@@ -351,6 +351,11 @@ const groupList = computed<ChatGroup[]>(() => {
 const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
 /** Each group's heading icon, by group key. */
 const groupIcons = computed(() => new Map(groupList.value.map((g) => [g.key, iconOfGroup(g)])))
+/** The folder of a group's project (projectOfGroup), for its right-click menu: most project groups are named groups
+ *  the projects feature files chats into, with no folder of their own. The cloud list uses it too. */
+const projectFolderOf = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.path ?? null
+/** What a desk group's menu describes: its project's folder, else its own, else the folder its newest chat works in. */
+const menuFolderOf = (g: ChatGroup) => projectFolderOf(g) ?? deskNewFolder(g)
 // A row the plain list shows that the order lacks joins it at the top, so it keeps the place it appeared in, and
 // so does one only the cloud list had shown (recordDeskOrder); any other saved one never moves; a row that just
 // turned orange goes to the top of its group. An added row joins as a new row does.
@@ -833,7 +838,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <DevServersList v-else-if="devServers.on.value" />
 
-        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :icon-of="iconOfGroup" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
+        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :icon-of="iconOfGroup" :project-folder-of="projectFolderOf":selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>
@@ -880,8 +885,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
             <!-- A project folder's group: its stats, Open project folder, Collapse, Auto-categorize on a scratch folder, and Hide (owner, 2026-10-10). -->
             <ProjectMenuItems
-              v-if="group.cwd"
-              :folder="group.cwd"
+              v-if="menuFolderOf(group)"
+              :folder="menuFolderOf(group)!"
               :label="group.label"
               :collapsed="collapsed.has(group.key)"
               :hidden="!!group.hidden"

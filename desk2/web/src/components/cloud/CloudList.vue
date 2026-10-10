@@ -55,6 +55,8 @@ const props = defineProps<{
   menuFor?: (row: CloudSession) => RowMenuEntry[]
   /** A group's project icon, the desk list's header icon (Sidebar.vue iconOfGroup), null for none. */
   iconOf?: (g: CloudGroup) => string | null
+  /** A group's project folder, for its right-click menu (Sidebar.vue projectFolderOf), null for none. */
+  projectFolderOf?: (g: CloudGroup) => string | null
 }>()
 const emit = defineEmits<{ 'new-session': [cwd: string]; open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
 
@@ -181,6 +183,8 @@ async function copyIds() {
 const ROW = LIST_ROW
 /** A group's '+' folder (sidebar/logic.ts newChatFolder): its own, else its newest row's; none for the results group. */
 const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFolder(g.cwd, g.rows.map((r) => ({ cwd: r.cwd, at: r.lastActivityAt }))))
+/** What a group's menu describes: its project's folder, else the group's own or its newest chat's (the desk list's rule). */
+const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.projectFolderOf?.(g) ?? newFolderOf(g)))
 </script>
 
 <template>
@@ -255,8 +259,8 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
         <!-- A project folder's group gets the desk list's menu (sidebar/ProjectMenuItems.vue; the sidebar mounts its dialog). -->
         <ProjectMenuItems
-          v-if="g.cwd"
-          :folder="g.cwd"
+          v-if="menuFolderOf(g)"
+          :folder="menuFolderOf(g)!"
           :label="g.label"
           :collapsed="collapsed.has(g.key)"
           :hidden="!!g.hidden"
