@@ -362,6 +362,36 @@ function keepsDeskRow(r: CloudSession, s: CloudScopes, thisPc: string): boolean 
   return !(r.source === 'claude' && claudeNarrowed)
 }
 
+/**
+ * The other PCs' sessions the cloud button adds to the desk list (owner, 2026-10-10: the cloud toggle "should show
+ * exactly the same as with the cloud toggled off. It should just also show me any external chats from the cloud"):
+ * AgentHydra's rows of another PC that the desk list does not list already (`listed`; the chat sync brings some), not
+ * archived, each as an outside session of its PC, idle and read-only. The Computer filter leaves a PC's out as it does
+ * the list's own rows.
+ */
+export function remoteSessions(rows: readonly CloudSession[], listed: ReadonlySet<string>, thisPc: string, pcs: readonly string[] | null): ExternalSession[] {
+  return rows
+    .filter((r) => r.fromPc && r.fromPc !== thisPc && !r.archived && !listed.has(r.id) && pcKept(r, pcs, thisPc))
+    .map((r) => ({
+      id: r.id,
+      title: r.title,
+      cwd: r.cwd,
+      source: r.source === 'claude' ? 'desktop' : r.source === 'codex' ? 'codex' : 'other',
+      instance: r.instanceNum !== null ? `#${r.instanceNum}` : r.instance,
+      status: 'idle',
+      activity: null,
+      lastActivityAt: r.lastActivityAt,
+      model: r.model,
+      accountId: null,
+      canResume: false,
+      fromPc: r.fromPc,
+      pinned: false,
+      archived: false,
+      unread: false,
+      group: null
+    }))
+}
+
 /** A row's key in the saved order: its desk row's id when the desk list lists the session, else its own session id. */
 export const rowOrderKey = (r: Pick<CloudSession, 'id'>, desk: ReadonlyMap<string, DeskPlace>): string => desk.get(r.id)?.key ?? r.id
 
@@ -385,8 +415,8 @@ export interface GroupCloudOptions {
  * name as in groupChats (owner, 2026-10-04: a chat jumped to another folder's group). Every other row goes
  * under the folder AgentHydra gives, the one it started in (server bridge/cloud.ts). Groups are listed A-Z
  * (sortFolders), as the desk list lists them. With the saved `order`, rows keep the desk list's places (a row by
- * its desk row's id, rowOrderKey); the rows only the cloud list has come after the desk's in their group
- * (cloudOnlyKeys records them). A search's answer
+ * its desk row's id, rowOrderKey); the rows only the cloud list has come after the desk's in their group.
+ * A search's answer
  * (`ranked`) keeps AgentHydra's order instead, best match first (a title hit before a folder hit before
  * letters in order), as one group.
  */

@@ -164,16 +164,19 @@ ${rows}`
   const groups = computed(() => visible.value.shown)
   const pcs = computed(() => pcsIn(sessions.value, thisPc.value))
 
-  // The rows only this list has join the saved order at its end once shown, newest first, and keep their
-  // places from then on; the desk list records its own at the top (Sidebar.vue). A search's answer records nothing.
+  // The sidebar draws this list itself only for a search's answer and while Select multiple sessions ticks rows
+  // (Sidebar.vue); with the cloud on otherwise it draws the desk list with the other PCs' sessions added. While it
+  // draws the plain list, the rows only this list has join the saved order at its end, newest first, and keep their
+  // places from then on; the desk list records its own (Sidebar.vue). A search's answer records nothing.
   watch(
-    () => (on.value && !searching.value ? groups.value : null),
+    () => (on.value && selectMode.value && !searching.value ? groups.value : null),
     (shown) => {
       if (!shown) return
       saveOrder(recordCloudOrder(order.value, cloudOnlyKeys(shown, placed.value)))
     },
     { immediate: true }
   )
+
 
   function toggleSelected(id: string) {
     const next = new Set(selected.value)
@@ -197,6 +200,8 @@ ${rows}`
     loading,
     error,
     loaded,
+    /** The rows answer a search (AgentHydra's best matches, one group), not the plain list. */
+    searching,
     groups,
     /** The groups Hide left out of `groups`. */
     hiddenOut: computed(() => visible.value.out),

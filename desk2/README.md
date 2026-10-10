@@ -161,32 +161,33 @@ sidebar on the left stays put, and only the pane on the right changes.
   http://127.0.0.1:7787), only from Desk 2's own page and without the browser's cookies or origin; the
   daemon itself is not copied, since two would both run work on the same accounts. `bun run build`
   builds both windows.
-- **The cloud list.** The cloud button (next to it, blue while it is on) turns the sidebar into every
-  session AgentHydra knows, from both PCs: the desk list's rows plus the rest. Turning it on or off moves
-  nothing (owner, 2026-10-04: "for some reason they change order"): both lists keep one saved order, so a
-  row the desk list shows sits in the same group at the same place, and is there even when it is older
-  than the cloud list's time period; the rows only the cloud list has come after the desk's in their group
-  (and their groups after the desk's groups), each kept where it first appeared. The cloud icon means the
-  other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
+- **The cloud button adds your other PC's chats.** The cloud button (next to it, blue while it is on) keeps the
+  sidebar exactly as it is and adds the chats of your other PC that AgentHydra knows and the list does not show
+  yet (owner, 2026-10-10: it "should show exactly the same as with the cloud toggled off. It should just also show
+  me any external chats from the cloud"). Each goes in the group of the folder of the same name here (paths differ
+  between PCs), after that group's own rows, else in a group of its folder's name, which offers no "New session
+  in" since the folder is that PC's; once shown it keeps its place in the one saved order. Turning the cloud on or
+  off moves nothing else. The other PC's running CliMayte tasks and HSwarm jobs join the list the same way. The
+  cloud icon means the other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
   different app, sure, but it's not cloud"): a row from the other PC leads with a cloud, its tooltip naming
   that PC (and the app when it is not Claude), pulsing gray while that chat or the work a row was added for
   runs (blue for a running HSwarm job), and nothing else sets it apart (owner, 2026-10-05: no PC-name chip;
   the desk list marks a synced chat with the same cloud); this PC's Codex, OpenCode and other apps' chats
-  lead with a small muted mark for their app in both lists (`rowLead` in `web/src/components/cloud/logic.ts`),
+  lead with a small muted mark for their app (`rowLead` in `web/src/components/cloud/logic.ts`),
   and the Apps ticks below decide which apps' chats the desk list shows too (Desk's own chats always).
-  Each row shows its AgentHydra instance number (#37), as AgentHydra's rows do. The Filter menu opens with
+  The Filter menu opens with
   Apps, one checkbox per app (Claude, Codex, OpenCode, Hermes, DSH, HSwarm), one click each, and starts at
   Claude alone (owner, 2026-10-05: "I don't necessarily want to see open code or ChatGPT in my sidebar by
   default, but I want to be able to"); search still looks through every app unless Only this view is
   ticked. The scopes call it `apps`, so a filter saved before (as `source`, every app ticked) comes back at
-  Claude alone with the rest of it kept. A row the desk list shows keeps
-  its dot, and the dot moves as it does there: gray and pulsing while the session works, orange while it
-  waits on you (owner, 2026-10-05: "the gray dots in the sidebar should pulse when they're working"). A session the desk list does
-  not show goes under the folder it
-  started in, which is where Claude Desktop files it, even after it moved into a subfolder. Clicking one opens its
-  transcript on the right. Search looks through every session, archived ones included, from all time,
-  and shows the best matches first. The cloud button again goes back to the desk list. It replaces
-  AgentHydra's Sessions tab.
+  Claude alone with the rest of it kept.
+  A row of the other PC's shows its AgentHydra instance number (#37), as AgentHydra's rows do, and its menu has Open, Pin and
+  Copy session ID. With the cloud on, the search box searches every session AgentHydra knows, from both PCs,
+  archived ones included, from all time, unless Only this view is ticked, and lists the best matches first;
+  clicking one opens its transcript on the right. The Filter menu's Select multiple sessions shows that whole list,
+  grouped by folder, to tick several and copy their ids. It replaces AgentHydra's Sessions tab
+  (`remoteSessions` in `web/src/components/cloud/logic.ts`, `addRemoteToDeskGroups` in
+  `web/src/components/sidebar/tasks.ts`).
 - **Rows that go away fade.** A row leaving either sidebar list, a CliMayte task line, or a folder whose last
   row left fades out and then folds shut, so the rows under it slide up instead of jumping (owner,
   2026-10-05). Rows a search or a filter hides go at once, and so does everything while the window is

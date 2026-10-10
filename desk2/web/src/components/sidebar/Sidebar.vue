@@ -13,7 +13,7 @@ const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 const DevServersList = lazyPanel(() => import('@/components/servers/DevServersList.vue'))
 import { useDevServers } from '@/components/servers/store'
 import { useCloud } from '@/components/cloud/store'
-import { ahSource, appShown, deskOnPcs } from '@/components/cloud/logic'
+import { ahSource, appShown, deskOnPcs, remoteSessions } from '@/components/cloud/logic'
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
@@ -40,7 +40,7 @@ import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
 import AutoCategorizeDialog from './AutoCategorizeDialog.vue'
 import {
-  addToCloudGroups,
+  addRemoteToDeskGroups,
   addToDeskGroups,
   addedStatus,
   addedPulse,
@@ -90,6 +90,7 @@ import {
   hideable,
   isOrange,
   raiseNewlyOrange,
+  recordCloudOrder,
   recordDeskOrder,
   moveTarget,
   parseFilter,
@@ -197,7 +198,7 @@ function openCloud(r: CloudSession) {
 }
 function onCloudSearchKey(e: KeyboardEvent) {
   if (e.key === 'Enter') {
-    const first = cloud.groups.value[0]?.rows[0]
+    const first = cloudSearching.value ? cloud.groups.value[0]?.rows[0] : undefined
     if (first) openCloud(first)
   } else if (e.key === 'Escape') {
     if (searchEscape(e, cloud.search.value) === 'clear') cloud.search.value = ''
@@ -288,6 +289,24 @@ const knownChats = computed(() => {
   for (const c of src.chats.value) if (c.sessionId) out.set(c.sessionId, { title: c.title, cwd: c.cwd || null, at: c.updatedAt })
   return out
 })
+// The cloud button keeps this list as it is and adds the other PCs' sessions it does not list (owner, 2026-10-10: the
+// cloud toggle "should show exactly the same as with the cloud toggled off. It should just also show me any external
+// chats from the cloud"; cloud/logic.ts remoteSessions), each in the group of the folder of its name here (deskShown).
+// A search typed with the cloud on answers in the cloud list instead (AgentHydra's best matches over everything), and
+// the Filter menu's Select multiple sessions ticks rows there (CloudList.vue).
+const remote = computed<ExternalSession[]>(() => {
+  if (!cloud.on.value) return []
+  const listed = new Set([...src.external.value.map((s) => s.id), ...src.chats.value.flatMap((c) => (c.sessionId ? [c.sessionId] : []))])
+  return remoteSessions(cloud.sessions.value, listed, cloud.thisPc.value, cloud.scopes.value.pcs)
+})
+/** The cloud's row of each session `remote` added, by id: its menu is the cloud list's (cloudMenu). */
+const remoteRows = computed(() => {
+  const ids = new Set(remote.value.map((s) => s.id))
+  return new Map(cloud.sessions.value.filter((r) => ids.has(r.id)).map((r) => [r.id, r]))
+})
+const cloudSearching = computed(() => cloud.on.value && cloud.searching.value && cloud.search.value.trim() !== '')
+const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && cloud.selectMode.value))
+
 // The HSwarm jobs seen so far, kept across polls (tasks.ts SeenJobs): a task HSwarm sent stays under the chat its job
 // named while HSwarm's list lacks the job, instead of turning into a row of its own and back (owner, 2026-10-09). A
 // task still waiting for its job is drawn nowhere for a while (ROUTED_WAIT_MS, counted from when this list began
@@ -306,18 +325,20 @@ function nestAll(): NestedTasks | null {
   const workers = [...src.workers.value, ...remoteWorkers.value]
   const jobs = swarmJobs.value
   const o = { seenJobs, now: Date.now(), since: listeningSince }
-  if (cloud.on.value) return nestTasks(cloud.groups.value.flatMap((g) => g.rows.map((r) => ({ key: `cloud:${r.id}`, sessionIds: [r.id] }))), workers, jobs, knownChats.value, o)
   // The rows the desk list draws of its own, as groupChats picks them (never a CliMayte worker's own session, nor
-  // a session that is one of our chats); a row in a folded group still holds its tasks, and the group's heading
-  // counts the running ones (RunningBadge). A chat stands for its worker by id too, so one still queued (no
-  // session yet) is not listed again as a task.
-  const rows: NestRow[] = ownGroups.value.flatMap((g) =>
-    g.entries.map((e) =>
-      e.kind === 'chat'
-        ? { key: `chat:${e.id}`, sessionIds: e.chat.sessionId ? [e.chat.sessionId] : [], workerId: e.chat.workerId }
-        : { key: `external:${e.id}`, sessionIds: [e.session.id] }
-    )
-  )
+  // a session that is one of our chats), and the other PCs' the cloud adds; a row in a folded group still holds its
+  // tasks, and the group's heading counts the running ones (RunningBadge). A chat stands for its worker by id too, so
+  // one still queued (no session yet) is not listed again as a task.
+  const rows: NestRow[] = [
+    ...ownGroups.value.flatMap((g) =>
+      g.entries.map((e) =>
+        e.kind === 'chat'
+          ? { key: `chat:${e.id}`, sessionIds: e.chat.sessionId ? [e.chat.sessionId] : [], workerId: e.chat.workerId }
+          : { key: `external:${e.id}`, sessionIds: [e.session.id] }
+      )
+    ),
+    ...remote.value.map((s) => ({ key: `external:${s.id}`, sessionIds: [s.id] }))
+  ]
   return nestTasks(rows, workers, jobs, knownChats.value, o)
 }
 /** The rows added for running work no drawn row lists (tasks.ts AddedRow), by id. */
@@ -337,14 +358,21 @@ const jobsCounted = (key: string): SwarmJob[] | null => {
 const subOf = (key: string, tasks: TaskNode[] | null, jobs: SwarmJob[] | null) => rowSubItems(key, tasks, jobs, { tasks: subModes.tasks.value, jobs: subModes.jobs.value }, expanded.value)
 const rowSub = (key: string) => subOf(key, tasksOf(key), jobsOf(key))
 
-// The desk list as drawn: its own groups and, while the cloud is off, the rows added for this PC's running work
-// no row of it lists, each in its folder's group among the list's own rows (tasks.ts addToDeskGroups); not while
-// a search or the Archived filter narrows it to the rows it matches.
+// The desk list as drawn: its own groups, the rows added for running work no row of it lists, each in its folder's
+// group among the list's own rows (tasks.ts addToDeskGroups; this PC's, and with the cloud on every PC's the Computer
+// filter keeps), and with the cloud on the other PCs' sessions it adds (`remote`, tasks.ts addRemoteToDeskGroups);
+// not while a search or the Archived filter narrows it to the rows it matches.
 const deskShown = computed<SidebarGroups>(() => {
   const g = groups.value
-  const added = cloud.on.value || query.value.trim() || filter.value === 'archived' ? [] : (nesting.value?.added ?? []).filter((a) => !a.pc)
-  if (!added.length) return g
-  return { ...g, folders: addToDeskGroups(g.folders, added, { order: order.value, hidden: hiddenGroups.hidden.value, showHidden: hiddenGroups.showHidden.value }) }
+  const narrowed = !!query.value.trim() || filter.value === 'archived'
+  const pcs = cloud.scopes.value.pcs
+  const keptPc = (a: AddedRow) => (cloud.on.value ? pcs === null || pcs.includes(a.pc ?? cloud.thisPc.value) : !a.pc)
+  const added = narrowed ? [] : (nesting.value?.added ?? []).filter(keptPc)
+  const others = narrowed ? [] : remote.value
+  if (!added.length && !others.length) return g
+  const placing = { order: order.value, hidden: hiddenGroups.hidden.value, showHidden: hiddenGroups.showHidden.value }
+  const withAdded = added.length ? addToDeskGroups(g.folders, added, placing) : g.folders
+  return { ...g, folders: others.length ? addRemoteToDeskGroups(withAdded, others, placing) : withAdded }
 })
 const groupList = computed<ChatGroup[]>(() => {
   const g = deskShown.value
@@ -381,30 +409,22 @@ watch(
   (g) => {
     if (query.value.trim() || filter.value !== 'active') return
     const shownEntries = [...(g.pinned?.entries ?? []), ...g.folders.flatMap((f) => f.entries)]
-    const shownRows = shownEntries.map((e) => e.id)
-    const next = recordDeskOrder(order.value, shownRows)
+    const others = remoteRows.value
+    const shownRows = shownEntries.filter((e) => !others.has(e.id)).map((e) => e.id)
+    const next = recordCloudOrder(
+      recordDeskOrder(order.value, shownRows),
+      shownEntries.filter((e) => others.has(e.id)).map((e) => e.id)
+    )
     const rows = raiseNewlyOrange(next.rows, shownEntries, wasOrange)
     for (const e of shownEntries) wasOrange.set(e.id, isOrange(e))
     saveOrder({ ...next, rows })
   },
   { immediate: true }
 )
-// The cloud list as drawn: the store's groups and the rows added for running work no row of it lists, both PCs',
-// each in its folder's group among the list's own rows (tasks.ts addToCloudGroups); not while a search answers it,
-// and another PC's not while the Computer filter (Show only local) leaves that PC's rows out, as it does the list's own.
+// The cloud list as drawn (cloudListShown): a search's answer, AgentHydra's best matches, or the list Select multiple
+// sessions ticks rows in.
 const cloudGroups = computed(() => {
-  const pcs = cloud.scopes.value.pcs
-  const added = cloud.search.value.trim() ? [] : (nesting.value?.added ?? []).filter((a) => pcs === null || pcs.includes(a.pc ?? cloud.thisPc.value))
-  const groups =
-    !cloud.on.value || !added.length
-      ? cloud.groups.value
-      : addToCloudGroups(cloud.groups.value, added, {
-          order: order.value,
-          hidden: hiddenGroups.hidden.value,
-          showHidden: hiddenGroups.showHidden.value,
-          orderKey: cloud.orderKey,
-          onDesk: cloud.onDesk
-        })
+  const groups = cloud.groups.value
   if (!activeOnly.value) return groups
   return groups.flatMap((g) => {
     const rows = g.rows.filter((r) => isActive(cloudDot(r.id)))
@@ -709,16 +729,20 @@ function selectExternal(s: ExternalSession) {
 }
 function externalAct(s: ExternalSession, item: RowMenuItem) {
   const added = addedRows.value.get(s.id)
+  const other = remoteRows.value.get(s.id)
   if (added) addedAct(added, item)
+  else if (other) cloudAct(other, item)
   else act({ kind: 'external', session: s }, item)
 }
 function renameExternal(s: ExternalSession, title: string | null) {
   if (!isAddedRow(s.id)) attempt('The change', src.updateSessionMeta(s.id, { title }))
 }
-/** An added row's menu in place of an outside session's; undefined for any other row. */
+/** An added row's menu in place of an outside session's, the cloud list's for another PC's the cloud added; undefined for any other row. */
 function externalMenu(id: string): RowMenuEntry[] | undefined {
   const added = addedRows.value.get(id)
-  return added ? addedMenu(added) : undefined
+  if (added) return addedMenu(added)
+  const other = remoteRows.value.get(id)
+  return other ? cloudMenu(other) : undefined
 }
 
 // Move to group > New group…: a name, then the row moves there.
@@ -854,7 +878,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <DevServersList v-else-if="devServers.on.value" />
 
-        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :icon-of="iconOfGroup" :project-folder-of="projectFolderOf":selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
+        <CloudList v-else-if="cloudListShown" :groups="cloudGroups" :icon-of="iconOfGroup" :project-folder-of="projectFolderOf":selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>

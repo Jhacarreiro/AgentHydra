@@ -1,8 +1,7 @@
 import { expect, test } from 'bun:test'
-import type { CliMayteWorker, CloudSession, ExternalSession, SwarmJob } from '@shared/protocol'
-import type { CloudGroup } from '../../src/components/cloud/logic'
-import type { ChatGroup, SidebarEntry } from '../../src/components/sidebar/logic'
-import { addToCloudGroups, addToDeskGroups, addedPulse, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
+import type { CliMayteWorker, ExternalSession, SwarmJob } from '@shared/protocol'
+import { deskNewFolder, type ChatGroup, type SidebarEntry } from '../../src/components/sidebar/logic'
+import { addRemoteToDeskGroups, addToDeskGroups, addedPulse, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -426,26 +425,19 @@ test("the desk list draws an added row in its folder's group among its own rows;
   expect(out[0]!.entries[0]!.kind).toBe('external')
 })
 
-const cloudRow = (id: string, at: number, cwd: string | null): CloudSession => ({ id, title: id, cwd, lastCwd: null, source: 'claude', instance: null, lastActivityAt: at, createdAt: null, messageCount: 1, dispatched: false, archived: false, fromPc: null, model: null, effort: null, instanceNum: null })
-
-test("the cloud list draws another PC's chat in the group of its synced folder among its rows, with that PC on it", () => {
+// With the cloud on, the desk list draws the other PC's work too (owner, 2026-10-10: the cloud toggle "should show
+// exactly the same as with the cloud toggled off. It should just also show me any external chats from the cloud").
+test("the desk list draws another PC's chat in the group of its synced folder among its rows, with that PC on it", () => {
   const known = new Map([['s-synced', { title: 'Example synced chat', cwd: 'd:\\work\\app', at: 60 }]])
   const { added } = nestTasks([], [worker('t', 1, { pc: 'PC-X', originSessionId: 's-synced' }), worker('u', 2, { pc: 'PC-X', originSessionId: 's-other' })], [], known)
-  const app: CloudGroup = { key: 'cloud:d:/work/app', label: 'app', cwd: 'D:/Work/app', orderKey: 'd:/work/app', rows: [cloudRow('s-desk', 70, 'D:/Work/app'), cloudRow('s-cloud', 50, 'D:/Work/app')] }
-  const out = addToCloudGroups([app], added, {
-    order: { rows: [] },
-    hidden: new Set<string>(),
-    showHidden: false,
-    orderKey: (id) => id,
-    onDesk: (id) => id === 's-desk'
-  })
-  // A row the desk list lacks goes after the desk's rows, as the cloud list puts its own.
-  expect(out.map((g) => [g.label, g.rows.map((r) => r.id)])).toEqual([
-    ['app', ['s-desk', 'added:PC-X:chat:s-synced', 's-cloud']],
-    ['No folder', ['added:PC-X:chat:s-other']]
+  const app: ChatGroup = { key: 'D:/Work/app', label: 'app', cwd: 'D:/Work/app', entries: [deskRow('s-desk', 70, 'D:/Work/app'), deskRow('s-local', 50, 'D:/Work/app')] }
+  const out = addToDeskGroups([app], added, { order: { rows: [] }, hidden: new Set<string>(), showHidden: false })
+  expect(out.map((g) => [g.label, g.key, g.entries.map((e) => e.id)])).toEqual([
+    ['app', 'D:/Work/app', ['s-desk', 'added:PC-X:chat:s-synced', 's-local']],
+    ['No folder', '', ['added:PC-X:chat:s-other']]
   ])
-  expect(out[0]!.rows[1]!.fromPc).toBe('PC-X')
-  expect(out[1]!.orderKey).toBe('')
+  const synced = out[0]!.entries[1]!
+  expect(synced.kind === 'external' && synced.session.fromPc).toBe('PC-X')
 })
 
 // Owner, 2026-10-06: another PC shares only the last name of a task's folder, never its path; a chat of it this PC
@@ -462,24 +454,43 @@ test("another PC's chat known only by its folder's last name goes in the one gro
     ],
     [swarmJob('j', { pc: 'PC-X', callerSessionId: sid, folder: 'Example-repo', startedAt: 5 })]
   )
-  const group = (cwd: string, at: number): CloudGroup => ({ key: `cloud:${cwd.toLowerCase()}`, label: cwd.split('/').pop()!, cwd, orderKey: cwd.toLowerCase(), rows: [cloudRow(`s-${at}`, at, cwd)] })
+  const group = (cwd: string, at: number): ChatGroup => ({ key: cwd, label: cwd.split('/').pop()!, cwd, entries: [deskRow(`s-${at}`, at, cwd)] })
   // Two folders here are named "shared": which one is a guess, so that chat gets a group of its own.
-  const out = addToCloudGroups([group('D:/Work/app', 70), group('D:/Work/shared', 60), group('E:/Other/shared', 50)], added, {
+  const out = addToDeskGroups([group('D:/Work/app', 70), group('D:/Work/shared', 60), group('E:/Other/shared', 50)], added, {
     order: { rows: [] },
     hidden: new Set<string>(),
-    showHidden: false,
-    orderKey: (id) => id,
-    onDesk: (id) => !id.startsWith('added:')
+    showHidden: false
   })
   // A-Z by label; the three "shared" groups keep the order they were built in.
-  expect(out.map((g) => [g.label, g.orderKey, g.rows.map((r) => r.id)])).toEqual([
-    ['app', 'd:/work/app', ['s-70', 'added:PC-X:chat:s-app']],
+  expect(out.map((g) => [g.label, g.key, g.entries.map((e) => e.id)])).toEqual([
+    ['app', 'D:/Work/app', ['s-70', 'added:PC-X:chat:s-app']],
     ['Example-repo', 'name:example-repo', [`added:PC-X:chat:${sid}`, 'added:PC-X:chat:s-repo']],
     ['No folder', '', ['added:PC-X:chat:s-none']],
-    ['shared', 'd:/work/shared', ['s-60']],
-    ['shared', 'e:/other/shared', ['s-50']],
+    ['shared', 'D:/Work/shared', ['s-60']],
+    ['shared', 'E:/Other/shared', ['s-50']],
     ['shared', 'name:shared', ['added:PC-X:chat:s-shared']]
   ])
+})
+
+test("another PC's session the cloud adds goes after the rows of the group of its folder's name, keeps a saved place, and its own group names no folder here", () => {
+  const other = (id: string, at: number, cwd: string): ExternalSession => {
+    const e = deskRow(id, at, cwd)
+    if (e.kind !== 'external') throw new Error('deskRow makes outside sessions')
+    return { ...e.session, fromPc: 'PC-X' }
+  }
+  const app: ChatGroup = { key: 'C:/Users/me/Projects/App', label: 'App', cwd: 'C:/Users/me/Projects/App', entries: [deskRow('s-a', 30, 'C:/Users/me/Projects/App'), deskRow('s-b', 10, 'C:/Users/me/Projects/App')] }
+  const out = addRemoteToDeskGroups([app], [other('r-new', 90, 'C:/Users/other/Work/app'), other('r-kept', 20, 'C:/Users/other/Work/app'), other('r-far', 40, 'C:/Users/other/Work/Elsewhere')], {
+    order: { rows: ['s-a', 'r-kept', 's-b'] },
+    hidden: new Set<string>(),
+    showHidden: false
+  })
+  expect(out.map((g) => [g.label, g.key, g.cwd, g.entries.map((e) => e.id)])).toEqual([
+    ['App', 'C:/Users/me/Projects/App', 'C:/Users/me/Projects/App', ['s-a', 'r-kept', 's-b', 'r-new']],
+    ['Elsewhere', 'name:elsewhere', null, ['r-far']]
+  ])
+  // Its path is the other PC's: the group offers no "New session in".
+  expect(deskNewFolder(out[1]!)).toBeNull()
+  expect(deskNewFolder(out[0]!)).toBe('C:/Users/me/Projects/App')
 })
 
 // Owner, 2026-10-05: another PC's chats pulse gray while their CliMayte tasks run, still when none does; blue is HSwarm's alone.

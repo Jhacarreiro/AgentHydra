@@ -318,10 +318,14 @@ export function newChatFolder(cwd: string | null, chats: readonly { cwd: string 
   return [...chats].sort((a, b) => b.at - a.at).find((c) => c.cwd)?.cwd ?? null
 }
 
-/** The desk list's group's '+' folder (newChatFolder); Pinned and Archived are not folders, so they get none. */
+/**
+ * The desk list's group's '+' folder (newChatFolder); Pinned and Archived are not folders, so they get none. Another
+ * PC's chat works in a folder of that PC, never one here, so it names none.
+ */
 export function deskNewFolder(group: ChatGroup): string | null {
   if (group.key === 'pinned' || group.key === 'archived') return null
-  return newChatFolder(group.cwd, group.entries.map((e) => ({ cwd: entryCwd(e) || null, at: e.at })))
+  const here = group.entries.filter((e) => e.kind === 'chat' || !e.session.fromPc)
+  return newChatFolder(group.cwd, here.map((e) => ({ cwd: entryCwd(e) || null, at: e.at })))
 }
 
 /**

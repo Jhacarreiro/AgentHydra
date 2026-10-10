@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, pcKept, pickApp, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, pcKept, pickApp, remoteSessions, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -325,5 +325,49 @@ describe('groupCloud', () => {
     expect(ids({ ...all, instance: ['default'] })).toEqual(['recent'])
     // A search's answer is AgentHydra's alone.
     expect(ids(all, true)).toEqual(['recent'])
+  })
+})
+
+// Owner, 2026-10-10: the cloud toggle "should show exactly the same as with the cloud toggled off. It should just also
+// show me any external chats from the cloud".
+describe('remoteSessions', () => {
+  const row = (id: string, fromPc: string | null, over: Partial<CloudSession> = {}): CloudSession => ({
+    id,
+    title: `Example ${id}`,
+    cwd: 'C:/Users/me/Work/app',
+    lastCwd: null,
+    source: 'claude',
+    instance: null,
+    lastActivityAt: 10,
+    createdAt: null,
+    messageCount: 3,
+    dispatched: false,
+    archived: false,
+    fromPc,
+    model: null,
+    effort: null,
+    instanceNum: null,
+    ...over
+  })
+  const rows = [
+    row('mine', null),
+    row('mine-named', 'MY-PC'),
+    row('synced', 'PC-X'),
+    row('archived', 'PC-X', { archived: true }),
+    row('x-chat', 'PC-X', { instanceNum: 37, lastActivityAt: 50 }),
+    row('y-chat', 'PC-Y', { source: 'codex' })
+  ]
+  const listed = new Set(['synced'])
+
+  test("only another PC's sessions the desk list lacks are added, not archived, each an idle outside session of its PC", () => {
+    const out = remoteSessions(rows, listed, 'MY-PC', null)
+    expect(out.map((s) => [s.id, s.fromPc, s.source, s.instance, s.status, s.lastActivityAt])).toEqual([
+      ['x-chat', 'PC-X', 'desktop', '#37', 'idle', 50],
+      ['y-chat', 'PC-Y', 'codex', null, 'idle', 10]
+    ])
+  })
+  test('the Computer filter leaves out the PCs it does not keep', () => {
+    expect(remoteSessions(rows, listed, 'MY-PC', ['MY-PC', 'PC-X']).map((s) => s.id)).toEqual(['x-chat'])
+    expect(remoteSessions(rows, listed, 'MY-PC', ['MY-PC'])).toEqual([])
   })
 })

@@ -9,8 +9,7 @@
 // rows, another PC's with a cloud (owner, 2026-10-05: "it should show up on mine as exactly as if it was the
 // other things ... inline identical"). Pure, so the window and the tests share it.
 import { ref, watch } from 'vue'
-import type { CliMayteWorker, CloudSession, ExternalSession, SwarmJob } from '@shared/protocol'
-import type { CloudGroup } from '../cloud/logic'
+import type { CliMayteWorker, ExternalSession, SwarmJob } from '@shared/protocol'
 import { folderKey, folderLabel, NO_FOLDER, sortFolders, stableOrder, type ChatGroup, type SidebarEntry, type SidebarOrder } from './logic'
 
 const KEY = 'hydra-desk.sidebar.tasks'
@@ -44,8 +43,8 @@ export interface KnownChat {
 /**
  * A row the sidebar adds for running work no drawn row lists: the chat that started it (the chat a task's
  * origin names, or the caller of an HSwarm job), a Hydra Desk chat run as a CliMayte worker, or, when nothing
- * says which chat started it, the task or the job itself. Each list draws it in its folder's group as one of
- * its own rows (addToDeskGroups, addToCloudGroups); another PC's leads with a cloud.
+ * says which chat started it, the task or the job itself. The desk list draws it in its folder's group as one of
+ * its own rows (addToDeskGroups); another PC's leads with a cloud.
  */
 export interface AddedRow {
   /** `added:`, then its PC, kind and id: never a listed session's id. */
@@ -559,28 +558,6 @@ export function addedEntry(r: AddedRow): SidebarEntry {
   return { kind: 'external', id: r.id, at: r.at, session }
 }
 
-/** An added row as the cloud list draws it: one of its rows, another PC's leading with a cloud (CloudList.vue). */
-export function addedCloudRow(r: AddedRow): CloudSession {
-  const num = r.worker?.account?.match(/^#(\d+)$/)
-  return {
-    id: r.id,
-    title: r.title,
-    cwd: r.cwd,
-    lastCwd: null,
-    source: r.job ? 'zswarm' : 'claude',
-    instance: null,
-    lastActivityAt: r.at,
-    createdAt: r.worker?.startedAt ?? r.job?.startedAt ?? null,
-    messageCount: 0,
-    dispatched: false,
-    archived: false,
-    fromPc: r.pc,
-    model: r.worker?.model ?? null,
-    effort: r.worker?.effort ?? null,
-    instanceNum: num ? Number(num[1]) : null
-  }
-}
-
 /** How a list places the rows added to it: the order both lists keep (order.ts) and the groups Hide left out (hidden.ts). */
 export interface AddedPlacing {
   order: SidebarOrder
@@ -682,28 +659,26 @@ export function addToDeskGroups(groups: readonly ChatGroup[], rows: readonly Add
 }
 
 /**
- * The cloud list's groups (cloud/logic.ts groupCloud) with the added rows of every PC, each drawn as one of its
- * rows (addedCloudRow) and ordered as the rows only it has: after the desk list's in their group. The groups are
- * listed A-Z (sortFolders). `orderKey` and `onDesk` are the cloud store's.
+ * The desk list's groups with the other PCs' sessions the cloud button adds (cloud/logic.ts remoteSessions), each in
+ * the group of the folder of the same name here, as another PC's added row goes (its path is the other PC's), else in a
+ * group of that name with no folder here. They come after the list's own rows in their group: new ones last, and from
+ * then on in their saved places (Sidebar.vue records them as the cloud list's own, at the end of the order).
  */
-export function addToCloudGroups(
-  groups: readonly CloudGroup[],
-  rows: readonly AddedRow[],
-  o: AddedPlacing & { orderKey: (id: string) => string; onDesk: (id: string) => boolean }
-): CloudGroup[] {
-  const names = new Map(rows.map((r) => [r.id, r.folder]))
-  return placeAdded<CloudGroup, CloudSession>(groups, rows.map(addedCloudRow), {
+export function addRemoteToDeskGroups(groups: readonly ChatGroup[], sessions: readonly ExternalSession[], o: AddedPlacing): ChatGroup[] {
+  const remote = new Set(sessions.map((s) => s.id))
+  const entries = sessions.map((session): SidebarEntry => ({ kind: 'external', id: session.id, at: session.lastActivityAt ?? 0, session }))
+  return placeAdded<ChatGroup, SidebarEntry>(groups, entries, {
     order: o.order,
     hidden: o.hidden,
     showHidden: o.showHidden,
-    folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.orderKey === '' ? '' : null),
-    rowsOf: (g) => g.rows,
-    cwdOf: (r) => r.cwd,
-    nameOf: (r) => names.get(r.id) ?? null,
-    at: (r) => r.lastActivityAt,
-    sort: (list) => stableOrder(list, (r) => o.orderKey(r.id), o.order.rows, (r) => !o.onDesk(r.id)),
-    withRows: (g, list) => ({ ...g, rows: list }),
-    make: (folder, cwd, label, list, hidden) => ({ key: `cloud:${folder}`, label, cwd, orderKey: folder, rows: list, ...(hidden ? { hidden } : {}) })
+    folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.key === '' ? '' : null),
+    rowsOf: (g) => g.entries,
+    cwdOf: () => null,
+    nameOf: (e) => (e.kind === 'external' && e.session.cwd ? folderLabel(e.session.cwd) : null),
+    at: (e) => e.at,
+    sort: (list) => stableOrder(list, (e) => e.id, o.order.rows, (e) => remote.has(e.id)),
+    withRows: (g, list) => ({ ...g, entries: list }),
+    make: (folder, cwd, label, list, hidden) => ({ key: cwd ?? folder, label, cwd, entries: list, ...(hidden ? { hidden } : {}) })
   })
 }
 
