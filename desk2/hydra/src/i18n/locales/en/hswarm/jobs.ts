@@ -5,16 +5,6 @@ export default {
   noJobsDescription:
     'A batch an agent runs through the swarm shows up here with its cost and outcome.',
   failedToLoad: 'Could not load the jobs',
-  table: {
-    jobId: 'Job',
-    label: 'Label',
-    state: 'State',
-    tasks: 'Tasks',
-    cost: 'Tokens',
-    created: 'Created',
-  },
-  runningNow: 'Running now',
-  allRecentJobs: 'All recent jobs',
   // The X button on a running job's row, which cancels the job (after confirmCancel).
   cancelJob: 'Cancel this job',
   confirmCancel: 'Cancel job {id}? Tasks already finished keep their results.',
@@ -23,7 +13,7 @@ export default {
   // The X button on an open job, which sits under the job's row in the table: it only folds the job's
   // summary and task results away (the job itself is untouched; cancelJob is the row's X that ends it).
   closeSummary: 'Hide this summary',
-  // A job's task counts, in the Tasks column and the open job's summary line.
+  // A job's task counts, on its line and the open job's summary line.
   countDone: '{n} done',
   countFailed: '{n} failed',
   countRunning: '{n} running',

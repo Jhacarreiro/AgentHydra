@@ -2,7 +2,8 @@
 // One task on one line (h-7), the row CliMayte's worker list and HSwarm's Jobs table both use: the status
 // icon (the default slot), a kind badge when the list mixes kinds, the title, a cloud for another PC's task,
 // the priority, the verdict mark, the account, the model and effort, and how long it has been active. The
-// single root is the button, so a parent's listeners and attributes land on it.
+// single root is the button, so a parent's listeners and attributes land on it. It is its own size container:
+// the account and the model drop out on a narrow row, the title never does.
 import { Check, Cloud, RotateCcw, X } from '@lucide/vue'
 import { useI18n } from 'vue-i18n'
 
@@ -39,7 +40,7 @@ const { t } = useI18n()
 <template>
   <button
     type="button"
-    class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+    class="@container flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
     :class="stale ? 'opacity-60' : ''"
     :title="hint"
   >
@@ -59,9 +60,11 @@ const { t } = useI18n()
       <RotateCcw v-else-if="mark.kind === 'retry'" class="size-3.5 text-warning" :aria-label="mark.label" />
       <X v-else class="size-3.5 text-destructive" :aria-label="mark.label" />
     </span>
-    <span class="hidden w-44 shrink-0 truncate text-muted-foreground sm:block">{{ account }}</span>
+    <!-- The account and the model fit the row, not the window: the pane beside HSwarm's tree is ~650px, where
+         the window's breakpoints left the title ~140px of a 650px row (2026-10-10). -->
+    <span class="hidden w-28 shrink-0 truncate text-muted-foreground @lg:block">{{ account }}</span>
     <span
-      class="hidden w-36 shrink-0 truncate md:block"
+      class="hidden w-32 shrink-0 truncate @md:block"
       :class="tag?.differs ? 'text-warning' : 'text-muted-foreground'"
     >{{ tag?.text }}</span>
     <span class="w-14 shrink-0 text-end tabular-nums text-muted-foreground">{{ time }}</span>
