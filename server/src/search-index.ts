@@ -117,6 +117,10 @@ function open(): Database | null {
   if (now() < openBlockedUntil) return null
   try {
     db = new Database(indexPath, { create: true })
+    // bun:sqlite's default busy timeout is 0: a file another process holds for a moment (a Windows
+    // scanner on a fresh file, the 2026-10-10 runner) fails the open at once with "database is
+    // locked", and the cooldown below then answers nothing for 30 s. Wait for the lock instead.
+    db.exec('pragma busy_timeout = 2000')
     // One file, always: a WAL sidecar would make "just delete search-index.db" a corruption bug.
     db.exec('pragma journal_mode = delete')
     db.exec('pragma synchronous = normal')

@@ -349,6 +349,42 @@ describe('refresh and query', () => {
     expect(r.indexed).toBe(0)
     expect(r.remaining).toBe(40)
   })
+
+  // Regression: the index file held for a moment by another process (a Windows scanner, or another
+  // reader) used to fail the open at once with "database is locked", and the 30 s cooldown then made
+  // the whole pass index nothing. A second process holds a lock here, so the wait is real.
+  test('a file another process holds for a moment is waited for, not reported as unavailable', async () => {
+    const path = join(dir, 'index.db')
+    setSearchIndexPathForTests(path)
+    const holder = Bun.spawn(
+      [
+        process.execPath,
+        '-e',
+        `const { Database } = require('bun:sqlite')
+const db = new Database(process.argv[1], { create: true })
+db.exec('pragma journal_mode = delete')
+db.exec('create table if not exists hold (x integer)')
+db.exec('begin exclusive')
+console.log('locked')
+setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
+        path,
+      ],
+      { stdout: 'pipe', stderr: 'pipe' },
+    )
+    const lines = holder.stdout.pipeThrough(new TextDecoderStream()).getReader()
+    let seen = ''
+    while (!seen.includes('locked')) {
+      const { value, done } = await lines.read()
+      if (done) break
+      seen += value
+    }
+    expect(seen).toContain('locked')
+
+    const r = await refreshSearchIndex([session('a', [turn('user', 'written while held')])])
+    expect(r.indexed).toBe(1)
+    expect(candidateKeys('written')).toEqual(new Set([claudeKey('a')]))
+    expect(await holder.exited).toBe(0)
+  })
 })
 
 // The ladder: phrase, then all words, then typo repair, then any word. Each test pins one rung's
