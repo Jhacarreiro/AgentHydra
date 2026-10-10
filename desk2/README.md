@@ -250,7 +250,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   that are measured on the way (they start as estimates) move the landing spot with them instead of stopping the
   glide short (owner, 2026-10-10: it "sometimes just nudges the page up"); a wheel or a press on the list
   stops it (`transcript/lib/steps.ts` `nextMessageStep`, TranscriptView's `stepUp` / `stepDown` / `glideTo`).
-  Under them an eye peeks at the message the up arrow would go to without scrolling (owner, 2026-10-10: "show me what
+  Right under the up arrow, above the down arrow, an eye peeks at the message the up arrow would go to without scrolling (owner, 2026-10-10: "show me what
   the previous message was in ... a slide-down tray. Kind of like the Session details thing works"): a tray slides
   down over the transcript's top with that message, stays two seconds, stays while the pointer is on it and goes a
   second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`).

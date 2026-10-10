@@ -758,7 +758,10 @@ watch(
       class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
     >{{ revealNote }}</div>
     <MessagePeek :item="peekItem" :top="insetTop ?? 0" @close="peekId = null" @go="goToPeek" />
-    <!-- Each arrow keeps its own slot, so the down arrow never moves up under the pointer when the up arrow goes. -->
+    <!-- Each button keeps its own slot, so the down arrow never moves up under the pointer when the up arrow goes. The peek
+         sits right under the up arrow (owner, 2026-10-10, pointing there: "I thought there was supposed to be one here";
+         under the down arrow it sat a slot lower at the bottom of a chat): it shows whenever the up arrow does, so no gap
+         opens between them. -->
     <div
       v-if="prevStep !== null || showStepDown || peekItem"
       class="pointer-events-none absolute right-5 z-[9] flex flex-col gap-1"
@@ -768,18 +771,6 @@ watch(
         <Tip v-if="prevStep !== null" label="Previous message you sent" side="left">
           <button type="button" aria-label="Previous message you sent" class="tx-step" @click="stepUp">
             <icons.prevUserMessage class="size-4" />
-          </button>
-        </Tip>
-      </span>
-      <span class="flex size-6">
-        <Tip v-if="showStepDown" :label="nextStep === null ? 'Back to the latest' : 'Next message you sent'" side="left">
-          <button
-            type="button"
-            :aria-label="nextStep === null ? 'Back to the latest' : 'Next message you sent'"
-            class="tx-step"
-            @click="stepDown"
-          >
-            <icons.nextUserMessage class="size-4" />
           </button>
         </Tip>
       </span>
@@ -794,6 +785,18 @@ watch(
             @click="peek"
           >
             <icons.peekUserMessage class="size-4" />
+          </button>
+        </Tip>
+      </span>
+      <span class="flex size-6">
+        <Tip v-if="showStepDown" :label="nextStep === null ? 'Back to the latest' : 'Next message you sent'" side="left">
+          <button
+            type="button"
+            :aria-label="nextStep === null ? 'Back to the latest' : 'Next message you sent'"
+            class="tx-step"
+            @click="stepDown"
+          >
+            <icons.nextUserMessage class="size-4" />
           </button>
         </Tip>
       </span>

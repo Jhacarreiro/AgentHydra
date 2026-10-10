@@ -61,13 +61,14 @@ try {
   const push = (n = 1) => ev(`(async () => { for (let i = 0; i < ${n}; i++) { await window.__streamBench.grow(); await ${FRAME} } })()`)
   const frame = () => ev(FRAME)
   type Box = { left: number; right: number; bottom: number; top: number }
-  type State = { top: number; distance: number; client: number; up: Box | null; down: Box | null; view: { top: number; right: number; bottom: number } }
-  // The step arrows at the top right: up is "Previous message you sent", down is "Next message you sent" or, past the last, "Back to the latest".
+  type State = { top: number; distance: number; client: number; up: Box | null; down: Box | null; peek: Box | null; view: { top: number; right: number; bottom: number } }
+  // The step arrows at the top right: up is "Previous message you sent", down is "Next message you sent" or, past the last, "Back to the latest";
+  // the peek's eye is between them.
   const state = async (): Promise<State> => ev(`(() => { const el = ${SC}; const r = el.getBoundingClientRect();
     const box = (sel) => { const b = document.querySelector(sel)?.getBoundingClientRect(); return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null };
     return { top: el.scrollTop, distance: el.scrollHeight - el.scrollTop - el.clientHeight, client: el.clientHeight,
       up: box('[aria-label="Previous message you sent"]'), down: box('[aria-label="Next message you sent"],[aria-label="Back to the latest"]'),
-      view: { top: r.top, right: r.right, bottom: r.bottom } } })()`)
+      peek: box('[data-testid="peek-step"]'), view: { top: r.top, right: r.right, bottom: r.bottom } } })()`)
   const check = (ok: boolean, line: string) => lines.push({ ok, line: `${ok ? 'PASS' : 'FAIL'} ${line}` })
   /** A real click (move, press, release) in the middle of a box. */
   async function click(box: Box): Promise<void> {
@@ -160,6 +161,11 @@ try {
   b = await state()
   check(a.distance < 2 && b.distance < 2, `the down arrow goes to the bottom and it follows from there (distance ${Math.round(a.distance)}, then ${Math.round(b.distance)})`)
   check(!b.down, 'the down arrow hides at the bottom')
+  // The peek right under the up arrow there (owner, 2026-10-10, pointing under it: "I thought there was supposed to be
+  // one here"): in the down arrow's slot's place it stood a whole slot lower with nothing between.
+  const gap = b.up && b.peek ? b.peek.top - b.up.bottom : null
+  check(gap !== null && gap >= 0 && gap <= 8 && Math.abs(b.peek!.left - b.up!.left) < 1,
+    `at the bottom the peek sits right under the up arrow (gap ${gap === null ? 'none shown' : Math.round(gap)})`)
 
   // 7. A send in this chat takes them to the bottom from well up; one for another chat does not.
   await wheel(-800)
