@@ -22,6 +22,7 @@ import InstanceRow from '@/components/InstanceRow.vue'
 import { Button } from '@/components/ui/button'
 import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { useDshInstances } from '@/composables/useDshInstances'
+import { useMergedOrderSource } from '@/composables/useMergedOrder'
 import { pii } from '@/composables/usePrivacy'
 import {
   createDshInstance,
@@ -119,6 +120,7 @@ function rowModel(inst: DshInstance): InstanceRowModel {
   return {
     id: inst.id,
     num: inst.num,
+    kind: 'desktop',
     provider: 'deepseek',
     status: { on: inst.running, title: statusTitle(inst) },
     glyph: { dir: inst.home, running: inst.running },
@@ -147,6 +149,18 @@ function rowModel(inst: DshInstance): InstanceRowModel {
 
 // Built once per data change, so a row whose instance did not change keeps the same model and does not redraw.
 const rowModels = computed(() => new Map(instances.value.map((inst) => [inst.id, rowModel(inst)])))
+
+// This table is not sorted on its own (its rows keep the list's order), but the All tab ranks them with
+// the other kinds by the facts a home does have: running, its name, and running as its last activity.
+const { orderStyle } = useMergedOrderSource('dsh', {
+  rows: () => instances.value,
+  rowKey: (inst: DshInstance) => inst.id,
+  values: (inst) => ({
+    status: inst.running,
+    name: inst.name,
+    lastActive: inst.running ? Number.MAX_SAFE_INTEGER : undefined,
+  }),
+})
 
 async function onNameSubmit(name: string): Promise<void> {
   const dialog = nameDialog.value
@@ -216,7 +230,13 @@ defineExpose({ openCreate, refresh })
 </script>
 
 <template>
-  <InstanceRow v-for="inst in instances" :key="inst.id" :columns="columns" :row="rowModels.get(inst.id)!">
+  <InstanceRow
+    v-for="inst in instances"
+    :key="inst.id"
+    :columns="columns"
+    :row="rowModels.get(inst.id)!"
+    :style="orderStyle(inst)"
+  >
     <template #primary>
       <!-- Icon-only (owner, 2026-10-06): the word is the tooltip and the aria-label, and the
            'Starting…' word becomes a spinning icon while a launch is in flight. -->

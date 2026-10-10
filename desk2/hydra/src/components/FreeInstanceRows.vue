@@ -42,6 +42,7 @@ import { DropdownMenuItem } from '@/components/ui/dropdown-menu'
 import { TableBody } from '@/components/ui/table'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { useMergedOrderSource } from '@/composables/useMergedOrder'
 import { pii } from '@/composables/usePrivacy'
 import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { useUiPrefs } from '@/composables/useUiPrefs'
@@ -136,7 +137,7 @@ const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
 // A Free login is never open or closed and has no plan the filter offers, so only its sign-in and
 // usage can set it aside (as on the CLI tab).
-const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (i: FreeInstance) => i.id,
   facts: (i: FreeInstance) => ({
@@ -152,6 +153,9 @@ const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
     { key: 'tokens', accessor: (i: FreeInstance) => tokensOf(i).total },
     ...quotaSortColumns(usageFor, (i: FreeInstance) => i.provider, now),
   ],
+  // The All tab's ranking only: a Free login has no plan size, and its own plan column sorts by provider,
+  // which means nothing beside the other kinds' plans. So its plan sorts last there.
+  mergedColumns: [{ key: 'plan', accessor: () => undefined }],
 })
 
 /** True until the first list is in, which the host draws as its skeleton. */
@@ -164,6 +168,7 @@ function rowModel(i: FreeInstance): InstanceRowModel {
   const used = tokensOf(i)
   return {
     id: i.id,
+    kind: 'free',
     num: i.num,
     dimmed: isDimmed(i),
     provider: freeLogo(i.provider),
@@ -258,6 +263,12 @@ function rowModel(i: FreeInstance): InstanceRowModel {
   }
 }
 const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+// The All tab's one ranking reads these rows' sort values, and places each row (composables/useMergedOrder.ts).
+const { orderStyle } = useMergedOrderSource('free', {
+  rows: () => visibleRows.value,
+  rowKey: (i: FreeInstance) => i.id,
+  values: sortValues,
+})
 
 /** The icon row at the top of a row's kebab (InstanceMenuHeader), in the order every table uses. */
 function menuActionsFor(i: FreeInstance): MenuIconAction[] {
@@ -488,6 +499,7 @@ defineExpose({
     <InstanceRow
       v-for="inst in visibleRows"
       :key="inst.id"
+      :style="orderStyle(inst)"
       :columns="columns"
       :row="rowModels.get(inst.id)!"
     >

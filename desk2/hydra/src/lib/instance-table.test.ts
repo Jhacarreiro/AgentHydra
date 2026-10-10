@@ -36,6 +36,7 @@ describe('instance table column model', () => {
     expect(instanceColumns(['desktop', 'cli', 'free'], { usageMode: true }).map((c) => c.key)).toEqual([
       'status',
       'name',
+      'kind',
       'session',
       'weekly',
       'plan',
@@ -49,6 +50,7 @@ describe('instance table column model', () => {
     expect(instanceColumns(['desktop', 'cli'], { usageMode: false }).map((c) => c.key)).toEqual([
       'status',
       'name',
+      'kind',
       'configDir',
       'pid',
       'uptime',

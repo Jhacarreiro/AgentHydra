@@ -49,6 +49,9 @@ export function useInstanceSource<Row>(opts: {
   facts: (row: Row) => InstanceFacts
   /** Where the sort is remembered across reloads, when it should be. */
   persisted?: PersistedSort
+  /** Sort values this source has for the All tab's one ranking only, not for its own header: a fact
+   *  its table does not sort by (a plan, a last-active time) that the other kinds do. */
+  mergedColumns?: SortableColumn<Row>[]
 }) {
   const { sortedRows, toggleSort, indicatorFor } = useSortable(
     opts.rows,
@@ -58,11 +61,17 @@ export function useInstanceSource<Row>(opts: {
   )
   const { dimmed, visible } = useInstanceFilter()
   const visibleRows = computed(() => visible(sortedRows.value, opts.facts))
+  // Every sort key's value for one row (composables/useMergedOrder.ts), read from the same accessors
+  // the header sorts by. A key the source holds no fact for is left out, so it sorts last.
+  const allColumns = [...opts.columns, ...(opts.mergedColumns ?? [])]
+  const sortValues = (row: Row): Record<string, Sortable> =>
+    Object.fromEntries(allColumns.map((c) => [c.key, c.accessor(row)]))
   return {
     sortedRows,
     toggleSort,
     indicatorFor,
     visibleRows,
+    sortValues,
     /** Rows the filter took out: said out loud in the heading beside the count. */
     hiddenByFilter: computed(() => sortedRows.value.length - visibleRows.value.length),
     isDimmed: (row: Row) => dimmed(opts.facts(row)),

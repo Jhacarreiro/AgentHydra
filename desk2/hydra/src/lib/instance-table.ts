@@ -20,6 +20,7 @@ export type InstanceTableKind = 'desktop' | 'cli' | 'free'
 export type InstanceColumnKey =
   | 'status'
   | 'name'
+  | 'kind'
   | 'configDir'
   | 'pid'
   | 'uptime'
@@ -81,6 +82,8 @@ interface ColumnDef extends Omit<InstanceColumn, 'label'> {
   kinds?: InstanceTableKind[]
   /** Only in process (default) or quota (usage) mode; both when omitted. */
   mode?: 'process' | 'quota'
+  /** Only when the table holds more than one kind (the All tab). */
+  multiKind?: boolean
 }
 
 // One list, in the order every table draws it. Columns that mean the same thing are ONE column with
@@ -104,6 +107,15 @@ const COLUMNS: ColumnDef[] = [
     sortable: true,
     head: { width: 'grow' },
     skeleton: { line: 'title', width: '28' },
+  },
+  // Which kind a row is, once the All tab ranks every kind in one list (owner, 2026-10-10: "which
+  // then just indicates whether or not they are CLI, desktop, or free"). Not sortable: the sort is the
+  // ranking, and the kind is only the label on it.
+  {
+    key: 'kind',
+    label: 'instances.colKind',
+    multiKind: true,
+    skeleton: { line: 'chip', width: '14' },
   },
   {
     key: 'configDir',
@@ -198,9 +210,16 @@ export function instanceColumns(
   return COLUMNS.filter(
     (c) =>
       (!c.kinds || c.kinds.some((k) => shown.includes(k))) &&
-      (!c.mode || (c.mode === 'quota') === opts.usageMode),
-  ).map(({ kinds: _k, mode: _m, ...c }) => c)
+      (!c.mode || (c.mode === 'quota') === opts.usageMode) &&
+      (!c.multiKind || shown.length > 1),
+  ).map(({ kinds: _k, mode: _m, multiKind: _u, ...c }) => c)
 }
+
+/** Every sortable column key, in COLUMNS order: what the All tab's one ranking sorts by
+ *  (composables/useMergedOrder.ts). */
+export const INSTANCE_SORT_KEYS: InstanceColumnKey[] = COLUMNS.filter((c) => c.sortable).map(
+  (c) => c.key,
+)
 
 /** A CLI login is named "<email> (<plan>)" by quick add; the plan has its own column. */
 export function withoutPlanSuffix(name: string, plan: string | null | undefined): string {

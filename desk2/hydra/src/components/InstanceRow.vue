@@ -26,7 +26,7 @@ import {
 import { TableCell, TableRow } from '@/components/ui/table'
 import { pii } from '@/composables/usePrivacy'
 import { useUsageMode } from '@/composables/useUsageMode'
-import { type InstanceColumn, type InstanceRowModel } from '@/lib/instance-table'
+import type { InstanceColumn, InstanceRowModel, InstanceTableKind } from '@/lib/instance-table'
 import { useTooltipConfig } from '@/lib/tooltip-config'
 import {
   resetLabel,
@@ -38,6 +38,12 @@ import {
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const props = defineProps<{ columns: InstanceColumn[]; row: InstanceRowModel }>()
+// The Type column's label: the tab names the kinds already (app.tab*).
+const KIND_LABEL: Record<InstanceTableKind, string> = {
+  desktop: 'app.tabDesktop',
+  cli: 'app.tabCli',
+  free: 'app.tabFree',
+}
 /** Whether the ⋯ menu is open: the table keeps it when it opens one menu at a time. */
 const menuOpen = defineModel<boolean>('menuOpen', { default: false })
 
@@ -164,6 +170,13 @@ function onContextMenu(e: MouseEvent): void {
           </span>
           <slot name="account-extra" />
         </div>
+      </TableCell>
+
+      <!-- Which kind this row is, on the All tab's one ranking (the Type column). -->
+      <TableCell v-else-if="col.key === 'kind'">
+        <Badge v-if="row.kind" variant="outline" class="text-muted-foreground">{{
+          $t(KIND_LABEL[row.kind])
+        }}</Badge>
       </TableCell>
 
       <TableCell v-else-if="col.key === 'configDir'" class="max-w-[16rem]">

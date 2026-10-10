@@ -45,6 +45,7 @@ import {
 import { useAppSettings } from '@/composables/useAppSettings'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { useMergedOrderSource } from '@/composables/useMergedOrder'
 import { pii } from '@/composables/usePrivacy'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
@@ -55,6 +56,7 @@ import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import { moveTargets } from '@/lib/move-chats'
 import { runUsageCatchup, selectUsageCatchup } from '@/lib/usage-catchup'
+import { planSize } from '@/lib/usage-pool'
 import IconTooltip from '@/shell/IconTooltip.vue'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -215,7 +217,7 @@ const filterFacts = (instance: CodexInstance): InstanceFacts => ({
 // the same order as the ticking one. Sorting on the tick would redraw every row every 15 s for nothing.
 const sortNow = ref(new Date())
 
-const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource({
   rows: () => instances.value,
   rowKey: (instance: CodexInstance) => instance.id,
   facts: filterFacts,
@@ -234,6 +236,21 @@ const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
       sortNow,
     ),
   ],
+  // The All tab's ranking only (a later entry with the same key replaces the one above): status is the
+  // dot's own boolean, as the Desktop rows sort it; plan is its size, as theirs is; and a running Codex
+  // desktop is "Now" last-active, as a Desktop row is. Its own table sorts none of these.
+  mergedColumns: [
+    { key: 'status', accessor: (instance: CodexInstance) => !!statusOn(instance) },
+    {
+      key: 'plan',
+      accessor: (instance: CodexInstance) => planSize(instance.account?.planLabel),
+    },
+    {
+      key: 'lastActive',
+      accessor: (instance: CodexInstance) =>
+        instance.isDesktopRunning ? Number.MAX_SAFE_INTEGER : undefined,
+    },
+  ],
 })
 
 /** What the shared row draws for one Codex instance (components/InstanceRow.vue). */
@@ -242,6 +259,7 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
   return {
     id: instance.id,
     num: instance.num,
+    kind: 'desktop',
     dimmed: isDimmed(instance),
     provider: 'codex',
     status: { on: !!statusOn(instance), title: statusTitle(instance) },
@@ -558,6 +576,12 @@ onUnmounted(() => {
 // One model per drawn row, rebuilt only when the rows or the facts they read change, so a row whose data
 // did not change gets the same prop and does not redraw.
 const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+// The All tab's one ranking reads these rows' sort values, and places each row (composables/useMergedOrder.ts).
+const { orderStyle } = useMergedOrderSource('codex', {
+  rows: () => visibleRows.value,
+  rowKey: (instance: CodexInstance) => instance.id,
+  values: sortValues,
+})
 const redeemReasons = computed(
   () => new Map(visibleRows.value.map((i) => [i.id, redeemDisabledReason(i)])),
 )
@@ -569,6 +593,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   <InstanceRow
     v-for="instance in visibleRows"
     :key="instance.id"
+    :style="orderStyle(instance)"
     :columns="columns"
     :row="rowModels.get(instance.id)!"
   >

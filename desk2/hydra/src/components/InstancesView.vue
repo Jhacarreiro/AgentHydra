@@ -79,6 +79,7 @@ import { useCodexInstances } from '@/composables/useCodexInstances'
 import { useDshInstances } from '@/composables/useDshInstances'
 import { KIND_VIEWS, type KindView, useInstanceFilter } from '@/composables/useInstanceFilter'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { provideMergedOrder, useMergedOrderSource } from '@/composables/useMergedOrder'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { useInstances } from '@/composables/useInstances'
 import { useMoveAllChats } from '@/composables/useMoveAllChats'
@@ -108,6 +109,7 @@ import {
 } from '@/lib/instance-appearance'
 import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import {
+  INSTANCE_SORT_KEYS,
   type InstanceColumnKey,
   type InstanceRowModel,
   instanceColumns,
@@ -327,6 +329,7 @@ const {
   toggleSort,
   indicatorFor,
   visibleRows,
+  sortValues,
   isDimmed,
   hiddenByFilter: claudeFiltered,
 } = useInstanceSource({
@@ -336,6 +339,21 @@ const {
   facts: filterFacts,
   persisted: { key: desktopSortKey, direction: desktopSortDirection },
   columns: sortColumns.map(holdable),
+})
+
+// The All tab's one ranking across the kinds (composables/useMergedOrder.ts). This component provides it
+// and also holds the Claude rows, so those report to it directly. Off unless more than one kind is shown.
+const mergedActive = computed(() => shownKinds.value.length > 1)
+const mergedOrder = provideMergedOrder({
+  active: mergedActive,
+  keys: INSTANCE_SORT_KEYS,
+  persisted: { key: desktopSortKey, direction: desktopSortDirection },
+})
+const { orderStyle } = useMergedOrderSource('claude', {
+  ctx: mergedOrder,
+  rows: () => visibleRows.value,
+  rowKey: (i: CMInstance) => i.dir,
+  values: sortValues,
 })
 
 /**
@@ -708,10 +726,12 @@ const columns = computed(() => instanceColumns(shownKinds.value, { usageMode: us
  *   tokens: "Tokens" and its sort arrow, the window note gone (owner, 2026-10-06)
  *   actions: one 24px icon button, a 4px gap, the 24px menu button and the cell's 12px padding
  *   (owner, 2026-10-06: icons instead of words)
+ *   kind: the "Desktop" badge (the longest of the three) and the cell's padding
  * Measured in the running table (2026-10-04): Last active came out 104 px once the Codex rows were
  * in, so its width is that, rounded up.
  */
 const COLUMN_WIDTHS: Partial<Record<InstanceColumnKey, string>> = {
+  kind: '5rem',
   pid: '3.5rem',
   uptime: '4.25rem',
   memory: '4.5rem',
@@ -732,6 +752,7 @@ function rowModel(inst: CMInstance): InstanceRowModel {
   return {
     id: inst.dir,
     num: inst.num,
+    kind: 'desktop',
     dimmed: isDimmed(inst),
     provider: 'claude',
     status: { on: inst.isRunning, pulse: true, title: status },
@@ -1628,6 +1649,7 @@ onUnmounted(() => {
         :skeleton-rows="skeletonRows"
         :widths="COLUMN_WIDTHS"
         :empty="emptyState"
+        :merged="mergedActive"
         @sort="toggleSort"
       >
         <TransitionGroup
@@ -1643,6 +1665,7 @@ onUnmounted(() => {
             :key="inst.dir"
             :columns="columns"
             :row="rowModels.get(inst.dir)!"
+            :style="orderStyle(inst)"
             :menu-open="rowMenuOpen === inst.dir"
             @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >

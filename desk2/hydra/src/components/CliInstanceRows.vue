@@ -50,6 +50,7 @@ import { TableBody } from '@/components/ui/table'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
+import { useMergedOrderSource } from '@/composables/useMergedOrder'
 import { useInstances } from '@/composables/useInstances'
 import { pii, piiDisplayName, piiName } from '@/composables/usePrivacy'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
@@ -175,7 +176,7 @@ const tokenWindow = useDesktopTokenWindow()
 // fact for (uptime, memory, pid) leaves them in list order.
 const { desktopSortKey, desktopSortDirection } = useUiPrefs()
 
-const { visibleRows, hiddenByFilter, isDimmed } = useInstanceSource({
+const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource({
   rows: () => cliInstances.value,
   rowKey: (i: CliInstance) => i.id,
   facts: filterFacts,
@@ -234,6 +235,7 @@ function rowModel(inst: CliInstance): InstanceRowModel {
   return {
     id: inst.id,
     num: inst.num,
+    kind: 'cli',
     dimmed: isDimmed(inst),
     status: {
       on: inst.loggedIn,
@@ -594,6 +596,12 @@ function nudgeNote(inst: CliInstance): { ok: boolean; label: string; description
 
 // One model and one nudge note per visible row, built once per change instead of in the template.
 const rowModels = computed(() => new Map(visibleRows.value.map((i) => [i.id, rowModel(i)])))
+// The All tab's one ranking reads these rows' sort values, and places each row (composables/useMergedOrder.ts).
+const { orderStyle } = useMergedOrderSource('cli', {
+  rows: () => visibleRows.value,
+  rowKey: (i: CliInstance) => i.id,
+  values: sortValues,
+})
 const nudgeNotes = computed(() => new Map(visibleRows.value.map((i) => [i.id, nudgeNote(i)])))
 
 // Move logins to the other PC (CliLoginMoveDialog.vue, server/src/core/cli-login-move.ts).
@@ -687,6 +695,7 @@ defineExpose({
     <InstanceRow
       v-for="inst in visibleRows"
       :key="inst.id"
+      :style="orderStyle(inst)"
       :columns="columns"
       :row="rowModels.get(inst.id)!"
     >

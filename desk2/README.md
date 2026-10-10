@@ -825,6 +825,14 @@ card picks the period, 24 hours, 7 days, 30 days or All time (owner, 2026-10-10:
 days, all time, et cetera"; `composables/useUsagePeriod.ts`, remembered): Desktop and CLI read that spend period,
 Free its daily record's days (today for 24 hours; the record keeps 30, so its All time is those 30 and says so).
 
+**All is one ranked list** (owner, 2026-10-10: "for the All tab in instances, I would like the desktop, CLI and free
+combined into a single table. Which then just indicates whether or not they are CLI, desktop, or free, but sorted by
+tokens"). On the All tab every kind's rows are one list in the header's sort, Tokens included, with a Type column
+saying Desktop, CLI or Free; the other tabs are as before. Each kind keeps its own rows component and reports its
+rows' sort values (`hydra/src/composables/useMergedOrder.ts`); the page sorts them together with the tables' own
+`useSortable`, and the table lays out as a grid whose rows take their rank as CSS `order`, since a table cannot
+interleave the rows of two bodies (`components/InstanceTable.vue`, `merged`).
+
 **A red mark means failing, not one failure** (owner, 2026-10-08: no red marks "unless the account is dead";
 `server/src/free-instances/health.ts`). Desk counts each account's messages over the last hour, whoever sent them,
 and `GET /api/free/status` returns them as `health` (`sent`, `failed`, `failing`, `reasons`): failing is 90% or more
