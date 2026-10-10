@@ -165,4 +165,6 @@ export interface FreeStatus {
   health?: Record<string, FreeHealth>
   instances: FreeInstance[]
   jobs: FreeJob[]
+  /** How many threads have a message running: a count needs no thread list (`/threads` holds ~22,000, 8 MB). */
+  running: number
 }

@@ -252,7 +252,8 @@ export class FreeInstances {
       const hour = healthOf(this.outcomes.get(i.id), now)
       if (hour) health[i.id] = hour
     }
-    return { ready: this.runtime.ready(), tokens, health, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    const running = this.store.data.threads.reduce((n, t) => n + (t.status === 'running' ? 1 : 0), 0)
+    return { ready: this.runtime.ready(), tokens, health, running, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   /** The last `days` days' messages by account and model (stats.ts). */
   stats(days: number): FreeStatRow[] { return statRows(this.store.data.stats ?? {}, days, Date.now()) }
@@ -305,18 +306,20 @@ export class FreeInstances {
    * chat list and saves once: a save per chat wrote the whole store (5 MB, fsync'd) for each, and one account's list
    * of 1,493 chats held the server's one thread for 16 s, 30 to 80 s on a busy PC, the sidebar frozen meanwhile
    * (2026-10-09). `used` false for a chat-list refresh: it records the chat but is not a use, so "last used" stays.
+   * `known` is the threads by id, for a caller noting many.
    */
-  private noteThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true): boolean {
+  private noteThread(r: FreeRequest, status: FreeThread['status'], chatId = r.chatId, error: string | null = null, serverId?: string, title?: string, createdAt?: number, used = true, known?: Map<string, FreeThread>): boolean {
     if (!chatId || !UUID.test(chatId)) return false
     const id = `${r.instanceId}/${chatId}`
     // A forgotten chat used again (a message, a track, a read) is wanted again: the chat-list read keeps it current.
     const forgotten = this.store.data.forgotten
     if (used && forgotten?.includes(id)) this.store.data.forgotten = forgotten.filter(f => f !== id)
-    let thread = this.store.data.threads.find(t => t.id === id)
+    let thread = known ? known.get(id) : this.store.data.threads.find(t => t.id === id)
     if (!thread) {
       const created = createdAt || Date.now()
       thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: created, updatedAt: used ? Date.now() : created, error }
       this.store.data.threads.push(thread)
+      known?.set(id, thread)
     }
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
@@ -403,10 +406,17 @@ export class FreeInstances {
     }
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
-    if (result.chats) for (const chat of result.chats) {
-      if (chat.is_temporary === true && !this.store.data.forgotten?.includes(`${r.instanceId}/${chat.chat_id}`)) {
-        const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chat.chat_id)
-        this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false)
+    if (result.chats) {
+      // Looked up by id, not searched per chat: an account's list of ~1,500 chats against ~22,000 threads held the
+      // server 2 to 6 s a list, every list read (2026-10-10, loop-stalls.jsonl: 220 s in a day).
+      const known = new Map(this.store.data.threads.map(t => [t.id, t]))
+      const forgotten = new Set(this.store.data.forgotten)
+      for (const chat of result.chats) {
+        const id = `${r.instanceId}/${chat.chat_id}`
+        if (chat.is_temporary === true && !forgotten.has(id)) {
+          const existing = known.get(id)
+          this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false, known)
+        }
       }
     }
     if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {

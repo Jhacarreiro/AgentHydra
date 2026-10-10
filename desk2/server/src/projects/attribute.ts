@@ -49,10 +49,13 @@ const word = (s: string) => s.toLowerCase().replace(/[^a-z0-9]+/g, '')
 export class SpotIndex<S extends Spot = Spot> {
   private readonly byPath = new Map<string, S>()
   private readonly names: { token: string; spot: S }[] = []
+  /** The most slashes a project's folder has: a deeper folder of a path cannot be one. */
+  private readonly depth: number = 0
 
   /** `aliases` gives every spelling a project's folder is reached by (a junction and its target). */
   constructor(spots: readonly S[], aliases: (path: string) => string[] = (p) => [p]) {
     for (const s of spots) for (const a of aliases(s.path)) if (!this.byPath.has(spelling(a))) this.byPath.set(spelling(a), s)
+    for (const p of this.byPath.keys()) this.depth = Math.max(this.depth, p.split('/').length - 1)
     const owners = new Map<string, Set<S>>()
     for (const s of spots) {
       for (const token of new Set([word(s.name), word(basename(s.path))])) {
@@ -66,17 +69,21 @@ export class SpotIndex<S extends Spot = Spot> {
     for (const [token, set] of owners) if (set.size === 1) this.names.push({ token, spot: [...set][0]! })
   }
 
-  /** Every project whose folder is `path` or holds it, the nearest first. */
+  /** Every project whose folder is `path` or holds it, the nearest first. Only the folders as shallow as the deepest
+   *  project are looked at: a "path" can be a JPEG's base64 (it begins "/9j/" and runs 200 KB), and walking that up a
+   *  slash at a time held the server 2 to 6 s a transcript (2026-10-10, loop-stalls.jsonl: 206 s in a day). */
   private holders(path: string): S[] {
+    const p = spelling(path)
+    const folders: string[] = []
+    let at = p.indexOf('/')
+    for (let above = 0; at >= 0 && above <= this.depth; above++, at = p.indexOf('/', at + 1)) if (at > 0) folders.push(p.slice(0, at))
+    if (at < 0) folders.push(p)
     const out: S[] = []
-    let p = spelling(path)
-    for (;;) {
-      const hit = this.byPath.get(p)
+    for (let i = folders.length - 1; i >= 0; i--) {
+      const hit = this.byPath.get(folders[i]!)
       if (hit && !out.includes(hit)) out.push(hit)
-      const cut = p.lastIndexOf('/')
-      if (cut <= 0) return out
-      p = p.slice(0, cut)
     }
+    return out
   }
 
   /** The project whose folder is `path` or holds it, the nearest one up. */

@@ -102,7 +102,7 @@ type ListRow = CliMayteWorkerView & {
   remote?: { pc: string; name: string; at: number; stale: boolean }
   free?: FreeThread
 }
-const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, forgetThread, errors: freeErrors, activeCount: freeActiveCount } = useFreeInstances()
+const { threads: freeThreads, instances: freeInstances, loaded: freeLoaded, refreshFree, forgetThread, errors: freeErrors, activeCount: freeActiveCount } = useFreeInstances({ threads: true })
 const selectedFree = ref<{ instanceId: string; chatId?: string } | null>(null)
 
 /** Takes a Free chat off Desk's list; the thread leaves the rows at once. An open view of it goes back to the list. */

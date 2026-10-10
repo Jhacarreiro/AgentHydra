@@ -1,10 +1,18 @@
-import { computed, reactive, ref, shallowRef } from 'vue'
+import { onScopeDispose, reactive, ref, shallowRef } from 'vue'
 import type { FreeCommand, FreeHealth, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
 const instances = ref<FreeInstance[]>([])
 const threads = ref<FreeThread[]>([])
+/** How many threads have a message running, from the status read. */
+const running = ref(0)
+/** The pages listing the threads that are open (CliMayte's): only they read the list. It holds every private chat
+ *  Desk has seen, ~22,000 and 8 MB, and HSwarm read it on every load and every two minutes for its running count
+ *  (owner, 2026-10-10: HSwarm "is taking a really long time to load"). */
+let threadReaders = 0
+let threadsRead = false
+let readingThreads: Promise<void> | null = null
 /** Each account's token estimate by its id (server/src/free-instances/tokens.ts). */
 const tokens = shallowRef<Record<string, FreeTokens>>({})
 /** Each account's last hour of messages by its id (server/src/free-instances/health.ts). */
@@ -36,10 +44,18 @@ function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
   return same ? old : merged
 }
 
+/** The thread list, read again; a read already running is shared. */
+function readThreads(): Promise<void> {
+  readingThreads ??= freeApi.threads()
+    .then((list) => { threads.value = keepUnchanged(threads.value, list); threadsRead = true })
+    .finally(() => { readingThreads = null })
+  return readingThreads
+}
+
 async function snapshot(): Promise<void> {
-  const [status, list] = await Promise.all([freeApi.status(), freeApi.threads()])
+  const [status] = await Promise.all([freeApi.status(), threadReaders ? readThreads() : null])
   instances.value = keepUnchanged(instances.value, status.instances)
-  threads.value = keepUnchanged(threads.value, list)
+  running.value = status.running
   const estimate = status.tokens ?? {}
   if (JSON.stringify(estimate) !== JSON.stringify(tokens.value)) tokens.value = estimate
   const hour = status.health ?? {}
@@ -202,7 +218,13 @@ function refreshFree(opts: { silent?: boolean } = {}): Promise<void> {
   return refreshing
 }
 
-export function useFreeInstances() {
+/** `threads`: the caller lists the threads, so the list is read while it is open (it is read for no one else). */
+export function useFreeInstances(opts: { threads?: boolean } = {}) {
+  if (opts.threads) {
+    threadReaders++
+    onScopeDispose(() => { threadReaders-- })
+    if (!threadsRead) void readThreads().catch(() => {})
+  }
   return { instances, threads, tokens, health, jobs, errors, loaded, loading, loadError, busy, run, logout, planSeen, remove, forgetThread, recover, refreshFree,
-    activeCount: computed(() => threads.value.filter(t => t.status === 'running').length) }
+    activeCount: running }
 }

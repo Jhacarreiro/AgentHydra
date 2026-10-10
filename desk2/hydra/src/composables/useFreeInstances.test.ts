@@ -2,6 +2,7 @@
 // every time (owner, 2026-10-06). Desk now reads the accounts itself (server/src/free-instances/refresh.ts): the
 // tab's refresh only reads the list, and Desk's own reads (FreeJob.auto) show no spinner.
 import { expect, it } from 'bun:test'
+import { effectScope } from 'vue'
 import type { FreeInstance, FreeStatus } from '@desk/shared/free-instances'
 import { useFreeInstances } from './useFreeInstances'
 
@@ -13,6 +14,7 @@ const account: FreeInstance = {
 it("opening the tab starts no operation and spins nothing, while Desk's own read runs", async () => {
   const status: FreeStatus = {
     ready: true,
+    running: 0,
     instances: [account],
     jobs: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', instanceId: account.id, provider: 'claude', command: 'auth', state: 'running', phase: 'working', startedAt: 1, auto: true }],
   }
@@ -100,6 +102,33 @@ it("another caller's failed message leaves the row unmarked; the page's own fail
     expect(free.errors[other.id] ?? '').toBe('')
     expect(await free.run(other, 'chat', { prompt: 'synthetic prompt' })).toEqual(refused)
     expect(free.errors[other.id]).toBe('Synthetic refusal')
+  } finally {
+    globalThis.fetch = realFetch
+  }
+})
+
+// 2026-10-10: HSwarm read every private chat Desk has seen (~22,000, 8 MB) on each load and every two minutes, only to
+// count the running ones. The count comes with the status; the list is read only while a page listing it is open.
+it('the running count needs no thread list; a page that lists the threads reads it while it is open', async () => {
+  const reads: string[] = []
+  const realFetch = globalThis.fetch
+  globalThis.fetch = (async (url: string | URL) => {
+    const path = String(url).split('/').pop()!
+    reads.push(path)
+    return new Response(path === 'threads' ? '[]' : JSON.stringify({ ready: true, running: 2, instances: [account], jobs: [] }), { status: 200 })
+  }) as typeof fetch
+  try {
+    const free = useFreeInstances()
+    await free.refreshFree({ silent: true })
+    expect([reads, free.activeCount.value]).toEqual([['status'], 2])
+    const page = effectScope()
+    page.run(() => useFreeInstances({ threads: true }))
+    await free.refreshFree({ silent: true })
+    expect(reads.filter(r => r === 'threads').length).toBeGreaterThan(0)
+    page.stop()
+    reads.length = 0
+    await free.refreshFree({ silent: true })
+    expect(reads).toEqual(['status'])
   } finally {
     globalThis.fetch = realFetch
   }
