@@ -132,8 +132,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   (`web/src/components/panes/settings.ts` `sectionFor`). Desk's links land on the node: a task row
   opens CliMayte on that task, a job row Jobs on that job.
   **HSwarm's Overview** (owner, 2026-10-10) holds CliMayte's card (tasks offloaded, runs, tokens, spent, and "What
-  works" per kind of task and model, `OffloadStatsCard`) and lists Key health by provider most-used first (tokens
-  in the range). Its **Model results** are one card per table or chart, each with a caption, every list the top 10
+  works" per kind of task and model, `OffloadStatsCard`) and lists Key health by provider most-used first, each row
+  saying the tokens it used in the range (owner, 2026-10-10: it seemed "to not be, like, sorted"). Key health and
+  Tokens by provider show their first eight rows and fold the rest behind "+N more" (owner: "there's no 'View
+  More.'"). Its **Model results** are one card per table or chart, each with a caption, every list the top 10
   with Show more (`hswarm/HSwarmModelResults.vue`): thumbs up and down per model from HSwarm's tasks and CliMayte's
   scorecard with an HSwarm / CliMayte / Both toggle, tokens per successful task, failed share, kept after 1 day and
   tasks per day, the charts bars with a trailing three-bar average (`charts/TrendBars.vue`). Tokens per successful
@@ -266,7 +268,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   Right under the up arrow, above the down arrow, an eye peeks at the message the up arrow would go to without scrolling (owner, 2026-10-10: "show me what
   the previous message was in ... a slide-down tray. Kind of like the Session details thing works"): a tray slides
   down over the transcript's top with that message, stays two seconds, stays while the pointer is on it and goes a
-  second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`).
+  second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`). The message sits in the sent
+  bubble's lighter grey, clamped at its 180px with a fade and Read more (owner, 2026-10-10: "it needs to cap off a
+  little bit better with a 'read more.' ... a lighter gray bubble").
 - **One shimmer at a time, and slower** (owner, 2026-10-10: the run's line and the working line were "excessively
   shimmery"; Claude Desktop has one, "the upper one. And then as it changes, it would ... step down"). Only the newest
   live row of the turn shimmers: a run with a call going, thinking as it streams, a file being sent. With none, the
@@ -810,6 +814,13 @@ With the Free rows on screen, Instances' Usage history card shows the Free total
 the tokens of all Free accounts, of Claude and of ChatGPT in the table's window with the answered share, answered
 by model, and Free tokens per day by provider (`hydra/src/components/FreeSummary.vue`, `lib/free-stats.ts`); it
 lists no row per account (owner, 2026-10-08: "don't need this").
+
+**Desktop and CLI numbers on Usage history** (owner, 2026-10-10: "the free shows ... tokens, but then CLI doesn't.
+Neither does desktop, and all only shows, like, free ... CLI doesn't show model stats, neither does desktop"). The
+card follows the table's tab: Desktop and CLI each have a header line (tokens and sessions over 7 days) and, opened,
+tiles and their models by tokens, top eight then "+N more", from one 7-day spend report per source (CLI is `cli`
+and `climayte` merged by model; `hydra/src/components/SpendSummary.vue`, `lib/usage-stats.ts`). All shows the
+Desktop, CLI and Free blocks, and its header adds the three over the same 7 days.
 
 **A red mark means failing, not one failure** (owner, 2026-10-08: no red marks "unless the account is dead";
 `server/src/free-instances/health.ts`). Desk counts each account's messages over the last hour, whoever sent them,

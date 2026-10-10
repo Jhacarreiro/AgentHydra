@@ -1585,7 +1585,7 @@ onUnmounted(() => {
         class="px-3 pb-3"
         @signed-in="refreshCliInstances({ silent: true })"
       />
-      <InstancesSummary :free="freeShown" />
+      <InstancesSummary :view="kindView" />
 
       <div
         v-if="desktopWarning"

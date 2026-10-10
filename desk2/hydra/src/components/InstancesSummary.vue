@@ -7,34 +7,50 @@
 // both fetched on mount, so the chart is ready by the time the card is opened: the tokens are one request
 // for the 14 days, not one spend report per source. With the Free accounts on screen it shows theirs first (FreeSummary):
 // their token totals and success rate in the header, the totals, accounts, models and tokens per day when open.
-import type { FleetUsageHistory } from '@agenthydra/server/types'
+// Owner, 2026-10-10: each tab shows its own part in the header and when open: Desktop and CLI tokens, sessions, turns
+// and models over the last 7 days (SpendSummary); All shows Desktop, CLI and Free together. The table's tab is `view`.
+import type { FleetUsageHistory, SpendReport } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
 import { useElementSize, useStorage } from '@vueuse/core'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import FreeSummary from '@/components/FreeSummary.vue'
+import SpendSummary from '@/components/SpendSummary.vue'
 import { useFreeInstances } from '@/composables/useFreeInstances'
+import type { KindView } from '@/composables/useInstanceFilter'
 import { FREE_STAT_DAYS, refreshFreeStats, useFreeStats } from '@/composables/useFreeStats'
 import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
-import { getFleetUsageHistory, getTokensByDay } from '@/lib/api'
+import { getFleetUsageHistory, getSpend, getTokensByDay } from '@/lib/api'
 import { axisMax, seriesColor, ticks } from '@/lib/chart'
 import { answeredShare, summarizeFree } from '@/lib/free-stats'
 import { formatTokens } from '@/lib/kit'
 import { dayLabel, formatAt, type PlotBox, segmentPaths } from '@/lib/usage-history'
+import { summarizeUsage, USAGE_DAYS } from '@/lib/usage-stats'
 
-const props = defineProps<{ /** The Free accounts are on screen. */ free?: boolean }>()
+const props = defineProps<{ /** The table's tab: All, Desktop, CLI or Free. */ view: KindView }>()
 const { t } = useI18n()
 const open = useStorage('agenthydra.instances.summaryOpen', false)
+
+const showFree = computed(() => props.view === 'all' || props.view === 'free')
+const showDesktop = computed(() => props.view === 'all' || props.view === 'desktop')
+const showCli = computed(() => props.view === 'all' || props.view === 'cli')
 
 // The Free record is read again whenever an account's numbers move (a message ended), while the Free rows show.
 const { instances: freeInstances, tokens: freeTokens, health: freeHealth } = useFreeInstances()
 const { rows: freeRows } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
-watch([() => props.free, freeTokens, freeHealth], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
+watch([showFree, freeTokens, freeHealth], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
+// The Free accounts' record; null with no Free accounts. Its totals are in the Free card's own window; the All line
+// takes the same USAGE_DAYS as Desktop and CLI from its days (oldest first), so its sum is one window.
+const freeSummary = computed(() =>
+  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, FREE_STAT_DAYS, Date.now()) : null,
+)
+const freeAll = computed(() => freeSummary.value?.totals.all ?? null)
+const freeInDays = computed(() => (freeSummary.value?.days ?? []).slice(-USAGE_DAYS).reduce((n, d) => n + d.claude + d.chatgpt, 0))
 const freeLine = computed(() => {
-  if (!props.free || !freeInstances.value.length) return ''
-  const all = summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, FREE_STAT_DAYS, Date.now()).totals.all
+  const all = freeAll.value
+  if (!all) return ''
   const share = answeredShare(all)
   return t('freeInstances.stats.headerLine', { tokens: formatTokens(all.tokens), answered: share === null ? '–' : `${Math.round(share * 100)}%`, days: FREE_STAT_DAYS })
 })
@@ -137,6 +153,74 @@ const tokenHours = computed(() =>
 const tokensEmpty = computed(
   () => tokenDays.value !== null && tokenDays.value.every((d) => d.values.every((v) => v === 0)),
 )
+
+// Desktop and CLI over the last 7 days: one spend report per source, read on mount. CLI is cli plus climayte.
+const SPEND_SOURCES = ['desktop', 'cli', 'climayte'] as const
+type SpendSource = (typeof SPEND_SOURCES)[number]
+const spend = ref<Partial<Record<SpendSource, SpendReport>>>({})
+const spendFailed = ref<Partial<Record<SpendSource, boolean>>>({})
+async function loadSpend(source: SpendSource) {
+  try {
+    // Awaited before the spread: `{ ...spend.value, [source]: await ... }` copies the reports as they were when the
+    // request went out, so the last of the three to answer dropped the other two.
+    const report = await getSpend('7d', source)
+    spend.value = { ...spend.value, [source]: report }
+  } catch {
+    spendFailed.value = { ...spendFailed.value, [source]: true }
+  }
+}
+onMounted(() => { for (const s of SPEND_SOURCES) void loadSpend(s) })
+
+const desktopUsage = computed(() => (spend.value.desktop ? summarizeUsage([spend.value.desktop]) : null))
+const desktopFailed = computed(() => !!spendFailed.value.desktop)
+const cliUsage = computed(() => (spend.value.cli && spend.value.climayte ? summarizeUsage([spend.value.cli, spend.value.climayte]) : null))
+const cliFailed = computed(() => !!spendFailed.value.cli || !!spendFailed.value.climayte)
+const desktopTiles = computed(() => {
+  const u = desktopUsage.value
+  if (!u) return []
+  return [
+    { key: 'tokens', label: t('instances.summary.tileTokens'), value: formatTokens(u.tokens) },
+    { key: 'sessions', label: t('instances.summary.tileSessions'), value: String(u.sessions) },
+    { key: 'turns', label: t('instances.summary.tileTurns'), value: String(u.turns) },
+  ]
+})
+const cliTiles = computed(() => {
+  const all = cliUsage.value
+  const cli = spend.value.cli ? summarizeUsage([spend.value.cli]) : null
+  const climayte = spend.value.climayte ? summarizeUsage([spend.value.climayte]) : null
+  if (!all || !cli || !climayte) return []
+  return [
+    { key: 'all', label: t('instances.summary.tileAllCli'), value: formatTokens(all.tokens) },
+    { key: 'cli', label: sourceLabel('cli'), value: formatTokens(cli.tokens) },
+    { key: 'climayte', label: sourceLabel('climayte'), value: formatTokens(climayte.tokens) },
+  ]
+})
+
+// The header line: the tab's own part; All adds Desktop, CLI and Free, its parts in the tooltip.
+const headerLine = computed(() => {
+  const d = desktopUsage.value
+  const c = cliUsage.value
+  if (props.view === 'free') return freeLine.value
+  if (props.view === 'desktop') {
+    return d ? t('instances.summary.headerDesktop', { tokens: formatTokens(d.tokens), sessions: d.sessions, days: USAGE_DAYS }) : ''
+  }
+  if (props.view === 'cli') {
+    return c ? t('instances.summary.headerCli', { tokens: formatTokens(c.tokens), sessions: c.sessions, days: USAGE_DAYS }) : ''
+  }
+  if (!d || !c) return ''
+  return t('instances.summary.headerAll', { tokens: formatTokens(d.tokens + c.tokens + freeInDays.value), days: USAGE_DAYS })
+})
+const headerTip = computed(() => {
+  const d = desktopUsage.value
+  const c = cliUsage.value
+  if (props.view !== 'all' || !d || !c) return undefined
+  return t('instances.summary.headerAllTip', {
+    desktop: formatTokens(d.tokens),
+    cli: formatTokens(c.tokens),
+    free: formatTokens(freeInDays.value),
+    days: USAGE_DAYS,
+  })
+})
 </script>
 
 <template>
@@ -152,7 +236,7 @@ const tokensEmpty = computed(
         :class="{ 'rotate-90': open }"
       />
       <span class="text-xs font-semibold whitespace-nowrap">{{ $t('instances.summary.title') }}</span>
-      <span v-if="freeLine" class="truncate text-2xs text-muted-foreground tabular-nums">{{ freeLine }}</span>
+      <span v-if="headerLine" class="truncate text-2xs text-muted-foreground tabular-nums" :title="headerTip">{{ headerLine }}</span>
       <svg
         v-if="sparkPaths.length"
         class="ms-auto shrink-0 overflow-visible text-primary"
@@ -177,7 +261,21 @@ const tokensEmpty = computed(
     </button>
 
     <div v-if="open" class="space-y-4 border-t p-3">
-      <FreeSummary v-if="free" />
+      <SpendSummary
+        v-if="showDesktop"
+        :title="$t('instances.summary.desktopTitle', { days: USAGE_DAYS })"
+        :tiles="desktopTiles"
+        :summary="desktopUsage"
+        :failed="desktopFailed"
+      />
+      <SpendSummary
+        v-if="showCli"
+        :title="$t('instances.summary.cliTitle', { days: USAGE_DAYS })"
+        :tiles="cliTiles"
+        :summary="cliUsage"
+        :failed="cliFailed"
+      />
+      <FreeSummary v-if="showFree" />
       <div>
         <h3 class="mb-1 text-xs font-semibold">{{ $t('instances.summary.fleetTitle') }}</h3>
         <p v-if="historyFailed" class="py-6 text-center text-2xs text-muted-foreground">

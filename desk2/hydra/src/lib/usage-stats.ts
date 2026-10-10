@@ -1,0 +1,42 @@
+// The Desktop and CLI blocks of the Usage history card (owner, 2026-10-10: "CLI doesn't show model stats, neither does
+// desktop, like free does ... I would like that added in"). A source's spend report (getSpend) becomes its totals and
+// a list of models. CLI is two reports, cli and climayte (CliMayte's workers run on the CLI accounts), merged by model.
+// Tokens are the weighted measure the card's tokens-per-day bars use.
+import type { SpendReport } from '@agenthydra/server/types'
+
+/** The window the Desktop and CLI blocks read, in days (the reports are fetched for '7d'). */
+export const USAGE_DAYS = 7
+
+export interface UsageTotals {
+  tokens: number
+  sessions: number
+  turns: number
+}
+export interface UsageModel extends UsageTotals {
+  model: string
+}
+export interface UsageSummary extends UsageTotals {
+  models: UsageModel[]
+}
+
+const byTokens = (a: UsageModel, b: UsageModel) => b.tokens - a.tokens || a.model.localeCompare(b.model)
+
+/** The totals of the reports added up, and their models merged by id, the most tokens first. A missing report counts for nothing. */
+export function summarizeUsage(reports: ReadonlyArray<SpendReport | null | undefined>): UsageSummary {
+  const totals: UsageTotals = { tokens: 0, sessions: 0, turns: 0 }
+  const models = new Map<string, UsageModel>()
+  for (const r of reports) {
+    if (!r) continue
+    totals.tokens += r.totalWeighted
+    totals.sessions += r.sessions
+    for (const b of r.byModel) {
+      const m = models.get(b.key) ?? { model: b.key, tokens: 0, sessions: 0, turns: 0 }
+      m.tokens += b.weighted
+      m.sessions += b.sessions
+      m.turns += b.turns
+      models.set(b.key, m)
+      totals.turns += b.turns
+    }
+  }
+  return { ...totals, models: [...models.values()].sort(byTokens) }
+}
