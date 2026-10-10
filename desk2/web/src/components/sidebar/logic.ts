@@ -618,18 +618,19 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
 /**
  * The compact mode's ring round a row's project icon (ProjectRing.vue): like a story ring, only a chat with something
  * going on has one (owner, 2026-10-10: "so I can still see which chats have activity, like which are active and which
- * are waiting on me"). A 2px two-tone gradient per dot state: running (the dot's blinking gray, and an HSwarm job) is
+ * are waiting on me"). A 1.5px gradient per dot state, fading from the dot's colour at 80% to 40% (owner, 2026-10-10:
+ * "slightly more subtle" than the first 2px, full-strength ring): running (the dot's blinking gray, and an HSwarm job) is
  * the live blue, needs you and unread the dot's orange, done-unread its green, an error its red; a usage limit keeps the
  * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own; closed dims it.
  * Every class string is written out whole, so Tailwind sees each one.
  */
 const RING_GRADIENT = {
-  muted: 'bg-[linear-gradient(135deg,var(--accent-text),color-mix(in_srgb,var(--accent-text)_55%,white))]',
-  warning: 'bg-[linear-gradient(135deg,var(--status-needs-you),color-mix(in_srgb,var(--status-needs-you)_55%,white))]',
-  success: 'bg-[linear-gradient(135deg,var(--status-done),color-mix(in_srgb,var(--status-done)_55%,white))]',
-  danger: 'bg-[linear-gradient(135deg,var(--status-error),color-mix(in_srgb,var(--status-error)_55%,white))]',
-  swarm: 'bg-[linear-gradient(135deg,var(--accent-text),color-mix(in_srgb,var(--accent-text)_55%,white))]',
-  limited: 'bg-[var(--status-limited)]'
+  muted: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
+  warning: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-needs-you)_80%,transparent),color-mix(in_srgb,var(--status-needs-you)_40%,transparent))]',
+  success: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-done)_80%,transparent),color-mix(in_srgb,var(--status-done)_40%,transparent))]',
+  danger: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--status-error)_80%,transparent),color-mix(in_srgb,var(--status-error)_40%,transparent))]',
+  swarm: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
+  limited: 'bg-[color-mix(in_srgb,var(--status-limited)_70%,transparent)]'
 }
 export function glyphRingClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion' | 'dim'>): string {
   const dim = g.dim ? ' opacity-50' : ''
