@@ -294,7 +294,8 @@ const outcomeChartData = computed(() => {
   return data
 })
 
-// Most used first: the tokens each provider used over the usage range (the bar is its ready keys). A
+// Most used first: the tokens each provider used over the usage range, printed on its row so the order reads (the bar
+// and the number are its ready keys; owner, 2026-10-10: "the Key Health by provider seems to not be, like, sorted"). A
 // provider with no usage in the range sorts last; ties go by name.
 const healthData = computed(() => {
   const used = new Map((usage.value?.providers ?? []).map((p): [string, number] => [p.name, p.tokens]))
@@ -302,34 +303,26 @@ const healthData = computed(() => {
     .filter((p: any) => p.keys > 0)
     .sort((a: any, b: any) => (used.get(b.name) ?? 0) - (used.get(a.name) ?? 0) || a.name.localeCompare(b.name))
 
-  return providers.map((p: any) => ({
-    key: p.name,
-    label: `${p.name}${p.enabled ? '' : ' (off)'}`,
-    value: p.ready || 0,
-    detail: `${p.ready || 0}/${p.keys || 0} ready`,
-  }))
-})
-
-const moneyData = computed(() => {
-  const list = (usage.value?.providers ?? []).filter((p) => p.tokens > 0)
-  const row = (name: string, value: number, usd: number) => ({
-    key: name,
-    label: `${name} · ${fineUsd(usd)}`,
-    value,
-    detail: fineUsd(usd),
+  return providers.map((p: any) => {
+    const tokens = used.get(p.name) ?? 0
+    return {
+      key: p.name,
+      label: `${p.name}${p.enabled ? '' : ' (off)'}${tokens > 0 ? ` · ${t('hswarm.v.overview.tokensUsed', { n: formatTokens(tokens) })}` : ''}`,
+      value: p.ready || 0,
+      detail: `${p.ready || 0}/${p.keys || 0} ready`,
+    }
   })
-  if (list.length <= 8) return list.map((p) => row(p.name, p.tokens, p.usd))
-
-  const rest = list.slice(7)
-  return [
-    ...list.slice(0, 7).map((p) => row(p.name, p.tokens, p.usd)),
-    row(
-      t('hswarm.v.overview.otherProviders', { n: rest.length }),
-      rest.reduce((sum, p) => sum + p.tokens, 0),
-      rest.reduce((sum, p) => sum + p.usd, 0),
-    ),
-  ]
 })
+
+const moneyData = computed(() =>
+  (usage.value?.providers ?? [])
+    .filter((p) => p.tokens > 0)
+    .map((p) => ({ key: p.name, label: `${p.name} · ${fineUsd(p.usd)}`, value: p.tokens, detail: fineUsd(p.usd) })),
+)
+
+// Both provider cards show their first BAR_TOP rows and fold the rest behind "+N more" (owner, 2026-10-10: "there's no
+// 'View More.' It's just all out there"), each colour kept by the whole list's order.
+const BAR_TOP = 8
 
 // Doctor run
 async function runDoctor() {
@@ -576,7 +569,10 @@ function formatPercent(value: number): string {
         </CardHeader>
         <CardContent>
           <BarRows
-            :rows="healthData"
+            :rows="healthData.slice(0, BAR_TOP)"
+            :more="healthData.slice(BAR_TOP)"
+            :more-label="t('analytics.showMore', { n: healthData.length - BAR_TOP })"
+            :order="healthData.map((r) => r.key)"
             :format="formatNumber"
           />
         </CardContent>
@@ -589,7 +585,10 @@ function formatPercent(value: number): string {
         </CardHeader>
         <CardContent>
           <BarRows
-            :rows="moneyData"
+            :rows="moneyData.slice(0, BAR_TOP)"
+            :more="moneyData.slice(BAR_TOP)"
+            :more-label="t('analytics.showMore', { n: moneyData.length - BAR_TOP })"
+            :order="moneyData.map((r) => r.key)"
             :format="formatTokens"
           />
         </CardContent>
