@@ -225,12 +225,20 @@ async function loadJobs() {
   }
 }
 
+let refreshing: Promise<void> | null = null
+
 /** Everything the HSwarm tab shows, read once: status, state, the clients and the jobs. Used by
- *  lib/warm-data.ts (about every 2 minutes) and when the tab opens. Never throws. */
-async function refreshHswarm(): Promise<void> {
-  await fetchStatus()
-  if (!status.value.running) return
-  await Promise.all([fetchState(), loadClients(), loadJobs(), refreshAccountNames()])
+ *  lib/warm-data.ts (about every 2 minutes) and when the tab opens. Never throws. An ask while a read runs shares it:
+ *  the tab opening and the warm cycle asked together, and every request went twice (2026-10-10, a cold load). */
+function refreshHswarm(): Promise<void> {
+  refreshing ??= (async () => {
+    await fetchStatus()
+    if (!status.value.running) return
+    await Promise.all([fetchState(), loadClients(), loadJobs(), refreshAccountNames()])
+  })().finally(() => {
+    refreshing = null
+  })
+  return refreshing
 }
 
 export function useHswarmApi() {

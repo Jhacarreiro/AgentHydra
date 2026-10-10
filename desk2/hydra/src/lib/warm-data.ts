@@ -21,6 +21,8 @@ const MIN_GAP_MS = 5_000
 const TICK_MS = 30_000
 /** Gap between the first background loads of the kinds. */
 const STAGGER_MS = 1_500
+/** How long the view's other kinds wait for its first one before they are read anyway. */
+const FIRST_MS = 1_500
 
 interface Entry {
   fetch: () => Promise<unknown>
@@ -73,10 +75,17 @@ export function viewOnScreen(): string {
   return currentView
 }
 
-/** A page was opened (or the pane was shown on it): refresh what it shows, right then. */
+/** A page was opened (or the pane was shown on it): refresh what it shows, right then. Its first kind goes first and
+ *  the others once it is in (or after FIRST_MS): the browser sends six requests at a time to Desk, and HSwarm's tree
+ *  waited ~750 ms behind CliMayte's five reads (1.3 MB) that started with it (2026-10-10, a cold load). */
 export function refreshForView(view: string): void {
   currentView = view
-  for (const k of VIEW_KINDS[view] ?? []) void refreshWarm(k, { viewed: true })
+  const [first, ...rest] = VIEW_KINDS[view] ?? []
+  if (!first) return
+  const others = () => {
+    for (const k of rest) void refreshWarm(k, { viewed: true })
+  }
+  void Promise.race([refreshWarm(first, { viewed: true }), new Promise((go) => window.setTimeout(go, FIRST_MS))]).then(others)
 }
 
 // Only the kinds the view on screen shows: a kind no one is looking at waits until its view opens.
@@ -89,15 +98,17 @@ function refreshDue(): void {
   }
 }
 
-/** Loads every kind once, a few seconds apart, then keeps them fresh. Safe to call twice. */
+/** Loads every kind once, a few seconds apart, after the page on screen has had its own reads, then keeps them
+ *  fresh. A kind a page has read already is not read again: the cycle refreshes it. Safe to call twice. */
 export function startWarm(): void {
   if (started) return
   started = true
-  let i = 0
+  let i = 1
   for (const kind of entries.keys()) {
     window.setTimeout(() => {
+      const e = entries.get(kind)
       // Hidden at that moment: the visibility catch-up below loads it when it is shown.
-      if (document.visibilityState !== 'hidden') void refreshWarm(kind)
+      if (document.visibilityState !== 'hidden' && !e?.inflight && !e?.at) void refreshWarm(kind)
     }, i++ * STAGGER_MS)
   }
   timer = window.setInterval(refreshDue, TICK_MS)
