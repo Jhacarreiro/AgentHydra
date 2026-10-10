@@ -223,7 +223,8 @@ class _UnknownSource(Exception):
 
 class _BatchArgs:
     __slots__ = ("chats", "chat_titles", "passthrough", "as_json", "all_unarchived", "source",
-                 "limit", "dry_run", "resume_text", "terminate_live", "archived_count")
+                 "limit", "dry_run", "resume_text", "terminate_live", "archived_count",
+                 "source_labels")
 
     def __init__(self) -> None:
         self.chats: list[str] = []
@@ -249,6 +250,8 @@ class _BatchArgs:
         # -1 = never stated. 0 is a REAL value ("I know this batch holds no archived chat"),
         # so it must not collapse into "not given" - hence -1 rather than 0 as the sentinel.
         self.archived_count = -1
+        # The source folder labels the batch enumerated (--all-unarchived), for the final sweep.
+        self.source_labels: set[str] = set()
 
 
 def _parse(argv: list[str]) -> _BatchArgs | int:
@@ -1473,6 +1476,7 @@ def _resolve_all_unarchived(parsed):
     # Resolve by SESSION ID, never by title: two accounts can hold the same title, and a
     # fuzzy re-match at move time could pick the wrong one.
     parsed.chats = [str(r.get("session_id") or "") for r in rows if r.get("session_id")]
+    parsed.source_labels = {str(r.get("instance") or "") for r in rows if r.get("instance")}
     # --all-unarchived names no per-chat title (nothing here read one new name per chat), so
     # `chat_titles` is rebuilt in lockstep - all None, same length as the fresh `chats`.
     parsed.chat_titles = [None] * len(parsed.chats)
@@ -1627,6 +1631,118 @@ def _recheck_provisional_settles(items: list) -> dict | None:
         "cameBack": sum(1 for r in rows if r["cameBack"]),
         "repaired": sum(1 for r in rows if r["repaired"]),
     }
+
+
+def _sweep_repair(item, sid: str, src: str, fleet: dict) -> bool:
+    """Re-drive the settle for one landed chat the sweep still saw on its source. True when the
+    source no longer shows it afterwards."""
+    try:
+        migrate_chat.phase_settle(item.landing)
+    except Exception as err:
+        item.errors.append(f"the final sweep re-settle raised {type(err).__name__}: "
+                           f"{str(err)[:150]}")
+        return False
+    return not migrate_chat.source_still_visible(sid, src, fleet)
+
+
+def _final_source_sweep(items: list, parsed) -> dict | None:
+    """PHASE SIX: re-list every source account, the way the owner sees it, and grade the batch on
+    THAT rather than on its own per-chat verdicts.
+
+    ⛔ WHY (owner, 2026-10-10: "you missed three ... I logged back in and here they are"). The
+    2026-10-09 #13 -> #187 batch answered ok with four landed while one of them was still
+    unarchived on #13 (phase 'stamped-settle-visible': the settle never ran), and only a
+    manual list_chats afterwards found it. Each phase checked
+    its own step; nothing re-read the account as a whole. This does, once, at the very end:
+      - a LANDED chat still unarchived on its source is re-settled once, then marked not-ok
+        with the reconcile command if it is still there (`leftBehind`);
+      - with --all-unarchived and no --limit, any OTHER unarchived chat on the source is named
+        (`notTaken`) and the batch is not ok: a chat that appeared mid-batch, or one the
+        enumeration missed, is still on the owner's screen either way. Refused chats are not
+        counted again - they are already in `refused` with their reason.
+    """
+    sources: set[str] = set(getattr(parsed, "source_labels", None) or set())
+    for item in items:
+        land = item.landing
+        if land is not None and item.payload.get("landed"):
+            src = str(getattr(land, "src_instance", None)
+                      or (getattr(land, "match", None) or {}).get("instance") or "")
+            if src:
+                sources.add(src)
+    if not sources:
+        return None
+    try:
+        # One read, like _movable_chats: scoped only when --from named the one account.
+        scope = next(iter(sources)) if parsed.source and len(sources) == 1 else None
+        wanted = {label.lower() for label in sources}
+        rows = [r for r in hydralib.chats(instance=scope)
+                if str(r.get("instance") or "").lower() in wanted]
+    except hydralib.DaemonError as err:
+        return {"checked": False, "why": f"the source accounts could not be re-read "
+                                         f"({str(err)[:120]}) - run list_chats on them before "
+                                         "calling this move done"}
+    shown = {str(r.get("sessionId") or ""): r for r in rows
+             if not r.get("isArchived", r.get("archived")) and r.get("sessionId")}
+    landed_by_sid = {str(i.payload.get("sessionId") or ""): i for i in items
+                     if i.payload.get("landed") and i.payload.get("sessionId")}
+    left_behind, repaired = [], []
+    fleet = None
+    for sid, item in landed_by_sid.items():
+        if sid not in shown:
+            continue
+        src = str(shown[sid].get("instance") or "")
+        if fleet is None and item.landing is not None:
+            try:
+                fleet = hydralib.fleet()
+            except hydralib.DaemonError:
+                fleet = {}
+        if item.landing is not None and fleet and _sweep_repair(item, sid, src, fleet):
+            repaired.append(sid)
+            item.payload["sourceSweep"] = {"stillShown": False, "repaired": True}
+            continue
+        left_behind.append({"sessionId": sid, "title": shown[sid].get("title"), "source": src})
+        item.payload["ok"] = False
+        item.payload["sourceSweep"] = {
+            "stillShown": True, "repaired": False,
+            "fix": f"migrate_reconcile, then migrate_reconcile --finish <id> for '{shown[sid].get('title')}'"}
+    named = _batch_ids(items) | set(landed_by_sid)
+    not_taken = [{"sessionId": sid, "title": r.get("title"), "source": r.get("instance"),
+                  "lastActivityAt": r.get("lastActivityAt")}
+                 for sid, r in shown.items() if sid not in named]
+    return {"checked": True, "sources": sorted(sources), "stillUnarchived": len(shown),
+            "repaired": repaired, "leftBehind": left_behind, "notTaken": not_taken,
+            "notTakenCounts": bool(parsed.all_unarchived and not parsed.limit)}
+
+
+def _apply_source_sweep(payload: dict, sweep: dict | None) -> None:
+    """Put the sweep on the payload and at the TOP of the report, and fail the batch on it."""
+    if sweep is None:
+        return
+    payload["sourceSweep"] = sweep
+    if not sweep.get("checked"):
+        payload["ok"] = False
+        payload["report"] = f"⚠ FINAL SWEEP NOT RUN: {sweep.get('why')}\n" + payload["report"]
+        return
+    lines = []
+    if sweep["leftBehind"]:
+        payload["ok"] = False
+        names = ", ".join(f"'{r['title']}' ({r['source']})" for r in sweep["leftBehind"])
+        lines.append(f"⚠ STILL ON THE OLD ACCOUNT after landing: {names}. Run migrate_reconcile "
+                     "and --finish each; this batch is NOT done.")
+    if sweep["notTaken"]:
+        names = ", ".join(f"'{r['title']}' ({r['source']})" for r in sweep["notTaken"])
+        if sweep["notTakenCounts"]:
+            payload["ok"] = False
+            lines.append(f"⚠ {len(sweep['notTaken'])} unarchived chat(s) on the source were NOT "
+                         f"in this batch: {names}. Re-run the same move to take them.")
+        else:
+            lines.append(f"note: {len(sweep['notTaken'])} other unarchived chat(s) remain on the "
+                         f"source (outside this batch's scope): {names}")
+    if not lines:
+        lines.append(f"final sweep: {', '.join(sweep['sources'])} re-read - no moved chat still "
+                     "shows there" + (f" ({len(sweep['repaired'])} re-settled by the sweep)"
+                                      if sweep["repaired"] else ""))
+    payload["report"] = "\n".join(lines) + "\n" + payload["report"]
 
 
 def _batch_ids(items: list) -> set[str]:
@@ -1797,11 +1913,14 @@ def main(argv: list[str]) -> int:
     # PHASE FIVE, after the resume has spent real time: did a running source app write any
     # settled row back? (_recheck_provisional_settles - the 2026-09-18 resurrection.)
     recheck = None if parsed.dry_run else _recheck_provisional_settles(items)
+    # PHASE SIX: re-list the source accounts as the owner sees them (_final_source_sweep).
+    sweep = None if parsed.dry_run else _final_source_sweep(items, parsed)
     secs = time.time() - t0
 
     payload = _build_batch_payload(items, parsed, note, secs, resume)
     if recheck is not None:
         payload["sourceRecheck"] = recheck
+    _apply_source_sweep(payload, sweep)
     migrate_chat.flag_collateral(payload, before, moved_ids,
                                  f"migrate_batch {len(items)} chat(s)")
     print(json.dumps(payload, indent=2) if parsed.as_json else payload["report"])
