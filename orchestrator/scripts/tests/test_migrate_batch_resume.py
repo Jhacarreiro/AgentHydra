@@ -596,6 +596,9 @@ class TerminateLiveTest(_BatchTest):
     def test_without_the_flag_an_engine_refusal_is_left_alone(self):
         calls = self.stub_phases({"two": [(_refused("two", "REFUSED: live engine"), 4)]})
         terminated, _ = self.stub_engine(live_pid=4242, stopped=True)
+        # A source BELOW the standing-order wall: without this the test read the machine's real
+        # usage survey, and went red whenever the stub's account was really at 98%+.
+        self.patch(migrate_batch.hydralib, "usage_survey", lambda: {"rows": []})
         _, out = _run(["--chat", "two", "--to", "55"])
         self.assertEqual(terminated, [])
         self.assertEqual(len(calls), 1)
