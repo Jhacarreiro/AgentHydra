@@ -1,12 +1,10 @@
 <script setup lang="ts">
 // The transcript: a windowed list (only the rows near the viewport are in the DOM, so a 3,000-item
-// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send, the jump button or
-// scrolling back down takes it back to the bottom), and a Working row under the last item while the
+// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send, the down arrow's last step
+// or scrolling back down takes it back to the bottom), and a Working row under the last item while the
 // chat's turn runs.
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, toRef, watch, type Directive } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type Directive } from 'vue'
 import { icons } from '@/lib/icons'
-
-const ArrowDown = icons.scrollToBottom
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { watchTranscript } from '@/lib/chat-audio'
@@ -15,7 +13,7 @@ import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
 import { groupRows, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
-import { nextMessageStep } from './lib/steps'
+import { nextMessageStep, stepTarget } from './lib/steps'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
 import { COLLAPSE_MS } from './lib/motion'
@@ -166,20 +164,18 @@ function estimateRow(r: DisplayRow): number {
 }
 
 // Auto-scroll: pinned to the bottom until Jacob scrolls up by any means (wheel, touchpad, scrollbar, keys); only
-// scrolling back down to the bottom, the jump button or a send re-pins. A reply growing never pulls him down.
+// scrolling back down to the bottom, the down arrow's last step or a send re-pins. A reply growing never pulls him down.
 const pinned = ref(true)
 let lastTop = 0
-/** How far the bottom is below the screen, for the jump button. */
+/** How far the bottom is below the screen, for the down arrow. */
 const fromBottom = ref(0)
-/** The jump button (WhatsApp's down arrow, bottom right) shows once he is more than half a screen up, never for a few lines. */
-const showJump = computed(() => !pinned.value && fromBottom.value > Math.max(200, viewHeight.value / 2))
 
 const distanceOf = (el: HTMLElement) => el.scrollHeight - el.scrollTop - el.clientHeight
 
-// A jump to the bottom (the button, a send, another chat) is the transcript's move, not a hand's: for half a second
-// after it, unless the person's own wheel, key or pointer comes first, a move up is the list settling, never a
-// let-go. Rows that mount at the bottom with estimated heights make the list shorter for a frame, and the browser's
-// clamp to it read as a scroll up: the jump button let go of the bottom 141px short of it (scroll-follow e2e case 5,
+// A jump to the bottom (the down arrow's last step, a send, another chat) is the transcript's move, not a hand's: for
+// half a second after it, unless the person's own wheel, key or pointer comes first, a move up is the list settling,
+// never a let-go. Rows that mount at the bottom with estimated heights make the list shorter for a frame, and the
+// browser's clamp to it read as a scroll up: a jump let go of the bottom 141px short of it (scroll-follow e2e case 5,
 // 2026-10-08; the clamp came 10ms after the click). The same holds for a mount and the first arrival of items, and each
 // row measured for the first time while the settle still runs re-arms it, so a chat that opens with estimated rows is
 // followed until they are measured (scroll-follow e2e case 11, 2026-10-09). Following a reply does not arm it: a drag or
@@ -204,7 +200,7 @@ function scrollToBottom() {
  *  the same frame as a streamed line) lets go here instead of being overwritten. */
 function follow() {
   const el = scroller.value
-  if (!el || !pinned.value || held) return
+  if (!el || !pinned.value || held || glide) return
   if (!settling() && el.scrollTop < lastTop - 1 && distanceOf(el) > 1) return onScroll()
   scrollToBottom()
 }
@@ -215,10 +211,10 @@ function onScroll() {
   const top = el.scrollTop
   const distance = distanceOf(el)
   // Any move up lets go, however small (the browser clamping a shrunk list at the very bottom is not a move); only a
-  // move down to within 24px of the bottom takes hold again.
+  // move down to within 24px of the bottom takes hold again (a glide decides that where it lands).
   const up = top < lastTop - 1
   if (up && distance > 1 && !settling()) pinned.value = false
-  else if (!up && distance <= 24 && !held) pinned.value = true
+  else if (!up && distance <= 24 && !held && !glide) pinned.value = true
   lastTop = top
   scrollTop.value = top
   fromBottom.value = distance
@@ -293,11 +289,18 @@ function trimSlack() {
 
 function onWheel(e: WheelEvent) {
   userScrolls()
+  stopGlide()
   if (e.deltaY < 0) pinned.value = false
+}
+/** A press on the list (a row, the scrollbar) is the person's own scroll, and takes over from a glide. */
+function onPointerDown() {
+  userScrolls()
+  stopGlide()
 }
 
 function jumpToLatest() {
   dropHold()
+  stopGlide()
   settle()
   pinned.value = true
   scrollToBottom()
@@ -313,50 +316,114 @@ function onSent(e: Event) {
 // The step arrows (top right; owner, 2026-10-09: "a little floating arrow that when I click it, scrolls me up to my
 // most recent message to the AI") walk the messages the person sent, read from the rows on the list, so one not
 // rendered counts; a sub-agent's prompt and a message still queued are not theirs to step to. A step lands the message
-// STEP_MARGIN px under the header's inset; a message already there is not a step.
+// STEP_MARGIN px under the header's inset; a message already there is not a step. They are the transcript's only
+// scroll buttons (owner, 2026-10-10: the bottom-right jump button went, "just have ... the ones on the top right be the
+// ones that do it"): past the last message the person sent, the down arrow's step is the bottom.
 const STEP_MARGIN = 8
 const stepLine = computed(() => (props.insetTop ?? 0) + STEP_MARGIN)
-const userTops = computed(() => {
-  const o = offsets.value
-  // The column's top padding (20px plus the inset) sits above the first row, as in the template.
-  const first = 20 + (props.insetTop ?? 0)
+/** Where row i's top sits in the scroller's content: the column's top padding (20px plus the inset) is above the first row, as in the template. */
+const rowTop = (i: number) => 20 + (props.insetTop ?? 0) + (offsets.value[i] ?? 0)
+/** The rows of the messages the person sent, in order: their ids, and their tops for nextMessageStep. */
+const sent = computed(() => {
+  const ids: string[] = []
   const tops: number[] = []
   display.value.forEach((r, i) => {
-    if (r.kind === 'item' && r.item.kind === 'user' && !r.item.parentToolUseId && !r.item.queued) tops.push(first + (o[i] ?? 0))
+    if (r.kind !== 'item' || r.item.kind !== 'user' || r.item.parentToolUseId || r.item.queued) return
+    ids.push(r.id)
+    tops.push(rowTop(i))
   })
-  return tops
+  return { ids, tops }
 })
-// Where the view is headed: a glide's end while one runs, so a second click steps on from there rather than to the
-// message the first click is still gliding to.
-const gliding = ref<number | null>(null)
-let glideTimer: ReturnType<typeof setTimeout> | undefined
-const stepFrom = computed(() => gliding.value ?? scrollTop.value)
-const prevStep = computed(() => nextMessageStep(userTops.value, stepFrom.value, 'up', stepLine.value))
-const nextStep = computed(() => nextMessageStep(userTops.value, stepFrom.value, 'down', stepLine.value))
+
+// A step glides there by the transcript's own frames, not the browser's smooth scroll. The rows on the way start as
+// height estimates and are measured as they come into view, and each measure of a row above the view moves scrollTop
+// to keep what is on screen still; the browser ends a smooth scroll at the first scrollTop written under it, so the
+// step stopped short (owner, 2026-10-10: it "sometimes just nudges the page up, like, a tiny bit"; scroll-follow e2e
+// case 12 measured 107px short, then 22px, landing on the third click). Each frame reads where the message is now, by
+// its row id, and covers the share of the way left that the easing gives that frame, so the measuring moves the
+// landing spot and the glide with it. After the last frame it holds the spot until the rows under it stop moving.
+const GLIDE_MS = 380
+/** A glide: `to` is the row id it lands on, null for the bottom; `eased` how much of the way the last frame covered. */
+type Glide = { to: string | null; t0: number; ms: number; eased: number; frame: number; last: number; still: number; after: number }
+let glide: Glide | null = null
+/** Where a glide is headed while one runs, so a second click steps on from there rather than to the message the first
+ *  click is still gliding to. */
+const heading = shallowRef<{ to: string | null } | null>(null)
+const easeOut = (p: number) => 1 - (1 - p) ** 3
+
+/** The scrollTop a glide to `to` ends on: the message on the step line, or the bottom; never past what the list scrolls. */
+function glideTarget(to: string | null): number {
+  const el = scroller.value
+  if (!el) return 0
+  const max = Math.max(0, el.scrollHeight - el.clientHeight)
+  if (to === null) return max
+  const i = indexById.value.get(to)
+  return i === undefined ? el.scrollTop : Math.min(max, stepTarget(rowTop(i), stepLine.value))
+}
+const stepFrom = computed(() => (heading.value ? glideTarget(heading.value.to) : scrollTop.value))
+const prevStep = computed(() => nextMessageStep(sent.value.tops, stepFrom.value, 'up', stepLine.value))
+const nextStep = computed(() => nextMessageStep(sent.value.tops, stepFrom.value, 'down', stepLine.value))
 const showStepDown = computed(() => fromBottom.value > 1)
 
 // A step is the person's own move: it lets go of the bottom at once (a streamed line does not pull it back), and the
-// view glides there. Reaching within 24px of the bottom re-pins through onScroll, as a hand's scroll does.
-function glideTo(top: number) {
+// view glides there. A wheel or a press on the list takes over from it.
+function glideTo(to: string | null) {
   const el = scroller.value
   if (!el) return
   dropHold()
+  stopGlide()
   userScrolls()
   pinned.value = false
-  gliding.value = top
-  clearTimeout(glideTimer)
-  glideTimer = setTimeout(() => (gliding.value = null), 700)
-  el.scrollTo({ top, behavior: 'smooth' })
+  const ms = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : GLIDE_MS
+  glide = { to, t0: performance.now(), ms, eased: 0, frame: 0, last: Number.NaN, still: 0, after: 0 }
+  heading.value = { to }
+  glide.frame = requestAnimationFrame(glideFrame)
 }
-onBeforeUnmount(() => clearTimeout(glideTimer))
+function glideFrame(now: number) {
+  const el = scroller.value
+  const g = glide
+  // No list under it any more: end the glide, or follow() and the re-pin stay off behind a glide with no frame.
+  if (!el || !g) return stopGlide()
+  const want = glideTarget(g.to)
+  const p = g.ms ? Math.min(1, (now - g.t0) / g.ms) : 1
+  const eased = easeOut(p)
+  // What is left of the way shrinks by this frame's share; a measure since the last frame is already in scrollTop and want.
+  const left = 1 - g.eased
+  el.scrollTop = left > 0 ? want + (el.scrollTop - want) * ((1 - eased) / left) : want
+  g.eased = eased
+  scrollTop.value = lastTop = el.scrollTop
+  fromBottom.value = distanceOf(el)
+  // Landed: rows that came into view in the last frames are measured after them; hold the spot until it stays put
+  // for three frames (half a second at most).
+  if (p >= 1) {
+    g.still = Math.abs(want - g.last) < 0.5 ? g.still + 1 : 0
+    if (g.still >= 3 || ++g.after > 30) return landGlide()
+  }
+  g.last = want
+  g.frame = requestAnimationFrame(glideFrame)
+}
+function landGlide() {
+  const to = glide?.to
+  stopGlide()
+  const el = scroller.value
+  if (!el || to === undefined) return
+  // The bottom is followed again, as after a send; a message within 24px of it re-pins, as a hand's scroll there does.
+  if (to === null) return jumpToLatest()
+  if (distanceOf(el) <= 24) pinned.value = true
+}
+function stopGlide() {
+  if (glide) cancelAnimationFrame(glide.frame)
+  glide = null
+  heading.value = null
+}
+onBeforeUnmount(stopGlide)
 function stepUp() {
-  if (prevStep.value !== null) glideTo(prevStep.value)
+  const i = prevStep.value
+  if (i !== null) glideTo(sent.value.ids[i]!)
 }
-// Past the last message the person sent, the final step is the jump to the bottom, which re-pins as the jump button does.
 function stepDown() {
-  if (nextStep.value !== null) return glideTo(nextStep.value)
-  gliding.value = null
-  jumpToLatest()
+  const i = nextStep.value
+  glideTo(i === null ? null : sent.value.ids[i]!)
 }
 
 let rowObserver: ResizeObserver | null = null
@@ -427,7 +494,7 @@ onMounted(() => {
   window.addEventListener(CHAT_SENT_EVENT, onSent)
   // A key (Page Up, the arrows) scrolls whatever has focus; a press on the scrollbar arrives as the scroller's own.
   window.addEventListener('keydown', userScrolls, true)
-  scroller.value?.addEventListener('pointerdown', userScrolls, true)
+  scroller.value?.addEventListener('pointerdown', onPointerDown, true)
 })
 
 onBeforeUnmount(() => {
@@ -507,6 +574,7 @@ watch(activeKey, () => {
   const el = scroller.value
   const idx = act ? indexById.value.get(act.itemId) : undefined
   if (!el || idx === undefined) return
+  stopGlide()
   pinned.value = false
   el.scrollTop = Math.max(0, offsets.value[idx] - el.clientHeight / 3)
   scrollTop.value = lastTop = el.scrollTop
@@ -527,6 +595,7 @@ function revealStep(id: string) {
   if (row.kind !== 'item') tctx.show(row.id)
   tctx.show(id)
   dropHold()
+  stopGlide()
   pinned.value = false
   el.scrollTop = Math.max(0, offsets.value[idx] - el.clientHeight / 3)
   scrollTop.value = lastTop = el.scrollTop
@@ -603,6 +672,7 @@ watch(
   () => props.chatId,
   () => {
     dropHold()
+    stopGlide()
     heights.clear()
     version.value++
     settle()
@@ -627,10 +697,10 @@ watch(
       @click.capture="holdRow"
       @contextmenu.capture="onContextCapture"
     >
-      <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane). The
-           last row ends 20px over what is under the column, a turn's gap (owner, 2026-10-08: the last rows stood "way too big
-           of gaps" off it; the real app's 86 reads as a hole once its actions bar is not under a finished reply). -->
-      <div class="mx-auto w-full max-w-210 px-9 pb-5 @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane).
+           Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
+           bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
+      <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">{{ emptyText }}</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
@@ -663,43 +733,31 @@ watch(
       role="status"
       class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
     >{{ revealNote }}</div>
-    <Transition
-      enter-from-class="opacity-0 translate-y-1"
-      leave-to-class="opacity-0 translate-y-1"
-      enter-active-class="transition duration-150"
-      leave-active-class="transition duration-150"
-    >
-      <Tip v-if="showJump" label="Scroll to bottom">
-        <button
-          type="button"
-          aria-label="Scroll to bottom"
-          class="tx-scroll-bottom absolute bottom-4 right-5"
-          @click="jumpToLatest"
-        >
-          <ArrowDown class="size-5 mix-blend-luminosity" />
-        </button>
-      </Tip>
-    </Transition>
+    <!-- Each arrow keeps its own slot, so the down arrow never moves up under the pointer when the up arrow goes. -->
     <div
       v-if="prevStep !== null || showStepDown"
-      class="absolute right-5 flex flex-col items-center gap-2"
+      class="pointer-events-none absolute right-5 flex flex-col gap-1"
       :style="{ top: `${(insetTop ?? 0) + 12}px` }"
     >
-      <Tip v-if="prevStep !== null" label="Previous message you sent">
-        <button type="button" aria-label="Previous message you sent" class="tx-scroll-bottom tx-step" @click="stepUp">
-          <icons.prevUserMessage class="size-5" />
-        </button>
-      </Tip>
-      <Tip v-if="showStepDown" :label="nextStep === null ? 'Back to the latest' : 'Next message you sent'">
-        <button
-          type="button"
-          :aria-label="nextStep === null ? 'Back to the latest' : 'Next message you sent'"
-          class="tx-scroll-bottom tx-step"
-          @click="stepDown"
-        >
-          <icons.nextUserMessage class="size-5" />
-        </button>
-      </Tip>
+      <span class="flex size-6">
+        <Tip v-if="prevStep !== null" label="Previous message you sent" side="left">
+          <button type="button" aria-label="Previous message you sent" class="tx-step" @click="stepUp">
+            <icons.prevUserMessage class="size-4" />
+          </button>
+        </Tip>
+      </span>
+      <span class="flex size-6">
+        <Tip v-if="showStepDown" :label="nextStep === null ? 'Back to the latest' : 'Next message you sent'" side="left">
+          <button
+            type="button"
+            :aria-label="nextStep === null ? 'Back to the latest' : 'Next message you sent'"
+            class="tx-step"
+            @click="stepDown"
+          >
+            <icons.nextUserMessage class="size-4" />
+          </button>
+        </Tip>
+      </span>
     </div>
   </div>
 </template>

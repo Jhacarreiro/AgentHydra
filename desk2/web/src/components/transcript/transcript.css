@@ -673,31 +673,30 @@ button.tx-file-card:hover {
   animation: epitaxy-approval-inline-enter 0.2s cubic-bezier(0.4, 0, 0.2, 1);
 }
 
-/* Scroll to bottom, measured: 36px round button centered above the dock. */
-.tx-scroll-bottom {
+/* The step arrows at the transcript's top right: the sidebar's Search and Filter size (a 24px square, r6, a 16px glyph;
+   owner, 2026-10-10: "Square, and make them smaller. So, make the arrows about the size of these icons"). At rest a
+   glyph at half strength with no box (2026-10-09: "only 50% visible"); hover or keyboard focus brings it up whole in
+   its box and outline ("only have the outline show when you hover on them"). The box is opaque, so a line of the
+   transcript under it does not show through. Their wrapper lets clicks through to the rows; the arrows take their own. */
+.tx-step {
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  width: 36px;
-  height: 36px;
-  border-radius: 9999px;
-  background: var(--bg-popover);
-  color: var(--text);
-  box-shadow: inset 0 0 0 1px var(--border), var(--shadow-menu);
-  cursor: pointer;
-  transition: background-color 60ms;
-}
-.tx-scroll-bottom:hover {
-  background: color-mix(in srgb, var(--bg-popover), white 6%);
-}
-/* The step arrows rest at half strength and come up whole on hover or keyboard focus. */
-.tx-step {
+  width: 24px;
+  height: 24px;
+  border-radius: var(--radius-6);
+  color: var(--text-2);
   opacity: 0.5;
-  transition: background-color 60ms, opacity 120ms;
+  cursor: pointer;
+  pointer-events: auto;
+  transition: background-color 60ms, box-shadow 60ms, color 60ms, opacity 120ms;
 }
 .tx-step:hover,
 .tx-step:focus-visible {
   opacity: 1;
+  color: var(--text);
+  background: var(--bg-popover);
+  box-shadow: inset 0 0 0 1px var(--border);
 }
 
 /* Buttons and inputs inside cards: the real 28px button (r6, 13px) language. */

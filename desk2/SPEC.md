@@ -596,7 +596,8 @@ unread/needs attention = solid `#2a78d6` (Hydra Desk: orange, see the table abov
 
 **Transcript** (`components/transcript/TranscriptView.vue`, props `{ chatId: string, items:
 TranscriptItem[], readOnly?: boolean }`): centered column, max width 780px, auto-scroll that stops when
-Jacob scrolls up (a "Jump to latest" button appears). User messages in a rounded `--bg-elev` box;
+Jacob scrolls up (a "Jump to latest" button appears; Desk 2 replaced it with the arrows at the top right, see
+README "Arrows through the messages you sent"). User messages in a rounded `--bg-elev` box;
 assistant text as markdown (markdown-it + shiki, dark theme, copy button on code blocks); thinking as a
 collapsed "Thinking" row (expands to the text); tool calls as compact rows like Claude Code: icon, tool
 name, the key argument (Bash command, file path, pattern, URL), a status spinner/tick/cross, click to

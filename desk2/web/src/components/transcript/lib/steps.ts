@@ -9,12 +9,13 @@ export function stepTarget(top: number, lineOffset: number): number {
 }
 
 /**
- * The scroll offset of the message a step lands on, or null when there is none that moves the view.
+ * Which message a step lands on (its index in `tops`), or null when there is none that moves the view.
  * `tops` are the user messages' tops in scroll-content px, in order; `scrollTop` is where the view is now;
  * `lineOffset` is how far below the view's top a message lands (the header's inset plus a margin).
  * "up" is the nearest message whose landing spot is above the view (scroll back past the one it lands on, so a
  * second step goes to the one before it); "down" is the nearest whose landing spot is below it. A message that
- * already sits on its landing spot is not a step: landing on one never repeats it.
+ * already sits on its landing spot is not a step: landing on one never repeats it. The view follows the message by
+ * its index while it glides there, so rows measured on the way move the landing spot with it.
  */
 export function nextMessageStep(
   tops: readonly number[],
@@ -24,14 +25,12 @@ export function nextMessageStep(
 ): number | null {
   if (dir === 'up') {
     for (let i = tops.length - 1; i >= 0; i--) {
-      const target = stepTarget(tops[i], lineOffset)
-      if (target < scrollTop - 1) return target
+      if (stepTarget(tops[i]!, lineOffset) < scrollTop - 1) return i
     }
     return null
   }
-  for (const top of tops) {
-    const target = stepTarget(top, lineOffset)
-    if (target > scrollTop + 1) return target
+  for (let i = 0; i < tops.length; i++) {
+    if (stepTarget(tops[i]!, lineOffset) > scrollTop + 1) return i
   }
   return null
 }
