@@ -4,8 +4,10 @@ import {
   accountFace,
   chatRow,
   elapsedLabel,
+  childrenByRow,
   entryKey,
   entryRunning,
+  foldChildren,
   externalGlyph,
   externalRename,
   externalRow,
@@ -673,4 +675,16 @@ describe('a chat started from another chat nests under it', () => {
   for (const [name, external, want] of cases) {
     it(name, () => expect(layout(groupChats([], { external }))).toEqual(want))
   }
+
+  // A row's fold button (owner, 2026-10-10: "I need the ability to collapse subthreads of a subagent").
+  const chain = [ext('p', { lastActivityAt: 30 }), ext('c', { parentId: 'p', lastActivityAt: 20 }), ext('g', { parentId: 'c', lastActivityAt: 15 }), ext('x', { lastActivityAt: 10 })]
+  const folders = () => groupChats([], { external: chain }).folders
+  const rows = (gs: ChatGroup[]) => gs.flatMap((g) => g.entries.map((e) => `${entryKey(e)}${e.under ? ` <- ${e.under}` : ''}`))
+  it('a folded row counts the chats under it, grandchildren too, and they leave the list while the other rows stay', () => {
+    expect(childrenByRow(folders()).get('external:p')?.map((e) => e.id)).toEqual(['c', 'g'])
+    expect(rows(foldChildren(folders(), new Set(['external:p']), () => false))).toEqual(['external:p', 'external:x'])
+  })
+  it('the open chat stays in sight under its folded row', () => {
+    expect(rows(foldChildren(folders(), new Set(['external:p']), (e) => e.id === 'g'))).toEqual(['external:p', 'external:g <- external:p', 'external:x'])
+  })
 })

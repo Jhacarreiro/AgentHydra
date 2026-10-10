@@ -207,6 +207,13 @@ sidebar on the left stays put, and only the pane on the right changes.
   dot's 2.4 s blink (`.run-pulse` in `web/src/style.css`, `runPulse` and `glyphDotClass` in
   `sidebar/logic.ts`) and hold still when the system asks for reduced motion; a waiting dot pulses orange
   every 3 s.
+- **Chats started from a chat sit under it, and fold away.** A chat another chat started (a sub-agent's, or
+  one from a chat's chip) sits one step in under the chat that started it, as in the newest Claude Desktop. That
+  chat's row has a fold button at its right edge, a chevron and how many sit under it: a click folds them away
+  and another shows them again (owner, 2026-10-10: "I need the ability to collapse subthreads of a subagent").
+  Folded, the chevron turns orange when one of them needs you and pulses gray while one runs; the one you have
+  open stays in sight, and a search shows every match. What is folded is remembered
+  (`web/src/components/sidebar/folded.ts`, `foldChildren` in `sidebar/logic.ts`).
 - **Which chat, on which account.** Every row's menu (right-click or ⋯, in either list) opens with a line
   naming the row: its id's first 8 characters and, muted beside it, its account (`#72 example`); a click
   copies the whole id (owner, 2026-10-08: "I need to be able to see what this thread ID is"). A Claude

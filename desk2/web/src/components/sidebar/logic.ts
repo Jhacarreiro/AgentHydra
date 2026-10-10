@@ -574,6 +574,32 @@ function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: num
 /** The dot of a row that stands for a running HSwarm job no chat is known to have called (tasks.ts AddedRow.job). */
 export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', dim: false, active: true, label: 'HSwarm job running' }
 
+/** The rows nested under each row (nestChildren's `under`), by that row's entryKey, in the order the list shows them. */
+export function childrenByRow(groups: readonly ChatGroup[]): Map<string, SidebarEntry[]> {
+  const out = new Map<string, SidebarEntry[]>()
+  for (const g of groups)
+    for (const e of g.entries) {
+      if (!e.under) continue
+      const list = out.get(e.under)
+      if (list) list.push(e)
+      else out.set(e.under, [e])
+    }
+  return out
+}
+
+/**
+ * The list with the sub-chats of the folded rows left out (owner, 2026-10-10: "I need the ability to collapse
+ * subthreads of a subagent"): a nested row whose row is in `folded` goes, unless `keep` holds it (the open chat stays
+ * in sight). A folded row's own row always stays, so no group empties.
+ */
+export function foldChildren(groups: ChatGroup[], folded: ReadonlySet<string>, keep: (e: SidebarEntry) => boolean): ChatGroup[] {
+  if (!folded.size) return groups
+  return groups.map((g) => {
+    const entries = g.entries.filter((e) => !e.under || !folded.has(e.under) || keep(e))
+    return entries.length === g.entries.length ? g : { ...g, entries }
+  })
+}
+
 /** Active only's rows: each group's entries whose dot is active, a group with none left dropped (Sidebar.vue). */
 export function onlyActive(groups: ChatGroup[], glyphOf: (e: SidebarEntry) => StatusGlyph | undefined): ChatGroup[] {
   return groups.flatMap((g) => {

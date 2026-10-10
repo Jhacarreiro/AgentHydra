@@ -33,6 +33,8 @@ import { rememberForUpdate } from '@/lib/whats-new'
 import { checkServerUpdate, restartServer, updateOffer } from '@/lib/server-update'
 import TaskRows from './TaskRows.vue'
 import SubBadges from './SubBadges.vue'
+import FoldButton from './FoldButton.vue'
+import { folded, toggleFolded } from './folded'
 import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
@@ -73,7 +75,9 @@ import {
   accountFace,
   accountMenu,
   chatRow,
+  childrenByRow,
   entryRunning,
+  foldChildren,
   externalGlyph,
   externalRow,
   isActive,
@@ -347,6 +351,18 @@ const groupList = computed<ChatGroup[]>(() => {
   const list = [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
   return activeOnly.value ? onlyActive(list, entryGlyph) : list
 })
+// The chats started from each row, which sit under it (logic.ts nestChildren), and the list as drawn: a folded row's
+// left out (folded.ts), the open one kept in sight; all of them while a search is typed, which shows what it matches.
+const childrenOf = computed(() => childrenByRow(groupList.value))
+const isOpenEntry = (e: SidebarEntry) => (e.kind === 'chat' ? selectedChatId.value === e.id : selectedExternalId.value === e.id)
+const drawnList = computed<ChatGroup[]>(() => (query.value.trim() ? groupList.value : foldChildren(groupList.value, folded.value, isOpenEntry)))
+/** A row's fold button (FoldButton.vue): how many chats sit under it, whether they show, and what the hidden ones do. */
+const foldOf = (key: string) => {
+  const kids = childrenOf.value.get(key)
+  if (!kids || query.value.trim()) return null
+  const open = !folded.value.has(key)
+  return { count: kids.length, open, running: !open && kids.some(entryRunning), needsYou: !open && kids.some((e) => entryGlyph(e)?.tone === 'warning') }
+}
 /** A group's icon: its Project Hydra project's icon, or null for none (projectOfGroup). The cloud list uses it too. */
 const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
 /** Each group's heading icon, by group key. */
@@ -516,7 +532,7 @@ function toggleGroup(key: string) {
 const search = ref<SearchState>(IDLE_SEARCH)
 const runner = createSearchRunner({ run: (q) => src.search(q), onChange: (s) => (search.value = s) })
 const everywhere = computed(() => everywhereRows(search.value.hits, src.chats.value, shownSessionIds(groupList.value, collapsed.value)))
-const targets = computed(() => (searchOpen.value ? searchTargets(groupList.value, collapsed.value, everywhere.value) : []))
+const targets = computed(() => (searchOpen.value ? searchTargets(drawnList.value, collapsed.value, everywhere.value) : []))
 // The cursor is its row (kind and id) and the place it was last at, for when that row goes away.
 const cursor = ref<{ key: string | null; at: number }>({ key: null, at: -1 })
 const cursorAt = computed(() => resolveCursor(targets.value, cursor.value.key, cursor.value.at))
@@ -848,7 +864,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
         <TransitionGroup :css="false" @leave="rowLeave">
         <!-- Compact sidebar (compact.ts): no group headers, so no heading to right-click, open or add to; the chats stay in their groups. -->
-        <section v-for="group in groupList" :key="group.key" :aria-label="group.label" :class="compactSidebar && group.hidden && 'opacity-60'">
+        <section v-for="group in drawnList" :key="group.key" :aria-label="group.label" :class="compactSidebar && group.hidden && 'opacity-60'">
           <!-- A group's right-click menu (ProjectMenuItems for a project folder's) can hide it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
           <ContextMenu v-if="!compactSidebar">
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
@@ -922,6 +938,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
               >
+                <FoldButton v-if="foldOf(`chat:${entry.id}`)" v-bind="foldOf(`chat:${entry.id}`)!" @toggle="toggleFolded(`chat:${entry.id}`)" />
                 <SubBadges v-if="rowSub(`chat:${entry.id}`).badges.length" :row-key="`chat:${entry.id}`" :badges="rowSub(`chat:${entry.id}`).badges" />
               </ChatRow>
               <ExternalRow
@@ -937,6 +954,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => externalAct(entry.session, item)"
                 @rename="(title: string | null) => renameExternal(entry.session, title)"
               >
+                <FoldButton v-if="foldOf(`external:${entry.id}`)" v-bind="foldOf(`external:${entry.id}`)!" @toggle="toggleFolded(`external:${entry.id}`)" />
                 <SubBadges v-if="rowSub(`external:${entry.id}`).badges.length" :row-key="`external:${entry.id}`" :badges="rowSub(`external:${entry.id}`).badges" />
               </ExternalRow>
               <TaskRows v-if="rowSub(`${entry.kind}:${entry.id}`).nodes.length || rowSub(`${entry.kind}:${entry.id}`).jobs.length" :nodes="rowSub(`${entry.kind}:${entry.id}`).nodes" :jobs="rowSub(`${entry.kind}:${entry.id}`).jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
