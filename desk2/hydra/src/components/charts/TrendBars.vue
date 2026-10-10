@@ -24,7 +24,8 @@ const props = withDefaults(
 
 const W = 480
 const H = 200
-const PAD = { left: 48, right: 10, top: 14, bottom: 64 }
+// The top leaves the axis title its own line above the highest tick.
+const PAD = { left: 48, right: 10, top: 26, bottom: 64 }
 const plotW = W - PAD.left - PAD.right
 const plotH = H - PAD.top - PAD.bottom
 
@@ -41,7 +42,12 @@ const trend = computed(() =>
   }),
 )
 const linePoints = computed(() => trend.value.map((v, i) => `${x(i)},${y(v)}`).join(' '))
-const ticks = computed(() => [0, max.value / 2, max.value].map((v) => ({ v, y: y(v) })))
+// A tick whose label reads like the one below it is left out: when no model failed, one 0% and not three.
+const ticks = computed(() =>
+  [0, max.value / 2, max.value]
+    .map((v) => ({ v, y: y(v), text: props.format(v) }))
+    .filter((t, i, all) => all.findIndex((o) => o.text === t.text) === i),
+)
 const cut = (s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)
 </script>
 
@@ -49,10 +55,10 @@ const cut = (s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)
   <div class="space-y-1.5">
     <div class="relative">
       <svg :viewBox="`0 0 ${W} ${H}`" class="block h-auto w-full" role="img" :aria-label="yTitle">
-        <text :x="0" :y="PAD.top - 4" class="fill-muted-foreground text-2xs">{{ yTitle }}</text>
+        <text :x="0" y="10" class="fill-muted-foreground text-2xs">{{ yTitle }}</text>
         <g v-for="tick in ticks" :key="tick.v">
           <line :x1="PAD.left" :x2="W - PAD.right" :y1="tick.y" :y2="tick.y" class="stroke-border" stroke-dasharray="2 3" />
-          <text :x="PAD.left - 6" :y="tick.y" dy="0.35em" text-anchor="end" class="fill-muted-foreground text-2xs tabular-nums">{{ format(tick.v) }}</text>
+          <text :x="PAD.left - 6" :y="tick.y" dy="0.35em" text-anchor="end" class="fill-muted-foreground text-2xs tabular-nums">{{ tick.text }}</text>
         </g>
         <g v-for="(p, i) in points" :key="p.key">
           <rect
