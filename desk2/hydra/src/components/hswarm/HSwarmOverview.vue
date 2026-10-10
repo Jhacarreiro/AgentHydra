@@ -13,11 +13,13 @@ import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AreaLine from '@/components/charts/AreaLine.vue'
 import BarRows from '@/components/charts/BarRows.vue'
+import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
 import HSwarmModelResults from '@/components/hswarm/HSwarmModelResults.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card'
 import { Separator } from '@/components/ui/separator'
+import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { HswarmMoney, HswarmState } from '@/lib/hswarm-api'
 import { moneyLine, useHswarmApi } from '@/lib/hswarm-api'
 import {
@@ -78,6 +80,8 @@ defineEmits<{ changed: []; open: [path: string[]] }>()
 
 const { t } = useI18n()
 const { apiCall } = useHswarmApi()
+// CliMayte's scorecard (the totals and "What works"), one shared copy with its page.
+const { totals, scorecard, refreshCliMayte } = useCliMayteData()
 
 // API data
 const usage = ref<UsageData | null>(null)
@@ -290,10 +294,13 @@ const outcomeChartData = computed(() => {
   return data
 })
 
+// Most used first: the tokens each provider used over the usage range (the bar is its ready keys). A
+// provider with no usage in the range sorts last; ties go by name.
 const healthData = computed(() => {
+  const used = new Map((usage.value?.providers ?? []).map((p): [string, number] => [p.name, p.tokens]))
   const providers = (props.state.providers || [])
     .filter((p: any) => p.keys > 0)
-    .sort((a: any, b: any) => (b.keys || 0) - (a.keys || 0) || a.name.localeCompare(b.name))
+    .sort((a: any, b: any) => (used.get(b.name) ?? 0) - (used.get(a.name) ?? 0) || a.name.localeCompare(b.name))
 
   return providers.map((p: any) => ({
     key: p.name,
@@ -364,7 +371,7 @@ async function submitAsk() {
 
 // Load data on mount
 onMounted(async () => {
-  await Promise.all([loadUsage(), loadClients()])
+  await Promise.all([loadUsage(), loadClients(), refreshCliMayte({ silent: true })])
 })
 
 // Money and tokens: the kit's formatters (lib/kit.ts).
@@ -595,6 +602,17 @@ function formatPercent(value: number): string {
         {{ t('hswarm.v.overview.chartsEmpty') }}
       </p>
     </div>
+
+    <!-- CliMayte: what its tasks offloaded and what works (moved from its page) -->
+    <Card size="sm">
+      <CardHeader>
+        <CardTitle size="lg">{{ t('hswarm.v.overview.climayteTitle') }}</CardTitle>
+      </CardHeader>
+      <CardContent stack="sm">
+        <p class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.climayteCaption') }}</p>
+        <OffloadStatsCard :totals="totals" :scorecard="scorecard" @open="$emit('open', ['savings'])" />
+      </CardContent>
+    </Card>
 
     <HSwarmModelResults />
 

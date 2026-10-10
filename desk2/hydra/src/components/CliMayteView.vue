@@ -8,7 +8,7 @@
 // every one, and another PC's tasks come with a cloud while the queue is shared. A click opens the task
 // (CliMayteWorkerDetail.vue, whose log is CliMayte's journal) in place of the list; its back button, or
 // a click on the CliMayte row, goes back to the list where it was. The scorecard (the totals and "What
-// works", OffloadStatsCard.vue) sits above the list, folded until it is opened. The manager waves are the
+// works", OffloadStatsCard.vue) is in HSwarm Overview; a line above the list links there. The manager waves are the
 // tree's CliMayte > Waves row (`section: 'waves'`, owner 2026-10-06: "Move the waves section into a
 // subsection called waves underneath CLI Mate"): the same page shows them in place of the list, and a
 // wave's manager opens here as any task does, its back button returning to the waves.
@@ -19,8 +19,6 @@
 // list asks for the newest 150 finished tasks; "Show older" asks for all of them.
 import {
   ArrowLeft,
-  BarChart3,
-  ChevronRight,
   Cloud,
   CloudOff,
   ListChecks,
@@ -57,10 +55,8 @@ import { useFreeInstances } from '@/composables/useFreeInstances'
 import { freeThreadAsk } from '@/lib/free-instances'
 import { freeThreadRow } from '@/lib/free-threads'
 import type { FreeThread } from '@desk/shared/free-instances'
-import OffloadStatsCard from '@/components/OffloadStatsCard.vue'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
 import { useCliMayteData } from '@/composables/useCliMayteData'
 import { useCliMayteFloat } from '@/composables/useCliMayteFloat'
@@ -92,7 +88,7 @@ import InfoHint from '@/shell/InfoHint.vue'
 
 /** `home`: HSwarmView bumps it when the CliMayte row is clicked, which goes back to the list. */
 const props = withDefaults(defineProps<{ home?: number; section?: 'tasks' | 'waves' }>(), { section: 'tasks' })
-/** `open`: a tree path for HSwarmView to show (the scorecard's HSwarm link opens HSwarm's savings). */
+/** `open`: a tree path for HSwarmView to show (the stats link opens HSwarm's Overview). */
 const emit = defineEmits<{ open: [path: string[]] }>()
 
 const { t, locale } = useI18n()
@@ -121,8 +117,6 @@ const {
   workers,
   remote,
   runningCount,
-  totals,
-  scorecard,
   waves,
   loading,
   loaded,
@@ -197,9 +191,6 @@ const PAGE = 150
 const limit = ref(PAGE)
 const shown = computed(() => listed.value.slice(0, limit.value))
 const notShown = computed(() => listed.value.length - shown.value.length)
-
-/** Folded until opened, and kept that way in this browser: the list comes first. */
-const scoreOpen = useStorage('agenthydra.climayte.scoreOpen', false)
 
 const selectedRow = computed(() => rows.value.find((w) => rowKey(w) === selectedId.value) ?? null)
 /** The remote row that is open, shown read-only from what the row has. */
@@ -806,28 +797,15 @@ onUnmounted(() => {
       />
     </div>
 
-    <!-- The list, under the scorecard (folded until opened). -->
+    <!-- The list, under the link to the stats (they moved to HSwarm Overview). -->
     <div v-else ref="listEl" class="scroll-slim min-h-0 flex-1 overflow-y-auto px-4 pb-4">
-      <Collapsible v-model:open="scoreOpen" class="mb-2">
-        <div class="flex flex-col gap-1.5">
-          <CollapsibleTrigger as-child>
-            <button
-              type="button"
-              class="group flex items-center gap-1.5 self-start rounded-md px-1 text-xs font-medium text-muted-foreground hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-            >
-              <ChevronRight
-                class="size-3.5 shrink-0 transition-transform group-data-[state=open]:rotate-90"
-                aria-hidden="true"
-              />
-              <BarChart3 class="size-3.5" aria-hidden="true" />
-              {{ $t('climayte.scorecard') }}
-            </button>
-          </CollapsibleTrigger>
-          <CollapsibleContent>
-            <OffloadStatsCard :totals="totals" :scorecard="scorecard" @open="emit('open', ['savings'])" />
-          </CollapsibleContent>
-        </div>
-      </Collapsible>
+      <button
+        type="button"
+        class="mb-2 block rounded-md px-1 text-start text-xs font-medium text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+        @click="emit('open', ['overview'])"
+      >
+        {{ $t('climayte.statsMoved') }}
+      </button>
 
       <!-- One line per task, as the Jobs page lists jobs: the status as an icon (a failed one tells its
            story on hover), the title, the account and model it runs on, how long it has been active. -->

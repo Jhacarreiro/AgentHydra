@@ -108,8 +108,8 @@ export default {
   listShowMore: 'Show {n} more ({total} not shown)',
   backToTasks: 'Back to tasks',
   backToWaves: 'Back to waves',
-  // The folded section over the list: the totals and "What works" (OffloadStatsCard.vue).
-  scorecard: 'Scorecard',
+  // The link over the list to the stats, which are in HSwarm Overview (OffloadStatsCard.vue).
+  statsMoved: 'Stats moved to HSwarm Overview',
   offloadedReread:
     'Re-reading a conversation into an empty cache when a run picks it up again (after a move, a limit, a handoff or a gap) took {share}% of what they used: {pct}% of a Pro 5-hour window.',
   detailCostHint: 'Every attempt on every account, stopped ones included.',

@@ -69,25 +69,54 @@ export default {
 
   keyHealth: 'Key health by provider',
   moneyChart: 'Tokens by provider (14 days)',
+  climayteTitle: 'CliMayte',
+  climayteCaption: 'What the tasks handed to CliMayte offloaded, and which models pass each kind of task.',
   chartsEmpty:
     'Tokens, failures and key health are charted here once you have a key and the swarm has run a task.',
 
   results: {
     title: 'Model results',
     days: 'Last {n} days',
+    all: 'All',
     failed: 'Could not load model results:',
     emptyTitle: 'No finished tasks in this window',
     emptyBody:
       'Thumbs up and down, cost and edit survival per model appear once the swarm has run tasks.',
-    outcomes: 'Thumbs up and down (ok vs failed tasks)',
-    upDown: '{ok} ok / {failed} failed',
-    tokensPerOk: 'Tokens per successful task (fewest first)',
+    sources: { both: 'Both', hswarm: 'HSwarm', climayte: 'CliMayte' },
+    sourceTag: { hswarm: 'HSwarm', climayte: 'CliMayte' },
+    outcomes: 'Thumbs up and down',
+    outcomesCaption:
+      'Passed (up) and failed (down) tasks per model, busiest first. The bar is the share that passed. CliMayte counts all time.',
+    noRows: 'No model has finished tasks for this source.',
+    climayteMissing: "CliMayte's scorecard is not available right now.",
+    upDown: '{up} up · {down} down',
+    up: 'up',
+    down: 'down',
+    trend: '3-model average',
+    tokensAxis: 'Tokens',
+    failedAxis: '% failed',
+    modelAxis: 'Model, best first',
+    tokensPerOk: 'Tokens per success',
+    tokensCaption:
+      "Input and output tokens of a model's tasks, divided by its successes. Cache reads and writes are left out. Fewest first; the line averages three bars. A model with fewer than 5 successes is marked and listed last.",
+    tokensHswarmOnly: 'Tokens come from HSwarm only. CliMayte keeps no token count per model.',
     noOk: 'No model has a successful task yet.',
-    survival: 'Edit survival after a day (share of added code still there)',
+    noTokens: '{n} models with successes recorded no tokens and are left out.',
+    failedShare: 'Failed share',
+    failedCaption:
+      'Failed tasks as a share of all of a model\'s tasks. Lowest first; the line averages three bars. Fewer than 5 tasks is marked and listed last.',
+    few: 'few',
+    fewTasks: 'Under {n} successes or tasks, so the number can swing on one task',
+    survival: 'Kept after 1 day',
+    survivalCaption:
+      "Share of a model's added code still in the repo a day later, from HSwarm's scoring. Models with no scored edits are left out.",
     noSurvival: 'No model has scored edits yet. Edits are scored after a day.',
     scored: '{n} scored tasks',
-    perDay: 'Tasks per day by model',
+    perDay: 'Tasks per day',
+    perDayCaption: "Tasks per model on each day, busiest models named. All shows the last 30 days.",
     other: 'other',
+    showMore: 'Show more',
+    showLess: 'Show less',
   },
 
   // Health section

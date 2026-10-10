@@ -115,7 +115,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   already on screen, so no other tab's rows are left behind. CliMayte has no tab of its own (owner,
   2026-10-05: "move what is currently on the CliMayte tab into HSwarm"): its node shows a compact manager
   list inside the pane, one line per task (status, title, account, model, time, a cloud for another PC's
-  task), Running / All, the scorecard closed above it; a click opens the task with "Back to tasks", and
+  task), Running / All, and a link to its stats, which live in HSwarm's Overview (owner, 2026-10-10: "let's just put
+  those in the HSwarm overview"); a click opens the task with "Back to tasks", and
   CliMayte's tasks never go into Desk's sidebar. **Jobs is one list** (owner, 2026-10-10: "combine CLImate and,
   like, Waves and Jobs into one that's just called Jobs, and then it just differentiates"): HSwarm jobs, CliMayte
   workers and manager waves, newest first, one compact line each in the CliMayte list's style with a kind badge
@@ -124,7 +125,17 @@ sidebar on the left stays put, and only the pane on the right changes.
   line; a worker opens on CliMayte's page, a wave on the waves page with "Back to waves". Settings calls the
   section HSwarm, with CliMayte's settings in its CliMayte group; an old link to the CliMayte section opens it
   (`web/src/components/panes/settings.ts` `sectionFor`). Desk's links land on the node: a task row
-  opens CliMayte on that task, a job row Jobs on that job. The Routing node is one page: HSwarm's
+  opens CliMayte on that task, a job row Jobs on that job.
+  **HSwarm's Overview** (owner, 2026-10-10) holds CliMayte's card (tasks offloaded, runs, tokens, spent, and "What
+  works" per kind of task and model, `OffloadStatsCard`) and lists Key health by provider most-used first (tokens
+  in the range). Its **Model results** are one card per table or chart, each with a caption, every list the top 10
+  with Show more (`hswarm/HSwarmModelResults.vue`): thumbs up and down per model from HSwarm's tasks and CliMayte's
+  scorecard with an HSwarm / CliMayte / Both toggle, tokens per successful task, failed share, kept after 1 day and
+  tasks per day, the charts bars with a trailing three-bar average (`charts/TrendBars.vue`). Tokens per successful
+  task count input and output only: cache reads made one route read 2.7 million (`lib/hswarm-results.ts`); a
+  model with no recorded tokens shows a dash, and one with under 5 successes is marked and ranked last. The range
+  is 14 days, 30 days or All; each range read is kept, and HSwarm's scoring (`hswarm/model_stats.py`) answers from
+  its cache and refreshes behind it, so a switch reads nothing. The Routing node is one page: HSwarm's
   routing first (`hswarm/HSwarmRouting.vue`), then AgentHydra's cost routing between API keys and the
   Claude subscriptions (`hswarm/HSwarmCostRouting.vue`, alone while HSwarm is down): the on/off switch, the
   API-or-subscription split used when the two costs are close (default 60 / 40 to API keys), the close
