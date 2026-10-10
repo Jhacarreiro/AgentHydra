@@ -865,12 +865,26 @@ def cost_usd(model: str, hit: int, miss: int, out: int, when: dt.datetime | None
     return (hit * p["hit"] + (miss - write) * p["miss"] + write * p.get("write", p["miss"]) + out * p["out"]) / 1_000_000.0
 
 
+_LINES_READ: dict[str, tuple] = {}  # file -> ((mtime, size), its lines)
+
+
 def _read_key_lines(path: Path) -> list[str]:
+    """A key file's keys, one a line, re-read when the file changed. Every source of a provider reads its `.dead`
+    files, so the console's state read the same files 236 times a call (2026-10-10: 230 ms of its 400)."""
+    try:
+        st = path.stat()
+    except OSError:
+        return []
+    stamp, hit = (st.st_mtime_ns, st.st_size), _LINES_READ.get(str(path))
+    if hit and hit[0] == stamp:
+        return list(hit[1])
     try:
         lines = path.read_text(encoding="utf-8").splitlines()
     except Exception:
         return []
-    return [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+    keys = [line.strip() for line in lines if line.strip() and not line.strip().startswith("#")]
+    _LINES_READ[str(path)] = (stamp, keys)
+    return list(keys)
 
 
 def _split_keys(s: str | None) -> list[str]:

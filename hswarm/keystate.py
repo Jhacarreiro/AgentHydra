@@ -186,10 +186,25 @@ def read_changes(since: int | None) -> list[tuple[str, str, int]] | None:
         return None
 
 
+_ALL: tuple = ((), {})  # ((database, rows, newest rev), {fingerprint: entry}) as last read
+
+
 def read_all() -> dict | None:
-    """Every non-empty row as {fingerprint: entry}; None when unreadable (read_key_state)."""
-    rows = read_changes(None)
-    return None if rows is None else {fp: json.loads(t) for fp, t, _ in rows if t != "{}"}
+    """Every non-empty row as {fingerprint: entry}; None when unreadable (read_key_state). The rows are read again only
+    when one was written or deleted since (a put bumps the newest rev, a delete drops the count): the console's state
+    read all ~3,500 on every call (2026-10-10: 170 ms of its 400)."""
+    global _ALL
+    try:
+        c = connect()
+        try:
+            stamp = (str(db_path()), *c.execute("SELECT count(*), max(rev) FROM keys").fetchone())
+            if stamp != _ALL[0]:
+                _ALL = (stamp, {fp: json.loads(t) for fp, t, _ in changes(c, None) if t != "{}"})
+        finally:
+            c.close()
+    except sqlite3.Error:
+        return None
+    return {fp: dict(e) for fp, e in _ALL[1].items()}  # each caller its own copy: the cache is never changed
 
 
 def prune(live: set[str]) -> dict:
