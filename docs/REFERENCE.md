@@ -872,7 +872,7 @@ the individual checks instead:
 - `bun run --cwd desk2/hydra check:i18n`: no hardcoded UI strings in AgentHydra's pages; every `t()` key
   resolves (also gates Desk 2's `build`).
 - `bun test`: includes the Windows-gated tray launcher guard and instance/crypto tests.
-- `bun run typecheck`: the server and the orchestrator (`tsc`, `vue-tsc`); Desk 2 has its own,
+- `bun run typecheck`: the server (`bun check`) and the orchestrator (`tsc`, `vue-tsc`); Desk 2 has its own,
   `bun run --cwd desk2 typecheck`.
 
 `bun run check:local` is the owner-only half on its own: today it is just `check:kit`, split out under a

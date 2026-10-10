@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A deleted project folder no longer burns a core or freezes the dev server list.** On Windows a watch on a
+  deleted folder reports it gone hundreds of times a second and never stops, which used a CPU core and kept Desk 2
+  from reloading a project's `.devwebui` settings. That watch now closes the moment its folder is gone, a check
+  every second reloads a changed `.devwebui` file directly, and watching starts again once the folder is back.
 - **The PC stays awake while your agents work.** While a CliMayte worker runs or a chat is working, AgentHydra
   stops the PC going to sleep on its own, and lets it sleep again once nothing works. The screen still turns off
   and Sleep still works. It is on by default; Settings -> CliMayte -> This PC turns it off.
