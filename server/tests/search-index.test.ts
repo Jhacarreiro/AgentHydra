@@ -384,7 +384,9 @@ setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
     expect(r.indexed).toBe(1)
     expect(candidateKeys('written')).toEqual(new Set([claudeKey('a')]))
     expect(await holder.exited).toBe(0)
-  })
+    // 20 s: a real bun child starts and holds the lock for 500 ms; a cold Windows CI runner has been
+    // seen at ~9.5x local (scripts/checks/spawn-test-without-timeout.mjs).
+  }, 20_000)
 })
 
 // The ladder: phrase, then all words, then typo repair, then any word. Each test pins one rung's
