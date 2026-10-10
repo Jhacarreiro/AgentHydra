@@ -62,6 +62,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
   It is on by default and its button is plain then; the button turns blue while it is off and the details show
   (owner, 2026-10-08).
+- **The sidebar drags down to 200px** (owner, 2026-10-10: "This sidebar does not let me make it any narrower"). Its
+  right edge drags it from 200 to 420px (294 until dragged; the arrow keys move it 8px). The chrome bar over its top keeps
+  the 294px its buttons need: over a narrower sidebar it reaches past the edge, as it does while the sidebar is hidden,
+  and the chat's title bar starts after it; the drag handle then starts below the bar. In the footer, the account's
+  name stays whole before its "· 41 accounts" does (`web/src/components/sidebar/width.ts`).
 - **A compact sidebar, and project icons in the cloud list** (owner, 2026-10-10). The chrome bar's Compact sidebar
   button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
   headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its

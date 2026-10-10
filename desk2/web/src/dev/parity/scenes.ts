@@ -9,6 +9,7 @@ import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import type { ComposerApi } from '@/components/composer/api'
 import type { PaneApi } from '@/components/panes/api'
+import { SIDEBAR_MIN } from '@/components/sidebar/width'
 import { PARITY_NOW } from './clock'
 import { backgroundTaskWorkers } from './tasks'
 import { markdownSceneItems } from './markdown'
@@ -56,6 +57,8 @@ export interface ParityScene {
   alert?: string
   /** The sidebar starts hidden, so the title bar spans the window. */
   sidebarHidden?: boolean
+  /** The width the sidebar was dragged to (the page sets its saved width; default SIDEBAR_DEFAULT). */
+  sidebarWidth?: number
   /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
   audio?: HeadlessAudioState
 }
@@ -107,6 +110,8 @@ export const PARITY_SCENES: Record<string, ParityScene> = {
   'header-fit': headerFit,
   // The same bar with a failed action's alert in its right block.
   'header-fit-alert': { ...headerFit, alert: 'The change failed: the Northwind workspace did not answer, so the last edit is not saved yet' },
+  // The same bar beside the sidebar dragged to its narrowest, under the chrome bar that reaches past it (sidebar/width.ts).
+  'header-fit-narrow-sidebar': { ...headerFit, sidebarWidth: SIDEBAR_MIN },
   'background-tasks': { ...whole, workers: backgroundTaskWorkers, openTasks: true },
   // The Settings dialog over the chat it was opened from.
   settings: { ...whole, view: { kind: 'settings' }, history: [{ kind: 'chat', id: 'pc' }, { kind: 'chat', id: 'ccd' }] },

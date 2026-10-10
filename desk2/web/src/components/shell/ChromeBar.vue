@@ -5,6 +5,7 @@ import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSepara
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-update'
+import { CHROME_COLLAPSED, CHROME_OPEN } from '@/components/sidebar/width'
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu and Hide sidebar (28px, r7).
 // The real app's Chat / Code mode switch is left out: Hydra Desk is Code only. Its Back and Forward arrows
@@ -33,17 +34,17 @@ const BTN_SHAPE =
 const BTN = `${BTN_SHAPE} text-text`
 /**
  * Hidden, the bar is just its buttons: 12 + 8 buttons of 28 + 9 gaps of 4 + two 1px dividers + 12 of divider margins
- * (the Cloud divider's 4px each side, the right divider's 4px on its right) + 4 = 290. Open, the sidebar's minimum
- * (Sidebar.vue MIN_WIDTH) is this less the 4px right padding plus 8px more: 294.
+ * (the Cloud divider's 4px each side, the right divider's 4px on its right) + 4 = 290 (sidebar/width.ts CHROME_COLLAPSED).
+ * Open, it is the sidebar's width, and never less than this less the 4px right padding plus 8px more (CHROME_OPEN, 294):
+ * over a narrower sidebar it reaches past its edge, and the title bar starts after it (DeskFrame titlePad).
  */
-const COLLAPSED_WIDTH = 290
 </script>
 
 <template>
   <div
     class="title-drag absolute left-0 top-0 z-21 flex h-9 items-center gap-1 ps-3"
     :class="[sidebarOpen ? 'pe-2' : 'pe-1', sliding ? 'transition-[width,padding] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none' : '']"
-    :style="{ width: `${sidebarOpen ? width : COLLAPSED_WIDTH}px` }"
+    :style="{ width: `${sidebarOpen ? Math.max(width, CHROME_OPEN) : CHROME_COLLAPSED}px` }"
     data-peek-zone="keep"
   >
     <Tip label="Menu">

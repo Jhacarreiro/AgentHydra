@@ -29,6 +29,7 @@ import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
+import { CHROME_COLLAPSED, SIDEBAR_WIDTH_KEY, chromeOverhang, savedSidebarWidth } from '@/components/sidebar/width'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
@@ -51,7 +52,7 @@ import { requestedSection } from '@/components/panes/settings-request'
 import type { SettingsSection } from '@/components/panes/settings'
 import { actionError } from '@/lib/action-error'
 
-// The whole window: sidebar (294, resizable), the chrome bar over its top, and the pane with the
+// The whole window: sidebar (294, resizable from 200 to 420), the chrome bar over its top, and the pane with the
 // title bar, the view, the composer and an optional right pane.
 const props = defineProps<{
   /** Gallery only: the composer renders from fixtures. */ demo?: boolean
@@ -160,11 +161,8 @@ const greetingName = computed(() => {
 })
 
 // Sidebar
-const SIDEBAR_KEY = 'hydra-desk.sidebar.width'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
-const savedWidth = Number(storage?.getItem(SIDEBAR_KEY))
-// A width saved before the minimum rose to 294 (Sidebar.vue's MIN_WIDTH, the chrome bar's open width) is raised to it.
-const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(294, savedWidth) : 294)
+const sidebarWidth = ref(savedSidebarWidth(storage?.getItem(SIDEBAR_WIDTH_KEY)))
 // Open or hidden (header toggle, Ctrl+B), remembered; it slides 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
@@ -262,7 +260,7 @@ function saveWidth() {
   if (!widthSave) return
   clearTimeout(widthSave)
   widthSave = null
-  storage?.setItem(SIDEBAR_KEY, String(pendingWidth))
+  storage?.setItem(SIDEBAR_WIDTH_KEY, String(pendingWidth))
 }
 // The group names a row's menu offers, worked out when the chats or outside sessions change, not on every render.
 const rowGroups = computed(() => groupChoices(src.chats.value, src.external.value))
@@ -785,9 +783,10 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 286: the bar's 290 less its 4px padding).
-const CHROME_COLLAPSED = 290
-const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 286: the bar's
+// CHROME_COLLAPSED 290 less its 4px padding); open, after the sidebar, or after the bar where it reaches past a sidebar narrower
+// than its buttons (sidebar/width.ts).
+const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarWidth.value) : CHROME_COLLAPSED))
 </script>
 
 <template>

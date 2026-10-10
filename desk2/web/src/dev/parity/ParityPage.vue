@@ -10,6 +10,7 @@ import { waitForNextPaint } from '@/lib/wait-for-next-paint'
 import { PARITY_SCENES, sceneComposerApi, scenePaneApi, sceneSource, type MenuName } from './scenes'
 import { actionError } from '@/lib/action-error'
 import { applyHeadlessAudio } from '@/lib/chat-audio'
+import { SIDEBAR_WIDTH_KEY } from '@/components/sidebar/width'
 
 // '#/parity/<scene>?open=<plus|mode|model|effort>&hover=<css selector | text:Label>&draft=<text>'
 // renders one scene of docs/reference/real/scenes.json with the real components on fixtures, then sets
@@ -20,8 +21,9 @@ const name = path!.replace(/^\/parity\/?/, '')
 const query = new URLSearchParams(search)
 const scene = PARITY_SCENES[name] ?? null
 
-// Layout state the app remembers (sidebar width, open) would differ between machines.
+// Layout state the app remembers (sidebar width, open) would differ between machines, so only a scene sets it.
 for (const key of Object.keys(localStorage)) if (key.startsWith('hydra-desk.')) localStorage.removeItem(key)
+if (scene?.sidebarWidth) localStorage.setItem(SIDEBAR_WIDTH_KEY, String(scene.sidebarWidth))
 
 if (scene) {
   provide(SHELL_SOURCE, sceneSource(scene))

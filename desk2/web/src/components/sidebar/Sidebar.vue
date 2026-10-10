@@ -35,6 +35,7 @@ import TaskRows from './TaskRows.vue'
 import SubBadges from './SubBadges.vue'
 import FoldButton from './FoldButton.vue'
 import { folded, toggleFolded } from './folded'
+import { CHROME_OPEN, SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth } from './width'
 import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
@@ -132,10 +133,8 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-// 294, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's six extra buttons and two dividers
-// with their 8px margins (12 + 8 buttons of 28 + 9 gaps of 4 + 2 dividers + 12 divider margins + 8 right padding = 294).
-const MIN_WIDTH = 294
-const MAX_WIDTH = 420
+// Dragged from 200 to 420 (width.ts); the chrome bar over its top keeps the 294 its buttons need and reaches past a
+// narrower sidebar.
 
 const src = useShellSource()
 const selected = computed(() => src.selected.value)
@@ -791,14 +790,11 @@ async function clickUpdateRow() {
 
 // Resize handle
 const root = ref<HTMLElement | null>(null)
-function clampWidth(w: number) {
-  return Math.max(MIN_WIDTH, Math.min(MAX_WIDTH, Math.round(w)))
-}
 function onResizeDown(e: PointerEvent) {
   const el = e.currentTarget as HTMLElement
   el.setPointerCapture(e.pointerId)
   const left = root.value?.getBoundingClientRect().left ?? 0
-  const move = (ev: PointerEvent) => emit('resize', clampWidth(ev.clientX - left))
+  const move = (ev: PointerEvent) => emit('resize', clampSidebarWidth(ev.clientX - left))
   const up = () => {
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)
@@ -807,8 +803,8 @@ function onResizeDown(e: PointerEvent) {
   el.addEventListener('pointerup', up)
 }
 function onResizeKey(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') emit('resize', clampWidth(props.width - 8))
-  else if (e.key === 'ArrowRight') emit('resize', clampWidth(props.width + 8))
+  if (e.key === 'ArrowLeft') emit('resize', clampSidebarWidth(props.width - 8))
+  else if (e.key === 'ArrowRight') emit('resize', clampSidebarWidth(props.width + 8))
 }
 
 defineExpose({
@@ -1074,8 +1070,9 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           class="flex h-7 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-6) ps-1 pe-1.5 transition-colors duration-60 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         >
           <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-(--fill-secondary) text-[10px] font-semibold leading-none text-text">{{ face.initial }}</span>
-          <span class="truncate text-[13px] leading-[19.5px] text-text-2">{{ face.name }}</span>
-          <span v-if="face.plan" class="shrink-0 text-[12px] leading-4 text-text-muted">· {{ face.plan }}</span>
+          <!-- In a narrow sidebar the plan ("· 41 accounts") gives way before the name does. -->
+          <span class="max-w-full shrink-0 truncate text-[13px] leading-[19.5px] text-text-2">{{ face.name }}</span>
+          <span v-if="face.plan" class="min-w-0 truncate text-[12px] leading-4 text-text-muted">· {{ face.plan }}</span>
           <component :is="icons.more" class="ms-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
@@ -1094,15 +1091,17 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
       </Tip>
     </footer>
 
+    <!-- Below the chrome bar while the bar reaches past a narrow sidebar, so it never takes its buttons' clicks. -->
     <div
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize sidebar"
       tabindex="0"
       :aria-valuenow="width"
-      :aria-valuemin="MIN_WIDTH"
-      :aria-valuemax="MAX_WIDTH"
-      class="absolute -right-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none"
+      :aria-valuemin="SIDEBAR_MIN"
+      :aria-valuemax="SIDEBAR_MAX"
+      class="absolute -right-1.5 bottom-0 z-22 w-3 cursor-col-resize touch-none"
+      :class="width < CHROME_OPEN ? 'top-9' : 'top-0'"
       @pointerdown.prevent="onResizeDown"
       @keydown="onResizeKey"
     />

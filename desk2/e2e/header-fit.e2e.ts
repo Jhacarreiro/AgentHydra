@@ -1,7 +1,8 @@
-// The title bar's fit (bun e2e/header-fit.e2e.ts; Windows, Edge). Three bars, each swept on the REAL layout, never by forcing the header's
+// The title bar's fit (bun e2e/header-fit.e2e.ts; Windows, Edge). Four bars, each swept on the REAL layout, never by forcing the header's
 // width: a chat's bar beside the Browser pane (the chat column is moved with the divider's own arrow keys, from the widest down to
 // CHAT_MIN 300 in steps of 16), the same chat with a long alert, and an outside session's bar (both with the sidebar hidden, so the
-// bar spans the window, which is resized from 1100px down to 300px in steps of 20).
+// bar spans the window, which is resized from 1100px down to 300px in steps of 20), and the chat's bar beside the sidebar dragged to its
+// 200px minimum, under the chrome bar that reaches past it (sidebar/width.ts), swept the same way.
 // At every width: the header stays h-8 and inside its column; no two visible controls overlap; every control is whole (no ancestor cuts
 // it) and is what a click at its centre hits (nothing covers it); the right-hand pane buttons keep their 26px; the title shows at least six
 // characters and an ellipsis; the status cue is its full words or its dot alone; the folder pill is at least 64px or hidden; the title
@@ -13,6 +14,7 @@ import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { portFrom } from './lib/free-port'
 import { QUIET_EDGE } from './lib/edge-flags'
+import { CHROME_COLLAPSED, CHROME_OPEN } from '../web/src/components/sidebar/width'
 
 const DESK = resolve(import.meta.dir, '..')
 const PORT = portFrom(process.env.E2E_PORT)
@@ -20,16 +22,19 @@ const CDP = portFrom(process.env.E2E_CDP_PORT)
 const EDGE = process.env.E2E_EDGE || 'C:/Program Files (x86)/Microsoft/Edge/Application/msedge.exe'
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
-// The collapsed sidebar leaves the title bar its window minus 250px of chrome, so these are header widths.
-const CHROME = 250
+// The collapsed sidebar leaves the title bar its window minus the chrome bar (CHROME_COLLAPSED), so these are header widths. The app's
+// own constant: a copy here said 250 after the bar grew to 290, and the sweep ran 40px under CHAT_MIN.
 const HEADER_WIDTHS = Array.from({ length: 41 }, (_, i) => 1100 - i * 20)
 const CHAT_MIN = 300
 const SHOTS: { name: string; at: number }[] = [{ name: 'wide', at: 1300 }, { name: 'mid', at: 560 }, { name: 'narrow', at: CHAT_MIN }]
 const RIGHT_BUTTONS = ['Background tasks', 'Changes', 'Browser and servers', 'Connections', 'View options', 'Hide session details', 'Show session details']
-const SCENES = [
+// `left`: the window's width left of the title bar's content (CHROME_COLLAPSED unless given), so a header width becomes a window
+// width. Beside the sidebar at SIDEBAR_MIN the title bar starts after the chrome bar's CHROME_OPEN, plus 9px.
+const SCENES: { scene: string; shape: string; split: boolean; left?: number }[] = [
   { scene: 'header-fit', shape: 'chat', split: true },
   { scene: 'header-fit-alert', shape: 'chat-alert', split: false },
   { scene: 'header-fit-external', shape: 'external', split: false },
+  { scene: 'header-fit-narrow-sidebar', shape: 'chat-narrow-sidebar', split: false, left: CHROME_OPEN + 9 },
 ]
 
 // Reads the header that holds the Background tasks button: its box and its column's, each visible control's whole and visible box (an
@@ -294,9 +299,10 @@ try {
     } else {
       await ev(`document.documentElement.style.overflow = 'hidden'`)
       for (const hw of HEADER_WIDTHS) {
-        await send('Emulation.setDeviceMetricsOverride', { width: hw + CHROME, height: 900, deviceScaleFactor: 1, mobile: false })
+        const left = s.left ?? CHROME_COLLAPSED
+        await send('Emulation.setDeviceMetricsOverride', { width: hw + left, height: 900, deviceScaleFactor: 1, mobile: false })
         await sleep(250)
-        await check(s.shape, `window ${hw + CHROME}`, s.shape === 'chat-alert')
+        await check(s.shape, `window ${hw + left}`, s.shape === 'chat-alert')
       }
     }
   }
