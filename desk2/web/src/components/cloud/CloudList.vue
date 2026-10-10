@@ -17,6 +17,7 @@ import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
 import ProjectRing from '@/components/sidebar/ProjectRing.vue'
+import ProjectMenuItems from '@/components/sidebar/ProjectMenuItems.vue'
 import { HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, newChatFolder, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
@@ -252,7 +253,17 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
       </header>
       </ContextMenuTrigger>
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-        <ContextMenuItem :class="MENU_ITEM" :title="g.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(g.orderKey, !g.hidden)">
+        <!-- A project folder's group gets the desk list's menu (sidebar/ProjectMenuItems.vue; the sidebar mounts its dialog). -->
+        <ProjectMenuItems
+          v-if="g.cwd"
+          :folder="g.cwd"
+          :label="g.label"
+          :collapsed="collapsed.has(g.key)"
+          :hidden="!!g.hidden"
+          @toggle="toggleGroup(g.key)"
+          @hide="hiddenGroups.hide(g.orderKey, !g.hidden)"
+        />
+        <ContextMenuItem v-else :class="MENU_ITEM" :title="g.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(g.orderKey, !g.hidden)">
           <span class="flex-1">{{ g.hidden ? 'Unhide' : 'Hide' }}</span>
         </ContextMenuItem>
       </ContextMenuContent>

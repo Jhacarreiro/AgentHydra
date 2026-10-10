@@ -46,6 +46,7 @@ import { RecentFolders } from '../folders/recent'
 import { findHydra, readHydra, type HydraLocation, type HydraRead } from '../projects/hydra'
 import { localFolderPath, withPath, withoutPath } from '../projects/choices'
 import { ProjectList } from '../projects/projects'
+import { ProjectMenu } from '../projects/menu'
 import { serveProjectIcon } from '../projects/icon-cache'
 
 /** How often chats started in a folder that holds projects are placed and filed while New is closed. */
@@ -478,6 +479,31 @@ function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFo
   })
 }
 
+/** The project group header's menu (plugins/31-project-menu.ts): its stats, and the chats a scratch folder's proposal reads. */
+function projectMenu(ctx: ServerContext, manager: ChatManager, projects: ProjectList): ProjectMenu {
+  const deps = ctx.deps
+  const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
+  const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
+  const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
+  const sessions = (deps.bridge as ManagerBridge | undefined) ?? bridge()
+  return new ProjectMenu({
+    findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
+    readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
+    chats: async () => [
+      ...manager.list({ archived: true }).map((c) => ({ kind: 'desk' as const, id: c.id, sessionId: c.sessionId ?? null, cwd: c.cwd, title: c.title, group: c.group, archived: c.archived })),
+      ...(await sessions.externalSessions())
+        .filter((s) => s.cwd)
+        .map((s) => ({ kind: 'outside' as const, id: s.id, sessionId: s.id, cwd: s.cwd!, title: s.title, group: s.group, archived: s.archived })),
+    ],
+    transcript: (sessionId, cwd) => findSessionJsonl(sessionId, sessions.sessionRoots(), cwd),
+    projects: async () => (await projects.list()).projects.map((p) => ({ name: p.name, path: p.path })),
+    setGroup: async (chat, group) => {
+      if (chat.kind === 'desk') await manager.patch(chat.id, { group })
+      else await manager.patchSessionMeta(chat.id, { group })
+    },
+  })
+}
+
 /** Sweeps the project list on a timer, and flushes the projects and the recent folders to disk when the server stops. */
 function keepProjectsSwept(ctx: ServerContext, projects: ProjectList, folders: RecentFolders): void {
   // Chats are filed into their project's group with New closed too (owner, 2026-10-08: "I wouldn't mind if Agent
@@ -561,6 +587,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   const folders = new RecentFolders(join(ctx.home, 'folders.json'))
   folderRoutes(app, ctx, manager, folders)
   const projects = projectList(ctx, manager, folders)
+  ctx.deps.projectMenu = projectMenu(ctx, manager, projects)
   projectRoutes(app, ctx, projects)
   keepProjectsSwept(ctx, projects, folders)
   mcpRoutes(app, ctx, manager)

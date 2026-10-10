@@ -892,3 +892,36 @@ export interface ProjectsResponse {
    * GET /api/projects?wait=1 answers once it is done. */
   pending: boolean
 }
+
+/** A project group header's read-only stats (GET /api/projects/stats?folder=). Each part is null when it cannot be read. */
+export interface ProjectStats {
+  /** The folder's git state, or null when it is not a checkout. `lastCommitAt` is an ISO time. */
+  git: { branch: string | null; upstream: string | null; ahead: number; behind: number; dirty: number; lastCommitAt: string | null } | null
+  /** Project Hydra is installed on this PC (its section shows only then). */
+  hydra: boolean
+  /** Project Hydra's read of this folder's project (`ph show <key> --json`): the last Architect run's error and warning
+   * counts and when it ran, the risk score and the production cell ("7/10"). Null when it has none or cannot be read;
+   * a part ph has not measured is null, never 0. */
+  architect: { errors: number | null; warnings: number | null; lastRunAt: string | null; risk: number | null; production: string | null } | null
+}
+
+/** One chat of an auto-categorize proposal: the project its transcript says it worked in, or null when it stays. */
+export interface PlacementProposal {
+  kind: 'desk' | 'outside'
+  id: string
+  title: string
+  project: { name: string; path: string } | null
+  /** The sidebar group the chat would be put under (the project folder's name), or null when it stays. */
+  group: string | null
+  /** References to the project. */
+  refs: number
+  /** `winner`; `no references` or `tie` (the chat stays); `no transcript` (nothing to read, the chat stays). */
+  reason: 'winner' | 'no references' | 'tie' | 'no transcript'
+}
+
+/** One placement to apply (POST /api/projects/placements). `group` null puts the chat back in its folder's group. */
+export interface PlacementMove {
+  kind: 'desk' | 'outside'
+  id: string
+  group: string | null
+}

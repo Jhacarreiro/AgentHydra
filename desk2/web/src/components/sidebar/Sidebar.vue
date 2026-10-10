@@ -35,6 +35,8 @@ import TaskRows from './TaskRows.vue'
 import SubBadges from './SubBadges.vue'
 import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
+import ProjectMenuItems from './ProjectMenuItems.vue'
+import AutoCategorizeDialog from './AutoCategorizeDialog.vue'
 import {
   addToCloudGroups,
   addToDeskGroups,
@@ -842,7 +844,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <TransitionGroup :css="false" @leave="rowLeave">
         <!-- Compact sidebar (compact.ts): no group headers, so no heading to right-click, open or add to; the chats stay in their groups. -->
         <section v-for="group in groupList" :key="group.key" :aria-label="group.label" :class="compactSidebar && group.hidden && 'opacity-60'">
-          <!-- A project group's right-click hides it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
+          <!-- A group's right-click menu (ProjectMenuItems for a project folder's) can hide it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
           <ContextMenu v-if="!compactSidebar">
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
@@ -876,7 +878,17 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </header>
           </ContextMenuTrigger>
           <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-            <ContextMenuItem :class="MENU_ITEM" :title="group.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(groupOrderKey(group), !group.hidden)">
+            <!-- A project folder's group: its stats, Open project folder, Collapse, Auto-categorize on a scratch folder, and Hide (owner, 2026-10-10). -->
+            <ProjectMenuItems
+              v-if="group.cwd"
+              :folder="group.cwd"
+              :label="group.label"
+              :collapsed="collapsed.has(group.key)"
+              :hidden="!!group.hidden"
+              @toggle="toggleGroup(group.key)"
+              @hide="hiddenGroups.hide(groupOrderKey(group), !group.hidden)"
+            />
+            <ContextMenuItem v-else :class="MENU_ITEM" :title="group.hidden ? undefined : HIDE_TITLE" @select="hiddenGroups.hide(groupOrderKey(group), !group.hidden)">
               <span class="flex-1">{{ group.hidden ? 'Unhide' : 'Hide' }}</span>
             </ContextMenuItem>
           </ContextMenuContent>
@@ -1080,5 +1092,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </form>
       </DialogContent>
     </Dialog>
+    <AutoCategorizeDialog />
   </aside>
 </template>

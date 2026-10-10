@@ -71,6 +71,18 @@ sidebar on the left stays put, and only the pane on the right changes.
   the icon alone. The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
   on keeps the icons. Each chrome-bar toggle's tooltip names what a click does ("Enable cloud sessions", "Show
   fewer details", "Enable compact mode", "Open AgentHydra"), and its two dividers have more room either side.
+- **A project header's right-click menu** (owner, 2026-10-10: "open project folder, collapse ... some stats ... if
+  it's behind on commits"), in both lists (`sidebar/ProjectMenuItems.vue`). It opens with the folder's stats: branch,
+  ahead and behind its upstream, uncommitted files, the last commit's age, and, where Project Hydra is installed and
+  knows the folder, its last Architect run (errors, warnings, when; "not measured" when it has none), risk score and
+  production cell (`GET /api/projects/stats`, `server/src/projects/menu.ts`, cached five minutes, each part given
+  five seconds). Then Open project folder, Collapse or Expand, and Hide. A scratch folder's group (`scratch-...`)
+  adds **Auto-categorize chats** (owner: "it would move the chats to the right place, because Scratch is the wrong
+  place"): `server/src/projects/categorize.ts` reads each chat's transcript for the absolute paths its tool calls
+  name, gives each to the deepest known project folder that holds it, and proposes the project with the most; a tie
+  or no reference keeps the chat where it is and says why. Nothing moves until you confirm; a move sets the chat's
+  sidebar group (the move menu's own field, so no session file is touched) and each moved chat can go back
+  (`AutoCategorizeDialog.vue`, `POST /api/projects/categorize` and `/api/projects/placements`).
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
   Instances has a page per kind: CLI (the Claude CLI kind shown, Keep windows running and its weekly
   floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI, DeepSeek; the one "Show
