@@ -43,8 +43,9 @@ export function summarizeFree(rows: readonly FreeStatRow[], instances: readonly 
     const day = perDay.get(r.day)
     if (day) day[instance.provider] += r.input + r.output
     for (const t of [totals.all, totals[instance.provider]]) { t.sent += r.sent; t.failed += r.failed }
-    // Tokens from before Desk recorded models count by day only.
-    if (!r.model) continue
+    // No model (stats.ts UNRECORDED_MODEL) counts by day and in the totals only. Days recorded before 2026-10-11 hold
+    // the same sends, ones that failed before a model was picked, as 'unknown'.
+    if (!r.model || r.model === 'unknown') continue
     const key = `${instance.provider}/${r.model}`
     const m = models.get(key) ?? { model: r.model, provider: instance.provider, ...blank() }
     m.sent += r.sent; m.failed += r.failed; m.tokens += r.input + r.output

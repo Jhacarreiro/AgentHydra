@@ -169,6 +169,25 @@ describe('Free jobs and routes', () => {
     expect(calls).toHaveLength(2)
   })
 
+  // 2026-10-10: with 16 operations held, every new send dropped the earliest-started finished one, often a reply that
+  // had just come and that free_chat had not read yet, so its caller was told operation_lost.
+  test('a finished reply stays readable while more sends start; at most 16 run at once', async () => {
+    const release: ((output: RunOutput) => void)[] = []
+    let hold = false
+    const { service, op } = fixture(async () => hold ? new Promise(resolve => release.push(resolve)) : output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' }))
+    const accounts = Array.from({ length: 17 }, (_, n) => service.create({ provider: 'claude', name: `Example ${n}` }))
+    const send = (n: number) => service.start(op({ instanceId: accounts[n]!.id, command: 'chat', prompt: `synthetic prompt ${n}` }))
+    const first = send(0)
+    while (service.get(first.id).state !== 'done') await tick()
+    hold = true
+    for (let n = 1; n <= 15; n++) send(n)
+    await tick()
+    send(16)
+    expect(service.get(first.id).result?.response).toBe('Synthetic reply')
+    expect(() => service.start(op({ command: 'chat', prompt: 'one too many' }))).toThrow('16 operations running')
+    release.forEach(done => done(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })))
+  })
+
   test('only metadata is persisted; restarting does not replay a send', async () => {
     let calls = 0
     const { service, home, op, runtime } = fixture(async () => { calls++; return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' }) })

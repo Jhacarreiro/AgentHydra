@@ -6,8 +6,10 @@ import type { FreeStatRow } from '@shared/free-instances'
 import type { TokenLedger } from './tokens'
 
 export const STATS_DAYS = 30
-/** The model a message's tokens were counted under before Desk recorded models: its tokens show by day, and it
- *  counts in no success rate. */
+/** No model: tokens counted before Desk recorded models, and a send that failed before ChatGPT or Claude picked one
+ *  ("ChatGPT rejected the HTTP request"). Its tokens show by day and its sends and failures in the totals, never as a
+ *  model of its own (owner, 2026-10-10, of the 'unknown' model those failures used to be listed as: "figure out what
+ *  the unknown model is ... and remove it"). */
 export const UNRECORDED_MODEL = ''
 
 export interface StatCell { sent: number; failed: number; input: number; output: number }
@@ -26,7 +28,7 @@ function add(stats: StatsData, at: number, instanceId: string, model: string, ce
 
 /** One message counted: sent, failed or not, with its tokens (none for a failure); days past the kept span dropped. */
 export function addStat(stats: StatsData, message: { at: number; instanceId: string; model: string | undefined; ok: boolean; input: number; output: number }): StatsData {
-  add(stats, message.at, message.instanceId, message.model || 'unknown', { sent: 1, failed: message.ok ? 0 : 1, input: message.input, output: message.output })
+  add(stats, message.at, message.instanceId, message.model || UNRECORDED_MODEL, { sent: 1, failed: message.ok ? 0 : 1, input: message.input, output: message.output })
   const oldest = oldestKept(message.at)
   for (const day of Object.keys(stats)) if (day < oldest) delete stats[day]
   return stats

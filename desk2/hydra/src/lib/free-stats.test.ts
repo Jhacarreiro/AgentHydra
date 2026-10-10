@@ -7,7 +7,7 @@ const account = (id: string, num: number, provider: FreeInstance['provider']): F
 const parts = (total: number) => ({ input: total, output: 0, total })
 const tokens = (fiveHour: number, total: number): FreeTokens => ({ fiveHour: parts(fiveHour), week: parts(total), total: parts(total) })
 
-test('Free numbers: tokens by provider in the table window, success by model, older tokens by day only', () => {
+test('Free numbers: tokens by provider in the table window, success by model, older tokens and model-less failures off the model list', () => {
   const now = new Date(2026, 9, 8, 12).getTime()
   const instances = [account('b', 2, 'chatgpt'), account('a', 1, 'claude'), account('c', 3, 'chatgpt')]
   const row = (day: string, instanceId: string, model: string, sent: number, failed: number, input: number): FreeStatRow =>
@@ -17,16 +17,18 @@ test('Free numbers: tokens by provider in the table window, success by model, ol
     row('2026-10-08', 'a', 'claude-haiku', 4, 1, 40),
     row('2026-10-08', 'b', 'gpt-6', 3, 0, 30),
     row('2026-10-08', 'c', 'gpt-6', 2, 2, 0),
+    // A send that failed before a model was picked: in the totals, not a model (as older days recorded it, and as now).
     row('2026-10-08', 'c', 'unknown', 1, 1, 0),
+    row('2026-10-08', 'b', '', 1, 1, 0),
     // An account removed since: on no total, line or day.
     row('2026-10-08', 'gone', 'gpt-6', 9, 0, 900),
   ]
   const all = { a: tokens(5, 1000), b: tokens(7, 2000) }
   const s = summarizeFree(rows, instances, all, '5h', 3, now)
 
-  expect(s.totals).toEqual({ all: { tokens: 12, sent: 10, failed: 4 }, claude: { tokens: 5, sent: 4, failed: 1 }, chatgpt: { tokens: 7, sent: 6, failed: 3 } })
+  expect(s.totals).toEqual({ all: { tokens: 12, sent: 11, failed: 5 }, claude: { tokens: 5, sent: 4, failed: 1 }, chatgpt: { tokens: 7, sent: 7, failed: 4 } })
   expect(summarizeFree(rows, instances, all, 'total', 3, now).totals.all.tokens).toBe(3000)
   expect(s.models.map(m => [m.provider, m.model, m.sent, m.failed, m.tokens])).toEqual([
-    ['chatgpt', 'gpt-6', 5, 2, 30], ['claude', 'claude-haiku', 4, 1, 40], ['chatgpt', 'unknown', 1, 1, 0]])
+    ['chatgpt', 'gpt-6', 5, 2, 30], ['claude', 'claude-haiku', 4, 1, 40]])
   expect(s.days).toEqual([{ key: '2026-10-06', claude: 0, chatgpt: 0 }, { key: '2026-10-07', claude: 500, chatgpt: 0 }, { key: '2026-10-08', claude: 40, chatgpt: 30 }])
 })

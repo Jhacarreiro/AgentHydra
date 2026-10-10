@@ -25,6 +25,9 @@ function name(value: unknown): string {
   return value.trim()
 }
 const isUuid = (v: unknown): boolean => typeof v === 'string' && UUID.test(v)
+/** Operations running at once, and operations kept (running, and finished ones waiting to be read; see start). */
+const MAX_RUNNING = 16
+const MAX_KEPT = 200
 function checkIdentity(r: FreeRequest): void {
   const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch', 'model']
   if (Object.keys(r).some(k => !keys.includes(k))) throw new FreeError('Unknown operation option.')
@@ -285,10 +288,15 @@ export class FreeInstances {
     const running = [...this.jobs.values()].filter(j => j.instanceId === r.instanceId && j.state === 'running')
     if (this.forgetting.has(r.instanceId) || (running.length && (auto || running.some(j => !j.auto)))) throw new FreeError('This account already has an operation running.', 409)
     this.prune()
-    while (this.jobs.size >= 16) {
-      const oldest = [...this.jobs.values()].find(j => j.state === 'done')
-      if (!oldest) throw new FreeError('Desk already has 16 operations running.', 409)
-      this.jobs.delete(oldest.id); this.fingerprints.delete(oldest.id)
+    // At most MAX_RUNNING run at once. A finished one stays until its caller has read it (prune drops it 15 minutes
+    // after it finished; past MAX_KEPT the earliest finished goes first). Before, any 17th operation dropped the
+    // earliest STARTED finished one, often a send that had just finished and whose reply free_chat had not read yet, so
+    // the caller was told operation_lost for a reply that had come (2026-10-10: 2 of 30 sends in one batch).
+    if ([...this.jobs.values()].filter(j => j.state === 'running').length >= MAX_RUNNING)
+      throw new FreeError(`Desk already has ${MAX_RUNNING} operations running.`, 409)
+    if (this.jobs.size >= MAX_KEPT) {
+      const done = [...this.jobs.values()].filter(j => j.state === 'done').sort((a, b) => (a.finishedAt ?? 0) - (b.finishedAt ?? 0))
+      for (const old of done.slice(0, this.jobs.size - MAX_KEPT + 1)) { this.jobs.delete(old.id); this.fingerprints.delete(old.id) }
     }
     const job: FreeJob = { id: r.requestId, instanceId: r.instanceId, provider: r.provider, command: r.command, state: 'running', phase: 'setup', startedAt: Date.now(), chatId: r.chatId, ...(auto ? { auto: true } : {}) }
     this.jobs.set(job.id, job)
