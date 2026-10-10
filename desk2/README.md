@@ -542,6 +542,24 @@ sidebar on the left stays put, and only the pane on the right changes.
   has: Refresh, Only this view, Select multiple sessions, then Source, Instance, Queued work, Usage
   limits, Session shape, Archived, Computer and Time period, Reset, and Session settings (which opens
   AgentHydra). The desk list's own filter is still at the top of the same menu.
+- **Ideas taken from Orca** (stablyai/orca, MIT, weighed against AgentHydra on 2026-10-10; each written fresh, the
+  record in Project Hydra's codex, `gh-stablyai-orca`). The browser agent answers a page's JavaScript dialogs at once
+  (alerts and "leave this page?" accepted, confirm and prompt declined) over one CDP link it keeps open per driven tab,
+  and `browser_tab_errors` lists the last 20, so a click that changed nothing has its reason
+  (`server/src/browser/agent/page-dialogs.ts`, `navigate.ts`). A snapshot ref whose element a re-render replaced is
+  healed by role, name and position only while the page has exactly as many nodes of that name; otherwise the agent is
+  told to snapshot again (`snapshot.ts`). The Changes pane names, in one line above the diff, the files a merge of the
+  base branch (origin/HEAD's branch, else origin/main, then main) would conflict on: `GET /api/git/merge-conflicts?cwd=`
+  runs `git merge-tree --write-tree` with no fetch and no change to the work tree (`server/src/git/git.ts`,
+  `web/src/components/panes/merge-preview.ts`). A chat whose saved session is in no folder on this PC no longer refuses
+  a send: the message starts a fresh session that carries a condensed handoff of the chat (`engine/handoff.ts`), a
+  takeover line says so, and the transcript shows only what was typed (`takeOver` in `engine/chat-manager.ts`). A
+  plain folder on the New screen shows its own logo: conventional icon files, an HTML `<link rel="icon">`, then the
+  same in an app one folder down (`server/src/projects/icon-detect.ts`). A dev server's own printed address (its
+  "Local:" line first) is the one shown and probed (`server/src/devservers/advertised-url.ts`). A chat marked unread by
+  hand stays unread until its next turn or a reopen; letter shortcuts work on Cyrillic and Greek layouts by the
+  physical key; a host's tree is killed only while its pid still belongs to the process started at the recorded time
+  (Windows reuses pids). Settings → CliMayte → This PC has the keep-awake switch.
 
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.

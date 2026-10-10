@@ -71,6 +71,11 @@ Keep unrelated working-tree changes intact. The main UI is AgentHydra 2.0's wind
 The old window (`web/`) was removed in 2.0.0; `orchestrator/web/` is a separate interface. Configuration/API details and
 the current compiler compatibility note are in the native-control runbook.
 
+The root suite's preload (`tests/setup.ts`, `tests/real-home-guard.ts`) refuses a test's write into the developer's
+real agent homes (`~/.claude`, `~/.claude-instances`, `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
+`CLAUDE_CONFIG_DIR` / `CODEX_HOME` the shell started with) and a remove of the working folder; point a test at its
+scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
+
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)
 
 - **AgentHydra is 2.0: never release 1.x.** The window that was Hydra Desk 2 (`desk2/`) is

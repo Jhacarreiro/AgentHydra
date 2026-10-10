@@ -79,6 +79,11 @@ between server/ and web/.
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.
+- Every `bun test` run from `desk2/` preloads `server/test/preload.ts` (`desk2/bunfig.toml`): removing the folder the
+  suite runs in, or a folder holding it, throws, and `process.env` cannot be reassigned. A test restores only the env
+  keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left
+  `process.env.ProgramFiles` undefined for every later file, and under Bun on Windows `rmSync('')` empties the working
+  folder. On 2026-10-10 the two together emptied `desk2/` mid-suite: a cleanup checks its temp path is set first.
 - A Desk on any home but `~/.hydra-desk-2` (a test's, an e2e script's, a probe's) is a throwaway: it never joins
   Login sync and sets up no Free runtime (`server/src/real-home.ts`, 2026-10-07: before, one pulled every Free login
   into %TEMP%). Never gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.
