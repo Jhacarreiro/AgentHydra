@@ -49,6 +49,22 @@ def test_a_free_tier_key_pool_ranks_with_the_free_routes():
         assert by_provider.get(paid) in (None, False)
 
 
+# Contract: a routine image plan, in the order dispatch walks it (plan, then rebias), offers every free route that can
+# see, unevidenced siblings included, before any paid one; with an OpenAI key, a decision image ask starts on GPT-6.1 Sol
+# at its own floor. Regression: 2026-10-10, flagging OpenAI's GPT-6 routes as seeing put paid GPT-6 Luna ahead of Gemini
+# 3.8 Flash's free siblings, so routine image asks ran on Luna whenever 3.8 Flash's free key rested; unflagged, critical
+# and decision image asks fell below their floors onto Gemini Flash.
+def test_a_routine_image_plan_walks_every_free_seeing_route_before_a_paid_one():
+    everywhere = lambda p: True  # noqa: E731 - a live-looking plan, so siblings are offered too
+    routine = selection.rebias(selection.plan("routine", vision=True, usable=everywhere)["candidates"], lambda p: 0.0)
+    free = [config.billed_of(c["model"]) is False for c in routine]
+    assert any(free) and not all(free)
+    assert free == sorted(free, reverse=True), [c["model"] for c in routine]
+    assert any(c.get("unevidenced") for c, f in zip(routine, free) if f), "the free family's siblings serve before paid legs"
+    decision = selection.plan("decision", vision=True, usable=lambda p: p == "openai")["candidates"]
+    assert decision[0]["model"] == "rank:gpt-6-1-sol:openai"
+
+
 def test_a_provider_whose_terms_allow_evaluation_only_never_serves_a_production_task(monkeypatch):
     """The gate stays tested even though NO SHIPPED PROVIDER SETS THE FLAG. NVIDIA carried it from 2026-09-29 until the
     owner reversed that on 2026-09-30 ("that ruling's bullshit, change it back"), so the flag is now a capability with

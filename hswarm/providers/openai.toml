@@ -16,11 +16,15 @@ anthropic_url = "facade"
 # Ranked routes (owner, 2026-10-07): the benchmarked GPT-6 models on OpenAI's own API. Prices and the 1,050,000-token
 # context are from OpenAI's pricing page (developers.openai.com/api/docs/pricing). tools = false: that page says Chat
 # Completions supports function calling only at reasoning_effort "none". The -high routes run the same model at
-# reasoning_effort "high", as openrouter.toml registers them.
+# reasoning_effort "high", as openrouter.toml registers them. vision = true: each model's page
+# (developers.openai.com/api/docs/models/<api_id>) lists "Input modalities: text, image" with Chat Completions
+# supported (read 2026-10-10), and GPT-6.1 Sol read a screenshot correctly through this provider that day. Without it
+# every critical or decision ask with an image fell below its floor onto Gemini Flash.
 [models."rank:gpt-6-astra:openai"]
 api_id = "gpt-6-astra"
 benchmark_slug = "gpt-6-astra"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-astra:openai"
 cc_effort = false
@@ -29,6 +33,7 @@ cc_effort = false
 api_id = "gpt-6-astra"
 benchmark_slug = "gpt-6-astra-high"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-astra-high:openai"
 default_reasoning_effort = "high"
@@ -38,6 +43,7 @@ cc_effort = false
 api_id = "gpt-6-luna"
 benchmark_slug = "gpt-6-luna"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-luna:openai"
 cc_effort = false
@@ -46,6 +52,7 @@ cc_effort = false
 api_id = "gpt-6-luna"
 benchmark_slug = "gpt-6-luna-high"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-luna-high:openai"
 default_reasoning_effort = "high"
@@ -55,6 +62,7 @@ cc_effort = false
 api_id = "gpt-6-sol"
 benchmark_slug = "gpt-6-sol"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-sol:openai"
 cc_effort = false
@@ -63,6 +71,7 @@ cc_effort = false
 api_id = "gpt-6-sol"
 benchmark_slug = "gpt-6-sol-high"
 ctx = 1050000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-sol-high:openai"
 default_reasoning_effort = "high"
@@ -74,6 +83,7 @@ api_id = "gpt-6.1-sol"
 benchmark_slug = "gpt-6-1-sol"
 ctx = 1050000
 max_out = 128000
+vision = true
 tools = false
 price_ref = "openai/rank:gpt-6-1-sol:openai"
 cc_effort = false

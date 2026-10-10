@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm's decision and critical asks can read images on GPT-6.** With an OpenAI key, an ask that carries a
+  screenshot at the decision or critical level now runs on GPT-6.1 Sol instead of dropping below its level to Gemini
+  Flash. Routine image asks still try every free Gemini model first.
 - **A deleted project folder no longer burns a core or freezes the dev server list.** On Windows a watch on a
   deleted folder reports it gone hundreds of times a second and never stops, which used a CPU core and kept Desk 2
   from reloading a project's `.devwebui` settings. That watch now closes the moment its folder is gone, a check
