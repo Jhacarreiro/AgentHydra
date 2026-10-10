@@ -28,6 +28,7 @@ import { useDevServers } from '@/components/servers/store'
 import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
+import { compactSidebar } from '@/components/sidebar/compact'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
@@ -50,7 +51,7 @@ import { requestedSection } from '@/components/panes/settings-request'
 import type { SettingsSection } from '@/components/panes/settings'
 import { actionError } from '@/lib/action-error'
 
-// The whole window: sidebar (288, resizable), the chrome bar over its top, and the pane with the
+// The whole window: sidebar (294, resizable), the chrome bar over its top, and the pane with the
 // title bar, the view, the composer and an optional right pane.
 const props = defineProps<{
   /** Gallery only: the composer renders from fixtures. */ demo?: boolean
@@ -162,8 +163,8 @@ const greetingName = computed(() => {
 const SIDEBAR_KEY = 'hydra-desk.sidebar.width'
 const storage = typeof localStorage === 'undefined' ? null : localStorage
 const savedWidth = Number(storage?.getItem(SIDEBAR_KEY))
-// A width saved before the minimum rose to 250 (Sidebar.vue's MIN_WIDTH) is raised to it.
-const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(250, savedWidth) : 288)
+// A width saved before the minimum rose to 294 (Sidebar.vue's MIN_WIDTH, the chrome bar's open width) is raised to it.
+const sidebarWidth = ref(savedWidth >= 240 && savedWidth <= 420 ? Math.max(294, savedWidth) : 294)
 // Open or hidden (header toggle, Ctrl+B), remembered; it slides 300ms on the snap ease.
 const OPEN_KEY = 'hydra-desk.sidebar.open'
 const sidebarOpen = ref(props.sidebarHidden ? false : storage?.getItem(OPEN_KEY) !== '0')
@@ -443,6 +444,7 @@ function toggleTasks() {
 }
 
 const toggleClean = () => (cleanSidebar.value = !cleanSidebar.value)
+const toggleCompact = () => (compactSidebar.value = !compactSidebar.value)
 
 // Right pane: which one is open, or none, is remembered per chat (and per outside session), so opening the browser in
 // one chat leaves the others as they were. Background tasks below is kept the same way.
@@ -783,8 +785,8 @@ onBeforeUnmount(() => {
   peek.dispose()
 })
 
-// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 242).
-const CHROME_COLLAPSED = 250
+// With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 286: the bar's 290 less its 4px padding).
+const CHROME_COLLAPSED = 290
 const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
 </script>
 
@@ -800,6 +802,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       :tasks-on="showTasks"
       :dev-on="devServers.on.value"
       :clean-on="cleanSidebar"
+      :compact-on="compactSidebar"
       :update="demo ? null : updateOffer"
       @restart="restartServer"
       @hydra="toggleHydra()"
@@ -808,6 +811,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 : CHROME_COLLAPSED))
       @tasks="toggleTasks"
       @dev="toggleDev"
       @clean="toggleClean"
+      @compact="toggleCompact"
       @new="src.select({ kind: 'new' })"
       @search="openSearch"
       @toggle-sidebar="toggleSidebar()"

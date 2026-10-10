@@ -62,6 +62,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
   It is on by default and its button is plain then; the button turns blue while it is off and the details show
   (owner, 2026-10-08).
+- **A compact sidebar, and project icons in the cloud list** (owner, 2026-10-10). The chrome bar's Compact sidebar
+  button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
+  headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its
+  chats, and each chat's status dot becomes its project's icon (`ProjectRing.vue`). A chat with something going on
+  wears a rounded-square ring around the icon, as a story ring does: the accent gradient while it runs, amber when it
+  waits on you, green when it finished, red on an error, each pulsing or blinking as its dot did; an idle chat shows
+  the icon alone. The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
+  on keeps the icons. Each chrome-bar toggle's tooltip names what a click does ("Enable cloud sessions", "Show
+  fewer details", "Enable compact mode", "Open AgentHydra"), and its two dividers have more room either side.
 - **The AgentHydra tables' settings are in Settings → Instances** (owner, 2026-10-06). Below This computer,
   Instances has a page per kind: CLI (the Claude CLI kind shown, Keep windows running and its weekly
   floor), Desktop (which tables show: Claude Desktop, Codex Desktop, Codex CLI, DeepSeek; the one "Show
@@ -206,9 +215,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   the transcript shows that step (Display can hide tools or thinking).
 - **Arrows through the messages you sent** (owner, 2026-10-09). At a chat's top right, an up arrow glides to the
   previous message the person sent, one per click, and a down arrow to the next; past the last one it goes back to
-  the latest, as the bottom-right arrow does. A sub-agent's prompt and a queued message are not steps. Both sit
-  at half opacity until hovered (`transcript/lib/steps.ts` `nextMessageStep`, TranscriptView's `stepUp` /
-  `stepDown`).
+  the latest. They are the transcript's only scroll buttons: the bottom-right jump button is gone (owner,
+  2026-10-10: "just have ... the ones on the top right be the ones that do it"). A sub-agent's prompt and a queued
+  message are not steps. Each is a 16px glyph in a 24px square, the sidebar's Search and Filter size, at half opacity
+  with no box until hovered, when the box and its outline show. A glide follows its message by id, so rows above it
+  that are measured on the way (they start as estimates) move the landing spot with them instead of stopping the
+  glide short (owner, 2026-10-10: it "sometimes just nudges the page up"); a wheel or a press on the list
+  stops it (`transcript/lib/steps.ts` `nextMessageStep`, TranscriptView's `stepUp` / `stepDown` / `glideTo`).
+- **Room under the last message** (owner, 2026-10-10: "when scrolled to the bottom, have the bottom spacing be
+  gapped like 150px"). At the bottom of a chat its last row stands 150px above the composer.
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the
   list and its chats stay active, nothing is archived (owner, 2026-10-05: "I don't want to like archive
   because they're meant to be there, but I also don't feel like seeing"). The Filter menu's Show hidden

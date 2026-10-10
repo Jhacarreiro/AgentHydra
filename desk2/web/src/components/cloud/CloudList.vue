@@ -15,6 +15,8 @@ import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import { useHiddenGroups } from '@/components/sidebar/hidden'
 import { cleanSidebar } from '@/components/sidebar/clean'
+import { compactSidebar } from '@/components/sidebar/compact'
+import ProjectRing from '@/components/sidebar/ProjectRing.vue'
 import { HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, newChatFolder, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
@@ -50,6 +52,8 @@ const props = defineProps<{
   pulse?: (id: string) => 'gray' | 'blue' | null | undefined
   /** A row's right-click menu: its desk row's, or the cloud-only one (Sidebar.vue cloudMenu). */
   menuFor?: (row: CloudSession) => RowMenuEntry[]
+  /** A group's project icon, the desk list's header icon (Sidebar.vue iconOfGroup), null for none. */
+  iconOf?: (g: CloudGroup) => string | null
 }>()
 const emit = defineEmits<{ 'new-session': [cwd: string]; open: [row: CloudSession]; 'open-task': [worker: CliMayteWorker]; 'open-job': [job: SwarmJob]; action: [row: CloudSession, item: RowMenuItem] }>()
 
@@ -58,6 +62,20 @@ const cloud = useCloud()
 const rowMenus = useFirstInterestSet()
 const [DefineRowBody, ReuseRowBody] = createReusableTemplate<{ r: CloudGroup['rows'][number] }>()
 const shownGroups = computed(() => props.groups ?? cloud.groups.value)
+// Compact sidebar (compact.ts): no headers, the chats in one list, each with its group's icon in a ring. Search results keep their header.
+const compactOf = (g: CloudGroup) => compactSidebar.value && g.key !== RESULTS_KEY
+const groupOfRow = computed(() => new Map(shownGroups.value.flatMap((g) => g.rows.map((r) => [r.id, g] as const))))
+const rowCompact = (r: CloudSession) => {
+  const g = groupOfRow.value.get(r.id)
+  return !!g && compactOf(g)
+}
+const rowIcon = (r: CloudSession) => {
+  const g = groupOfRow.value.get(r.id)
+  return g && props.iconOf ? props.iconOf(g) : null
+}
+const IDLE_GLYPH: StatusGlyph = { shape: 'ring', tone: 'muted', motion: 'none', dim: false, active: false, label: 'Idle' }
+/** A row's compact ring state: its desk row's dot, or the idle ring for an archived or cloud-only row (as dotClass draws it). */
+const ringOf = (r: CloudSession): StatusGlyph => (r.archived ? IDLE_GLYPH : (props.glyph?.(r.id) ?? IDLE_GLYPH))
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
 const hiddenGroups = useHiddenGroups()
 const rowLeave = leaveUnlessFiltered([() => cloud.answeredQuery.value, () => JSON.stringify(cloud.scopes.value)])
@@ -177,6 +195,7 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
               <Cloud v-else-if="cloudMark(r)?.kind === 'cloud'" role="img" :aria-label="cloudMark(r)!.label" class="size-3.5" :class="cloudTone(r)" />
+              <ProjectRing v-else-if="rowCompact(r)" :glyph="ringOf(r)" :icon="rowIcon(r)" />
               <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
             <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->
@@ -207,12 +226,13 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
     </p>
 
     <TransitionGroup :css="false" @leave="rowLeave">
-    <section v-for="g in shownGroups" :key="g.key" :aria-label="g.label">
-      <ContextMenu>
+    <section v-for="g in shownGroups" :key="g.key" :aria-label="g.label" :class="compactOf(g) && g.hidden && 'opacity-60'">
+      <ContextMenu v-if="!compactOf(g)">
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
       <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
         <Tip :label="g.cwd ?? ''" align="start">
           <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
+            <img v-if="props.iconOf?.(g)" :src="props.iconOf(g)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
             <span class="truncate">{{ g.label }}</span>
             <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
             <component
@@ -237,7 +257,7 @@ const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFo
         </ContextMenuItem>
       </ContextMenuContent>
       </ContextMenu>
-      <TransitionGroup v-if="!collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
+      <TransitionGroup v-if="compactOf(g) || !collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
         <div
           v-for="r in g.rows"
           :key="r.id"

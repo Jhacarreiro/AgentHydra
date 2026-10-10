@@ -110,6 +110,7 @@ import {
 } from './logic'
 import { useSidebarOrder } from './order'
 import { useHiddenGroups } from './hidden'
+import { compactSidebar } from './compact'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem } from './menuClasses'
 import { useRowDrag } from './rowDrag'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
@@ -124,9 +125,9 @@ const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the a
 })
 const emit = defineEmits<{ resize: [width: number] }>()
 
-// 250, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's five extra buttons and two dividers
-// (12 + 7 buttons of 28 + 8 gaps of 4 + 2 + 8 = 250).
-const MIN_WIDTH = 250
+// 294, not the real app's 220: the chrome bar over it carries AgentHydra 2.0's six extra buttons and two dividers
+// with their 8px margins (12 + 8 buttons of 28 + 9 gaps of 4 + 2 dividers + 12 divider margins + 8 right padding = 294).
+const MIN_WIDTH = 294
 const MAX_WIDTH = 420
 
 const src = useShellSource()
@@ -344,8 +345,10 @@ const groupList = computed<ChatGroup[]>(() => {
   const list = [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
   return activeOnly.value ? onlyActive(list, entryGlyph) : list
 })
-/** Each group's heading icon, by group key: its Project Hydra project's icon, or null for none (projectOfGroup). */
-const groupIcons = computed(() => new Map(groupList.value.map((g) => [g.key, projectOfGroup(g, keptProjects.value)?.icon ?? null])))
+/** A group's icon: its Project Hydra project's icon, or null for none (projectOfGroup). The cloud list uses it too. */
+const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
+/** Each group's heading icon, by group key. */
+const groupIcons = computed(() => new Map(groupList.value.map((g) => [g.key, iconOfGroup(g)])))
 // A row the plain list shows that the order lacks joins it at the top, so it keeps the place it appeared in, and
 // so does one only the cloud list had shown (recordDeskOrder); any other saved one never moves; a row that just
 // turned orange goes to the top of its group. An added row joins as a new row does.
@@ -828,7 +831,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <DevServersList v-else-if="devServers.on.value" />
 
-        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
+        <CloudList v-else-if="cloud.on.value" :groups="cloudGroups" :icon-of="iconOfGroup" :selected-id="selectedCloudId" @new-session="(cwd: string) => src.select({ kind: 'new', cwd })" :tasks-of="nesting ? (id: string) => tasksOf(`cloud:${id}`) : undefined" :shown-of="nesting ? (id: string) => rowSub(`cloud:${id}`).nodes : undefined" :jobs-of="nesting ? (id: string) => jobsCounted(`cloud:${id}`) : undefined" :shown-jobs-of="nesting ? (id: string) => rowSub(`cloud:${id}`).jobs : undefined" :running="sessionRunning" :glyph="cloudDot" :pulse="cloudPulse" :menu-for="cloudMenu" @action="cloudAct" @open="openCloud" @open-task="openTask" @open-job="openJob">
           <template #sub-badges="{ id }">
             <SubBadges v-if="nesting" :row-key="`cloud:${id}`" :badges="rowSub(`cloud:${id}`).badges" />
           </template>
@@ -837,9 +840,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <template v-else>
         <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
         <TransitionGroup :css="false" @leave="rowLeave">
-        <section v-for="group in groupList" :key="group.key" :aria-label="group.label">
+        <!-- Compact sidebar (compact.ts): no group headers, so no heading to right-click, open or add to; the chats stay in their groups. -->
+        <section v-for="group in groupList" :key="group.key" :aria-label="group.label" :class="compactSidebar && group.hidden && 'opacity-60'">
           <!-- A project group's right-click hides it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
-          <ContextMenu>
+          <ContextMenu v-if="!compactSidebar">
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
             class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
@@ -877,7 +881,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             </ContextMenuItem>
           </ContextMenuContent>
           </ContextMenu>
-          <TransitionGroup v-if="!collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
+          <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. -->
+          <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
               :key="`${entry.kind}:${src.rowKeyOf?.(entry.id) ?? entry.id}`"
@@ -894,6 +899,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 :chat="entry.chat"
                 :selected="selectedChatId === entry.id"
                 :groups="groupNames"
+                :compact="compactSidebar && !entry.under"
+                :icon="groupIcons.get(group.key) ?? null"
                 @select="src.select({ kind: 'chat', id: entry.id })"
                 @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
@@ -907,6 +914,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 :groups="groupNames"
                 :entries="externalMenu(entry.id)"
                 :dot="addedGlyph(entry.id)"
+                :compact="compactSidebar && !entry.under"
+                :icon="groupIcons.get(group.key) ?? null"
                 @select="selectExternal(entry.session)"
                 @action="(item: RowMenuItem) => externalAct(entry.session, item)"
                 @rename="(title: string | null) => renameExternal(entry.session, title)"

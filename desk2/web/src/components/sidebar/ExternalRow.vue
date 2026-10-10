@@ -12,6 +12,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
 import { externalGlyph, externalRename, externalRow, glyphDotClass, rowMenu, sourceLabel, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from './logic'
+import ProjectRing from './ProjectRing.vue'
 import RowMenuList from './RowMenuList.vue'
 import AudioButton from './AudioButton.vue'
 import { isAudible, isMuted, toggleMuted } from '@/lib/chat-audio'
@@ -36,10 +37,16 @@ const props = withDefaults(
     entries?: RowMenuEntry[]
     /** The dot in place of the session's: an added row that is a running HSwarm job pulses blue (Sidebar.vue addedGlyph). */
     dot?: StatusGlyph
+    /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */
+    compact?: boolean
+    /** That project's icon, null for none. */
+    icon?: string | null
   }>(),
   {
     selected: false,
-    groups: () => []
+    groups: () => [],
+    compact: false,
+    icon: null
   }
 )
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
@@ -117,7 +124,8 @@ function onMenuClosed(e: Event) {
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <span class="flex size-3.5 items-center justify-center">
+            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" />
+            <span v-else class="flex size-3.5 items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>

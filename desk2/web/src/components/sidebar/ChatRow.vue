@@ -6,6 +6,7 @@ import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem } from './logic'
+import ProjectRing from './ProjectRing.vue'
 import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
 import { useFirstInterest } from '@/lib/first-interest'
@@ -19,9 +20,11 @@ import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
 // the "More options" button. The three-dot menu and the right-click menu are the same list.
-const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[] }>(), {
+const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null }>(), {
   selected: false,
-  groups: () => []
+  groups: () => [],
+  compact: false,
+  icon: null
 })
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
 
@@ -96,7 +99,8 @@ defineExpose({ startRename })
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <span class="flex size-3.5 items-center justify-center">
+            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" />
+            <span v-else class="flex size-3.5 items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>

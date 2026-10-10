@@ -615,6 +615,29 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
   return tone + motion
 }
 
+/**
+ * The compact mode's ring round a row's project icon (ProjectRing.vue): like a story ring, only a chat with something
+ * going on has one (owner, 2026-10-10: "so I can still see which chats have activity, like which are active and which
+ * are waiting on me"). A 2px two-tone gradient per dot state: running (the dot's blinking gray, and an HSwarm job) is
+ * the live blue, needs you and unread the dot's orange, done-unread its green, an error its red; a usage limit keeps the
+ * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own; closed dims it.
+ * Every class string is written out whole, so Tailwind sees each one.
+ */
+const RING_GRADIENT = {
+  muted: 'bg-[linear-gradient(135deg,var(--accent-text),color-mix(in_srgb,var(--accent-text)_55%,white))]',
+  warning: 'bg-[linear-gradient(135deg,var(--status-needs-you),color-mix(in_srgb,var(--status-needs-you)_55%,white))]',
+  success: 'bg-[linear-gradient(135deg,var(--status-done),color-mix(in_srgb,var(--status-done)_55%,white))]',
+  danger: 'bg-[linear-gradient(135deg,var(--status-error),color-mix(in_srgb,var(--status-error)_55%,white))]',
+  swarm: 'bg-[linear-gradient(135deg,var(--accent-text),color-mix(in_srgb,var(--accent-text)_55%,white))]',
+  limited: 'bg-[var(--status-limited)]'
+}
+export function glyphRingClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion' | 'dim'>): string {
+  const dim = g.dim ? ' opacity-50' : ''
+  if (g.shape === 'ring') return g.tone === 'limited' ? RING_GRADIENT.limited + dim : ''
+  const motion = { none: '', blink: ' run-pulse', pulse: ' animate-dot-pulse' }[g.motion]
+  return RING_GRADIENT[g.tone] + motion + dim
+}
+
 /** Elapsed time of a running turn, short: "12s", "4m", "1h 5m". */
 export function elapsedLabel(startedAt: number | null, now: number = Date.now()): string {
   if (startedAt == null) return ''
