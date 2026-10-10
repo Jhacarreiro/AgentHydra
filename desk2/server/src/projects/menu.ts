@@ -11,6 +11,10 @@ import type { PlacementProposal, ProjectStats } from '@shared/protocol'
 
 /** How long one folder's stats are kept before they are read again. */
 export const STATS_TTL_MS = 5 * 60_000
+/** How long stats with a part missing are kept: a git or Project Hydra read that ran out of time on a busy server
+ * (a project sweep running git on every project; 2026-10-10 a cold server answered empty after 18 s) is read again
+ * at the next right-click after this, not five minutes later. A folder that is no checkout costs one stat to re-read. */
+export const PARTIAL_TTL_MS = 30_000
 /** How long Project Hydra gets to name the folder's project and to show its Architect summary. */
 export const PH_TIMEOUT_MS = 5_000
 /** How much of a transcript's end is read for paths. */
@@ -127,7 +131,7 @@ export class ProjectMenu {
   async stats(folder: string): Promise<ProjectStats> {
     const id = normalizePath(folder)
     const hit = this.stat.get(id)
-    if (hit && this.now() - hit.at < STATS_TTL_MS) return hit.value
+    if (hit && this.now() - hit.at < (complete(hit.value) ? STATS_TTL_MS : PARTIAL_TTL_MS)) return hit.value
     const [git, architect, hydra] = await Promise.all([this.gitOf(folder), this.architectOf(folder), this.deps.findHydra()])
     const value: ProjectStats = {
       git: git
@@ -212,6 +216,11 @@ export class ProjectMenu {
     }
     return { moved, failed }
   }
+}
+
+/** Every part was read: git, and the Architect summary where Project Hydra is installed. */
+function complete(stats: ProjectStats): boolean {
+  return stats.git !== null && (!stats.hydra || stats.architect !== null)
 }
 
 /** A group name a placement may carry: 1 to 60 characters after trimming. */

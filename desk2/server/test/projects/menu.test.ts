@@ -77,6 +77,31 @@ test('architectOf reads `ph show --json`: the row\'s Architect counts, risk and 
   expect(architectOf({ other: true })).toBeNull()
 })
 
+test('stats missing a part are read again after 30 s; complete ones are kept 5 minutes', async () => {
+  let clock = 0
+  let reads = 0
+  const facts = { git: { branch: 'main', upstream: null, ahead: 0, behind: 0, dirty: 0, fetchedAt: null }, lastCommitAt: null }
+  const menu = new ProjectMenu({
+    findHydra: () => null,
+    readHydra: async () => ({ projects: [], problem: null }),
+    // The first read runs out of time (a busy server), the later ones answer.
+    git: async () => (reads++ === 0 ? null : facts),
+    chats: () => [],
+    transcript: () => null,
+    projects: () => [],
+    setGroup: () => {},
+    now: () => clock,
+  })
+  expect((await menu.stats('C:/Users/me/Projects/alpha')).git).toBeNull()
+  clock = 29_000
+  expect((await menu.stats('C:/Users/me/Projects/alpha')).git).toBeNull()
+  clock = 31_000
+  expect((await menu.stats('C:/Users/me/Projects/alpha')).git?.branch).toBe('main')
+  clock = 31_000 + 4 * 60_000
+  await menu.stats('C:/Users/me/Projects/alpha')
+  expect(reads).toBe(2)
+})
+
 test('propose names the project of a chat whose transcript points into one, and leaves the rest in scratch', async () => {
   const dir = temp()
   const withProject = join(dir, 'one.jsonl')
