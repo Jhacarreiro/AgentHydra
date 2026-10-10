@@ -1,8 +1,8 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
-// left-handed sidebar"). A tree on the left (Overview, Providers > each provider > its models, All models,
-// Routing & roles, Clients > each client, Jobs > recent jobs, CliMayte > Waves, Help) picks what the right pane
-// shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
+// left-handed sidebar"). A tree on the left (Overview, Savings, CliMayte, Providers > each provider > its models, All models,
+// Routing & roles, Clients > each client, Jobs (HSwarm jobs, CliMayte workers and waves), Help) picks what the right
+// pane shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
 // is a drawer, as in the console.
 //
 // The tree is the tab's only list (owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm
@@ -48,7 +48,7 @@ import type { EmbedIcon, EmbedTone, SidebarRow } from '@desk/shared/hydra-embed'
 import { API_BASE } from '@/lib/api'
 import { hswarmNodeAsk } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
-import { deskSwarmAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
+import { deskSwarmAsk, deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
@@ -72,6 +72,10 @@ const { status, error, loading, state, clients, jobs, loadClients, loadJobs, ref
 const { runningCount: cliRunning, waves } = useCliMayteData()
 // The Waves row counts the waves still being worked (running, or reported and waiting to be verified).
 const liveWaves = computed(() => waves.value.filter((w) => w.status === 'running' || w.status === 'reported').length)
+// The Jobs node's count: HSwarm jobs still running, plus CliMayte workers and waves still live.
+const jobsRunning = computed(
+  () => (jobs.value ?? []).filter((j: any) => jobDot(j.state) === 'run').length + cliRunning.value + liveWaves.value,
+)
 const { activeCount: freeRunning } = useFreeInstances()
 const climayteRunning = computed(() => cliRunning.value + freeRunning.value)
 
@@ -120,7 +124,6 @@ const DOT_CLASS: Record<Dot, string> = {
   bad: 'bg-destructive',
 }
 const CLIENT_IDS = ['claude-code', 'claude-desktop', 'codex']
-const JOBS_SHOWN = 25
 // At most this many model rows in the open tree, as in the console; the rest wait behind a search.
 const MODEL_BUDGET = 300
 const TREE_MIN = 220
@@ -194,19 +197,16 @@ const nodes = computed<TreeNode[]>(() => {
     icon: Network,
     count: active || null,
     dotTitle: active ? t('hswarm.nav.climayteActive', { n: active }) : undefined,
-    kids: [
-      { id: 'climayte/waves', label: t('climayte.waves'), icon: ListChecks, count: liveWaves.value || null },
-    ],
   }
   if (!s) return [routing, climayte]
   const provs = [...(s.providers ?? [])].sort(
     (a, b) => Number(b.keys > 0) - Number(a.keys > 0) || a.name.localeCompare(b.name),
   )
   const cl = clients.value ?? CLIENT_IDS.map((c) => ({ client: c, registered: null }))
-  const js = (jobs.value ?? []).slice(0, JOBS_SHOWN)
   return [
     { id: 'overview', label: t('hswarm.overview'), icon: LayoutGrid },
     { id: 'savings', label: t('hswarm.savings'), icon: PiggyBank },
+    climayte,
     {
       id: 'providers',
       label: t('hswarm.providers'),
@@ -256,22 +256,8 @@ const nodes = computed<TreeNode[]>(() => {
             : t('hswarm.v.clients.checking'),
       })),
     },
-    {
-      id: 'jobs',
-      label: t('hswarm.jobs'),
-      icon: Layers,
-      count: jobs.value ? js.length : null,
-      kids: js.map((j) => ({
-        id: `jobs/${enc(j.job_id)}`,
-        label: j.label || j.job_id,
-        icon: Layers,
-        dot: jobDot(j.state),
-        dotTitle: j.state,
-        meta: (j.created ?? '').slice(5, 16).replace('T', ' '),
-        search: j.job_id,
-      })),
-    },
-    climayte,
+    // One Jobs list: HSwarm jobs, CliMayte workers and waves (HSwarmJobs). Its count is what runs across all three.
+    { id: 'jobs', label: t('hswarm.jobs'), icon: Layers, count: jobsRunning.value || null },
     { id: 'help', label: t('hswarm.help'), icon: Info, search: t('hswarm.nav.helpSearch') },
   ]
 })
@@ -418,6 +404,17 @@ const climayteHome = ref(0)
 function pick(id: string) {
   if (id === 'climayte' || id === 'climayte/waves') climayteHome.value++
   select(id)
+}
+
+// A row of the Jobs list that is a CliMayte worker or wave: its page opens with that task (CliMayteView asks
+// for a worker through deskWorkerAsk; a wave is opened by openWaveRow before this runs).
+function openTask(id: string, wave: boolean) {
+  if (wave) select('climayte/waves')
+  else {
+    climayteHome.value++
+    select('climayte')
+    deskWorkerAsk.value = { id }
+  }
 }
 
 // The tree's star, as in the console: ☆ gives the model the next priority number, ★n clears it.
@@ -994,6 +991,7 @@ async function handleRefresh() {
             v-bind="page.props"
             @changed="handleRefresh"
             @open="openPath"
+            @open-task="openTask"
           />
           <!-- HSwarm down: the Routing page keeps the cost routing between API keys and subscriptions,
                which is AgentHydra's -->

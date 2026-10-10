@@ -20,7 +20,6 @@
 import {
   ArrowLeft,
   BarChart3,
-  Check,
   ChevronRight,
   Cloud,
   CloudOff,
@@ -28,11 +27,9 @@ import {
   Network,
   PictureInPicture2,
   RefreshCw,
-  RotateCcw,
   Trash2,
   TriangleAlert,
   UserRound,
-  X,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
 import {
@@ -51,6 +48,7 @@ import {
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliMayteFloat from '@/components/CliMayteFloat.vue'
+import CliMayteRow from '@/components/CliMayteRow.vue'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
@@ -84,6 +82,7 @@ import {
   firstLine,
   isCliMayteActive,
 } from '@/lib/climayte-status'
+import { activeSeconds, activeTime, runTag } from '@/lib/climayte-rows'
 import { deskWorkerAsk, PANE_OPEN_EVENT } from '@/lib/desk-embed'
 import { formatUsd } from '@/lib/kit'
 import { reconcileList, sameData } from '@/lib/reconcile'
@@ -461,16 +460,11 @@ async function toggleFloat() {
 /** How long the task has been active: its sessions' running time over every attempt, not the time
  *  since it was queued (owner, 2026-10-02: "if it sat for two hours, but it only worked for one,
  *  then it should show one hour, not three"). Waiting for an account or a reset does not count. */
-const activeS = (w: CliMayteWorkerView): number =>
-  w.ranS + (w.status === 'running' ? Math.max(0, (now.value - listedAt.value) / 1000) : 0)
+const activeS = (w: CliMayteWorkerView): number => activeSeconds(w, now.value, listedAt.value)
 
 function activeLabel(totalS: number): string {
-  const m = Math.floor(totalS / 60)
-  if (m < 1) return t('climayte.activeSeconds', { s: Math.floor(totalS) })
-  if (m < 60) return t('climayte.activeMinutes', { m })
-  const h = Math.floor(m / 60)
-  if (h < 24) return t('climayte.activeHours', { h, m: m % 60 })
-  return t('climayte.activeDays', { d: Math.floor(h / 24), h: h % 24 })
+  const p = activeTime(totalS)
+  return t(p.key, p.values)
 }
 
 /** "waiting 3h 12m" for another PC's waiting task: since its last change, which is when it began to wait. */
@@ -523,18 +517,6 @@ function rowHintText(w: ListRow): string {
   ]
     .filter(Boolean)
     .join('\n')
-}
-
-/** The row's model: the one that ran (else the one asked for) and the effort, e.g. `Opus 5.5 · max`;
- *  amber when the CLI ran a different model than the one asked for. */
-function runTag(w: CliMayteWorkerView): { text: string; differs: boolean } | null {
-  const run = climayteRunLabel(w)
-  if (!run) return null
-  const model = run.ran ?? run.model
-  return {
-    text: [model, run.effort].filter(Boolean).join(' · '),
-    differs: run.differs,
-  }
 }
 
 /** What a row says, worked out once and kept until the row, the clock it depends on, the task list its
@@ -851,12 +833,17 @@ onUnmounted(() => {
            story on hover), the title, the account and model it runs on, how long it has been active. -->
       <ul v-if="shown.length" class="flex flex-col rounded-lg border bg-card py-0.5" :aria-label="$t('climayte.listLabel')">
         <li v-for="w in shown" :key="rowKey(w)" class="group/row relative">
-          <button
-            type="button"
+          <CliMayteRow
             :data-task="rowKey(w)"
-            class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            :class="w.remote?.stale ? 'opacity-60' : ''"
-            :title="rowView(w).hint"
+            :title="w.title"
+            :hint="rowView(w).hint"
+            :account="rowView(w).account"
+            :time="rowView(w).time"
+            :tag="rowView(w).tag"
+            :cloud="w.remote ? remoteLabel(w) : null"
+            :priority="w.priority"
+            :mark="rowView(w).mark"
+            :stale="!!w.remote?.stale"
             @click="select(w)"
             @pointerenter="prefetchOnRest(w)"
             @pointerleave="cancelRest"
@@ -865,40 +852,7 @@ onUnmounted(() => {
             @pointerdown="prefetch(w)"
           >
             <CliMayteStatusBadge :status="w.status" :hold="w.hold" icon-only :task="w" :tasks="workers" />
-            <span class="min-w-0 flex-1 truncate text-sm">{{ w.title }}</span>
-            <!-- Another PC's task: a small cloud, the PC on hover (the row's hover says it too). -->
-            <Cloud
-              v-if="w.remote"
-              class="size-3.5 shrink-0 text-muted-foreground"
-              :aria-label="remoteLabel(w)"
-            />
-            <span
-              v-if="w.priority"
-              class="shrink-0 rounded bg-muted px-1 text-2xs text-warning"
-              :title="$t('climayte.rowPriorityHint', { n: w.priority })"
-            >{{ $t('climayte.rowPriority', { n: w.priority }) }}</span>
-            <!-- Its own hover: who judged it and what they said. A failed check on a task still
-                 working is amber and a retry arrow, never the red cross (owner, 2026-10-02). -->
-            <span v-if="rowView(w).mark" class="inline-flex shrink-0" :title="rowView(w).mark?.hint">
-              <Check
-                v-if="rowView(w).mark?.kind === 'pass'"
-                class="size-3.5 text-success"
-                :aria-label="rowView(w).mark?.label"
-              />
-              <RotateCcw
-                v-else-if="rowView(w).mark?.kind === 'retry'"
-                class="size-3.5 text-warning"
-                :aria-label="rowView(w).mark?.label"
-              />
-              <X v-else class="size-3.5 text-destructive" :aria-label="rowView(w).mark?.label" />
-            </span>
-            <span class="hidden w-44 shrink-0 truncate text-muted-foreground sm:block">{{ rowView(w).account }}</span>
-            <span
-              class="hidden w-36 shrink-0 truncate md:block"
-              :class="rowView(w).tag?.differs ? 'text-warning' : 'text-muted-foreground'"
-            >{{ rowView(w).tag?.text }}</span>
-            <span class="w-14 shrink-0 text-end tabular-nums text-muted-foreground">{{ rowView(w).time }}</span>
-          </button>
+          </CliMayteRow>
           <!-- A Free chat is private: Desk's list is all that remembers it, so one row can be dropped from it. -->
           <IconTooltip v-if="w.free" :label="$t('freeInstances.forgetThread')" :description="$t('freeInstances.forgetThreadHint')">
             <Button

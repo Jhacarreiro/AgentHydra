@@ -13,7 +13,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { settingsIcons } from '@/lib/icons'
 import { usePaneApi } from './api'
 import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
-import { SETTINGS_SECTIONS, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
+import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
 import { ahUpdateDot, seeAhUpdateDot } from '@/components/hydra/api'
@@ -261,12 +261,13 @@ function pick(id: SettingsSection) {
 if (ahUpdateDot.value) pick('updates')
 watch(section, (id) => id === 'updates' && seeAhUpdateDot(), { immediate: true })
 // Another part of Desk asked for a section (settings-request.ts); a page kept from before a reload may be one
-// Settings no longer has.
+// Settings no longer has, or an id renamed since (climayte is now hswarm: sectionFor maps it).
 watch(
   requestedSection,
   (id) => {
     if (!id) return
-    if (SETTINGS_SECTIONS.some((s) => s.id === id)) pick(id)
+    const next = sectionFor(id)
+    if (next) pick(next)
     requestedSection.value = null
   },
   { immediate: true }

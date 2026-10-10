@@ -7,12 +7,21 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'alerts' | 'climayte' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+
+// Ids a saved or linked section used before a rename. CliMayte is part of HSwarm (owner, 2026-10-10).
+export const LEGACY_SECTION: Record<string, SettingsSection> = { climayte: 'hswarm' }
+
+/** The section a (possibly old) id opens, or null when Settings has no such page. */
+export function sectionFor(id: string): SettingsSection | null {
+  const next = LEGACY_SECTION[id] ?? id
+  return SETTINGS_SECTIONS.find((s) => s.id === next)?.id ?? null
+}
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
-  { id: 'climayte', label: 'CliMayte', caption: 'Settings' },
+  { id: 'hswarm', label: 'HSwarm', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
   { id: 'connectors', label: 'Connectors', caption: 'Settings' },
   { id: 'devservers', label: 'Dev servers', caption: 'Settings' },
@@ -274,21 +283,21 @@ export const SETTINGS_ROWS: SettingsRow[] = [
   },
   {
     id: 'delegate',
-    section: 'climayte',
-    group: 'Sub-agents',
+    section: 'hswarm',
+    group: 'CliMayte',
     label: 'Delegate to CliMayte',
     description: 'New chats hand sub-agent work to CliMayte instead of the Agent tool.'
   },
-  { id: 'workers', section: 'climayte', group: 'Sub-agents', label: 'Running now', description: 'CliMayte workers active across your chats.' },
+  { id: 'workers', section: 'hswarm', group: 'CliMayte', label: 'Running now', description: 'CliMayte workers active across your chats.' },
   {
     id: 'ahKeepAwake',
-    section: 'climayte',
-    group: 'This PC',
+    section: 'hswarm',
+    group: 'CliMayte',
     label: 'Stay awake while agents work',
     description:
       'On by default. While a CliMayte worker runs or a chat is working, the PC does not go to sleep on its own. The screen still turns off, and Sleep still works.'
   },
-  { id: 'bridge', section: 'climayte', group: 'AgentHydra bridge', label: 'Bridge status', description: 'The AgentHydra MCP bridge CliMayte runs through.' },
+  { id: 'bridge', section: 'hswarm', group: 'CliMayte', label: 'Bridge status', description: 'The AgentHydra MCP bridge CliMayte runs through.' },
   {
     id: 'ahMcp',
     section: 'connections',

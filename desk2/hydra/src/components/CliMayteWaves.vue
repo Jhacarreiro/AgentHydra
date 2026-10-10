@@ -12,6 +12,7 @@ import { useStorage } from '@vueuse/core'
 import { computed, ref } from 'vue'
 import { Badge } from '@/components/ui/badge'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
+import { WAVE_OPEN_KEY } from '@/lib/climayte-rows'
 import type {
   CliMayteWave,
   CliMayteWaveStatus,
@@ -54,7 +55,7 @@ const live = (w: CliMayteWave) => w.status === 'running' || w.status === 'report
 const shown = computed(() => props.waves.filter((w) => live(w) || props.now - w.updatedAt < DAY_MS))
 
 // Every wave starts collapsed (a live wave auto-opening was noise); a click is remembered here.
-const open = useStorage<Record<string, boolean>>('agenthydra.climayte.waveOpen', {})
+const open = useStorage<Record<string, boolean>>(WAVE_OPEN_KEY, {})
 const reportOpen = ref<Record<string, boolean>>({})
 
 /** Per wave, once per change of the waves (not per render or clock tick): the count of each task

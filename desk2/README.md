@@ -106,7 +106,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   after Hide sidebar (an outline two-headed serpent drawn like the Cloud and Bot beside it), slides AgentHydra in over the chat with a push (0.42 s, the chat moving out
   to the left as AgentHydra comes in). While it is open there is still only the one sidebar, Desk's: on
   HSwarm it is HSwarm's tree alone (`hydra/src/components/HSwarmView.vue`), Routing and CliMayte two of its
-  nodes (CliMayte after Jobs; owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm sidebar.
+  nodes (CliMayte above Providers, owner 2026-10-10: "CLImate is a sub-H Swarm item"; owner, 2026-10-05: "HSwarm should pretty much just show the HSwarm sidebar.
   Routing should be an option under the HSwarm in the sidebar, and CliMayte should also be an item under
   that"), drawn in Desk's look (the copy describes it in `shared/hydra-embed.ts` and hides its own; a click
   goes back to it); with HSwarm down the tree holds just Routing and CliMayte under a "not running"
@@ -116,9 +116,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   2026-10-05: "move what is currently on the CliMayte tab into HSwarm"): its node shows a compact manager
   list inside the pane, one line per task (status, title, account, model, time, a cloud for another PC's
   task), Running / All, the scorecard closed above it; a click opens the task with "Back to tasks", and
-  CliMayte's tasks never go into Desk's sidebar. The manager waves are CliMayte's child row, Waves
-  (owner, 2026-10-06: "Move the waves section into a subsection called waves underneath CLI Mate"),
-  counting the live ones; a wave's manager opens there with "Back to waves". Desk's links land on the node: a task row
+  CliMayte's tasks never go into Desk's sidebar. **Jobs is one list** (owner, 2026-10-10: "combine CLImate and,
+  like, Waves and Jobs into one that's just called Jobs, and then it just differentiates"): HSwarm jobs, CliMayte
+  workers and manager waves, newest first, one compact line each in the CliMayte list's style with a kind badge
+  (HSwarm, CliMayte, Wave), filters for Running and per kind, Show more and Show older (`hswarm/HSwarmJobs.vue`,
+  `CliMayteRow.vue`). The Jobs node counts what runs across all three. A HSwarm job opens its detail under its
+  line; a worker opens on CliMayte's page, a wave on the waves page with "Back to waves". Settings calls the
+  section HSwarm, with CliMayte's settings in its CliMayte group; an old link to the CliMayte section opens it
+  (`web/src/components/panes/settings.ts` `sectionFor`). Desk's links land on the node: a task row
   opens CliMayte on that task, a job row Jobs on that job. The Routing node is one page: HSwarm's
   routing first (`hswarm/HSwarmRouting.vue`), then AgentHydra's cost routing between API keys and the
   Claude subscriptions (`hswarm/HSwarmCostRouting.vue`, alone while HSwarm is down): the on/off switch, the

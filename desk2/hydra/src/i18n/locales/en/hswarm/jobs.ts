@@ -62,4 +62,17 @@ export default {
   noAnswerYet: 'Still running: no answer yet.',
   noAnswerQueued: 'Queued: not started yet.',
   noResults: 'No task results yet.',
+  // One list of HSwarm jobs, CliMayte workers and CliMayte waves (HSwarmJobs.vue).
+  kind: { hswarm: 'HSwarm', climayte: 'CliMayte', wave: 'Wave' },
+  filter: {
+    label: 'Filter jobs',
+    all: 'All',
+    running: 'Running',
+    hswarm: 'HSwarm',
+    climayte: 'CliMayte',
+    waves: 'Waves',
+    none: 'Nothing matches these filters.',
+  },
+  waveTasks: '{n} tasks',
+  showMore: 'Show {n} more',
 }

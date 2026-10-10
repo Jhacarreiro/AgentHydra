@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { DeskSettings } from '@shared/protocol'
-import { SETTINGS_SECTIONS, matchRows, settingsGroups, stepSection, switchPatch } from '@/components/panes/settings'
+import { SETTINGS_SECTIONS, matchRows, sectionFor, settingsGroups, stepSection, switchPatch } from '@/components/panes/settings'
 import { pairingSummary } from '@/components/panes/instances'
 import { NavHistory, viewUnder, type View } from '@/components/shell/logic'
 
@@ -29,7 +29,16 @@ describe('settings search', () => {
     expect(matchRows('CLIMAYTE').map((r) => r.id)).toEqual(['ahAlerts', 'delegate', 'workers', 'ahKeepAwake', 'bridge'])
     // Every word must match, in either the label or the description.
     expect(matchRows('model thinks').map((r) => r.id)).toEqual(['effort'])
-    expect(settingsGroups('about', 'climayte').map((g) => g.heading)).toEqual(['Usage alerts', 'CliMayte'])
+    expect(settingsGroups('about', 'climayte').map((g) => g.heading)).toEqual(['Usage alerts', 'HSwarm'])
+    // The four CliMayte rows sit under one CliMayte sub-heading on the HSwarm page.
+    expect(settingsGroups('hswarm', '').map((g) => g.heading)).toEqual(['CliMayte'])
+    expect(settingsGroups('hswarm', '').flatMap((g) => g.rows.map((r) => r.id))).toEqual(['delegate', 'workers', 'ahKeepAwake', 'bridge'])
+  })
+
+  it('opens the HSwarm page for an old CliMayte section id, and nothing for an unknown one', () => {
+    expect(sectionFor('climayte')).toBe('hswarm')
+    expect(sectionFor('hswarm')).toBe('hswarm')
+    expect(sectionFor('nope')).toBeNull()
   })
 
   it('matches nothing for a setting Hydra Desk does not have', () => {
@@ -41,13 +50,13 @@ describe('settings search', () => {
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'alerts', 'climayte', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+      'general', 'alerts', 'hswarm', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
     ])
     expect(stepSection('general', 'ArrowDown')).toBe('alerts')
     expect(stepSection('about', 'ArrowDown')).toBe('cli')
     expect(stepSection('general', 'ArrowUp')).toBe('free')
     expect(stepSection('free', 'ArrowRight')).toBe('general')
-    expect(stepSection('climayte', 'Home')).toBe('general')
+    expect(stepSection('hswarm', 'Home')).toBe('general')
     expect(stepSection('general', 'End')).toBe('free')
     expect(stepSection('general', 'a')).toBeNull()
   })

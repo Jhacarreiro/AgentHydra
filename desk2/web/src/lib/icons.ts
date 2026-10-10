@@ -90,7 +90,6 @@ export const icons = {
   chapter: Bookmark,
   readAloud: Volume2,
   statusChevron: ChevronRight, // rotates to point down when open
-  scrollToBottom: ArrowDown,
   prevUserMessage: ArrowUp,
   nextUserMessage: ArrowDown,
   // Composer
@@ -214,7 +213,7 @@ import { Activity, BellRing, CloudDownload, Info, Monitor, Server } from '@lucid
 export const settingsIcons = {
   general: Settings,
   alerts: BellRing,
-  climayte: Bot,
+  hswarm: Bot,
   connections: Plug,
   connectors: Blocks,
   devservers: Server,

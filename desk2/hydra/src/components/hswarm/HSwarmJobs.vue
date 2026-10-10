@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// The Jobs page: the jobs running now, then every recent job. A click on a job opens it right under
-// its row, inside the table (owner, 2026-10-04: "The HSwarm jobs should expand in place on the table
-// to show the data instead of making it appear on the bottom."). One job is open at a time; a second
-// click, its close button or Escape closes it.
+// The Jobs page: one list of HSwarm jobs, CliMayte workers and CliMayte waves, newest first, each row one
+// line in CliMayte's row style with a kind badge (owner, 2026-10-10: one Jobs list, told apart by kind). A
+// HSwarm job opens right under its row (owner, 2026-10-04: "The HSwarm jobs should expand in place on the
+// table to show the data instead of making it appear on the bottom."); a CliMayte row opens on its own page.
+// One job is open at a time; a second click, its close button or Escape closes it.
 //
 // An open job is short (owner, 2026-10-05: the page "is, like, way too verbose ... it doesn't, like,
 // collapse or scroll"): one line of summary (label, state, counts, cost, time, the chat that called
@@ -12,7 +13,6 @@
 import {
   AlertCircle,
   Ban,
-  ChevronRight,
   CircleCheck,
   CircleX,
   Clock,
@@ -30,17 +30,14 @@ import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
 import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible'
 import { Skeleton } from '@/components/ui/skeleton'
-import {
-  Table,
-  TableBody,
-  TableCell,
-  TableHead,
-  TableHeader,
-  TableRow,
-} from '@/components/ui/table'
+import CliMayteRow from '@/components/CliMayteRow.vue'
+import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import { pii } from '@/composables/usePrivacy'
-import type { ChatListResult } from '@/lib/api'
+import { useCliMayteData } from '@/composables/useCliMayteData'
+import type { ChatListResult, CliMayteWave, CliMayteWaveStatus, CliMayteWorkerView } from '@/lib/api'
 import { j as getJson } from '@/lib/api'
+import { activeSeconds, activeTime, openWaveRow, runTag } from '@/lib/climayte-rows'
+import { firstLine, isCliMayteActive } from '@/lib/climayte-status'
 import { EMBEDDED, openInDesk } from '@/lib/desk-embed'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
@@ -53,7 +50,8 @@ const { apiCall } = useHswarmApi()
 
 // jobId: set when the HSwarm tree picked one job; the page opens with that job open under its row.
 const props = defineProps<{ state: HswarmState; jobId?: string }>()
-const emit = defineEmits<{ changed: [] }>()
+// open-task: a CliMayte worker (wave false) or a wave (wave true) was clicked; HSwarmView opens it on its page.
+const emit = defineEmits<{ changed: []; 'open-task': [id: string, wave: boolean] }>()
 
 interface CallerStamp {
   session_id?: string | null
@@ -102,13 +100,197 @@ interface JobDetail {
   error?: string
 }
 
-// The two tables a job is listed in: a running job is in both.
-type Where = 'running' | 'all'
+// The one list's rows are HSwarm jobs (here), CliMayte workers and CliMayte waves (the composable's, which
+// CliMayte's own page and warm-data read too: nothing is fetched twice).
+type Where = 'all'
+type Kind = 'hswarm' | 'climayte' | 'wave'
+const KINDS: Kind[] = ['hswarm', 'climayte', 'wave']
+const KIND_FILTER_KEY: Record<Kind, string> = { hswarm: 'hswarm', climayte: 'climayte', wave: 'waves' }
+const STATUS_FILTERS = ['all', 'running'] as const
+const DOT_CLASS = {
+  run: 'bg-primary animate-pulse',
+  ok: 'bg-success',
+  bad: 'bg-destructive',
+  off: 'bg-muted-foreground/50',
+}
+/** Rows shown at a time; "Show more" adds this many. */
+const PAGE = 50
+
+const { workers, waves, listedAt, hasOlder, showOlder: widenFinished, refreshCliMayte } = useCliMayteData()
+const statusFilter = ref<(typeof STATUS_FILTERS)[number]>('all')
+/** The kinds picked; none picked shows every kind. */
+const kindFilter = ref<Kind[]>([])
+const limit = ref(PAGE)
+// The elapsed times count with this clock: a tick every 15 seconds (the list is read, not polled).
+const now = ref(Date.now())
+
+interface Item {
+  key: string
+  kind: Kind
+  /** When it was made, in ms. */
+  at: number
+  running: boolean
+  job?: Job
+  worker?: CliMayteWorkerView
+  wave?: CliMayteWave
+}
+
+// Newest first, all three kinds together.
+const items = computed<Item[]>(() =>
+  [
+    ...jobs.value.map(
+      (job): Item => ({
+        key: `hswarm:${job.job_id}`,
+        kind: 'hswarm',
+        at: Date.parse(job.created) || 0,
+        running: jobDot(job.state) === 'run',
+        job,
+      }),
+    ),
+    ...workers.value.map(
+      (worker): Item => ({
+        key: `climayte:${worker.id}`,
+        kind: 'climayte',
+        at: worker.createdAt,
+        running: isCliMayteActive(worker),
+        worker,
+      }),
+    ),
+    ...waves.value.map(
+      (wave): Item => ({
+        key: `wave:${wave.id}`,
+        kind: 'wave',
+        at: wave.createdAt,
+        running: wave.status === 'running' || wave.status === 'reported',
+        wave,
+      }),
+    ),
+  ].sort((a, b) => b.at - a.at),
+)
+
+const matching = computed(() =>
+  items.value.filter(
+    (it) =>
+      (statusFilter.value === 'all' || it.running) &&
+      (!kindFilter.value.length || kindFilter.value.includes(it.kind)),
+  ),
+)
+
+function toggleKind(k: Kind) {
+  kindFilter.value = kindFilter.value.includes(k)
+    ? kindFilter.value.filter((x) => x !== k)
+    : [...kindFilter.value, k]
+}
+
+/** What a row shows: the one line's texts, worked out for the rows on screen. */
+interface Row {
+  item: Item
+  jobId: string | null
+  running: boolean
+  title: string
+  kind: string
+  account: string
+  time: string
+  tag: { text: string; differs: boolean } | null
+  hint: string
+  priority?: number
+  dot: 'run' | 'ok' | 'bad' | 'off'
+}
+
+function waveDot(status: CliMayteWaveStatus): Row['dot'] {
+  if (status === 'running' || status === 'reported') return 'run'
+  if (status === 'verified') return 'ok'
+  if (status === 'failed' || status === 'rejected') return 'bad'
+  return 'off'
+}
+
+/** The instance that called a job, masked in privacy mode; '' when the job has none. */
+function callerOf(job: Job): string {
+  const name =
+    job.caller_ids?.instance ??
+    (typeof job.caller === 'string' ? job.caller.split(' / ')[0] : job.caller?.instance)
+  return name ? pii(name) : ''
+}
+
+function elapsed(from: number, to: number): string {
+  return to > from ? spanText((to - from) / 1000) : '–'
+}
+
+function rowOf(it: Item): Row {
+  const kind = t(`hswarm.v.jobs.kind.${it.kind}`)
+  if (it.job) {
+    const job = it.job
+    const finished = typeof job.finished === 'string' && job.finished ? Date.parse(job.finished) : NaN
+    return {
+      item: it,
+      jobId: job.job_id,
+      running: it.running,
+      title: job.label || job.job_id.substring(0, 8),
+      kind,
+      account: callerOf(job),
+      time: elapsed(it.at, it.running ? now.value : finished || it.at),
+      tag: { text: `${tallyText(job.counts)} · ${costText(job.cost_usd)}`, differs: false },
+      hint: [job.label || job.job_id, kind, tallyText(job.counts)].join('\n'),
+      dot: jobDot(job.state),
+    }
+  }
+  if (it.worker) {
+    const w = it.worker
+    const p = activeTime(activeSeconds(w, now.value, listedAt.value))
+    const account = w.account ? pii(w.account) : t('climayte.noAccount')
+    return {
+      item: it,
+      jobId: null,
+      running: it.running,
+      title: w.title,
+      kind,
+      account,
+      time: t(p.key, p.values),
+      tag: runTag(w),
+      hint: [w.title, kind, account].join('\n'),
+      priority: w.priority,
+      dot: 'off',
+    }
+  }
+  const wv = it.wave!
+  return {
+    item: it,
+    jobId: null,
+    running: it.running,
+    title: firstLine(wv.plan) || wv.id,
+    kind,
+    account: '',
+    time: elapsed(it.at, it.running ? now.value : wv.updatedAt),
+    tag: { text: t('hswarm.v.jobs.waveTasks', { n: wv.tasks.length }), differs: false },
+    hint: [firstLine(wv.plan) || wv.id, kind].join('\n'),
+    dot: waveDot(wv.status),
+  }
+}
+
+const rows = computed<Row[]>(() => matching.value.slice(0, limit.value).map(rowOf))
+
+/** A row click: a HSwarm job opens its detail here; a CliMayte worker or wave opens on its own page. */
+function pick(it: Item) {
+  if (it.job) toggleJob(it.job.job_id, 'all')
+  else if (it.worker) emit('open-task', it.worker.id, false)
+  else if (it.wave) {
+    openWaveRow(it.wave.id)
+    emit('open-task', it.wave.id, true)
+  }
+}
+
+function cancelRowJob(r: Row) {
+  if (r.jobId) void cancelJob(r.jobId)
+}
+
+/** Finished CliMayte tasks older than the ones read: widen the read and read again. */
+function showOlder() {
+  widenFinished()
+  void refreshCliMayte()
+}
 
 const jobs = ref<Job[]>([])
 const selectedJobId = ref<string | null>(null)
-// The table the open job was opened from: its detail shows under the row clicked, not twice.
-const openIn = ref<Where>('all')
 const jobDetail = ref<JobDetail | null>(null)
 const isLoading = ref(true)
 const isLoadingDetail = ref(false)
@@ -117,29 +299,12 @@ const isCancelling = ref(false)
 const detailError = ref<string | null>(null)
 const rootEl = ref<HTMLElement | null>(null)
 
-const runningJobs = computed(() => jobs.value.filter((job) => jobDot(job.state) === 'run'))
-
-const allJobs = computed(() => jobs.value)
-
-// Both tables come from one loop, so the open job's detail is written once.
-const sections = computed(() => {
-  const all = { key: 'all' as Where, title: t('hswarm.v.jobs.allRecentJobs'), jobs: allJobs.value }
-  if (!runningJobs.value.length) return [all]
-  const running = {
-    key: 'running' as Where,
-    title: t('hswarm.v.jobs.runningNow'),
-    jobs: runningJobs.value,
-  }
-  return [running, all]
-})
-
-// The table the open job's detail is drawn in. A reload never closes it: a job that finished after
-// it was opened in the running table leaves that table, and its detail follows it into the other.
+// The open job's detail is drawn under its row. A reload never closes it: the job stays listed while the
+// list refreshes, and its detail is read again quietly.
 const detailIn = computed<Where | null>(() => {
   const id = selectedJobId.value
   if (!id) return null
-  if (openIn.value === 'running' && runningJobs.value.some((job) => job.job_id === id)) return 'running'
-  return allJobs.value.some((job) => job.job_id === id) ? 'all' : null
+  return jobs.value.some((job) => job.job_id === id) ? 'all' : null
 })
 
 const isOpen = (where: Where, jobId: string) =>
@@ -413,7 +578,7 @@ function taskMark(status: string): TaskMark {
   return { icon: CircleX, tone: 'text-destructive', label: t('hswarm.v.jobs.markFailed', { status }) }
 }
 
-const firstLine = (text: string) => (text.split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 300)
+const headLine = (text: string) => (text.split('\n').find((l) => l.trim()) ?? '').trim().slice(0, 300)
 
 function resultRow(r: TaskResult): TaskRow {
   const failed = isFailed(r.status)
@@ -429,7 +594,7 @@ function resultRow(r: TaskResult): TaskRow {
     model: r.model ?? '',
     cost: r.cost_usd,
     mark: taskMark(r.status),
-    first: firstLine(head),
+    first: headLine(head),
     firstTone: failed ? 'text-destructive' : '',
     full: full || t('hswarm.v.jobs.noAnswer'),
   }
@@ -526,7 +691,6 @@ async function loadJobDetail(jobId: string, quiet = false) {
 
 // Opens a job under its row in one table; the same job open in the other table just moves there.
 async function openJob(jobId: string, where: Where) {
-  openIn.value = where
   if (selectedJobId.value === jobId) return
   selectedJobId.value = jobId
   await loadJobDetail(jobId)
@@ -600,20 +764,23 @@ function onWindowKey(e: KeyboardEvent) {
   closeJob()
 }
 
+let clock: ReturnType<typeof setInterval> | undefined
 onMounted(async () => {
   window.addEventListener('keydown', onWindowKey)
+  clock = setInterval(() => (now.value = Date.now()), 15_000)
   const listed = loadJobs()
   if (!props.jobId) return
-  // A job picked in the tree opens where it is listed first (the running table while it runs), and
-  // its row is scrolled to the top once the list and its detail have loaded.
+  // A job picked in the tree opens in the list, and its row is scrolled to the top once the list and its
+  // detail have loaded.
   const id = props.jobId
-  await Promise.all([listed, openJob(id, 'running')])
+  await Promise.all([listed, openJob(id, 'all')])
   await nextTick()
   const where = detailIn.value
-  if (where) toggleEl(where, id)?.closest('tr')?.scrollIntoView({ block: 'start' })
+  if (where) toggleEl(where, id)?.closest('li')?.scrollIntoView({ block: 'start' })
 })
 onBeforeUnmount(() => {
   window.removeEventListener('keydown', onWindowKey)
+  clearInterval(clock)
 })
 </script>
 
@@ -646,7 +813,7 @@ onBeforeUnmount(() => {
 
     <!-- Empty State -->
     <div
-      v-else-if="!jobs.length"
+      v-else-if="!items.length"
       class="flex flex-col items-center justify-center gap-3 py-4 text-center"
     >
       <div class="text-4xl text-muted-foreground">✨</div>
@@ -658,245 +825,248 @@ onBeforeUnmount(() => {
       </div>
     </div>
 
-    <!-- Main Content: the running jobs (while any run), then every recent job -->
-    <div v-else class="flex flex-col gap-3 overflow-auto flex-1">
-      <div v-for="section in sections" :key="section.key">
-        <h3 class="text-base font-semibold mb-3">
-          {{ section.title }}
-          <span class="text-sm font-normal text-muted-foreground">
-            ({{ section.jobs.length }})
-          </span>
-        </h3>
-        <div class="border rounded-lg overflow-x-auto">
-          <Table rows="dense">
-            <TableHeader>
-              <TableRow>
-                <TableHead>{{ t('hswarm.v.jobs.table.jobId') }}</TableHead>
-                <TableHead>{{ t('hswarm.v.jobs.table.label') }}</TableHead>
-                <TableHead>{{ t('hswarm.v.jobs.table.state') }}</TableHead>
-                <TableHead class="text-end">
-                  {{ t('hswarm.v.jobs.table.tasks') }}
-                </TableHead>
-                <TableHead class="text-end">
-                  {{ t('hswarm.v.jobs.table.cost') }}
-                </TableHead>
-                <TableHead>{{ t('hswarm.v.jobs.table.created') }}</TableHead>
-                <TableHead class="w-12"></TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              <template v-for="job in section.jobs" :key="job.job_id">
-                <!-- A click anywhere on the row toggles it; its button carries the open state (and tints the row) for the keyboard -->
-                <TableRow
-                  class="cursor-pointer"
-                  @click="toggleJob(job.job_id, section.key)"
-                >
-                  <TableCell mono>
-                    <button
-                      type="button"
-                      class="inline-flex items-center gap-1 rounded-sm outline-none focus-visible:ring-2 focus-visible:ring-ring/50"
-                      :data-job-toggle="`${section.key}:${job.job_id}`"
-                      :aria-expanded="isOpen(section.key, job.job_id)"
-                      :aria-controls="isOpen(section.key, job.job_id) ? detailId(section.key, job.job_id) : undefined"
-                    >
-                      <ChevronRight
-                        class="size-3.5 shrink-0 text-muted-foreground transition-transform motion-reduce:transition-none"
-                        :class="isOpen(section.key, job.job_id) ? 'rotate-90' : ''"
-                        aria-hidden="true"
-                      />
-                      {{ job.job_id.substring(0, 8) }}...
-                    </button>
-                  </TableCell>
-                  <TableCell>{{ job.label || '–' }}</TableCell>
-                  <TableCell>
-                    <Badge :variant="stateVariant(job.state)">
-                      {{ job.state }}
-                    </Badge>
-                  </TableCell>
-                  <TableCell align="end" size="sm">
-                    {{ tallyText(job.counts) }}
-                  </TableCell>
-                  <TableCell align="end" mono size="sm">
-                    {{ formatTokens(job.tokens) }}
-                    <div v-if="job.tokens != null" class="text-xs text-muted-foreground">{{ costText(job.cost_usd) }} {{ t('hswarm.v.money.atListPrice') }}</div>
-                  </TableCell>
-                  <TableCell size="sm" muted>
-                    {{ formatDate(job.created) }}
-                  </TableCell>
-                  <TableCell class="w-12">
+    <!-- Main Content: HSwarm jobs, CliMayte workers and waves in one list, newest first -->
+    <div v-else class="flex flex-col gap-2 overflow-auto flex-1">
+      <!-- The filters: running or all, then the kinds (none picked means every kind) -->
+      <div class="flex flex-wrap items-center gap-1.5" role="group" :aria-label="t('hswarm.v.jobs.filter.label')">
+        <Button
+          v-for="f in STATUS_FILTERS"
+          :key="f"
+          size="sm"
+          :variant="statusFilter === f ? 'secondary' : 'ghost'"
+          :aria-pressed="statusFilter === f"
+          @click="statusFilter = f"
+        >
+          {{ t(`hswarm.v.jobs.filter.${f}`) }}
+        </Button>
+        <span class="mx-1 h-4 w-px bg-border" aria-hidden="true" />
+        <Button
+          v-for="k in KINDS"
+          :key="k"
+          size="sm"
+          :variant="kindFilter.includes(k) ? 'secondary' : 'ghost'"
+          :aria-pressed="kindFilter.includes(k)"
+          @click="toggleKind(k)"
+        >
+          {{ t(`hswarm.v.jobs.filter.${KIND_FILTER_KEY[k]}`) }}
+        </Button>
+      </div>
+
+      <ul
+        v-if="matching.length"
+        class="flex flex-col rounded-lg border bg-card py-0.5"
+        :aria-label="t('hswarm.v.jobs.title')"
+      >
+        <!-- One line per row (CliMayteRow, as the CliMayte list). A HSwarm job opens its detail right under it. -->
+        <li v-for="r in rows" :key="r.item.key">
+          <div class="group/row relative">
+            <CliMayteRow
+              :title="r.title"
+              :kind="r.kind"
+              :account="r.account"
+              :time="r.time"
+              :tag="r.tag"
+              :hint="r.hint"
+              :priority="r.priority"
+              :data-job-toggle="r.jobId ? `all:${r.jobId}` : undefined"
+              :aria-expanded="r.jobId ? isOpen('all', r.jobId) : undefined"
+              :aria-controls="r.jobId && isOpen('all', r.jobId) ? detailId('all', r.jobId) : undefined"
+              @click="pick(r.item)"
+            >
+              <CliMayteStatusBadge
+                v-if="r.item.worker"
+                :status="r.item.worker.status"
+                :hold="r.item.worker.hold"
+                icon-only
+                :task="r.item.worker"
+                :tasks="workers"
+              />
+              <span v-else class="inline-flex size-4 shrink-0 items-center justify-center">
+                <span class="size-2 rounded-full" :class="DOT_CLASS[r.dot]" />
+              </span>
+            </CliMayteRow>
+            <!-- A running HSwarm job can be cancelled from its row; it shows on hover, as a CliMayte row's forget does -->
+            <Button
+              v-if="r.jobId && r.running"
+              variant="row-reveal"
+              size="icon-xs"
+              class="absolute end-1.5 top-1/2 -translate-y-1/2"
+              :aria-label="t('hswarm.v.jobs.cancelJob')"
+              :title="t('hswarm.v.jobs.cancelJob')"
+              :disabled="isCancelling"
+              @click="cancelRowJob(r)"
+            >
+              <X />
+            </Button>
+          </div>
+
+          <!-- The open job, right under its row: a one-line summary, then its task results -->
+          <div
+            v-if="r.jobId && isOpen('all', r.jobId)"
+            :id="detailId('all', r.jobId)"
+            class="border-b bg-muted/30"
+          >
+            <!-- w-0 min-w-full: the detail spans the table without widening its columns. It grows
+                 open from zero height in CSS alone (starting: is @starting-style), with no measuring. -->
+            <div class="grid w-0 min-w-full grid-rows-[1fr] transition-rows duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
+              <div class="min-h-0 overflow-hidden">
+                <div class="flex flex-col gap-2 px-3 py-2">
+                  <div class="flex items-start gap-2">
+                    <div class="min-w-0 flex-1">
+                      <!-- Detail Error -->
+                      <Alert v-if="detailError" variant="destructive">
+                        <AlertCircle class="size-4" />
+                        <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
+                        <AlertDescription>{{ detailError }}</AlertDescription>
+                      </Alert>
+
+                      <!-- Detail Loading -->
+                      <Skeleton v-else-if="isLoadingDetail" class="h-7 w-full" />
+
+                      <!-- The summary: one line of facts, wrapping only on a narrow pane -->
+                      <template v-else>
+                        <div class="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
+                          <span class="min-w-0 max-w-full truncate text-sm font-medium" :title="selectedJobId ?? undefined">{{ summary.label || selectedJobId }}</span>
+                          <Badge :variant="stateVariant(summary.state)">{{ summary.state || '–' }}</Badge>
+                          <span
+                            class="inline-flex flex-wrap gap-x-2 tabular-nums"
+                            :title="summary.total != null ? t('hswarm.v.jobs.countsHint', { n: summary.total }) : undefined"
+                          >
+                            <span v-for="c in summary.counts" :key="c.key" :class="c.tone">{{ c.text }}</span>
+                          </span>
+                          <span class="font-mono tabular-nums" :title="summary.costHint">{{ summary.cost }}</span>
+                          <span class="inline-flex items-center gap-1 text-muted-foreground" :title="summary.timeHint || undefined">
+                            <Clock class="size-3.5 shrink-0" aria-hidden="true" />{{ summary.time }}
+                          </span>
+                          <!-- The chat that called it; a click opens it in Desk -->
+                          <button
+                            v-if="caller?.open"
+                            type="button"
+                            class="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                            :title="t('hswarm.v.jobs.callerOpen')"
+                            @click="openCaller"
+                          >
+                            <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
+                            <span class="truncate">{{ caller.name }}</span>
+                          </button>
+                          <span
+                            v-else-if="caller"
+                            class="inline-flex min-w-0 max-w-64 items-center gap-1 text-muted-foreground"
+                            :title="t('hswarm.v.jobs.callerHint')"
+                          >
+                            <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
+                            <span class="truncate">{{ caller.name }}</span>
+                          </span>
+                        </div>
+                        <p v-if="summary.error" class="mt-1 text-xs text-destructive">{{ summary.error }}</p>
+                      </template>
+                    </div>
                     <Button
-                      v-if="jobDot(job.state) === 'run'"
                       size="sm"
                       variant="ghost"
-                      :aria-label="t('hswarm.v.jobs.cancelJob')"
-                      :title="t('hswarm.v.jobs.cancelJob')"
-                      :disabled="isCancelling"
-                      @click.stop="cancelJob(job.job_id)"
+                      :aria-label="t('hswarm.v.jobs.closeSummary')"
+                      :title="t('hswarm.v.jobs.closeSummary')"
+                      aria-keyshortcuts="Escape"
+                      @click="closeJob"
                     >
                       <X class="size-4" />
                     </Button>
-                  </TableCell>
-                </TableRow>
+                  </div>
 
-                <!-- The open job, right under its row: a one-line summary, then its task results -->
-                <tr
-                  v-if="isOpen(section.key, job.job_id)"
-                  :id="detailId(section.key, job.job_id)"
-                  class="border-b bg-muted/30"
-                >
-                  <td colspan="7" class="p-0! text-base whitespace-normal">
-                    <!-- w-0 min-w-full: the detail spans the table without widening its columns. It grows
-                         open from zero height in CSS alone (starting: is @starting-style), with no measuring. -->
-                    <div class="grid w-0 min-w-full grid-rows-[1fr] transition-rows duration-150 ease-out starting:grid-rows-[0fr] motion-reduce:transition-none">
-                      <div class="min-h-0 overflow-hidden">
-                        <div class="flex flex-col gap-2 px-3 py-2">
-                          <div class="flex items-start gap-2">
-                            <div class="min-w-0 flex-1">
-                              <!-- Detail Error -->
-                              <Alert v-if="detailError" variant="destructive">
-                                <AlertCircle class="size-4" />
-                                <AlertTitle>{{ t('hswarm.v.jobs.failedToLoad') }}</AlertTitle>
-                                <AlertDescription>{{ detailError }}</AlertDescription>
-                              </Alert>
-
-                              <!-- Detail Loading -->
-                              <Skeleton v-else-if="isLoadingDetail" class="h-7 w-full" />
-
-                              <!-- The summary: one line of facts, wrapping only on a narrow pane -->
-                              <template v-else>
-                                <div class="flex min-h-7 flex-wrap items-center gap-x-3 gap-y-1 text-xs">
-                                  <span class="min-w-0 max-w-full truncate text-sm font-medium" :title="job.job_id">{{ summary.label || job.job_id }}</span>
-                                  <Badge :variant="stateVariant(summary.state)">{{ summary.state || '–' }}</Badge>
-                                  <span
-                                    class="inline-flex flex-wrap gap-x-2 tabular-nums"
-                                    :title="summary.total != null ? t('hswarm.v.jobs.countsHint', { n: summary.total }) : undefined"
-                                  >
-                                    <span v-for="c in summary.counts" :key="c.key" :class="c.tone">{{ c.text }}</span>
-                                  </span>
-                                  <span class="font-mono tabular-nums" :title="summary.costHint">{{ summary.cost }}</span>
-                                  <span class="inline-flex items-center gap-1 text-muted-foreground" :title="summary.timeHint || undefined">
-                                    <Clock class="size-3.5 shrink-0" aria-hidden="true" />{{ summary.time }}
-                                  </span>
-                                  <!-- The chat that called it; a click opens it in Desk -->
-                                  <button
-                                    v-if="caller?.open"
-                                    type="button"
-                                    class="inline-flex min-w-0 max-w-64 items-center gap-1 rounded-sm text-muted-foreground hover:text-foreground hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                    :title="t('hswarm.v.jobs.callerOpen')"
-                                    @click="openCaller"
-                                  >
-                                    <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
-                                    <span class="truncate">{{ caller.name }}</span>
-                                  </button>
-                                  <span
-                                    v-else-if="caller"
-                                    class="inline-flex min-w-0 max-w-64 items-center gap-1 text-muted-foreground"
-                                    :title="t('hswarm.v.jobs.callerHint')"
-                                  >
-                                    <MessageSquare class="size-3.5 shrink-0" aria-hidden="true" />
-                                    <span class="truncate">{{ caller.name }}</span>
-                                  </span>
-                                </div>
-                                <p v-if="summary.error" class="mt-1 text-xs text-destructive">{{ summary.error }}</p>
-                              </template>
-                            </div>
-                            <Button
-                              size="sm"
-                              variant="ghost"
-                              :aria-label="t('hswarm.v.jobs.closeSummary')"
-                              :title="t('hswarm.v.jobs.closeSummary')"
-                              aria-keyshortcuts="Escape"
-                              @click="closeJob"
-                            >
-                              <X class="size-4" />
-                            </Button>
-                          </div>
-
-                          <!-- Task results: one line per task under a heading that folds them (folded past
-                               FOLD_AT tasks), in a box that scrolls instead of growing the page -->
-                          <div
-                            v-if="jobDetail?.results && !detailError && !isLoadingDetail"
-                            class="flex flex-col gap-1.5 border-t pt-2"
-                          >
-                          <Collapsible v-model:open="resultsOpen">
-                            <div class="flex min-w-0 items-center gap-1.5">
-                              <CollapsibleTrigger as-child>
-                                <button
-                                  type="button"
-                                  class="group flex min-w-0 items-center gap-1.5 rounded-md px-1 text-xs font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
-                                >
-                                  <ChevronRight
-                                    class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
-                                    aria-hidden="true"
-                                  />
-                                  <span class="shrink-0">{{ t('hswarm.v.jobs.taskResults') }}</span>
-                                  <span class="truncate font-normal text-muted-foreground tabular-nums">({{ taskRows.length }}) {{ tallyText(taskCounts) }}</span>
-                                </button>
-                              </CollapsibleTrigger>
-                              <InfoHint :text="t('hswarm.v.jobs.taskResultsHint', { n: FOLD_AT })" />
-                            </div>
-                            <CollapsibleContent>
-                              <p v-if="resultsError" class="px-1 text-xs text-destructive">{{ resultsError }}</p>
-                              <p v-else-if="!taskRows.length" class="px-1 text-xs text-muted-foreground">
-                                {{ t('hswarm.v.jobs.noResults') }}
-                              </p>
-                              <template v-else>
-                                <ul
-                                  class="scroll-slim flex max-h-96 flex-col overflow-y-auto rounded-lg border bg-card py-0.5"
-                                  :aria-label="t('hswarm.v.jobs.taskListLabel')"
-                                >
-                                  <li v-for="task in shownTasks" :key="task.id">
-                                    <!-- One line: how it ended, its id, the model, the cost, the first line of its answer -->
-                                    <button
-                                      type="button"
-                                      class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-                                      :aria-expanded="openTask === task.id"
-                                      @click="toggleTask(task.id)"
-                                    >
-                                      <span class="relative inline-flex shrink-0" :class="task.mark.tone" :title="task.mark.label">
-                                        <component
-                                          :is="task.mark.icon"
-                                          class="size-3.5"
-                                          :class="task.mark.spin ? 'animate-spin' : ''"
-                                          aria-hidden="true"
-                                        />
-                                        <span class="sr-only">{{ task.mark.label }}</span>
-                                      </span>
-                                      <span class="w-24 shrink-0 truncate font-mono" :title="task.id">{{ task.id }}</span>
-                                      <span class="hidden w-36 shrink-0 truncate text-muted-foreground sm:block" :title="task.model || undefined">{{ task.model || '–' }}</span>
-                                      <span class="w-16 shrink-0 text-end font-mono tabular-nums text-muted-foreground" :title="t('hswarm.v.money.atListPrice')">{{ costText(task.cost) }}</span>
-                                      <span class="min-w-0 flex-1 truncate" :class="task.firstTone">{{ task.first || '–' }}</span>
-                                    </button>
-                                    <!-- Its whole answer, in a box of its own height that scrolls -->
-                                    <pre
-                                      v-if="openTask === task.id"
-                                      tabindex="0"
-                                      class="scroll-slim mx-2.5 mb-1.5 max-h-64 overflow-auto rounded-md border bg-background p-2 font-mono text-xs whitespace-pre-wrap wrap-break-word"
-                                    >{{ task.full }}</pre>
-                                  </li>
-                                </ul>
-                                <Button
-                                  v-if="taskRows.length > taskLimit"
-                                  variant="outline"
-                                  size="sm"
-                                  class="mt-1.5 w-full"
-                                  @click="taskLimit += TASK_PAGE"
-                                >
-                                  {{ t('hswarm.v.jobs.taskShowMore', { n: Math.min(TASK_PAGE, taskRows.length - taskLimit), total: taskRows.length - taskLimit }) }}
-                                </Button>
-                              </template>
-                            </CollapsibleContent>
-                          </Collapsible>
-                          </div>
-                        </div>
-                      </div>
+                  <!-- Task results: one line per task under a heading that folds them (folded past
+                       FOLD_AT tasks), in a box that scrolls instead of growing the page -->
+                  <div
+                    v-if="jobDetail?.results && !detailError && !isLoadingDetail"
+                    class="flex flex-col gap-1.5 border-t pt-2"
+                  >
+                  <Collapsible v-model:open="resultsOpen">
+                    <div class="flex min-w-0 items-center gap-1.5">
+                      <CollapsibleTrigger as-child>
+                        <button
+                          type="button"
+                          class="group flex min-w-0 items-center gap-1.5 rounded-md px-1 text-xs font-medium hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+                        >
+                          <ChevronRight
+                            class="size-3.5 shrink-0 text-muted-foreground transition-transform group-data-[state=open]:rotate-90 motion-reduce:transition-none"
+                            aria-hidden="true"
+                          />
+                          <span class="shrink-0">{{ t('hswarm.v.jobs.taskResults') }}</span>
+                          <span class="truncate font-normal text-muted-foreground tabular-nums">({{ taskRows.length }}) {{ tallyText(taskCounts) }}</span>
+                        </button>
+                      </CollapsibleTrigger>
+                      <InfoHint :text="t('hswarm.v.jobs.taskResultsHint', { n: FOLD_AT })" />
                     </div>
-                  </td>
-                </tr>
-              </template>
-            </TableBody>
-          </Table>
-        </div>
+                    <CollapsibleContent>
+                      <p v-if="resultsError" class="px-1 text-xs text-destructive">{{ resultsError }}</p>
+                      <p v-else-if="!taskRows.length" class="px-1 text-xs text-muted-foreground">
+                        {{ t('hswarm.v.jobs.noResults') }}
+                      </p>
+                      <template v-else>
+                        <ul
+                          class="scroll-slim flex max-h-96 flex-col overflow-y-auto rounded-lg border bg-card py-0.5"
+                          :aria-label="t('hswarm.v.jobs.taskListLabel')"
+                        >
+                          <li v-for="task in shownTasks" :key="task.id">
+                            <!-- One line: how it ended, its id, the model, the cost, the first line of its answer -->
+                            <button
+                              type="button"
+                              class="flex h-7 w-full min-w-0 items-center gap-2 px-2.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
+                              :aria-expanded="openTask === task.id"
+                              @click="toggleTask(task.id)"
+                            >
+                              <span class="relative inline-flex shrink-0" :class="task.mark.tone" :title="task.mark.label">
+                                <component
+                                  :is="task.mark.icon"
+                                  class="size-3.5"
+                                  :class="task.mark.spin ? 'animate-spin' : ''"
+                                  aria-hidden="true"
+                                />
+                                <span class="sr-only">{{ task.mark.label }}</span>
+                              </span>
+                              <span class="w-24 shrink-0 truncate font-mono" :title="task.id">{{ task.id }}</span>
+                              <span class="hidden w-36 shrink-0 truncate text-muted-foreground sm:block" :title="task.model || undefined">{{ task.model || '–' }}</span>
+                              <span class="w-16 shrink-0 text-end font-mono tabular-nums text-muted-foreground" :title="t('hswarm.v.money.atListPrice')">{{ costText(task.cost) }}</span>
+                              <span class="min-w-0 flex-1 truncate" :class="task.firstTone">{{ task.first || '–' }}</span>
+                            </button>
+                            <!-- Its whole answer, in a box of its own height that scrolls -->
+                            <pre
+                              v-if="openTask === task.id"
+                              tabindex="0"
+                              class="scroll-slim mx-2.5 mb-1.5 max-h-64 overflow-auto rounded-md border bg-background p-2 font-mono text-xs whitespace-pre-wrap wrap-break-word"
+                            >{{ task.full }}</pre>
+                          </li>
+                        </ul>
+                        <Button
+                          v-if="taskRows.length > taskLimit"
+                          variant="outline"
+                          size="sm"
+                          class="mt-1.5 w-full"
+                          @click="taskLimit += TASK_PAGE"
+                        >
+                          {{ t('hswarm.v.jobs.taskShowMore', { n: Math.min(TASK_PAGE, taskRows.length - taskLimit), total: taskRows.length - taskLimit }) }}
+                        </Button>
+                      </template>
+                    </CollapsibleContent>
+                  </Collapsible>
+                  </div>
+                </div>
+              </div>
+            </div>
+          </div>
+        </li>
+      </ul>
+      <p v-else class="px-1 py-6 text-center text-xs text-muted-foreground">
+        {{ t('hswarm.v.jobs.filter.none') }}
+      </p>
+
+      <!-- More of the list, then the finished CliMayte tasks older than the ones read. -->
+      <div v-if="matching.length > limit || hasOlder" class="flex gap-2">
+        <Button v-if="matching.length > limit" variant="outline" size="sm" class="flex-1" @click="limit += PAGE">
+          {{ t('hswarm.v.jobs.showMore', { n: Math.min(PAGE, matching.length - limit) }) }}
+        </Button>
+        <Button v-if="hasOlder" variant="outline" size="sm" class="flex-1" @click="showOlder">
+          {{ t('climayte.showOlder') }}
+        </Button>
       </div>
     </div>
   </div>
