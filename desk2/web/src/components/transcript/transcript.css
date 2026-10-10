@@ -527,7 +527,9 @@ button.tx-file-card:hover {
   }
 }
 
-/* Running text: the real cds-shimmer-text-shine sweep (a bright band crossing muted text). */
+/* Running text: the real cds-shimmer-text-shine sweep (a bright band crossing muted text), at 3.5 s a sweep, not the
+   real 2 s (owner, 2026-10-10: "excessively shimmery. It needs to be slower"). One line shimmers at a time
+   (lib/groups.ts liveRow). */
 .tx-shimmer {
   background: linear-gradient(
     90deg,
@@ -541,7 +543,7 @@ button.tx-file-card:hover {
   -webkit-background-clip: text;
   background-clip: text;
   color: transparent;
-  animation: cds-shimmer-text-shine 2s infinite;
+  animation: cds-shimmer-text-shine 3.5s infinite;
 }
 
 /* Status row, measured: 24 high, margin -4px 0 (applied as the row gap), padding 2px 4px, r6, gap 6, 14px muted. */
@@ -692,7 +694,8 @@ button.tx-file-card:hover {
   transition: background-color 60ms, box-shadow 60ms, color 60ms, opacity 120ms;
 }
 .tx-step:hover,
-.tx-step:focus-visible {
+.tx-step:focus-visible,
+.tx-step[aria-pressed='true'] {
   opacity: 1;
   color: var(--text);
   background: var(--bg-popover);

@@ -20,13 +20,15 @@ const props = defineProps<{ id: string; items: RunItem[]; tasks?: TaskItem[] }>(
 const ctx = useTranscript()
 const open = computed(() => ctx.isOpen(props.id))
 const sum = computed(() => toolSummary(props.items, ctx.cwd.value, props.tasks))
+/** Running and the newest live row (ctx.shimmerId): the one line that shimmers. */
+const shimmer = computed(() => sum.value.running && (ctx.shimmerId ? ctx.shimmerId.value === props.id : true))
 </script>
 
 <template>
   <div>
     <StatusRow :open="open" :running="sum.running" @toggle="ctx.toggle(id)">
       <!-- one line: template whitespace would show as stray spaces -->
-      <span class="min-w-0 truncate" :class="sum.running && 'tx-shimmer'"><template v-for="(p, i) in sum.phrases" :key="i">{{ i ? ', ' : '' }}{{ p.text }}{{ p.target ? ' ' : '' }}<span v-if="p.target" class="tx-target ms-0.75">{{ p.target }}</span>{{ p.after ? ' ' + p.after : '' }}</template></span>
+      <span class="min-w-0 truncate" :class="shimmer && 'tx-shimmer'"><template v-for="(p, i) in sum.phrases" :key="i">{{ i ? ', ' : '' }}{{ p.text }}{{ p.target ? ' ' : '' }}<span v-if="p.target" class="tx-target ms-0.75">{{ p.target }}</span>{{ p.after ? ' ' + p.after : '' }}</template></span>
       <template #after>
         <span v-if="sum.added || sum.removed" class="shrink-0 font-mono text-[12px] tabular-nums">
           <span class="text-git-add">+{{ sum.added }}</span>

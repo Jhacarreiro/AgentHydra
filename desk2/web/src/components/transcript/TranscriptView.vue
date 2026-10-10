@@ -11,7 +11,7 @@ import { watchTranscript } from '@/lib/chat-audio'
 import { buildRows, estimateHeight } from './lib/rows'
 import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
-import { groupRows, rowGap, type DisplayRow } from './lib/groups'
+import { groupRows, liveRow, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { nextMessageStep, stepTarget } from './lib/steps'
 import { provideTranscript } from './context'
@@ -25,6 +25,7 @@ import WorkingFooter from './parts/WorkingFooter.vue'
 import ToolGroup from './parts/ToolGroup.vue'
 import TaskGroup from './parts/TaskGroup.vue'
 import BrowserCard from './parts/BrowserCard.vue'
+import MessagePeek from './parts/MessagePeek.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
 import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
@@ -110,6 +111,7 @@ const tctx = provideTranscript(
       count: chat.value?.climayteActive ?? 0,
       resultId: props.items.findLast((i) => i.kind === 'result' && !i.parentToolUseId)?.id ?? null,
     })),
+    shimmerId: computed(() => liveRowId.value),
   },
   props.expandedIds,
 )
@@ -128,6 +130,9 @@ const heights = new Map<string, number>()
 const version = ref(0)
 
 const indexById = computed(() => new Map(display.value.map((r, i) => [r.id, i])))
+// One shimmer at a time (owner, 2026-10-10): the newest live row of the turn (lib/groups.ts liveRow); none, and the
+// working line shimmers.
+const liveRowId = computed(() => liveRow(display.value))
 // Gaps and row heights together, once per change of the rows: a re-measure then only updates its own row's
 // height and adds the heights up again.
 const layout = computed(() => {
@@ -426,6 +431,24 @@ function stepDown() {
   glideTo(i === null ? null : sent.value.ids[i]!)
 }
 
+// The peek under the arrows (parts/MessagePeek.vue): the message the up arrow would go to, shown in a tray over the
+// top while the view stays put. A second press closes it.
+const peekId = ref<string | null>(null)
+const peekItem = computed(() => {
+  const i = peekId.value === null ? undefined : indexById.value.get(peekId.value)
+  const r = i === undefined ? undefined : display.value[i]
+  return r?.kind === 'item' && r.item.kind === 'user' ? r.item : null
+})
+function peek() {
+  const i = prevStep.value
+  peekId.value = peekId.value !== null || i === null ? null : sent.value.ids[i]!
+}
+function goToPeek() {
+  const id = peekId.value
+  peekId.value = null
+  if (id) glideTo(id)
+}
+
 let rowObserver: ResizeObserver | null = null
 let viewObserver: ResizeObserver | null = null
 
@@ -673,6 +696,7 @@ watch(
   () => {
     dropHold()
     stopGlide()
+    peekId.value = null
     heights.clear()
     version.value++
     settle()
@@ -710,7 +734,7 @@ watch(
           <TranscriptRow v-else :item="r.item" :end-of-turn="r.endOfTurn" :prompt="r.prompt" :overlay-actions="display[range.start + k + 1]?.kind === 'tasks'" />
         </div>
         <div :style="{ height: `${padBottom}px` }" />
-        <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" class="mt-4" @reveal="revealStep" />
+        <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" :shimmer="liveRowId === null" class="mt-4" @reveal="revealStep" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
       </div>
@@ -733,10 +757,11 @@ watch(
       role="status"
       class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
     >{{ revealNote }}</div>
+    <MessagePeek :item="peekItem" :top="insetTop ?? 0" @close="peekId = null" @go="goToPeek" />
     <!-- Each arrow keeps its own slot, so the down arrow never moves up under the pointer when the up arrow goes. -->
     <div
-      v-if="prevStep !== null || showStepDown"
-      class="pointer-events-none absolute right-5 flex flex-col gap-1"
+      v-if="prevStep !== null || showStepDown || peekItem"
+      class="pointer-events-none absolute right-5 z-[9] flex flex-col gap-1"
       :style="{ top: `${(insetTop ?? 0) + 12}px` }"
     >
       <span class="flex size-6">
@@ -755,6 +780,20 @@ watch(
             @click="stepDown"
           >
             <icons.nextUserMessage class="size-4" />
+          </button>
+        </Tip>
+      </span>
+      <span class="flex size-6">
+        <Tip v-if="prevStep !== null || peekItem" :label="peekItem ? 'Close the peek' : 'Peek at the previous message you sent'" side="left">
+          <button
+            type="button"
+            :aria-label="peekItem ? 'Close the peek' : 'Peek at the previous message you sent'"
+            :aria-pressed="!!peekItem"
+            class="tx-step"
+            data-testid="peek-step"
+            @click="peek"
+          >
+            <icons.peekUserMessage class="size-4" />
           </button>
         </Tip>
       </span>

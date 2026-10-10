@@ -261,6 +261,50 @@ try {
   }
   check(downs.length === 3 && downs.every((d, i) => Math.abs(d.off) <= 2 && d.n === (i ? downs[i - 1]!.n : two.n) + 1),
     `three down clicks land the next three sent messages on the line (${said(downs)})`)
+
+  // 13. The peek under the arrows (owner, 2026-10-10: "show me what the previous message was in ... a slide-down tray"):
+  // it shows the message the up arrow would go to and the view stays put; it stays while the pointer is on it, goes about
+  // a second after the pointer leaves, and on its own after two seconds; Go to it lands that message on the line.
+  const boxOf = (sel: string): Promise<Box | null> => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect();
+    return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
+  const PEEK_BTN = '[data-testid="peek-step"]'
+  const TRAY = '[data-testid="message-peek"]'
+  const peekText = (): Promise<string | null> => ev(`document.querySelector('${TRAY} p')?.textContent ?? null`)
+  const here = await onLine()
+  const before = (await state()).top
+  const btn = await boxOf(PEEK_BTN)
+  if (btn) await click(btn)
+  await sleep(400)
+  const shown = await peekText()
+  const still = Math.abs((await state()).top - before)
+  check(!!shown?.startsWith(`Question ${here.n - 1}:`) && still < 1,
+    `the peek shows the previous message you sent and the view stays (u${here.n}, tray "${shown?.slice(0, 12) ?? 'none'}", moved ${Math.round(still)})`)
+  const tray = await boxOf(TRAY)
+  if (tray) await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: (tray.left + tray.right) / 2 - 100, y: (tray.top + tray.bottom) / 2 })
+  await sleep(3000)
+  const held = await peekText()
+  const away = (await state()).view
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 300, y: away.bottom - 60 })
+  await sleep(1600)
+  const left = await peekText()
+  check(held !== null && left === null, `the peek stays while the pointer is on it and goes after it leaves (held ${held !== null}, after ${left !== null})`)
+  const again = await boxOf(PEEK_BTN)
+  if (again) await click(again)
+  await sleep(400)
+  const opened = await peekText()
+  await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: 300, y: away.bottom - 60 })
+  await sleep(2600)
+  check(opened !== null && (await peekText()) === null, `the peek goes on its own after two seconds`)
+  const third = await boxOf(PEEK_BTN)
+  if (third) await click(third)
+  await sleep(400)
+  const go = await ev(`(() => { const b = [...document.querySelectorAll('${TRAY} button')].find((e) => e.textContent.trim() === 'Go to it')?.getBoundingClientRect();
+    return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
+  if (go) await click(go)
+  await sleep(900)
+  const landed = await onLine()
+  check(!!go && landed.n === here.n - 1 && Math.abs(landed.off) <= 2 && (await peekText()) === null,
+    `Go to it lands the peeked message on the line and closes the peek (${said([landed])})`)
 } finally {
   // The Edge launched here may hand its window to another process: close the browser over CDP, then the launcher.
   try {

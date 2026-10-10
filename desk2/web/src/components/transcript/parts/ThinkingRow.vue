@@ -12,6 +12,8 @@ import Collapse from './Collapse.vue'
 const props = defineProps<{ id: string; text: string; streaming?: boolean; step?: boolean }>()
 const ctx = useTranscript()
 const label = computed(() => (props.streaming ? 'Thinking' : 'Thought process'))
+/** Streaming and the newest live row (ctx.shimmerId; a step of a run never is, its run's line is). */
+const shimmer = computed(() => props.streaming && (ctx.shimmerId ? ctx.shimmerId.value === props.id : true))
 // Blank lines at either end of the text would show as empty space in the box (pre-wrap keeps them; owner, 2026-10-08:
 // "an extra empty space below them for no reason").
 const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
@@ -28,11 +30,11 @@ const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
       @click="ctx.toggle(id)"
     >
       <Brain class="size-4 shrink-0 text-text-muted" />
-      <span class="min-w-0 truncate text-text-muted" :class="streaming && 'tx-shimmer'">{{ label }}</span>
+      <span class="min-w-0 truncate text-text-muted" :class="shimmer && 'tx-shimmer'">{{ label }}</span>
       <ChevronRight class="ms-auto size-3 shrink-0 text-text-muted transition motion-reduce:transition-none" :class="ctx.isOpen(id) && 'rotate-90'" />
     </button>
     <StatusRow v-else :open="ctx.isOpen(id)" :running="streaming" @toggle="ctx.toggle(props.id)">
-      <span :class="streaming && 'tx-shimmer'">{{ label }}</span>
+      <span :class="shimmer && 'tx-shimmer'">{{ label }}</span>
     </StatusRow>
     <Collapse :open="ctx.isOpen(id)">
       <div v-if="step" class="whitespace-pre-wrap border-t border-border px-3 py-2 text-[14px] leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>

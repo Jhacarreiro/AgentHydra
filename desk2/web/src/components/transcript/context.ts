@@ -18,6 +18,9 @@ export interface TranscriptCtx {
   redesign?: ComputedRef<RedesignState>
   /** Background tasks the chat dispatched that still run, and the id of its latest result line (the only one they hold back). */
   background?: Ref<{ count: number; resultId: string | null }>
+  /** The one row whose words shimmer: the newest live one (lib/groups.ts liveRow); null, and none does but the working
+   *  line. Absent (a row rendered on its own), every live row does. */
+  shimmerId?: ComputedRef<string | null>
   isOpen(key: string, fallback?: boolean): boolean
   toggle(key: string, fallback?: boolean): void
   /** Opens it whatever it was (the working line's ">" opening the step it names). */

@@ -21,6 +21,7 @@ import {
   Copy,
   CornerDownLeft,
   Ellipsis,
+  Eye,
   Folder,
   FolderPlus,
   GitBranch,
@@ -92,6 +93,7 @@ export const icons = {
   statusChevron: ChevronRight, // rotates to point down when open
   prevUserMessage: ArrowUp,
   nextUserMessage: ArrowDown,
+  peekUserMessage: Eye,
   // Composer
   add: Plus,
   record: Mic,

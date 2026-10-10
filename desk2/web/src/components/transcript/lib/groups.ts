@@ -207,6 +207,24 @@ export function rowGap(rows: DisplayRow[], i: number): number {
   return Math.max(0, 20 - (isStatusRow(a) || user ? 8 : 0) - (isStatusRow(rows[i + 1]) ? 8 : 0))
 }
 
+/**
+ * The one row that shimmers (owner, 2026-10-10: the run's line and the working line both shimmered; Claude Desktop has
+ * one, "the upper one. And then as it changes, it would ... step down"): the newest live row of the turn, a tool run
+ * with a call running or thinking streaming, a thinking row streaming, a file being sent. Null, and the working line
+ * shimmers. Only the last turn is looked at: rows above the newest message the person sent are done.
+ */
+export function liveRow(rows: DisplayRow[]): string | null {
+  for (let i = rows.length - 1; i >= 0; i--) {
+    const r = rows[i]!
+    if (r.kind === 'tools' && r.items.some((it) => (isThinking(it) ? !!it.streaming : it.status === 'running'))) return r.id
+    if (r.kind !== 'item') continue
+    const it = r.item
+    if (it.kind === 'user' && !it.parentToolUseId && !it.queued) return null
+    if ((it.kind === 'thinking' && it.streaming) || (it.kind === 'tool_use' && it.status === 'running' && isSendFileTool(it.name))) return r.id
+  }
+  return null
+}
+
 /** One clause of a status row: muted text, an optional target in primary text ("read" + "a.png"), then a muted note ("(1 failed)"). */
 export interface Phrase {
   text: string

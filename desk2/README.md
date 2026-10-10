@@ -66,7 +66,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   button (blue while on, off by default, remembered; `web/src/components/sidebar/compact.ts`) drops the project
   headers from both lists: the chats stay in their groups and order as one list, a collapsed group still shows its
   chats, and each chat's status dot becomes its project's icon (`ProjectRing.vue`). A chat with something going on
-  wears a rounded-square ring around the icon, as a story ring does: the accent gradient while it runs, amber when it
+  wears a square ring with slightly rounded corners around the icon, as a story ring does: the accent gradient while it runs, amber when it
   waits on you, green when it finished, red on an error, each pulsing or blinking as its dot did; an idle chat shows
   the icon alone. The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
   on keeps the icons. Each chrome-bar toggle's tooltip names what a click does ("Enable cloud sessions", "Show
@@ -250,6 +250,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   that are measured on the way (they start as estimates) move the landing spot with them instead of stopping the
   glide short (owner, 2026-10-10: it "sometimes just nudges the page up"); a wheel or a press on the list
   stops it (`transcript/lib/steps.ts` `nextMessageStep`, TranscriptView's `stepUp` / `stepDown` / `glideTo`).
+  Under them an eye peeks at the message the up arrow would go to without scrolling (owner, 2026-10-10: "show me what
+  the previous message was in ... a slide-down tray. Kind of like the Session details thing works"): a tray slides
+  down over the transcript's top with that message, stays two seconds, stays while the pointer is on it and goes a
+  second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`).
+- **One shimmer at a time, and slower** (owner, 2026-10-10: the run's line and the working line were "excessively
+  shimmery"; Claude Desktop has one, "the upper one. And then as it changes, it would ... step down"). Only the newest
+  live row of the turn shimmers: a run with a call going, thinking as it streams, a file being sent. With none, the
+  working line does. A sweep takes 3.5 s, not 2 (`transcript/lib/groups.ts` `liveRow`, `.tx-shimmer`).
 - **Room under the last message** (owner, 2026-10-10: "when scrolled to the bottom, have the bottom spacing be
   gapped like 150px"). At the bottom of a chat its last row stands 150px above the composer.
 - **Groups you hide.** A project group's header has a right-click menu with Hide: the group leaves the

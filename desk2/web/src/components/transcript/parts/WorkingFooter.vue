@@ -13,7 +13,8 @@ import { Tip } from '@/components/ui/tooltip'
 import WorkingMark from './WorkingMark.vue'
 import RevealStep from './RevealStep.vue'
 
-const props = defineProps<{ chat: ChatSummary; items?: readonly TranscriptItem[] }>()
+// `shimmer`: no row above is live (TranscriptView's liveRowId), so these words are the one that shimmers.
+const props = withDefaults(defineProps<{ chat: ChatSummary; items?: readonly TranscriptItem[]; shimmer?: boolean }>(), { shimmer: true })
 const emit = defineEmits<{ reveal: [id: string] }>()
 
 const clock = useClock()
@@ -38,7 +39,7 @@ const step = computed(() => (!needsYou.value && props.chat.status !== 'starting'
     <span v-if="needsYou" class="mx-1.25 size-1.5 shrink-0 animate-dot-blink rounded-full bg-warning" />
     <WorkingMark v-else />
     <Tip :label="why">
-      <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : 'tx-shimmer'">{{ text }}</span>
+      <span class="min-w-0 truncate" :class="needsYou ? 'text-warning-text' : shimmer ? 'tx-shimmer' : 'text-text-muted'">{{ text }}</span>
     </Tip>
     <RevealStep v-if="step" @click="step && emit('reveal', step)" />
     <span class="shrink-0 tabular-nums text-[13px] text-text-muted" aria-hidden="true">{{ elapsed }}</span>

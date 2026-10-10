@@ -5,11 +5,15 @@
 import { computed } from 'vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { Tip } from '@/components/ui/tooltip'
+import { useTranscript } from '../context'
 import { imageSrc, openLightbox, tileKey, videoSrc } from '../lib/media'
 import FileCard from './FileCard.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'tool_use' }> }>()
+const ctx = useTranscript()
+/** The newest live row (ctx.shimmerId): the one line that shimmers. */
+const shimmer = computed(() => (ctx.shimmerId ? ctx.shimmerId.value === props.item.id : true))
 
 const files = computed(() => props.item.result?.images ?? [])
 const caption = computed(() => (typeof props.item.input.caption === 'string' ? props.item.input.caption : ''))
@@ -52,7 +56,7 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
     <div v-if="files.length" class="flex flex-wrap gap-2 ps-0">
       <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" />
     </div>
-    <div v-else-if="item.status === 'running'" class="px-1 text-[14px] leading-5 text-text-muted"><span class="tx-shimmer">Sending a file</span></div>
+    <div v-else-if="item.status === 'running'" class="px-1 text-[14px] leading-5 text-text-muted"><span :class="shimmer && 'tx-shimmer'">Sending a file</span></div>
     <div v-else-if="item.result?.isError" class="px-1 text-[14px] leading-5 text-danger-text">{{ item.result.text || 'The file could not be sent' }}</div>
   </div>
 </template>

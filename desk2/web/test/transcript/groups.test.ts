@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
-import { groupRows, rowGap, toolSummary, type RunItem, type ThinkingItem, type ToolItem } from '../../src/components/transcript/lib/groups'
+import { groupRows, liveRow, rowGap, toolSummary, type RunItem, type ThinkingItem, type ToolItem } from '../../src/components/transcript/lib/groups'
 
 const tool = (id: string, name: string, input: Record<string, unknown> = {}, status: ToolItem['status'] = 'done'): ToolItem => ({
   id,
@@ -76,6 +76,21 @@ describe('rowGap', () => {
   test('20px between turns, 12 beside a status row, 4 from a user message to a status row, none after the last row', () => {
     const rows = groupRows([user('u'), tool('a', 'Bash'), text('t'), user('u2'), text('t2')])
     expect(rows.map((_, i) => rowGap(rows, i))).toEqual([4, 12, 20, 12, 0])
+  })
+})
+
+describe('liveRow', () => {
+  test('one row shimmers: the newest live row of the last turn, never one from an earlier turn', () => {
+    // A run left running by an interrupted turn stays still once the person sends again; the working line takes it.
+    expect(liveRow(groupRows([user('u'), tool('a', 'Bash', {}, 'running'), user('u2'), text('t')]))).toBeNull()
+    // Two live rows in a turn: the lower one, so the shimmer steps down as the turn goes on.
+    expect(liveRow(groupRows([user('u'), tool('a', 'Bash', {}, 'running'), text('t'), tool('c', 'Read', {}, 'running')]))).toBe('tools:c')
+    // A message queued under a live run is not a new turn.
+    const queued: TranscriptItem = { id: 'q', ts: 1, kind: 'user', text: 'next', queued: true }
+    expect(liveRow(groupRows([user('u'), tool('a', 'Bash', {}, 'running'), queued]))).toBe('tools:a')
+    // A file being sent keeps its own row, and that row shimmers; a finished run above it does not.
+    expect(liveRow(groupRows([user('u'), tool('a', 'Bash'), tool('f', 'SendUserFile', {}, 'running')]))).toBe('f')
+    expect(liveRow(groupRows([user('u'), tool('a', 'Bash'), text('t', true)]))).toBeNull()
   })
 })
 
