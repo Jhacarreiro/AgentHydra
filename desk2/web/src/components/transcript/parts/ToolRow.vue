@@ -18,8 +18,10 @@ const props = defineProps<{ item: ToolItem; step?: boolean }>()
 
 const ctx = useTranscript()
 const family = computed(() => toolFamily(props.item.name))
-// Edits show their diff without a click, as Claude Code does; everything else opens on demand.
-const openByDefault = computed(() => family.value === 'edit' || family.value === 'write')
+// An edit alone (a sub-agent card's) shows its diff without a click, as Claude Code does; everything else opens on
+// demand. A step of a tool run's box starts closed, edits too (owner, 2026-10-10: opening a run "needs to not expand
+// the text edits. It gets really long"): the box lists its steps, and a click on one opens its diff.
+const openByDefault = computed(() => !props.step && (family.value === 'edit' || family.value === 'write'))
 const open = computed(() => ctx.isOpen(props.item.id, openByDefault.value))
 const diff = computed(() => (open.value ? toolDiff(props.item.name, props.item.input) : null))
 const exit = computed(() => bashExit(props.item.status, props.item.result?.text))

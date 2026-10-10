@@ -191,8 +191,16 @@ export function mapExternal(
 
   for (const c of chats.values())
     fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
-  for (const l of inp.live)
+  // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript
+  // whose chat runs as another session is a spare one Claude Desktop left running, nothing to show (owner, 2026-10-10:
+  // "ddc6fc99 ... shows nothing, like cannot load"; a second engine of a listed chat, started with no prompt, was a row
+  // titled with its id that opened onto "no transcript").
+  const runsAs = new Map(inp.chats.filter((c) => c.sessionId).map((c) => [c.chatId, c.sessionId]))
+  for (const l of inp.live) {
+    const chatSession = l.hostSessionId ? runsAs.get(l.hostSessionId) : undefined
+    if (!l.transcriptPath && chatSession && chatSession !== l.sessionId) continue
     fromIndex(l.sessionId, l.hostSessionId ? 'desktop' : 'cli', { cwd: l.cwd, last: l.startedAt, root: configRootOf(l.transcriptPath) })
+  }
   for (const h of hooks.values())
     if (h.state !== 'done') fromIndex(h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
   for (const s of inp.sessions)

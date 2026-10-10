@@ -203,6 +203,28 @@ describe('external sessions', () => {
     expect(list.find((x) => x.id === sid(895))).not.toHaveProperty('parentId')
   })
 
+  // Owner, 2026-10-10: a row titled "ddc6fc99" that "shows nothing, like cannot load" was a second engine of a listed chat.
+  test('a spare engine of a Desktop chat, with no transcript, is not listed; the engine its chat runs as is', () => {
+    const chat = {
+      instance: 'Claude-9',
+      chatId: 'local_chat896',
+      sessionId: sid(896),
+      title: 'Invented chat',
+      archived: false,
+      lastActivityAt: new Date(NOW - 60_000).toISOString(),
+      cwd: null,
+      live: true,
+      unread: false,
+    }
+    const engine = (n: number, transcriptPath: string | null) => ({ pid: n, sessionId: sid(n), cwd: 'C:/Users/me/work', name: 'work-8e', startedAt: NOW - 30_000, transcriptPath, hostSessionId: 'local_chat896' })
+    const list = mapExternal({ ...inputs, chats: [chat], live: [engine(896, 'C:/Users/me/.claude/projects/x/896.jsonl'), engine(897, null)] }, new Set(), NOW)
+    expect(list.find((x) => x.id === sid(896))).toMatchObject({ source: 'desktop', title: 'Invented chat' })
+    expect(list.some((x) => x.id === sid(897))).toBe(false)
+    // An engine with no transcript and no chat of its own yet (a terminal CLI before its first prompt) is still listed.
+    const cli = mapExternal({ ...inputs, live: [{ ...engine(898, null), hostSessionId: undefined }] }, new Set(), NOW)
+    expect(cli.some((x) => x.id === sid(898))).toBe(true)
+  })
+
   test('merges workers, desktop chats, the live registry, hooks and fresh transcripts', () => {
     const list = mapExternal(inputs, new Set(), NOW)
     const by = new Map(list.map((x) => [x.id, x]))
