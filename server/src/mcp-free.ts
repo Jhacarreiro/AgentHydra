@@ -567,7 +567,7 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
   const cache: { threads: FreeThread[] | null } = { threads: null }
-  if (!seeded) seedSends(await recentThreads())
+  await seedOnce()
   while (pending(b)) {
     let status: { instances: FreeInstance[]; jobs: FreeJob[] }
     try {
@@ -645,34 +645,30 @@ function readTask(raw: unknown, index: number): FreeTask {
   }
 }
 
-/** The thread list (1.4 MB at 3,250 threads) only gives free_status its counts, and HSwarm reads free_status
- *  before every task with a short timeout: one read a minute is enough. */
-const THREADS_TTL_MS = 60_000
-let threadsRead: { at: number; list: Promise<FreeThread[]> } | null = null
-function recentThreads(): Promise<FreeThread[]> {
-  if (!threadsRead || Date.now() - threadsRead.at > THREADS_TTL_MS)
-    threadsRead = {
-      at: Date.now(),
-      list: desk<FreeThread[]>('GET', '/threads').catch(() => {
-        threadsRead = null // only a read that worked is kept: the next call tries again
-        return []
-      }),
-    }
-  return threadsRead.list
+/** The pacing's sends from before this process started, read once: the threads started in the last window, not
+ *  the whole list (8 MB at ~22,000 threads, 2026-10-10), which HSwarm's free_status before every task read each minute.
+ *  The status carries each account's thread count. An older Desk ignores `since` and sends every thread. */
+async function seedOnce(): Promise<void> {
+  if (seeded) return
+  seedSends(
+    await desk<FreeThread[]>('GET', `/threads?since=${Date.now() - PACE_WINDOW_MS}`).catch(
+      () => [],
+    ),
+  )
 }
 
 async function freeStatus() {
-  const [status, threads] = await Promise.all([
+  const [status] = await Promise.all([
     desk<{
       ready: boolean
       instances: FreeInstance[]
       jobs: FreeJob[]
       health?: Record<string, { sent: number; failed: number; failing: boolean }>
+      threadCounts?: Record<string, number>
     }>('GET', '/status'),
-    recentThreads(),
+    seedOnce(),
   ])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
-  seedSends(threads)
   const now = Date.now()
   return {
     ready: status.ready,
@@ -706,7 +702,7 @@ async function freeStatus() {
           : i.usage.unlimited_text
             ? 'unlimited everyday text'
             : `5h ${windowOf(i, 'five_hour') ?? '?'}%, week ${windowOf(i, 'seven_day') ?? '?'}%`,
-        threads: threads.filter((t) => t.instanceId === i.id).length,
+        threads: status.threadCounts?.[i.id] ?? 0,
         // Desk's count of how its messages ended (desk2 free-instances/health.ts); "failing" at 90% of 5 or more.
         ...(status.health?.[i.id]
           ? {

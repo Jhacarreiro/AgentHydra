@@ -252,8 +252,13 @@ export class FreeInstances {
       const hour = healthOf(this.outcomes.get(i.id), now)
       if (hour) health[i.id] = hour
     }
-    const running = this.store.data.threads.reduce((n, t) => n + (t.status === 'running' ? 1 : 0), 0)
-    return { ready: this.runtime.ready(), tokens, health, running, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    let running = 0
+    const threadCounts: Record<string, number> = {}
+    for (const t of this.store.data.threads) {
+      if (t.status === 'running') running++
+      threadCounts[t.instanceId] = (threadCounts[t.instanceId] ?? 0) + 1
+    }
+    return { ready: this.runtime.ready(), tokens, health, running, threadCounts, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   /** The last `days` days' messages by account and model (stats.ts). */
   stats(days: number): FreeStatRow[] { return statRows(this.store.data.stats ?? {}, days, Date.now()) }

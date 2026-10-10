@@ -51,7 +51,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   router.patch('/settings', async c => c.json(service.updateSettings(await c.req.json().catch(() => null))))
   router.post('/instances/:id/logout', async c => c.json(await service.logout(c.req.param('id'))))
   router.post('/instances/:id/plan-seen', c => c.json(service.planSeen(c.req.param('id'))))
-  router.get('/threads', c => c.json(service.threads()))
+  // `since` (ms): only the threads started from then on, for a caller that needs the recent few (the pacing in
+  // server/src/mcp-free.ts), not all ~22,000 (8 MB).
+  router.get('/threads', c => {
+    const since = Number(c.req.query('since'))
+    return c.json(since > 0 ? service.threads().filter(t => t.createdAt >= since) : service.threads())
+  })
   // A thread's id is `<instance>/<chat>`: the slash may arrive encoded or not.
   router.delete('/threads/:id{.+}', c => c.json(service.forgetThread(c.req.param('id'))))
   router.post('/jobs', async c => c.json(service.start(await c.req.json().catch(() => null)), 202))

@@ -167,4 +167,6 @@ export interface FreeStatus {
   jobs: FreeJob[]
   /** How many threads have a message running: a count needs no thread list (`/threads` holds ~22,000, 8 MB). */
   running: number
+  /** How many threads each account holds, by its id. */
+  threadCounts: Record<string, number>
 }

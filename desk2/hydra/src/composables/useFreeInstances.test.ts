@@ -15,6 +15,7 @@ it("opening the tab starts no operation and spins nothing, while Desk's own read
   const status: FreeStatus = {
     ready: true,
     running: 0,
+    threadCounts: {},
     instances: [account],
     jobs: [{ id: 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee', instanceId: account.id, provider: 'claude', command: 'auth', state: 'running', phase: 'working', startedAt: 1, auto: true }],
   }
