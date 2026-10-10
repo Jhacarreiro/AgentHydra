@@ -1,22 +1,33 @@
 """Per-model results for the console's overview charts: thumbs up/down, cost per successful task, edit survival, daily volume.
 
 Pure aggregation over the ledger (one line per finished task) and the survival log (edit scores per checkpoint). The ledger
-runs to ~140 MB, so only the window's tail is parsed (ledger._window_start) and the answer is cached by both files'
-size+mtime: a repeated call while nothing was appended reads nothing.
+runs to ~140 MB, so only the window's tail is parsed (ledger._window_start), and model_stats() answers from a cache it
+refreshes on a thread (see there): a range switch in the console reads nothing.
 """
 from __future__ import annotations
 
 import datetime as dt
 import json
 import threading
+import time
 from pathlib import Path
 
 from . import config, ledgerstore
 from .ledger import money_kind, window_lines
 
 TOP_DAILY = 6
-_CACHE: dict = {}
+# A cached answer younger than this is served as it is, even when the ledger has grown since.
+MAX_AGE_S = 60.0
+# The console's ranges, read on a thread after the first call so a switch between them never waits.
+WARM_DAYS = (14, 30)
+# The console's All: every task the ledger and its archives hold.
+ALL_DAYS = 3650
+_CACHE: dict = {}  # days -> (files key, monotonic time it was computed, answer)
+_BUSY: set[int] = set()  # days with a refresh running
 _LOCK = threading.Lock()
+_DONE = threading.Condition(_LOCK)  # notified when a refresh ends
+# How long a call for a range waits for the refresh already reading it before it reads the files itself.
+WAIT_S = 30.0
 
 
 def _sig(p: Path) -> tuple[int, int] | None:
@@ -106,15 +117,54 @@ def compute(days: int, ledger: Path, survival_log: Path, now: dt.datetime | None
     return {"days": days, "models": out, "daily": {"top": top, "days": daily}}
 
 
-def model_stats(days: int = 14) -> dict:
-    """compute() for the live files, cached until either file grows or changes."""
-    days = max(1, min(90, int(days)))
-    ledger, log = config.LEDGER, config.HOME / "survival.jsonl"
-    key = (str(ledger), str(log), days, _sig(ledger), _sig(log), tuple((m, _sig(p)) for m, p in sorted(ledgerstore.archives(ledger).items())))
-    with _LOCK:
-        hit = _CACHE.get(days)
-        if hit and hit[0] == key:
-            return hit[1]
+def _key(days: int, ledger: Path, log: Path) -> tuple:
+    return (str(ledger), str(log), days, _sig(ledger), _sig(log), tuple((m, _sig(p)) for m, p in sorted(ledgerstore.archives(ledger).items())))
+
+
+def _refresh(days: int, ledger: Path, log: Path) -> dict:
+    """compute() into the cache. The paths are the caller's, so a refresh in the background reads the files it was asked about."""
+    try:
         out = compute(days, ledger, log)
-        _CACHE[days] = (key, out)
+        with _LOCK:
+            _CACHE[days] = (_key(days, ledger, log), time.monotonic(), out)
         return out
+    finally:
+        with _LOCK:
+            _BUSY.discard(days)
+            _DONE.notify_all()
+
+
+def _refresh_later(days: int, ledger: Path, log: Path) -> None:
+    """_refresh() on a daemon thread, unless one is already running for these days."""
+    with _LOCK:
+        if days in _BUSY:
+            return
+        _BUSY.add(days)
+    threading.Thread(target=_refresh, args=(days, ledger, log), name=f"model-stats-{days}", daemon=True).start()
+
+
+def model_stats(days: int = 14) -> dict:
+    """compute() for the live files, answered from the cache whenever there is one (owner, 2026-10-10: switching the
+    range was "very slow and laggy"). The ledger grows with every finished task, so a cache keyed on its size missed
+    almost every call and re-read ~140 MB (5 to 7 s a range). Now a cached answer is served at once; one older than
+    MAX_AGE_S whose files changed is refreshed on a thread for the next call. Only a range never read waits, and the
+    first read warms the console's other ranges. `days` up to ALL_DAYS: the console's All."""
+    days = max(1, min(ALL_DAYS, int(days)))
+    ledger, log = config.LEDGER, config.HOME / "survival.jsonl"
+    with _LOCK:
+        missing = [d for d in WARM_DAYS if d != days and d not in _CACHE and d not in _BUSY]
+        # A warm-up already reading this range is waited for, not read twice.
+        deadline = time.monotonic() + WAIT_S
+        while days not in _CACHE and days in _BUSY and time.monotonic() < deadline:
+            _DONE.wait(timeout=deadline - time.monotonic())
+        hit = _CACHE.get(days)
+        if hit is None:
+            _BUSY.add(days)
+    for d in missing:
+        _refresh_later(d, ledger, log)
+    if hit is None:
+        return _refresh(days, ledger, log)
+    key, at, out = hit
+    if time.monotonic() - at >= MAX_AGE_S and key != _key(days, ledger, log):
+        _refresh_later(days, ledger, log)
+    return out

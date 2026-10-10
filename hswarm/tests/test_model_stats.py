@@ -4,6 +4,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import sys
+import time
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent.parent))
@@ -46,6 +47,42 @@ def test_counts_cost_days_and_survival(tmp_path):
     assert (b["model"], b["ok"], b["failed"], b["cost_per_ok"], b["survival"]) == ("b", 0, 1, None, None)
     assert out["daily"]["top"] == ["a", "b"] and len(out["daily"]["days"]) == 30
     assert sum(d["models"]["a"] for d in out["daily"]["days"]) == 3
+
+
+def test_cached_answer_is_served_at_once_and_refreshed_behind(tmp_path, monkeypatch):
+    """The console's range switch never waits on the ledger: a cached answer comes back as it is, a stale one too while
+    a thread reads the grown ledger for the next call (owner, 2026-10-10: the switch was "very slow and laggy")."""
+    from hswarm import config
+    from hswarm import model_stats as ms
+
+    now = dt.datetime.now(dt.timezone.utc).isoformat()
+    ledger = _write(tmp_path / "ledger.jsonl", [{"ts": now, "job": "j", "task": "a", "model": "m", "status": "ok"}])
+    monkeypatch.setattr(config, "LEDGER", ledger)
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    monkeypatch.setattr(ms, "_CACHE", {})
+    monkeypatch.setattr(ms, "_BUSY", set())
+    reads: list[int] = []
+    real = ms.compute
+
+    def counted(days, ledger_path, log, now=None):
+        reads.append(days)
+        return real(days, ledger_path, log, now)
+
+    monkeypatch.setattr(ms, "compute", counted)
+    tasks = lambda: ms.model_stats(14)["models"][0]["tasks"]  # noqa: E731
+    assert tasks() == 1
+    with ledger.open("a", encoding="utf-8") as f:
+        f.write(json.dumps({"ts": now, "job": "j", "task": "b", "model": "m", "status": "ok"}) + "\n")
+    assert tasks() == 1  # younger than MAX_AGE_S: served as it is, nothing read
+    monkeypatch.setattr(ms, "MAX_AGE_S", 0.0)
+    assert tasks() == 1  # stale and the ledger grew: still served at once, a thread reads it
+    deadline = time.monotonic() + 5
+    while tasks() != 2 and time.monotonic() < deadline:
+        time.sleep(0.02)
+    assert tasks() == 2
+    assert reads.count(14) == 2  # the first call and the one refresh; 30 days was warmed on its own thread
+    while ms._BUSY and time.monotonic() < deadline:  # let the warm-up finish inside the test's patches
+        time.sleep(0.02)
 
 
 def test_days_filter(tmp_path):
