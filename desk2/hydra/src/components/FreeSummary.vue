@@ -9,7 +9,8 @@ import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import ProviderLogo from '@/components/ProviderLogo.vue'
 import { useFreeInstances } from '@/composables/useFreeInstances'
-import { FREE_STAT_DAYS, useFreeStats } from '@/composables/useFreeStats'
+import { freeStatDays, useFreeStats } from '@/composables/useFreeStats'
+import { useUsageSpan } from '@/composables/useUsagePeriod'
 import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { seriesColor } from '@/lib/chart'
 import { freeLogo } from '@/lib/free-instances'
@@ -22,7 +23,7 @@ const { instances, tokens } = useFreeInstances()
 const { rows, failed } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
 
-const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, tokens.value, tokenWindow.value, FREE_STAT_DAYS, Date.now()))
+const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, tokens.value, tokenWindow.value, freeStatDays.value, Date.now()))
 const windowLabel = computed(() => ({ '5h': t('freeInstances.stats.window5h'), week: t('freeInstances.stats.windowWeek'), total: t('freeInstances.stats.windowTotal') })[tokenWindow.value])
 const providerLabel = (p: FreeProvider) => (p === 'claude' ? 'Claude' : 'ChatGPT')
 const pct = (x: Pick<FreeTally, 'sent' | 'failed'>) => {
@@ -41,7 +42,8 @@ const SERIES = ['claude', 'chatgpt'] as const
 const series = SERIES.map(s => ({ key: s, label: providerLabel(s), color: seriesColor(s, SERIES) }))
 const dayBars = computed(() => summary.value.days.map(d => ({ label: dayLabel(d.key), values: [d.claude, d.chatgpt] })))
 const daysEmpty = computed(() => summary.value.days.every(d => d.claude + d.chatgpt === 0))
-const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sent: x.sent, failed: x.failed, days: FREE_STAT_DAYS })
+const { freeSpan } = useUsageSpan()
+const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sent: x.sent, failed: x.failed, span: freeSpan.value })
 </script>
 
 <template>
@@ -59,7 +61,7 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
         </p>
         <p class="text-2xs tabular-nums text-muted-foreground" :title="messagesTip(tile)">
           <span :class="rateClass(tile)">{{ pct(tile) }}</span>
-          {{ $t('freeInstances.stats.answeredOf', { sent: tile.sent, days: FREE_STAT_DAYS }) }}
+          {{ $t('freeInstances.stats.answeredOf', { sent: tile.sent, span: freeSpan }) }}
         </p>
       </div>
     </div>
@@ -67,7 +69,7 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
     <p v-if="failed" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.unavailable') }}</p>
     <template v-else>
       <div>
-        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.byModel', { days: FREE_STAT_DAYS }) }}</h4>
+        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.byModel', { span: freeSpan }) }}</h4>
         <p v-if="!summary.models.length" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noModels') }}</p>
         <ul v-else class="divide-y rounded-md border text-xs">
           <li v-for="m in summary.models" :key="`${m.provider}/${m.model}`" class="flex items-center gap-3 px-2.5 py-1.5">
@@ -85,7 +87,7 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
       </div>
 
       <div>
-        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.perDay', { days: FREE_STAT_DAYS }) }}</h4>
+        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.perDay', { span: freeSpan }) }}</h4>
         <p v-if="daysEmpty" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noTokens') }}</p>
         <template v-else>
           <HourBars :hours="dayBars" :series="series" :format-value="formatTokens" height-class="h-20" />

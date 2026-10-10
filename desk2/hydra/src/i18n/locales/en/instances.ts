@@ -518,19 +518,27 @@ export default {
     unavailable: 'Usage history is unavailable right now',
     noData: 'No usage recorded in this window yet',
     // Desktop and CLI (owner, 2026-10-10: "CLI doesn't show model stats, neither does desktop, like free does"). The
-    // header line is the tab's own part; All adds the three, its parts in the tooltip. The blocks read the last 7 days.
-    headerDesktop: 'Desktop: {tokens} tokens, {sessions} sessions in {days} days',
-    headerCli: 'CLI: {tokens} tokens, {sessions} sessions in {days} days',
-    headerAll: 'All: {tokens} tokens in {days} days',
-    headerAllTip: 'Desktop {desktop}, CLI {cli} and Free {free} tokens in the last {days} days',
-    desktopTitle: 'Desktop usage, last {days} days',
-    cliTitle: 'CLI usage, last {days} days',
+    // header line is the tab's own part; All adds the three, its parts in the tooltip. Everything reads the period the
+    // toggle picks ({span}); Free's record keeps 30 days, so its All time says so (owner, 2026-10-10: "toggles for ...
+    // seven days, 30 days, all time").
+    headerDesktop: 'Desktop: {tokens} tokens, {sessions} sessions {span}',
+    headerCli: 'CLI: {tokens} tokens, {sessions} sessions {span}',
+    headerAll: 'All: {tokens} tokens {span}',
+    headerAllTip: 'Desktop {desktop} and CLI {cli} tokens {span}; Free {free} tokens {freeSpan}',
+    periodLabel: 'Period',
+    period: { '24h': '24 hours', '7d': '7 days', '30d': '30 days', all: 'All time' },
+    span: {
+      '24h': 'in the last 24 hours', '7d': 'in the last 7 days', '30d': 'in the last 30 days', all: 'all time',
+      today: 'today', days: 'in the last {n} days', freeKept: 'in the {n} days kept',
+    },
+    desktopTitle: 'Desktop usage',
+    cliTitle: 'CLI usage',
     tileTokens: 'Tokens',
     tileSessions: 'Sessions',
     tileTurns: 'Turns',
     tileAllCli: 'All CLI',
-    usageByModel: 'By model, last {days} days',
-    usageNoModels: 'No model was used in the last {days} days',
+    usageByModel: 'By model {span}',
+    usageNoModels: 'No model was used {span}',
     usageDetail: '{sessions} sessions, {turns} turns',
     usageTokens: 'tokens',
     usageMore: '+{n} more',

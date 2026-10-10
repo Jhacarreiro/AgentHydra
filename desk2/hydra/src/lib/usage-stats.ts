@@ -4,8 +4,14 @@
 // Tokens are the weighted measure the card's tokens-per-day bars use.
 import type { SpendReport } from '@agenthydra/server/types'
 
-/** The window the Desktop and CLI blocks read, in days (the reports are fetched for '7d'). */
-export const USAGE_DAYS = 7
+/** The windows the card's toggle offers (owner, 2026-10-10: "toggles for, like, seven days, 30 days, all time, et
+ *  cetera"): the spend report's own periods. */
+export const USAGE_PERIODS = ['24h', '7d', '30d', 'all'] as const
+export type UsagePeriod = (typeof USAGE_PERIODS)[number]
+/** The days of Desk's daily Free record a period reads: the record keeps 30 (server/src/free-instances/stats.ts), so
+ *  All time is those 30, and 24 hours is today. */
+export const FREE_KEPT_DAYS = 30
+export const freeDaysFor = (p: UsagePeriod): number => ({ '24h': 1, '7d': 7, '30d': 30, all: FREE_KEPT_DAYS })[p]
 
 export interface UsageTotals {
   tokens: number

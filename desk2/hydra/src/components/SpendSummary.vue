@@ -4,7 +4,8 @@
 // show and the rest sit behind a "+N more" toggle. The parent reads the reports; this only draws them.
 import { computed, ref } from 'vue'
 import { formatTokens } from '@/lib/kit'
-import { type UsageSummary, USAGE_DAYS } from '@/lib/usage-stats'
+import { useUsageSpan } from '@/composables/useUsagePeriod'
+import type { UsageSummary } from '@/lib/usage-stats'
 
 const props = defineProps<{
   title: string
@@ -15,6 +16,7 @@ const props = defineProps<{
 }>()
 
 const TOP = 8
+const { span } = useUsageSpan()
 const expanded = ref(false)
 const models = computed(() => props.summary?.models ?? [])
 const shown = computed(() => (expanded.value ? models.value : models.value.slice(0, TOP)))
@@ -35,9 +37,9 @@ const hidden = computed(() => Math.max(0, models.value.length - TOP))
       </div>
 
       <div>
-        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('instances.summary.usageByModel', { days: USAGE_DAYS }) }}</h4>
+        <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('instances.summary.usageByModel', { span }) }}</h4>
         <p v-if="!models.length" class="py-2 text-center text-2xs text-muted-foreground">
-          {{ $t('instances.summary.usageNoModels', { days: USAGE_DAYS }) }}
+          {{ $t('instances.summary.usageNoModels', { span }) }}
         </p>
         <template v-else>
           <ul class="divide-y rounded-md border text-xs">

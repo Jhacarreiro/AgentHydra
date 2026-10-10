@@ -8,7 +8,9 @@
 // for the 14 days, not one spend report per source. With the Free accounts on screen it shows theirs first (FreeSummary):
 // their token totals and success rate in the header, the totals, accounts, models and tokens per day when open.
 // Owner, 2026-10-10: each tab shows its own part in the header and when open: Desktop and CLI tokens, sessions, turns
-// and models over the last 7 days (SpendSummary); All shows Desktop, CLI and Free together. The table's tab is `view`.
+// and models (SpendSummary); All shows Desktop, CLI and Free together. The table's tab is `view`. A toggle at the top of
+// the open card picks the period, 24 hours, 7 days, 30 days or All time (owner, the same day: "toggles for, like, seven
+// days, 30 days, all time, et cetera"); Free's record keeps 30 days, so its All time is those 30 (useUsagePeriod).
 import type { FleetUsageHistory, SpendReport } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
 import { useElementSize, useStorage } from '@vueuse/core'
@@ -17,16 +19,18 @@ import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import FreeSummary from '@/components/FreeSummary.vue'
 import SpendSummary from '@/components/SpendSummary.vue'
+import { Button } from '@/components/ui/button'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import type { KindView } from '@/composables/useInstanceFilter'
-import { FREE_STAT_DAYS, refreshFreeStats, useFreeStats } from '@/composables/useFreeStats'
+import { freeStatDays, refreshFreeStats, useFreeStats } from '@/composables/useFreeStats'
+import { usagePeriod, useUsageSpan } from '@/composables/useUsagePeriod'
 import { useDesktopTokenWindow } from '@/composables/useTokenWindow'
 import { getFleetUsageHistory, getSpend, getTokensByDay } from '@/lib/api'
 import { axisMax, seriesColor, ticks } from '@/lib/chart'
 import { answeredShare, summarizeFree } from '@/lib/free-stats'
 import { formatTokens } from '@/lib/kit'
 import { dayLabel, formatAt, type PlotBox, segmentPaths } from '@/lib/usage-history'
-import { summarizeUsage, USAGE_DAYS } from '@/lib/usage-stats'
+import { summarizeUsage, USAGE_PERIODS, type UsagePeriod } from '@/lib/usage-stats'
 
 const props = defineProps<{ /** The table's tab: All, Desktop, CLI or Free. */ view: KindView }>()
 const { t } = useI18n()
@@ -40,19 +44,20 @@ const showCli = computed(() => props.view === 'all' || props.view === 'cli')
 const { instances: freeInstances, tokens: freeTokens, health: freeHealth } = useFreeInstances()
 const { rows: freeRows } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
-watch([showFree, freeTokens, freeHealth], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
-// The Free accounts' record; null with no Free accounts. Its totals are in the Free card's own window; the All line
-// takes the same USAGE_DAYS as Desktop and CLI from its days (oldest first), so its sum is one window.
+watch([showFree, freeTokens, freeHealth, freeStatDays], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
+const { span, freeSpan } = useUsageSpan()
+// The Free accounts' record over the period's days; null with no Free accounts. Its totals are in the Free card's own
+// window; the All line adds its days, the same period as Desktop and CLI (only All time differs: Free keeps 30 days).
 const freeSummary = computed(() =>
-  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, FREE_STAT_DAYS, Date.now()) : null,
+  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, freeStatDays.value, Date.now()) : null,
 )
 const freeAll = computed(() => freeSummary.value?.totals.all ?? null)
-const freeInDays = computed(() => (freeSummary.value?.days ?? []).slice(-USAGE_DAYS).reduce((n, d) => n + d.claude + d.chatgpt, 0))
+const freeInDays = computed(() => (freeSummary.value?.days ?? []).reduce((n, d) => n + d.claude + d.chatgpt, 0))
 const freeLine = computed(() => {
   const all = freeAll.value
   if (!all) return ''
   const share = answeredShare(all)
-  return t('freeInstances.stats.headerLine', { tokens: formatTokens(all.tokens), answered: share === null ? '–' : `${Math.round(share * 100)}%`, days: FREE_STAT_DAYS })
+  return t('freeInstances.stats.headerLine', { tokens: formatTokens(freeInDays.value), answered: share === null ? '–' : `${Math.round(share * 100)}%`, span: freeSpan.value })
 })
 
 const TOKEN_SOURCES = ['desktop', 'cli', 'climayte', 'hswarm'] as const
@@ -154,22 +159,32 @@ const tokensEmpty = computed(
   () => tokenDays.value !== null && tokenDays.value.every((d) => d.values.every((v) => v === 0)),
 )
 
-// Desktop and CLI over the last 7 days: one spend report per source, read on mount. CLI is cli plus climayte.
+// Desktop and CLI over the period: one spend report per source, read the first time the period is shown and kept, so
+// toggling back is instant. CLI is cli plus climayte.
 const SPEND_SOURCES = ['desktop', 'cli', 'climayte'] as const
 type SpendSource = (typeof SPEND_SOURCES)[number]
-const spend = ref<Partial<Record<SpendSource, SpendReport>>>({})
-const spendFailed = ref<Partial<Record<SpendSource, boolean>>>({})
-async function loadSpend(source: SpendSource) {
+type BySource<T> = Partial<Record<SpendSource, T>>
+const spendBy = ref<Partial<Record<UsagePeriod, BySource<SpendReport>>>>({})
+const failedBy = ref<Partial<Record<UsagePeriod, BySource<boolean>>>>({})
+async function loadSpend(period: UsagePeriod, source: SpendSource) {
   try {
-    // Awaited before the spread: `{ ...spend.value, [source]: await ... }` copies the reports as they were when the
-    // request went out, so the last of the three to answer dropped the other two.
-    const report = await getSpend('7d', source)
-    spend.value = { ...spend.value, [source]: report }
+    // Awaited before the spread: `{ ...x, [source]: await ... }` copies the reports as they were when the request went
+    // out, so the last of the three to answer dropped the other two.
+    const report = await getSpend(period, source)
+    spendBy.value = { ...spendBy.value, [period]: { ...spendBy.value[period], [source]: report } }
   } catch {
-    spendFailed.value = { ...spendFailed.value, [source]: true }
+    failedBy.value = { ...failedBy.value, [period]: { ...failedBy.value[period], [source]: true } }
   }
 }
-onMounted(() => { for (const s of SPEND_SOURCES) void loadSpend(s) })
+const asked = new Set<UsagePeriod>()
+watch(usagePeriod, (p) => {
+  if (asked.has(p)) return
+  asked.add(p)
+  for (const s of SPEND_SOURCES) void loadSpend(p, s)
+}, { immediate: true })
+const spend = computed<BySource<SpendReport>>(() => spendBy.value[usagePeriod.value] ?? {})
+const spendFailed = computed<BySource<boolean>>(() => failedBy.value[usagePeriod.value] ?? {})
+const periodLabel = (p: UsagePeriod) => t(`instances.summary.period.${p}`)
 
 const desktopUsage = computed(() => (spend.value.desktop ? summarizeUsage([spend.value.desktop]) : null))
 const desktopFailed = computed(() => !!spendFailed.value.desktop)
@@ -202,13 +217,13 @@ const headerLine = computed(() => {
   const c = cliUsage.value
   if (props.view === 'free') return freeLine.value
   if (props.view === 'desktop') {
-    return d ? t('instances.summary.headerDesktop', { tokens: formatTokens(d.tokens), sessions: d.sessions, days: USAGE_DAYS }) : ''
+    return d ? t('instances.summary.headerDesktop', { tokens: formatTokens(d.tokens), sessions: d.sessions, span: span.value }) : ''
   }
   if (props.view === 'cli') {
-    return c ? t('instances.summary.headerCli', { tokens: formatTokens(c.tokens), sessions: c.sessions, days: USAGE_DAYS }) : ''
+    return c ? t('instances.summary.headerCli', { tokens: formatTokens(c.tokens), sessions: c.sessions, span: span.value }) : ''
   }
   if (!d || !c) return ''
-  return t('instances.summary.headerAll', { tokens: formatTokens(d.tokens + c.tokens + freeInDays.value), days: USAGE_DAYS })
+  return t('instances.summary.headerAll', { tokens: formatTokens(d.tokens + c.tokens + freeInDays.value), span: span.value })
 })
 const headerTip = computed(() => {
   const d = desktopUsage.value
@@ -218,7 +233,8 @@ const headerTip = computed(() => {
     desktop: formatTokens(d.tokens),
     cli: formatTokens(c.tokens),
     free: formatTokens(freeInDays.value),
-    days: USAGE_DAYS,
+    span: span.value,
+    freeSpan: freeSpan.value,
   })
 })
 </script>
@@ -261,16 +277,26 @@ const headerTip = computed(() => {
     </button>
 
     <div v-if="open" class="space-y-4 border-t p-3">
+      <div class="flex gap-1" role="group" :aria-label="$t('instances.summary.periodLabel')">
+        <Button
+          v-for="p in USAGE_PERIODS"
+          :key="p"
+          size="sm"
+          :variant="usagePeriod === p ? 'default' : 'outline'"
+          :aria-pressed="usagePeriod === p"
+          @click="usagePeriod = p"
+        >{{ periodLabel(p) }}</Button>
+      </div>
       <SpendSummary
         v-if="showDesktop"
-        :title="$t('instances.summary.desktopTitle', { days: USAGE_DAYS })"
+        :title="$t('instances.summary.desktopTitle')"
         :tiles="desktopTiles"
         :summary="desktopUsage"
         :failed="desktopFailed"
       />
       <SpendSummary
         v-if="showCli"
-        :title="$t('instances.summary.cliTitle', { days: USAGE_DAYS })"
+        :title="$t('instances.summary.cliTitle')"
         :tiles="cliTiles"
         :summary="cliUsage"
         :failed="cliFailed"

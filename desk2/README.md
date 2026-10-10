@@ -820,7 +820,10 @@ Neither does desktop, and all only shows, like, free ... CLI doesn't show model 
 card follows the table's tab: Desktop and CLI each have a header line (tokens and sessions over 7 days) and, opened,
 tiles and their models by tokens, top eight then "+N more", from one 7-day spend report per source (CLI is `cli`
 and `climayte` merged by model; `hydra/src/components/SpendSummary.vue`, `lib/usage-stats.ts`). All shows the
-Desktop, CLI and Free blocks, and its header adds the three over the same 7 days.
+Desktop, CLI and Free blocks, and its header adds the three over the same period. A toggle at the top of the open
+card picks the period, 24 hours, 7 days, 30 days or All time (owner, 2026-10-10: "toggles for, like, seven days, 30
+days, all time, et cetera"; `composables/useUsagePeriod.ts`, remembered): Desktop and CLI read that spend period,
+Free its daily record's days (today for 24 hours; the record keeps 30, so its All time is those 30 and says so).
 
 **A red mark means failing, not one failure** (owner, 2026-10-08: no red marks "unless the account is dead";
 `server/src/free-instances/health.ts`). Desk counts each account's messages over the last hour, whoever sent them,
