@@ -34,7 +34,7 @@ import { resolveOwnTranscript } from '../src/compaction-history'
 import { app } from '../src/http-app'
 import { POINTER_DIR } from '../src/instance'
 import { TOOLS, toolsForCaller } from '../src/mcp'
-import { CALLER_AWARE_TOOLS, setCallerTranscriptResolver } from '../src/mcp-self'
+import { CALLER_AWARE_TOOLS, callerOrigin, setCallerTranscriptResolver } from '../src/mcp-self'
 import '../src/routes/climayte'
 
 // The shared `app` in http-app.ts freezes its router on its first request, after which every later
@@ -165,6 +165,23 @@ describe('climayte_run records the calling chat as the origin', () => {
       expect((climayteGet(r.workers[0].id) as { origin?: unknown }).origin).toBeUndefined()
     } finally {
       caller = () => ({ sessionId: SID, path: TRANSCRIPT, home: HOME, how: 'test caller' })
+    }
+  })
+
+  // 2026-10-11: three climayte_run calls (68, 17 and 1 tasks) waited on this lookup, a netstat behind
+  // a jammed spawn worker, until the daemon restarted under them, and none was ever dispatched. Past
+  // its budget the lookup answers as an untraced caller does, so the dispatch above goes on.
+  test('a caller lookup that never answers gives up at its budget', async () => {
+    setCallerTranscriptResolver(() => new Promise(() => {}))
+    try {
+      const started = Date.now()
+      expect(await callerOrigin({}, 200)).toEqual({
+        origin: null,
+        why: 'the calling chat could not be traced within 0.2 s',
+      })
+      expect(Date.now() - started).toBeLessThan(5_000)
+    } finally {
+      setCallerTranscriptResolver(async () => caller())
     }
   })
 

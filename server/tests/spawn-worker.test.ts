@@ -1,4 +1,7 @@
 import { expect, test } from 'bun:test'
+import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import { spawnCaptured } from '../src/core/process.ts'
 
 // spawnCaptured runs on a worker thread so Bun.spawn's 100-280 ms hold never lands on the daemon's
@@ -25,6 +28,27 @@ test('spawnCaptured: a hung child is killed at the deadline and reported timedOu
   expect(r.timedOut).toBe(true)
   expect(r.stdout).toBe('a\n')
 }, 20_000)
+
+// 2026-10-11: one thread spawns every capture, so a burst queued the CliMayte runner hand-off and the
+// callers' netstats for minutes, and each one still started once the thread reached it. A capture
+// that waited its whole deadline for the worker is answered timedOut and never started, so a backlog
+// drains instead of growing (a 0 ms deadline has always passed by the time the worker reads it).
+test('spawnCaptured: a capture that waited out its deadline for the worker never starts', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spawn-worker-late-'))
+  const marker = join(dir, 'started')
+  try {
+    const r = await spawnCaptured(
+      [process.execPath, '-e', `require('node:fs').writeFileSync(${JSON.stringify(marker)}, 'x')`],
+      { timeoutMs: 0, lane: 'spawn-worker-test' },
+    )
+    expect(r).toEqual({ code: null, stdout: '', stderr: '', timedOut: true })
+    // A child that had been started would have written it by now.
+    await Bun.sleep(3_000)
+    expect(existsSync(marker)).toBe(false)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 10_000)
 
 test('spawnCaptured: a command that cannot start comes back as data', async () => {
   const r = await spawnCaptured(['definitely-not-a-command-xyz'])

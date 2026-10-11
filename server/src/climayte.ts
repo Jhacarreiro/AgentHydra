@@ -108,6 +108,7 @@ import {
   climaytePriority,
   contextTokens,
   IDENTITY_WALL,
+  RUNNER_NEVER_STARTED_NOTICE,
 } from './climayte-lib'
 import {
   type CliMayteOrigin,
@@ -861,13 +862,17 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
   cleanUpRunner(w, at)
   const stderr = tailText(at.errLog, 4_000)
-  const v = installBroken(
+  const classified = installBroken(
     at,
     withStops(at, classifyAttempt(events, stderr, at.started === true)),
     events,
     stderr,
     hadRunnerPid,
   )
+  const v =
+    classified.outcome === 'interrupted' && at.runner && !hadRunnerPid
+      ? { ...classified, notice: RUNNER_NEVER_STARTED_NOTICE }
+      : classified
   rmSync(signalPath(w.id), { force: true })
   removeWorkerFiles(w.id)
   forgetRead(at.log)

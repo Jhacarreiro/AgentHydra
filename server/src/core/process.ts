@@ -362,6 +362,7 @@ export async function spawnCaptured(
     env,
     wantStderr = true,
     stdin,
+    lane,
   }: {
     timeoutMs?: number
     cwd?: string
@@ -371,6 +372,9 @@ export async function spawnCaptured(
     /** Text written to the child's stdin, then closed (`git patch-id` reads its diff this way). Absent:
      *  the child's stdin is ignored, as it always was. */
     stdin?: string
+    /** A spawn-worker thread of this capture's own, for one that must never queue behind the rest
+     *  (the CliMayte runner hand-off: core/spawn-worker.ts). Absent: the shared thread. */
+    lane?: string
   } = {},
 ): Promise<CapturedRun> {
   // Spawned on a worker thread: Bun.spawn holds its caller for 100-280 ms on Windows, and the
@@ -380,7 +384,7 @@ export async function spawnCaptured(
   // otherwise be bypassed and a real process launched behind its back.
   if (Bun.spawn === nativeSpawn) {
     try {
-      return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr, stdin })
+      return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr, stdin, lane })
     } catch {
       // worker unavailable or died: capture on this thread
     }

@@ -54,7 +54,13 @@ import {
   windDownAt,
   windDownMessage,
 } from './climayte-lib'
-import { type RunnerPids, readRunnerExit, readRunnerPids } from './climayte-runner'
+import {
+  RUNNER_CLAIM_MS,
+  type RunnerPids,
+  readRunnerExit,
+  readRunnerPids,
+  unclaimedFor,
+} from './climayte-runner'
 import { isPidAlive, killProcessTreesAsync, spawnCaptured } from './core/process'
 import { nativeCommandLines } from './core/win-process-table'
 import { parseResetTime } from './usage'
@@ -348,7 +354,7 @@ function takeRunnerPids(
 /** Whether the attempt's CLI has ended. A runner attempt is read from its files, so the answer
  *  survives a daemon restart: an exit file means it ended; a runner gone without one died (finish
  *  then reads it as interrupted), while one not yet vouched for still runs. A spec nobody claimed
- *  within a minute is voided, so it never starts late (2026-10-02: reading a pid-less minute as
+ *  within a minute of its hand-off's end (unclaimedFor) is voided, so it never starts late (2026-10-02: reading a pid-less minute as
  *  ended could not tell "never started" from "started late"); a claimed one waits for its runner
  *  up to RUNNER_CLAIM_GIVE_UP_MS. An attempt the daemon spawned itself is read from its handle, or,
  *  with none (the daemon restarted), it died with that daemon's kill-on-close job on Windows. */
@@ -366,8 +372,8 @@ export function attemptExited(w: CliMayteWorker, at: Attempt): boolean {
     if (pids) {
       if (takeRunnerPids(at, runner, pids)) changed(w)
     } else if (runner.pid === null) {
-      const age = Date.now() - runner.launchedAt
-      if (age <= 60_000) return false
+      const age = unclaimedFor(runnerSpecPath(at.log), runner.launchedAt)
+      if (age === null || age <= RUNNER_CLAIM_MS) return false
       if (voidSpec(at.log)) return true
       return age > RUNNER_CLAIM_GIVE_UP_MS
     }

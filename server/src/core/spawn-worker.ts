@@ -10,6 +10,18 @@
 // second build entrypoint. The worker does the WHOLE capture (spawn, drain both streams, deadline,
 // kill the tree on timeout) with the same contract as spawnCaptured in process.ts. Where no worker
 // can be started the caller runs the capture inline: slower for its thread, never a missing answer.
+//
+// ⛔ A CAPTURE THAT WAITED OUT ITS DEADLINE NEVER STARTS, AND THE ASKER IS ALWAYS ANSWERED (2026-10-11).
+// One thread spawns every capture, so they queue behind each other's CreateProcess. From 06:10 to
+// 08:00 UTC that queue held the CliMayte runner hand-off past the minute a runner gets to claim its
+// spec (405 checks lost "never started", 80 workers failed "stopped three times"), and every
+// climayte_run and climayte_status waited 150-1,600 s on a netstat behind it. So a capture that
+// waited its whole `timeoutMs` for the thread is answered timedOut and never started (a backlog
+// drains instead of growing); one that starts keeps its full `timeoutMs` from the spawn, as before
+// (on this box a CreateProcess alone took 1.2-5.9 s that hour, so a deadline counted from the ask
+// left a 3 s capture no time to print). The main thread answers by itself if the worker has not
+// by 2 x `timeoutMs` + WORKER_GRACE_MS, whatever that thread is doing. A capture that must not wait
+// behind the rest asks for a lane: a worker thread of its own.
 
 export interface WorkerCapture {
   code: number | null
@@ -86,48 +98,69 @@ async function capture(cmd, opts) {
 }
 self.onmessage = async (e) => {
   const { id, cmd, opts } = e.data
+  // It waited its whole deadline for this thread: answered, never started.
+  if (Date.now() - opts.askedAt >= opts.timeoutMs) {
+    self.postMessage({ id, result: { code: null, stdout: '', stderr: '', timedOut: true } })
+    return
+  }
   self.postMessage({ id, result: await capture(cmd, opts) })
 }
 `
 
+/** What the main thread allows past the worker's own worst case (a capture that waited just under
+ *  its deadline, then ran its whole deadline) before answering by itself: the spawn (up to 5.9 s
+ *  measured under load) and the 2 s the worker waits for a killed child's pipes (capture above). */
+const WORKER_GRACE_MS = 10_000
+
+const TIMED_OUT: WorkerCapture = { code: null, stdout: '', stderr: '', timedOut: true }
+
 interface Pending {
+  lane: string
   resolve: (r: WorkerCapture) => void
   reject: (err: Error) => void
+  guard: ReturnType<typeof setTimeout>
 }
 
-let worker: Worker | null = null
+const workers = new Map<string, Worker>()
 const pending = new Map<number, Pending>()
 let nextId = 0
 
-function failAll(err: Error): void {
-  for (const p of pending.values()) p.reject(err)
-  pending.clear()
+function settle(id: number): Pending | undefined {
+  const p = pending.get(id)
+  if (!p) return undefined
+  pending.delete(id)
+  clearTimeout(p.guard)
+  return p
 }
 
-function ensureWorker(): Worker {
-  if (worker) return worker
+function failLane(lane: string, err: Error): void {
+  for (const [id, p] of pending) if (p.lane === lane) settle(id)?.reject(err)
+}
+
+function ensureWorker(lane: string): Worker {
+  const live = workers.get(lane)
+  if (live) return live
   const w = new Worker(URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' })))
   // Never what keeps the process alive: a test run or one-shot CLI must be free to exit.
   // Bun's Worker has unref(); the DOM Worker type this file compiles against does not list it.
   ;(w as Worker & { unref(): void }).unref()
   w.onmessage = (e: MessageEvent<{ id: number; result: WorkerCapture }>) => {
-    const p = pending.get(e.data.id)
-    if (!p) return
-    pending.delete(e.data.id)
-    p.resolve(e.data.result)
+    settle(e.data.id)?.resolve(e.data.result)
   }
   w.onerror = (e) => {
     // A dead worker fails what it held and is replaced on the next call.
-    worker = null
-    failAll(new Error(`spawn worker failed: ${e.message}`))
+    if (workers.get(lane) === w) workers.delete(lane)
+    failLane(lane, new Error(`spawn worker failed: ${e.message}`))
     w.terminate()
   }
-  worker = w
+  workers.set(lane, w)
   return w
 }
 
-/** Run `cmd` on the worker thread. Rejects when the worker cannot be used (not started, or died
- *  mid-run); the caller then runs the capture inline. A child's own failure is data, not a rejection. */
+/** Run `cmd` on a worker thread: `lane`'s own, else the shared one. Answers within 2 x `timeoutMs` +
+ *  WORKER_GRACE_MS whatever that thread is doing (timedOut when it could not say). Rejects when the
+ *  worker cannot be used (not started, or died mid-run); the caller then runs the capture inline. A
+ *  child's own failure is data, not a rejection. */
 export function captureInWorker(
   cmd: string[],
   opts: {
@@ -136,21 +169,28 @@ export function captureInWorker(
     env?: Record<string, string | undefined>
     wantStderr: boolean
     stdin?: string
+    lane?: string
   },
 ): Promise<WorkerCapture> {
+  const { lane = 'shared', ...rest } = opts
   let w: Worker
   try {
-    w = ensureWorker()
+    w = ensureWorker(lane)
   } catch (err) {
     return Promise.reject(err instanceof Error ? err : new Error(String(err)))
   }
   const id = ++nextId
   return new Promise<WorkerCapture>((resolve, reject) => {
-    pending.set(id, { resolve, reject })
+    const guard = setTimeout(
+      () => settle(id)?.resolve({ ...TIMED_OUT }),
+      2 * opts.timeoutMs + WORKER_GRACE_MS,
+    )
+    ;(guard as { unref?(): void }).unref?.()
+    pending.set(id, { lane, resolve, reject, guard })
     try {
-      w.postMessage({ id, cmd, opts })
+      w.postMessage({ id, cmd, opts: { ...rest, askedAt: Date.now() } })
     } catch (err) {
-      pending.delete(id)
+      settle(id)
       reject(err instanceof Error ? err : new Error(String(err)))
     }
   })

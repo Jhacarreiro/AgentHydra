@@ -976,6 +976,10 @@ export function overageStart(raw: unknown): { resetsAt: number | null } | null {
 
 export const INTERRUPTED_NOTICE =
   'Interrupted: the CLI process ended with no result and no error (AgentHydra restarted or the process was killed). Resumed automatically.'
+/** An interrupted attempt whose runner never wrote a pid: no CLI ran at all. Told apart because the
+ *  plain notice blamed a restart or a kill for 80 workers on 2026-10-11 whose runners never started. */
+export const RUNNER_NEVER_STARTED_NOTICE =
+  'Interrupted: its runner never started, so no CLI ran (its spec went unclaimed a minute after the hand-off). Resumed automatically.'
 
 /** Env keys a worker must never inherit: it bills its OWN login, never a borrowed key or token. */
 export const ENV_SCRUB =

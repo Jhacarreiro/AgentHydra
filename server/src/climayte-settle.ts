@@ -34,6 +34,7 @@ import {
   newestTranscript,
   notConverging,
   ORG_DISABLED_WALL,
+  RUNNER_NEVER_STARTED_NOTICE,
   wallUntil,
 } from './climayte-lib'
 import { ceilingFields, credStamp, trySaveWalls } from './climayte-stops'
@@ -139,14 +140,14 @@ function retryTransient(
 /** Killed from outside with the transcript intact: resume the same session on the same
  *  account. Three in one turn means something keeps killing it, and that needs a person. No
  *  delay: with one, a resume took 3.1 s every time (6 real cases), all of it waiting. */
-function resumeInterrupted(w: CliMayteWorker, stderr: string): void {
+function resumeInterrupted(w: CliMayteWorker, stderr: string, neverStarted: boolean): void {
   if (w.retries < 3) {
     w.notBefore = null
     w.retries++
     w.status = 'queued'
   } else {
     w.status = 'failed'
-    w.error = `The CLI was stopped before it finished three times in a row in this turn.${stderr ? ` Its last error output: ${stderr.slice(-1_500)}` : ''}`
+    w.error = `The CLI was stopped before it finished three times in a row in this turn.${neverStarted ? ' The last time its runner never started, so no CLI ran.' : ''}${stderr ? ` Its last error output: ${stderr.slice(-1_500)}` : ''}`
   }
 }
 
@@ -184,7 +185,7 @@ function settleByOutcome(
       retryTransient(w, v, now)
       break
     case 'interrupted':
-      resumeInterrupted(w, stderr)
+      resumeInterrupted(w, stderr, v.notice === RUNNER_NEVER_STARTED_NOTICE)
       break
     case 'install-broken':
       // Held where it is: no retry spent, no wall, no move. The next tick's guard says why and

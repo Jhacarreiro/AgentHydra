@@ -7,7 +7,7 @@ import { existsSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { accountsProvider, changed, runnerSpecPath, voidSpec } from './climayte-core'
 import type { CliMayteWorker } from './climayte-lib'
-import { readRunnerExit, readRunnerPids } from './climayte-runner'
+import { RUNNER_CLAIM_MS, readRunnerExit, readRunnerPids, unclaimedFor } from './climayte-runner'
 import {
   confirmedRunners,
   killRunners,
@@ -117,9 +117,11 @@ export function stopStaleChecks(w: CliMayteWorker): void {
  *  an outage longer than CHECK_TIMEOUT_MS, a check that died with the machine runs again rather than
  *  being judged 'timed out' (a fail) (review, 2026-10-02). */
 export function checkLost(r: CheckRunner): 'never started' | 'ended without an exit' | null {
-  const age = Date.now() - r.launchedAt
   if (r.pid === null) {
-    if (age > 60_000 && voidSpec(r.log)) return 'never started'
+    // Null while this daemon's hand-off of it is still on the way: not started yet is not lost.
+    const age = unclaimedFor(runnerSpecPath(r.log), r.launchedAt)
+    if (age === null) return null
+    if (age > RUNNER_CLAIM_MS && voidSpec(r.log)) return 'never started'
     return age > RUNNER_CLAIM_GIVE_UP_MS ? 'ended without an exit' : null
   }
   // The exit file is read again: the runner may have written it and ended since the first read.

@@ -175,6 +175,46 @@ export function runnerArgv(specPath: string): string[] {
     : [process.execPath, join(import.meta.dir, 'main.ts'), '--climayte-runner', specPath]
 }
 
+/** How long a runner has to claim its spec once it can have been started; unclaimed past it, the spec
+ *  is voided so the runner never starts late (climayte-stops.ts attemptExited, climayte-checks.ts
+ *  checkLost). */
+export const RUNNER_CLAIM_MS = 60_000
+
+/** The Windows hand-offs this daemon started, by spec path: null while the hand-off powershell is
+ *  still queued or running, then when it ended. A hand-off that has not ended cannot have started
+ *  the runner, so its spec is not yet the runner's to claim (unclaimedFor). */
+const handoffs = new Map<string, number | null>()
+/** An ended hand-off is forgotten this long after: its minute was decided long before. */
+const HANDOFF_KEEP_MS = 10 * 60_000
+
+/** Record where a spec's hand-off is (launchRunner; tests stand one in). */
+export function noteHandoff(specPath: string, endedAt: number | null): void {
+  handoffs.set(specPath, endedAt)
+  if (endedAt === null) return
+  for (const [path, at] of handoffs)
+    if (at !== null && endedAt - at > HANDOFF_KEEP_MS) handoffs.delete(path)
+}
+
+/** How long `specPath` has been its runner's to claim, or null while this daemon's hand-off of it has
+ *  not ended (the runner cannot have started, so it is neither late nor lost). Counted from that
+ *  hand-off's end, else from `launchedAt`: an earlier daemon's hand-off died with it, and POSIX's
+ *  detached spawn starts the runner at once.
+ *
+ *  ⛔ 2026-10-11: counted from `launchedAt` alone, a hand-off queued behind other captures on the
+ *  spawn worker for over a minute had its spec voided before the runner could exist, and the attempt
+ *  or check was launched again, adding one more hand-off to that same queue. 06:10-08:00 UTC: 405
+ *  checks "never started" (35 workers then failed "the check itself is broken"), and 80 workers
+ *  failed "stopped three times in a row" with no CLI ever started. */
+export function unclaimedFor(
+  specPath: string,
+  launchedAt: number,
+  now = Date.now(),
+): number | null {
+  const ended = handoffs.get(specPath)
+  if (ended === undefined) return now - launchedAt
+  return ended === null ? null : now - Math.max(launchedAt, ended)
+}
+
 /** Write the spec and hand the runner to the OS, outside this process's tree and hidden. The pids
  *  arrive in `spec.pidFile`: the runner's once it has claimed the spec, the CLI's once it has started
  *  (readRunnerPids). */
@@ -184,9 +224,12 @@ export function launchRunner(spec: RunnerSpec, specPath: string): void {
   const handoff = buildDetachedSpawn(process.platform, argv, { hideWindow: true })
   if (!handoff.detached) {
     // Windows: the hand-off is a short powershell that has WMI start the runner outside this tree, so it
-    // runs on the spawn worker and is not awaited. Spawned here, its CreateProcess held the event loop
+    // runs on a spawn worker and is not awaited. Spawned here, its CreateProcess held the event loop
     // 204 s over the 24 h to 2026-10-11 (the stall sentinel). Nothing reads the runner's pid from here.
-    void spawnCaptured(handoff.argv, { timeoutMs: 60_000 }).then((r) => {
+    // Its own lane: on the shared thread it queued behind every netstat, git and taskkill (unclaimedFor).
+    noteHandoff(specPath, null)
+    void spawnCaptured(handoff.argv, { timeoutMs: 60_000, lane: 'climayte-runner' }).then((r) => {
+      noteHandoff(specPath, Date.now())
       if (r.code !== 0)
         console.error(
           `[climayte] runner hand-off for ${specPath} exited ${r.code}${r.timedOut ? ' (timed out)' : ''}: ${r.stderr.slice(0, 300)}`,

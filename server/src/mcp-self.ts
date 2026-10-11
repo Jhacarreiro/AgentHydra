@@ -181,24 +181,42 @@ export function setCallerTranscriptResolver(fn: CallerTranscriptResolver | null)
   callerTranscriptResolver = fn
 }
 
+/** The longest a dispatch or a status read waits to learn which chat called it. Past it the work goes
+ *  on without pings: 2026-10-11, three climayte_run calls (68, 17 and 1 tasks) each waited on this
+ *  lookup's netstat behind a jammed spawn worker until the daemon restarted under them, and none was
+ *  ever dispatched; climayte_status answered 150-1,600 s late for the same reason. */
+export const CALLER_ORIGIN_BUDGET_MS = 15_000
+
 /** The calling chat as a ping origin, or why there is none. Only the route's caller binding counts:
  *  no argument a client sends (an `origin`, a `session_id`) is read, so a chat cannot have another
- *  chat's work reported to it, or its own reported elsewhere. Never throws. */
+ *  chat's work reported to it, or its own reported elsewhere. Never throws, and answers within
+ *  `budgetMs` (CALLER_ORIGIN_BUDGET_MS). */
 export async function callerOrigin(
   a: Record<string, unknown>,
+  budgetMs = CALLER_ORIGIN_BUDGET_MS,
 ): Promise<{ origin: CallerChatOrigin; why: null } | { origin: null; why: string }> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const late = new Promise<never>((_, reject) => {
+    timer = setTimeout(
+      () => reject(new Error(`the calling chat could not be traced within ${budgetMs / 1000} s`)),
+      budgetMs,
+    )
+  })
   try {
-    const t = callerTranscriptResolver
-      ? await callerTranscriptResolver(a)
-      : await (async () => {
-          const callerPid = await callerPidFromArgs(a)
-          if (callerPid === null) throw new Error('the calling process could not be traced')
-          const { resolveOwnTranscript } = await import('./compaction-history')
-          return resolveOwnTranscript({
-            callerPid: callerPid ?? null,
-            extraHomes: () => callerHomes(callerPid),
-          })
-        })()
+    const t = await Promise.race([
+      callerTranscriptResolver
+        ? callerTranscriptResolver(a)
+        : (async () => {
+            const callerPid = await callerPidFromArgs(a)
+            if (callerPid === null) throw new Error('the calling process could not be traced')
+            const { resolveOwnTranscript } = await import('./compaction-history')
+            return resolveOwnTranscript({
+              callerPid: callerPid ?? null,
+              extraHomes: () => callerHomes(callerPid),
+            })
+          })(),
+      late,
+    ])
     return {
       origin: {
         kind: 'chat',
@@ -212,6 +230,8 @@ export async function callerOrigin(
   } catch (err) {
     const msg = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim()
     return { origin: null, why: msg || 'the calling chat could not be identified' }
+  } finally {
+    clearTimeout(timer)
   }
 }
 
