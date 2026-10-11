@@ -105,6 +105,7 @@ def test_decide_over_http_takes_the_jev_leg_to_the_callers_route_and_books_it_th
     assert status == 200 and out["answers"][0]["answer"] is None and len(seen) == 1  # Clef has its own routes (none here)
     assert asyncio.run(console.handle("POST", "decide", {"items": [item], "jev": {**route, "url": "http://jev.example.test/"}}))[0] == 400
     assert asyncio.run(console.handle("POST", "decide", {"items": [item], "jev": "https://jev.example.test/"}))[0] == 400
+    assert asyncio.run(console.handle("POST", "decide", {"items": [item], "jev": {**route, "provider": ""}}))[0] == 400
 
 
 def test_codex_registration_keeps_the_rest_of_config_toml(tmp_path, monkeypatch):

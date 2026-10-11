@@ -153,9 +153,10 @@ async def _ask(b: dict) -> dict:
 async def _decide(b: dict) -> dict:
     """hswarm_decide over plain HTTP, booked the same way (booking.decide), for a caller that would otherwise start a
     Python process to import it: Dredd's Jev door started one per Node process, about 2,000 a day (2026-10-10).
-    `jev` {url, key, provider?} sends the Jev leg of a jev-* model to another System One endpoint with that one key (a
-    Worker in front of Workers AI's typesafe/jev); a 401/402/403 there falls to the Clef stand-in like a refused
-    TypeSafe key. Without it the leg runs on the configured TypeSafe pool."""
+    `jev` {url, key, provider} sends the Jev leg of a jev-* model to another System One endpoint with that one key (a
+    Worker in front of Workers AI's typesafe/jev), booked under `provider` so it never reads as the TypeSafe pool's
+    spend; a 401/402/403 there falls to the Clef stand-in like a refused TypeSafe key. Without it the leg runs on the
+    configured TypeSafe pool."""
     from . import booking, typesafe
 
     args = {k: v for k, v in b.items() if k in DECIDE_ARGS}
@@ -163,11 +164,11 @@ async def _decide(b: dict) -> dict:
     if not route or not str(args.get("model") or typesafe.MODEL).startswith("jev-"):
         return await booking.decide(**args)
     if not isinstance(route, dict):
-        raise ValueError("jev needs an object: {url, key, provider?}")
-    url, key = str(route.get("url") or ""), str(route.get("key") or "")
-    if not url.startswith("https://") or not key:
-        raise ValueError("jev needs an https url and a key")
-    async with typesafe.Jev(keys=[key], url=url, provider=str(route.get("provider") or "typesafe")) as jev:
+        raise ValueError("jev needs an object: {url, key, provider}")
+    url, key, provider = (str(route.get(field) or "") for field in ("url", "key", "provider"))
+    if not url.startswith("https://") or not key or not provider:
+        raise ValueError("jev needs an https url, a key and the provider its spend is booked under")
+    async with typesafe.Jev(keys=[key], url=url, provider=provider) as jev:
         return await booking.decide(**args, jev=jev)
 
 
