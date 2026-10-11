@@ -6,6 +6,7 @@
 // Both expose the identical UpdateStatus / UpdateApplyResult shape, so the /api/update routes, the
 // auto-update loop, and the web UI drive whichever is active without knowing which it is.
 import { APP_ROOT, IS_RELEASE, SERVICE_NAME } from './config'
+import { spawnCaptured } from './core/process'
 import { applyUpdate as ghApplyUpdate, checkForUpdate as ghCheckForUpdate } from './github-updater'
 import { beginUpdateProgress, finishUpdateProgress, setUpdatePhase } from './update-progress'
 import { createUpdater, type UpdateApplyResult, type UpdateStatus } from './updater-engine.mjs'
@@ -31,6 +32,15 @@ const gitUpdater = createUpdater({
     '-e',
     "for (const a of [['install'], ['run', 'build']]) { const r = Bun.spawnSync(['bun', ...a], { cwd: 'desk2', stdout: 'inherit', stderr: 'inherit' }); if (r.exitCode !== 0) process.exit(r.exitCode ?? 1) }",
   ],
+  // Every git, install and build step runs on the spawn worker's own lane (core/spawn-worker.ts):
+  // the engine's node spawn of git held the daemon's thread (21.7 s in 7 STALL blocks on
+  // updater-engine.mjs:58, 2026-10-11), and that thread serves every route.
+  run: async (args, { cwd, env, timeoutMs }) => {
+    const r = await spawnCaptured(args, { cwd, env, timeoutMs, lane: 'updater' })
+    return r.code === null && !r.timedOut && !r.stdout && !r.stderr
+      ? { ...r, stderr: `${args[0]} could not be started` }
+      : r
+  },
 })
 
 /** `fresh` bypasses the compiled path's 5-minute result cache, for a check a PERSON asked for.
