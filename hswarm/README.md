@@ -194,6 +194,12 @@ same Free models one question at a time, but the Free models scored 4.8 points u
 questions, so a batch that replaces paid escalations loses 6-7 points. Re-run `scripts/rsi/decide-free-batch.py`
 before routing more decisions to the Free accounts.
 
+A Python caller outside the server calls `hswarm.booking.decide(items, escalate_below=..., model=...)`: the body of
+`hswarm_decide`, booked the same way (a ledger line per Jev leg, the fallback asks in the savings total), on this
+process's one `jobs.manager()`. It imports no MCP SDK and no pydantic. Measured 2026-10-10 on Python 3.14, a fresh
+interpreter costs 63 MB and 661 modules importing it, against 101 MB and 998 modules for
+`from hswarm.mcp_server import hswarm_decide`.
+
 ## One tool with CliMayte
 
 Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default

@@ -130,7 +130,7 @@ async def _icons(b: dict) -> dict:
 
 async def _test(b: dict) -> dict:
     """One tiny paid call on exactly this model (routing off for it), so a key and a model can be checked from the page."""
-    from .mcp_server import manager
+    from .jobs import manager
 
     model = b.get("model") or config.AUTO
     r = await manager().ask_routed("Reply with the single word: ready", config.resolve_model(model), route=False, max_tokens=64)
@@ -192,7 +192,8 @@ async def _jobs(b: dict) -> dict:
 
     `limit` (default 20) counts FINISHED jobs only: every RUNNING job is always listed, however many newer finished jobs
     exist. `state=running` lists only the running jobs; any other `state` value keeps the finished jobs in that state."""
-    from .mcp_server import hswarm_jobs, manager
+    from .jobs import manager
+    from .mcp_server import hswarm_jobs
 
     limit = int(b.get("limit") or 20)
     want = str(b.get("state") or "").strip().lower()

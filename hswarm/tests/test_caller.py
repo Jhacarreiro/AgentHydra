@@ -126,9 +126,9 @@ def test_usage_report_with_no_ledger_is_empty_not_fatal(tmp_path, monkeypatch):
 
 
 def _jobs_list(monkeypatch, m, **query):
-    from hswarm import console, mcp_server
+    from hswarm import console, jobs
 
-    monkeypatch.setattr(mcp_server, "_manager", m)
+    monkeypatch.setattr(jobs, "_manager", m)
     return asyncio.run(console._jobs(query))["jobs"]
 
 

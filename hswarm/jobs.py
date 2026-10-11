@@ -609,7 +609,7 @@ class JobManager:
         self._queued: dict[str, int] = {}  # job id -> its tasks waiting on a gate right now, for pool_report
         self._resuming: dict[str, str] = {}  # earlier job id -> the running job resuming it: two resumes would pay twice for its gaps
         self._budgets: dict[str, Budget] = {}  # job id -> its budget_usd ceiling, reserved against before every api turn
-        self.port: int | None = None  # the shared server's port when this manager runs inside it (mcp_server.manager)
+        self.port: int | None = None  # the shared server's port when this manager runs inside it (manager below)
 
     def runner(self) -> dict:
         """Who runs the jobs this manager starts, stamped on each job: the process, and the port when it is the
@@ -1663,3 +1663,28 @@ class JobManager:
 
     load_from_disk = staticmethod(Job.load_from_disk)
     list_on_disk = staticmethod(Job.list_on_disk)
+
+
+_manager: JobManager | None = None
+_adopted = False
+
+
+def manager() -> JobManager:
+    """This process's one JobManager: the MCP server's tools, the console and booking.decide share it, so jobs stay
+    addressable for the process's lifetime."""
+    global _manager, _adopted
+    from . import shared
+
+    if _manager is None:
+        _manager = JobManager()
+        _manager.port = shared.SERVING_PORT  # the shared server stamps its jobs with its port
+    if not _adopted and _manager.port:
+        try:
+            asyncio.get_running_loop()
+        except RuntimeError:
+            return _manager  # asked from a worker thread: the first call on the loop carries the jobs on
+        _adopted = True
+        # A restart: the jobs the previous server on this port left unfinished carry on here, under their own ids,
+        # before this first call looks any of them up.
+        _manager.adopt_orphans()
+    return _manager

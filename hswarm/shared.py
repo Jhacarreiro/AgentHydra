@@ -361,9 +361,9 @@ def _wait(port: int, wait_s: float) -> dict | None:
 
 
 def _running_jobs() -> int:
-    from . import mcp_server
+    from . import jobs
 
-    m = mcp_server._manager
+    m = jobs._manager
     return sum(1 for j in list(m.jobs.values()) if j.state == "running") if m else 0
 
 

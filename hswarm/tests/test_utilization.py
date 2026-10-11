@@ -289,19 +289,20 @@ def test_decide_books_its_jev_spend_as_a_utilization(tmp_path, monkeypatch):
     """hswarm_decide's Jev line used to reach utilization.record as a LEDGER row, which has no `id`, so every
     decide logged `record failed for None: KeyError: 'id'` and its spend never reached the savings database
     (3,070 times from 2026-09-21 to 2026-09-24, every Dredd docket among them)."""
-    from hswarm import decisions, mcp_server
+    from hswarm import booking, decisions, mcp_server
 
     _isolate(monkeypatch, tmp_path)
     monkeypatch.setattr(config, "HOME", tmp_path)
-    monkeypatch.setattr(mcp_server, "detect_caller", lambda kind: {"instance": "7", "model": "claude-opus-5-5"})
+    monkeypatch.setattr(booking, "detect_caller", lambda kind: {"instance": "7", "model": "claude-opus-5-5"})
     monkeypatch.setattr(mcp_server, "manager", lambda: None)
+    monkeypatch.setattr(booking, "manager", lambda: None)
 
     async def fake_decide(items, mgr, **kw):
         return {"answers": [{"id": "a", "answer": "yes", "source": "jev"}], "summary": {"items": 1},
                 "_jev_stats": {"calls": 3, "in": 120, "out": 9, "cost_usd": 0.0001, "secs": 0.4, "model": "jev-1.13.0"},
                 "_stand_in_stats": None, "_fallback_results": []}
 
-    monkeypatch.setattr(decisions, "decide", fake_decide)  # hswarm_decide imports it at call time
+    monkeypatch.setattr(decisions, "decide", fake_decide)  # booking.decide looks it up at call time
     out = asyncio.run(mcp_server.hswarm_decide([{"id": "a", "state": "x", "question": "q?", "type": "yesno"}]))
     assert "bookkeeping_error" not in out and "error" not in out
     c = utilization.connect()

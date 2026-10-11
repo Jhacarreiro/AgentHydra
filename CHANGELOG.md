@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm's typed decisions start lighter outside the MCP server.** A script that asks Jev through HSwarm now
+  imports `hswarm.booking.decide` instead of the MCP server's `hswarm_decide`. It is the same cascade with the same
+  booking, without the MCP SDK and pydantic: each start costs 63 MB instead of 101 MB.
 - **HSwarm's decision and critical asks can read images on GPT-6.** With an OpenAI key, an ask that carries a
   screenshot at the decision or critical level now runs on GPT-6.1 Sol instead of dropping below its level to Gemini
   Flash. Routine image asks still try every free Gemini model first.

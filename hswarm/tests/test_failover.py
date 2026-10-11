@@ -254,6 +254,7 @@ def test_a_leg_with_no_key_at_all_fails_over(monkeypatch, tmp_path):
 def test_an_ask_hands_its_whole_budget_to_the_route_walk(monkeypatch):
     # Dredd's board secretary asked for 300 s and every leg still got a share of 120 (ask_selected's default): the
     # door took no budget, and two Lift boards sat for nothing on 2026-09-29 while NVIDIA crawled.
+    import hswarm.booking as booking
     import hswarm.mcp_server as ms
 
     seen = {}
@@ -267,7 +268,7 @@ def test_an_ask_hands_its_whole_budget_to_the_route_walk(monkeypatch):
         return {}
 
     monkeypatch.setattr(ms, "manager", lambda: _Mgr())
-    monkeypatch.setattr(ms, "_book_asks", _no_booking)
+    monkeypatch.setattr(booking, "book_asks", _no_booking)
     asyncio.run(ms.hswarm_ask("q", timeout_s=300))
     assert seen["timeout_s"] == 300.0
     seen.clear()

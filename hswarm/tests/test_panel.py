@@ -82,7 +82,7 @@ def test_positions_decode_through_the_rebutting_panelists_own_seating_and_contes
 
 
 def test_the_mcp_tool_books_both_rounds_and_keeps_its_payload_plain(monkeypatch):
-    from hswarm import mcp_server
+    from hswarm import booking, mcp_server
 
     booked = []
 
@@ -92,7 +92,7 @@ def test_the_mcp_tool_books_both_rounds_and_keeps_its_payload_plain(monkeypatch)
 
     mgr = FakeMgr(lambda m, pr: "")
     monkeypatch.setattr(mcp_server, "manager", lambda: mgr)
-    monkeypatch.setattr(mcp_server, "_book_asks", book)
+    monkeypatch.setattr(booking, "book_asks", book)
     out = asyncio.run(mcp_server.hswarm_panel("Review this diff.", models=[G, M]))
     assert "error" not in out and "_results" not in out
     assert booked == [(4, "panel")] and out["summary"]["answered"] == 2

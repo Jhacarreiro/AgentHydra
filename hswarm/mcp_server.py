@@ -6,7 +6,8 @@ hswarm_decide (typed decisions: TypeSafe Jev first, the tool-free default for wh
 hswarm_panel (a blind multi-model review with an anonymised rebuttal round; hswarm/panel.py),
 hswarm_review and hswarm_doubt (evidence-gated review, refute pass and claim-blind doubt cycle; hswarm/review.py). Results are kept compact by default; fetch full answers or
 transcripts with hswarm_results. Doctor and cost bodies live in health.py; result shaping in results.py;
-the savings tracker in savings.py; the caller stamp (which session asked) in caller.py; the usage report in ledger.py.
+the savings tracker in savings.py; the caller stamp (which session asked) in caller.py; the usage report in ledger.py;
+booking an ask (ledger line, savings) and hswarm_decide's body in booking.py, which imports no MCP SDK.
 """
 from __future__ import annotations
 
@@ -25,37 +26,15 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
-from . import archive, batching, blobs, config, dispatch, health, mcp_policy, model_watch, proposals, review, shared, utilization, verdict
-from .caller import detect as detect_caller
-from .jobs import JobManager
-from .ledger import append_row, ask_row, usage_report
+from . import archive, batching, blobs, booking, config, dispatch, health, mcp_policy, model_watch, proposals, review, shared, utilization, verdict
+from .jobs import JobManager, manager
+from .ledger import usage_report
 from .results import brief_summary, job_payload, results_from_disk
 from .spec import EFFORTS, Backend, Task
 
 # The instructions every client shows its model: the same text `hswarm install --instructions` writes into
 # CLAUDE.md / AGENTS.md (data/agent-instructions.md), so "delegate the cheap, wide work here" is said once.
 mcp = FastMCP("hswarm", instructions=files("hswarm").joinpath("data", "agent-instructions.md").read_text(encoding="utf-8").strip())
-
-_manager: JobManager | None = None
-_adopted = False
-
-
-def manager() -> JobManager:
-    global _manager, _adopted
-    if _manager is None:
-        _manager = JobManager()  # one manager per server process: jobs stay addressable for the session's lifetime
-        _manager.port = shared.SERVING_PORT  # the shared server stamps its jobs with its port
-    if not _adopted and _manager.port:
-        try:
-            asyncio.get_running_loop()
-        except RuntimeError:
-            return _manager  # asked from a worker thread: the first call on the loop carries the jobs on
-        _adopted = True
-        # A restart: the jobs the previous server on this port left unfinished carry on here, under their own ids,
-        # before this first call looks any of them up.
-        _manager.adopt_orphans()
-    return _manager
-
 
 def _parse_tasks(tasks: list[dict], defaults: dict) -> list[Task]:
     return [Task.from_dict({"prompt": t} if isinstance(t, str) else t, defaults, i) for i, t in enumerate(tasks)]
@@ -316,7 +295,7 @@ async def hswarm_apply_proposals(job_id: str, ids: list[str] | None = None, appl
 
     out = await proposals.review_job(doc, ask, ids=ids, apply=apply)
     calls = out.pop("calls")
-    return {"job_id": job_id, **out} | await _book_asks(calls, "screen")
+    return {"job_id": job_id, **out} | await booking.book_asks(calls, "screen")
 
 
 @_served
@@ -429,7 +408,7 @@ async def hswarm_ask(prompt: str, system: str | None = None, model: str = "auto"
         options["timeout_s"] = float(timeout_s)
     # On auto, the owner's Free web accounts answer first when one is idle: ask_routed asks them (free_route.py).
     r = await manager().ask_routed(prompt, model, system=system, schema=schema, thinking=thinking, reasoning_effort=reasoning_effort, max_tokens=max_tokens, images=images or None, **options)
-    out = r.as_dict(brief=True) | await _book_asks([r], "ask")
+    out = r.as_dict(brief=True) | await booking.book_asks([r], "ask")
     try:
         if note := batching.note_ask(prompt):
             out["batching"] = note  # beside the answer, never instead of it
@@ -527,30 +506,7 @@ async def hswarm_doubt(artifact: str, contract: str, history: list[list[dict]] |
     true after 3 cycles, when this cycle found nothing substantive, or on `doubt_theater` (two or more cycles with
     substantive issues and none actionable: stop doubting and decide)."""
     payload, r = await review.run_doubt(manager(), artifact, contract, history)
-    return payload | await _book_asks([r], "ask")
-
-
-async def _book_asks(results: list, kind: str, extra: tuple = ()) -> dict:
-    """Attribute and cost finished asks (ledger line + the savings running total). ⛔ Bookkeeping NEVER fails the
-    answer it records (2026-09-21): the CLI `ask` does none of this and answered on the machine where the MCP tool
-    kept failing, so a caller-stamp, ledger or savings-database fault must come back as a note beside the answer,
-    not replace it.
-
-    `extra` is (Result, ledger fields) pairs for spend that is not one of `results` (hswarm_decide's Jev calls). Each
-    gets a ledger line AND its own utilization row: the ledger line has no `id`, so handing it to utilization.record
-    failed every decide with `KeyError: 'id'` (3,070 times, 2026-09-21 to 2026-09-24) and no Jev spend was saved."""
-    try:
-        caller = detect_caller(kind)
-        for r, fields in extra:
-            append_row(ask_row(r, caller) | fields)
-            await asyncio.to_thread(utilization.record, utilization.ask_row(r, caller) | {"label": fields.get("job") or kind})
-        saved = None
-        for r in results:
-            append_row(ask_row(r, caller) | ({"job": kind} if kind != "ask" else {}))
-            saved = utilization.compact(await asyncio.to_thread(utilization.record_ask, r, caller))
-        return {"savings": saved} if kind == "ask" else {}
-    except Exception as e:  # noqa: BLE001 - see the docstring
-        return {"bookkeeping_error": f"{type(e).__name__}: {e}"[:300]}
+    return payload | await booking.book_asks([r], "ask")
 
 
 @_served
@@ -579,21 +535,7 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     there (~0.42 matches it on choices; docs/BENCH-2026-10-02-clef.md); never batch it.
     Returns answers [{id, answer, source, jev: {answer, confidence, probabilities}, fallback?}] plus a cost summary.
     """
-    from .decisions import decide
-    from .spec import Result, now_iso
-
-    out = await decide(items, manager(), escalate_below=escalate_below, fallback_model=fallback_model, model=model, batch=batch)
-    fallbacks = out.pop("_fallback_results")
-    jev: tuple = ()
-    # The Jev part, and Clef's when it stood in, is one ledger line each (all its calls), costed like an ask; the caller
-    # stamp is added in _book_asks.
-    for stats, provider, name in ((out.pop("_jev_stats"), "typesafe", model), (out.pop("_stand_in_stats") or {}, "cloudflare", "clef")):
-        if stats.get("calls"):
-            jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend=provider, model=stats.get("model") or name,
-                        usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),
-                        seconds=round(stats.get("secs", 0.0), 3), turns=stats["calls"], finished=now_iso())
-            jev += ((jr, {"provider": provider, "job": "decide"}),)
-    return out | await _book_asks(fallbacks, "decide", jev)
+    return await booking.decide(items, manager(), escalate_below=escalate_below, fallback_model=fallback_model, batch=batch, model=model)
 
 
 @_served
@@ -613,7 +555,7 @@ async def hswarm_panel(prompt: str, models: list[str] | None = None, system: str
     if reasoning_effort is not None and reasoning_effort not in EFFORTS:
         return {"error": f"reasoning_effort must be one of {'|'.join(EFFORTS)}"}
     out = await panel(prompt, manager(), models=models, system=system, max_findings=max_findings, reasoning_effort=reasoning_effort, seed=seed)
-    return out | await _book_asks(out.pop("_results"), "panel")
+    return out | await booking.book_asks(out.pop("_results"), "panel")
 
 
 @_served
