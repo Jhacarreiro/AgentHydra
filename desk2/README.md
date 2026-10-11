@@ -59,7 +59,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   The desk list's rows show their account number and time since the last activity as the cloud list's do, with
   Cloud off too (owner, 2026-10-07). Clean sidebar (`web/src/components/sidebar/clean.ts`, remembered) leaves
   each row's account number, its time since the last activity, a working chat's elapsed time and the AgentHydra
-  lists' detail and time out: a dot and a title. A limited chat's reset, the CliMayte count and sub-items stay.
+  lists' detail and time out: a dot and a title. A limited chat's reset and sub-items stay; the CliMayte count is
+  among the sub-items' badges (its separate pill went 2026-10-10).
   It is on by default and its button is plain then; the button turns blue while it is off and the details show
   (owner, 2026-10-08).
 - **The sidebar drags down to 200px** (owner, 2026-10-10: "This sidebar does not let me make it any narrower"). Its
@@ -839,7 +840,9 @@ tokens"). On the All tab every kind's rows are one list in the header's sort, To
 saying Desktop, CLI or Free; the other tabs are as before. Each kind keeps its own rows component and reports its
 rows' sort values (`hydra/src/composables/useMergedOrder.ts`); the page sorts them together with the tables' own
 `useSortable`, and the table lays out as a grid whose rows take their rank as CSS `order`, since a table cannot
-interleave the rows of two bodies (`components/InstanceTable.vue`, `merged`).
+interleave the rows of two bodies (`components/InstanceTable.vue`, `merged`). A CLI login linked to a Desktop row is the
+same account, so it is not ranked on its own: it sits directly under that row, same rank, and its Tokens cell says
+"counted on #n" (owner, 2026-10-10).
 
 **A red mark means failing, not one failure** (owner, 2026-10-08: no red marks "unless the account is dead";
 `server/src/free-instances/health.ts`). Desk counts each account's messages over the last hour, whoever sent them,

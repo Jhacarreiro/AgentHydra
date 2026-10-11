@@ -119,20 +119,16 @@ defineExpose({ startRename })
           />
           <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
 
-          <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset, CliMayte count -->
+          <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
+               sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->
           <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (account !== null || elapsed || aged || resets || chat.climayteActive > 0 || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-[12px] leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+          <span v-if="!renaming && (account !== null || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-[12px] leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
             <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
             <RowAge v-else-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="chat.updatedAt" />
             <span v-if="resets" class="tnum text-(--status-limited-text)">resets {{ resets }}</span>
-            <span
-              v-if="chat.climayteActive > 0"
-              class="tnum flex h-4 min-w-4 items-center justify-center rounded-sm bg-(--fill-secondary) px-1 text-[11px] text-text-2"
-              :aria-label="`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`"
-            >{{ chat.climayteActive }}</span>
           </span>
 
       </DefineBody>

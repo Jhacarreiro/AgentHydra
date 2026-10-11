@@ -29,7 +29,7 @@ import {
   Trash2,
   Unlink,
 } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, inject, onMounted, ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import AssociateCliInstanceDialog from '@/components/AssociateCliInstanceDialog.vue'
@@ -50,7 +50,7 @@ import { TableBody } from '@/components/ui/table'
 import { useCliInstances } from '@/composables/useCliInstances'
 import { useData } from '@/composables/useData'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
-import { useMergedOrderSource } from '@/composables/useMergedOrder'
+import { MERGED_ORDER, useMergedOrderSource } from '@/composables/useMergedOrder'
 import { useInstances } from '@/composables/useInstances'
 import { pii, piiDisplayName, piiName } from '@/composables/usePrivacy'
 import { useQuickAddTarget } from '@/composables/useQuickAddTarget'
@@ -274,10 +274,26 @@ function rowModel(inst: CliInstance): InstanceRowModel {
       onCheck: () => void onCheckUsageFromPopover(inst),
     },
     plan: plan ? { label: plan } : null,
-    tokens: tokenPartsFor(inst.tokens, tokenWindow.value),
+    tokens: shownOn(inst) ? null : tokenPartsFor(inst.tokens, tokenWindow.value),
+    tokensElsewhere: shownOn(inst)
+      ? t('cliInstances.tokensCountedOn', { num: shownOn(inst)?.num })
+      : undefined,
     remoteWorkers: inst.remoteWorkers,
     menu: { name: inst.name, actions: menuActionsFor(inst), width: 'md' },
   }
+}
+
+// On the All tab a linked login is the same account as its desktop row, so that row counts it once (owner,
+// 2026-10-10): this login's Tokens cell says where it is counted instead of repeating the figure.
+const mergedOrder = inject(MERGED_ORDER, null)
+function countedOn(inst: CliInstance) {
+  return mergedOrder?.active.value ? linkedDesktop(inst) : null
+}
+/** The desktop row this login's Tokens cell points to: only while that row is ranked too (a filter can hide it, and
+ *  then this row ranks on its own and shows its figure). Read while drawing, never by the report, so it feeds no loop. */
+function shownOn(inst: CliInstance) {
+  const desktop = countedOn(inst)
+  return desktop && mergedOrder?.ranked('claude', desktop.dir) ? desktop : null
 }
 
 const linkedLabel = (inst: CliInstance) =>
@@ -601,6 +617,10 @@ const { orderStyle } = useMergedOrderSource('cli', {
   rows: () => visibleRows.value,
   rowKey: (i: CliInstance) => i.id,
   values: sortValues,
+  countedOn: (i: CliInstance) => {
+    const desktop = countedOn(i)
+    return desktop ? { source: 'claude', key: desktop.dir } : undefined
+  },
 })
 const nudgeNotes = computed(() => new Map(visibleRows.value.map((i) => [i.id, nudgeNote(i)])))
 

@@ -44,6 +44,8 @@ export default {
   countOfTotal: '{shown} of {total}',
   // The chip beside a linked login's name: which desktop row it is the same account as.
   linkedTo: 'Linked to desktop instance #{num} {name}',
+  // The Tokens cell of a linked login on the All tab: its figure is counted on that desktop row, once.
+  tokensCountedOn: 'counted on #{num}',
   linkedToHint:
     'The same Claude account as that desktop instance, signed in a second time for the CLI. It also shows on that row in the Instances tab, marked with a terminal icon.',
   // The pill beside a row's name: Claude sessions live on this login now (GET /api/cli-instances).

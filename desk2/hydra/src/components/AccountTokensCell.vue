@@ -28,6 +28,7 @@ defineProps<{ row: InstanceRowModel }>()
     >
       <span class="font-medium tabular-nums">{{ formatTokens(row.tokens.total) }}</span>
     </IconTooltip>
+    <span v-else-if="row.tokensElsewhere" class="text-xs text-muted-foreground">{{ row.tokensElsewhere }}</span>
     <span v-else class="text-xs text-muted-foreground">—</span>
     <IconTooltip
       v-if="row.remoteWorkers"
