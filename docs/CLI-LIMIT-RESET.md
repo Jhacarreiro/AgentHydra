@@ -29,7 +29,9 @@ works on Windows), types `/limit-reset`, and reads the CLI's own answer off the 
 1. The account's `.claude.json` is prepared once: `hasCompletedOnboarding: true` (else the CLI
    opens its theme and login-method screens) and the scratch folder
    `<DATA_DIR>/cli-limit-reset` trusted (else "Is this a project you trust?" defaults to
-   "No, exit").
+   "No, exit"). The CLI starts with `--no-chrome`: since 2.1.295, a PC with the Claude in Chrome
+   extension gets a "Claude in Chrome extension detected" question in place of the prompt on every
+   account that never answered it. The flag skips it for the run and writes no setting.
 2. Wait for the prompt (`Try "…"`), then 6 s more: keys typed while the start screen is still
    drawing are lost.
 3. Type `/limit-reset`, confirm it shows in the input, press Enter.
@@ -56,7 +58,9 @@ first pass 10 minutes after start, then hourly; accounts one at a time) and stor
 each row shows it. An account is checked only when its last check is over 24 h old (or never) and
 it has a 5-hour reading under 90% taken in the last 30 minutes. No reading, a stale one, or one
 near the limit means no check: at the limit a check could spend the weekly reset. The reading is
-re-read right before each run. Each run starts no MCP servers.
+re-read right before each run. Each run starts no MCP servers. A run that ends in `error` stores
+nothing (the account is due again next pass) and logs `[cli-reset-sweep] #<num> not checked:
+<why>`; each pass ends with `checked, available, failed, skipped` counts in the daemon log.
 
 ## Status (2026-10-03)
 

@@ -35,6 +35,9 @@ test('a reset that went through maps to reset', () => {
 // Whole runs use a stand-in CLI on a real pseudo-terminal. The stand-in shows a prompt, echoes what is typed, answers `/limit-reset` with the banked reset's
 // question, and writes which answer it got ("yes" or "no") to a file. Each run waits out the real
 // CLI's six-second start screen, so these take about eight seconds apiece.
+// Like the real CLI (2.1.295) on a PC with the Chrome extension, it opens on a "Claude in Chrome
+// extension detected" question in place of the prompt unless started with --no-chrome: that
+// question failed every hourly check on 36 of 37 accounts (2026-10-11).
 
 const root = mkdtempSync(join(tmpdir(), 'ah-limit-reset-'))
 const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
@@ -42,13 +45,17 @@ const claudeWas = process.env.AGENTHYDRA_CLAUDE_PATH
 const STAND_IN = `
 const { appendFileSync } = require('node:fs')
 const said = (k) => appendFileSync(process.env.CLAUDE_CONFIG_DIR + '/answers.txt', k + '\\n')
-process.stdout.write('Claude Code\\r\\n> Try "how does this repo work"\\r\\n')
+const chromeAsk = !process.argv.includes('--no-chrome')
+process.stdout.write(chromeAsk
+  ? 'Claude in Chrome extension detected\\r\\n> No, keep browser tools off\\r\\n  Yes, use my browser\\r\\n'
+  : 'Claude Code\\r\\n> Try "how does this repo work"\\r\\n')
 process.stdin.setRawMode(true)
 let line = ''
 let asking = false
 process.stdin.on('data', (d) => {
   for (const ch of d.toString()) {
     if (ch === '\\x03') process.exit(0)
+    if (chromeAsk) continue
     if (asking) {
       if (ch === '\\x1b') { said('no'); asking = false; process.stdout.write('\\r\\nKept.\\r\\n') }
       if (ch === '\\r') { said('yes'); asking = false; process.stdout.write('\\r\\nLimits reset · next reset available Oct 14\\r\\n') }

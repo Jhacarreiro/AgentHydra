@@ -471,7 +471,11 @@ export async function runCliLimitReset(
     return await runOffThread({
       configFile: join(configDir, '.claude.json'),
       workDir: WORK_DIR,
-      cmd: [resolveClaudeExe(), ...CLAUDE_PROBE_NO_MCP_ARGS],
+      // --no-chrome: with the Chrome extension installed, the CLI (2.1.295) opens on a "Claude in
+      // Chrome extension detected" question on every account that never answered it, in place of
+      // the prompt, so every hourly check ended "did not reach its prompt" (36 of 37 accounts,
+      // 2026-10-11). The flag skips it for this run and writes no setting.
+      cmd: [resolveClaudeExe(), ...CLAUDE_PROBE_NO_MCP_ARGS, '--no-chrome'],
       env: resetEnv(configDir),
       confirm: opts.confirm !== false,
       at: Date.now(),

@@ -69,7 +69,13 @@ export async function runCliResetSweep(): Promise<void> {
   passRunning = true
   let checked = 0
   let available = 0
+  let failed = 0
   let skipped = 0
+  // A failed check records nothing, so the account is due again next pass: say why, per account.
+  const failure = (num: number, why: string) => {
+    failed++
+    console.warn(`[cli-reset-sweep] #${num} not checked: ${why}`)
+  }
   try {
     for (const id of cliResetChecksDue(listCliInstances(), readingOf, Date.now())) {
       const inst = getCliInstance(id)
@@ -80,14 +86,14 @@ export async function runCliResetSweep(): Promise<void> {
       try {
         const result = await runCliLimitReset(inst.configDir, { confirm: false })
         if (result.outcome === 'error') {
-          skipped++
+          failure(inst.num, result.message)
           continue
         }
         setCliInstanceLimitReset(id, result)
         checked++
         if (result.outcome === 'available') available++
-      } catch {
-        skipped++
+      } catch (err) {
+        failure(inst.num, err instanceof Error ? err.message : String(err))
       }
     }
   } catch (err) {
@@ -95,7 +101,9 @@ export async function runCliResetSweep(): Promise<void> {
   } finally {
     passRunning = false
   }
-  console.log(`[cli-reset-sweep] checked ${checked}, available ${available}, skipped ${skipped}`)
+  console.log(
+    `[cli-reset-sweep] checked ${checked}, available ${available}, failed ${failed}, skipped ${skipped}`,
+  )
 }
 
 const FIRST_PASS_MS = 10 * 60_000
