@@ -13,14 +13,15 @@
 // import replaces that PC's rows, hour range by hour range, each in one transaction: importing the same shard
 // twice changes nothing, a shard that shrank removes what it no longer has, and a reader never sees a gap.
 //
-// The daemon's event loop is never held: git runs in Bun.spawn, files are read and gzipped off-thread, and
-// SQLite is touched in slices of IMPORT_SLICE rows with a loop turn between them.
+// The daemon's event loop is never held: git starts and runs on the spawn worker, files are read and gzipped
+// off-thread, and SQLite is touched in slices of IMPORT_SLICE rows with a loop turn between them.
 import { createHash } from 'node:crypto'
 import { existsSync } from 'node:fs'
 import { mkdir, readdir, rename, writeFile } from 'node:fs/promises'
 import { join, resolve } from 'node:path'
 import { promisify } from 'node:util'
 import { gunzip, gzip } from 'node:zlib'
+import { spawnCaptured } from '../core/process'
 import { hswarmHome } from '../hswarm'
 import { machineId } from './machine'
 import { KIT_HOUR_DIMS, KIT_MEASURES } from './schema'
@@ -78,21 +79,20 @@ interface Ran {
   err: string
 }
 
+/** A pull or push past this is hung (no prompt can answer: GIT_TERMINAL_PROMPT=0); it is killed and fails. */
+const GIT_TIMEOUT_MS = 5 * 60_000
+
+/** On the spawn worker: a git start held the daemon's thread 240-345 ms on MPC-HELL, and a sync pass runs
+ *  a dozen of them back to back (48 s of STALL in 140 min of daemon.log, 2026-10-11). */
 async function git(cwd: string, args: string[], input?: string): Promise<Ran> {
-  const p = Bun.spawn(['git', ...args], {
+  const r = await spawnCaptured(['git', ...args], {
     cwd,
-    stdin: input === undefined ? 'ignore' : new Blob([input]),
-    stdout: 'pipe',
-    stderr: 'pipe',
-    windowsHide: true,
+    stdin: input,
+    timeoutMs: GIT_TIMEOUT_MS,
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   })
-  const [out, err, code] = await Promise.all([
-    new Response(p.stdout).text(),
-    new Response(p.stderr).text(),
-    p.exited,
-  ])
-  return { code, out: out.trim(), err: err.trim() }
+  const err = r.timedOut ? `timed out after ${GIT_TIMEOUT_MS / 1000} s` : r.stderr.trim()
+  return { code: r.timedOut || r.code === null ? -1 : r.code, out: r.stdout.trim(), err }
 }
 
 const gitOrThrow = async (cwd: string, args: string[], input?: string): Promise<string> => {
