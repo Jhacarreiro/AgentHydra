@@ -521,7 +521,8 @@ async def hswarm_decide(items: list[dict], escalate_below: float = 0.7, fallback
     under escalate_below confidence is re-asked through the published decision capability profile.
     If no valid stronger answer is obtained, the decision remains unanswered with an explicit error. When no TypeSafe
     key works (none set, or all refused), Cloudflare's Clef answers the typed leg instead (source 'jev:clef', its
-    confidence held to escalate_below scaled to its own scale), given a Cloudflare token and account id.
+    confidence held to escalate_below scaled to its own scale), given a Cloudflare token and account id, and what
+    Clef cannot answer goes to Microsoft-Decision-1 on OpenRouter (source 'jev:microsoft/microsoft-decision-1').
     The desktop orchestrator retains final authority. escalate_below=0 is Jev alone: nothing escalates, and an item
     Jev could not answer (no key, HTTP 402) stays unanswered with Jev's error, for the caller's own fallback.
     1.01 sends everything to the fallback. Items with the same state always share one Jev call (the

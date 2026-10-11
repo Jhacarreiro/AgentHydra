@@ -243,43 +243,52 @@ async def jev_answers(jev: typesafe.Jev, items: list[dict], model: str = typesaf
 # gold asks it convened 76 of 87 dockets exactly right against Jev's 72 (docs/BENCH-2026-10-02-clef.md), and Workers
 # AI's 10,000 free neurons a day cover about 450k Clef input tokens. Its confidence runs lower than Jev's (0.415 there
 # matched Jev's 0.7 on choices), so a stand-in answer is held to the caller's threshold scaled by that ratio.
-STAND_IN = "clef"
-STAND_IN_SCALE = 0.415 / 0.7
+# What Clef cannot answer (no route, or its free neurons spent for the day) goes to Microsoft-Decision-1 on OpenRouter:
+# 0.852 on the 465-item decision bench against Jev's 0.845 and Clef's 0.849 (2026-10-10). Its confidence runs on Jev's
+# own scale (at 0.7 it was right on 95.0% of the items it covered against Jev's 94.6%, covering 73.7% against 72.1%),
+# so its answers meet the caller's threshold unscaled.
+# Each stand-in, in the order asked -> the factor on the caller's threshold its confidence must clear.
+STAND_INS = {"clef": 0.415 / 0.7, typesafe.MD1: 1.0}
 
 
-async def stand_in_answers(items: list[dict], jres: list[dict], jev, stand_in: typesafe.Jev | None = None) -> dict | None:
-    """Re-ask on STAND_IN the items Jev could not answer for want of a working key; each answer replaces Jev's error in
-    `jres`, marked with the model. The stand-in's call stats, or None when it asked nothing (no such item, or no
-    Cloudflare route: typesafe.clef_routes, the REST API with a token and account or a clef-proxy Worker)."""
+async def stand_in_answers(items: list[dict], jres: list[dict], jev, stand_ins: dict[str, typesafe.Jev] | None = None) -> list[dict]:
+    """Re-ask the items Jev could not answer for want of a working key on each STAND_INS model in turn, each taking
+    what the one before left; an answer replaces Jev's error in `jres`, marked with the model. The call stats (with
+    `model`, `provider` and `items` answered) of each stand-in that asked something; one with no route
+    (typesafe.clef_routes, or no OpenRouter key for MD1) is passed over. `stand_ins`: open clients by model, used in
+    place of building them."""
     down = [k for k, r in enumerate(jres) if r["status"] != "ok" and (not jev.usable or r.get("http") in typesafe.KEY_DEAD)]
-    if not down:
-        return None
-    own = stand_in is None
-    stand_in = stand_in or typesafe.Jev.for_model(STAND_IN)
-    if not stand_in.usable:
-        return None
-    try:
-        if own:
-            await stand_in.__aenter__()
-        res, stats = await jev_answers(stand_in, [items[k] for k in down], STAND_IN)
-    finally:
-        if own:
-            await stand_in.__aexit__(None, None, None)
-    for k, r in zip(down, res):
-        if r["status"] == "ok":
-            jres[k] = {**r, "model": STAND_IN}
-    stats["items"] = sum(r["status"] == "ok" for r in res)
-    return stats
+    spent = []
+    for model in STAND_INS:
+        down = [k for k in down if jres[k]["status"] != "ok"]
+        if not down:
+            break
+        given = (stand_ins or {}).get(model)
+        client = given or typesafe.Jev.for_model(model)
+        if not client.usable:
+            continue
+        try:
+            if given is None:
+                await client.__aenter__()
+            res, stats = await jev_answers(client, [items[k] for k in down], model)
+        finally:
+            if given is None:
+                await client.__aexit__(None, None, None)
+        for k, r in zip(down, res):
+            if r["status"] == "ok":
+                jres[k] = {**r, "model": model}
+        spent.append({**stats, "model": model, "provider": client.provider, "items": sum(r["status"] == "ok" for r in res)})
+    return spent
 
 
 # ---------------------------------------------------------------- the cascade
 
 async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | None = 0.7, fallback_model: str | None = None,
                  model: str = typesafe.MODEL, batch: int = 1, reasoning_effort: str | None = None, jev: typesafe.Jev | None = None,
-                 stand_in: typesafe.Jev | None = None) -> dict:
+                 stand_ins: dict[str, typesafe.Jev] | None = None) -> dict:
     """Answer typed decisions: Jev first, then the generative fallback for every answer under `escalate_below`
     confidence (and for every item Jev could not answer). An item Jev could not answer for want of a working key is
-    first re-asked on Clef (STAND_IN), and that answer counts as Jev's. escalate_below=0 is Jev alone: nothing
+    first re-asked on the stand-ins (STAND_INS: Clef, then MD1), and that answer counts as Jev's. escalate_below=0 is Jev alone: nothing
     escalates, and an item neither could answer comes back unanswered with Jev's error, for the caller's own fallback.
     None escalates only the items Jev could not answer; 1.01 sends everything to the fallback. `mgr` is a JobManager,
     needed only when something escalates."""
@@ -302,13 +311,13 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
     finally:
         if own:
             await jev.__aexit__(None, None, None)
-    st_stats = await stand_in_answers(items, jres, jev, stand_in) if model.startswith("jev") else None
+    st_stats = await stand_in_answers(items, jres, jev, stand_ins) if model.startswith("jev") else []
     thr = -1.0 if escalate_below is None else float(escalate_below)
     # 0 is Jev alone even when Jev fails (HTTP 402 since 2026-10-06): Dredd asks its yes/no questions at 0 because the
     # fallback's yes/no answers convened the right instruments on 19 of 39 gold dockets against Jev's 39 of 39, and
     # its own keyword heuristic answers what Jev leaves unanswered.
     todo = [] if escalate_below is not None and thr <= 0 else [
-        k for k, r in enumerate(jres) if r["status"] != "ok" or (r.get("conf") or 0.0) < thr * (STAND_IN_SCALE if r.get("model") == STAND_IN else 1.0)]
+        k for k, r in enumerate(jres) if r["status"] != "ok" or (r.get("conf") or 0.0) < thr * STAND_INS.get(r.get("model"), 1.0)]
     fb_results: list = []
 
     async def escalate(k: int) -> None:
@@ -366,6 +375,6 @@ async def decide(raw_items: list[dict], mgr=None, *, escalate_below: float | Non
                         "unanswered": sum(a["answer"] is None for a in answers) + len(bad), "invalid": len(bad), "escalate_below": escalate_below,
                         "fallback_model": fallback, "jev_model": stats.get("model", model), "jev_calls": stats.get("calls", 0),
                         "jev_cost_usd": round(stats.get("cost_usd", 0.0), 6), "fallback_cost_usd": round(fb_cost, 6), "seconds": round(time.perf_counter() - t0, 2),
-                        **({"stand_in": {"model": STAND_IN, "items": st_stats["items"], "calls": st_stats["calls"],
-                                         "cost_usd": round(st_stats["cost_usd"], 6)}} if st_stats else {})},
+                        **({"stand_in": [{"model": s["model"], "items": s["items"], "calls": s["calls"], "cost_usd": round(s["cost_usd"], 6)}
+                                         for s in st_stats]} if st_stats else {})},
             "_jev_stats": stats, "_stand_in_stats": st_stats, "_fallback_results": fb_results}

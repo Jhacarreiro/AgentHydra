@@ -22,6 +22,10 @@ It also reaches Cloudflare's Clef decision models (blog.cloudflare.com/clef-deci
 Workers AI access (CLOUDFLARE_API_TOKEN, or ~/.hswarm/secrets/cloudflare_api_keys) and the account: CLOUDFLARE_ACCOUNT_ID,
 or a key line written `<account id>:<token>`. An account with no API token to keep runs hswarm/cloudflare/clef-proxy.js
 instead, a Worker that reaches Clef through its AI binding, and lists it as `<worker host>:<secret>`.
+
+And Microsoft-Decision-1 (MD1, 2026-10-09), a Jev-class model OpenRouter serves at /systemone in TypeSafe's own shape,
+$0.042 per million input tokens like Jev. It answers on OpenRouter keys whose balance reads $0 (14 of 14 on 2026-10-11),
+so its client draws every OpenRouter key the pool has not found revoked, not only the funded ones.
 """
 from __future__ import annotations
 
@@ -60,19 +64,16 @@ CLEF_URL = "https://api.cloudflare.com/client/v4/accounts/{account}/ai/run/@cf/c
 # hswarm/cloudflare/clef-proxy.js (an account with no API token to keep reaches Workers AI through a Worker's binding).
 CLEF_LINE = re.compile(r"^([0-9a-f]{32}|[a-z0-9-]+(?:\.[a-z0-9-]+)+):(\S+)$")
 CLEF_PROXY_URL = "https://{host}/{model}"
+MD1 = "microsoft/microsoft-decision-1"
+MD1_URL = "https://openrouter.ai/api/v1/systemone"
 NO_KEY = {"typesafe": f"no usable TypeSafe key (TYPESAFE_API_KEY or {config.SECRETS_DIR / 'typesafe_api_keys'})",
           "cloudflare": f"no usable Cloudflare route (CLOUDFLARE_API_TOKEN plus CLOUDFLARE_ACCOUNT_ID, or an `<account id>:<token>` or "
                         f"`<worker host>:<secret>` line in {config.SECRETS_DIR / 'cloudflare_api_keys'})"}
 
 
 def is_typed_model(model: str) -> bool:
-    """A model that answers typed questions natively (Jev, Clef, or an open model behind Simple Jev), not a generative one."""
-    return model == "jev" or model in CLEF_PRICES or model.startswith(("jev-", SIMPLE_JEV_PREFIX))
-
-
-def load_keys() -> list[str]:
-    """Every TypeSafe key the provider file's sources hold: the environment, the user's file, ~/.hswarm/secrets/."""
-    return config.load_api_keys("typesafe")
+    """A model that answers typed questions natively (Jev, Clef, MD1, or an open model behind Simple Jev), not a generative one."""
+    return model in ("jev", MD1) or model in CLEF_PRICES or model.startswith(("jev-", SIMPLE_JEV_PREFIX))
 
 
 def _clef_lines() -> list[tuple[str, str]]:
@@ -93,18 +94,18 @@ def clef_account() -> str:
 
 
 def clef_routes(model: str) -> dict[str, str]:
-    """Each usable Clef credential -> the URL that serves `model` with it: the REST API for CLOUDFLARE_API_TOKEN
-    (comma-separated for several) and for the file's tokens of `clef_account()` (a line for another account would
-    401 there), the Worker for a `<worker host>:<secret>` line. No account means no REST credential."""
+    """Each usable Clef credential -> the URL that serves `model` with it: an `<account id>:<token>` line its own
+    account's REST URL (each account has its own 10,000 free neurons a day), CLOUDFLARE_API_TOKEN (comma-separated for
+    several) and a bare token line `clef_account()`'s, a `<worker host>:<secret>` line its Worker. A bare token with no
+    account anywhere has nothing to call."""
     account, routes = clef_account(), {}
-    rest = CLEF_URL.format(account=account, model=model)
     for token in config._split_keys(os.environ.get("CLOUDFLARE_API_TOKEN")) if account else []:
-        routes.setdefault(token, rest)
+        routes.setdefault(token, CLEF_URL.format(account=account, model=model))
     for route, token in _clef_lines():
         if "." in route:
             routes.setdefault(token, CLEF_PROXY_URL.format(host=route, model=model))
-        elif account and route in ("", account):
-            routes.setdefault(token, rest)
+        elif route or account:
+            routes.setdefault(token, CLEF_URL.format(account=route or account, model=model))
     return routes
 
 
@@ -120,8 +121,9 @@ class Jev:
     # 30 s: an answer takes 0.15-2 s, so a longer wait is a hung connection, and a timeout is retried like a 5xx.
     def __init__(self, keys: list[str] | None = None, concurrency: int = 16, timeout: float = 30.0, http: httpx.AsyncClient | None = None,
                  *, url: str = URL, usd_per_input_token: float = USD_PER_INPUT_TOKEN, keyless: bool = False, min_interval: float = 0.0,
-                 provider: str = "typesafe", urls: dict[str, str] | None = None):
+                 provider: str = "typesafe", urls: dict[str, str] | None = None, answers_without_credit: bool = False):
         self.url, self.keyless, self.min_interval, self.provider = url, keyless, min_interval, provider
+        self.answers_without_credit = answers_without_credit  # MD1: a key disabled for credit still serves it
         self._urls = urls or {}  # key -> its own endpoint, when keys reach different ones (Clef's REST API and its Worker)
         self.usd_per_input_token = usd_per_input_token
         self._pool, self.disabled = None, 0
@@ -136,7 +138,8 @@ class Jev:
     @classmethod
     def for_model(cls, model: str, concurrency: int = 16, **kw) -> "Jev":
         """The client that serves `model`: TypeSafe for jev-*, the keyless Featherless demo for featherless-ai/*,
-        Workers AI for clef and clef-flash, through the REST API or a clef-proxy Worker (clef_routes)."""
+        Workers AI for clef and clef-flash, through the REST API or a clef-proxy Worker (clef_routes), OpenRouter's
+        key pool for MD1."""
         if model.startswith(SIMPLE_JEV_PREFIX):
             return cls(concurrency=min(concurrency, 2), url=SIMPLE_JEV_DEMO_URL, usd_per_input_token=0.0, keyless=True,
                        min_interval=SIMPLE_JEV_DEMO_INTERVAL, **kw)
@@ -144,19 +147,24 @@ class Jev:
             routes = clef_routes(model)
             return cls(keys=list(routes), urls=routes, concurrency=concurrency, url=CLEF_URL.format(account=clef_account(), model=model),
                        usd_per_input_token=CLEF_PRICES[model] / 1_000_000, provider="cloudflare", **kw)
+        if model == MD1:  # priced like Jev, so the default rate stands
+            return cls(concurrency=concurrency, url=MD1_URL, provider="openrouter", answers_without_credit=True, **kw)
         return cls(concurrency=concurrency, **kw)
 
     def _live_pool_keys(self) -> list[str]:
-        """The configured keys minus those in the disabled slot, after letting out any disabled for credit more than
-        JEV_RECHECK_S ago."""
+        """The provider's configured keys minus those in the disabled slot, after letting out any disabled for credit
+        more than JEV_RECHECK_S ago. For a model that answers without credit, only revoked and hand-disabled keys stay
+        out, and nothing is let out: the pool's own balance probe owns a credit disable there."""
+        from .client import OUT_OF_CREDIT
         from .keys import pool_for
 
-        loaded = load_keys()
+        loaded = config.load_api_keys(self.provider)
         self._pool = pool_for(self.provider) if loaded else None
         if self._pool is None:
             return loaded
-        self._pool.probation(JEV_RECHECK_S)
-        off = set(self._pool.disabled())
+        if not self.answers_without_credit:
+            self._pool.probation(JEV_RECHECK_S)
+        off = set(self._pool.disabled(but=OUT_OF_CREDIT if self.answers_without_credit else None))
         live = [k for k in loaded if config.fingerprint(k) not in off]
         self.disabled = len(loaded) - len(live)
         return live
@@ -235,8 +243,10 @@ class Jev:
                 data = resp.json()
                 if isinstance(data.get("result"), dict):  # Workers AI wraps the System One answer: {"result": ..., "success": ...}
                     data = data["result"]
-                if self._pool is not None:
-                    self._pool.recover(key)  # a struck key that answers is healthy again
+                # A struck key that answers is healthy again; an MD1 answer says nothing about paid credit, and clearing
+                # a credit disable on it would hand the key to the next paid request, which 402s.
+                if self._pool is not None and not self.answers_without_credit:
+                    self._pool.recover(key)
                 usage = data.get("usage") or {}
                 tin = int(usage.get("input_tokens") or 0)
                 return {"status": "ok", "answers": data.get("answers") or {}, "secs": secs, "in": tin, "out": int(usage.get("output_tokens") or 0),

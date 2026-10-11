@@ -825,11 +825,12 @@ class KeyPool:
         now = time.time()
         return sum(1 for k in self._keys if self._parked(k, now) and self.enable(k))
 
-    def disabled(self) -> list[str]:
-        """Fingerprints currently in the disabled slot, including any an older build left parked on a timer."""
+    def disabled(self, but: str | None = None) -> list[str]:
+        """Fingerprints currently in the disabled slot, including any an older build left parked on a timer; `but`
+        leaves out the keys disabled for that reason (OUT_OF_CREDIT, for a model that answers on a key with none)."""
         self._load(force=True)
         now = time.time()
-        return [self._fp[k] for k in self._keys if self._parked(k, now)]
+        return [self._fp[k] for k in self._keys if self._parked(k, now) and not (but and self._entry(k).get("disabled_reason") == but)]
 
     def any_key(self) -> str:
         """Any key, disabled or not. Only for a FREE GET (the balance/models endpoints): probing a disabled key

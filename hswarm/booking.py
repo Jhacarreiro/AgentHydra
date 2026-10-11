@@ -50,10 +50,10 @@ async def decide(items: list[dict], mgr=None, *, escalate_below: float = 0.7, fa
                                  jev=jev)
     fallbacks = out.pop("_fallback_results")
     spent: tuple = ()
-    # The Jev part, and Clef's when it stood in, is one ledger line each (all its calls), costed like an ask; the caller
-    # stamp is added in book_asks.
+    # The Jev part, and each stand-in's when one stood in, is one ledger line each (all its calls), costed like an ask;
+    # the caller stamp is added in book_asks.
     for stats, provider, name in ((out.pop("_jev_stats"), jev.provider if jev else "typesafe", model),
-                                  (out.pop("_stand_in_stats") or {}, "cloudflare", "clef")):
+                                  *((s, s["provider"], s["model"]) for s in out.pop("_stand_in_stats") or ())):
         if stats.get("calls"):
             jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend=provider, model=stats.get("model") or name,
                         usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),

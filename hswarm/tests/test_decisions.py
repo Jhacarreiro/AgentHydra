@@ -16,8 +16,8 @@ from hswarm import typesafe
 class FakeJev:
     """Answers by a table: question text -> Jev answer object. Records every call."""
 
-    def __init__(self, table: dict, keys=("k",), fail: dict | None = None):
-        self.table, self.keys, self.fail, self.calls = table, list(keys), fail, []
+    def __init__(self, table: dict, keys=("k",), fail: dict | None = None, provider="typesafe"):
+        self.table, self.keys, self.fail, self.calls, self.provider = table, list(keys), fail, [], provider
         self.usable = bool(self.keys)
 
     async def ask(self, state, questions, model=typesafe.MODEL):
@@ -110,18 +110,47 @@ def test_clef_stands_in_when_every_jev_key_is_refused_and_is_held_to_its_own_sca
     clef = FakeJev({"Which team?": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.5, "technical": 0.3, "sales": 0.2}, "confidence": 0.45},
                     "Urgent?": {"type": "noul", "noul": 0.9}})
     mgr = FakeMgr("FINAL: technical")
-    out = asyncio.run(d.decide([_item("Which team?"), {"state": "s", "question": "Urgent?"}], mgr, jev=jev, stand_in=clef, escalate_below=0.7))
+    md1 = FakeJev({}, provider="openrouter")
+    out = asyncio.run(d.decide([_item("Which team?"), {"state": "s", "question": "Urgent?"}], mgr, jev=jev,
+                               stand_ins={"clef": clef, typesafe.MD1: md1}, escalate_below=0.7))
     team, urgent = out["answers"]
     # 0.45 clears Clef's equivalent of 0.7 (0.415) where it would not clear Jev's, so nothing escalates
     assert (team["answer"], team["source"], team["jev"]["model"]) == ("billing", "jev:clef", "clef") and mgr.prompts == []
     assert (urgent["answer"], urgent["source"]) == ("yes", "jev:clef")
-    assert out["summary"]["stand_in"]["items"] == 2 and out["summary"]["by_jev"] == 2
+    assert [s["items"] for s in out["summary"]["stand_in"]] == [2] and out["summary"]["by_jev"] == 2 and md1.calls == []
+
+
+def test_md1_answers_what_clef_cannot_on_jevs_own_scale_and_is_booked_under_openrouter(monkeypatch):
+    # Clef's free neurons run out daily; MD1 on OpenRouter takes what it leaves, unscaled (its 0.7 matched Jev's).
+    from hswarm import booking, config
+
+    jev = FakeJev({}, fail={"status": "error", "error": "HTTP 402: no credit", "http": 402})
+    clef = FakeJev({}, fail={"status": "error", "error": "HTTP 429: daily free allocation used", "http": 429}, provider="cloudflare")
+    md1 = FakeJev({"Which team?": {"type": "choice", "choice": "billing", "probabilities": {"billing": 0.5, "technical": 0.3, "sales": 0.2}, "confidence": 0.45},
+                   "Urgent?": {"type": "noul", "noul": 0.9}}, provider="openrouter")
+    items = [_item("Which team?"), {"state": "s", "question": "Urgent?"}]
+    mgr = FakeMgr("FINAL: technical")
+    out = asyncio.run(d.decide(items, mgr, jev=jev, stand_ins={"clef": clef, typesafe.MD1: md1}, escalate_below=0.7))
+    team, urgent = out["answers"]
+    assert (urgent["answer"], urgent["source"]) == ("yes", "jev:" + typesafe.MD1)
+    assert team["answer"] == "technical" and len(mgr.prompts) == 1  # 0.45 is under 0.7 unscaled, so the choice escalates
+    assert [s["model"] for s in out["summary"]["stand_in"]] == ["clef", typesafe.MD1]
+
+    raw = asyncio.run(d.decide(items, FakeMgr(), jev=jev, stand_ins={"clef": clef, typesafe.MD1: md1}, escalate_below=0))
+
+    async def decided(*a, **kw):
+        return raw
+
+    monkeypatch.setattr(booking.decisions, "decide", decided)
+    asyncio.run(booking.decide(items, FakeMgr(), escalate_below=0))
+    booked = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [(r["provider"], r["model"]) for r in booked if r["provider"] != "typesafe"] == [("cloudflare", "clef"), ("openrouter", typesafe.MD1)]
 
 
 def test_a_malformed_question_is_not_handed_to_the_stand_in():
     jev = FakeJev({}, fail={"status": "error", "error": "HTTP 422: criteria required", "http": 422})
     clef = FakeJev({"Urgent?": {"type": "noul", "noul": 0.9}})
-    out = asyncio.run(d.decide([{"state": "s", "question": "Urgent?"}], FakeMgr(), jev=jev, stand_in=clef, escalate_below=0))
+    out = asyncio.run(d.decide([{"state": "s", "question": "Urgent?"}], FakeMgr(), jev=jev, stand_ins={"clef": clef}, escalate_below=0))
     assert clef.calls == [] and out["answers"][0]["answer"] is None and "stand_in" not in out["summary"]
 
 
@@ -315,11 +344,38 @@ def test_a_clef_key_line_carries_its_route_so_a_synced_pc_needs_nothing_else():
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             jev = typesafe.Jev.for_model("clef", http=http)
-            res = [await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model="clef") for _ in range(2)]
+            res = [await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model="clef") for _ in range(3)]
             return jev.keys, res
 
     keys, res = asyncio.run(go())
     assert all(r["status"] == "ok" for r in res)
-    assert keys == ["cf-token-a", "proxy-secret"]  # the other account's token would 401 on this account's URL
+    assert keys == ["cf-token-a", "cf-token-b", "proxy-secret"]  # each account's token on its own account's URL, never another's
     assert sorted(seen) == [("https://api.cloudflare.com/client/v4/accounts/0123456789abcdef0123456789abcdef/ai/run/@cf/cloudflare/clef", "Bearer cf-token-a"),
+                            ("https://api.cloudflare.com/client/v4/accounts/fedcba9876543210fedcba9876543210/ai/run/@cf/cloudflare/clef", "Bearer cf-token-b"),
                             ("https://clef.example.workers.dev/clef", "Bearer proxy-secret")]
+
+
+def test_md1_draws_openrouter_keys_disabled_for_credit_but_never_revoked_ones_and_leaves_the_disable(monkeypatch):
+    """14 of 14 OpenRouter keys whose balance read $0 answered MD1 on 2026-10-11, so a credit disable must not hide a key
+    from it. A 200 there says nothing about paid credit: the key stays out of paid rotation."""
+    from hswarm import client, keys
+
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "or-funded-0000,or-broke-0000,or-revoked-000")
+    pool = keys.pool_for("openrouter")
+    pool.broke("or-broke-0000", status=402)
+    pool.disable("or-revoked-000", reason=client.REVOKED, status=401)
+    seen = []
+
+    def handler(request: httpx.Request) -> httpx.Response:
+        seen.append((str(request.url), json.loads(request.content)["model"]))
+        return httpx.Response(200, json={"model": typesafe.MD1, "answers": {"q": {"type": "noul", "noul": 0.9}}, "usage": {"input_tokens": 30}})
+
+    async def go():
+        async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
+            jev = typesafe.Jev.for_model(typesafe.MD1, http=http)
+            return jev.keys, [await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model=typesafe.MD1) for _ in range(2)]
+
+    drawn, res = asyncio.run(go())
+    assert sorted(drawn) == ["or-broke-0000", "or-funded-0000"] and all(r["status"] == "ok" for r in res)
+    assert seen == [(typesafe.MD1_URL, typesafe.MD1)] * 2 and typesafe.is_typed_model(typesafe.MD1)
+    assert config.fingerprint("or-broke-0000") in pool.disabled()
