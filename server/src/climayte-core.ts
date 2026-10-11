@@ -7,7 +7,6 @@
 import {
   closeSync,
   existsSync,
-  mkdirSync,
   openSync,
   readdirSync,
   readFileSync,
@@ -63,11 +62,12 @@ import {
 } from './climayte-placement'
 import { newestLive } from './climayte-remote'
 import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
+import { queueSideWrite, queueStoreWrite } from './climayte-store-writer'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { loginExpiryState } from './core/desktop-cli-renew'
 import { handsOnAgoMs } from './core/hands-on'
-import { type JsonStoreSpec, readJsonStore, writeJsonStoreAtomic } from './core/json-store'
+import { type JsonStoreSpec, readJsonStore } from './core/json-store'
 import { mapPool } from './core/map-pool'
 import { setOwnerClaudeDir } from './core/owner-claude-dir'
 import { POINTER_DIR } from './instance'
@@ -705,33 +705,36 @@ function orgWallsFromAttempts(): boolean {
   return any
 }
 
+/** The text is made here; the files are written off the thread, in order (climayte-store-writer). */
 export function save(): void {
   if (!loaded) return
-  mkdirSync(ROOT, { recursive: true })
+  const files = new Map<string, string | null>()
   const hot: CliMayteWorker[] = []
   for (const w of workers.values()) {
     if (!isFinished(w)) hot.push(w)
     else if (dirty.has(w.id) || !filed.has(w.id)) {
-      writeJsonStoreAtomic(donePath(w.id), w)
+      files.set(donePath(w.id), JSON.stringify(w, null, 2))
       filed.add(w.id)
     }
   }
   dirty.clear()
-  writeJsonStoreAtomic(STORE_SPEC.path, { workers: hot, perAccount, perAccountStrict })
-  // A revived worker's file (and a removed one's) goes only now that workers.json is written: a
+  // A revived worker's file (and a removed one's) goes only after workers.json is written: a
   // finished worker is filed before it leaves workers.json and unfiled after it is back there, so
   // a crash at any point leaves it in at least one of them.
   for (const id of filed) {
     const w = workers.get(id)
     if (w && isFinished(w)) continue
-    rmSync(donePath(id), { force: true })
+    files.set(donePath(id), null)
     filed.delete(id)
   }
+  queueStoreWrite(files, {
+    path: STORE_SPEC.path,
+    text: JSON.stringify({ workers: hot, perAccount, perAccountStrict }, null, 2),
+  })
 }
 
 export function saveWalls(): void {
-  mkdirSync(ROOT, { recursive: true })
-  writeJsonStoreAtomic(WALLS_PATH, walls)
+  queueSideWrite(WALLS_PATH, JSON.stringify(walls, null, 2))
 }
 
 /** Tell the listeners `w` changed. Apart from the save, so a dispatch of many saves once. */

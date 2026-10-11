@@ -37,6 +37,12 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import {
+  mkdir as mkdirAsync,
+  rename as renameAsync,
+  rm as rmAsync,
+  writeFile as writeFileAsync,
+} from 'node:fs/promises'
 import { dirname } from 'node:path'
 
 /** What a read found. `raw` is the exact file text, kept so a corrupt store can be reported and
@@ -141,7 +147,7 @@ export function readJsonStore<T>(spec: JsonStoreSpec<T>): JsonStoreRead<T> {
  */
 export function writeJsonStoreAtomic(path: string, value: unknown): void {
   mkdirSync(dirname(path), { recursive: true })
-  const tmp = `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
+  const tmp = tmpPathFor(path)
   try {
     writeFileSync(tmp, JSON.stringify(value, null, 2))
     // The rename is retried on the codes Windows hands out while something else briefly holds the
@@ -156,6 +162,35 @@ export function writeJsonStoreAtomic(path: string, value: unknown): void {
     }
     throw err
   }
+}
+
+/** writeJsonStoreAtomic for a caller on the daemon's thread: the caller makes the text, the file
+ *  steps go through node:fs/promises, and the waits between rename retries are timers, not a spin
+ *  (that spin was 262.9 s of the live log's thread stalls, all-time, while Defender held a store). */
+export async function writeJsonTextAtomic(path: string, text: string): Promise<void> {
+  await mkdirAsync(dirname(path), { recursive: true })
+  const tmp = tmpPathFor(path)
+  try {
+    await writeFileAsync(tmp, text)
+    const deadline = Date.now() + RENAME_RETRY_MS
+    for (;;) {
+      try {
+        await renameAsync(tmp, path)
+        return
+      } catch (err) {
+        const code = errorCode(err)
+        if (!code || !TRANSIENT_CODES.has(code) || Date.now() >= deadline) throw err
+        await new Promise<void>((r) => setTimeout(r, 10))
+      }
+    }
+  } catch (err) {
+    await rmAsync(tmp, { force: true }).catch(() => {})
+    throw err
+  }
+}
+
+function tmpPathFor(path: string): string {
+  return `${path}.${process.pid}.${Date.now()}.${Math.random().toString(36).slice(2, 8)}.tmp`
 }
 
 export type JsonStoreMutation<R> =

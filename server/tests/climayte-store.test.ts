@@ -243,6 +243,55 @@ test('a load while done/ is still being read takes the work in flight now and ev
   expect(booted).toBe(5)
 }, 60_000)
 
+test('a store write the disk refuses holds neither the caller nor the thread, keeps the worker in workers.json, and goes with the next save', async () => {
+  const { home, corch } = install('refused')
+  writeFileSync(
+    join(corch, 'workers.json'),
+    JSON.stringify({ workers: [worker('w-x', 'waiting', home)], perAccount: {} }),
+  )
+  // A directory where the worker's file goes: on Windows its rename answers EPERM, the code a file
+  // Defender holds answers, so the write retries for its whole budget before it gives up.
+  const blocker = join(corch, 'done', 'w-x.json')
+  mkdirSync(blocker, { recursive: true })
+  const src = (f: string) => pathToFileURL(resolve(import.meta.dir, `../src/${f}`)).href
+  const out = (await start(
+    home,
+    `const core = await import(args.core)
+     const { flushCliMayteStore } = await import(args.writer)
+     const fs = await import('node:fs')
+     c.climayteList()
+     const w = core.workers.get('w-x')
+     w.status = 'done'
+     let last = performance.now()
+     let maxGapMs = 0
+     const timer = setInterval(() => {
+       const now = performance.now()
+       maxGapMs = Math.max(maxGapMs, now - last)
+       last = now
+     }, 5)
+     let threw = null
+     try { core.changed(w) } catch (err) { threw = String(err) }
+     await flushCliMayteStore()
+     clearInterval(timer)
+     const hotAfterRefusal = JSON.parse(fs.readFileSync(args.store, 'utf8')).workers.map((x) => x.id)
+     fs.rmSync(args.blocker, { recursive: true })
+     core.save()
+     await flushCliMayteStore()
+     return { threw, maxGapMs, hotAfterRefusal }`,
+    {
+      core: src('climayte-core.ts'),
+      writer: src('climayte-store-writer.ts'),
+      store: join(corch, 'workers.json'),
+      blocker,
+    },
+  )) as { threw: string | null; maxGapMs: number; hotAfterRefusal: string[] }
+  expect(out.threw).toBeNull()
+  expect(out.maxGapMs).toBeLessThan(500)
+  expect(out.hotAfterRefusal).toEqual(['w-x'])
+  expect(readJson(blocker)).toMatchObject({ id: 'w-x', status: 'done' })
+  expect(readJson(join(corch, 'workers.json')).workers).toEqual([])
+}, 60_000)
+
 test("a finished attempt's log is packed a day on and reads the same; a cancelled one whose runner still lives is left", async () => {
   const { home, corch } = install('pack')
   const logs = join(corch, 'logs')

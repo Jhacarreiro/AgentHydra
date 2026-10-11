@@ -5,7 +5,7 @@
 // from climayte.ts on 2026-10-08 to keep each file under the Architect's 2,500-line gate; nothing
 // here imports climayte.ts.
 
-import { mkdirSync, renameSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   accountCaps,
@@ -21,7 +21,6 @@ import {
   load,
   overageAllowed,
   peekLog,
-  ROOT,
   readInto,
   readIntoAsync,
   runnerSpecPath,
@@ -62,6 +61,7 @@ import {
   readRunnerPids,
   unclaimedFor,
 } from './climayte-runner'
+import { queueSideWrite } from './climayte-store-writer'
 import { isPidAlive, killProcessTreesAsync, spawnCaptured } from './core/process'
 import { nativeCommandLines } from './core/win-process-table'
 import { parseResetTime } from './usage'
@@ -77,14 +77,7 @@ let liveDirty = false
 export function saveLive(): void {
   if (!liveDirty) return
   liveDirty = false
-  try {
-    mkdirSync(ROOT, { recursive: true })
-    const tmp = `${LIVE_PATH}.tmp`
-    writeFileSync(tmp, JSON.stringify(Object.fromEntries(liveByAccount)))
-    renameSync(tmp, LIVE_PATH)
-  } catch (err) {
-    console.error('[climayte] could not save live readings:', err)
-  }
+  queueSideWrite(LIVE_PATH, JSON.stringify(Object.fromEntries(liveByAccount)))
 }
 
 /** A copy of each account's newest live reading, for the usage tables (usage-live.ts). */

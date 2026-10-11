@@ -29,6 +29,7 @@ import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayt
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { preloadDone } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
+import { flushCliMayteStore } from './climayte-store-writer'
 import {
   APP_ROOT,
   appEnv,
@@ -927,6 +928,11 @@ async function flushConnectionsBeforeExit(): Promise<void> {
   ])
 }
 
+/** Every graceful exit waits for the settings sync and for CliMayte's queued store writes. */
+async function flushBeforeExit(): Promise<void> {
+  await Promise.all([flushConnectionsBeforeExit(), flushCliMayteStore()])
+}
+
 app.post('/api/shutdown', (c) => {
   const trayHeader = c.req.header('x-agenthydra-shutdown-token') ?? ''
   const uiSource = c.req.header('x-agenthydra-shutdown-source') === 'ui'
@@ -939,7 +945,7 @@ app.post('/api/shutdown', (c) => {
   if (!uiSource && !tokenOk) return c.json({ error: 'forbidden' }, 403)
   if (uiSource && !tokenOk) writeShutdownRequest()
   setTimeout(async () => {
-    await flushConnectionsBeforeExit()
+    await flushBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1304,9 +1310,11 @@ startTrayInvariant({
   wait: (ms) => new Promise((r) => setTimeout(r, ms)),
   shutdown: () => {
     stopBackgroundTimers()
-    clearInstanceInfo()
-    stopAutoUpdate()
-    process.exit(0)
+    void flushCliMayteStore().finally(() => {
+      clearInstanceInfo()
+      stopAutoUpdate()
+      process.exit(0)
+    })
   },
   log: (m) => console.log(m),
 })
@@ -1322,7 +1330,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     clearInterval(pointerReassertTimer)
     stopBackgroundTimers()
     await stopHSwarm()
-    await flushConnectionsBeforeExit()
+    await flushBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
     process.exit(0)
@@ -1379,7 +1387,7 @@ function relaunchDaemon(): Promise<boolean> {
         // /api/daemon/restart response flush before the socket carrying it closes.
         setTimeout(async () => {
           await stopHSwarm()
-          await flushConnectionsBeforeExit()
+          await flushBeforeExit()
           clearInstanceInfo()
           stopAutoUpdate()
           process.exit(0)

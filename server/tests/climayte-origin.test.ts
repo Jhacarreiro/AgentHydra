@@ -31,6 +31,7 @@ import {
 } from '../src/climayte'
 import { notify, ROOT, workers } from '../src/climayte-core'
 import type { CliMayteAttempt } from '../src/climayte-lib'
+import { flushCliMayteStore } from '../src/climayte-store-writer'
 import { resolveOwnTranscript } from '../src/compaction-history'
 import { app } from '../src/http-app'
 import { POINTER_DIR } from '../src/instance'
@@ -220,6 +221,7 @@ describe('climayte_run records the calling chat as the origin', () => {
       origin: { kind: 'chat', sessionId: SID, home: HOME, transcript: TRANSCRIPT, how: 'x' },
     })
     const id = r.workers[0].id
+    await flushCliMayteStore()
     const stored = JSON.parse(readFileSync(join(ROOT, 'workers.json'), 'utf8')) as {
       workers: Array<{ id: string; origin?: { sessionId: string } }>
     }
