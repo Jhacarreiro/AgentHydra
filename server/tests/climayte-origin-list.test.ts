@@ -1,5 +1,5 @@
 // server/tests/climayte-origin-list.test.ts — `origin=<session ids>` on the workers list (Desk 2's Background tasks
-// panel asks it for the open chat).
+// panel asks it for the open chat), and `session=<session ids>` (Desk 2 finds a session's worker with it).
 //
 // It answers the workers those chats dispatched, through the workers they dispatched and a wave's manager, and for a chat
 // that is itself a worker the ones that worker dispatched, never the worker itself; `limit` counts the finished ones of
@@ -95,4 +95,28 @@ test('origin keeps the workers a chat dispatched, through workers and waves, wit
   expect(await list(`&origin=${SID},${OWN_OLD}`)).toEqual(
     [id.direct, id.child, id.manager, id.waveTask, id.ownChild].sort(),
   )
+})
+
+// Desk 2 finds the worker behind a session the transcript index lacks with this, instead of reading every worker
+// (27 MB on a busy PC, built on the daemon's thread).
+test('session keeps the workers that ran in one of these sessions, current or earlier', async () => {
+  const run = climayteRun({
+    tasks: ['now', 'before', 'neither'].map((t) => ({
+      prompt: `run ${t}`,
+      cwd: CWD,
+      title: t,
+      size: 'whole' as const,
+    })),
+    group: GROUP,
+  }).workers
+  made.push(...run.map((w) => w.id))
+  const [now, before, neither] = run.map((w) => workers.get(w.id)!)
+  Object.assign(now!, { sessionId: 'sess-now', sessions: [] })
+  Object.assign(before!, { sessionId: 'sess-later', sessions: ['sess-old'] })
+  Object.assign(neither!, { sessionId: 'sess-other', sessions: [] })
+
+  expect(await list('&session=sess-now')).toEqual([now!.id])
+  expect(await list('&session=sess-old')).toEqual([before!.id])
+  expect(await list('&session=sess-now,sess-old')).toEqual([now!.id, before!.id].sort())
+  expect(await list('&session=sess-none')).toEqual([])
 })

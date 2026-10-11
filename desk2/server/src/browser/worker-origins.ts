@@ -1,6 +1,9 @@
 // The Claude Code sessions of CliMayte workers, each mapped to the session that dispatched the worker, so a page a
 // worker opens belongs to its parent chat's ecosystem. Read from the bridge at most every few seconds and shared by
-// every browser plugin (one cache per bridge).
+// every browser plugin (one cache per bridge). The full list (every worker AgentHydra ever ran: 27 MB on a busy PC,
+// and building it held AgentHydra's thread) is read once; after that the recent list, which holds every active
+// worker and the newest finished ones, adds the sessions that appear. A session stays its worker's, so what the map
+// learned stays true.
 
 import type { Bridge } from '../bridge'
 
@@ -13,15 +16,20 @@ const readers = new WeakMap<Bridge, () => Promise<WorkerOrigins>>()
 export function workerOrigins(b: Bridge): () => Promise<WorkerOrigins> {
   let read = readers.get(b)
   if (!read) {
-    let cached: { at: number; map: WorkerOrigins } | null = null
+    const map = new Map<string, string>()
+    let seeded = false
+    let readAt = 0
     read = async () => {
-      if (cached && Date.now() - cached.at < TTL_MS) return cached.map
-      const map = new Map<string, string>()
-      for (const w of await b.workers({ all: true }).catch(() => [])) {
-        if (!w.originSessionId) continue
-        for (const s of w.sessions ?? []) map.set(s, w.originSessionId)
+      if (readAt && Date.now() - readAt < TTL_MS) return map
+      const list = await (seeded ? b.workers() : b.workers({ all: true })).catch(() => null)
+      if (list) {
+        seeded = true
+        for (const w of list) {
+          if (!w.originSessionId) continue
+          for (const s of w.sessions ?? []) map.set(s, w.originSessionId)
+        }
       }
-      cached = { at: Date.now(), map }
+      readAt = Date.now()
       return map
     }
     readers.set(b, read)

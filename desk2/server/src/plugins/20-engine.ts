@@ -557,7 +557,8 @@ function shutdownRoute(app: Hono, ctx: ServerContext, manager: ChatManager, host
 async function tabSweepSessions(manager: ChatManager, deps: ServerContext['deps']): Promise<Set<string>> {
   const ids = new Set<string>()
   for (const chat of manager.list()) for (const id of manager.browserSessions(chat.id)) ids.add(id)
-  const workers = await ((deps.bridge as ReturnType<typeof bridge> | undefined) ?? bridge()).workers({ all: true })
+  // The recent list holds every active worker; the full one is every worker ever run.
+  const workers = await ((deps.bridge as ReturnType<typeof bridge> | undefined) ?? bridge()).workers()
   for (const w of workers) if (w.active && w.sessionId) ids.add(w.sessionId)
   return ids
 }

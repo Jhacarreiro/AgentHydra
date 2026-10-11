@@ -126,11 +126,13 @@ app.get('/api/corch/workers', async (c) => {
       .map((s) => s.trim())
       .filter(Boolean)
   const ids = list(c.req.query('ids'))
+  const sessions = list(c.req.query('session'))
   const origin = list(c.req.query('origin'))
   const filter = {
     group: optStr(c.req.query('group')),
     id: optStr(c.req.query('id')),
     ids: ids?.length ? ids : undefined,
+    sessions: sessions?.length ? sessions : undefined,
     origin: origin?.length ? origin : undefined,
     active: flag(c.req.query('active')) ? true : undefined,
     limit: optInt(c.req.query('limit')),

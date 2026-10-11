@@ -483,6 +483,9 @@ export function createClient(opts: HydraClientOptions = {}) {
       post<{ cancelled: string[]; keptMessages: Record<string, number> }>('/api/corch/cancel', { id }),
     /** These workers however old (a chat's worker that finished a week ago), in one read. */
     workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1`),
+    /** The workers that ran in these sessions (current or earlier), however old, without reading every worker. */
+    workersBySession: (sessionIds: string[]) =>
+      get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1`),
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {

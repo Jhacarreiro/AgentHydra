@@ -226,6 +226,8 @@ function handlePost(state: FakeState, p: string, body: any): Response {
 function getWorkers(state: FakeState, q: URLSearchParams): Response {
   const ids = q.get('ids')
   if (ids !== null) return json(state.workers.filter((w) => ids.split(',').includes(w.id)))
+  const session = q.get('session')?.split(',')
+  if (session) return json(state.workers.filter((w) => [w.sessionId, ...(w.sessions ?? [])].some((s) => !!s && session.includes(s))))
   const group = q.get('group')
   if (group !== null) return json(state.workers.filter((w) => w.group === group))
   const limit = q.get('limit')

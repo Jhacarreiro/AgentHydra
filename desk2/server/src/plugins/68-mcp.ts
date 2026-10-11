@@ -76,9 +76,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const redesign = new Map<string, McpHandler>()
   const outDir = join(ctx.home, 'design-options')
   const browserClient = createBrowserAgentClient({ home: ctx.home })
+  // The recent list holds every active worker, and a caller is one (a worker on a call, or the session of one).
+  // The full list is every worker AgentHydra ever ran: 27 MB on a busy PC, and building it held its thread.
   const cachedWorkers = cachedLookup<Workers>(async () => {
     const b = (ctx.deps.bridge as Bridge | undefined) ?? bridge()
-    return b.workers({ all: true }).catch(() => [])
+    return b.workers().catch(() => [])
   })
   const peerSession = createPeerSessionLookup(resolvePeerSession)
   const sessionDeps = {

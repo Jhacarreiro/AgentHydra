@@ -574,8 +574,8 @@ export function createBridge(opts: BridgeOptions = {}) {
       const tail = await client.tail(sessionId)
       if (!tail.error) return tailToItems(tail)
       // Not in the transcript index: a CliMayte worker's session lives in its CLI instance's folder.
-      const all = await rawWorkers(true)
-      const w = all.find((x) => x.sessionId === sessionId || x.sessions?.includes(sessionId))
+      const held = await client.workersBySession([sessionId])
+      const w = held.find((x) => x.sessionId === sessionId || x.sessions?.includes(sessionId))
       if (!w) throw new BridgeError('http', `AgentHydra has no transcript for session ${sessionId}`, 404)
       return workerDetailToItems(await client.worker(w.id))
     } finally {

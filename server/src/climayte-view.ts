@@ -143,11 +143,13 @@ export function onCliMayteChange(cb: (w: CliMayteWorker) => void): () => void {
 
 export function matches(
   w: CliMayteWorker,
-  f: { group?: string; id?: string; ids?: string[]; active?: boolean },
+  f: { group?: string; id?: string; ids?: string[]; sessions?: string[]; active?: boolean },
 ): boolean {
   return (
     (!f.id || w.id === f.id) &&
     (!f.ids || f.ids.includes(w.id)) &&
+    (!f.sessions ||
+      [w.sessionId, ...(w.sessions ?? [])].some((s) => !!s && f.sessions?.includes(s))) &&
     (!f.group || w.group === f.group) &&
     (!f.active || isActive(w))
   )
@@ -201,12 +203,14 @@ export function dispatchedFrom(
 
 /** `limit`: keep every active worker and only the `limit` most recently finished ones
  *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief);
- *  `ids`: only these workers; `origin`: only the workers these chat sessions dispatched
+ *  `ids`: only these workers; `sessions`: only the workers that ran in one of these sessions
+ *  (current or earlier); `origin`: only the workers these chat sessions dispatched
  *  (dispatchedFrom), `limit` then counting their finished ones. */
 export interface CliMayteListFilter {
   group?: string
   id?: string
   ids?: string[]
+  sessions?: string[]
   active?: boolean
   origin?: string[]
   limit?: number

@@ -1651,9 +1651,10 @@ the chat failed, and it looked like the account was broken. Now:
 
 ## Routes: `server/src/routes/climayte.ts`
 
-- `GET /api/corch/workers?group=&id=&ids=&origin=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
+- `GET /api/corch/workers?group=&id=&ids=&session=&origin=&active=1&limit=&brief=1&wait=` → `climayteList` (`wait`
   seconds: first wait for the next status change in scope, via `climayteWait`; `ids` a
-  comma-separated list; `origin` comma-separated session ids: only the workers those chats dispatched, through
+  comma-separated list; `session` comma-separated session ids: only the workers that ran in one of them, current
+  or earlier (Desk 2 finds a worker by its session this way instead of reading every worker); `origin` comma-separated session ids: only the workers those chats dispatched, through
   the workers they dispatched and a wave's manager, and for a chat that is itself a worker the ones that worker
   dispatched (`dispatchedFrom`), with `limit` counting their finished ones alone; Desk 2's Background tasks panel
   asks it for the open chat). Every row carries `judged`: finished, and a verdict covers its newest work
