@@ -162,6 +162,8 @@ async def _decide(b: dict) -> dict:
     route = b.get("jev")
     if not route or not str(args.get("model") or typesafe.MODEL).startswith("jev-"):
         return await booking.decide(**args)
+    if not isinstance(route, dict):
+        raise ValueError("jev needs an object: {url, key, provider?}")
     url, key = str(route.get("url") or ""), str(route.get("key") or "")
     if not url.startswith("https://") or not key:
         raise ValueError("jev needs an https url and a key")
