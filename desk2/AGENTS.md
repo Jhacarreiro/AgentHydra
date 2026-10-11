@@ -75,6 +75,12 @@ between server/ and web/.
   than its listener was attached; inside the transcript (whose capture listener stamps the click first) a probe's
   click then does nothing (2026-10-08, the working line's ">"). Move the clock before clicking:
   `Date.now = () => frozen + n++`.
+- A ref filled from the server only by whole replacement (`x.value = await api.y()`) is a `shallowRef`: `ref()` wraps
+  every element of every reply in a reactive proxy and re-tracks it on each swap. Keep `ref()` when anything edits it in
+  place (a member or index assignment, a mutating method, `v-model` into it or into a `v-for` item of it), or when one of
+  its items is stored in another ref or compared by identity: an item read raw from a `shallowRef` never equals the same
+  object read through a deep ref's proxy. 26 were moved on 2026-10-11; the Architect's `deep-ref-replaced-whole` rule
+  lists the rest, each still to be checked against those exceptions.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp

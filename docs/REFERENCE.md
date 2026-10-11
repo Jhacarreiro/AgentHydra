@@ -925,8 +925,11 @@ same process to happen at all. Two rules came out of chasing it:
 
 A test that passes alone and times out in `bun test --parallel=4` on a busy machine is usually
 betting that a real process (a bun child, git, a hook push, PowerShell) is as fast as it is idle.
-Five such tests were fixed on 2026-10-11, on a box at 91% CPU, and the rules they left are:
+Tests of this class were fixed in three passes on 2026-10-11, on a box at ~90% CPU, and the rules they
+left are:
 
+- **Run the file alone first** (`bun test <file>`). Passes alone: load, so find the slow step before
+  widening. Fails alone: a bug, so fix the code the test guards.
 - **Measure before widening anything.** `--timeout 120000 --reporter=junit --reporter-outfile=<file>`
   lets slow tests report their real durations instead of being cut off at the bound.
 - **Look for incidental work first.** Every successful update in the updater tests launched a
@@ -945,6 +948,38 @@ Five such tests were fixed on 2026-10-11, on a box at 91% CPU, and the rules the
   killed that way returns status 1, which reads like a refusal from the code under test.
 - **A failure in milliseconds is never load.** Look for a test that reads the clock separately
   from the code it checks.
+- **Nor is a failure faster than the wait it should have made.** The search index's held-file test
+  indexed nothing in under a second against a 2 s `busy_timeout`: SQLite answers `SQLITE_BUSY` at
+  once, never waiting, to a deferred transaction that read before it asked to write. The index's
+  upgrade and rebuild now `BEGIN IMMEDIATE` (`server/src/search-index.ts`). Log what a `catch`
+  swallows before sizing anything.
+- **A test that fails only after another failed is a cascade.** Give it a clean start in its own
+  `beforeAll` or first lines (`resetFreeHealth()` in `mcp-free.test.ts`; the wave-judging tests in
+  `climayte-wave.test.ts` check out `main` whatever the test before left checked out).
+- **`--parallel` implies `--isolate`.** Each file gets fresh module state and a file's leftover
+  timers stop when it ends, but a timer still pending fires in the same file's next test: a helper
+  that resets a module clears the timers it starts (`setSearchIndexPathForTests` and the 1 s upkeep
+  timer).
+- **The CliMayte integration tests size every wait from one measured constant**, `ATTEMPT_MS` in
+  `server/tests/mocks/climayte-timing.ts`: a wait for k attempts is k x `ATTEMPT_MS`, and a run on an
+  idle box still ends the moment its worker does.
+- **A test about its own process tree builds the tree it asserts.** The runner's parents are not a
+  fixture: a `bun test` started from an agent's shell can have one live parent, not two.
+  `climayte-origin.test.ts`'s nearest-engine case starts a relay that starts the asker, and asserts the
+  asker's chain is exactly [relay, test]. Its children get a scratch `HOME` and `USERPROFILE` (Bun's
+  `os.homedir()` follows them), so a crashed session's stale `~/.claude/sessions/<pid>.json`, naming a
+  pid Windows has since given to the relay, cannot answer.
+- **A timing assertion says which stall it saw.** The limit-reset thread test
+  (`cli-limit-reset.test.ts`) runs a ticker on a second thread; on a failure it prints whether that
+  thread stalled too (the whole process was off the CPU) or kept ticking (the tested thread alone was
+  held). One 1,035 ms gap in nine full runs never came back in 39 later samples: if it does, read that
+  line first.
+- **A source guard keys on what it protects, not on the call that starts it.**
+  `usage-probe-discipline.test.ts` looked for `Bun.spawn([resolveClaudeExe()` and failed in 0 ms once
+  the probe moved to `spawnCaptured`; it now finds the probe's argv.
+- **State a test's own bound as a numeric literal with a comment** unless it is shared: Biome keeps
+  the hugged `}, 45_000)` layout only for a literal, and expands the whole `test()` call for a
+  constant.
 
 ### Repo guardrails (`scripts/checks/`)
 

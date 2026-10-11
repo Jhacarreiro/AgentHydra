@@ -40,6 +40,11 @@ works on Windows), types `/limit-reset`, and reads the CLI's own answer off the 
    says it may have been used.
 5. Ctrl+C twice, then kill the tree. One run per account at a time.
 
+A run lives on a worker thread of its own (`runOffThread`), never the daemon's: on 2026-10-11 starting
+`claude.exe` held the daemon's only thread for seconds at a time on a loaded PC, and the tray watchdog kills
+a daemon that leaves `/api/health` unanswered. `server/tests/cli-limit-reset.test.ts` makes the CLI's start
+hold its thread for 2 s and asserts the daemon's thread never goes a second without running.
+
 Answers (screen text loses spaces, so matching is loose; the message shown is a fixed sentence):
 `reset`, `used` (with the date it comes back), `unavailable` ("A reset isn't available for this
 account right now."), `available` (check only), `error`. The last real answer is kept on the
