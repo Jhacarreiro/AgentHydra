@@ -31,7 +31,7 @@ import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { killProcessTree, listDesktopEngines } from './core/process'
 import { deliverIncidentNotification, recordIncident } from './incidents'
-import { readLiveRegistry } from './live-registry'
+import { readLiveRegistryAsync } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { ExtraUsageOffResult, UsageLimit, UsageSnapshot } from './types'
 import { getCachedUsage } from './usage'
@@ -128,7 +128,7 @@ async function stores(): Promise<Store[]> {
 async function sessionsOn(store: Store, skip: Set<number>): Promise<number[] | null> {
   if (store.kind === 'cli') {
     if (!store.configDir) return []
-    return readLiveRegistry(store.configDir)
+    return (await readLiveRegistryAsync(store.configDir, { transcripts: false }))
       .map((s) => s.pid)
       .filter((pid) => !skip.has(pid))
   }

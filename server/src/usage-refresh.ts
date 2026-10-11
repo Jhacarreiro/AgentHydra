@@ -175,7 +175,7 @@ function keepaliveBlock(
   const wall = walls.get(id)
   if (wall && wall.until > Date.now())
     return `walled by CliMayte at its ${wall.weekly ? 'weekly' : '5-hour'} limit until ${new Date(wall.until).toISOString()}`
-  const running = readLiveRegistry(configDir).length
+  const running = readLiveRegistry(configDir, { transcripts: false }).length
   return running ? `${running} Claude session${running === 1 ? '' : 's'} running on it` : null
 }
 

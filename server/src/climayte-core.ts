@@ -72,7 +72,7 @@ import { mapPool } from './core/map-pool'
 import { setOwnerClaudeDir } from './core/owner-claude-dir'
 import { POINTER_DIR } from './instance'
 import type { KitStore } from './kit/store'
-import { liveSessionIds } from './live-registry'
+import { liveIdsOf, type Registration, readRegistrationsAsync } from './live-registry'
 import { getProviderSettings } from './provider-settings'
 import type { CliInstance, UsageSnapshot } from './types'
 import { resetTimeIso } from './usage'
@@ -246,9 +246,34 @@ export let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 
 /** Claude sessions running in an account's folder that are not CliMayte's own: an interactive
  *  CLI session, another agent's, the chat orchestrating this one. Matched by session id, which
- *  CliMayte picks before it starts the CLI (--session-id), so its own new sessions never count. */
+ *  CliMayte picks before it starts the CLI (--session-id), so its own new sessions never count.
+ *  Judged (pid, pipe) at each pool build from the folder's registrations as the tick last read
+ *  them; an account not read yet counts none until the read lands. */
 function otherSessionsIn(configDir: string, mine: Set<string>): number {
-  return liveSessionIds(configDir).filter((id) => !mine.has(id)).length
+  const read = registrations.get(configDir)
+  return read ? liveIdsOf(read.regs).filter((id) => !mine.has(id)).length : 0
+}
+
+/** Each pool account's session registrations and when they were read. The pool read every
+ *  account's sessions folder on the daemon's thread, a readdirSync and a readFileSync per file for
+ *  ~37 accounts every POOL_MS: 9.6 s of the live log's thread stalls in 24 h (2026-10-11), up to
+ *  4 s in one block while the disk was busy. */
+const registrations = new Map<string, { at: number; regs: Registration[] }>()
+
+/** Read again, off the thread, the registrations of every pool account last read POOL_MS ago or
+ *  more; a pool built after it judges the new reads. The tick awaits it before it places work. */
+export async function refreshPoolSessions(now = Date.now()): Promise<void> {
+  const dirs = listCliInstances()
+    .filter(
+      (i) =>
+        (i.loggedIn || !!i.loginNote) && now - (registrations.get(i.configDir)?.at ?? 0) >= POOL_MS,
+    )
+    .map((i) => i.configDir)
+  if (!dirs.length) return
+  const read = await mapPool(dirs, 8, readRegistrationsAsync)
+  for (const [k, dir] of dirs.entries())
+    registrations.set(dir, { at: now, regs: read[k] as Registration[] })
+  pool = null
 }
 
 /** The sessions CliMayte's own running workers hold, built once per pool. */

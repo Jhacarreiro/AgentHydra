@@ -20,7 +20,7 @@ import { join } from 'node:path'
 import { chatMatches, collectChats, type DossierChat, lineageIdsOf } from './core/chat-store-scan'
 import { processImagePath } from './core/process-image'
 import { db } from './db'
-import { readLiveRegistry } from './live-registry'
+import { type LiveSession, readLiveRegistry } from './live-registry'
 
 export type { DossierChat }
 // The pure file-scan (which files exist, which ids each answers to) now lives in
@@ -105,7 +105,7 @@ function defaultLiveFor(
   metaPath?: string | null,
 ): DossierMatch['live'] {
   try {
-    const live = readLiveRegistry(join(homedir(), '.claude'))
+    const live = readLiveRegistry(join(homedir(), '.claude'), { transcripts: false })
     const hit = live.find(
       (s) =>
         ids.includes(s.sessionId) &&
@@ -257,41 +257,44 @@ interface LiveEngine {
   image?: string | null
 }
 
-/** Every live engine by session id, read ONCE. The dossier's per-chat liveFor re-reads the
- *  registry for every chat it returns, which is right for one chat and quadratic for 206. A list
+/** Every live engine by session id, from ONE registry read. The dossier's per-chat liveFor re-reads
+ *  the registry for every chat it returns, which is right for one chat and quadratic for 206. A list
  *  per id, because one id can have two engines at once (a moved chat whose source engine still
  *  runs), and each copy is live only off its own. */
-function liveIndex(): Map<string, LiveEngine[]> {
+function liveIndex(live: LiveSession[]): Map<string, LiveEngine[]> {
   const engines = new Map<string, LiveEngine[]>()
-  try {
-    for (const s of readLiveRegistry(join(homedir(), '.claude'))) {
-      const engine = { pid: s.pid, hostSessionId: s.hostSessionId, image: processImagePath(s.pid) }
-      engines.set(s.sessionId, [...(engines.get(s.sessionId) ?? []), engine])
-    }
-  } catch {
-    /* no registry: every chat reports live:false, which is what "unknown" already looked like */
+  for (const s of live) {
+    const engine = { pid: s.pid, hostSessionId: s.hostSessionId, image: processImagePath(s.pid) }
+    engines.set(s.sessionId, [...(engines.get(s.sessionId) ?? []), engine])
   }
   return engines
 }
 
 export function listChats(
-  opts: ListChatsOptions = {},
-  deps: DossierDeps & {
-    liveIds?: Map<string, number>
-    liveHosts?: Map<string, string>
-    liveImages?: Map<string, string>
-  } = {},
+  opts: ListChatsOptions,
+  deps: DossierDeps &
+    (
+      | {
+          /** The live sessions, read off the daemon's thread by the route (readLiveRegistryAsync). */
+          live: LiveSession[]
+        }
+      | {
+          liveIds: Map<string, number>
+          liveHosts?: Map<string, string>
+          liveImages?: Map<string, string>
+        }
+    ),
 ): ChatListResult {
   const chats = deps.chats ?? collectChats(deps.roots)
-  const { liveIds, liveHosts, liveImages } = deps
-  const engines = liveIds
-    ? new Map(
-        [...liveIds].map(([id, pid]) => [
-          id,
-          [{ pid, hostSessionId: liveHosts?.get(id), image: liveImages?.get(id) }],
-        ]),
-      )
-    : liveIndex()
+  const engines =
+    'live' in deps
+      ? liveIndex(deps.live)
+      : new Map(
+          [...deps.liveIds].map(([id, pid]) => [
+            id,
+            [{ pid, hostSessionId: deps.liveHosts?.get(id), image: deps.liveImages?.get(id) }],
+          ]),
+        )
   const livePidOf = (c: DossierChat): number | undefined => {
     for (const id of lineageIdsOf(c)) {
       const engine = engines.get(id)?.find((e) => engineHostedBy(e, c))

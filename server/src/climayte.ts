@@ -71,6 +71,7 @@ import {
   perAccountStrict,
   preloadDone,
   ROOT,
+  refreshPoolSessions,
   runnerSpecPath,
   save,
   settleSpends,
@@ -624,6 +625,10 @@ async function tick(): Promise<void> {
   try {
     load()
     const now = Date.now()
+    // Who else is on each account, read off the daemon's thread before the pool judges it.
+    await refreshPoolSessions(now).catch((err) =>
+      console.error("[climayte] could not read the accounts' sessions:", err),
+    )
     const accounts = tickAccounts()
     checkRunners()
     await pollRunning()

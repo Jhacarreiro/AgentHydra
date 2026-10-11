@@ -19,7 +19,7 @@ import { db, getSetting } from '../db'
 import { contentDispositionAttachment, safeTranscriptFilename } from '../filenames'
 import { app } from '../http-app'
 import { findDesktopChat } from '../instance-sessions'
-import { readLiveRegistry } from '../live-registry'
+import { readLiveRegistryAsync } from '../live-registry'
 import { boundedQueryInt, jsonBody } from '../route-helpers'
 import { dropSearchIndex, searchIndexStatus } from '../search-index'
 import { branchSession } from '../session-branch'
@@ -377,7 +377,10 @@ app.get('/api/chats', async (c) => {
       limit: boundedQueryInt(c.req.query('limit'), 200, 1000),
       offset: boundedQueryInt(c.req.query('offset'), 0, 100_000, 0),
     },
-    { chats: await collectChatsAsync(roots) },
+    {
+      chats: await collectChatsAsync(roots),
+      live: await readLiveRegistryAsync(join(homedir(), '.claude'), { transcripts: false }),
+    },
   )
   // ⛔ AN INSTANCE THAT DOES NOT EXIST MUST NOT LOOK LIKE AN INSTANCE WITH NO CHATS. Both are
   // `{rows: [], counts: {all: 0}}`, and the second is a real and reassuring answer, so a typo or
@@ -409,7 +412,7 @@ app.get('/api/chats', async (c) => {
 // older daemon that ignored the parameter. Opt-in because it scans the chat store, and the
 // running-count callers ask this endpoint far more often than the orchestrator's plan does.
 app.get('/api/sessions/live', async (c) => {
-  const sessions = readLiveRegistry(join(homedir(), '.claude'))
+  const sessions = await readLiveRegistryAsync(join(homedir(), '.claude'))
   const seen = new Set<string>()
   const rows = sessions.filter((s) => {
     if (seen.has(s.sessionId)) return false

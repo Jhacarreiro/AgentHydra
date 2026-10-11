@@ -458,7 +458,7 @@ function engineTarget(
 function liveChats(homes: string[]): DriftLiveChat[] {
   const out: DriftLiveChat[] = []
   for (const home of homes) {
-    for (const s of readLiveRegistry(home)) {
+    for (const s of readLiveRegistry(home, { transcripts: false })) {
       if (!s.version) continue
       out.push({ pid: s.pid, sessionId: s.sessionId, name: s.name, cwd: s.cwd, version: s.version })
     }

@@ -242,7 +242,9 @@ export function readPortableLogin(
     return { error: 'Not signed in on this PC, so there is nothing to carry.', ...at }
   // Login sync uploads the file as the running CLI last wrote it (`whileRunning`): a refresh made
   // under a long CliMayte run must reach the other PC before that run ends, not after.
-  const running = opts.whileRunning ? 0 : readLiveRegistry(rec.configDir).length
+  const running = opts.whileRunning
+    ? 0
+    : readLiveRegistry(rec.configDir, { transcripts: false }).length
   if (running)
     return {
       error: `${running} Claude session${running === 1 ? ' is' : 's are'} running on it; a running session refreshes the login. Let it finish (or stop it), then try again.`,
@@ -366,7 +368,7 @@ export function exportCliLogins(opts: {
     // A CLI started outside this daemon since the read (a terminal) may have refreshed the login, and
     // the bundle's copy is then the stale one: signing out here would lose the only live login.
     if (
-      readLiveRegistry(rec.configDir).length ||
+      readLiveRegistry(rec.configDir, { transcripts: false }).length ||
       readText(credPath(rec.configDir)) !== s.credentials
     ) {
       row.ok = false
@@ -449,7 +451,7 @@ function landingBlockReason(
   email: string | null,
 ): string | null {
   row.num = rec.num ?? null
-  const running = readLiveRegistry(rec.configDir).length
+  const running = readLiveRegistry(rec.configDir, { transcripts: false }).length
   if (running) {
     row.blocked = 'running'
     return `${running} Claude session${running === 1 ? ' is' : 's are'} running on #${rec.num} here; let it finish, then try again.`

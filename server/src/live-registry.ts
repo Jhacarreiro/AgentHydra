@@ -8,6 +8,7 @@
 // the chat dossier answers "is a process hosting this chat right now" from it.
 
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { access, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
 
 export interface LiveSession {
@@ -129,6 +130,35 @@ function transcriptPathFor(claudeHome: string, cwd: string, sessionId: string): 
   return null
 }
 
+/** transcriptPathFor through node:fs/promises, for a caller on the daemon's thread: its existsSync
+ *  calls were 11.5 s of the live log's thread stalls in 24 h (2026-10-11), in 4 blocks while the
+ *  disk was busy, under the live-session and chat-list routes. */
+async function transcriptPathForAsync(
+  claudeHome: string,
+  cwd: string,
+  sessionId: string,
+): Promise<string | null> {
+  const direct = join(claudeHome, 'projects', projectKeyForCwd(cwd), `${sessionId}.jsonl`)
+  if (await exists(direct)) return direct
+  let dirs: string[]
+  try {
+    dirs = await readdir(join(claudeHome, 'projects'))
+  } catch {
+    return null
+  }
+  for (const dir of dirs) {
+    const p = join(claudeHome, 'projects', dir, `${sessionId}.jsonl`)
+    if (await exists(p)) return p
+  }
+  return null
+}
+
+const exists = (path: string): Promise<boolean> =>
+  access(path).then(
+    () => true,
+    () => false,
+  )
+
 /** A registry file that outlived its process: the session died un-gracefully (computer
  *  restart, crash, kill) - a graceful exit deletes its own `<pid>.json`. Restored from the
  *  archived v1 (piece 8 needs it as crash evidence): mid-process death is a resumable
@@ -182,30 +212,15 @@ export function findTranscriptById(claudeHome: string, sessionId: string): strin
   return null
 }
 
-/** The ids of the sessions alive in a Claude home, without looking up their transcripts: what a
- *  caller that only counts needs (CliMayte's pool asks for every account every few seconds). */
-export function liveSessionIds(claudeHome: string): string[] {
-  let files: string[] = []
-  try {
-    files = readdirSync(join(claudeHome, 'sessions')).filter((f) => f.endsWith('.json'))
-  } catch {
-    return []
-  }
-  const ids: string[] = []
-  const pipes = pipeListing()
-  for (const f of files) {
-    try {
-      const reg = JSON.parse(readFileSync(join(claudeHome, 'sessions', f), 'utf8'))
-      if (typeof reg?.sessionId !== 'string' || typeof reg.pid !== 'number') continue
-      if (sessionAlive(reg, pipes)) ids.push(reg.sessionId)
-    } catch {
-      // One unreadable registry entry must not hide the others.
-    }
-  }
-  return ids
+/** A registry file the CLI wrote (`<pid>.json`), kept when it names a session and a pid. */
+export type Registration = Record<string, unknown> & { pid: number; sessionId: string }
+
+function registrationOf(text: string): Registration | null {
+  const reg = JSON.parse(text)
+  return typeof reg?.sessionId === 'string' && typeof reg.pid === 'number' ? reg : null
 }
 
-export function readLiveRegistry(claudeHome: string): LiveSession[] {
+function readRegistrations(claudeHome: string): Registration[] {
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []
   try {
@@ -213,29 +228,96 @@ export function readLiveRegistry(claudeHome: string): LiveSession[] {
   } catch {
     return []
   }
-  const live: LiveSession[] = []
-  const pipes = pipeListing()
+  const regs: Registration[] = []
   for (const f of files) {
     try {
-      const reg = JSON.parse(readFileSync(join(dir, f), 'utf8'))
-      if (typeof reg?.sessionId !== 'string' || typeof reg?.cwd !== 'string') continue
-      if (typeof reg.pid !== 'number') continue
-      if (!sessionAlive(reg, pipes)) continue
-      live.push({
-        pid: reg.pid,
-        sessionId: reg.sessionId,
-        cwd: reg.cwd,
-        name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
-        startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
-        transcriptPath: transcriptPathFor(claudeHome, reg.cwd, reg.sessionId),
-        ...(typeof reg.version === 'string' ? { version: reg.version } : {}),
-        ...(typeof reg.hostSessionId === 'string' && reg.hostSessionId !== ''
-          ? { hostSessionId: reg.hostSessionId }
-          : {}),
-      })
+      const reg = registrationOf(readFileSync(join(dir, f), 'utf8'))
+      if (reg) regs.push(reg)
     } catch {
       // One unreadable registry entry must not hide the others.
     }
   }
-  return live
+  return regs
+}
+
+/** A home's registrations through node:fs/promises; liveIdsOf judges them on the thread. */
+export async function readRegistrationsAsync(claudeHome: string): Promise<Registration[]> {
+  const dir = join(claudeHome, 'sessions')
+  let files: string[] = []
+  try {
+    files = (await readdir(dir)).filter((f) => f.endsWith('.json'))
+  } catch {
+    return []
+  }
+  const regs = await Promise.all(
+    files.map(async (f) => {
+      try {
+        return registrationOf(await readFile(join(dir, f), 'utf8'))
+      } catch {
+        // One unreadable registry entry must not hide the others.
+        return null
+      }
+    }),
+  )
+  return regs.filter((r): r is Registration => r !== null)
+}
+
+/** The ids of the registrations whose session is alive now (pid and pipe, sessionAlive). */
+export function liveIdsOf(regs: Registration[]): string[] {
+  const pipes = pipeListing()
+  return regs.filter((r) => sessionAlive(r, pipes)).map((r) => r.sessionId)
+}
+
+/** The registrations with a cwd whose session is alive now. */
+function aliveWithCwd(regs: Registration[]): Array<Registration & { cwd: string }> {
+  const pipes = pipeListing()
+  return regs.filter(
+    (r): r is Registration & { cwd: string } => typeof r.cwd === 'string' && sessionAlive(r, pipes),
+  )
+}
+
+function liveSession(
+  reg: Registration & { cwd: string },
+  transcriptPath: string | null,
+): LiveSession {
+  return {
+    pid: reg.pid,
+    sessionId: reg.sessionId,
+    cwd: reg.cwd,
+    name: typeof reg.name === 'string' ? reg.name : reg.sessionId.slice(0, 8),
+    startedAt: typeof reg.startedAt === 'number' ? reg.startedAt : 0,
+    transcriptPath,
+    ...(typeof reg.version === 'string' ? { version: reg.version } : {}),
+    ...(typeof reg.hostSessionId === 'string' && reg.hostSessionId !== ''
+      ? { hostSessionId: reg.hostSessionId }
+      : {}),
+  }
+}
+
+/** The live sessions of a Claude home. `transcripts: false` leaves transcriptPath null: a caller
+ *  that counts sessions or matches them by id pays no lookup (one existsSync per session, or a scan
+ *  of every project folder when the cwd's casing moved). */
+export function readLiveRegistry(
+  claudeHome: string,
+  { transcripts = true }: { transcripts?: boolean } = {},
+): LiveSession[] {
+  return aliveWithCwd(readRegistrations(claudeHome)).map((r) =>
+    liveSession(r, transcripts ? transcriptPathFor(claudeHome, r.cwd, r.sessionId) : null),
+  )
+}
+
+/** readLiveRegistry with every file step through node:fs/promises, for the routes. */
+export async function readLiveRegistryAsync(
+  claudeHome: string,
+  { transcripts = true }: { transcripts?: boolean } = {},
+): Promise<LiveSession[]> {
+  const live = aliveWithCwd(await readRegistrationsAsync(claudeHome))
+  return Promise.all(
+    live.map(async (r) =>
+      liveSession(
+        r,
+        transcripts ? await transcriptPathForAsync(claudeHome, r.cwd, r.sessionId) : null,
+      ),
+    ),
+  )
 }

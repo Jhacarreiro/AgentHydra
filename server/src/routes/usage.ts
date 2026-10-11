@@ -67,7 +67,7 @@ import { instanceDirParam } from '../instance-dir-param'
 import { accountTokenWindows, accountTokenWindowsAsync } from '../kit/account-windows'
 import type { QuotaReset, UsageQueryOpts } from '../kit/query'
 import type { KitStore } from '../kit/store'
-import { readLiveRegistry } from '../live-registry'
+import { readLiveRegistryAsync } from '../live-registry'
 import { jsonBody } from '../route-helpers'
 import { fileNudgeStore } from '../session-keepalive'
 import type { AccountTokens, FleetUsageHistory, UsageCheckResult, UsageSnapshot } from '../types'
@@ -568,11 +568,16 @@ app.get('/api/cli-instances', async (c) => {
   const windows = await kitTokensForAsync(
     rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })),
   )
+  const liveSessions = await Promise.all(
+    rows.map(
+      async ({ i }) => (await readLiveRegistryAsync(i.configDir, { transcripts: false })).length,
+    ),
+  )
   return c.json(
-    rows.map(({ i, uuid, lastUsageCheck }) => ({
+    rows.map(({ i, uuid, lastUsageCheck }, k) => ({
       ...i,
       lastNudge: nudges[i.id] ?? null,
-      liveSessions: readLiveRegistry(i.configDir).length,
+      liveSessions: liveSessions[k],
       // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
       // keepalive nudge, whichever is newer: one stat, no transcript walk.
       lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,

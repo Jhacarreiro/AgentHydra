@@ -28,7 +28,7 @@ export function logoutCliInstance(id: string): CMActionResult {
   if (!instance)
     return { ok: false, action: 'cli-logout', dir: null, message: 'CLI instance not found.' }
   const dir = instance.configDir
-  const running = readLiveRegistry(dir)
+  const running = readLiveRegistry(dir, { transcripts: false })
   if (running.length) {
     return {
       ok: false,
