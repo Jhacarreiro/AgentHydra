@@ -86,7 +86,7 @@ names and fingerprints. They never return a key or the pairing code.
 | GET | `job` | `id`, optional `max_answer_chars` (default 4000) | `{status, results}` of one job |
 | POST | `job/cancel` | `id` | cancel a running job |
 | POST | `ask` | `prompt`, `system`, `model`, `schema`, `thinking`, `reasoning_effort`, `max_tokens`, `role`, `profile`, `exclude_models` | one tool-free call through `hswarm_ask` |
-| POST | `decide` | `items`, `escalate_below`, `fallback_model`, `batch`, `model`, optional `jev` `{url, key, provider}` | typed decisions through `hswarm_decide`'s cascade, booked the same way; `jev` sends the Jev leg of a `jev-*` model to that https endpoint with that one key, booked under `provider` |
+| POST | `decide` | `items`, `escalate_below`, `fallback_model`, `batch`, `model`, optional `jev` `{url, key, provider}` | typed decisions through `hswarm_decide`'s cascade, booked the same way; `jev` sends the Jev leg of a `jev-*` model to that https endpoint with that one key, booked under `provider`. When no Jev key works, Clef and then MD1 answer in its place (`summary.stand_in` lists each stand-in that asked, booked under its own provider) |
 | POST | `models/test` | `model` | a one-word paid call on exactly that model, to check a key and a model |
 | POST | `select` | `profile`, `tools`, `backend` | the full plan AUTO would run now (`hswarm_select` with `verbose`). No model call |
 | GET | `doctor` | | the same report as `hswarm doctor` |
