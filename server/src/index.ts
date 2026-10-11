@@ -399,6 +399,8 @@ app.post('/api/mcp', async (c) => {
   // everything else the same object", and the side-run warning (side-run.ts) is a transport concern.
   // The jmespath projection and the byte cap (mcp-output.ts) sit beneath both warnings, exactly as
   // on stdio, so the two transports shape a result the same way.
+  // One lookup per request, however many times its tool asks: every ask was a netstat of its own.
+  let callerPid: Promise<number | null> | null = null
   const ctx = {
     serverInfo: MCP_SERVER_INFO,
     // Old tool names (a chat's list is fixed at its start) answer as the renamed tools (mcp.ts).
@@ -406,7 +408,9 @@ app.post('/api/mcp', async (c) => {
       mcpWithUnlistedTools(
         withRestartWarning(
           mcpWithCallBudget(
-            mcpWithDaemonWarning(mcpWithOutputShaping(mcpToolsForCaller(() => callerPidOf(c)))),
+            mcpWithDaemonWarning(
+              mcpWithOutputShaping(mcpToolsForCaller(() => (callerPid ??= callerPidOf(c)))),
+            ),
           ),
         ),
         MCP_UNLISTED_TOOLS,

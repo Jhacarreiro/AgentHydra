@@ -1022,8 +1022,8 @@ export async function listDesktopEngines(): Promise<DesktopEngine[] | null> {
  * ⛔ DELIBERATELY NOT CACHED. An ephemeral port is recycled, so a remembered answer can name a
  * process that no longer owns that socket - and this answer decides which ACCOUNT an agent is,
  * which is how `move_chats { to: "here" }` once landed 13 chats on the wrong one (2026-09-08,
- * docs/AI_USAGE_SELFCHECK.md). A ~100ms table read per identity call is the cheap side of that
- * trade; identity tools are called occasionally, not per tool call.
+ * docs/AI_USAGE_SELFCHECK.md). Concurrent lookups SHARE one table read instead (freshTcpTable), and
+ * only a read that began after the caller asked: that is the same freshness, not a cache.
  */
 export async function pidOwningLocalPort(port: number): Promise<number | null> {
   if (!Number.isInteger(port) || port <= 0) return null
@@ -1052,8 +1052,45 @@ export function netstatOwnerPid(stdout: string, port: number): number | null {
 }
 
 async function windowsPortOwner(port: number): Promise<number | null> {
-  const stdout = await runCaptureStdout(['netstat', '-ano', '-p', 'tcp'])
+  const stdout = await freshTcpTable()
   return stdout === null ? null : netstatOwnerPid(stdout, port)
+}
+
+/**
+ * The connection table, read by ONE `netstat` for every caller waiting on it.
+ *
+ * ⛔ WHY (2026-10-11): one netstat per identity call put 346 netstat.exe under the daemon at once,
+ * and 70-90 more an hour later, each hung for minutes. Twenty chats and the CliMayte routes ask
+ * "who is calling?" all day; under load one netstat outlives the next request, the spawn worker's
+ * single thread falls behind draining them, a stalled netstat blocks on its full stdout pipe, its
+ * deadline fires, and the pile only grows. Now at most one read runs, and at most one more waits.
+ *
+ * Freshness is kept exactly: a caller that asks while a read is RUNNING is served by the NEXT read,
+ * which starts after that one ends, so every answer comes from a table taken after its caller asked.
+ * A recycled port can therefore never be answered from a table older than the connection asking.
+ */
+let tcpTableRunning: Promise<string | null> | null = null
+let tcpTableNext: Promise<string | null> | null = null
+
+function readTcpTable(): Promise<string | null> {
+  const run = runCaptureStdout(['netstat', '-ano', '-p', 'tcp']).finally(() => {
+    if (tcpTableRunning === run) tcpTableRunning = null
+  })
+  tcpTableRunning = run
+  return run
+}
+
+function freshTcpTable(): Promise<string | null> {
+  if (tcpTableNext) return tcpTableNext
+  if (!tcpTableRunning) return readTcpTable()
+  const next = tcpTableRunning
+    .catch(() => null)
+    .then(() => {
+      if (tcpTableNext === next) tcpTableNext = null
+      return readTcpTable()
+    })
+  tcpTableNext = next
+  return next
 }
 
 async function unixPortOwner(port: number): Promise<number | null> {

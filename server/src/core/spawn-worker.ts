@@ -18,11 +18,14 @@ export interface WorkerCapture {
   timedOut: boolean
 }
 
+// killTree never waits for taskkill (2026-10-11): spawnSync held this one thread for each kill, so a
+// burst of deadlines stopped it draining every other child, whose full pipes then blocked them past
+// their own deadlines (70-90 netstat.exe hung under the daemon at once).
 const WORKER_SOURCE = `
 function killTree(pid) {
   try {
     if (process.platform === 'win32') {
-      Bun.spawnSync(['taskkill', '/PID', String(pid), '/T', '/F'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore', windowsHide: true })
+      Bun.spawn(['taskkill', '/PID', String(pid), '/T', '/F'], { stdin: 'ignore', stdout: 'ignore', stderr: 'ignore', windowsHide: true })
     } else {
       process.kill(pid, 'SIGKILL')
     }

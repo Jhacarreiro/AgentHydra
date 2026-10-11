@@ -6,8 +6,8 @@
 // exactly the code that rots without anyone noticing, so it is pinned here against REAL
 // `netstat -ano` output (Windows 11, 2026-09-11), including the lines around it.
 
-import { describe, expect, test } from 'bun:test'
-import { netstatOwnerPid } from '../src/core/process'
+import { describe, expect, spyOn, test } from 'bun:test'
+import { netstatOwnerPid, pidOwningLocalPort } from '../src/core/process'
 
 const NETSTAT = [
   '',
@@ -56,5 +56,63 @@ describe('netstatOwnerPid', () => {
   test('UDP rows and garbage are ignored', () => {
     expect(netstatOwnerPid(NETSTAT, 5353)).toBeNull()
     expect(netstatOwnerPid('not a table at all', 54321)).toBeNull()
+  })
+})
+
+// One netstat per lookup put 346 netstat.exe under the daemon at once (2026-10-11). Lookups now share
+// a table read, but only one that began after they asked: a recycled port must never be answered from
+// an older table, which is the identity bug the no-cache rule exists for.
+describe.skipIf(process.platform !== 'win32')('pidOwningLocalPort under concurrent callers', () => {
+  test('callers waiting on a running read share the next one, and only the next one', async () => {
+    const releases: Array<() => void> = []
+    const spawn = spyOn(Bun, 'spawn').mockImplementation(((cmd: string[]) => {
+      expect(cmd[0]).toBe('netstat')
+      const n = releases.length + 1 // which read this is; its table names pid 1000 + n as the caller
+      let release!: () => void
+      const done = new Promise<void>((r) => (release = r))
+      releases.push(release)
+      const row = `  TCP    127.0.0.1:50001        127.0.0.1:7787         ESTABLISHED     ${1000 + n}\r\n`
+      const proc = {
+        pid: undefined,
+        killed: false,
+        exitCode: null as number | null,
+        stdout: new ReadableStream<Uint8Array>({
+          async start(c) {
+            await done
+            c.enqueue(new TextEncoder().encode(row))
+            c.close()
+          },
+        }),
+        stderr: new ReadableStream<Uint8Array>({ start: (c) => c.close() }),
+        exited: done.then((): number => {
+          proc.exitCode = 0
+          return 0
+        }),
+      }
+      return proc
+    }) as unknown as typeof Bun.spawn)
+    const settle = async (reads: number) => {
+      for (let i = 0; i < 200 && releases.length < reads; i++) await Bun.sleep(1)
+    }
+    try {
+      const first = pidOwningLocalPort(50001)
+      await settle(1)
+      const second = pidOwningLocalPort(50001)
+      const third = pidOwningLocalPort(50001)
+      await Bun.sleep(5)
+      expect(spawn).toHaveBeenCalledTimes(1) // the two late callers wait; they do not each spawn
+
+      releases[0]!()
+      expect(await first).toBe(1001)
+      await settle(2)
+      releases[1]!()
+      // Answered by the read that started after they asked, never by the one already running.
+      expect(await second).toBe(1002)
+      expect(await third).toBe(1002)
+      expect(spawn).toHaveBeenCalledTimes(2)
+    } finally {
+      for (const r of releases) r()
+      spawn.mockRestore()
+    }
   })
 })
