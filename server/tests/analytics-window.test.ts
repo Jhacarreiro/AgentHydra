@@ -194,12 +194,34 @@ describe('history past the raw window survives in the rollup', () => {
     expect(r.byProject.map((b) => b.key)).toEqual(['unknown'])
   })
 
-  test('totals agree whatever the window start within a minute, and with the day split', async () => {
+  test('totals agree whatever the window start, and with the day split', async () => {
+    // Two hours apart, so each window is computed rather than answered from the other's kept report.
     const a = await report({ sinceMs: NOW - 30 * D + 1_000 })
-    const b = await report({ sinceMs: NOW - 30 * D + 40_000 })
+    const b = await report({ sinceMs: NOW - 30 * D + 2 * H + 1_000 })
     expect(b).toEqual(a)
     expect(a.byDay.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
     expect(a.byProject.reduce((s, d) => s + d.turns, 0)).toBe(a.calls)
+  })
+})
+
+describe('the kept spend report', () => {
+  test('answers the last report at once, and the read after its rebuild shows new rows', async () => {
+    const s = new KitStore(':memory:', { now: NOW })
+    s.upsertEvents([call(2 * H, { id: 'kept-1' })])
+    expect((await spendReport({ store: s, now: NOW })).calls).toBe(1)
+    s.upsertEvents([call(3 * H, { id: 'kept-2' })])
+    // A minute on the kept report is still fresh: no rebuild, so the new row is not in it yet.
+    expect((await spendReport({ store: s, now: NOW + 60_000 })).calls).toBe(1)
+    // Four minutes on it is answered at once, and one rebuild starts behind it.
+    const later = NOW + 4 * 60_000
+    expect((await spendReport({ store: s, now: later })).calls).toBe(1)
+    let r = await spendReport({ store: s, now: later })
+    for (let i = 0; i < 200 && r.calls !== 2; i++) {
+      await Bun.sleep(25)
+      r = await spendReport({ store: s, now: later })
+    }
+    expect(r.calls).toBe(2)
+    s.close()
   })
 })
 

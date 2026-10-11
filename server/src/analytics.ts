@@ -40,7 +40,7 @@ import {
 } from './edit-survival'
 import { readHermesUsage } from './hermes-sessions'
 import { findDesktopChat, instanceSessionMap } from './instance-sessions'
-import { sharedKitStore, storeGeneration, type UsageRow, usageQueryAsync } from './kit/query'
+import { sharedKitStore, type UsageRow, usageQueryAsync } from './kit/query'
 import type { KitStore } from './kit/store'
 import { readOpenCodeUsage } from './opencode-sessions'
 import { priceSource, pricesAsOf } from './pricing'
@@ -1542,23 +1542,56 @@ export interface SpendReportOptions {
  * every call, rollup included.
  */
 export async function spendReport(opts: SpendReportOptions = {}): Promise<SpendReport> {
-  // The same question again within the minute, with nothing written since, is the last answer (the
-  // kit's own cache hands back a copy of thousands of rows each time); asked while the first is still
-  // being worked out, it waits for that one.
+  // The last answer to each question is kept per store, and a read answers it at once. Inside
+  // SPEND_FRESH_MS of its build it is the answer; older, up to SPEND_STALE_MAX_MS, it is still answered at
+  // once and ONE rebuild starts behind it (the read after that rebuild shows the new rows); older than that,
+  // or a question's first read, waits for the build. The spend card waited 2.6-3.5 s on every open (2.6 s
+  // cold, measured 2026-10-11), since the old key moved each minute and with every usage row written.
   const store = opts.store ?? sharedKitStore()
-  const key = `${storeGeneration(store.db)}|${Math.floor((opts.sinceMs ?? 0) / 60_000)}|${Math.floor((opts.now ?? Date.now()) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}|${opts.pc ?? ''}`
-  const hit = spendCache.get(store)
-  if (hit && hit.key === key) return hit.value
-  const value = buildSpendReport({ ...opts, store })
-  spendCache.set(store, { key, value })
-  try {
-    return await value
-  } catch (err) {
-    if (spendCache.get(store)?.value === value) spendCache.delete(store)
-    throw err
+  const clock = opts.now ?? Date.now()
+  // Keyed by the window's LENGTH (the card's cutoff moves with the clock, its length does not), so a kept
+  // answer is exactly the report of that window as it stood when it was built.
+  const key = `${opts.sinceMs == null ? 'all' : Math.round((clock - opts.sinceMs) / 60_000)}|${opts.sources ? [...opts.sources].sort().join(',') : '*'}|${opts.pc ?? ''}`
+  let byKey = spendKept.get(store)
+  if (!byKey) {
+    byKey = new Map()
+    spendKept.set(store, byKey)
   }
+  let kept = byKey.get(key)
+  if (!kept) {
+    kept = { at: 0, report: null, rebuild: null }
+    byKey.set(key, kept)
+  }
+  if (kept.report && clock - kept.at < SPEND_FRESH_MS) return kept.report
+  // Too old to show while a rebuild runs: a card opened after a long pause waits once rather than draw old spend.
+  if (kept.report && clock - kept.at >= SPEND_STALE_MAX_MS) kept.report = null
+  const entry = kept
+  entry.rebuild ??= buildSpendReport({ ...opts, store })
+    .then((report) => {
+      entry.report = report
+      entry.at = clock
+      return report
+    })
+    .finally(() => {
+      entry.rebuild = null
+    })
+  if (!entry.report) return entry.rebuild
+  entry.rebuild.catch(() => undefined)
+  return entry.report
 }
-const spendCache = new WeakMap<KitStore, { key: string; value: Promise<SpendReport> }>()
+/** How long a built spend report answers without a rebuild. Three minutes: a 30-day total grows by
+ *  three minutes of spend out of 43,200 (under 0.01%) in that time, so an answer that old is within
+ *  the card's rounding, and one 2.6 s rebuild is paid at most once per three minutes, not once a
+ *  minute. */
+const SPEND_FRESH_MS = 3 * 60_000
+/** The oldest kept report still answered while its rebuild runs behind it. */
+const SPEND_STALE_MAX_MS = 30 * 60_000
+interface SpendKept {
+  at: number
+  report: SpendReport | null
+  rebuild: Promise<SpendReport> | null
+}
+const spendKept = new WeakMap<KitStore, Map<string, SpendKept>>()
 
 const HOUR_MS = 60 * 60 * 1000
 /** The longest window that also gets `byHour`. */

@@ -15,6 +15,16 @@ const NOW = new Date(2026, 5, 15, 12, 0, 0).getTime()
 const day = (ago: number) => localDay(NOW - ago * D)
 const MODEL = 'claude-opus-5'
 
+// spendReport rebuilds behind a kept answer; poll until a read shows the rebuild.
+async function readUntil<T>(read: () => Promise<T>, done: (r: T) => boolean): Promise<T> {
+  for (let i = 0; i < 200; i++) {
+    const r = await read()
+    if (done(r)) return r
+    await Bun.sleep(25)
+  }
+  throw new Error('the rebuild never landed')
+}
+
 function statsDb(): Database {
   const s = new Database(':memory:')
   s.exec(`create table session_stats (session_key text primary key, session_id text not null,
@@ -182,7 +192,14 @@ describe('kit legacy backfill', () => {
     dropAnalytics() // forgets the minute-old session -> project map an earlier test file may have left
     const before = await spendReport({ store, now: NOW })
     await ingestLegacy(store, s, { now: NOW })
-    const after = await spendReport({ store, now: NOW })
+    // Four minutes on, the kept report (before the backfill) answers at once and a rebuild starts
+    // behind it; the backfill shows on the first read after that rebuild.
+    const later = NOW + 4 * 60_000
+    expect((await spendReport({ store, now: later })).tokens.total).toBe(0)
+    const after = await readUntil(
+      () => spendReport({ store, now: later }),
+      (r) => r.tokens.total === 1200,
+    )
     expect(before.tokens.total).toBe(0)
     expect(after.tokens.total).toBe(1200)
     expect(after.byDay.map((d) => d.key)).toEqual([day(120)])

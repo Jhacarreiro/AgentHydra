@@ -48,6 +48,7 @@ import {
 import { join } from 'node:path'
 import { ROOT } from './climayte-core'
 import { APP_ROOT, IS_RELEASE } from './config'
+import { spawnCaptured } from './core/process'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
 import { CLIMAYTE_RUNNER_FILE, embeddedMiscFiles } from './misc-assets'
 
@@ -181,6 +182,18 @@ export function launchRunner(spec: RunnerSpec, specPath: string): void {
   const argv = runnerArgv(specPath)
   writeFileSync(specPath, JSON.stringify(spec))
   const handoff = buildDetachedSpawn(process.platform, argv, { hideWindow: true })
+  if (!handoff.detached) {
+    // Windows: the hand-off is a short powershell that has WMI start the runner outside this tree, so it
+    // runs on the spawn worker and is not awaited. Spawned here, its CreateProcess held the event loop
+    // 204 s over the 24 h to 2026-10-11 (the stall sentinel). Nothing reads the runner's pid from here.
+    void spawnCaptured(handoff.argv, { timeoutMs: 60_000 }).then((r) => {
+      if (r.code !== 0)
+        console.error(
+          `[climayte] runner hand-off for ${specPath} exited ${r.code}${r.timedOut ? ' (timed out)' : ''}: ${r.stderr.slice(0, 300)}`,
+        )
+    })
+    return
+  }
   const child = spawn(handoff.argv[0] as string, handoff.argv.slice(1), {
     detached: handoff.detached,
     stdio: 'ignore',

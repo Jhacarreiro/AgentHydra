@@ -538,9 +538,18 @@ function doneWorker(name: string, text: string): CliMayteWorker {
   return w
 }
 
+let preloadRun: Promise<void> | null = null
+
 /** Read done/ off the daemon's thread (the reads run on the I/O pool, 32 at a time; the parses yield
- *  to requests between files), for the first load() (readDone) to take. A no-op once loaded. */
-export async function preloadDone(): Promise<void> {
+ *  to requests between files), for the first load() (readDone) to take. A no-op once loaded. One read
+ *  per process: boot starts it before its first step that can reach load() (index.ts), and
+ *  startCliMayte's call takes that same read rather than going on before it lands. */
+export function preloadDone(): Promise<void> {
+  preloadRun ??= readDoneAhead()
+  return preloadRun
+}
+
+async function readDoneAhead(): Promise<void> {
   if (loaded || preloadedDone) return
   preloading = true
   try {

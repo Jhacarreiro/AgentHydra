@@ -83,6 +83,8 @@ export const W_CACHE_WRITE_1H = W_CACHE_WRITE_5M * 1.6
 export const W_INPUT = W_CACHE_WRITE_5M / 1.25
 export const W_OUTPUT = 31
 
+const multiplierByModel = new Map<string, number>()
+
 /** A model's weight relative to Sonnet, at current list prices: Opus 5.5 $4 and Fable 5.1 $10 per
  *  million input against Sonnet 5.5's $2, Haiku 4.5 $1. Quota is shared across models, so a turn's
  *  weight must account for WHICH model spent it. The meter agrees where the data can tell: weighing
@@ -94,12 +96,20 @@ export const W_OUTPUT = 31
  *  100k, so 0.05 x 54.4% + 0.25 x 45.6% = 0.14. Haiku 4.5 and older keep 0.5, so old transcripts
  *  weigh as they did. */
 export function modelMultiplier(model: string): number {
+  // Asked for every usage row on the CliMayte tick and the analytics (2026-10-11: 91 s of daemon stalls
+  // over 361 stalls in 24 h, on the lower-case and regex per row). A model's weight never changes, and a
+  // daemon sees a few dozen model names, so one answer per name is kept; cleared if a name ever floods it.
+  const known = multiplierByModel.get(model)
+  if (known !== undefined) return known
   const m = model.toLowerCase()
-  if (m.includes('fable')) return 5
-  if (m.includes('opus')) return 2
-  if (/haiku-[5-9](?!\d)/.test(m)) return 0.14
-  if (m.includes('haiku')) return 0.5
-  return 1 // sonnet + anything unrecognized
+  let weight = 1 // sonnet + anything unrecognized
+  if (m.includes('fable')) weight = 5
+  else if (m.includes('opus')) weight = 2
+  else if (/haiku-[5-9](?!\d)/.test(m)) weight = 0.14
+  else if (m.includes('haiku')) weight = 0.5
+  if (multiplierByModel.size >= 256) multiplierByModel.clear()
+  multiplierByModel.set(model, weight)
+  return weight
 }
 
 /** Token counts in weighted tokens. The one place the weights are applied, so a live turn, a stored

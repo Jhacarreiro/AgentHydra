@@ -111,6 +111,40 @@ export interface FinishedCost {
  *  finished task moves the estimate a third of the way to it, ten nearly all the way. */
 export const PRIOR_WEIGHT = 2
 
+/** The finished list grouped the ways expectedCost reads it, in the list's own order, so the sums
+ *  add in the same order as a filter per lookup. One placement pass asks it once per queued worker
+ *  against one list: 461 stalls and 175 s of the tick's modelFamily calls (2026-10-11) were that
+ *  filter, re-run per worker. A list must not change once it has been asked about (placementState
+ *  builds a new one per pass). */
+interface FinishedIndex {
+  byFamily: Map<string, FinishedCost[]>
+  byKind: Map<string, FinishedCost[]>
+  byKindFamily: Map<string, FinishedCost[]>
+}
+
+const indexes = new WeakMap<FinishedCost[], FinishedIndex>()
+
+function indexOf(finished: FinishedCost[]): FinishedIndex {
+  const have = indexes.get(finished)
+  if (have) return have
+  const ix: FinishedIndex = { byFamily: new Map(), byKind: new Map(), byKindFamily: new Map() }
+  const push = (m: Map<string, FinishedCost[]>, key: string, f: FinishedCost): void => {
+    const list = m.get(key)
+    if (list) list.push(f)
+    else m.set(key, [f])
+  }
+  for (const f of finished) {
+    const family = modelFamily(f.model)
+    push(ix.byFamily, family, f)
+    if (f.kind) {
+      push(ix.byKind, f.kind, f)
+      push(ix.byKindFamily, `${f.kind}|${family}`, f)
+    }
+  }
+  indexes.set(finished, ix)
+  return ix
+}
+
 /** A task's expected cost, in % of a Pro 5-hour window, from finished tasks (judged or not: what a
  *  task cost needs no verdict). From the broadest record to the narrowest: DEFAULT_TASK_PCT, its
  *  model family's tasks of any kind, its kind on any model scaled to its own (modelMultiplier: an
@@ -138,9 +172,12 @@ export function expectedCost(
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
   const scaled = (f: FinishedCost): number =>
     (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
-  const family = finished.filter((f) => modelFamily(f.model) === modelFamily(task.model))
-  const kind = task.kind ? finished.filter((f) => f.kind === task.kind) : []
-  const kindFamily = kind.filter((f) => modelFamily(f.model) === modelFamily(task.model))
+  const ix = indexOf(finished)
+  const family = ix.byFamily.get(modelFamily(task.model)) ?? []
+  const kind = task.kind ? (ix.byKind.get(task.kind) ?? []) : []
+  const kindFamily = task.kind
+    ? (ix.byKindFamily.get(`${task.kind}|${modelFamily(task.model)}`) ?? [])
+    : []
   const exact = kindFamily.filter((f) => f.model === task.model && f.effort === task.effort)
   const levels: Array<[CostEstimate['basis'], number[]]> = [
     // Scaled at every family level too: Haiku 4.5 (0.5x) and Haiku 5.5 (0.14x) share the family.

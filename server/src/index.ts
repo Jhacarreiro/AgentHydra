@@ -27,6 +27,7 @@ import { startIdleSweep, stopIdleSweep } from './claude-native-idle'
 import { startClaudeNativePrewarm, stopClaudeNativePrewarm } from './claude-native-prewarm'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
+import { preloadDone } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import {
   APP_ROOT,
@@ -1099,6 +1100,12 @@ if (isRelaunchSuccessor()) {
     },
   })
 }
+// CliMayte's finished workers are read off the thread from here, before the first boot step that can
+// reach its load(): listing the CLI instances (reassertSharedMcp below) asks it for signed-out walls,
+// and that load read all of done/ on the thread, 3.5 s at the 2026-10-11 boot (8,360 files). A load
+// during the read takes workers.json alone and merges done/ when it lands; startCliMayte waits on this
+// same read. A failure is said there.
+void preloadDone().catch(() => undefined)
 // Probe the SAME interface the server binds (HOST); the wildcard probe misses a
 // squatter that holds only 127.0.0.1 (e.g. wrangler dev's workerd on 8787).
 // A tray "Restart"/"Rebuild & Restart" spawns the successor while the predecessor is still

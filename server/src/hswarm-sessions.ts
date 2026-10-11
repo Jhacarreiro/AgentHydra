@@ -231,18 +231,40 @@ export async function listHSwarmSessionsAsync(root: string): Promise<HSwarmSessi
 }
 
 const RUNS_TTL_MS = 60_000
-let runs: { at: number; db: string; map: Map<string, number> } | null = null
+let runs: { at: number; db: string; stamp: string; map: Map<string, number> } | null = null
+
+/** What a run write changes on disk. HSwarm opens its database in WAL mode (hswarm/utilization.py),
+ *  so a commit lands in the -wal file and the main file's stat stays put until a checkpoint: both
+ *  are stamped. A commit appends frames, so the -wal size moves with each write. */
+function runsStamp(path: string): string {
+  const one = (p: string) => {
+    try {
+      const st = statSync(p)
+      return `${st.mtimeMs}:${st.size}`
+    } catch {
+      return '-'
+    }
+  }
+  return `${one(path)}|${one(`${path}-wal`)}`
+}
 
 /**
  * How many HSwarm runs each chat started, keyed by the first 8 characters of its session id: HSwarm
  * records only that much of its caller (hswarm/caller.py `caller_session`). Read from HSwarm's own
- * run table, which has every run; a job folder exists for only a few of them. Read-only, at most
- * once a minute; empty when HSwarm has never run here.
+ * run table, which has every run; a job folder exists for only a few of them. Read-only; empty when
+ * HSwarm has never run here.
+ *
+ * Re-read only when HSwarm wrote since the last read, and then at most once a minute: the group-by
+ * over the whole run table cost 37 s of daemon stalls in 24 h (2026-10-11), mostly from listSessions
+ * on an unchanged file. So the count is exact while HSwarm is idle, and at most a minute behind while
+ * it writes.
  */
 export function hswarmRunsBySessionPrefix(home: string = hswarmHome()): Map<string, number> {
   const path = join(home, 'hswarm.sqlite')
   const now = Date.now()
-  if (runs && runs.db === path && now - runs.at < RUNS_TTL_MS) return runs.map
+  const stamp = runsStamp(path)
+  if (runs && runs.db === path && (runs.stamp === stamp || now - runs.at < RUNS_TTL_MS))
+    return runs.map
   const map = new Map<string, number>()
   if (existsSync(path)) {
     let con: Database | null = null
@@ -263,7 +285,7 @@ export function hswarmRunsBySessionPrefix(home: string = hswarmHome()): Map<stri
       con?.close()
     }
   }
-  runs = { at: now, db: path, map }
+  runs = { at: now, db: path, stamp, map }
   return map
 }
 

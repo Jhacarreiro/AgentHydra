@@ -229,6 +229,17 @@ test('a load while done/ is still being read takes the work in flight now and ev
   // The next start, done/ read the ordinary way, sees the same store.
   const again = (await start(home, 'return c.climayteList().length')) as number
   expect(again).toBe(5)
+  // Boot starts the read before its first step that can load (index.ts); startCliMayte's call, which
+  // climayteReady and the routes wait on, takes that same read rather than settling at once.
+  const booted = (await start(
+    home,
+    `const core = await import(${JSON.stringify(core)})
+     void core.preloadDone()
+     c.climayteRunningCount()
+     await core.preloadDone()
+     return core.workers.size`,
+  )) as number
+  expect(booted).toBe(5)
 }, 60_000)
 
 test("a finished attempt's log is packed a day on and reads the same; a cancelled one whose runner still lives is left", async () => {
