@@ -41,19 +41,22 @@ async def book_asks(results: list, kind: str, extra: tuple = ()) -> dict:
 
 
 async def decide(items: list[dict], mgr=None, *, escalate_below: float = 0.7, fallback_model: str = "auto", batch: int = 1,
-                 model: str = typesafe.MODEL) -> dict:
+                 model: str = typesafe.MODEL, jev: typesafe.Jev | None = None) -> dict:
     """Typed decisions, booked: decisions.decide on `mgr` (this process's jobs.manager() when None), then its Jev calls
     and its fallback asks go through book_asks. The arguments and the answer are hswarm_decide's, whose docstring
-    says what the cascade does. Unlike the tool, an unexpected failure raises instead of coming back as an `error`."""
-    out = await decisions.decide(items, mgr or manager(), escalate_below=escalate_below, fallback_model=fallback_model, model=model, batch=batch)
+    says what the cascade does; `jev` is an open client for the Jev leg in place of the configured pool, booked under
+    its own provider. Unlike the tool, an unexpected failure raises instead of coming back as an `error`."""
+    out = await decisions.decide(items, mgr or manager(), escalate_below=escalate_below, fallback_model=fallback_model, model=model, batch=batch,
+                                 jev=jev)
     fallbacks = out.pop("_fallback_results")
-    jev: tuple = ()
+    spent: tuple = ()
     # The Jev part, and Clef's when it stood in, is one ledger line each (all its calls), costed like an ask; the caller
     # stamp is added in book_asks.
-    for stats, provider, name in ((out.pop("_jev_stats"), "typesafe", model), (out.pop("_stand_in_stats") or {}, "cloudflare", "clef")):
+    for stats, provider, name in ((out.pop("_jev_stats"), jev.provider if jev else "typesafe", model),
+                                  (out.pop("_stand_in_stats") or {}, "cloudflare", "clef")):
         if stats.get("calls"):
             jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend=provider, model=stats.get("model") or name,
                         usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),
                         seconds=round(stats.get("secs", 0.0), 3), turns=stats["calls"], finished=now_iso())
-            jev += ((jr, {"provider": provider, "job": "decide"}),)
-    return out | await book_asks(fallbacks, "decide", jev)
+            spent += ((jr, {"provider": provider, "job": "decide"}),)
+    return out | await book_asks(fallbacks, "decide", spent)

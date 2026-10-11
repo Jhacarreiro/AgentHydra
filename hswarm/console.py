@@ -150,6 +150,25 @@ async def _ask(b: dict) -> dict:
     return await hswarm_ask(**{k: v for k, v in b.items() if k in ASK_ARGS})
 
 
+async def _decide(b: dict) -> dict:
+    """hswarm_decide over plain HTTP, booked the same way (booking.decide), for a caller that would otherwise start a
+    Python process to import it: Dredd's Jev door started one per Node process, about 2,000 a day (2026-10-10).
+    `jev` {url, key, provider?} sends the Jev leg of a jev-* model to another System One endpoint with that one key (a
+    Worker in front of Workers AI's typesafe/jev); a 401/402/403 there falls to the Clef stand-in like a refused
+    TypeSafe key. Without it the leg runs on the configured TypeSafe pool."""
+    from . import booking, typesafe
+
+    args = {k: v for k, v in b.items() if k in DECIDE_ARGS}
+    route = b.get("jev")
+    if not route or not str(args.get("model") or typesafe.MODEL).startswith("jev-"):
+        return await booking.decide(**args)
+    url, key = str(route.get("url") or ""), str(route.get("key") or "")
+    if not url.startswith("https://") or not key:
+        raise ValueError("jev needs an https url and a key")
+    async with typesafe.Jev(keys=[key], url=url, provider=str(route.get("provider") or "typesafe")) as jev:
+        return await booking.decide(**args, jev=jev)
+
+
 async def _job(b: dict) -> dict:
     from .mcp_server import hswarm_results, hswarm_status
 
@@ -338,6 +357,7 @@ RUN_ARGS = {"tasks", "cwd", "tools", "model", "role", "backend", "system", "max_
             "budget_usd", "label", "wait", "wait_s", "thinking", "reasoning_effort", "max_cost_usd", "profile", "max_answer_chars",
             "unbatched"}
 ASK_ARGS = {"prompt", "system", "model", "schema", "thinking", "reasoning_effort", "max_tokens", "role", "profile", "exclude_models"}
+DECIDE_ARGS = {"items", "escalate_below", "fallback_model", "batch", "model"}
 
 # (method, path) -> handler(body). Names travel in the body, never the path: a model name may hold a '/' or ':'.
 ROUTES = {
@@ -385,6 +405,7 @@ ROUTES = {
     ("GET", "model-stats"): lambda b: asyncio.to_thread(model_stats.model_stats, int(b.get("days") or 14)),
     ("GET", "stats"): lambda b: asyncio.to_thread(lambda: _stats(b)),
     ("POST", "ask"): _ask,
+    ("POST", "decide"): _decide,
     ("POST", "run"): _run,
     ("GET", "jobs"): _jobs,
     ("GET", "job"): _job,

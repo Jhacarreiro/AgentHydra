@@ -76,6 +76,36 @@ def test_a_pending_key_upload_leaves_the_console_responsive_and_reloads_on_its_l
     asyncio.run(exercise())
 
 
+def test_decide_over_http_takes_the_jev_leg_to_the_callers_route_and_books_it_there(monkeypatch):
+    """POST /api/decide is hswarm_decide for a caller with no MCP session (Dredd's Jev door): a `jev` route sends the
+    Jev leg of a jev-* model to that endpoint with that key and books it under its provider; another model ignores it."""
+    import asyncio
+    import json
+
+    import httpx
+
+    from hswarm import config, typesafe
+
+    seen = []
+
+    def system_one(request):
+        seen.append((str(request.url), request.headers["authorization"]))
+        return httpx.Response(200, json={"answers": {"q0": {"type": "noul", "noul": 0.97}}, "usage": {"input_tokens": 40}})
+
+    real = httpx.AsyncClient
+    monkeypatch.setattr(typesafe.httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(system_one), **kw))
+    item = {"id": "a", "state": {"n": 2}, "question": "Is `n` even?", "type": "yesno"}
+    route = {"url": "https://jev-worker.example.test/", "key": "worker-secret", "provider": "example-jev"}
+    status, out = asyncio.run(console.handle("POST", "decide", {"items": [item], "escalate_below": 0, "jev": route}))
+    assert status == 200 and out["answers"][0]["answer"] == "yes"
+    assert seen == [("https://jev-worker.example.test/", "Bearer worker-secret")]
+    booked = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [row["provider"] for row in booked] == ["example-jev"]
+    status, out = asyncio.run(console.handle("POST", "decide", {"items": [item], "escalate_below": 0, "model": "clef", "jev": route}))
+    assert status == 200 and out["answers"][0]["answer"] is None and len(seen) == 1  # Clef has its own routes (none here)
+    assert asyncio.run(console.handle("POST", "decide", {"items": [item], "jev": {**route, "url": "http://jev.example.test/"}}))[0] == 400
+
+
 def test_codex_registration_keeps_the_rest_of_config_toml(tmp_path, monkeypatch):
     monkeypatch.setenv("CODEX_HOME", str(tmp_path))
     cfg = tmp_path / "config.toml"
