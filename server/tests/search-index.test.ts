@@ -362,6 +362,7 @@ describe('refresh and query', () => {
         '-e',
         `const { Database } = require('bun:sqlite')
 const db = new Database(process.argv[1], { create: true })
+db.exec('pragma busy_timeout = 2000')
 db.exec('pragma journal_mode = delete')
 db.exec('create table if not exists hold (x integer)')
 db.exec('begin exclusive')
@@ -378,6 +379,8 @@ setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
       if (done) break
       seen += value
     }
+    // A child that dies before taking the lock says why on stderr, which is otherwise never read.
+    if (!seen.includes('locked')) throw new Error(await new Response(holder.stderr).text())
     expect(seen).toContain('locked')
 
     const r = await refreshSearchIndex([session('a', [turn('user', 'written while held')])])
