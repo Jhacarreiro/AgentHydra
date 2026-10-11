@@ -167,5 +167,7 @@ describe('kit sync', () => {
     expect(again.committed).toBe(false)
     expect(again.imported).toEqual({})
     expect(totals(a).map((t) => (t as { pc: string }).pc)).toEqual(['pc-a', 'pc-b'])
-  }, 120_000)
+    // Dozens of real git commands (clones, four syncs' pulls, commits and pushes): 34-72 s in eight full
+    // suite runs on a box at ~90% CPU and past 120 s in a ninth (2026-10-11), where each took up to 3.4 s.
+  }, 240_000)
 })

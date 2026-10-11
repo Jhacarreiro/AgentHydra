@@ -88,7 +88,9 @@ describe('uncommittedOf', () => {
       'src/fresh/new.ts',
       'src/kept.ts',
     ])
-  })
+    // Four git commands, two here and two in uncommittedOf: each 0.5-3.4 s on a box at ~90% CPU
+    // (2026-10-11), where bun's 5 s default ran out.
+  }, 30_000)
 
   test('outside a repository there is nothing to hold it to', async () => {
     const plain = join(root, 'plain')

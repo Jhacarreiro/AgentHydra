@@ -16,9 +16,12 @@ import { writePosixLauncher } from '../../scripts/launcher-posix'
 // The POSIX launcher (launcher/posix/agenthydra) is a shell script, so it is tested by running it
 // with a real sh against a local server standing in for GitHub's two download hosts. The bun it
 // downloads is a small sh script inside a zip, so nothing here needs the network or a real bun.
-// A subprocess that hangs must fail its test instead of the suite, so each one has a timeout.
-setDefaultTimeout(90_000)
-const RUN_TIMEOUT_MS = 60_000
+// A subprocess that hangs must fail its test instead of the suite, so each one has a timeout. Sized from a
+// box at ~90% CPU (2026-10-11): one launcher run is ~160 shell commands, and Git for Windows' sh took 1-4.7 s
+// for each fork there, so a run that takes 2-12 s alone took 42-54 s and, in two of nine full suite runs,
+// past the 60 s this bound was.
+setDefaultTimeout(180_000)
+const RUN_TIMEOUT_MS = 150_000
 
 const VERSION = '2.0.0'
 const PIN = '1.4.2'
