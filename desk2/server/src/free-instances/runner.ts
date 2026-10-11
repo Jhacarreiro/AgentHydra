@@ -1,8 +1,7 @@
-import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { FreeConfig, FreeHarnessCommand, FreeRequest } from '@shared/free-instances'
-import { terminate } from './runtime'
+import { SpawnLaunchError, spawnOff, type SpawnOffResult } from '../lib/spawn-off'
 
 export interface RunOutput { code: number; stdout: string }
 export type FreeRunRequest = Omit<FreeRequest, 'command'> & { command: FreeHarnessCommand }
@@ -25,32 +24,25 @@ export function commandArgs(config: FreeConfig, request: FreeRunRequest): string
   return args
 }
 
-export const runFree: FreeRunner = (config, request, signal) => new Promise((resolve, reject) => {
-  const child = spawn(config.python, commandArgs(config, request), {
-    cwd: config.harnessDir,
-    windowsHide: true,
-    shell: false,
-    stdio: ['pipe', 'pipe', 'ignore'],
-    env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_STATE_DIR: config.stateDir, CLAUDFREE_CACHE_DIR: config.cacheDir },
-  })
-  const chunks: Buffer[] = []
-  let bytes = 0
-  let failed = false
-  const stop = () => { if (failed) return; failed = true; terminate(child); reject(new Error('stopped')) }
-  const timer = setTimeout(stop, request.command === 'login' ? 960_000 : 300_000)
-  signal.addEventListener('abort', stop, { once: true })
-  if (signal.aborted) stop()
-  child.stdout.on('data', (chunk: Buffer) => {
-    bytes += chunk.length
-    if (bytes > 8 * 1024 * 1024) stop()
-    else chunks.push(chunk)
-  })
-  child.on('error', () => { failed = true; reject(new Error('launch_failed')) })
-  child.on('close', code => {
-    clearTimeout(timer)
-    signal.removeEventListener('abort', stop)
-    if (!failed) resolve({ code: code ?? 1, stdout: Buffer.concat(chunks).toString('utf8') })
-  })
-  child.stdin.on('error', () => { /* A process may exit before consuming its input. */ })
-  child.stdin.end(request.prompt ?? '')
-})
+/** The spawn runs on the spawn-off worker, so a busy PC cannot stall the server's loop while Python starts. */
+export const runFree: FreeRunner = async (config, request, signal) => {
+  if (signal.aborted) throw new Error('stopped')
+  let out: SpawnOffResult
+  try {
+    out = await spawnOff({
+      cmd: [config.python, ...commandArgs(config, request)],
+      cwd: config.harnessDir,
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_STATE_DIR: config.stateDir, CLAUDFREE_CACHE_DIR: config.cacheDir },
+      stdin: request.prompt ?? '',
+      maxBytes: 8 * 1024 * 1024,
+      timeoutMs: request.command === 'login' ? 960_000 : 300_000,
+      stderr: 'ignore',
+      killTree: true,
+    }, signal)
+  } catch (err) {
+    if (err instanceof SpawnLaunchError) throw new Error('launch_failed')
+    throw err
+  }
+  if (out.aborted || out.capped || out.timedOut) throw new Error('stopped')
+  return { code: out.code, stdout: Buffer.from(out.stdout).toString('utf8') }
+}

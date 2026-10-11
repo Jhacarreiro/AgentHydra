@@ -1,8 +1,9 @@
-import { afterEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
+import { afterEach, describe, expect, setDefaultTimeout, spyOn, test } from 'bun:test'
 import { mkdirSync, unlinkSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { GitFileChange } from '@shared/protocol'
 import { GitError, gitDiff, gitStatus, MAX_DIFF_BYTES, MAX_FILES } from '../../src/git/git'
+import * as spawnOff from '../../src/lib/spawn-off'
 import { cleanTemps, commitAll, git, initRepo, tempDir } from './helpers'
 
 // Every case spawns several git processes; on a busy Windows box that takes seconds.
@@ -139,16 +140,12 @@ describe('gitStatus', () => {
     writeFileSync(join(dir, 'new.txt'), 'n\n')
     expect((await gitStatus(dir)).added).toBe(2)
 
-    const spawn = Bun.spawn
-    let gits = 0
-    ;(Bun as unknown as { spawn: unknown }).spawn = (...args: Parameters<typeof Bun.spawn>) => {
-      gits++
-      return spawn(...args)
-    }
+    // Git runs on the spawn worker, so count the calls that start it, not Bun.spawn itself.
+    const gitRuns = spyOn(spawnOff, 'spawnOff')
     try {
       const again = await gitStatus(dir)
       expect(again.added).toBe(2)
-      expect(gits).toBe(1)
+      expect(gitRuns).toHaveBeenCalledTimes(1)
 
       // Same status letters, new content: the counts must follow the file, not the memo.
       writeFileSync(join(dir, 'keep.txt'), 'a\nb\nc\nd\n')
@@ -158,7 +155,7 @@ describe('gitStatus', () => {
       expect(byPath(edited.files)['new.txt']).toEqual({ path: 'new.txt', status: '??', added: 2, removed: 0 })
       expect(edited.added).toBe(5)
     } finally {
-      ;(Bun as unknown as { spawn: unknown }).spawn = spawn
+      gitRuns.mockRestore()
     }
   })
 

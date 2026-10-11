@@ -5,6 +5,7 @@ import { existsSync, statSync } from 'node:fs'
 import { open } from 'node:fs/promises'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import type { GitFileChange, GitStatus, MergeConflictPreview } from '@shared/protocol'
+import { SpawnLaunchError, spawnOff, type SpawnOffResult } from '../lib/spawn-off'
 
 export const GIT_TIMEOUT_MS = 5000
 export const MAX_FILES = 500
@@ -51,59 +52,30 @@ const GIT_ENV: Record<string, string | undefined> = {
   LC_ALL: 'C',
 }
 
-async function readCapped(stream: ReadableStream<Uint8Array>, maxBytes: number, onCap: () => void) {
-  const chunks: Uint8Array[] = []
-  let size = 0
-  let capped = false
-  const reader = stream.getReader()
-  for (;;) {
-    const { done, value } = await reader.read()
-    if (done) break
-    if (capped) continue
-    if (size + value.length > maxBytes) {
-      chunks.push(value.subarray(0, maxBytes - size))
-      size = maxBytes
-      capped = true
-      onCap()
-      continue
-    }
-    chunks.push(value)
-    size += value.length
-  }
-  return { buf: Buffer.concat(chunks), capped }
-}
-
-/** Runs `git <args>` in cwd: no shell, no window, killed after GIT_TIMEOUT_MS. */
+/** Runs `git <args>` in cwd: no shell, no window, killed after GIT_TIMEOUT_MS. The spawn runs off the main thread. */
 export async function runGit(cwd: string, args: string[], opts: RunOptions = {}): Promise<RunResult> {
   const fullArgs = ['-c', 'core.quotepath=false', '-c', 'color.ui=false', ...args]
-  let proc: ReturnType<typeof Bun.spawn>
+  let out: SpawnOffResult
   try {
-    proc = Bun.spawn(['git', ...fullArgs], {
+    out = await spawnOff({
+      cmd: ['git', ...fullArgs],
       cwd,
       env: GIT_ENV,
-      stdin: opts.stdin === undefined ? 'ignore' : new Blob([opts.stdin]),
-      stdout: 'pipe',
+      stdin: opts.stdin,
+      maxBytes: opts.maxBytes ?? MAX_LIST_BYTES,
+      timeoutMs: GIT_TIMEOUT_MS,
       stderr: 'pipe',
-      windowsHide: true,
     })
   } catch (err) {
-    throw new GitError(`could not start git in ${cwd}: ${(err as Error).message}`)
+    if (err instanceof SpawnLaunchError) throw new GitError(`could not start git in ${cwd}: ${err.detail}`)
+    throw err
   }
-  let timedOut = false
-  const timer = setTimeout(() => {
-    timedOut = true
-    proc.kill()
-  }, GIT_TIMEOUT_MS)
-  try {
-    const [out, err, code] = await Promise.all([
-      readCapped(proc.stdout as ReadableStream<Uint8Array>, opts.maxBytes ?? MAX_LIST_BYTES, () => proc.kill()),
-      new Response(proc.stderr as ReadableStream<Uint8Array>).text(),
-      proc.exited,
-    ])
-    if (timedOut) throw new GitError(`git ${args[0]} timed out after ${GIT_TIMEOUT_MS / 1000}s in ${cwd}`)
-    return { code, stdout: out.buf, stderr: err.trim(), capped: out.capped }
-  } finally {
-    clearTimeout(timer)
+  if (out.timedOut) throw new GitError(`git ${args[0]} timed out after ${GIT_TIMEOUT_MS / 1000}s in ${cwd}`)
+  return {
+    code: out.code,
+    stdout: Buffer.from(out.stdout.buffer, out.stdout.byteOffset, out.stdout.byteLength),
+    stderr: out.stderr,
+    capped: out.capped,
   }
 }
 
