@@ -32,6 +32,8 @@ if ($info) {
     if ($id -le 0) { continue }
     $p = Get-Process -Id $id -ErrorAction SilentlyContinue
     $recorded = $info.($key -replace 'Pid$', 'Started')
+    # PowerShell 7's ConvertFrom-Json reads the recorded ISO time as a DateTime, 5.1 leaves it text: compare as text.
+    if ($recorded -is [datetime]) { $recorded = $recorded.ToUniversalTime().ToString('o') }
     if (-not $p) { Write-Output "$key $id is not running"; continue }
     if ($p.StartTime.ToUniversalTime().ToString('o') -ne $recorded) {
       Write-Output "$key $id is a different process now ($($p.ProcessName)); leaving it alone"

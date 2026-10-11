@@ -85,7 +85,10 @@ function Get-LauncherServer {
     $id = [int]$info.$key
     if ($id -le 0) { continue }
     $p = Get-Process -Id $id -ErrorAction SilentlyContinue
-    if ($p -and $p.StartTime.ToUniversalTime().ToString('o') -eq $info.($key -replace 'Pid$', 'Started')) { return $info }
+    $recorded = $info.($key -replace 'Pid$', 'Started')
+    # PowerShell 7's ConvertFrom-Json reads the recorded ISO time as a DateTime, 5.1 leaves it text: compare as text.
+    if ($recorded -is [datetime]) { $recorded = $recorded.ToUniversalTime().ToString('o') }
+    if ($p -and $p.StartTime.ToUniversalTime().ToString('o') -eq $recorded) { return $info }
   }
   return $null
 }
