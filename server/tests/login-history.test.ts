@@ -24,7 +24,7 @@ import os from 'node:os'
 import { join } from 'node:path'
 import { resolveAccount } from '../src/core/accounts'
 import { instanceNumberFor } from '../src/core/instance-numbers'
-import { readLoginHistory } from '../src/core/login-history'
+import { readLoginHistory, readPastLogins } from '../src/core/login-history'
 import { accountsCacheFile, normalizeInstancePath } from '../src/core/paths'
 
 const OLD = '33333333-cccc-4ccc-8ccc-333333333333'
@@ -99,6 +99,23 @@ describe('login history', () => {
     )
     expect(entries[1].lastSeenAt).toBe('2024-10-01T04:57:00.000Z')
     expect(entries[1].chats).toBe(1)
+  })
+
+  // The account map behind HSwarm's and Home's names reads this for every profile (routes/hswarm.ts); it must
+  // date each account by its NEWEST record, and keep a login that has no chat yet.
+  test('past logins: each account with its newest chat, and a fresh login with none', async () => {
+    const dir = profile(NEW)
+    chat(dir, OLD, 'a', new Date('2024-10-01T04:57:00Z'))
+    chat(dir, OLD, 'b', new Date('2024-10-02T08:00:00Z'))
+    chat(dir, OLD, 'c', new Date('2024-09-30T01:00:00Z'))
+    mkdirSync(join(dir, 'claude-code-sessions', 'not-an-account'), { recursive: true })
+
+    const past = await readPastLogins(dir)
+
+    expect(past.sort((a, b) => a.accountUuid.localeCompare(b.accountUuid))).toEqual([
+      { accountUuid: OLD, lastSeenAt: '2024-10-02T08:00:00.000Z' },
+      { accountUuid: NEW, lastSeenAt: null },
+    ])
   })
 
   test('an account identified on one profile is named on another it signs into', async () => {

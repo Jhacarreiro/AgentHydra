@@ -13,7 +13,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { listCliInstances } from '../core/cli-instances'
 import { readKnownAccounts } from '../core/known-accounts'
-import { readLoginHistory } from '../core/login-history'
+import { readPastLogins } from '../core/login-history'
 import { type FleetInstanceEntry, fleetInstances } from '../fleet-instances'
 import { getHSwarmStatus, hswarmHome } from '../hswarm'
 import { app } from '../http-app'
@@ -112,16 +112,20 @@ let accountMap: { at: number; map: Promise<Record<string, HSwarmAccountRef>> } |
 
 async function readAccountMap(): Promise<Record<string, HSwarmAccountRef>> {
   const desktop = await fleetInstances()
+  // Every profile's past logins first, off the thread (readPastLogins); the map itself is plain lookups.
+  const past = new Map(
+    await Promise.all(
+      desktop
+        .flatMap((d) => (d.dir ? [d.dir] : []))
+        .map(async (dir) => [dir, await readPastLogins(dir)] as const),
+    ),
+  )
   return hswarmAccountMap({
     desktop,
     cli: listCliInstances(),
     cliUuid: cliAccountUuid,
     known: readKnownAccounts(),
-    pastLogins: (dir) =>
-      readLoginHistory(dir).entries.map((e) => ({
-        accountUuid: e.accountUuid,
-        lastSeenAt: e.lastSeenAt,
-      })),
+    pastLogins: (dir) => past.get(dir) ?? [],
   })
 }
 

@@ -11,6 +11,7 @@
 // `usedOn` the ones it passed through, which is the trail for an account nobody ever identified.
 
 import { readdirSync, statSync } from 'node:fs'
+import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { identityForAccount } from './accounts'
 import { allInstanceNumbers, instanceRef, parseInstanceRef } from './instance-numbers'
@@ -138,4 +139,63 @@ export function readLoginHistory(instanceDir: string): CMLoginHistory {
       (b.lastSeenAt ?? '').localeCompare(a.lastSeenAt ?? ''),
   )
   return { dir, loginState: login.reason, entries }
+}
+
+async function subdirsOff(dir: string): Promise<string[]> {
+  try {
+    return (await readdir(dir, { withFileTypes: true }))
+      .filter((d) => d.isDirectory())
+      .map((d) => d.name)
+  } catch {
+    return []
+  }
+}
+
+/** The newest mtime of the chat records filed under one account folder, 0 for none. */
+async function newestRecord(accountDir: string): Promise<number> {
+  let last = 0
+  for (const org of await subdirsOff(accountDir)) {
+    const orgDir = path.join(accountDir, org)
+    let names: string[] = []
+    try {
+      names = (await readdir(orgDir)).filter((n) => n.startsWith('local_') && n.endsWith('.json'))
+    } catch {
+      continue
+    }
+    const times = await Promise.all(
+      names.map((name) =>
+        stat(path.join(orgDir, name)).then(
+          (s) => s.mtimeMs,
+          () => 0,
+        ),
+      ),
+    )
+    for (const t of times) last = Math.max(last, t)
+  }
+  return last
+}
+
+/**
+ * The accounts that have used this profile and when each was last busy here, as readLoginHistory's entries say,
+ * without the rest: no identities and no pass over the other profiles. The account map behind HSwarm's and Home's
+ * names asks this of every desktop profile at once, where readLoginHistory read every other profile's config and
+ * chat store for each one (17 live of 69 numbered profiles on this PC, about 1,200 reads: a 4.1 s freeze of the
+ * daemon on 2026-10-11). The chat-store listing and a stat of every record (2,745 here) go through the thread pool.
+ * Never throws.
+ */
+export async function readPastLogins(
+  instanceDir: string,
+): Promise<Array<{ accountUuid: string; lastSeenAt: string | null }>> {
+  const dir = normalizePath(instanceDir)
+  const current = readLoginState(dir).uuid
+  const root = path.join(dir, 'claude-code-sessions')
+  const accounts = (await subdirsOff(root)).filter((name) => UUID.test(name))
+  const out = await Promise.all(
+    accounts.map(async (accountUuid) => ({
+      accountUuid,
+      lastSeenAt: iso(await newestRecord(path.join(root, accountUuid))),
+    })),
+  )
+  if (current && !accounts.includes(current)) out.push({ accountUuid: current, lastSeenAt: null })
+  return out
 }
