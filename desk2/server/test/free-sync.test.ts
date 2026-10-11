@@ -16,7 +16,7 @@ import { FreeSync, readLogin, writeLogin } from '../src/free-instances/sync'
 
 const dirs: string[] = []
 const services: FreeInstances[] = []
-afterEach(() => { services.splice(0).forEach(s => s.stop()); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
+afterEach(async () => { await Promise.all(services.splice(0).map(async s => { await s.settled(); await s.stop() })); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
 
 /** /v1/free as the Worker keeps it: version 0 creates, the current version replaces, else 409. */
 function fakeStore(token: string) {

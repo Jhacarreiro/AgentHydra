@@ -28,6 +28,8 @@ const isUuid = (v: unknown): boolean => typeof v === 'string' && UUID.test(v)
 /** Operations running at once, and operations kept (running, and finished ones waiting to be read; see start). */
 const MAX_RUNNING = 16
 const MAX_KEPT = 200
+/** How long a shutdown waits for aborted jobs to save their last state, ms. */
+const STOP_WAIT_MS = 2000
 function checkIdentity(r: FreeRequest): void {
   const keys = ['requestId', 'instanceId', 'provider', 'command', 'chatId', 'prompt', 'name', 'webSearch', 'model']
   if (Object.keys(r).some(k => !keys.includes(k))) throw new FreeError('Unknown operation option.')
@@ -459,5 +461,17 @@ export class FreeInstances {
     if (thread) thread.contextChars = context + sent + reply
     return entry
   }
-  stop(): void { this.stopping = true; clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher); for (const controller of this.controllers.values()) controller.abort() }
+  /** Resolves once everything saved so far is on disk (tests). */
+  settled(): Promise<void> { return this.store.settled() }
+  /** Aborts the running jobs, waits for their last saves (STOP_WAIT_MS at most), then writes what is still queued and
+   *  waits out a write already in flight, so nothing touches the folder after the service stopped. */
+  async stop(): Promise<void> {
+    this.stopping = true; clearTimeout(this.keeper); clearInterval(this.keeper); clearTimeout(this.refresher); clearInterval(this.refresher)
+    for (const controller of this.controllers.values()) controller.abort()
+    let timer: ReturnType<typeof setTimeout> | undefined
+    await Promise.race([Promise.all(this.runs.values()), new Promise(resolve => { timer = setTimeout(resolve, STOP_WAIT_MS) })])
+    clearTimeout(timer)
+    this.store.flushSync()
+    await this.store.quiet()
+  }
 }

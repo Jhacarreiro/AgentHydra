@@ -10,6 +10,8 @@ export interface AsyncFileOptions {
   retryMs?: number
   /** The rename onto the file; a test holds it here. */
   rename?: typeof renameOverAsync
+  /** The file's permission bits (Free's accounts.json is 0o600). */
+  mode?: number
 }
 
 export class AsyncFile {
@@ -76,7 +78,7 @@ export class AsyncFile {
         const tmp = this.tempName(seq)
         try {
           await mkdir(dirname(this.file), { recursive: true })
-          await writeFlushedAsync(tmp, text)
+          await writeFlushedAsync(tmp, text, { mode: this.opts.mode })
           if (seq < this.landed) {
             await rm(tmp, { force: true })
             continue
@@ -121,7 +123,7 @@ export class AsyncFile {
     const tmp = `${this.tempName(seq)}.sync`
     try {
       mkdirSync(dirname(this.file), { recursive: true })
-      writeFlushed(tmp, this.want as string)
+      writeFlushed(tmp, this.want as string, { mode: this.opts.mode })
       renameOver(tmp, this.file)
     } catch (err) {
       rmSyncQuiet(tmp)

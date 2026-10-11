@@ -4,7 +4,7 @@ import { isAbsolute, join } from 'node:path'
 import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
 import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
-import { renameOver, writeFlushed } from '../write-flushed'
+import { AsyncFile } from '../async-file'
 
 /** accounts.json.bak is rewritten at most this often (and on the first save after load). */
 const BACKUP_EVERY_MS = 10 * 60_000
@@ -54,9 +54,13 @@ function load(text: string): Data {
 export class FreeStorage {
   data: Data = { instances: [], threads: [] }
   private file: string
+  private writer: AsyncFile
+  private backupWriter: AsyncFile
   private backedUpAt = 0
   constructor(private home: string) {
     this.file = join(home, 'free', 'accounts.json')
+    this.writer = new AsyncFile(this.file, { mode: 0o600 })
+    this.backupWriter = new AsyncFile(`${this.file}.bak`, { mode: 0o600 })
     const bytes = existsSync(this.file) ? readFileSync(this.file) : null
     if (!bytes) this.migrate()
     // A power cut must never cost the Free accounts' history: the last-good backup comes before any rebuild.
@@ -100,16 +104,30 @@ export class FreeStorage {
     this.data.deleted = (this.data.deleted ?? []).filter(d => d.id !== id)
     this.save()
   }
+  /**
+   * Queues the newest accounts.json (and, when due, its backup) for the file thread and returns at once. Written on the
+   * server's thread, every save blocked the event loop 3 to 4.7 s under disk load (loop-stalls.jsonl, 16 parallel Free
+   * sends), and every message's token and stats update saves. Each writer lands the newest content, so nothing waits.
+   */
   save(): void {
-    mkdirSync(join(this.home, 'free'), { recursive: true })
     const json = JSON.stringify(this.data)
-    writeFlushed(`${this.file}.tmp`, json, { mode: 0o600 })
-    renameOver(`${this.file}.tmp`, this.file)
+    void this.writer.write(json)
     if (Date.now() - this.backedUpAt < BACKUP_EVERY_MS) return
-    const backup = `${this.file}.bak`
-    writeFlushed(`${backup}.tmp`, json, { mode: 0o600 })
-    renameOver(`${backup}.tmp`, backup)
     this.backedUpAt = Date.now()
+    void this.backupWriter.write(json)
+  }
+  /** Server shutdown: what is queued but not on disk yet is written now. Call it after the service's last save. */
+  flushSync(): void {
+    try { this.writer.flushSync() }
+    finally { this.backupWriter.flushSync() }
+  }
+  /** Resolves once neither writer has a write in flight: after flushSync, none starts again on its own. */
+  quiet(): Promise<void> {
+    return Promise.all([this.writer.quiet(), this.backupWriter.quiet()]).then(() => undefined)
+  }
+  /** Resolves once everything saved so far is on disk (tests). */
+  settled(): Promise<void> {
+    return Promise.all([this.writer.settled(), this.backupWriter.settled()]).then(() => undefined)
   }
   /** Restores accounts.json from its last-good backup, setting the damaged file aside (never deleted). False if there is no usable backup. */
   private restore(aside: 'unwritten' | 'damaged'): boolean {

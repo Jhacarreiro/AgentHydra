@@ -19,7 +19,7 @@ import { FreeStorage } from '../src/free-instances/storage'
 
 const dirs: string[] = []
 const services: FreeInstances[] = []
-afterEach(() => { services.splice(0).forEach(s => s.stop()); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
+afterEach(async () => { await Promise.all(services.splice(0).map(async s => { await s.settled(); await s.stop() })); dirs.splice(0).forEach(d => rmSync(d, { recursive: true, force: true })) })
 const CHAT = '11111111-2222-4333-8444-555555555555'
 const INSTANCE = 'aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee'
 const output = (value: unknown, code = 0): RunOutput => ({ code, stdout: JSON.stringify(value) })
@@ -193,6 +193,7 @@ describe('Free jobs and routes', () => {
     const { service, home, op, runtime } = fixture(async () => { calls++; return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' }) })
     const job = service.start(op({ command: 'chat', prompt: 'synthetic prompt' }))
     await tick()
+    await service.settled()
     const stored = readFileSync(join(home, 'free', 'accounts.json'), 'utf8')
     expect(stored).not.toContain('synthetic prompt')
     expect(stored).not.toContain('Synthetic reply')
@@ -421,6 +422,7 @@ describe('Free jobs and routes', () => {
     const { service, home, runtime } = fixture()
     expect(service.settings()).toEqual({ keepWindows: false, weeklyFloorPct: 85 })
     expect(service.updateSettings({ keepWindows: true, weeklyFloorPct: 70 })).toEqual({ keepWindows: true, weeklyFloorPct: 70 })
+    await service.settled()
     const again = new FreeInstances(home, undefined, runtime)
     services.push(again)
     expect(again.settings()).toEqual({ keepWindows: true, weeklyFloorPct: 70 })
@@ -581,6 +583,7 @@ describe('Free jobs and routes', () => {
     expect(total()).toEqual({ input: 160, output: 60, total: 220 })
     const now = service.status().tokens![instance.id]!
     expect([now.fiveHour, now.week]).toEqual([now.total, now.total])
+    await service.settled()
     expect(readFileSync(join(home, 'free', 'accounts.json'), 'utf8')).not.toMatch(/ppp|rrr|xxx/)
     const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
     expect(again.status().tokens?.[instance.id]?.total.total).toBe(220)
@@ -603,6 +606,7 @@ describe('Free jobs and routes', () => {
       { day, instanceId: instance.id, model: 'model-b', sent: 1, failed: 1, input: 0, output: 0 },
     ]
     expect(await (await app.request('/api/free/stats?days=14')).json()).toEqual(rows)
+    await service.settled()
     const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
     expect(again.stats(14)).toEqual(rows)
     // A store from before the record starts with the week of tokens it holds, by day, as no messages sent.
@@ -658,7 +662,7 @@ describe('Free jobs and routes', () => {
     expect(nextRead(many, () => false, NOW)?.id).toBe('d')
     expect(nextRead(many.slice(0, 2), () => false, NOW)?.id).toBe('c')
   })
-  test('legacy migration copies encrypted state into isolated homes once, without removing its source', () => {
+  test('legacy migration copies encrypted state into isolated homes once, without removing its source', async () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-migrate-')); dirs.push(home)
     const legacy = join(home, 'old-harness')
     mkdirSync(join(legacy, '.state', 'chatgpt'), { recursive: true })
@@ -673,9 +677,10 @@ describe('Free jobs and routes', () => {
     expect(readFileSync(join(home, 'free', 'instances', gpt!.id, 'chatgpt', 'session.dpapi'), 'utf8')).toBe('another encrypted fixture')
     expect(existsSync(join(home, 'free', 'instances', claude!.id, 'requests.json'))).toBe(false)
     expect(existsSync(join(legacy, '.state', 'session.dpapi'))).toBe(true)
+    await migrated.settled()
     expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual(migrated.data.instances.map(i => i.id))
   })
-  test('an accounts.json an unclean shutdown left as NUL bytes is kept aside, and each account folder holding a login is an account again, unchecked, under a name its first check replaces', () => {
+  test('an accounts.json an unclean shutdown left as NUL bytes is kept aside, and each account folder holding a login is an account again, unchecked, under a name its first check replaces', async () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-unwritten-')); dirs.push(home)
     const folders = join(home, 'free', 'instances')
     const claude = 'aaaaaaaa-0000-4000-8000-000000000001', gpt = 'aaaaaaaa-0000-4000-8000-000000000002', noLogin = 'aaaaaaaa-0000-4000-8000-000000000003'
@@ -691,17 +696,21 @@ describe('Free jobs and routes', () => {
     expect(store.data.instances.map(i => i.num).sort()).toEqual([1, 2])
     const kept = readdirSync(join(home, 'free')).filter(f => f.startsWith('accounts.json.unwritten-'))
     expect(kept.map(f => readFileSync(join(home, 'free', f)).length)).toEqual([4096])
+    await store.settled()
     expect(new FreeStorage(home).data.instances.map(i => i.id).sort()).toEqual([claude, gpt])
   })
-  test('a NUL-filled accounts.json restores from its last-good backup: accounts, threads and tokens come back, and the NUL file is kept aside', () => {
+  test('a NUL-filled accounts.json restores from its last-good backup: accounts, threads and tokens come back, and the NUL file is kept aside', async () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-backup-nul-')); dirs.push(home)
     const free = join(home, 'free')
-    const account = new FreeStorage(home).create('claude', 'Mine')
+    const first = new FreeStorage(home)
+    const account = first.create('claude', 'Mine')
+    await first.settled()
     const store = new FreeStorage(home)
     const thread = 'bbbbbbbb-0000-4000-8000-000000000001'
     store.data.threads.push({ id: thread, instanceId: account.id, provider: 'claude', chatId: 'chat-1', title: 'Kept', status: 'done', createdAt: 1, updatedAt: 2, error: null })
     store.data.tokens = { [account.id]: { entries: [{ at: 1, input: 3, output: 4 }], total: { input: 3, output: 4 } } }
     store.save()
+    await store.settled()
     writeFileSync(join(free, 'accounts.json.bak'), readFileSync(join(free, 'accounts.json')))
     writeFileSync(join(free, 'accounts.json'), Buffer.alloc(4096))
     const restored = new FreeStorage(home)
@@ -710,23 +719,30 @@ describe('Free jobs and routes', () => {
     expect(restored.data.tokens?.[account.id]?.total).toEqual({ input: 3, output: 4 })
     const kept = readdirSync(free).filter(f => f.startsWith('accounts.json.unwritten-'))
     expect(kept.map(f => readFileSync(join(free, f)).length)).toEqual([4096])
+    await restored.settled()
     expect(new FreeStorage(home).data.threads.map(t => t.id)).toEqual([thread])
   })
-  test('an unreadable accounts.json restores from its last-good backup, and the damaged file is kept aside, never deleted', () => {
+  test('an unreadable accounts.json restores from its last-good backup, and the damaged file is kept aside, never deleted', async () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-backup-damaged-')); dirs.push(home)
     const free = join(home, 'free')
-    const account = new FreeStorage(home).create('chatgpt', 'Work')
+    const store = new FreeStorage(home)
+    const account = store.create('chatgpt', 'Work')
+    await store.settled()
     writeFileSync(join(free, 'accounts.json.bak'), readFileSync(join(free, 'accounts.json')))
     writeFileSync(join(free, 'accounts.json'), '{"instances": [')
-    expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual([account.id])
+    const restored = new FreeStorage(home)
+    expect(restored.data.instances.map(i => i.id)).toEqual([account.id])
     const kept = readdirSync(free).filter(f => f.startsWith('accounts.json.damaged-'))
     expect(kept.map(f => readFileSync(join(free, f), 'utf8'))).toEqual(['{"instances": ['])
+    await restored.settled()
     expect(new FreeStorage(home).data.instances.map(i => i.id)).toEqual([account.id])
   })
-  test('save() keeps accounts.json.bak, the last-good copy, beside accounts.json', () => {
+  test('save() keeps accounts.json.bak, the last-good copy, beside accounts.json', async () => {
     const home = mkdtempSync(join(tmpdir(), 'desk-free-backup-write-')); dirs.push(home)
     const free = join(home, 'free')
-    const account = new FreeStorage(home).create('claude', 'Mine')
+    const store = new FreeStorage(home)
+    const account = store.create('claude', 'Mine')
+    await store.settled()
     expect(readFileSync(join(free, 'accounts.json.bak'), 'utf8')).toBe(readFileSync(join(free, 'accounts.json'), 'utf8'))
     expect(existsSync(join(free, 'accounts.json.bak.tmp'))).toBe(false)
     expect(JSON.parse(readFileSync(join(free, 'accounts.json.bak'), 'utf8')).instances.map((i: FreeInstance) => i.id)).toEqual([account.id])
@@ -765,6 +781,7 @@ describe('Free jobs and routes', () => {
     service.start(op({ command: 'chats' })); await tick()
     expect(service.threads()).toEqual([])
     expect(service.status().tokens?.[instance.id]?.total).toEqual(total)
+    await service.settled()
     const again = new FreeInstances(home, async () => output({}), runtime); services.push(again)
     expect(again.threads()).toEqual([])
     expect(again.status().tokens?.[instance.id]?.total).toEqual(total)
