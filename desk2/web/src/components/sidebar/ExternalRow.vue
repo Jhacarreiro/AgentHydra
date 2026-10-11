@@ -124,7 +124,7 @@ function onMenuClosed(e: Event) {
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" />
+            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" :selected="selected" />
             <span v-else class="flex size-3.5 items-center justify-center">
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>

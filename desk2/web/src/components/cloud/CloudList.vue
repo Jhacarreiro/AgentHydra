@@ -200,7 +200,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
                 <svg v-if="cloud.selected.value.has(r.id)" viewBox="0 0 12 12" class="size-2.5" fill="none" stroke="currentColor" stroke-width="2"><path d="M2.5 6.2 5 8.5 9.5 3.5" /></svg>
               </span>
               <Cloud v-else-if="cloudMark(r)?.kind === 'cloud'" role="img" :aria-label="cloudMark(r)!.label" class="size-3.5" :class="cloudTone(r)" />
-              <ProjectRing v-else-if="rowCompact(r)" :glyph="ringOf(r)" :icon="rowIcon(r)" />
+              <ProjectRing v-else-if="rowCompact(r)" :glyph="ringOf(r)" :icon="rowIcon(r)" :selected="props.selectedId === r.id" />
               <span v-else class="size-1.5 rounded-full" :class="dotClass(r)" />
             </span>
             <!-- This PC's chat of another app: its muted mark beside the dot, which keeps its running and needs-you look. -->

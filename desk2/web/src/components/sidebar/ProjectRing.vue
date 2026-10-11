@@ -9,8 +9,12 @@ import { glyphDotClass, glyphRingClass, type StatusGlyph } from './logic'
 // side is thicker than the other"): at 1.5px the mask's inner edge rounded to 2px on the left and top and 1px on the
 // right and bottom, at every display scale; 1px is even at 100% and 200% and within a quarter pixel at 125% and 150%. A row keeps its 26px height. A project with
 // no icon (the group header's fallback) keeps the dot in the middle, so the state still shows.
-const props = defineProps<{ glyph: StatusGlyph; icon: string | null }>()
+// The icon dims once the chat is done, nothing running and nothing waiting on you (the glyph not `active`), as its title
+// does, unless the row is the one open (owner, 2026-10-10: "the outline ... strobes when it's working and lights up when I
+// need to do something, and the text dims when it is not working. Can you also have the logo dim when it's done?").
+const props = defineProps<{ glyph: StatusGlyph; icon: string | null; selected?: boolean }>()
 const ring = computed(() => glyphRingClass(props.glyph))
+const done = computed(() => !props.glyph.active && !props.selected)
 </script>
 
 <template>
@@ -21,7 +25,13 @@ const ring = computed(() => glyphRingClass(props.glyph))
       class="pointer-events-none absolute inset-0 rounded-[4px] p-px [mask:linear-gradient(#000_0_0)_content-box_exclude,linear-gradient(#000_0_0)]"
       :class="ring"
     />
-    <img v-if="icon" :src="icon" alt="" class="size-4 rounded-[3px]" />
+    <img
+      v-if="icon"
+      :src="icon"
+      alt=""
+      class="size-4 rounded-[3px] transition-opacity duration-(--dur-fast) ease-(--ease-snap)"
+      :class="{ 'opacity-50': done }"
+    />
     <span v-else class="size-1.5 rounded-full" :class="glyphDotClass({ shape: glyph.shape, tone: glyph.tone, motion: 'none' })" />
   </span>
 </template>
