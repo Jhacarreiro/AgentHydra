@@ -355,27 +355,24 @@ def test_a_clef_key_line_carries_its_route_so_a_synced_pc_needs_nothing_else():
                             ("https://clef.example.workers.dev/clef", "Bearer proxy-secret")]
 
 
-def test_md1_draws_openrouter_keys_disabled_for_credit_but_never_revoked_ones_and_leaves_the_disable(monkeypatch):
-    """14 of 14 OpenRouter keys whose balance read $0 answered MD1 on 2026-10-11, so a credit disable must not hide a key
-    from it. A 200 there says nothing about paid credit: the key stays out of paid rotation."""
-    from hswarm import client, keys
-
-    monkeypatch.setenv("OPENROUTER_API_KEYS", "or-funded-0000,or-broke-0000,or-revoked-000")
-    pool = keys.pool_for("openrouter")
-    pool.broke("or-broke-0000", status=402)
-    pool.disable("or-revoked-000", reason=client.REVOKED, status=401)
+def test_md1_goes_to_openrouters_system_one_with_the_md1_list_only(monkeypatch):
+    """OpenRouter's balance does not say which keys serve MD1 (2026-10-11: 21 of 199 answered, keys with credit 402'd),
+    so MD1 asks with its own list's keys, never the general OpenRouter pool's."""
+    monkeypatch.setenv("OPENROUTER_API_KEYS", "or-general-0000")
+    assert not typesafe.Jev.for_model(typesafe.MD1).usable
+    config.SECRETS_DIR.mkdir(parents=True, exist_ok=True)
+    (config.SECRETS_DIR / "md1_api_keys").write_text("or-md1-key-0000\n", encoding="utf-8")
     seen = []
 
     def handler(request: httpx.Request) -> httpx.Response:
-        seen.append((str(request.url), json.loads(request.content)["model"]))
+        seen.append((str(request.url), request.headers["authorization"], json.loads(request.content)["model"]))
         return httpx.Response(200, json={"model": typesafe.MD1, "answers": {"q": {"type": "noul", "noul": 0.9}}, "usage": {"input_tokens": 30}})
 
     async def go():
         async with httpx.AsyncClient(transport=httpx.MockTransport(handler)) as http:
             jev = typesafe.Jev.for_model(typesafe.MD1, http=http)
-            return jev.keys, [await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model=typesafe.MD1) for _ in range(2)]
+            return await jev.ask("s", {"q": {"type": "noul", "instructions": "q?"}}, model=typesafe.MD1), jev.provider
 
-    drawn, res = asyncio.run(go())
-    assert sorted(drawn) == ["or-broke-0000", "or-funded-0000"] and all(r["status"] == "ok" for r in res)
-    assert seen == [(typesafe.MD1_URL, typesafe.MD1)] * 2 and typesafe.is_typed_model(typesafe.MD1)
-    assert config.fingerprint("or-broke-0000") in pool.disabled()
+    res, provider = asyncio.run(go())
+    assert res["status"] == "ok" and res["cost_usd"] == pytest.approx(30 * 0.042 / 1_000_000) and provider == "openrouter"
+    assert seen == [(typesafe.MD1_URL, "Bearer or-md1-key-0000", typesafe.MD1)] and typesafe.is_typed_model(typesafe.MD1)
