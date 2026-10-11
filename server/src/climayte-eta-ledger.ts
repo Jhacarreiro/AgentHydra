@@ -14,7 +14,7 @@
 // Reads take the file's tail only and are cached on its size and time: briefArgs reads it at every
 // launch.
 
-import { appendFileSync, closeSync, mkdirSync, openSync, readSync, statSync } from 'node:fs'
+import { closeSync, openSync, readSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { ROOT } from './climayte-core'
 import {
@@ -28,6 +28,7 @@ import {
   etaSamples,
   mergeSamples,
 } from './climayte-eta'
+import { appendInOrder } from './core/append-in-order'
 
 export const ETA_LEDGER_PATH = join(ROOT, ETA_LEDGER_FILE)
 /** A read looks at this much of the file's end. */
@@ -77,14 +78,10 @@ export type EtaRow =
 
 let cache: { path: string; size: number; mtime: number; rows: EtaRow[] } | null = null
 
-/** Append one row. Never throws: the ledger is a record, not a dependency. */
-export function appendEtaRow(row: EtaRow, path = ETA_LEDGER_PATH): void {
-  try {
-    mkdirSync(join(path, '..'), { recursive: true })
-    appendFileSync(path, `${JSON.stringify(row)}\n`)
-  } catch {
-    // a full disk or a locked file loses one row, never a worker
-  }
+/** Append one row, off the daemon's thread and after the rows appended before it. Never rejects:
+ *  the ledger is a record, not a dependency (a full disk or a locked file loses one row). */
+export function appendEtaRow(row: EtaRow, path = ETA_LEDGER_PATH): Promise<void> {
+  return appendInOrder(path, `${JSON.stringify(row)}\n`)
 }
 
 /** The rows in the last `bytes` of the file, oldest first. */

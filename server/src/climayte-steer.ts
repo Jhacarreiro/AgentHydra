@@ -127,7 +127,7 @@ export function climayteStopHook(
   w.eta.tookS = tookS
   w.eta.doneAt = now
   w.eta.reviewAskedAt = now
-  appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+  void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
   changed(w)
   return { decision: 'block', reason }
 }

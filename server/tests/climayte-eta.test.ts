@@ -374,7 +374,7 @@ describe('the ledger', () => {
       eta,
     }) as unknown as CliMayteWorker
 
-  test('rows round-trip, calibration reads them with the worker gone, and a live copy counts once', () => {
+  test('rows round-trip, calibration reads them with the worker gone, and a live copy counts once', async () => {
     const path = join(dir, 'eta.jsonl')
     for (let i = 0; i < 5; i++) {
       const eta = {
@@ -387,7 +387,7 @@ describe('the ledger', () => {
       }
       appendEtaRow(settledRow(worker(`w-${i}`, eta), eta), path)
     }
-    appendEtaRow(
+    await appendEtaRow(
       {
         t: 'review',
         id: 'w-4',
@@ -435,12 +435,14 @@ describe('the ledger', () => {
     expect(samplesOfRows(rows)).toHaveLength(5)
   })
 
-  test('only the tail is read, and a cut first line is dropped', () => {
+  test('only the tail is read, and a cut first line is dropped', async () => {
     const path = join(dir, 'big.jsonl')
+    const appends: Promise<void>[] = []
     for (let i = 0; i < 50; i++) {
       const eta = { minutes: 5, at: i, attempt: 0, tookS: 300, doneAt: i + 1 }
-      appendEtaRow(settledRow(worker(`w-${i}`, eta), eta), path)
+      appends.push(appendEtaRow(settledRow(worker(`w-${i}`, eta), eta), path))
     }
+    await Promise.all(appends)
     resetEtaLedgerCache()
     const rows = readEtaRows(path, 2_000)
     expect(rows.length).toBeGreaterThan(0)

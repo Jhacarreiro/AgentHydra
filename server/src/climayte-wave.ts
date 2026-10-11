@@ -185,15 +185,31 @@ export function waveDone(wave: CliMayteWave): boolean {
 /** The most a manager's report or notes keep, in characters. */
 export const WAVE_TEXT_CAP = 2000
 
-/** The table a report starts with: one line per key, then the branch head (git, hidden). */
-export function reportTable(wave: CliMayteWave): string {
-  const head = spawnSync('git', ['rev-parse', wave.branch], {
+/** The wave branch's head commit, or 'unknown'. git runs off the daemon's thread: run on it, the
+ *  manager's wave_report held every route for up to 3 s (11.6 s in 4 blocks in 24 h, 2026-10-11). */
+export async function waveHead(wave: CliMayteWave): Promise<string> {
+  const r = await spawnCaptured(['git', 'rev-parse', wave.branch], {
+    cwd: wave.cwd,
+    timeoutMs: 30_000,
+    wantStderr: false,
+  })
+  return r.code === 0 ? r.stdout.trim() : 'unknown'
+}
+
+/** waveHead on this thread, for the report the tick writes for a manager that ended without
+ *  wave_report (reportForManager), inside the settle of that manager. */
+export function waveHeadNow(wave: CliMayteWave): string {
+  const r = spawnSync('git', ['rev-parse', wave.branch], {
     cwd: wave.cwd,
     encoding: 'utf8',
     windowsHide: true,
     timeout: 30_000,
   })
-  const sha = head.status === 0 ? (head.stdout ?? '').trim() : 'unknown'
+  return r.status === 0 ? (r.stdout ?? '').trim() : 'unknown'
+}
+
+/** The table a report starts with: one line per key, then the branch head (waveHead). */
+export function reportTable(wave: CliMayteWave, head: string): string {
   const lines = wave.tasks.map((t) => {
     const p = t.proof
     const proof = p
@@ -207,13 +223,15 @@ export function reportTable(wave: CliMayteWave): string {
       : 'none'
     return `${t.key} | ${t.state} | ${proof} | ${p?.commits.length ? p.commits.join(' ') : 'none'}`
   })
-  return [`key | state | proof | commits`, ...lines, `branch ${wave.branch} head ${sha}`].join('\n')
+  return [`key | state | proof | commits`, ...lines, `branch ${wave.branch} head ${head}`].join(
+    '\n',
+  )
 }
 
 /** The wave is reported: the table, then `text` (the manager's wave_report, or the daemon's stand-in for a
  *  manager that ended without calling it). Only now can climayte_wait --wave wake and the wave be verified. */
-export function reportWave(wave: CliMayteWave, text: string, now = Date.now()): void {
-  wave.report = `${reportTable(wave)}\n\n${text.slice(0, WAVE_TEXT_CAP)}`
+export function reportWave(wave: CliMayteWave, text: string, head: string, now = Date.now()): void {
+  wave.report = `${reportTable(wave, head)}\n\n${text.slice(0, WAVE_TEXT_CAP)}`
   wave.status = 'reported'
   wave.updatedAt = now
 }

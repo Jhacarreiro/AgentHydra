@@ -10,7 +10,7 @@ import { accountsProvider, changed, journal, load, workers } from './climayte-co
 import { firstLine } from './climayte-journal'
 import type { CliMayteWave, CliMayteWorker } from './climayte-lib'
 import { verdictNoteTooLong, verdictRecord } from './climayte-steer'
-import { readWave, reportWave, waveDone, writeWave } from './climayte-wave'
+import { readWave, reportWave, waveDone, waveHeadNow, writeWave } from './climayte-wave'
 
 // Waves modified during this tick: waveId -> { wave, configDir }. Cleared at the end of the tick.
 export const modifiedWaves = new Map<string, { wave: CliMayteWave; configDir: string }>()
@@ -68,6 +68,7 @@ function reportForManager(
   reportWave(
     wave,
     `The manager ended without wave_report; its last answer:\n\n${said || '(none)'}`,
+    waveHeadNow(wave),
     now,
   )
   modifiedWaves.set(wave.id, found)

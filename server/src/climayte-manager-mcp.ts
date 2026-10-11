@@ -16,7 +16,7 @@ import {
 import { attemptCliPid, CALLER_REFUSED } from './climayte-ask-mcp'
 import { load, workers } from './climayte-core'
 import type { CliMayteWave } from './climayte-lib'
-import { reportWave, WAVE_TEXT_CAP, waveStateText } from './climayte-wave'
+import { reportWave, WAVE_TEXT_CAP, waveHead, waveStateText } from './climayte-wave'
 import { VERSION } from './config'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { handleRpc, type McpEngineTool } from './mcp-stdio.mjs'
@@ -235,12 +235,16 @@ export function managerTools(managerId: string): McpEngineTool[] {
         properties: { text: { type: 'string', description: "The manager's final report." } },
         required: ['text'],
       },
-      run: async (args) =>
-        onWave(managerId, (wave) => {
+      run: async (args) => {
+        const id = waveIdOf(managerId)
+        const stored = id ? climayteWave(id) : null
+        const head = stored ? await waveHead(stored) : 'unknown'
+        return onWave(managerId, (wave) => {
           if (wave.status !== 'running') return { error: `the wave is already ${wave.status}` }
-          reportWave(wave, str(args.text))
+          reportWave(wave, str(args.text), head)
           return { ok: true, status: wave.status }
-        }),
+        })
+      },
     },
   ]
 }

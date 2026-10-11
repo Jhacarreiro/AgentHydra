@@ -52,7 +52,7 @@ import {
   startQuickAdd,
   submitQuickAddCode,
 } from '../core/cli-quick-add'
-import { ownBuild } from '../core/own-build'
+import { readOwnBuild } from '../core/own-build'
 import { app } from '../http-app'
 import { CLIMAYTE_MAX_WAIT_S } from '../mcp-client'
 import { jsonBody } from '../route-helpers'
@@ -153,8 +153,9 @@ app.get('/api/corch/workers', async (c) => {
 // The other PC's CliMayte queue, as it last shared it through the login sync (core/climayte-queue-sync.ts):
 // shown apart, never part of /api/corch/workers. `stale`: that PC was not seen (its snapshot or
 // its polls of the store) for over 20 minutes.
-app.get('/api/corch/remote', (c) => {
+app.get('/api/corch/remote', async (c) => {
   const enabled = queueSharingOn()
+  const mine = enabled ? await readOwnBuild() : null
   const pcs = enabled
     ? remoteSnapshots().map(({ pc, name, at, stale, workers, jobs, build }) => ({
         pc,
@@ -163,7 +164,7 @@ app.get('/api/corch/remote', (c) => {
         stale,
         workers,
         jobs: jobs ?? [],
-        ...buildStatus(name, build, ownBuild()),
+        ...buildStatus(name, build, mine),
       }))
     : []
   return c.json({ enabled, pcs })
@@ -314,7 +315,7 @@ app.post('/api/corch/waves', async (c) => {
   const body = await jsonBody(c)
   const { origin, why } = chatOrigin(body.origin)
   try {
-    const reply = climayteWaveStart({
+    const reply = await climayteWaveStart({
       plan: body.plan,
       cwd: body.cwd,
       tasks: body.tasks,

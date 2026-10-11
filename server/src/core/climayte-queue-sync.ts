@@ -50,7 +50,7 @@ import {
 } from '../climayte-remote'
 import { adoptCliInstancePlacements, cliInstancePlacements } from './cli-instances'
 import { MIRROR_FRESH_MS, type StoreMirror } from './login-sync-mirror'
-import { ownBuild } from './own-build'
+import { ownBuild, readOwnBuild } from './own-build'
 
 /** The store's cap on a queue blob (cloud/login-sync-worker/worker.js). */
 export const QUEUE_MAX_BLOB = 256 * 1024
@@ -566,6 +566,7 @@ export async function syncQueueDetail(
     // titles are a nicety: never fail the pass
   }
   await warmSwarmJobs() // never throws: HSwarm down or slow is no jobs this pass
+  await readOwnBuild() // never throws: the snapshot shares this daemon's build
   const rows = await queueRows(io)
   const own = rows.find((r) => r.pc === io.pc)?.version ?? 0
   let problem: Error | null = null

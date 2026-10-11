@@ -39,9 +39,10 @@
 // passed to startCliMaytePing, so the batching and the delivery chain are tested with a fake clock
 // and fake transports (server/tests/climayte-ping.test.ts).
 
-import { appendFileSync, existsSync, readFileSync, renameSync } from 'node:fs'
+import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CliMayteStatus } from './climayte-lib'
+import { appendInOrder } from './core/append-in-order'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { deliverPeerMessage } from './peer-message'
 
@@ -503,15 +504,11 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     deps.toast ??
     (async (n: { title: string; body: string }) =>
       (await import('./notify-os')).sendOsNotification(n))
+  // Off the daemon's thread; a line that cannot be written is lost, and never stops a ping.
   const journal =
     deps.journal ??
-    ((line: Record<string, unknown>) => {
-      try {
-        appendFileSync(join(deps.dir, 'pings-journal.jsonl'), `${JSON.stringify(line)}\n`)
-      } catch {
-        // the journal must never stop a ping
-      }
-    })
+    ((line: Record<string, unknown>) =>
+      void appendInOrder(join(deps.dir, 'pings-journal.jsonl'), `${JSON.stringify(line)}\n`))
 
   const ledger = loadLedger(file, journal, clock.now())
   // An origin with nothing owed and no news for a week is forgotten. Its delivered keys only guard

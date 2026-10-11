@@ -196,6 +196,7 @@ import {
 } from './climayte-wave-ops'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
+import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { POINTER_DIR } from './instance'
 
@@ -697,14 +698,14 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
       line: r.eta.line,
       prompt: ETA_PROMPT_VERSION,
     }
-    appendEtaRow(saidRow(w, w.eta, r.eta.text))
+    void appendEtaRow(saidRow(w, w.eta, r.eta.text))
     changed(w)
   }
   // Its answer to why the estimate missed (the Stop hook asked, climayteStopHook): kept on the
   // estimate and in the ledger.
   if (!w.chat && w.eta?.reviewAskedAt !== undefined && !w.eta.review && r.review) {
     w.eta.review = r.review
-    appendEtaRow(reviewRow(w.id, w.eta, r.review, Date.now()))
+    void appendEtaRow(reviewRow(w.id, w.eta, r.review, Date.now()))
     changed(w)
   }
   if (exited) finish(w, r.events)
@@ -976,7 +977,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   ) {
     w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
     w.eta.doneAt = now
-    appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+    void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
   }
   // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
@@ -1552,7 +1553,7 @@ function reconcileWaves(now: number): void {
 
 /** Piece 7: write a wave and start its manager; nothing else starts (the manager dispatches).
  *  Throws an Error with the reason when the dispatch is refused. */
-export function climayteWaveStart(input: {
+export async function climayteWaveStart(input: {
   plan: unknown
   cwd: unknown
   tasks: unknown
@@ -1561,7 +1562,7 @@ export function climayteWaveStart(input: {
   maxRounds?: unknown
   /** The climayte_manage caller: the manager worker reports to it. */
   origin?: CliMayteOrigin
-}): { wave: string; managerId: string; waiter: string } {
+}): Promise<{ wave: string; managerId: string; waiter: string }> {
   load()
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
   const plan = str(input.plan)
@@ -1610,8 +1611,10 @@ export function climayteWaveStart(input: {
   const maxRounds = Number.isInteger(rounds) && rounds >= 1 ? rounds : 3
   let branch = str(input.branch)
   if (!branch) {
-    const r = Bun.spawnSync(['git', 'branch', '--show-current'], { cwd, windowsHide: true })
-    branch = r.stdout.toString().trim() || 'main'
+    // Off the daemon's thread: run on it, git held every route for up to 3 s per wave started
+    // (21.6 s in 24 h, 2026-10-11).
+    const r = await spawnCaptured(['git', 'branch', '--show-current'], { cwd, wantStderr: false })
+    branch = r.stdout.trim() || 'main'
   }
   const dir = waveDirs()[0]
   if (!dir) throw new Error('No CLI account is signed in to run a wave on.')

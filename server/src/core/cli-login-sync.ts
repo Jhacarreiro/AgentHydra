@@ -248,13 +248,22 @@ interface Live {
   key: Buffer
 }
 
+/** The last config's store credentials, unsealed. DPAPI's unseal ran on the daemon's thread at every
+ *  pass and held every route for about 2 s on some (9.2 s in 4 blocks in 24 h, 2026-10-11); the sealed
+ *  values change only when sync is set up again. */
+let lastLive: { url: string; token: string; key: string; live: Live } | null = null
+
 function live(c: SyncConfig): Live | null {
+  if (lastLive && lastLive.url === c.url && lastLive.token === c.token && lastLive.key === c.key)
+    return lastLive.live
   const url = storeUrl(c.url)
   const token = unseal(c.token)
   const key = unseal(c.key)
   if (!url || !token || !key) return null
   const buf = Buffer.from(key, 'base64')
-  return buf.length === 32 ? { url, token, key: buf } : null
+  if (buf.length !== 32) return null
+  lastLive = { url: c.url, token: c.token, key: c.key, live: { url, token, key: buf } }
+  return lastLive.live
 }
 
 async function call(

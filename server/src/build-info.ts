@@ -51,6 +51,12 @@ function stamp(): StampedBuild | null {
   return g.__AGENTHYDRA_BUILD__ ?? null
 }
 
+/** The commit `git rev-parse HEAD` printed, or null when it printed no full sha. */
+export function headSha(stdout: string): string | null {
+  const sha = stdout.trim()
+  return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+}
+
 /** The checkout's HEAD, for source mode. Never throws: git may be absent, or this may be a copy of
  *  the tree with no `.git` at all, and neither is an error worth failing `--version` over. */
 function gitHead(): string | null {
@@ -60,20 +66,20 @@ function gitHead(): string | null {
       stdout: 'pipe',
       stderr: 'ignore',
     })
-    if (proc.exitCode !== 0) return null
-    const sha = proc.stdout.toString().trim()
-    return /^[0-9a-f]{40}$/.test(sha) ? sha : null
+    return proc.exitCode === 0 ? headSha(proc.stdout.toString()) : null
   } catch {
     return null
   }
 }
 
-export function buildInfo(): BuildInfo {
+/** `git: false` leaves a source build's commit null instead of asking git on this thread: the
+ *  daemon asks it off the thread (core/own-build.ts). */
+export function buildInfo({ git = true }: { git?: boolean } = {}): BuildInfo {
   const stamped = stamp()
   return {
     schema: BUILD_INFO_SCHEMA,
     version: VERSION,
-    commit: stamped?.commit ?? (IS_RELEASE ? null : gitHead()),
+    commit: stamped?.commit ?? (IS_RELEASE || !git ? null : gitHead()),
     builtAt: stamped?.builtAt ?? null,
     release: IS_RELEASE,
   }

@@ -1313,25 +1313,32 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  const start = (tasks: unknown[] = three) => {
-    const r = climayteWaveStart({ plan: join(root, 'plan.md'), cwd: repo, tasks, branch: 'main' })
+  const start = async (tasks: unknown[] = three) => {
+    const r = await climayteWaveStart({
+      plan: join(root, 'plan.md'),
+      cwd: repo,
+      tasks,
+      branch: 'main',
+    })
     groups.push(`mgr-${r.wave}`)
     return r
   }
 
-  test('a wave under 3 tasks, a manage task, a repeated key or an unknown `after` is refused and starts nothing', () => {
+  test('a wave under 3 tasks, a manage task, a repeated key or an unknown `after` is refused and starts nothing', async () => {
     const before = climayteList({}).length
-    const run = (tasks: unknown[]) => () =>
+    const run = (tasks: unknown[]) =>
       climayteWaveStart({ plan: 'p.md', cwd: repo, tasks, branch: 'main' })
-    expect(run([task('a'), task('b')])).toThrow('use climayte_run')
-    expect(run([...three, task('m', { kind: 'manage' })])).toThrow('manage')
-    expect(run([...three, task('a')])).toThrow('used twice')
-    expect(run([task('a', { after: ['zz'] }), task('b'), task('c')])).toThrow('unknown key')
+    await expect(run([task('a'), task('b')])).rejects.toThrow('use climayte_run')
+    await expect(run([...three, task('m', { kind: 'manage' })])).rejects.toThrow('manage')
+    await expect(run([...three, task('a')])).rejects.toThrow('used twice')
+    await expect(run([task('a', { after: ['zz'] }), task('b'), task('c')])).rejects.toThrow(
+      'unknown key',
+    )
     expect(climayteList({}).length).toBe(before)
   })
 
-  test('a started wave is running with pending tasks and only its manager exists', () => {
-    const r = start()
+  test('a started wave is running with pending tasks and only its manager exists', async () => {
+    const r = await start()
     const wave = readWave(acct, r.wave)
     expect(wave).toMatchObject({ status: 'running', managerId: r.managerId, maxRounds: 3 })
     expect(wave?.tasks.map((t) => t.state)).toEqual(['pending', 'pending', 'pending'])
@@ -1342,13 +1349,13 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     )
   })
 
-  test('waveStateText shows task titles, after-keys, and ready markers for after-chains', () => {
+  test('waveStateText shows task titles, after-keys, and ready markers for after-chains', async () => {
     const withChain = [
       task('nav', { title: 'Nav: Instances group' }),
       task('instances-home', { title: 'Instances home page', after: ['nav'] }),
       task('climayte-float', { title: 'Float: add climayte', after: ['instances-home'] }),
     ]
-    const r = start(withChain)
+    const r = await start(withChain)
     const wave = readWave(acct, r.wave) as CliMayteWave
     const state = waveStateText(wave, new Map())
     // A pending task with no after keys is ready; one whose after key has not passed is not.
@@ -1366,7 +1373,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
 
   /** A reported wave whose one task passed provisionally (the daemon's judgement, by: 'wave'). */
   const reportedWave = async () => {
-    const r = start()
+    const r = await start()
     const run = climayteRun({
       tasks: [
         {
@@ -1397,7 +1404,7 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
 
   test('verify ok confirms the provisional passes and passes the manager; an unreported wave is refused', async () => {
     const { wave, managerId, id } = await reportedWave()
-    const pending = start()
+    const pending = await start()
     expect(climayteWaveVerify(pending.wave, { ok: true })).toMatchObject({ ok: false, status: 409 })
 
     const passes = code()?.pass ?? 0
@@ -1423,8 +1430,8 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     })
   }, 60_000)
 
-  test('resolve turns an escalated key into passed and unblocks a key that waits on it', () => {
-    const r = start()
+  test('resolve turns an escalated key into passed and unblocks a key that waits on it', async () => {
+    const r = await start()
     const w = readWave(acct, r.wave) as CliMayteWave
     const a = w.tasks.find((x) => x.key === 'a') as CliMayteWave['tasks'][number]
     a.state = 'escalated'

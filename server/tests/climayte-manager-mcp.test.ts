@@ -73,8 +73,8 @@ describe('manager MCP endpoint', () => {
   })
 
   /** A wave of three tasks (t1; t2 after t1; t3) and its manager, whose CLI "is" CALLER. */
-  function newWave(extra: Record<string, unknown> = {}) {
-    const started = climayteWaveStart({
+  async function newWave(extra: Record<string, unknown> = {}) {
+    const started = await climayteWaveStart({
       plan: join(repo, 'plan.md'),
       cwd: repo,
       tasks: [task('t1'), task('t2', { after: ['t1'] }), task('t3')],
@@ -124,7 +124,7 @@ describe('manager MCP endpoint', () => {
   }
 
   test('a non-manager and a wrong pid are refused', async () => {
-    const { wave, managerId } = newWave()
+    const { wave, managerId } = await newWave()
     const [plain] = climayteRun({ tasks: [{ prompt: 'x', cwd: repo }], group: 'plain-g' }).workers
     groups.push('plain-g')
     expect((await call(plain?.id as string, 'wave_state')).status).toBe(404)
@@ -140,7 +140,7 @@ describe('manager MCP endpoint', () => {
   }, 20_000)
 
   test('wave_dispatch starts a worker in the wave group, and refuses what the plan forbids', async () => {
-    const { wave, managerId } = newWave({ maxRounds: 1 })
+    const { wave, managerId } = await newWave({ maxRounds: 1 })
     const first = await call(managerId, 'wave_dispatch', { keys: ['t2', 't1', 'nope'] })
     const [t2, t1, nope] = first.value.results
     expect(t2.refused).toContain('after not met')
@@ -171,7 +171,7 @@ describe('manager MCP endpoint', () => {
   }, 20_000)
 
   test('wave_dispatch refuses the manage kind', async () => {
-    const { wave, managerId } = newWave()
+    const { wave, managerId } = await newWave()
     const w = readWave(acct, wave)
     if (!w) throw new Error('no wave')
     w.tasks[0] = { ...(w.tasks[0] as (typeof w.tasks)[number]), kind: 'manage' }
@@ -181,7 +181,7 @@ describe('manager MCP endpoint', () => {
   }, 20_000)
 
   test('escalate, note and cancel change the wave record', async () => {
-    const { wave, managerId } = newWave()
+    const { wave, managerId } = await newWave()
     const started = (await call(managerId, 'wave_dispatch', { keys: ['t1'] })).value.results[0]
     expect((await call(managerId, 'wave_note', { text: 'n'.repeat(3000) })).value.chars).toBe(2000)
     await call(managerId, 'wave_escalate', { key: 't3', reason: 'needs a decision' })
@@ -196,7 +196,7 @@ describe('manager MCP endpoint', () => {
   }, 20_000)
 
   test('wave_report sets status reported with the table first', async () => {
-    const { wave, managerId } = newWave()
+    const { wave, managerId } = await newWave()
     const r = await call(managerId, 'wave_report', { text: 'r'.repeat(3000) })
     expect(r.value).toEqual({ ok: true, status: 'reported' })
     const rec = readWave(acct, wave)
