@@ -474,7 +474,7 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  through --settings hides them
  *  for this run only and moves nothing in the account's folder (the CLI's own settings schema,
  *  2.1.286). The owner's skills, synced into the account by syncOwnerClaude, still load.
- *  The owner's Bash guards (destructive_guard, push_force_guard) run on Bash and PowerShell calls for
+ *  The owner's Bash guards (destructive_guard, push_force_guard, drive_root_guard) run on Bash and PowerShell calls for
  *  every worker and chat that is not sealed, the same as edit_claims: the owner's chats have them.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
 function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
@@ -487,10 +487,12 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   const claims =
     ownerClaudeDir && !w.sealed ? join(ownerClaudeDir, 'hooks', 'edit_claims.py') : null
   // The owner's Bash guards, for the same reason: a worker with permissions skipped had no guard
-  // against a `git clean -f` or a force push in a shared checkout (2026-10-07).
+  // against a `git clean -f` or a force push in a shared checkout (2026-10-07). drive_root_guard
+  // hosts the box guards (a gate, test or build outside fairjob, a recursive grep, a visible console,
+  // a foreground sleep): 40 workers at once ran without them while every chat had them (2026-10-11).
   const hooksDir = ownerClaudeDir && !w.sealed ? join(ownerClaudeDir, 'hooks') : null
   const guards = hooksDir
-    ? ['destructive_guard.py', 'push_force_guard.py']
+    ? ['destructive_guard.py', 'push_force_guard.py', 'drive_root_guard.py']
         .map((f) => join(hooksDir, f))
         .filter((f) => existsSync(f))
         .map(slashed)

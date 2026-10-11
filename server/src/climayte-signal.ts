@@ -60,7 +60,8 @@ export const STOP_HOOK_TIMEOUT_S = 10
  *    it is still there (proven against the real CLI 2.1.286: a missing script blocked every Write).
  *    `-S` skips the site import (the script reads only the standard library).
  *  - PreToolUse on Bash and PowerShell, for each of `guards` given: the owner's destructive_guard and
- *    push_force_guard, which refuse a `git clean -f` or a force push. Workers carry none of the
+ *    push_force_guard, which refuse a `git clean -f` or a force push, and drive_root_guard, which
+ *    refuses heavy work outside fairjob and a recursive grep. Workers carry none of the
  *    owner's hooks, and a worker running with permissions skipped ran `git clean -fd` in a shared
  *    checkout (2026-10-07). Same exec form and launcher as edit_claims, so a missing script does
  *    nothing and an exit 2 from a guard denies the call.
