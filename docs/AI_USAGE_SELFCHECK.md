@@ -128,7 +128,8 @@ machine, and `check_my_usage` reported the default login.
 
 The caller is not unknowable. It opened a **loopback socket**, and the OS knows
 which process owns it: Bun hands the route the peer's port, the connection table
-maps that port to a pid (`netstat -ano` / `lsof`, `core/process.ts`), and that
+maps that port to a pid (read in-process on Windows, `core/win-tcp-table.ts`; `lsof`
+elsewhere; `core/process.ts`), and that
 pid IS the engine - `<instanceDir>/claude-code/<ver>/claude.exe`. The existing
 `ancestor-execpath` / `ancestor-user-data-dir` signals then identify it exactly,
 walking the CALLER's chain instead of the daemon's.
@@ -140,7 +141,7 @@ What makes it trustworthy where the env route was not:
   cannot carry one, so a client sending `callerPid: 1234` is sending data, and
   data is never an identity here.
 - Ambiguity answers **null**, not a guess: two rows claiming one local port, an
-  unreadable table, no `netstat` - all of them fall back to the old detection,
+  unreadable table, no `lsof` - all of them fall back to the old detection,
   which says "could not tell" and keeps `to: "here"` refused.
 - The port→pid read is **deliberately uncached** (ports are recycled; a
   remembered answer could name a process that no longer owns that socket). It

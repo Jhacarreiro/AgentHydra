@@ -104,7 +104,7 @@ async function detectSelf(
 /** How the HTTP route hands a tool the process that sent the request. It is a FUNCTION on
  *  purpose: JSON cannot carry one, so a client cannot forge `callerPid` in its own arguments -
  *  only our own route, which resolves it from the socket, can put one here. Lazy, because
- *  resolving it costs a `netstat` and only the identity tools ever ask. */
+ *  resolving it reads the OS connection table and only the identity tools ever ask. */
 export type CallerPidSource = () => Promise<number | null>
 export const CALLER_PID_ARG = 'callerPid'
 // history_search / history_read are here because "my own transcript" is a caller identity too.

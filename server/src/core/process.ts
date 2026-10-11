@@ -27,6 +27,7 @@ import { normalizePath } from './paths.ts'
 import { createScanCache } from './scan-cache.ts'
 import { captureInWorker } from './spawn-worker.ts'
 import { nativeProcessesNamed, nativeProcessInfo, nativeProcessTable } from './win-process-table.ts'
+import { TCP_STATE_ESTABLISHED, type TcpRow, windowsTcpTable } from './win-tcp-table.ts'
 
 /** One row of the OS process table, as `ps -eo pid=,ppid=,command=` would print it. */
 export interface ProcTableRow {
@@ -1020,14 +1021,14 @@ export async function listDesktopEngines(): Promise<DesktopEngine[] | null> {
  * pid and the EXISTING ancestry signals do the rest — the caller IS `claude.exe` under an
  * instance dir.
  *
- * Never throws: every failure (no netstat, no lsof, unparseable output, two matching rows)
- * resolves to null, which callers must treat as "could not tell", never as "nobody".
+ * Never throws: every failure (no connection table, no lsof, unparseable output, two matching
+ * rows) resolves to null, which callers must treat as "could not tell", never as "nobody".
  *
  * ⛔ DELIBERATELY NOT CACHED. An ephemeral port is recycled, so a remembered answer can name a
  * process that no longer owns that socket - and this answer decides which ACCOUNT an agent is,
  * which is how `move_chats { to: "here" }` once landed 13 chats on the wrong one (2026-09-08,
- * docs/AI_USAGE_SELFCHECK.md). Concurrent lookups SHARE one table read instead (freshTcpTable), and
- * only a read that began after the caller asked: that is the same freshness, not a cache.
+ * docs/AI_USAGE_SELFCHECK.md). On Windows every lookup reads the live table in-process
+ * (win-tcp-table.ts), so no answer is older than its question.
  */
 export async function pidOwningLocalPort(port: number): Promise<number | null> {
   if (!Number.isInteger(port) || port <= 0) return null
@@ -1038,63 +1039,23 @@ export async function pidOwningLocalPort(port: number): Promise<number | null> {
   }
 }
 
-/** The pid owning an ESTABLISHED TCP connection whose LOCAL port is `port`, read out of
- *  `netstat -ano` output. Exported for its own test: this is a parser over another program's
- *  text, which is exactly the kind of code that rots silently.
+/** The pid owning the one ESTABLISHED TCP connection whose LOCAL port is `port`, or null.
  *
  *  Exactly one owner or nothing. Two rows claiming one local port is a table we do not
  *  understand, and guessing which one is the caller is how an identity answer becomes a lie. */
-export function netstatOwnerPid(stdout: string, port: number): number | null {
+export function tcpOwnerPid(rows: TcpRow[], port: number): number | null {
   const pids = new Set<number>()
-  for (const line of stdout.split(/\r?\n/)) {
-    // "  TCP    127.0.0.1:54321   127.0.0.1:7787   ESTABLISHED   66800"
-    const m = /^\s*TCP\s+\S+:(\d+)\s+\S+:\d+\s+(\S+)\s+(\d+)\s*$/.exec(line)
-    if (!m || Number(m[1]) !== port || m[2] !== 'ESTABLISHED') continue
-    pids.add(Number(m[3]))
-  }
+  for (const r of rows)
+    if (r.localPort === port && r.state === TCP_STATE_ESTABLISHED) pids.add(r.pid)
   return pids.size === 1 ? [...pids][0]! : null
 }
 
+/** Windows: the connection table read in-process, never a `netstat` on the spawn worker, which
+ *  queued behind every other capture and timed CliMayte managers' MCP connections out (2026-10-11,
+ *  win-tcp-table.ts). */
 async function windowsPortOwner(port: number): Promise<number | null> {
-  const stdout = await freshTcpTable()
-  return stdout === null ? null : netstatOwnerPid(stdout, port)
-}
-
-/**
- * The connection table, read by ONE `netstat` for every caller waiting on it.
- *
- * ⛔ WHY (2026-10-11): one netstat per identity call put 346 netstat.exe under the daemon at once,
- * and 70-90 more an hour later, each hung for minutes. Twenty chats and the CliMayte routes ask
- * "who is calling?" all day; under load one netstat outlives the next request, the spawn worker's
- * single thread falls behind draining them, a stalled netstat blocks on its full stdout pipe, its
- * deadline fires, and the pile only grows. Now at most one read runs, and at most one more waits.
- *
- * Freshness is kept exactly: a caller that asks while a read is RUNNING is served by the NEXT read,
- * which starts after that one ends, so every answer comes from a table taken after its caller asked.
- * A recycled port can therefore never be answered from a table older than the connection asking.
- */
-let tcpTableRunning: Promise<string | null> | null = null
-let tcpTableNext: Promise<string | null> | null = null
-
-function readTcpTable(): Promise<string | null> {
-  const run = runCaptureStdout(['netstat', '-ano', '-p', 'tcp']).finally(() => {
-    if (tcpTableRunning === run) tcpTableRunning = null
-  })
-  tcpTableRunning = run
-  return run
-}
-
-function freshTcpTable(): Promise<string | null> {
-  if (tcpTableNext) return tcpTableNext
-  if (!tcpTableRunning) return readTcpTable()
-  const next = tcpTableRunning
-    .catch(() => null)
-    .then(() => {
-      if (tcpTableNext === next) tcpTableNext = null
-      return readTcpTable()
-    })
-  tcpTableNext = next
-  return next
+  const rows = windowsTcpTable()
+  return rows === null ? null : tcpOwnerPid(rows, port)
 }
 
 async function unixPortOwner(port: number): Promise<number | null> {
