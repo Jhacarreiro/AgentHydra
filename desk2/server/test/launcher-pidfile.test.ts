@@ -54,7 +54,9 @@ describe.skipIf(process.platform !== 'win32' || SHELLS.length === 0)('the launch
     started = (
       await run('powershell', ['-Command', `(Get-Process -Id ${standIn.pid}).StartTime.ToUniversalTime().ToString('o')`])
     ).trim()
-  })
+    // One Windows PowerShell start: 1.2-1.7 s alone on a box at ~90% CPU (2026-10-11); in the root suite's parallel
+    // run that day a PowerShell start took up to 8.2 s (server/tests/mocks/climayte-timing.ts), past bun's 5 s default.
+  }, 30_000)
   afterAll(() => {
     standIn?.kill()
     if (home) rmSync(home, { recursive: true, force: true })
