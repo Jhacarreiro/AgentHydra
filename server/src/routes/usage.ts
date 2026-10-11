@@ -663,7 +663,7 @@ app.post('/api/cli-instances/move-out', async (c) => {
 // Login sync through the owner's own store (core/cli-login-sync.ts, cloud/login-sync-worker).
 // Answers carry statuses only; the pairing route is the one that returns a secret, for the Login
 // sync dialog's copy button. No MCP tool on purpose, as for the move.
-app.get('/api/cli-instances/sync', (c) => c.json(loginSyncStatus()))
+app.get('/api/cli-instances/sync', async (c) => c.json(await loginSyncStatus()))
 app.post('/api/cli-instances/sync/setup', async (c) => {
   const body = await jsonBody(c)
   return c.json(
@@ -679,7 +679,7 @@ app.post('/api/cli-instances/sync/join', async (c) => {
 })
 app.post('/api/cli-instances/sync/run', async (c) => {
   const result = await runLoginSync()
-  return c.json({ result, status: loginSyncStatus() })
+  return c.json({ result, status: await loginSyncStatus() })
 })
 app.post('/api/cli-instances/sync/enabled', async (c) => {
   const body = await jsonBody(c)
@@ -688,18 +688,18 @@ app.post('/api/cli-instances/sync/enabled', async (c) => {
 app.post('/api/cli-instances/sync/queue', async (c) => {
   const body = await jsonBody(c)
   setQueueSharing(body.enabled === true)
-  return c.json(loginSyncStatus())
+  return c.json(await loginSyncStatus())
 })
 app.post('/api/cli-instances/sync/chats', async (c) => {
   const body = await jsonBody(c)
   setChatSharing(body.enabled === true)
-  return c.json(loginSyncStatus())
+  return c.json(await loginSyncStatus())
 })
 app.post('/api/cli-instances/sync/exclude', async (c) => {
   const body = await jsonBody(c)
   if (typeof body.id !== 'string') return c.json({ error: 'id is required' }, 400)
   setLoginSyncExcluded(body.id, body.excluded === true)
-  return c.json(loginSyncStatus())
+  return c.json(await loginSyncStatus())
 })
 app.post('/api/cli-instances/sync/pairing', (c) => {
   const code = loginSyncPairingCode()

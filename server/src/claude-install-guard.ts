@@ -22,15 +22,8 @@
 // never on the daemon's thread: CreateProcess of the 250 MB claude.exe held it for seconds on a loaded
 // box (STALL lines on the old spawnSync probe, 2026-10-11), and that thread serves every route.
 
-import {
-  copyFileSync,
-  mkdirSync,
-  readFileSync,
-  renameSync,
-  rmSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { copyFile, mkdir, rename } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { claudeExeFallback, DATA_DIR, resolveClaudeExeUnguarded } from './config'
 import { spawnCaptured } from './core/process'
@@ -130,11 +123,12 @@ export const defaultGuardDeps: GuardDeps = {
     }
   },
   lkgDir: join(DATA_DIR, 'claude-lkg'),
+  // Through node:fs/promises: a copyFileSync of the 250 MB executable held the daemon's thread.
   copyLkg: async (from, toDir) => {
-    mkdirSync(toDir, { recursive: true })
+    await mkdir(toDir, { recursive: true })
     const tmp = join(toDir, `claude.exe.${process.pid}.tmp`)
-    copyFileSync(from, tmp)
-    renameSync(tmp, join(toDir, 'claude.exe'))
+    await copyFile(from, tmp)
+    await rename(tmp, join(toDir, 'claude.exe'))
   },
   raise: async (message) => {
     const { recordIncident, deliverIncidentNotification } = await import('./incidents')

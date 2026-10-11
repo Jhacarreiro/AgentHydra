@@ -212,7 +212,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       // under its OWN key, its cookie written the way Chromium stores one.
       await otherPc(UB, 'from-pc1', 4242, 5000, 'sk-b')
       await runLoginSync()
-      const b = listDesktopProfiles().find((p) => p.name === 'from-pc1')!
+      const b = (await listDesktopProfiles()).find((p) => p.name === 'from-pc1')!
       made.push(b.dir)
       expect(b).toMatchObject({ uuid: UB, num: 4242 })
       expect(await here(b.dir)).toEqual({ expiry: 5000, session: 'sk-b' })
@@ -263,7 +263,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       await runLoginSync()
       expect(await here(solo)).toEqual({ expiry: 100, session: 'sk-mine' })
       expect((await meta(UC)).version).toBe(before)
-      expect(loginSyncStatus().logins.find((l) => l.id === UC)?.note).toBe('own')
+      expect((await loginSyncStatus()).logins.find((l) => l.id === UC)?.note).toBe('own')
 
       // Left out on this PC: a newer copy in the store does not land.
       setLoginSyncExcluded(UA, true)
@@ -438,7 +438,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
         await runLoginSync()
         expect(await sessionOf(dir)).toBe('sk-landed')
         expect(tokenExpiry((await readDesktopTokens(dir))?.v2 ?? null)).toBe(expiresAt)
-        expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBeNull()
+        expect((await loginSyncStatus()).logins.find((l) => l.id === id)?.note).toBeNull()
       } finally {
         disconnectLoginSync()
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -454,7 +454,7 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       try {
         await runLoginSync()
         expect(await sessionOf(dir)).toBe('sk-mine')
-        expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBe('own')
+        expect((await loginSyncStatus()).logins.find((l) => l.id === id)?.note).toBe('own')
       } finally {
         disconnectLoginSync()
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
@@ -466,7 +466,10 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       const dir = await profile(`running-${suffix()}`, id, 100, 'org-run', 'lastActiveOrg')
       try {
         const ctx = stubSync(id, false, copyOf(id, 'sk-run', future()))
-        await syncDesktopLogins(ctx, async () => new Set(listDesktopProfiles().map((p) => p.dir)))
+        await syncDesktopLogins(
+          ctx,
+          async () => new Set((await listDesktopProfiles()).map((p) => p.dir)),
+        )
         expect(ctx.out.landed).toBe(0)
         expect(await sessionOf(dir)).toBeUndefined()
         expect(desktopNotes.waiting.has(id)).toBe(true)

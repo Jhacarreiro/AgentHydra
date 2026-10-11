@@ -55,7 +55,7 @@ import {
   scoreRows,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
-import { attemptExited, finishedLines, readLog, signalWindDown } from './climayte-stops'
+import { attemptExited, finishedLines, lastRead, signalWindDown } from './climayte-stops'
 
 /** The room CliMayte has right now, for an agent deciding whether to hand work over (check_my_usage
  *  and list_usage say it): `idle`, the accounts running no CliMayte worker that placement would
@@ -315,7 +315,7 @@ export function climayteGet(
   for (let i = w.attempts.length - 1; i >= 0 && events.length < 60; i--) {
     const a = w.attempts[i]!
     const who = a.account.num === null ? a.account.name : `#${a.account.num} ${a.account.name}`
-    const lines = a.outcome === 'running' ? readLog(a).recent : finishedLines(a.log)
+    const lines = a.outcome === 'running' ? lastRead(a).recent : finishedLines(a.log)
     events.unshift(`— attempt ${i + 1} on ${who}: ${a.outcome} —`, ...lines)
   }
   return {

@@ -39,7 +39,6 @@
 import { Database } from 'bun:sqlite'
 import { createHash } from 'node:crypto'
 import {
-  copyFileSync,
   existsSync,
   mkdirSync,
   readdirSync,
@@ -49,6 +48,7 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
+import { copyFile, rm, stat } from 'node:fs/promises'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { LoginArrival } from '../login-sync-arrivals'
@@ -161,33 +161,41 @@ export function replaceDesktopTokenCacheV2(dir: string, sealed: string): boolean
 
 /** Every AgentHydra desktop profile here (the instances root only: the machine's own Claude login
  *  is never touched), with its number and the account it is signed in to. */
-export function listDesktopProfiles(): DesktopProfile[] {
+export async function listDesktopProfiles(): Promise<DesktopProfile[]> {
   const root = instancesRoot()
   if (!existsSync(root)) return []
   const dirs = readdirSync(root, { withFileTypes: true })
     .filter((e) => e.isDirectory())
     .map((e) => ({ name: e.name, dir: normalizePath(join(root, e.name)) }))
   const nums = instanceNumbers(dirs.map((d) => instanceRef('desktop', d.dir)))
-  return dirs.map((d) => {
-    const cfg = readJson(join(d.dir, 'config.json'))
-    const uuid = cfg?.lastKnownAccountUuid
-    const signedIn =
-      typeof cfg?.['oauth:tokenCacheV2'] === 'string' ||
-      typeof cfg?.['oauth:tokenCache'] === 'string'
-    const linked = signedIn && typeof uuid === 'string' && UUID_RE.test(uuid) ? uuid : null
-    return {
-      ...d,
-      num: nums.get(instanceRef('desktop', d.dir)) ?? null,
-      uuid: linked,
-      hasSessionKey: linked ? hasSessionKey(d.dir) : null,
-    }
-  })
+  return Promise.all(
+    dirs.map(async (d) => {
+      const cfg = readJson(join(d.dir, 'config.json'))
+      const uuid = cfg?.lastKnownAccountUuid
+      const signedIn =
+        typeof cfg?.['oauth:tokenCacheV2'] === 'string' ||
+        typeof cfg?.['oauth:tokenCache'] === 'string'
+      const linked = signedIn && typeof uuid === 'string' && UUID_RE.test(uuid) ? uuid : null
+      return {
+        ...d,
+        num: nums.get(instanceRef('desktop', d.dir)) ?? null,
+        uuid: linked,
+        hasSessionKey: linked ? await hasSessionKey(d.dir) : null,
+      }
+    }),
+  )
 }
 
 /** Whether the profile holds a claude.ai sign-in cookie. Reads the cookie names only, through a copy:
  *  nothing is decrypted. Null when the database cannot be copied or read (the app holds it). */
-export function hasSessionKey(dir: string): boolean | null {
-  if (!existsSync(cookieDb(dir))) return false
+export async function hasSessionKey(dir: string): Promise<boolean | null> {
+  if (
+    !(await stat(cookieDb(dir)).then(
+      () => true,
+      () => false,
+    ))
+  )
+    return false
   return withCookieCopy(dir, (d) =>
     (d.query('select host_key, name from cookies').all() as Array<Record<string, unknown>>).some(
       (r) => CLAUDE_HOST.test(String(r.host_key)) && String(r.name).startsWith('sessionKey'),
@@ -242,14 +250,16 @@ function cookieVersion(d: Database): number {
   }
 }
 
+let cookieCopies = 0
+
 /** Read a cookie database through a copy: Chromium holds the live one locked while it runs, and a
- *  copy never disturbs it. Null when it cannot be copied (the app is running) or opened. */
-function withCookieCopy<T>(dir: string, read: (d: Database) => T): T | null {
-  const db = cookieDb(dir)
-  if (!existsSync(db)) return null
-  const tmp = join(tmpdir(), `ah-cookies-${process.pid}-${Date.now()}.db`)
+ *  copy never disturbs it. Null when there is none, or it cannot be copied (the app is running) or
+ *  opened. The copy and its removal run through node:fs/promises, never on the daemon's thread: a
+ *  copyFileSync here held it for 45 s in STALL blocks over 2026-10-10..11. */
+async function withCookieCopy<T>(dir: string, read: (d: Database) => T): Promise<T | null> {
+  const tmp = join(tmpdir(), `ah-cookies-${process.pid}-${Date.now()}-${++cookieCopies}.db`)
   try {
-    copyFileSync(db, tmp)
+    await copyFile(cookieDb(dir), tmp)
     const d = new Database(tmp, { readonly: true, safeIntegers: true })
     try {
       return read(d)
@@ -259,7 +269,7 @@ function withCookieCopy<T>(dir: string, read: (d: Database) => T): T | null {
   } catch {
     return null
   } finally {
-    rmSync(tmp, { force: true })
+    await rm(tmp, { force: true })
   }
 }
 
@@ -280,7 +290,7 @@ const plainRow = (row: Record<string, unknown>): Record<string, string | number 
 export async function readAuthCookies(dir: string): Promise<DesktopCookie[] | null> {
   const key = await getWindowsMasterKey(dir)
   if (!key) return null
-  const rows = withCookieCopy(dir, (d) => ({
+  const rows = await withCookieCopy(dir, (d) => ({
     hashed: cookieVersion(d) >= HOSTED_COOKIES_VERSION,
     rows: (d.query('select * from cookies').all() as Array<Record<string, unknown>>).filter(
       (r) => CLAUDE_HOST.test(String(r.host_key)) && isAuthCookie(String(r.name)),
@@ -325,10 +335,10 @@ const COOKIE_SCHEMA_V24: CookieSchema = {
 
 /** A cookie database's schema (tables, indexes, meta rows) for a profile this PC makes, which has
  *  none until its app first runs: another profile's here (this PC's app version), else version 24. */
-function cookieSchema(except: string): CookieSchema {
-  for (const p of listDesktopProfiles()) {
+async function cookieSchema(except: string): Promise<CookieSchema> {
+  for (const p of await listDesktopProfiles()) {
     if (p.dir === except) continue
-    const schema = withCookieCopy(p.dir, (d) => ({
+    const schema = await withCookieCopy(p.dir, (d) => ({
       sql: (
         d
           .query(
@@ -347,8 +357,8 @@ function cookieSchema(except: string): CookieSchema {
 
 /** A cookie database for a profile that has none yet, with the schema this PC's other profiles
  *  use (cookieSchema). */
-function createCookieDb(dir: string, path: string): void {
-  const schema = cookieSchema(dir)
+async function createCookieDb(dir: string, path: string): Promise<void> {
+  const schema = await cookieSchema(dir)
   mkdirSync(join(dir, 'Network'), { recursive: true })
   const fresh = new Database(path, { create: true })
   try {
@@ -425,7 +435,7 @@ async function writeAuthCookies(
   cookies: DesktopCookie[],
 ): Promise<boolean> {
   const path = cookieDb(dir)
-  if (!existsSync(path)) createCookieDb(dir, path)
+  if (!existsSync(path)) await createCookieDb(dir, path)
   const d = new Database(path, { safeIntegers: true })
   try {
     const cols = d.query('pragma table_info(cookies)').all() as CookieColumn[]
@@ -933,7 +943,7 @@ export async function syncDesktopLogins(
   scanRunning: () => Promise<Set<string> | null> = runningDesktopDirs,
 ): Promise<void> {
   if (process.platform !== 'win32') return
-  const profiles = listDesktopProfiles()
+  const profiles = await listDesktopProfiles()
   let scan: Promise<Set<string> | null> | null = null
   const pass: DesktopPass = {
     ctx,

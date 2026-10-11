@@ -105,6 +105,7 @@ import type { ChatLocal } from './desktop-chat-types'
 import { hasOwnCliLogin } from './desktop-cli-feed'
 import {
   asDesktopLogin,
+  type DesktopProfile,
   desktopNotes,
   listDesktopProfiles,
   type PortableDesktopLogin,
@@ -1363,7 +1364,7 @@ function makeCliLogin(
 }
 
 function makeDesktopLogin(
-  p: ReturnType<typeof listDesktopProfiles>[number],
+  p: DesktopProfile,
   remote: any,
   excluded: Set<string>,
   state: any,
@@ -1407,7 +1408,7 @@ function makeRemoteLogin(
   }
 }
 
-export function loginSyncStatus(): CliLoginSyncStatus {
+export async function loginSyncStatus(): Promise<CliLoginSyncStatus> {
   const c = readConfig()
   if (!c)
     return {
@@ -1436,7 +1437,7 @@ export function loginSyncStatus(): CliLoginSyncStatus {
     logins.push(makeCliLogin(i, slot, remote, excluded, c.state))
   }
 
-  for (const p of listDesktopProfiles()) {
+  for (const p of await listDesktopProfiles()) {
     if (!p.uuid || seen.has(p.uuid)) continue
     seen.add(p.uuid)
     const remote = lastStore.get(p.uuid)

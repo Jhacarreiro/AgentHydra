@@ -9,6 +9,7 @@ import {
   rmSync,
   statSync,
 } from 'node:fs'
+import { stat } from 'node:fs/promises'
 import { homedir, tmpdir } from 'node:os'
 import { dirname, join } from 'node:path'
 import rootPkg from '../../package.json'
@@ -396,20 +397,54 @@ export const claudeExeFallback: { primary: string | null; path: string | null } 
   path: null,
 }
 
-/** The executable resolveClaudeExe would name, before any last-known-good swap. */
+const claudeExeCandidates = (): string[] => [
+  join(APPDATA, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
+  join(APPDATA, 'npm', 'claude.cmd'),
+  join(APPDATA, 'npm', 'claude'),
+]
+
+/** How long resolveClaudeExeUnguarded serves its last look before it looks again. */
+const CLAUDE_EXE_LOOK_MS = 10_000
+/** Its last look at the npm-global install, and whether a fresh one is under way. Every launch,
+ *  probe and check asks for the path, and an existsSync per ask held the daemon's thread for 34.7 s
+ *  in STALL blocks over 2026-10-10..11: the disk is slowest when the box is busiest. */
+let claudeExeLook: { path: string; at: number } | null = null
+let claudeExeLooking = false
+
+async function lookForClaudeExe(): Promise<void> {
+  claudeExeLooking = true
+  try {
+    let found = 'claude'
+    for (const c of claudeExeCandidates())
+      if (
+        await stat(c).then(
+          () => true,
+          () => false,
+        )
+      ) {
+        found = c
+        break
+      }
+    claudeExeLook = { path: found, at: Date.now() }
+  } finally {
+    claudeExeLooking = false
+  }
+}
+
+/** The executable resolveClaudeExe would name, before any last-known-good swap. The first ask looks
+ *  on this thread; after that an answer older than CLAUDE_EXE_LOOK_MS is served while a fresh look
+ *  runs through node:fs/promises. */
 export function resolveClaudeExeUnguarded(): string {
   const configured = appEnv('CLAUDE_PATH')?.trim()
   if (configured) return configured
-
-  const candidates = [
-    join(APPDATA, 'npm', 'node_modules', '@anthropic-ai', 'claude-code', 'bin', 'claude.exe'),
-    join(APPDATA, 'npm', 'claude.cmd'),
-    join(APPDATA, 'npm', 'claude'),
-  ]
-  for (const c of candidates) {
-    if (existsSync(c)) return c
-  }
-  return 'claude'
+  if (!claudeExeLook)
+    claudeExeLook = {
+      path: claudeExeCandidates().find((c) => existsSync(c)) ?? 'claude',
+      at: Date.now(),
+    }
+  else if (Date.now() - claudeExeLook.at > CLAUDE_EXE_LOOK_MS && !claudeExeLooking)
+    void lookForClaudeExe()
+  return claudeExeLook.path
 }
 
 /**

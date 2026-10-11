@@ -149,7 +149,7 @@ describe('login sync between two PCs', () => {
       })
       await otherPc(3000, reordered)
       await runLoginSync()
-      expect(loginSyncStatus().lastError).toBeNull()
+      expect((await loginSyncStatus()).lastError).toBeNull()
       expect(here()).toBe(creds(3000))
       // Anthropic ended the login: the CLI empties its tokens and keeps the file. Nothing to share
       // and no sync error (one dead login read as "sync is broken"); its own row says signed out.
@@ -158,8 +158,8 @@ describe('login sync between two PCs', () => {
         JSON.stringify({ claudeAiOauth: { accessToken: '', refreshToken: '', expiresAt: 0 } }),
       )
       await runLoginSync()
-      expect(loginSyncStatus().lastError).toBeNull()
-      expect(loginSyncStatus().logins.find((l) => l.id === id)?.note).toBe('signedOut')
+      expect((await loginSyncStatus()).lastError).toBeNull()
+      expect((await loginSyncStatus()).logins.find((l) => l.id === id)?.note).toBe('signedOut')
       expect((await inStore()).login.credentials).toBe(reordered)
       // Signed in again here: that login goes up.
       writeFileSync(join(dir, '.credentials.json'), creds(4000))
@@ -226,8 +226,8 @@ describe('login sync between two PCs', () => {
       // And one row in the dialog: the store's copy is this instance's, not a second login (the
       // first test's row is still in the shared store, so only these two ids are counted).
       expect(
-        loginSyncStatus()
-          .logins.filter((l) => l.id === id || l.id === theirId)
+        (await loginSyncStatus()).logins
+          .filter((l) => l.id === id || l.id === theirId)
           .map((l) => [l.id, l.inStore]),
       ).toEqual([[id, true]])
 

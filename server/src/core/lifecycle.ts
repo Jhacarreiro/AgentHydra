@@ -13,7 +13,8 @@
 // locked file, permission error) — every public function returns a status-carrying
 // CMActionResult instead.
 
-import { existsSync, mkdirSync, readdirSync, rmSync, statSync } from 'node:fs'
+import { existsSync, mkdirSync } from 'node:fs'
+import { readdir, rm, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { ensureClaudeNativeProfileConfig } from '../claude-native-settings'
 import { linkCliInstanceToDesktop, listCliInstances } from './cli-instances'
@@ -144,34 +145,34 @@ function validateInstanceName(name: string): NameValidation {
 // cross-file private-function import)
 // ----------------------------------------------------------------------------
 
-/** Best-effort recursive byte size of a directory. Returns 0 on any failure. */
-function dirSizeBytes(dir: string): number {
+/** Best-effort recursive byte size of a directory. Returns 0 on any failure. Through
+ *  node:fs/promises: a profile is thousands of files, and the sync walk held the daemon's thread
+ *  (STALL blocks on removeInstance, 2026-10-11). */
+async function dirSizeBytes(dir: string): Promise<number> {
   let total = 0
-  try {
-    if (!existsSync(dir)) return 0
-    const stack: string[] = [dir]
-    while (stack.length) {
-      const current = stack.pop()
-      if (current === undefined) continue
-      let entries: string[]
-      try {
-        entries = readdirSync(current)
-      } catch {
-        continue
-      }
-      for (const name of entries) {
-        const full = `${current}/${name}`
-        try {
-          const st = statSync(full)
-          if (st.isDirectory()) stack.push(full)
-          else if (st.isFile()) total += st.size
-        } catch {
-          // Skip individual unreadable entries — best-effort only.
-        }
-      }
+  const stack: string[] = [dir]
+  while (stack.length) {
+    const current = stack.pop()
+    if (current === undefined) continue
+    let entries: string[]
+    try {
+      entries = await readdir(current)
+    } catch {
+      continue
     }
-  } catch {
-    return total
+    // Skip individual unreadable entries — best-effort only.
+    const stats = await Promise.all(
+      entries.map((name) =>
+        stat(`${current}/${name}`).then(
+          (st) => ({ name, st }),
+          () => null,
+        ),
+      ),
+    )
+    for (const e of stats) {
+      if (e?.st.isDirectory()) stack.push(`${current}/${e.name}`)
+      else if (e?.st.isFile()) total += e.st.size
+    }
   }
   return total
 }
@@ -418,10 +419,10 @@ export async function removeInstance(
   }
 
   // --- All guards passed: compute freed bytes (best-effort), then delete. ---
-  const freedBytes = dirSizeBytes(normDir)
+  const freedBytes = await dirSizeBytes(normDir)
 
   try {
-    rmSync(normDir, { recursive: true, force: true })
+    await rm(normDir, { recursive: true, force: true })
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err)
     return {

@@ -508,7 +508,7 @@ describe('a pass through the store', () => {
       wave: null,
     })
     expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
-    expect(loginSyncStatus().shareQueue).toBe(false)
+    expect((await loginSyncStatus()).shareQueue).toBe(false)
     expect(setQueueSharing(true).ok).toBe(true)
     const pairing = loginSyncPairingCode()!
     const syncKey = Buffer.from(
@@ -554,7 +554,7 @@ describe('a pass through the store', () => {
     await runLoginSync() // a pass setup started may have begun before sharing was on
     const res = await runLoginSync()
     expect(res.ok).toBe(true)
-    const status = loginSyncStatus()
+    const status = await loginSyncStatus()
     expect(status.shareQueue).toBe(true)
     expect(status.queueError).toBeNull()
     // (Other test files leave logins in this process's one store; they are not this test's business.)
@@ -635,7 +635,7 @@ describe('a pass through the store', () => {
       await runLoginSync()
       const res = await runLoginSync()
       expect(res.ok).toBe(true)
-      const status = loginSyncStatus()
+      const status = await loginSyncStatus()
       expect(status.queueError).toContain('no queue routes yet')
       expect(status.lastError).toBeNull()
       expect(status.events.some((e) => e.note.includes('no queue routes yet'))).toBe(true)

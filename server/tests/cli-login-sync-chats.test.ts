@@ -61,10 +61,10 @@ describe('desktop chats in the login sync pass', () => {
       (await store('GET', '/v1/chats')).json.chats.filter((r: { id: string }) => r.id === chat.id)
     try {
       expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
-      expect(loginSyncStatus().shareChats).toBe(true)
+      expect((await loginSyncStatus()).shareChats).toBe(true)
       await pass()
       await pass()
-      const status = loginSyncStatus()
+      const status = await loginSyncStatus()
       expect(status.shareChats).toBe(true)
       expect(status.chatsError).toBeNull()
       expect(status.chats.map((c) => c.title)).toEqual(['A shared chat'])
@@ -96,7 +96,7 @@ describe('desktop chats in the login sync pass', () => {
       await pass()
       const res = await pass()
       expect(res.ok).toBe(true)
-      const status = loginSyncStatus()
+      const status = await loginSyncStatus()
       expect(status.chatsError).toBeTruthy()
       expect(status.lastError).toBeNull()
     } finally {
@@ -130,7 +130,7 @@ describe('desktop chats in the login sync pass', () => {
       await pass()
       await pass()
       expect(paths.some((p) => p.startsWith('/v1/chats'))).toBe(false)
-      const status = loginSyncStatus()
+      const status = await loginSyncStatus()
       expect(status.shareChats).toBe(false)
       expect(status.chats).toEqual([])
     } finally {

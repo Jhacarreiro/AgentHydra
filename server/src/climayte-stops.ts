@@ -23,6 +23,7 @@ import {
   peekLog,
   ROOT,
   readInto,
+  readIntoAsync,
   runnerSpecPath,
   SIGNALS,
   saveWalls,
@@ -498,16 +499,32 @@ export function killRunners(runners: { pid: number; log: string }[], after?: () 
 /** When this daemon loaded: an attempt started before then was started by an earlier daemon. */
 const BOOTED_AT = Date.now()
 
-export function readLog(at: CliMayteWorker['attempts'][number]): LogRead {
+/** This daemon's read of an attempt's log. Until it has read anything, a log an earlier daemon was
+ *  tailing replays from the start: its readings keep their own time (readInto). */
+function readOf(at: CliMayteWorker['attempts'][number]): { r: LogRead; replay: boolean } {
   let r = reads.get(at.log)
-  // This daemon's first read of a log an earlier daemon was tailing replays it from the start: its
-  // readings keep their own time (readInto).
-  const replay = !r && at.startedAt < BOOTED_AT
   if (!r) {
     r = freshRead()
     reads.set(at.log, r)
   }
+  return { r, replay: r.offset === 0 && at.startedAt < BOOTED_AT }
+}
+
+export function readLog(at: CliMayteWorker['attempts'][number]): LogRead {
+  const { r, replay } = readOf(at)
   return readInto(at.log, r, replay)
+}
+
+/** readLog off the daemon's thread (readIntoAsync): the tick's read of every running attempt. */
+export async function refreshLog(at: CliMayteWorker['attempts'][number]): Promise<LogRead> {
+  const { r, replay } = readOf(at)
+  return readIntoAsync(at.log, r, replay)
+}
+
+/** A running attempt's log as the tick last read it (each second), without reading it again; one
+ *  the tick has not read yet is read now. */
+export function lastRead(at: CliMayteWorker['attempts'][number]): LogRead {
+  return reads.get(at.log) ?? readLog(at)
 }
 
 /** The summary lines of finished attempts, for climayteGet: the CliMayte view asks for the selected

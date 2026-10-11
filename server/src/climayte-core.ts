@@ -17,7 +17,12 @@ import {
   statSync,
   writeFileSync,
 } from 'node:fs'
-import { readdir as readdirAsync, readFile as readFileAsync } from 'node:fs/promises'
+import {
+  open as openAsync,
+  readdir as readdirAsync,
+  readFile as readFileAsync,
+  stat as statAsync,
+} from 'node:fs/promises'
 import { join } from 'node:path'
 import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
@@ -965,13 +970,7 @@ export function readInto(path: string, r: LogRead, replay = false): LogRead {
     size = stat.size
     writtenAt = stat.mtimeMs
   } catch {
-    // No plain file: a finished attempt's log may be packed (packLog), and is then read whole, once.
-    const packed = r.offset === 0 ? packedText(path) : null
-    if (packed) {
-      r.offset = packed.length
-      feedLog(packed, r, null)
-    }
-    return r
+    return feedPacked(path, r)
   }
   if (size > r.offset) {
     const fd = openSync(path, 'r')
@@ -984,6 +983,48 @@ export function readInto(path: string, r: LogRead, replay = false): LogRead {
       closeSync(fd)
     }
   }
+  return r
+}
+
+/** No plain file: a finished attempt's log may be packed (packLog), and is then read whole, once. */
+function feedPacked(path: string, r: LogRead): LogRead {
+  const packed = r.offset === 0 ? packedText(path) : null
+  if (packed) {
+    r.offset = packed.length
+    feedLog(packed, r, null)
+  }
+  return r
+}
+
+/** readInto through node:fs/promises, so the stat and the read never hold the daemon's thread: the
+ *  tick reads every running attempt's log each second, and a statSync there held it for 33 s in
+ *  STALL blocks over 2026-10-10..11. The new bytes are fed only when no other read moved `r` on
+ *  while these were read (a stop's own read, climayte.ts pollBeforeStop): they would be fed twice. */
+export async function readIntoAsync(path: string, r: LogRead, replay = false): Promise<LogRead> {
+  const from = r.offset
+  let size = 0
+  let writtenAt = 0
+  try {
+    const stat = await statAsync(path)
+    size = stat.size
+    writtenAt = stat.mtimeMs
+  } catch {
+    return r.offset === from ? feedPacked(path, r) : r
+  }
+  if (size <= from) return r
+  const file = await openAsync(path, 'r')
+  let text: string
+  try {
+    const buf = Buffer.alloc(size - from)
+    const { bytesRead } = await file.read(buf, 0, buf.length, from)
+    text = buf.toString('utf8', 0, bytesRead)
+    size = from + bytesRead
+  } finally {
+    await file.close()
+  }
+  if (r.offset !== from) return r
+  r.offset = size
+  feedLog(text, r, replay ? writtenAt : null)
   return r
 }
 

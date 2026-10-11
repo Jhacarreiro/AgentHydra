@@ -163,6 +163,7 @@ import {
   noteReading,
   readLog,
   recheckCredentialWall,
+  refreshLog,
   saveLive,
   signedOutRecheckDue,
   stopAtCeilingOrOverage,
@@ -582,15 +583,38 @@ function schedule(delay?: number): void {
   timer.unref?.()
 }
 
-function pollRunning(): void {
+/** Every running worker's look this tick. Its exit is judged first, then its log is read off the
+ *  daemon's thread (refreshLog), so a read taken after the exit was seen holds all the CLI wrote;
+ *  then the same judging as poll. A worker a route moved on while the logs were read (a stop, a
+ *  send) is left to the next tick. */
+async function pollRunning(): Promise<void> {
+  const looks: Array<{ w: CliMayteWorker; at: Attempt; exited: boolean }> = []
   for (const w of workers.values()) {
-    if (w.status !== 'running') continue
+    const at = runningAttempt(w)
+    if (!at) continue
     try {
-      poll(w)
+      looks.push({ w, at, exited: attemptExited(w, at) })
     } catch (err) {
       console.error(`[climayte] could not read ${w.id}:`, err)
     }
   }
+  const logs = await Promise.all(
+    looks.map(({ w, at }) =>
+      refreshLog(at).catch((err) => {
+        console.error(`[climayte] could not read ${w.id}:`, err)
+        return null
+      }),
+    ),
+  )
+  looks.forEach(({ w, at, exited }, i) => {
+    const r = logs[i]
+    if (!r || runningAttempt(w) !== at) return
+    try {
+      judgePoll(w, at, exited, r)
+    } catch (err) {
+      console.error(`[climayte] could not read ${w.id}:`, err)
+    }
+  })
 }
 
 async function tick(): Promise<void> {
@@ -601,7 +625,7 @@ async function tick(): Promise<void> {
     const now = Date.now()
     const accounts = tickAccounts()
     checkRunners()
-    pollRunning()
+    await pollRunning()
     if (now - lastSettle >= 5_000) {
       lastSettle = now
       settleSpends(now)
@@ -686,14 +710,18 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
   if (exited) finish(w, r.events)
 }
 
+/** One worker's look now, its log read on this thread: a stop's (pollBeforeStop). */
 function poll(w: CliMayteWorker): void {
   const at = w.attempts[w.attempts.length - 1]
   if (!at) return
   const exited = attemptExited(w, at)
+  judgePoll(w, at, exited, readLog(at))
+}
+
+function judgePoll(w: CliMayteWorker, at: Attempt, exited: boolean, r: LogRead): void {
   // A process this daemon is watching now: its own child, or a live runner (a restarted daemon
   // picks those up again). A dead attempt's log, read again after a restart, is not.
   const watching = !exited && !!at.runner
-  const r = readLog(at)
   noteReading(at, r, watching)
   const accountLive = liveByAccount.get(at.account.id) ?? null
   const now = Date.now()

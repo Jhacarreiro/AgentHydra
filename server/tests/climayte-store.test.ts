@@ -6,6 +6,7 @@
 // AGENTHYDRA_HOME: the same code path a daemon's boot takes, against files this test wrote.
 import { afterAll, expect, test } from 'bun:test'
 import {
+  appendFileSync,
   existsSync,
   mkdirSync,
   mkdtempSync,
@@ -19,7 +20,7 @@ import {
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { pathToFileURL } from 'node:url'
-import { freshRead, readInto } from '../src/climayte-core'
+import { freshRead, readInto, readIntoAsync } from '../src/climayte-core'
 
 const CLIMAYTE = pathToFileURL(resolve(import.meta.dir, '../src/climayte.ts')).href
 const MARK = '@@store-test@@'
@@ -332,4 +333,27 @@ test('a usage reading replayed after a restart keeps its own time; one tailed li
   })
   const now = Date.now()
   expect(readInto(log, freshRead()).live?.at).toBeGreaterThanOrEqual(now)
+})
+
+// The tick reads each running attempt's log off the daemon's thread (readIntoAsync) while a stop
+// can read the same one on it (readInto, pollBeforeStop): the read that lands second must not feed
+// the same lines again, and the next read goes on from where they left off.
+test("a log read off the thread and a stop's read of it at the same time feed each line once", async () => {
+  const log = join(root, 'overlap.jsonl')
+  const said = (text: string) =>
+    `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', model: 'claude-x', content: [{ type: 'text', text }] } })}\n`
+  writeFileSync(log, said('one') + said('two'))
+  const r = freshRead()
+  const offThread = readIntoAsync(log, r)
+  readInto(log, r)
+  await offThread
+  expect(r.events).toHaveLength(2)
+
+  appendFileSync(log, said('three'))
+  await readIntoAsync(log, r)
+  expect(
+    r.events.map(
+      (e) => (e as { message: { content: Array<{ text: string }> } }).message.content[0]?.text,
+    ),
+  ).toEqual(['one', 'two', 'three'])
 })
