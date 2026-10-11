@@ -117,11 +117,12 @@ import {
   startCliMaytePing,
 } from './climayte-ping'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { scheduleDue, tickAccounts, tickState } from './climayte-schedule'
+import { installForTick, scheduleDue, tickAccounts, tickState } from './climayte-schedule'
 import { type CliMayteVerdict, climayteKind, nextRung } from './climayte-scorecard'
 import {
   charge,
   installBroken,
+  installLookDue,
   journalFinish,
   keepHome,
   keepResults,
@@ -612,11 +613,13 @@ async function tick(): Promise<void> {
     // A stop's kill runs off the daemon's thread (killRunners): nothing launches beside a CLI still
     // being killed, as the next turn of a worker stopped to deliver an urgent message would.
     await killsLanded()
-    const state = tickState(accounts, now)
-    const due = [...workers.values()].filter(
-      (w) =>
-        (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold,
-    )
+    const isDue = (w: CliMayteWorker): boolean =>
+      (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
+    // The install guard is asked before the state is read, and only with work to place: its probe
+    // runs off the daemon's thread, and what is due is read after it answers.
+    const install = [...workers.values()].some(isDue) ? await installForTick() : null
+    const state = tickState(accounts, now, install)
+    const due = [...workers.values()].filter(isDue)
     scheduleDue(state, due)
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
@@ -855,24 +858,63 @@ function continueThrash(w: CliMayteWorker, v: { result: string | null }, stderr:
   return true
 }
 
+/** How an attempt ended, read before its runner's files are cleaned up. */
+interface EndRead {
+  v: ReturnType<typeof classifyAttempt>
+  stderr: string
+  hadRunnerPid: boolean
+}
+
+/** Instant deaths waiting on a fresh look at the install (installBroken), whose probe runs off the
+ *  daemon's thread: by attempt log, null while the look is out, then the end the next finish settles. */
+const installLooks = new Map<string, EndRead | null>()
+
+/** Look at the install for an instant death, then settle the attempt (finish), unless something else
+ *  settled it meanwhile (a stop records it cancelled). */
+function lookAtInstall(w: CliMayteWorker, at: Attempt, events: unknown[], end: EndRead): void {
+  installLooks.set(at.log, null)
+  void installBroken(at, end.v, events, end.stderr, end.hadRunnerPid)
+    .catch((err) => {
+      console.error(`[climayte] could not look at the install for ${w.id}:`, err)
+      return end.v
+    })
+    .then((v) => {
+      installLooks.set(at.log, { ...end, v })
+      if (workers.get(w.id) !== w || w.attempts.at(-1) !== at || at.outcome !== 'running') {
+        installLooks.delete(at.log)
+        return
+      }
+      try {
+        finish(w, events)
+      } catch (err) {
+        console.error(`[climayte] could not settle ${w.id}:`, err)
+      }
+    })
+}
+
 function finish(w: CliMayteWorker, events: unknown[]): void {
   const at = w.attempts[w.attempts.length - 1]
   if (at?.outcome !== 'running') return
-  const hadRunnerPid =
-    !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
+  let end = installLooks.get(at.log)
+  if (end === null) return
+  if (end) installLooks.delete(at.log)
+  else {
+    const hadRunnerPid =
+      !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
+    const stderr = tailText(at.errLog, 4_000)
+    const read = withStops(at, classifyAttempt(events, stderr, at.started === true))
+    end = { v: read, stderr, hadRunnerPid }
+    if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
+      lookAtInstall(w, at, events, end)
+      return
+    }
+  }
+  const { stderr, hadRunnerPid } = end
   cleanUpRunner(w, at)
-  const stderr = tailText(at.errLog, 4_000)
-  const classified = installBroken(
-    at,
-    withStops(at, classifyAttempt(events, stderr, at.started === true)),
-    events,
-    stderr,
-    hadRunnerPid,
-  )
   const v =
-    classified.outcome === 'interrupted' && at.runner && !hadRunnerPid
-      ? { ...classified, notice: RUNNER_NEVER_STARTED_NOTICE }
-      : classified
+    end.v.outcome === 'interrupted' && at.runner && !hadRunnerPid
+      ? { ...end.v, notice: RUNNER_NEVER_STARTED_NOTICE }
+      : end.v
   rmSync(signalPath(w.id), { force: true })
   removeWorkerFiles(w.id)
   forgetRead(at.log)

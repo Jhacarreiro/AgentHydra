@@ -64,7 +64,7 @@ import { attemptExited, finishedLines, readLog, signalWindDown } from './climayt
  *  idle for six hours while every chat did its own work. The same day at 04:58 it answered idle 9
  *  with 24 tasks waiting: it counted every account under the stop lines, and placement held them
  *  all. */
-export function climayteCapacity(now = Date.now()): {
+export async function climayteCapacity(now = Date.now()): Promise<{
   idle: number
   accounts: number
   running: number
@@ -73,8 +73,8 @@ export function climayteCapacity(now = Date.now()): {
   /** Accounts whose linked Claude Code login has expired: `renewing` while the desktop side refreshes it, `open-once` when its desktop app must be opened once. */
   expiredLogins: { account: string; state: 'renewing' | 'open-once' }[]
   /** Whether a Claude Code CLI can be started: false holds every task (claude-install-guard.ts). */
-  claudeInstall: ReturnType<typeof installStatusView>
-} {
+  claudeInstall: Awaited<ReturnType<typeof installStatusView>>
+}> {
   load()
   let accounts: CliMayteAccount[] = []
   try {
@@ -105,7 +105,7 @@ export function climayteCapacity(now = Date.now()): {
     expiredLogins: accounts
       .filter((a) => a.loginExpired)
       .map((a) => ({ account: acctLabel(a), state: a.loginExpired as 'renewing' | 'open-once' })),
-    claudeInstall: installStatusView(),
+    claudeInstall: await installStatusView(),
   }
 }
 

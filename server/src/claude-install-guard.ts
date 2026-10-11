@@ -17,8 +17,11 @@
 //      with --version; raise ONE incident the owner sees when it keeps failing.
 //   4. claudeInstallState: what the scheduler asks before it launches. Not healthy and no good copy: the
 //      work is held ("Waiting: Claude Code install broken"), no retry is spent and no account is tried.
+//
+// Every probe and install step runs on the spawn worker's `claude-install` lane (core/spawn-worker.ts),
+// never on the daemon's thread: CreateProcess of the 250 MB claude.exe held it for seconds on a loaded
+// box (STALL lines on the old spawnSync probe, 2026-10-11), and that thread serves every route.
 
-import { spawnSync } from 'node:child_process'
 import {
   copyFileSync,
   mkdirSync,
@@ -30,6 +33,7 @@ import {
 } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import { claudeExeFallback, DATA_DIR, resolveClaudeExeUnguarded } from './config'
+import { spawnCaptured } from './core/process'
 
 /** The native Claude Code executable is ~250 MB; the placeholder is 500 bytes. Anything under this is a stub. */
 export const MIN_EXE_BYTES = 5 * 1024 * 1024
@@ -67,7 +71,7 @@ export interface GuardDeps {
   /** The file's size and mtime, or null when it does not exist. */
   stat: (path: string) => { size: number; mtimeMs: number } | null
   /** Run `<exe> --version`. */
-  probe: (exe: string) => ProbeResult
+  probe: (exe: string) => Promise<ProbeResult>
   /** Run a command (the repair's install step). */
   run: (argv: string[], cwd: string | null, timeoutMs: number) => Promise<RunResult>
   readText: (path: string) => string | null
@@ -83,23 +87,27 @@ export interface GuardDeps {
   overridden: () => boolean
 }
 
-const nativeRun = (argv: string[], cwd: string | null, timeoutMs: number): Promise<RunResult> =>
-  new Promise((resolve) => {
-    const r = spawnSync(argv[0] as string, argv.slice(1), {
-      cwd: cwd ?? undefined,
-      timeout: timeoutMs,
-      encoding: 'utf8',
-      windowsHide: true,
-      env: { ...process.env, DISABLE_AUTOUPDATER: '1' },
-      shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(argv[0] as string),
-    })
-    resolve({
-      code: r.status,
-      stdout: r.stdout ?? '',
-      stderr: r.stderr ?? (r.error ? String(r.error.message) : ''),
-      timedOut: r.error != null && /ETIMEDOUT/.test(String((r.error as { code?: string }).code)),
-    })
+/** `argv` on the install's own spawn-worker lane; a .cmd or .bat through the shell. One that could not
+ *  be started at all says so on stderr, where the reason and the repair's detail read it. */
+async function nativeRun(
+  argv: string[],
+  cwd: string | null,
+  timeoutMs: number,
+): Promise<RunResult> {
+  const cmd =
+    process.platform === 'win32' && /\.(cmd|bat)$/i.test(argv[0] as string)
+      ? [process.env.ComSpec ?? 'cmd.exe', '/d', '/s', '/c', ...argv]
+      : argv
+  const r = await spawnCaptured(cmd, {
+    cwd: cwd ?? undefined,
+    timeoutMs,
+    env: { ...process.env, DISABLE_AUTOUPDATER: '1' },
+    lane: 'claude-install',
   })
+  return r.code === null && !r.timedOut && !r.stdout && !r.stderr
+    ? { ...r, stderr: `${argv[0]} could not be started` }
+    : r
+}
 
 export const defaultGuardDeps: GuardDeps = {
   now: () => Date.now(),
@@ -112,22 +120,7 @@ export const defaultGuardDeps: GuardDeps = {
       return null
     }
   },
-  probe: (exe) => {
-    const r = spawnSync(exe, ['--version'], {
-      timeout: PROBE_TIMEOUT_MS,
-      encoding: 'utf8',
-      windowsHide: true,
-      env: { ...process.env, DISABLE_AUTOUPDATER: '1' },
-      shell: process.platform === 'win32' && /\.(cmd|bat)$/i.test(exe),
-    })
-    const timedOut = r.error != null && (r.error as { code?: string }).code === 'ETIMEDOUT'
-    return {
-      code: r.status,
-      stdout: r.stdout ?? '',
-      stderr: (r.stderr ?? '') || (r.error && !timedOut ? r.error.message : ''),
-      timedOut,
-    }
-  },
+  probe: (exe) => nativeRun([exe, '--version'], null, PROBE_TIMEOUT_MS),
   run: nativeRun,
   readText: (p) => {
     try {
@@ -177,7 +170,7 @@ const firstLine = (s: string): string => s.trim().split(/\r?\n/)[0]?.slice(0, 16
 const isNativePath = (exe: string): boolean => /[\\/]/.test(exe) && /\.exe$/i.test(exe)
 
 /** Healthy or not, with the reason in words the owner can act on. No cache (see checkClaudeExe). */
-export function inspectClaudeExe(exe: string, d: GuardDeps = deps): InstallHealth {
+export async function inspectClaudeExe(exe: string, d: GuardDeps = deps): Promise<InstallHealth> {
   const bad = (reason: string): InstallHealth => ({ ok: false, reason, exe, version: null })
   if (/[\\/]/.test(exe)) {
     const s = d.stat(exe)
@@ -187,7 +180,7 @@ export function inspectClaudeExe(exe: string, d: GuardDeps = deps): InstallHealt
         `${exe} is only ${s.size} bytes: a placeholder, not the Claude Code executable (an update did not finish)`,
       )
   }
-  const p = d.probe(exe)
+  const p = await d.probe(exe)
   if (p.timedOut)
     return bad(`\`claude --version\` did not answer within ${PROBE_TIMEOUT_MS / 1000} s`)
   const v = VERSION_RE.exec(p.stdout)
@@ -206,20 +199,36 @@ interface Cached {
   at: number
 }
 const cache = new Map<string, Cached>()
+/** The probe running for a cache key: checks that ask while it runs share it. */
+const looking = new Map<string, Promise<InstallHealth>>()
 
 /** inspectClaudeExe, cached by path + size + mtime: free while the file is unchanged. An unhealthy
  *  verdict is trusted UNHEALTHY_RECHECK_MS (a repair changes size or mtime, and ends it at once).
- *  `fresh` skips the cache (a launch that died instantly asks for a new look). */
-export function checkClaudeExe(exe: string, fresh = false, d: GuardDeps = deps): InstallHealth {
+ *  `fresh` skips the cache (a launch that died instantly asks for a new look); a probe of the same
+ *  file already running is that look. */
+export function checkClaudeExe(
+  exe: string,
+  fresh = false,
+  d: GuardDeps = deps,
+): Promise<InstallHealth> {
   const s = /[\\/]/.test(exe) ? d.stat(exe) : null
   const key = `${exe}|${s?.size ?? '-'}|${s?.mtimeMs ?? '-'}`
   const hit = cache.get(exe)
   const now = d.now()
   if (!fresh && hit && hit.key === key && (hit.health.ok || now - hit.at < UNHEALTHY_RECHECK_MS))
-    return hit.health
-  const health = inspectClaudeExe(exe, d)
-  cache.set(exe, { key, health, at: now })
-  return health
+    return Promise.resolve(hit.health)
+  const running = looking.get(key)
+  if (running) return running
+  const look = inspectClaudeExe(exe, d)
+    .then((health) => {
+      cache.set(exe, { key, health, at: now })
+      return health
+    })
+    .finally(() => {
+      if (looking.get(key) === look) looking.delete(key)
+    })
+  looking.set(key, look)
+  return look
 }
 
 // --- last-known-good copy ----------------------------------------------------------------------------
@@ -250,7 +259,7 @@ function snapshotLkg(h: InstallHealth, d: GuardDeps): void {
   void (async () => {
     try {
       await d.copyLkg(h.exe, d.lkgDir)
-      const copy = inspectClaudeExe(lkgExe(d), d)
+      const copy = await inspectClaudeExe(lkgExe(d), d)
       if (copy.ok) {
         try {
           writeFileSync(join(d.lkgDir, 'version.txt'), copy.version ?? '')
@@ -290,12 +299,15 @@ export interface InstallState {
 
 /** Is a CLI launchable now? Cheap while the install is unchanged. Starts a repair (in the background) when
  *  the install is broken. `fresh`: look again now, whatever the cache says. */
-export function claudeInstallState(fresh = false, d: GuardDeps = deps): InstallState {
+export async function claudeInstallState(
+  fresh = false,
+  d: GuardDeps = deps,
+): Promise<InstallState> {
   const exe = d.exe()
   const base = { exe, repairing: repair.running, nextRepairAt: repair.nextAt }
   if (d.overridden())
     return { ...base, ok: true, reason: null, version: null, usingLastKnownGood: false }
-  const h = checkClaudeExe(exe, fresh, d)
+  const h = await checkClaudeExe(exe, fresh, d)
   if (h.ok) {
     claudeExeFallback.primary = null
     claudeExeFallback.path = null
@@ -314,7 +326,7 @@ export function claudeInstallState(fresh = false, d: GuardDeps = deps): InstallS
     }
   }
   void startRepair(h, d)
-  const lkg = d.stat(lkgExe(d)) ? checkClaudeExe(lkgExe(d), false, d) : null
+  const lkg = d.stat(lkgExe(d)) ? await checkClaudeExe(lkgExe(d), false, d) : null
   if (lkg?.ok) {
     claudeExeFallback.primary = exe
     claudeExeFallback.path = lkgExe(d)
@@ -397,7 +409,7 @@ async function repairNow(h: InstallHealth, d: GuardDeps): Promise<void> {
         const native = nativePackageExe(pkgDir)
         const nativeStat = d.stat(native)
         const nativeOk =
-          !!nativeStat && nativeStat.size >= MIN_EXE_BYTES && inspectClaudeExe(native, d).ok
+          !!nativeStat && nativeStat.size >= MIN_EXE_BYTES && (await inspectClaudeExe(native, d)).ok
         if (nativeOk) {
           how = 'ran the package install step (native package complete)'
           ran = await d.run(['node', join(pkgDir, 'install.cjs')], pkgDir, REPAIR_TIMEOUT_MS)
@@ -414,7 +426,7 @@ async function repairNow(h: InstallHealth, d: GuardDeps): Promise<void> {
   } catch (err) {
     repair.lastDetail = err instanceof Error ? err.message : String(err)
   }
-  const after = checkClaudeExe(h.exe, true, d)
+  const after = await checkClaudeExe(h.exe, true, d)
   if (after.ok) {
     d.log(`repaired: ${how}; claude ${after.version}`)
     repair.failures = 0
@@ -444,15 +456,15 @@ async function repairNow(h: InstallHealth, d: GuardDeps): Promise<void> {
 }
 
 /** For climayte_status and Desk 2. */
-export function installStatusView(): {
+export async function installStatusView(): Promise<{
   ok: boolean
   reason: string | null
   version: string | null
   usingLastKnownGood: boolean
   repairing: boolean
   nextRepairAt: string | null
-} {
-  const s = claudeInstallState()
+}> {
+  const s = await claudeInstallState()
   return {
     ok: s.ok,
     reason: s.reason,
@@ -471,6 +483,7 @@ export async function settleRepair(): Promise<void> {
 
 export function resetGuard(): void {
   cache.clear()
+  looking.clear()
   repair.running = false
   repair.failures = 0
   repair.nextAt = null

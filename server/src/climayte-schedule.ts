@@ -81,6 +81,8 @@ interface TickState {
   memory: MachineMemory | null
   /** Workers started within RAMP_MS, this tick's starts included: not yet fully in `memory`. */
   growing: Growth
+  /** What the install guard said before the tick (installForTick); null: no install is judged. */
+  install: InstallState | null
 }
 
 export function tickAccounts(): CliMayteAccount[] {
@@ -105,7 +107,11 @@ function groupCounts(byGroup: Map<string, Map<string, number>>, g: string): Map<
   return m
 }
 
-export function tickState(accounts: CliMayteAccount[], now: number): TickState {
+export function tickState(
+  accounts: CliMayteAccount[],
+  now: number,
+  install: InstallState | null = null,
+): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
   const byGroup = new Map<string, Map<string, number>>()
@@ -136,6 +142,7 @@ export function tickState(accounts: CliMayteAccount[], now: number): TickState {
     finishedSince,
     memory,
     growing,
+    install,
   }
 }
 
@@ -490,19 +497,26 @@ const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
 
 /** Test seam: what the scheduler asks before launching (null: the real guard, which only judges the
  *  real launcher). */
-let installGuard: (() => InstallState) | null = null
-export function setInstallGuard(fn: (() => InstallState) | null): void {
+let installGuard: (() => InstallState | Promise<InstallState>) | null = null
+export function setInstallGuard(fn: (() => InstallState | Promise<InstallState>) | null): void {
   installGuard = fn
+}
+
+/** What holdForInstall judges a tick's placements by, asked before the tick's state is built: the
+ *  guard's probe runs off the daemon's thread (claude-install-guard.ts), and nothing is placed while
+ *  it runs. Null: no install is judged (only the real launcher on the real CLI is ours). */
+export async function installForTick(): Promise<InstallState | null> {
+  if (installGuard) return installGuard()
+  const real = launcher === launch && claudeCommand()[0] === resolveClaudeExe()
+  return real ? claudeInstallState() : null
 }
 
 /** The Claude Code install does not run (claude-install-guard.ts): launching would only die at once,
  *  and an instant death must not spend a retry or move the task to another account. The task waits
  *  here, with the reason on its row, and is released on the first tick the install answers again.
  *  True: held (do not place it). */
-function holdForInstall(w: CliMayteWorker): boolean {
-  // Only the real launcher on the real CLI is judged: a test's fake launcher or argv is not ours.
-  const real = launcher === launch && claudeCommand()[0] === resolveClaudeExe()
-  const st = installGuard ? installGuard() : real ? claudeInstallState() : null
+function holdForInstall(s: TickState, w: CliMayteWorker): boolean {
+  const st = s.install
   if (!st) return false
   if (!st.ok) {
     const retry = st.repairing
@@ -688,7 +702,7 @@ function holdForAccount(
  *  line and its continuation is placed again); else it waits. At 11:05 that day priority-1 tasks
  *  sat waiting behind a flat 4-worker cap and an unbounded wait for room while #35 had room. */
 export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
-  if (holdForInstall(w)) return
+  if (holdForInstall(s, w)) return
   const { now, accounts } = s
   // No cap from the dispatcher: the default, which counts Pro windows (groupCap).
   const cap = perAccount[w.group] ?? null

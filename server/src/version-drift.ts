@@ -811,7 +811,7 @@ export const defaultFixDeps: FixDeps = {
     // its npm killed, left a placeholder claude.exe and every launch died). The guard looks at the
     // result fresh: when it does not run, launches stay on the verified last-known-good copy and the
     // guard's own repair takes over; this update is reported as failed, not as done.
-    const state = claudeInstallState(true)
+    const state = await claudeInstallState(true)
     if (!state.ok || state.usingLastKnownGood)
       return {
         ok: false,

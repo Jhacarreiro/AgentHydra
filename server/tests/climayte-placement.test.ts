@@ -379,13 +379,13 @@ describe('climayteCapacity', () => {
     setCliMayteMemoryReader(null)
   })
 
-  test('says how many tasks already wait, and counts as idle only where a task would start now', () => {
+  test('says how many tasks already wait, and counts as idle only where a task would start now', async () => {
     setCliMayteAccountsProvider(() => [])
-    const before = climayteCapacity().waiting
+    const before = (await climayteCapacity()).waiting
     const run = climayteRun({ tasks: [{ prompt: 'x', cwd: tmpdir() }] })
-    expect(climayteCapacity().waiting).toBe(before + 1)
+    expect((await climayteCapacity()).waiting).toBe(before + 1)
     climayteCancel({ group: run.group })
-    expect(climayteCapacity().waiting).toBe(before)
+    expect((await climayteCapacity()).waiting).toBe(before)
     // At 70% an account is under the 85% stop line, but an ordinary task (25%) would wait for room
     // there rather than start.
     const dir = join(tmpdir(), 'climayte-placement-capacity')
@@ -393,10 +393,10 @@ describe('climayteCapacity', () => {
       { id: 'room-roomy', num: 1, name: 'roomy', configDir: dir, sessionPct: 10, weekPct: 10 },
       { id: 'room-tight', num: 2, name: 'tight', configDir: dir, sessionPct: 70, weekPct: 10 },
     ])
-    expect(climayteCapacity()).toMatchObject({ accounts: 2, idle: 1 })
+    expect(await climayteCapacity()).toMatchObject({ accounts: 2, idle: 1 })
     // A machine out of memory starts nothing, so no account is idle with room.
     setCliMayteMemoryReader(() => box(1))
-    expect(climayteCapacity()).toMatchObject({ accounts: 2, idle: 0 })
+    expect(await climayteCapacity()).toMatchObject({ accounts: 2, idle: 0 })
   })
 })
 

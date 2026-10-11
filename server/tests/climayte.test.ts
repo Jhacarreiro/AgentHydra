@@ -437,7 +437,7 @@ describe('climayteCapacity', () => {
   // someone is using, or one past the wind-down line, is not room.
   afterAll(() => setCliMayteAccountsProvider(null))
 
-  test('counts only accounts free for new work', () => {
+  test('counts only accounts free for new work', async () => {
     const dir = join(tmpdir(), 'climayte-capacity')
     setCliMayteAccountsProvider(() => [
       { id: 'cap-free', num: 1, name: 'free', configDir: dir, sessionPct: 10, weekPct: 10 },
@@ -461,7 +461,7 @@ describe('climayteCapacity', () => {
       },
       { id: 'cap-near', num: 4, name: 'near', configDir: dir, sessionPct: 95, weekPct: 10 },
     ])
-    const cap = climayteCapacity()
+    const cap = await climayteCapacity()
     expect(cap.accounts).toBe(4)
     expect(cap.idle).toBe(1)
   })

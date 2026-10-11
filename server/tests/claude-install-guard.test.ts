@@ -28,7 +28,13 @@ import {
   classifyAttempt,
   isInstantEmptyDeath,
 } from '../src/climayte-lib'
-import { scheduleDue, setInstallGuard, setLauncher, tickState } from '../src/climayte-schedule'
+import {
+  installForTick,
+  scheduleDue,
+  setInstallGuard,
+  setLauncher,
+  tickState,
+} from '../src/climayte-schedule'
 import { claudeExeFallback } from '../src/config'
 import './no-chats'
 
@@ -68,7 +74,7 @@ const install = (): void =>
     exe: () => exe,
     overridden: () => false,
     lkgDir: join(root, 'lkg'),
-    probe: (p) => {
+    probe: async (p) => {
       probes.push(p)
       return answer(statSync(p).size)
     },
@@ -114,57 +120,59 @@ afterEach(() => {
 })
 
 describe('inspectClaudeExe', () => {
-  test('a 500-byte placeholder is unhealthy and is never run', () => {
+  test('a 500-byte placeholder is unhealthy and is never run', async () => {
     write(exe, 500)
-    const h = inspectClaudeExe(exe)
+    const h = await inspectClaudeExe(exe)
     expect(h.ok).toBe(false)
     expect(h.reason).toContain('500 bytes')
     expect(probes).toEqual([])
   })
 
-  test('a truncated binary that cannot execute is unhealthy', () => {
+  test('a truncated binary that cannot execute is unhealthy', async () => {
     write(exe, HEALTHY - 1)
-    const h = inspectClaudeExe(exe)
+    const h = await inspectClaudeExe(exe)
     expect(h.ok).toBe(false)
     expect(h.reason).toContain('Exec format error')
   })
 
-  test('a missing file is unhealthy', () => {
-    expect(inspectClaudeExe(join(root, 'nope', 'claude.exe')).reason).toContain('does not exist')
+  test('a missing file is unhealthy', async () => {
+    expect((await inspectClaudeExe(join(root, 'nope', 'claude.exe'))).reason).toContain(
+      'does not exist',
+    )
   })
 
-  test('a healthy executable answers --version', () => {
+  test('a healthy executable answers --version', async () => {
     write(exe, HEALTHY)
-    expect(inspectClaudeExe(exe)).toMatchObject({ ok: true, version: '2.1.292' })
+    expect(await inspectClaudeExe(exe)).toMatchObject({ ok: true, version: '2.1.292' })
   })
 
-  test('a --version that hangs is unhealthy', () => {
+  test('a --version that hangs is unhealthy', async () => {
     write(exe, HEALTHY)
     answer = () => ({ code: null, stdout: '', stderr: '', timedOut: true })
-    expect(inspectClaudeExe(exe).reason).toContain('did not answer')
+    expect((await inspectClaudeExe(exe)).reason).toContain('did not answer')
   })
 })
 
 describe('checkClaudeExe cache', () => {
-  test('a healthy verdict costs one probe while path, size and mtime are unchanged', () => {
+  test('a healthy verdict costs one probe while path, size and mtime are unchanged', async () => {
     write(exe, HEALTHY)
-    for (let i = 0; i < 20; i++) expect(checkClaudeExe(exe).ok).toBe(true)
+    for (let i = 0; i < 20; i++) expect((await checkClaudeExe(exe)).ok).toBe(true)
     expect(probes).toHaveLength(1)
     write(exe, HEALTHY + 1) // an update: asked again
-    expect(checkClaudeExe(exe).ok).toBe(true)
+    expect((await checkClaudeExe(exe)).ok).toBe(true)
     expect(probes).toHaveLength(2)
   })
 
-  test('an unhealthy verdict is re-probed only after UNHEALTHY_RECHECK_MS, or when asked fresh', () => {
+  test('an unhealthy verdict is re-probed only after UNHEALTHY_RECHECK_MS, or when asked fresh', async () => {
     write(exe, 500)
     write(exe, HEALTHY - 1)
-    checkClaudeExe(exe)
-    checkClaudeExe(exe)
+    await checkClaudeExe(exe)
+    await checkClaudeExe(exe)
     expect(probes).toHaveLength(1)
     clock += UNHEALTHY_RECHECK_MS + 1
-    checkClaudeExe(exe)
+    await checkClaudeExe(exe)
     expect(probes).toHaveLength(2)
-    checkClaudeExe(exe, true)
+    await checkClaudeExe(exe, true)
     expect(probes).toHaveLength(3)
   })
 })
@@ -176,13 +184,13 @@ describe('claudeInstallState and repair', () => {
       write(exe, HEALTHY)
       return { code: 0 }
     }
-    const asks = Array.from({ length: 6 }, () => claudeInstallState())
+    const asks = await Promise.all(Array.from({ length: 6 }, () => claudeInstallState()))
     expect(asks.every((s) => !s.ok)).toBe(true)
     expect(asks[0]?.reason).toContain('500 bytes')
     await settleRepair()
     expect(repairRuns()).toBe(1)
     expect(runs).toHaveLength(1)
-    const after = claudeInstallState()
+    const after = await claudeInstallState()
     expect(after.ok).toBe(true)
     expect(after.version).toBe('2.1.292')
     expect(repairRuns()).toBe(1)
@@ -192,7 +200,7 @@ describe('claudeInstallState and repair', () => {
 
   test('no native package: it reinstalls the version package.json names', async () => {
     write(exe, 500)
-    claudeInstallState()
+    await claudeInstallState()
     await settleRepair()
     expect(runs[0]?.slice(0, 3)).toEqual(['npm', 'install', '-g'])
     expect(runs[0]?.[3]).toBe('@anthropic-ai/claude-code@2.1.292')
@@ -214,26 +222,26 @@ describe('claudeInstallState and repair', () => {
       write(exe, HEALTHY)
       return { code: 0 }
     }
-    claudeInstallState()
+    await claudeInstallState()
     await settleRepair()
     expect(runs).toHaveLength(1)
     expect(runs[0]?.[0]).toBe('node')
     expect(runs[0]?.[1]).toBe(join(pkg, 'install.cjs'))
-    expect(claudeInstallState().ok).toBe(true)
+    expect((await claudeInstallState()).ok).toBe(true)
   })
 
   test('a repair that fails keeps holding, backs off, and raises one incident', async () => {
     write(exe, 500)
     onRun = () => ({ code: 1, stderr: 'EBUSY: resource busy' })
-    expect(claudeInstallState().ok).toBe(false)
+    expect((await claudeInstallState()).ok).toBe(false)
     await settleRepair()
     expect(repairRuns()).toBe(1)
     expect(raised).toHaveLength(1)
     expect(raised[0]).toContain('could not repair')
     // Inside the backoff: no second repair however often it is asked.
     clock += 30_000
-    claudeInstallState()
-    claudeInstallState()
+    await claudeInstallState()
+    await claudeInstallState()
     await settleRepair()
     expect(repairRuns()).toBe(1)
     // After it: one more try, then it works.
@@ -242,26 +250,26 @@ describe('claudeInstallState and repair', () => {
       return { code: 0 }
     }
     clock += 120_000
-    claudeInstallState()
+    await claudeInstallState()
     await settleRepair()
     expect(repairRuns()).toBe(2)
-    expect(claudeInstallState().ok).toBe(true)
+    expect((await claudeInstallState()).ok).toBe(true)
   })
 
   test('while the install is broken launches use a verified last-known-good copy, and wait for nothing', async () => {
     write(exe, HEALTHY)
-    expect(claudeInstallState().ok).toBe(true)
+    expect((await claudeInstallState()).ok).toBe(true)
     await settleRepair() // the background copy
     write(exe, 500) // the update that did not finish
     onRun = () => ({ code: 1 })
-    const s = claudeInstallState()
+    const s = await claudeInstallState()
     expect(s.ok).toBe(true)
     expect(s.usingLastKnownGood).toBe(true)
     expect(claudeExeFallback.primary).toBe(exe)
     expect(claudeExeFallback.path).toBe(join(root, 'lkg', 'claude.exe'))
     await settleRepair()
     write(exe, HEALTHY)
-    expect(claudeInstallState().usingLastKnownGood).toBe(false)
+    expect((await claudeInstallState()).usingLastKnownGood).toBe(false)
     expect(claudeExeFallback.path).toBeNull()
   })
 })
@@ -316,16 +324,16 @@ const mk = (id: string, over: Partial<CliMayteWorker> = {}): CliMayteWorker => {
   workers.set(id, w)
   return w
 }
-const tick = (ids: string[]): void =>
+const tick = async (ids: string[]): Promise<void> =>
   scheduleDue(
-    tickState(accounts, t0),
+    tickState(accounts, t0, await installForTick()),
     [...workers.values()].filter(
       (w) => ids.includes(w.id) && (w.status === 'queued' || w.status === 'waiting'),
     ),
   )
 
 describe('scheduler', () => {
-  test('a broken install holds queued work and a handoff with the reason: no launch, no retry, no account', () => {
+  test('a broken install holds queued work and a handoff with the reason: no launch, no retry, no account', async () => {
     write(exe, 500)
     const launched: string[] = []
     setLauncher((w) => {
@@ -342,7 +350,7 @@ describe('scheduler', () => {
         { account: accounts[0], startedAt: t0 - 5, endedAt: t0, outcome: 'handoff' },
       ] as any,
     })
-    tick(['guard-q', 'guard-h'])
+    await tick(['guard-q', 'guard-h'])
     expect(launched).toEqual([])
     for (const w of [queued, handoff]) {
       expect(w.status).toBe('waiting')
@@ -368,11 +376,11 @@ describe('scheduler', () => {
     })
     setInstallGuard(() => claudeInstallState())
     const w = mk('guard-r')
-    tick(['guard-r'])
+    await tick(['guard-r'])
     expect(w.status).toBe('waiting')
     expect(launched).toEqual([])
     await settleRepair()
-    tick(['guard-r'])
+    await tick(['guard-r'])
     expect(launched).toEqual(['guard-r'])
     expect(w.status).toBe('running')
     expect(w.error).toBeNull()
@@ -408,9 +416,9 @@ describe('instant empty deaths', () => {
     expect(isInstantEmptyDeath({ ...dead, events: [{ type: 'system' }] })).toBe(false)
   })
 
-  test('with the install broken it is install-broken, and settling it burns no retry and moves nothing', () => {
+  test('with the install broken it is install-broken, and settling it burns no retry and moves nothing', async () => {
     write(exe, HEALTHY - 1)
-    const v = installBroken(attempt(), classifyAttempt([], ''), [], '', false)
+    const v = await installBroken(attempt(), classifyAttempt([], ''), [], '', false)
     expect(v.outcome).toBe('install-broken')
     expect(v.notice).toContain('Exec format error')
     const w = mk('guard-c', { retries: 2, accountId: 'acct-g1' })
@@ -422,22 +430,26 @@ describe('instant empty deaths', () => {
     workers.delete('guard-c')
   })
 
-  test('with a healthy install it stays interrupted (a restart kill), and a real death with output is untouched', () => {
+  test('with a healthy install it stays interrupted (a restart kill), and a real death with output is untouched', async () => {
     write(exe, HEALTHY)
-    expect(installBroken(attempt(), classifyAttempt([], ''), [], '', false).outcome).toBe(
+    expect((await installBroken(attempt(), classifyAttempt([], ''), [], '', false)).outcome).toBe(
       'interrupted',
     )
     const loud = classifyAttempt([], 'error: unknown option --bogus')
-    expect(installBroken(attempt(), loud, [], 'error: unknown option --bogus', false).outcome).toBe(
-      'error',
-    )
-    expect(probes).toHaveLength(1)
+    expect(
+      (await installBroken(attempt(), loud, [], 'error: unknown option --bogus', false)).outcome,
+    ).toBe('error')
+    // One look at the install, none for the loud death (the healthy look also verifies a
+    // last-known-good copy in the background: that probe is of the copy, not of `exe`).
+    expect(probes.filter((p) => p === exe)).toHaveLength(1)
   })
 
-  test('a long-running death is never read as the install', () => {
+  test('a long-running death is never read as the install', async () => {
     write(exe, 500)
     const at = { ...attempt(), endedAt: t0 + 120_000 }
-    expect(installBroken(at, classifyAttempt([], ''), [], '', false).outcome).toBe('interrupted')
+    expect((await installBroken(at, classifyAttempt([], ''), [], '', false)).outcome).toBe(
+      'interrupted',
+    )
   })
 })
 

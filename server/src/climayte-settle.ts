@@ -43,23 +43,36 @@ import { resolveClaudeExe } from './config'
 import { getCliInstance } from './core/cli-instances'
 import { parseResetTime } from './usage'
 
-/** A CLI that died at once with nothing on stdout or stderr and no runner pid is either killed from
- *  outside or unable to run at all. A fresh look at the install tells them apart: when it does not
- *  run (or the last-known-good copy had to stand in), the death is the install's, not the task's:
- *  'install-broken' spends no retry and moves nothing (2026-10-06: a placeholder claude.exe read as
- *  "interrupted" three times and failed the chat). */
-export function installBroken(
+/** Whether the death needs a fresh look at the install before it is judged (installBroken): it
+ *  died at once with nothing on stdout or stderr and no runner pid, on the real CLI. */
+export function installLookDue(
   at: CliMayteWorker['attempts'][number],
   v: ReturnType<typeof classifyAttempt>,
   events: unknown[],
   stderr: string,
   hadRunnerPid: boolean,
-): ReturnType<typeof classifyAttempt> {
-  if (v.outcome !== 'interrupted' && v.outcome !== 'error') return v
+): boolean {
+  if (v.outcome !== 'interrupted' && v.outcome !== 'error') return false
   const livedMs = (at.endedAt ?? Date.now()) - at.startedAt
-  if (!isInstantEmptyDeath({ livedMs, events, stderr, hadRunnerPid })) return v
-  if (claudeCommand()[0] !== resolveClaudeExe()) return v
-  const st = claudeInstallState(true)
+  if (!isInstantEmptyDeath({ livedMs, events, stderr, hadRunnerPid })) return false
+  return claudeCommand()[0] === resolveClaudeExe()
+}
+
+/** A CLI that died at once with nothing on stdout or stderr and no runner pid is either killed from
+ *  outside or unable to run at all. A fresh look at the install tells them apart: when it does not
+ *  run (or the last-known-good copy had to stand in), the death is the install's, not the task's:
+ *  'install-broken' spends no retry and moves nothing (2026-10-06: a placeholder claude.exe read as
+ *  "interrupted" three times and failed the chat). The look's probe runs off the daemon's thread;
+ *  finish settles the attempt once it is in. */
+export async function installBroken(
+  at: CliMayteWorker['attempts'][number],
+  v: ReturnType<typeof classifyAttempt>,
+  events: unknown[],
+  stderr: string,
+  hadRunnerPid: boolean,
+): Promise<ReturnType<typeof classifyAttempt>> {
+  if (!installLookDue(at, v, events, stderr, hadRunnerPid)) return v
+  const st = await claudeInstallState(true)
   if (st.ok && !st.usingLastKnownGood) return v
   return { ...v, outcome: 'install-broken', notice: st.reason }
 }
