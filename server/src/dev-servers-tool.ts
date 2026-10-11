@@ -48,7 +48,9 @@ export const DEV_SERVERS_NOT_RUNNING =
   'AgentHydra 2.0 is not running on this PC, so dev servers cannot be shared; open AgentHydra.'
 // Desk's ensure waits up to ~45 s for a server to answer; this stays under the MCP call budget (50 s).
 const START_TIMEOUT_MS = 48_000
-const ASK_TIMEOUT_MS = 10_000
+// A cold list scans the ports and every process (two PowerShell process reads and a probe of each listed port):
+// measured 11-13 s on a busy box (2026-10-11), so 10 s failed the first call after each cache expired.
+const ASK_TIMEOUT_MS = 30_000
 const LOG_LINES_DEFAULT = 60
 const LOG_LINES_MAX = 500
 const UP = new Set(['running', 'starting', 'waiting'])

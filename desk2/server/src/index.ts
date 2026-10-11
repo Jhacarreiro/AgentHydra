@@ -206,6 +206,11 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const server = Bun.serve<unknown>({
     port: opts.port,
     hostname: opts.hostname ?? '127.0.0.1',
+    // Bun closes an HTTP request that sends nothing for 10 s by default (`websocket.idleTimeout` below is the
+    // sockets' own). /dw/api goes on to the dev-servers service, whose list takes 11-13 s cold on a busy box and
+    // whose ensure waits up to ~45 s for a server: every such call was cut at 8-12 s with no answer, so `dev_servers`
+    // said AgentHydra did not answer (2026-10-11). The service itself allows 255 s.
+    idleTimeout: 255,
     async fetch(req, srv) {
       // A `<label>.localhost` host (the dev-server proxy) is the route's own to judge: the guard below would refuse it.
       const host = req.headers.get('host')
