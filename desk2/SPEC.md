@@ -396,6 +396,7 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/external/sessions/:id/branch` (ExternalBranchRequest) | `ExternalBranchResult`: AgentHydra (`POST /api/sessions/:id/branch`) copies the Claude Code session up to the reply `uuid` (an item's `branchFrom`) into a new session, titled "<title> (branch)"; no uuid 400, AgentHydra's refusal keeps its status |
 | `GET /api/search?q=&limit=` | `SearchHit[]`: AgentHydra's transcript search (`GET /api/sessions/search`, its `search_sessions` tool), each hit joined with its session row for title and time (`bridge/search.ts`). q 2+ chars (else 400), limit 25 by default, at most 50; AgentHydra down 503, any other failure 502 with the reason |
 | `GET /api/climayte/workers?all=1` | `CliMayteWorker[]` (active + the last 20 finished; all with the flag) |
+| `GET /api/session-tasks/:id` | `SessionTasks`: the CliMayte workers (through the workers they dispatched) and the HSwarm jobs that one session called on this PC, every running one and the 50 newest finished of each (AgentHydra's `?origin=`, HSwarm's `?session=` with the session and its Desktop chat ids). Read at most every 5 s per session; each answer is cut to the session's own again, for a daemon too old to filter. Not a session id 400 |
 | `POST /api/climayte/workers/:id/cancel` | `{ ok: true }` |
 | `POST /api/climayte/workers/:id/send` (`{ text }`) | `{ ok: true }` |
 
@@ -429,6 +430,11 @@ stay listed after AgentHydra's recent-finished window drops them (the bridge re-
 `?ids=` and merges them into the worker list). The web filters by `workerIds`: the Background tasks panel
 opens on 'This chat' ('All' stays one click away, remembered in localStorage), and
 the inline 'N running tasks' row and the CliMayte pane's 'only this chat' box use the same list.
+The window's lists keep only the 20 newest finished workers and jobs of the whole PC, which a busy PC turns over in
+minutes, and an outside session has no `workerIds`; so while the Background tasks panel or the tasks line is on
+screen, the window also reads the session's own (`GET /api/session-tasks/:id`, every 15 s, `web/src/components/tasks/session.ts`)
+and lists them beside the window's, the window's copy winning for one in both (owner, 2026-10-10: the session view
+shows the HSwarm and CliMayte items the session called). The sidebar keeps the window's lists.
 
 ### Chats are CliMayte workers
 

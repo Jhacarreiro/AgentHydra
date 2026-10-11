@@ -454,7 +454,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   like, background running tasks. Which I have not been able to figure out how to view").
   A chat's finished tasks count under Finished, in Desk's own chats too, and so do the HSwarm jobs it called, the
   ones its sidebar row's HSwarm badge counts (owner, 2026-10-10: "it shows it has a H Swarm item, but it doesn't show
-  the H Swarm in line"); a job's name opens it on the HSwarm tab. The count lives in one
+  the H Swarm in line"); a job's name opens it on the HSwarm tab. They stay listed however busy the PC is: while the
+  panel or the tasks line is on screen it asks for the session's own workers and jobs, its 50 newest finished of each,
+  since the window's own lists keep only the PC's 20 newest finished (owner, 2026-10-10). The count lives in one
   place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
