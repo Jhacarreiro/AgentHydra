@@ -62,7 +62,8 @@ def shape(task: Task) -> str:
         parts.append("# Instructions\n\n" + task.system.strip())
     parts.append(inline_files(task, task.prompt.strip()))
     if task.schema:
-        parts.append(SCHEMA_LINE + "\n" + json.dumps(task.schema, ensure_ascii=False))
+        # Compact: the same schema without the space after every comma and colon, which every free call paid for.
+        parts.append(SCHEMA_LINE + "\n" + json.dumps(task.schema, ensure_ascii=False, separators=(",", ":")))
     return "\n\n".join(parts)
 
 
