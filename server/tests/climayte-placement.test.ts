@@ -28,6 +28,7 @@ import {
   waitsForRoom,
 } from '../src/climayte-placement'
 import { signedOutRecheckDue } from '../src/climayte-stops'
+import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 describe('projectedPct', () => {
   test('counts what running tasks still owe, once, and scales by the plan', () => {
@@ -431,53 +432,57 @@ describe('a task waits for memory, and starts on the first tick with room', () =
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('held while a start would leave RAM under the floor, then run to done', async () => {
-    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    let memory = box(1)
-    setCliMayteMemoryReader(() => memory)
-    let ticks = 0
-    setCliMayteAccountsProvider(() => {
-      ticks++
-      return [
-        {
-          id: 'mem-roomy',
-          num: 61,
-          name: 'roomy',
-          configDir: acctDir,
-          sessionPct: 5,
-          weekPct: 5,
-          readAt: Date.now(),
-        },
-      ]
-    })
-    const until = async (ok: () => boolean) => {
-      const deadline = Date.now() + 20_000
-      while (!ok() && Date.now() < deadline) await Bun.sleep(100)
-    }
-    const aTick = async () => {
-      const seen = ticks
-      await until(() => ticks >= seen + 2)
-    }
-    startCliMayte()
-    // A named setting: an auto task would shift the scorecard's every-4th pick for later suites.
-    const run = climayteRun({
-      model: 'sonnet',
-      effort: 'medium',
-      ownerWords: 'the memory gate under test',
-      tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
-    })
-    group = run.group
-    const id = run.workers[0]?.id as string
-    const view = () => climayteList({ id })[0]
-    await aTick()
-    expect(view()?.status).toBe('queued')
-    expect(view()?.attempts).toHaveLength(0)
-    expect(view()?.error).toContain('Waiting for memory: 1.0 GB of 64.0 GB RAM free')
-    memory = box(32)
-    await until(() => view()?.status === 'done' || view()?.status === 'failed')
-    expect(view()?.status).toBe('done')
-    expect(view()?.attempts).toHaveLength(1)
-  }, 45_000)
+  test(
+    'held while a start would leave RAM under the floor, then run to done',
+    async () => {
+      setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      let memory = box(1)
+      setCliMayteMemoryReader(() => memory)
+      let ticks = 0
+      setCliMayteAccountsProvider(() => {
+        ticks++
+        return [
+          {
+            id: 'mem-roomy',
+            num: 61,
+            name: 'roomy',
+            configDir: acctDir,
+            sessionPct: 5,
+            weekPct: 5,
+            readAt: Date.now(),
+          },
+        ]
+      })
+      const until = async (ok: () => boolean, ms = 20_000) => {
+        const deadline = Date.now() + ms
+        while (!ok() && Date.now() < deadline) await Bun.sleep(100)
+      }
+      const aTick = async () => {
+        const seen = ticks
+        await until(() => ticks >= seen + 2)
+      }
+      startCliMayte()
+      // A named setting: an auto task would shift the scorecard's every-4th pick for later suites.
+      const run = climayteRun({
+        model: 'sonnet',
+        effort: 'medium',
+        ownerWords: 'the memory gate under test',
+        tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
+      })
+      group = run.group
+      const id = run.workers[0]?.id as string
+      const view = () => climayteList({ id })[0]
+      await aTick()
+      expect(view()?.status).toBe('queued')
+      expect(view()?.attempts).toHaveLength(0)
+      expect(view()?.error).toContain('Waiting for memory: 1.0 GB of 64.0 GB RAM free')
+      memory = box(32)
+      await until(() => view()?.status === 'done' || view()?.status === 'failed', 2 * ATTEMPT_MS)
+      expect(view()?.status).toBe('done')
+      expect(view()?.attempts).toHaveLength(1)
+    },
+    20_000 + 2 * ATTEMPT_MS + 10_000,
+  )
 })
 
 describe('a reading over 10 minutes old is read again before a task starts there', () => {
@@ -498,69 +503,73 @@ describe('a reading over 10 minutes old is read again before a task starts there
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('the task waits for the read, and a read that fails lets it go on', async () => {
-    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    const stale = Date.now() - 21 * 60_000
-    let old: Partial<CliMayteAccount> = { readAt: stale }
-    let ticks = 0
-    setCliMayteAccountsProvider(() => {
-      ticks++
-      return [
-        {
-          id: 'read-old',
-          num: 41,
-          name: 'old',
-          configDir: oldDir,
-          sessionPct: 24,
-          weekPct: 10,
-          ...old,
-        },
-        {
-          id: 'read-busy',
-          num: 42,
-          name: 'busy',
-          configDir: busyDir,
-          sessionPct: 60,
-          weekPct: 10,
-          readAt: Date.now(),
-        },
-      ]
-    })
-    const until = async (ok: () => boolean) => {
-      const deadline = Date.now() + 20_000
-      while (!ok() && Date.now() < deadline) await Bun.sleep(100)
-    }
-    // A whole tick has run since the accounts last changed.
-    const aTick = async () => {
-      const seen = ticks
-      await until(() => ticks >= seen + 2)
-    }
-    startCliMayte()
-    // A named setting: an auto task would shift the scorecard's every-4th pick for later suites.
-    const run = climayteRun({
-      model: 'sonnet',
-      effort: 'medium',
-      ownerWords: 'the placement under test',
-      tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
-    })
-    group = run.group
-    const id = run.workers[0]?.id as string
-    const view = () => climayteList({ id })[0]
-    await aTick()
-    // #41 has the most room: the task neither starts there on the old 24% nor goes to #42 instead.
-    expect(view()?.status).toBe('queued')
-    expect(view()?.attempts).toHaveLength(0)
-    expect(view()?.error).toContain('Reading the usage of #41')
-    // The read is asked and still running.
-    old = { readAt: stale, readTriedAt: Date.now(), refreshing: true }
-    await aTick()
-    expect(view()?.attempts).toHaveLength(0)
-    // The read failed (the reading is as old as before): the task goes on there.
-    old = { readAt: stale, readTriedAt: Date.now() }
-    await until(() => view()?.status === 'done' || view()?.status === 'failed')
-    expect(view()?.status).toBe('done')
-    expect(view()?.attempts[0]?.account.id).toBe('read-old')
-  }, 45_000)
+  test(
+    'the task waits for the read, and a read that fails lets it go on',
+    async () => {
+      setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      const stale = Date.now() - 21 * 60_000
+      let old: Partial<CliMayteAccount> = { readAt: stale }
+      let ticks = 0
+      setCliMayteAccountsProvider(() => {
+        ticks++
+        return [
+          {
+            id: 'read-old',
+            num: 41,
+            name: 'old',
+            configDir: oldDir,
+            sessionPct: 24,
+            weekPct: 10,
+            ...old,
+          },
+          {
+            id: 'read-busy',
+            num: 42,
+            name: 'busy',
+            configDir: busyDir,
+            sessionPct: 60,
+            weekPct: 10,
+            readAt: Date.now(),
+          },
+        ]
+      })
+      const until = async (ok: () => boolean, ms = 20_000) => {
+        const deadline = Date.now() + ms
+        while (!ok() && Date.now() < deadline) await Bun.sleep(100)
+      }
+      // A whole tick has run since the accounts last changed.
+      const aTick = async () => {
+        const seen = ticks
+        await until(() => ticks >= seen + 2)
+      }
+      startCliMayte()
+      // A named setting: an auto task would shift the scorecard's every-4th pick for later suites.
+      const run = climayteRun({
+        model: 'sonnet',
+        effort: 'medium',
+        ownerWords: 'the placement under test',
+        tasks: [{ prompt: 'do the fake task', cwd, title: 'fake' }],
+      })
+      group = run.group
+      const id = run.workers[0]?.id as string
+      const view = () => climayteList({ id })[0]
+      await aTick()
+      // #41 has the most room: the task neither starts there on the old 24% nor goes to #42 instead.
+      expect(view()?.status).toBe('queued')
+      expect(view()?.attempts).toHaveLength(0)
+      expect(view()?.error).toContain('Reading the usage of #41')
+      // The read is asked and still running.
+      old = { readAt: stale, readTriedAt: Date.now(), refreshing: true }
+      await aTick()
+      expect(view()?.attempts).toHaveLength(0)
+      // The read failed (the reading is as old as before): the task goes on there.
+      old = { readAt: stale, readTriedAt: Date.now() }
+      await until(() => view()?.status === 'done' || view()?.status === 'failed', 2 * ATTEMPT_MS)
+      expect(view()?.status).toBe('done')
+      expect(view()?.attempts[0]?.account.id).toBe('read-old')
+    },
+    2 * 20_000 + 2 * ATTEMPT_MS + 10_000,
+  )
 })
 
 describe('waitsForRoom', () => {

@@ -33,6 +33,7 @@ import {
   writeWave,
 } from '../src/climayte-wave'
 import { harnessKit } from './mocks/climayte-kit'
+import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 setSpendKit(harnessKit)
 
@@ -843,7 +844,8 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
       { id: 'judge-1', num: 1, name: 'judge', configDir: acct, sessionPct: 0, weekPct: 0 },
     ])
     startCliMayte()
-  }, 30_000) // five git commits take over the default 5 s on a loaded box
+    // Seventeen git commands, each 0.5-3.4 s on a box at ~90% CPU (2026-10-11), where 30 s ran out.
+  }, 90_000)
 
   afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
@@ -856,7 +858,8 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
 
   // climayteWait answers at once when no worker is active, so each pass also lets timers run: a verdict
   // gathered off the thread is written by the next tick, which a microtask-only loop would starve.
-  const until = async (ok: () => boolean, ms = 25_000) => {
+  // An attempt, then the wave's judge: git commands on the worker thread (each up to 3.4 s under load).
+  const until = async (ok: () => boolean, ms = 2 * ATTEMPT_MS) => {
     const deadline = Date.now() + ms
     while (!ok() && Date.now() < deadline) {
       await climayteWait({}, 1_000)
@@ -913,142 +916,148 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     ownerWords: 'the rung this test judges',
   })
 
-  test('commits are checked, a pass stays provisional and out of the scorecard, a later verdict replaces it', async () => {
-    const passes = opusHighCode()?.pass ?? 0
-    const run = climayteRun({
-      tasks: [
-        codeTask('inside', `inside FAKE-COMMITS:${sha.inside}`),
-        codeTask('outside', `outside FAKE-COMMITS:${sha.outside}`),
-        codeTask('off', `off FAKE-COMMITS:${sha.off}`),
-        codeTask('nothing', 'nothing to commit'),
-      ],
-      group: 'judge-group',
-      perAccount: 4,
-    })
-    groups.push(run.group)
-    const ids = run.workers.map((w) => w.id)
-    const wave = waveOf('wv-judge1', 'w-nobody', [
-      ['inside', ids[0] as string],
-      ['outside', ids[1] as string],
-      ['off', ids[2] as string],
-      ['nothing', ids[3] as string],
-    ])
-    writeWave(acct, wave)
-    for (const id of ids) {
-      const w = liveWorkers.get(id)
-      if (w) w.wave = wave.id
-    }
-    await until(
-      () => readWave(acct, wave.id)?.tasks.every((t) => t.state !== 'running') === true,
-      30_000,
-    )
-    await until(
-      () => (climayteList({ id: ids[2] as string })[0]?.verdicts?.length ?? 0) > 0,
-      10_000,
-    )
+  test(
+    'commits are checked, a pass stays provisional and out of the scorecard, a later verdict replaces it',
+    async () => {
+      const passes = opusHighCode()?.pass ?? 0
+      const run = climayteRun({
+        tasks: [
+          codeTask('inside', `inside FAKE-COMMITS:${sha.inside}`),
+          codeTask('outside', `outside FAKE-COMMITS:${sha.outside}`),
+          codeTask('off', `off FAKE-COMMITS:${sha.off}`),
+          codeTask('nothing', 'nothing to commit'),
+        ],
+        group: 'judge-group',
+        perAccount: 4,
+      })
+      groups.push(run.group)
+      const ids = run.workers.map((w) => w.id)
+      const wave = waveOf('wv-judge1', 'w-nobody', [
+        ['inside', ids[0] as string],
+        ['outside', ids[1] as string],
+        ['off', ids[2] as string],
+        ['nothing', ids[3] as string],
+      ])
+      writeWave(acct, wave)
+      for (const id of ids) {
+        const w = liveWorkers.get(id)
+        if (w) w.wave = wave.id
+      }
+      await until(() => readWave(acct, wave.id)?.tasks.every((t) => t.state !== 'running') === true)
+      await until(
+        () => (climayteList({ id: ids[2] as string })[0]?.verdicts?.length ?? 0) > 0,
+        ATTEMPT_MS,
+      )
 
-    const verdict = (i: number) => climayteList({ id: ids[i] as string })[0]?.verdicts?.[0]
-    expect(verdict(0)).toMatchObject({ verdict: 'pass', by: 'wave', provisional: true })
-    expect(verdict(1)).toMatchObject({ verdict: 'fail', by: 'wave' })
-    expect(verdict(1)?.note).toContain('outside the brief')
-    expect(verdict(2)).toMatchObject({ verdict: 'fail', by: 'wave' })
-    expect(verdict(2)?.note).toContain('is not on the branch')
-    expect(verdict(3)).toBeUndefined()
+      const verdict = (i: number) => climayteList({ id: ids[i] as string })[0]?.verdicts?.[0]
+      expect(verdict(0)).toMatchObject({ verdict: 'pass', by: 'wave', provisional: true })
+      expect(verdict(1)).toMatchObject({ verdict: 'fail', by: 'wave' })
+      expect(verdict(1)?.note).toContain('outside the brief')
+      expect(verdict(2)).toMatchObject({ verdict: 'fail', by: 'wave' })
+      expect(verdict(2)?.note).toContain('is not on the branch')
+      expect(verdict(3)).toBeUndefined()
 
-    const saved = readWave(acct, wave.id)
-    expect(saved?.tasks.map((t) => t.state)).toEqual([
-      'passed',
-      'escalated',
-      'escalated',
-      'escalated',
-    ])
-    expect(saved?.tasks[0]?.proof).toMatchObject({
-      check: null,
-      commits: [sha.inside],
-      paths: true,
-    })
-    expect(saved?.escalations.map((e) => e.key)).toContain('nothing')
+      const saved = readWave(acct, wave.id)
+      expect(saved?.tasks.map((t) => t.state)).toEqual([
+        'passed',
+        'escalated',
+        'escalated',
+        'escalated',
+      ])
+      expect(saved?.tasks[0]?.proof).toMatchObject({
+        check: null,
+        commits: [sha.inside],
+        paths: true,
+      })
+      expect(saved?.escalations.map((e) => e.key)).toContain('nothing')
 
-    // The provisional pass is not on the scorecard. The orchestrator's fail on the same work leaves
-    // one fail, not a pass and a fail. The row is the rung these workers ran (Opus high), named by
-    // model too: climayte.test.ts, run first in the same process, leaves a Sonnet high code row.
-    // Counted from the row as this test found it: since 5ee3c78f that file's check test finishes an
-    // Opus high code task of its own, so on Linux the row already holds its pass (CI, 2026-10-06).
-    const row = () => opusHighCode()
-    expect(row()?.pass ?? 0).toBe(passes)
-    const fails = row()?.fail ?? 0
-    expect(
-      climayteVerdict(ids[0] as string, { verdict: 'fail', note: 'wrong', retry: false }).ok,
-    ).toBe(true)
-    expect(row()?.pass ?? 0).toBe(passes)
-    expect(row()?.fail).toBe(fails + 1)
-    expect(climayteList({ id: ids[0] as string })[0]?.verdicts?.map((v) => v.by)).toEqual([
-      'wave',
-      'orchestrator',
-    ])
-  }, 60_000)
+      // The provisional pass is not on the scorecard. The orchestrator's fail on the same work leaves
+      // one fail, not a pass and a fail. The row is the rung these workers ran (Opus high), named by
+      // model too: climayte.test.ts, run first in the same process, leaves a Sonnet high code row.
+      // Counted from the row as this test found it: since 5ee3c78f that file's check test finishes an
+      // Opus high code task of its own, so on Linux the row already holds its pass (CI, 2026-10-06).
+      const row = () => opusHighCode()
+      expect(row()?.pass ?? 0).toBe(passes)
+      const fails = row()?.fail ?? 0
+      expect(
+        climayteVerdict(ids[0] as string, { verdict: 'fail', note: 'wrong', retry: false }).ok,
+      ).toBe(true)
+      expect(row()?.pass ?? 0).toBe(passes)
+      expect(row()?.fail).toBe(fails + 1)
+      expect(climayteList({ id: ids[0] as string })[0]?.verdicts?.map((v) => v.by)).toEqual([
+        'wave',
+        'orchestrator',
+      ])
+    },
+    3 * ATTEMPT_MS + 10_000,
+  )
 
-  test('a manager runs on the 1-hour cache and starts a fresh session from the wave state past the context limit', async () => {
-    const manager = climayteRun({
-      tasks: [
-        {
-          prompt: `manage FAKE-SPEND:2000000 FAKE-CONTEXT:${MANAGER_CONTEXT_TOKENS + 10_000}`,
-          cwd: repo,
-          title: 'manager',
-          kind: 'manage',
-        },
-      ],
-      group: 'mgr-wv-judge2',
-    })
-    groups.push(manager.group)
-    const mid = manager.workers[0]?.id as string
-    const wave = waveOf('wv-judge2', mid, [['late', null]])
-    writeWave(acct, wave)
-    const m = liveWorkers.get(mid) as CliMayteWorker
-    m.wave = wave.id
-    // Its first turn ends with a task still to come: held.
-    await until(() => climayteList({ id: mid })[0]?.hold === 'wave')
-    expect(climayteList({ id: mid })[0]).toMatchObject({
-      status: 'waiting',
-      hold: 'wave',
-      model: 'claude-haiku-5-5', // a manager starts on Haiku 5.5 medium like every kind (2026-10-07)
-      effort: 'medium',
-    })
+  test(
+    'a manager runs on the 1-hour cache and starts a fresh session from the wave state past the context limit',
+    async () => {
+      const manager = climayteRun({
+        tasks: [
+          {
+            prompt: `manage FAKE-SPEND:2000000 FAKE-CONTEXT:${MANAGER_CONTEXT_TOKENS + 10_000}`,
+            cwd: repo,
+            title: 'manager',
+            kind: 'manage',
+          },
+        ],
+        group: 'mgr-wv-judge2',
+      })
+      groups.push(manager.group)
+      const mid = manager.workers[0]?.id as string
+      const wave = waveOf('wv-judge2', mid, [['late', null]])
+      writeWave(acct, wave)
+      const m = liveWorkers.get(mid) as CliMayteWorker
+      m.wave = wave.id
+      // Its first turn ends with a task still to come: held.
+      await until(() => climayteList({ id: mid })[0]?.hold === 'wave')
+      expect(climayteList({ id: mid })[0]).toMatchObject({
+        status: 'waiting',
+        hold: 'wave',
+        model: 'claude-haiku-5-5', // a manager starts on Haiku 5.5 medium like every kind (2026-10-07)
+        effort: 'medium',
+      })
 
-    // The task arrives and passes on its commit: the wave is done, which wakes the manager at once.
-    const task = climayteRun({
-      tasks: [codeTask('late', `late FAKE-COMMITS:${sha.inside}`)],
-      group: 'judge-late',
-    })
-    groups.push(task.group)
-    const tid = task.workers[0]?.id as string
-    writeWave(acct, waveOf(wave.id, mid, [['late', tid]]))
-    const t = liveWorkers.get(tid) as CliMayteWorker
-    t.wave = wave.id
-    await until(
-      () =>
-        (climayteList({ id: mid })[0]?.attempts.length ?? 0) >= 2 &&
-        climayteList({ id: mid })[0]?.status !== 'running',
-    )
+      // The task arrives and passes on its commit: the wave is done, which wakes the manager at once.
+      const task = climayteRun({
+        tasks: [codeTask('late', `late FAKE-COMMITS:${sha.inside}`)],
+        group: 'judge-late',
+      })
+      groups.push(task.group)
+      const tid = task.workers[0]?.id as string
+      writeWave(acct, waveOf(wave.id, mid, [['late', tid]]))
+      const t = liveWorkers.get(tid) as CliMayteWorker
+      t.wave = wave.id
+      await until(
+        () =>
+          (climayteList({ id: mid })[0]?.attempts.length ?? 0) >= 2 &&
+          climayteList({ id: mid })[0]?.status !== 'running',
+        3 * ATTEMPT_MS, // the task's attempt, its judge, and the manager's second
+      )
 
-    const ran = launches().filter(
-      (l) => l.prompt.startsWith('manage') || l.prompt.includes('# Wave wv-judge2'),
-    )
-    expect(ran).toHaveLength(2)
-    // The second wake is a new session (no resume), told the wave as the store holds it.
-    expect(ran[1]?.resume).toBe(false)
-    expect(ran[1]?.session).not.toBe(ran[0]?.session)
-    expect(ran[1]?.prompt).toContain('You are the manager of a wave')
-    expect(ran[1]?.prompt).toContain('- late: passed')
-    // The 1-hour cache for the manager, the 5-minute one for the task, and the attempts say so.
-    expect(ran.map((l) => l.ttl)).toEqual(['1h', '1h'])
-    expect(launches().find((l) => l.prompt.startsWith('late'))?.ttl).toBe('5m')
+      const ran = launches().filter(
+        (l) => l.prompt.startsWith('manage') || l.prompt.includes('# Wave wv-judge2'),
+      )
+      expect(ran).toHaveLength(2)
+      // The second wake is a new session (no resume), told the wave as the store holds it.
+      expect(ran[1]?.resume).toBe(false)
+      expect(ran[1]?.session).not.toBe(ran[0]?.session)
+      expect(ran[1]?.prompt).toContain('You are the manager of a wave')
+      expect(ran[1]?.prompt).toContain('- late: passed')
+      // The 1-hour cache for the manager, the 5-minute one for the task, and the attempts say so.
+      expect(ran.map((l) => l.ttl)).toEqual(['1h', '1h'])
+      expect(launches().find((l) => l.prompt.startsWith('late'))?.ttl).toBe('5m')
 
-    // The totals say what managing the wave cost, per wave.
-    const mine = climayteTotals().managerPct.find((p) => p.wave === 'wv-judge2')
-    expect(mine?.wakes).toBe(2)
-    expect(mine?.pct).toBeGreaterThan(0)
-  }, 90_000)
+      // The totals say what managing the wave cost, per wave.
+      const mine = climayteTotals().managerPct.find((p) => p.wave === 'wv-judge2')
+      expect(mine?.wakes).toBe(2)
+      expect(mine?.pct).toBeGreaterThan(0)
+    },
+    5 * ATTEMPT_MS + 10_000,
+  )
 })
 
 describe('a wave is judged wherever it is stored, not only on the account its task ran on', () => {
@@ -1463,49 +1472,66 @@ describe('judging a wave task by its commits (field notes 93 and 94)', () => {
     put('src/a.txt', 'one\n')
     put('docs/x.md', 'x\n')
     commit('base')
-  })
+  }, 30_000) // seven git commands, each 0.5-3.4 s on a box at ~90% CPU (2026-10-11); 5 s ran out
   afterAll(() => rmSync(repo, { recursive: true, force: true }))
+  // Each test is about thirty git commands, its two judgeWaveTask calls included: 8 s alone, past 60 s
+  // on a box at ~90% CPU (2026-10-11), where each took up to 3.4 s.
+  const JUDGE_TEST_MS = 150_000
 
-  test('a commit rebased onto a moved branch is found by its patch-id and passes', async () => {
-    git('checkout', '-q', '-b', 'work')
-    put('src/b.txt', 'task\n')
-    const mine = commit('task work')
-    git('checkout', '-q', 'main')
-    put('docs/other.md', 'someone else\n')
-    commit('moved on')
-    git('cherry-pick', mine)
-    const landed = git('rev-parse', 'HEAD')
-    expect(landed).not.toBe(mine)
-    const j = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${mine}`, null)
-    expect(j.verdict).toBe('pass')
-    expect(j.note).toContain(`found on main as ${landed.slice(0, 10)} after a rebase`)
-    git('checkout', '-q', 'work')
-    put('src/unlanded.txt', 'never landed\n')
-    const stray = commit('never landed')
-    git('checkout', '-q', 'main')
-    const none = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${stray}`, null)
-    expect(none.verdict).toBe('fail')
-    expect(none.note).toContain('is not on the branch main')
-  }, 60_000)
+  test(
+    'a commit rebased onto a moved branch is found by its patch-id and passes',
+    async () => {
+      git('checkout', '-q', '-b', 'work')
+      put('src/b.txt', 'task\n')
+      const mine = commit('task work')
+      git('checkout', '-q', 'main')
+      put('docs/other.md', 'someone else\n')
+      commit('moved on')
+      git('cherry-pick', mine)
+      const landed = git('rev-parse', 'HEAD')
+      expect(landed).not.toBe(mine)
+      const j = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${mine}`, null)
+      expect(j.verdict).toBe('pass')
+      expect(j.note).toContain(`found on main as ${landed.slice(0, 10)} after a rebase`)
+      git('checkout', '-q', 'work')
+      put('src/unlanded.txt', 'never landed\n')
+      const stray = commit('never landed')
+      git('checkout', '-q', 'main')
+      const none = await judgeWaveTask(
+        task,
+        { cwd: repo, branch: 'main' },
+        `Commits: ${stray}`,
+        null,
+      )
+      expect(none.verdict).toBe('fail')
+      expect(none.note).toContain('is not on the branch main')
+    },
+    JUDGE_TEST_MS,
+  )
 
-  test('an edit outside paths that the next commit reverts passes; a kept one fails', async () => {
-    const before = git('rev-parse', 'HEAD')
-    put('docs/x.md', 'changed\n')
-    put('src/c.txt', 'c\n')
-    const c1 = commit('edit too much')
-    put('docs/x.md', 'x\n')
-    const c2 = commit('restore docs')
-    const ok = await judgeWaveTask(
-      task,
-      { cwd: repo, branch: 'main' },
-      `Commits: ${c1} ${c2}`,
-      null,
-    )
-    expect(ok.verdict).toBe('pass')
-    expect(ok.proof.paths).toBe(true)
-    const bad = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1}`, null)
-    expect(bad.verdict).toBe('fail')
-    expect(bad.note).toContain('docs/x.md')
-    expect(before).not.toBe(c2)
-  }, 60_000)
+  test(
+    'an edit outside paths that the next commit reverts passes; a kept one fails',
+    async () => {
+      git('checkout', '-q', 'main') // on main whatever the test before left checked out
+      const before = git('rev-parse', 'HEAD')
+      put('docs/x.md', 'changed\n')
+      put('src/c.txt', 'c\n')
+      const c1 = commit('edit too much')
+      put('docs/x.md', 'x\n')
+      const c2 = commit('restore docs')
+      const ok = await judgeWaveTask(
+        task,
+        { cwd: repo, branch: 'main' },
+        `Commits: ${c1} ${c2}`,
+        null,
+      )
+      expect(ok.verdict).toBe('pass')
+      expect(ok.proof.paths).toBe(true)
+      const bad = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1}`, null)
+      expect(bad.verdict).toBe('fail')
+      expect(bad.note).toContain('docs/x.md')
+      expect(before).not.toBe(c2)
+    },
+    JUDGE_TEST_MS,
+  )
 })

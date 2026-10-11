@@ -29,7 +29,12 @@ if (configDir)
 
 const emit = (ev: unknown) => process.stdout.write(`${JSON.stringify(ev)}\n`)
 const line = (ev: unknown) => `${JSON.stringify(ev)}\n`
-const readJson = (path: string | null): Record<string, unknown> | null => {
+// How long a turn on a fake-overage or fake-near-limit account runs on when nobody stops it: the seconds its
+// marker names, else 6. A test that expects the stop names more than a stop takes on a loaded box (3-5 s
+// from the daemon's decision to the CLI's end, measured 2026-10-11), so the stop decides, not a race.
+const leftAloneMs = (marker: string) =>
+  (Number(/\d+/.exec(readFileSync(join(configDir, marker), 'utf8'))?.[0]) || 6) * 1000
+const readJson =(path: string | null): Record<string, unknown> | null => {
   try {
     return path ? JSON.parse(readFileSync(path, 'utf8')) : null
   } catch {
@@ -192,7 +197,7 @@ if (existsSync(join(configDir, 'fake-identity'))) {
 if (existsSync(join(configDir, 'fake-overage'))) {
   // An account with paid extra usage switched on: the window runs out, the CLI says so in its own
   // rate_limit_event (shape measured live 2026-09-30) and carries on, billing overage, for as
-  // long as nobody stops it.
+  // long as nobody stops it (leftAloneMs).
   const dir = join(configDir, 'projects', 'fake-proj')
   mkdirSync(dir, { recursive: true })
   appendFileSync(
@@ -213,15 +218,15 @@ if (existsSync(join(configDir, 'fake-overage'))) {
     },
   })
   emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Still working, on overage.' }] } })
-  await Bun.sleep(6_000)
+  await Bun.sleep(leftAloneMs('fake-overage'))
   emit({ type: 'result', subtype: 'success', is_error: false, result: 'FINISHED ON OVERAGE', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
   process.exit(0)
 }
 
 if (existsSync(join(configDir, 'fake-near-limit'))) {
   // An account that CAN bill (extra usage switched on), at 98.5% of its 5-hour window: the next
-  // requests would run into overage. Left alone it finishes here. A marker reading 'rising': the
-  // account reads 50% on the first request and climbs to 98.5% on the next.
+  // requests would run into overage. Left alone it finishes here (leftAloneMs). A marker reading 'rising':
+  // the account reads 50% on the first request and climbs to 98.5% on the next.
   const dir = join(configDir, 'projects', 'fake-proj')
   mkdirSync(dir, { recursive: true })
   appendFileSync(
@@ -251,7 +256,7 @@ if (existsSync(join(configDir, 'fake-near-limit'))) {
   }
   reading(0.985)
   emit({ type: 'assistant', session_id: sessionId, message: { role: 'assistant', model: 'fake-model', content: [{ type: 'text', text: 'Still working, near the limit.' }] } })
-  await Bun.sleep(6_000)
+  await Bun.sleep(leftAloneMs('fake-near-limit'))
   emit({ type: 'result', subtype: 'success', is_error: false, result: 'FINISHED NEAR LIMIT', session_id: sessionId, total_cost_usd: 1, num_turns: 1 })
   process.exit(0)
 }
@@ -297,7 +302,9 @@ if (existsSync(join(configDir, 'fake-winddown'))) {
     if (!signal || !existsSync(signal)) return null
     return JSON.parse(readFileSync(signal, 'utf8')).hookSpecificOutput.additionalContext
   }
-  for (let i = 0; i < 50; i++) {
+  // Up to 30 s for the signal: the daemon reads the 87% and writes the signal on its tick, which a loaded
+  // box holds back (2026-10-11).
+  for (let i = 0; i < 150; i++) {
     await Bun.sleep(200)
     const context = await signalContext()
     if (!context) continue

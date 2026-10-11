@@ -25,6 +25,7 @@ import { waitsForHome } from '../src/climayte-placement'
 import { clearRemote, setRemote } from '../src/climayte-remote'
 import { isPidAlive } from '../src/core/process'
 import { harnessKit } from './mocks/climayte-kit'
+import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 setSpendKit(harnessKit)
 
@@ -456,25 +457,33 @@ describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
     expect(held?.error).not.toContain('per_account_strict')
   }, 40_000)
 
-  test('a limit that resets in 20 minutes moves at once; one that resets in 3 waits at home', async () => {
-    fake()
-    setCliMayteAccountsProvider(() => [
-      acct('q-home', 161, dir('q-home', ['fake-quota', '20']), 0),
-      acct('q-other', 162, dir('q-other'), 20),
-      acct('q3-home', 171, dir('q3-home', ['fake-quota', '3']), 0),
-      acct('q3-other', 172, dir('q3-other'), 20),
-    ])
-    startCliMayte()
-    const moves = dispatch('q-move', 'moves on', { accounts: ['q-home', 'q-other'] })
-    const done = await until(moves, (x) => x?.status === 'done' || x?.status === 'failed', 20_000)
-    expect(done?.status).toBe('done')
-    expect(done?.attempts[0]?.outcome).toBe('quota')
-    expect(launchedOn(moves)).toEqual(['#161', '#162'])
+  test(
+    'a limit that resets in 20 minutes moves at once; one that resets in 3 waits at home',
+    async () => {
+      fake()
+      setCliMayteAccountsProvider(() => [
+        acct('q-home', 161, dir('q-home', ['fake-quota', '20']), 0),
+        acct('q-other', 162, dir('q-other'), 20),
+        acct('q3-home', 171, dir('q3-home', ['fake-quota', '3']), 0),
+        acct('q3-other', 172, dir('q3-other'), 20),
+      ])
+      startCliMayte()
+      const moves = dispatch('q-move', 'moves on', { accounts: ['q-home', 'q-other'] })
+      const done = await until(
+        moves,
+        (x) => x?.status === 'done' || x?.status === 'failed',
+        2 * ATTEMPT_MS,
+      )
+      expect(done?.status).toBe('done')
+      expect(done?.attempts[0]?.outcome).toBe('quota')
+      expect(launchedOn(moves)).toEqual(['#161', '#162'])
 
-    const waits = dispatch('q-wait', 'waits at home', { accounts: ['q3-home', 'q3-other'] })
-    const held = await until(waits, (x) => x?.status === 'waiting', 15_000)
-    expect(held?.status).toBe('waiting')
-    expect(held?.error).toContain('Waiting for its own account #171')
-    expect(launchedOn(waits)).toEqual(['#171'])
-  }, 45_000)
+      const waits = dispatch('q-wait', 'waits at home', { accounts: ['q3-home', 'q3-other'] })
+      const held = await until(waits, (x) => x?.status === 'waiting', ATTEMPT_MS)
+      expect(held?.status).toBe('waiting')
+      expect(held?.error).toContain('Waiting for its own account #171')
+      expect(launchedOn(waits)).toEqual(['#171'])
+    },
+    3 * ATTEMPT_MS + 10_000,
+  )
 })

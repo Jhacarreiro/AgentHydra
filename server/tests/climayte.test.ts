@@ -75,6 +75,7 @@ import { KitStore } from '../src/kit/store'
 import { setProviderSettings } from '../src/provider-settings'
 import { parseResetTime } from '../src/usage'
 import { harnessKit } from './mocks/climayte-kit'
+import { ATTEMPT_MS } from './mocks/climayte-timing'
 
 setSpendKit(harnessKit)
 
@@ -1367,7 +1368,8 @@ describe('integration: paid extra usage is never spent', () => {
   const overDir = join(root, 'acct-over')
   const freeDir = join(root, 'acct-free')
   for (const d of [cwd, overDir, freeDir]) mkdirSync(d, { recursive: true })
-  writeFileSync(join(overDir, 'fake-overage'), '')
+  // 30 s on overage unless stopped, longer than a stop takes on a loaded box (fake-claude's leftAloneMs).
+  writeFileSync(join(overDir, 'fake-overage'), '30')
   const groups: string[] = []
 
   afterAll(async () => {
@@ -1378,48 +1380,22 @@ describe('integration: paid extra usage is never spent', () => {
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('a turn that starts billing overage is stopped at once and the session moves on', async () => {
-    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    // The overage account scores lower, so it is picked first. Left alone, the fake would go on
-    // for 6 s and finish there on overage ('FINISHED ON OVERAGE', no move).
-    setCliMayteAccountsProvider(() => [
-      { id: 'over-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
-      { id: 'over-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
-    ])
-    startCliMayte()
-    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
-    groups.push(run.group)
-    const id = run.workers[0]?.id as string
-
-    const deadline = Date.now() + 15_000
-    let w = climayteList({ id })[0]
-    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = climayteList({ id })[0]
-    }
-
-    expect(w?.status).toBe('done')
-    expect(w?.result).toBe('FAKE DONE')
-    expect(w?.moves).toBe(1)
-    expect(w?.attempts[0]?.outcome).toBe('quota')
-    expect(w?.attempts[0]?.notice).toContain('extra usage')
-  }, 20_000)
-
-  test('with allowExtraUsage on, the turn is not stopped and finishes on the overage account', async () => {
-    setProviderSettings({ allowExtraUsage: true })
-    try {
+  test(
+    'a turn that starts billing overage is stopped at once and the session moves on',
+    async () => {
       setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-      // New account ids: the test above walled 'over-1'.
+      // The overage account scores lower, so it is picked first. Left alone, the fake would go on
+      // for 30 s and finish there on overage ('FINISHED ON OVERAGE', no move).
       setCliMayteAccountsProvider(() => [
-        { id: 'allow-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
-        { id: 'allow-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+        { id: 'over-1', num: 1, name: 'overage', configDir: overDir, sessionPct: 0, weekPct: 0 },
+        { id: 'over-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
       ])
       startCliMayte()
-      const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage allowed' }] })
+      const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'overage' }] })
       groups.push(run.group)
       const id = run.workers[0]?.id as string
 
-      const deadline = Date.now() + 15_000
+      const deadline = Date.now() + 2 * ATTEMPT_MS
       let w = climayteList({ id })[0]
       while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
         await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
@@ -1427,22 +1403,71 @@ describe('integration: paid extra usage is never spent', () => {
       }
 
       expect(w?.status).toBe('done')
-      expect(w?.result).toBe('FINISHED ON OVERAGE')
-      expect(w?.moves).toBe(0)
-      expect(w?.attempts).toHaveLength(1)
-      // A dispatch-to-done run is four journal lines: its turn's text, then done with its turns and cost.
-      const log = climayteJournal({ id })
-      expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'turn-end', 'done'])
-      expect(log[2]).toMatchObject({ account: '#1', said: 'FINISHED ON OVERAGE' })
-      expect(log[3]).toMatchObject({ account: '#1', turns: 1 })
-      expect(typeof log[3]?.costUsd).toBe('number')
-      expect(climayteJournalLines({ id })[3]).toMatch(
-        /^\d\d:\d\d:\d\d w-\w+ done on #1: \$\d+\.\d\d, 1 turn \(/,
-      )
-    } finally {
-      setProviderSettings({ allowExtraUsage: false })
-    }
-  }, 20_000)
+      expect(w?.result).toBe('FAKE DONE')
+      expect(w?.moves).toBe(1)
+      expect(w?.attempts[0]?.outcome).toBe('quota')
+      expect(w?.attempts[0]?.notice).toContain('extra usage')
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
+
+  test(
+    'with allowExtraUsage on, the turn is not stopped and finishes on the overage account',
+    async () => {
+      setProviderSettings({ allowExtraUsage: true })
+      try {
+        setCliMayteClaudeCommand([
+          process.execPath,
+          join(import.meta.dir, 'mocks', 'fake-claude.ts'),
+        ])
+        // New account ids: the test above walled 'over-1'. Its own folder: this turn runs its 6 s out.
+        const allowDir = join(root, 'acct-allow')
+        mkdirSync(allowDir, { recursive: true })
+        writeFileSync(join(allowDir, 'fake-overage'), '')
+        setCliMayteAccountsProvider(() => [
+          {
+            id: 'allow-1',
+            num: 1,
+            name: 'overage',
+            configDir: allowDir,
+            sessionPct: 0,
+            weekPct: 0,
+          },
+          { id: 'allow-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+        ])
+        startCliMayte()
+        const run = climayteRun({
+          tasks: [{ prompt: 'a long task', cwd, title: 'overage allowed' }],
+        })
+        groups.push(run.group)
+        const id = run.workers[0]?.id as string
+
+        const deadline = Date.now() + 2 * ATTEMPT_MS
+        let w = climayteList({ id })[0]
+        while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+          await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+          w = climayteList({ id })[0]
+        }
+
+        expect(w?.status).toBe('done')
+        expect(w?.result).toBe('FINISHED ON OVERAGE')
+        expect(w?.moves).toBe(0)
+        expect(w?.attempts).toHaveLength(1)
+        // A dispatch-to-done run is four journal lines: its turn's text, then done with its turns and cost.
+        const log = climayteJournal({ id })
+        expect(log.map((e) => e.event)).toEqual(['dispatched', 'launched', 'turn-end', 'done'])
+        expect(log[2]).toMatchObject({ account: '#1', said: 'FINISHED ON OVERAGE' })
+        expect(log[3]).toMatchObject({ account: '#1', turns: 1 })
+        expect(typeof log[3]?.costUsd).toBe('number')
+        expect(climayteJournalLines({ id })[3]).toMatch(
+          /^\d\d:\d\d:\d\d w-\w+ done on #1: \$\d+\.\d\d, 1 turn \(/,
+        )
+      } finally {
+        setProviderSettings({ allowExtraUsage: false })
+      }
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 
   /** A task on an account that reads 98.5% (and could bill), run until it ends; 'rising': the
    *  account reads 50% first and climbs to 98.5% (fake-claude's fake-near-limit). */
@@ -1450,7 +1475,8 @@ describe('integration: paid extra usage is never spent', () => {
     const kind = caps ? 'capped' : rising ? 'rising' : 'full'
     const nearDir = join(root, `acct-near-${kind}`)
     mkdirSync(nearDir, { recursive: true })
-    writeFileSync(join(nearDir, 'fake-near-limit'), rising ? 'rising' : '')
+    // 30 s at 98.5% unless stopped, longer than a stop takes on a loaded box (fake-claude's leftAloneMs).
+    writeFileSync(join(nearDir, 'fake-near-limit'), rising ? 'rising 30' : '30')
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     const near = caps ? 'cap-1' : rising ? 'rise-1' : 'near-1'
     setCliMayteAccountsProvider(() => [
@@ -1461,7 +1487,7 @@ describe('integration: paid extra usage is never spent', () => {
     const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title }] })
     groups.push(run.group)
     const id = run.workers[0]?.id as string
-    const deadline = Date.now() + 15_000
+    const deadline = Date.now() + 2 * ATTEMPT_MS
     let w = climayteList({ id })[0]
     while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
       await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
@@ -1470,53 +1496,65 @@ describe('integration: paid extra usage is never spent', () => {
     return { id, w }
   }
 
-  test('a run that climbs into the 90% ceiling is stopped there, short of billing, and goes on elsewhere', async () => {
-    const { id, w } = await nearLimitRun('climbs to the ceiling', true)
-    expect(w?.status).toBe('done')
-    expect(w?.moves).toBe(1)
-    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
-    expect(w?.attempts[0]?.notice).toContain("CliMayte's ceiling of 90%, well short of the limit")
-    const totals = climayteTotals()
-    expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(true)
-    expect(totals.placedPastList.some((p) => p.id === id)).toBe(false)
-  }, 20_000)
+  test(
+    'a run that climbs into the 90% ceiling is stopped there, short of billing, and goes on elsewhere',
+    async () => {
+      const { id, w } = await nearLimitRun('climbs to the ceiling', true)
+      expect(w?.status).toBe('done')
+      expect(w?.moves).toBe(1)
+      expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+      expect(w?.attempts[0]?.notice).toContain("CliMayte's ceiling of 90%, well short of the limit")
+      const totals = climayteTotals()
+      expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(true)
+      expect(totals.placedPastList.some((p) => p.id === id)).toBe(false)
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 
-  test("under the owner's 40% cap a run is stopped at 45, the cap's ceiling, and goes on elsewhere", async () => {
-    // Owner, 2026-10-09: "up to 50% of five-hour". The account reads 50% on the first request, where
-    // the fleet's ceiling of 90 would have let the run go on.
-    const { w } = await nearLimitRun('capped account', true, { maxSessionPct: 40 })
-    expect(w?.status).toBe('done')
-    expect(w?.moves).toBe(1)
-    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
-    expect(w?.attempts[0]?.notice).toContain("past the ceiling of 45% its owner's cap sets")
-  }, 20_000)
+  test(
+    "under the owner's 40% cap a run is stopped at 45, the cap's ceiling, and goes on elsewhere",
+    async () => {
+      // Owner, 2026-10-09: "up to 50% of five-hour". The account reads 50% on the first request, where
+      // the fleet's ceiling of 90 would have let the run go on.
+      const { w } = await nearLimitRun('capped account', true, { maxSessionPct: 40 })
+      expect(w?.status).toBe('done')
+      expect(w?.moves).toBe(1)
+      expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+      expect(w?.attempts[0]?.notice).toContain("past the ceiling of 45% its owner's cap sets")
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 
-  test('at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere', async () => {
-    // Left alone, the fake finishes on the near-limit account after 6 s ('FINISHED NEAR LIMIT').
-    const { id, w } = await nearLimitRun('near the limit', false)
-    expect(w?.status).toBe('done')
-    expect(w?.result).toBe('FAKE DONE')
-    expect(w?.moves).toBe(1)
-    // Owner, 2026-10-01: "85 with a max of 90". The account reads 98.5% (and could bill): the
-    // ceiling stops it first, and that is a ceiling stop, not a limit hit. Placed at 0% and found
-    // at 98.5% on its first request, it is a placement on a stale reading (pastOnArrival), not a
-    // stop line that came too late: listed apart from the ceiling stops.
-    expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
-    expect(w?.attempts[0]?.notice).toContain(
-      "Found at 99% of its 5-hour usage on its first request, past CliMayte's ceiling of 90%",
-    )
-    const totals = climayteTotals()
-    expect(totals.limitHitList.some((h) => h.id === id)).toBe(false)
-    expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(false)
-    expect(totals.placedPastList.find((p) => p.id === id)).toMatchObject({
-      pct: 98.5,
-      placedPct: 0,
-    })
-    expect(climayteJournal({ id }).find((e) => e.event === 'limit')).toMatchObject({
-      ceiling: true,
-      onArrival: true,
-    })
-  }, 20_000)
+  test(
+    'at the 90% ceiling the turn is stopped, short of billing and of the limit, and goes on elsewhere',
+    async () => {
+      // Left alone, the fake finishes on the near-limit account after 30 s ('FINISHED NEAR LIMIT').
+      const { id, w } = await nearLimitRun('near the limit', false)
+      expect(w?.status).toBe('done')
+      expect(w?.result).toBe('FAKE DONE')
+      expect(w?.moves).toBe(1)
+      // Owner, 2026-10-01: "85 with a max of 90". The account reads 98.5% (and could bill): the
+      // ceiling stops it first, and that is a ceiling stop, not a limit hit. Placed at 0% and found
+      // at 98.5% on its first request, it is a placement on a stale reading (pastOnArrival), not a
+      // stop line that came too late: listed apart from the ceiling stops.
+      expect(w?.attempts[0]).toMatchObject({ outcome: 'quota', ceiling: true })
+      expect(w?.attempts[0]?.notice).toContain(
+        "Found at 99% of its 5-hour usage on its first request, past CliMayte's ceiling of 90%",
+      )
+      const totals = climayteTotals()
+      expect(totals.limitHitList.some((h) => h.id === id)).toBe(false)
+      expect(totals.ceilingStopList.some((c) => c.id === id)).toBe(false)
+      expect(totals.placedPastList.find((p) => p.id === id)).toMatchObject({
+        pct: 98.5,
+        placedPct: 0,
+      })
+      expect(climayteJournal({ id }).find((e) => e.event === 'limit')).toMatchObject({
+        ceiling: true,
+        onArrival: true,
+      })
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 
   test("a run that found its account past the ceiling is not counted as CliMayte's peak", () => {
     // 2026-10-02: #120 had no reading; its first request was refused at 129%, and the totals showed
@@ -1716,80 +1754,88 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('it writes a handoff and the task goes on from it in a new session elsewhere', async () => {
-    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
-    // The near-limit account scores lower, so it is picked first. Left alone it works on and
-    // finishes there ('NO WIND-DOWN'); the other account has room.
-    setCliMayteAccountsProvider(() => [
-      { id: 'wind-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
-      { id: 'wind-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
-    ])
-    startCliMayte()
-    const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'wind down' }] })
-    group = run.group
-    const id = run.workers[0]?.id as string
-    const firstSession = run.workers[0]?.sessionId as string
+  test(
+    'it writes a handoff and the task goes on from it in a new session elsewhere',
+    async () => {
+      setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+      // The near-limit account scores lower, so it is picked first. Left alone it works on and
+      // finishes there ('NO WIND-DOWN'); the other account has room.
+      setCliMayteAccountsProvider(() => [
+        { id: 'wind-1', num: 1, name: 'near', configDir: nearDir, sessionPct: 0, weekPct: 0 },
+        { id: 'wind-2', num: 2, name: 'free', configDir: freeDir, sessionPct: 50, weekPct: 50 },
+      ])
+      startCliMayte()
+      const run = climayteRun({ tasks: [{ prompt: 'a long task', cwd, title: 'wind down' }] })
+      group = run.group
+      const id = run.workers[0]?.id as string
+      const firstSession = run.workers[0]?.sessionId as string
 
-    const deadline = Date.now() + 15_000
-    let w = climayteList({ id })[0]
-    while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
-      await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
-      w = climayteList({ id })[0]
-    }
+      const deadline = Date.now() + 2 * ATTEMPT_MS
+      let w = climayteList({ id })[0]
+      while (w && w.status !== 'done' && w.status !== 'failed' && Date.now() < deadline) {
+        await climayteWait({ id }, Math.min(5_000, deadline - Date.now()))
+        w = climayteList({ id })[0]
+      }
 
-    expect(w?.status).toBe('done')
-    expect(w?.result).toBe('FAKE DONE FROM HANDOFF')
-    // The turns before the handoff are kept, labelled, not mixed into the continuation's report.
-    expect(climayteGet(id)?.reports?.at(-1)).toMatchObject({ results: ['Handoff written.'] })
-    expect(climayteGet(id)?.reports?.at(-1)?.message).toEndWith('(before a handoff)')
-    expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([
-      ['wind-1', 'handoff'],
-      ['wind-2', 'done'],
-    ])
-    expect(w?.sessions).toEqual([firstSession])
-    expect(w?.sessionId).not.toBe(firstSession)
-  }, 20_000)
+      expect(w?.status).toBe('done')
+      expect(w?.result).toBe('FAKE DONE FROM HANDOFF')
+      // The turns before the handoff are kept, labelled, not mixed into the continuation's report.
+      expect(climayteGet(id)?.reports?.at(-1)).toMatchObject({ results: ['Handoff written.'] })
+      expect(climayteGet(id)?.reports?.at(-1)?.message).toEndWith('(before a handoff)')
+      expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([
+        ['wind-1', 'handoff'],
+        ['wind-2', 'done'],
+      ])
+      expect(w?.sessions).toEqual([firstSession])
+      expect(w?.sessionId).not.toBe(firstSession)
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 
-  test('with no room elsewhere it still stops at the line, and the task waits for the reset', async () => {
-    // Owner, 2026-10-01: never the limit, stop at 85-90%. The account reports 87% (as
-    // signedInAccounts merges a running worker's reading, so does this provider).
-    const aloneDir = join(root, 'acct-alone')
-    mkdirSync(aloneDir, { recursive: true })
-    writeFileSync(join(aloneDir, 'fake-winddown'), '')
-    setCliMayteAccountsProvider(() => {
-      const live = climayteLiveReadings().get('wind-3')
-      return [
-        {
-          id: 'wind-3',
-          num: 3,
-          name: 'alone',
-          configDir: aloneDir,
-          sessionPct: live?.sessionPct ?? 0,
-          weekPct: 0,
-          sessionResetsAt: live?.sessionResetsAt ?? null,
-        },
-      ]
-    })
-    const run = climayteRun({
-      tasks: [{ prompt: 'a long task', cwd, title: 'alone' }],
-      group: 'wind-alone',
-    })
-    const id = run.workers[0]?.id as string
-    const deadline = Date.now() + 15_000
-    let w = climayteList({ id })[0]
-    while (w && w.status !== 'waiting' && w.status !== 'failed' && Date.now() < deadline) {
-      await climayteWait({ id }, Math.min(2_000, deadline - Date.now()))
-      w = climayteList({ id })[0]
-    }
-    climayteCancel({ group: 'wind-alone' })
-    expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([['wind-3', 'handoff']])
-    expect(w?.status).toBe('waiting')
-    expect(w?.error).toContain('85% stop line')
-    const resetsAt = climayteLiveReadings().get('wind-3')?.sessionResetsAt as number
-    expect(w?.waitUntil).toBe(new Date(resetsAt).toISOString())
-    // Its peak is on record: 87, inside the 85-90 band.
-    expect(climayteTotals().peaks.find((p) => p.account === '#3')?.peakPct).toBe(87)
-  }, 20_000)
+  test(
+    'with no room elsewhere it still stops at the line, and the task waits for the reset',
+    async () => {
+      // Owner, 2026-10-01: never the limit, stop at 85-90%. The account reports 87% (as
+      // signedInAccounts merges a running worker's reading, so does this provider).
+      const aloneDir = join(root, 'acct-alone')
+      mkdirSync(aloneDir, { recursive: true })
+      writeFileSync(join(aloneDir, 'fake-winddown'), '')
+      setCliMayteAccountsProvider(() => {
+        const live = climayteLiveReadings().get('wind-3')
+        return [
+          {
+            id: 'wind-3',
+            num: 3,
+            name: 'alone',
+            configDir: aloneDir,
+            sessionPct: live?.sessionPct ?? 0,
+            weekPct: 0,
+            sessionResetsAt: live?.sessionResetsAt ?? null,
+          },
+        ]
+      })
+      const run = climayteRun({
+        tasks: [{ prompt: 'a long task', cwd, title: 'alone' }],
+        group: 'wind-alone',
+      })
+      const id = run.workers[0]?.id as string
+      const deadline = Date.now() + 2 * ATTEMPT_MS
+      let w = climayteList({ id })[0]
+      while (w && w.status !== 'waiting' && w.status !== 'failed' && Date.now() < deadline) {
+        await climayteWait({ id }, Math.min(2_000, deadline - Date.now()))
+        w = climayteList({ id })[0]
+      }
+      climayteCancel({ group: 'wind-alone' })
+      expect(w?.attempts.map((a) => [a.account.id, a.outcome])).toEqual([['wind-3', 'handoff']])
+      expect(w?.status).toBe('waiting')
+      expect(w?.error).toContain('85% stop line')
+      const resetsAt = climayteLiveReadings().get('wind-3')?.sessionResetsAt as number
+      expect(w?.waitUntil).toBe(new Date(resetsAt).toISOString())
+      // Its peak is on record: 87, inside the 85-90 band.
+      expect(climayteTotals().peaks.find((p) => p.account === '#3')?.peakPct).toBe(87)
+    },
+    2 * ATTEMPT_MS + 10_000,
+  )
 })
 
 describe('climayte_status scope (field notes 1, 4 and 7)', () => {
