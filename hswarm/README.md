@@ -280,11 +280,14 @@ These match ZSwarm (ported 2026-10-03; ideas from CopilotKit's OpenBot and OpenT
 
 ## Model watch (owner, 2026-10-07)
 
-`model_watch.py` keeps routing current. Every chat provider with a live key is asked for its model list (one free GET,
-all in parallel; a provider that fails is recorded with its error and hides nothing else), and each id lands in
-`~/.hswarm/model-watch.json` with a standing:
+`model_watch.py` keeps routing current. Every chat provider with a key that still has credit is asked for its model
+list (one free GET, all in parallel; a provider that fails is recorded with its error and hides nothing else), and each
+id lands in `~/.hswarm/model-watch.json` with a standing. A provider whose keys are all spent is not scanned, so its
+table keeps the last scan's standings until a key is topped up; `model_watch.scan(["<provider>", ...])` scans named
+providers anyway (listing models costs no credit).
 
-- `routed`: a registered model or `rank:` route on that provider serves the id.
+- `routed`: a registered model or `rank:` route on that provider serves the id. A route whose `api_id` pins a host
+  (`model:host`, as the Hugging Face routes do) serves the bare model id too.
 - `benchmarked_unrouted`: the index (`data/published-models.json`) scores it and no route here does. Register the route with its sourced price.
 - `superseded` (reported, not stored): benchmarked and unrouted, but a route on the same provider serves a model of the
   same maker released later that scores higher on the index, so it gets no route (owner, 2026-10-10). Artificial
