@@ -16,7 +16,7 @@
 // Revert check: delete the `if (verdict !== "private")` block in check-public-push.mjs and the
 // first four tests fail; delete the release-tag block and the tag tests fail.
 
-import { afterAll, afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { execFileSync, spawnSync } from 'node:child_process'
 import {
   chmodSync,
@@ -346,6 +346,103 @@ describe('.githooks/pre-push: the lanes run free of the hook git environment', (
       expect(r.status).toBe(0)
       const inherited = readFileSync(seen, 'utf8')
       expect(inherited).not.toMatch(/^GIT_(DIR|WORK_TREE|INDEX_FILE)=/m)
+    },
+    HOOK_TEST_TIMEOUT,
+  )
+})
+
+// The kit drift lane refuses a push only for drift the push itself carries. Drift it does not carry is
+// another session's work in the shared tree. On 2026-10-11 one session's untracked probe test under the
+// kit-synced server/tests/server-lib/ ("! orphan" in the kit's report) refused every other session's
+// push, because the lane read only "! differs" lines and took the rest for a failed check.
+describe('check-kit-sync-pushed.mjs: only drift the push carries refuses it', () => {
+  let repo: string
+  let refs: string
+  const at = (rel: string) => join(repo, rel).replace(/\\/g, '/')
+
+  beforeAll(() => {
+    const base = prepushRoot('kitdrift')
+    repo = join(base, 'ah', 'repo')
+    const origin = join(base, 'origin')
+    // A stand-in kit beside the checkout, as the lane finds it: its --check prints the report it is handed.
+    mkdirSync(join(base, 'lunarwerx-ui'), { recursive: true })
+    writeFileSync(
+      join(base, 'lunarwerx-ui', 'sync.mjs'),
+      'const r = process.env.KIT_STUB_REPORT ?? ""\nconsole.log(r)\nprocess.exit(r ? 1 : 0)\n',
+    )
+    mkdirSync(join(repo, 'server', 'lib'), { recursive: true })
+    git(base, {}, 'init', '-q', '--bare', origin)
+    git(repo, {}, 'init', '-q', '-b', 'main')
+    git(repo, {}, 'remote', 'add', 'origin', origin)
+    writeFileSync(join(repo, 'server', 'lib', 'carried.ts'), 'one\n')
+    writeFileSync(join(repo, 'server', 'lib', 'edited.ts'), 'one\n')
+    git(repo, {}, 'add', '-A')
+    git(repo, {}, 'commit', '-q', '-m', 'on the remote')
+    git(repo, {}, 'push', '-q', 'origin', 'main')
+    // What this push carries: a changed synced file and a new one.
+    writeFileSync(join(repo, 'server', 'lib', 'carried.ts'), 'two\n')
+    writeFileSync(join(repo, 'server', 'lib', 'added.ts'), 'new\n')
+    git(repo, {}, 'add', '-A')
+    git(repo, {}, 'commit', '-q', '-m', 'the push')
+    // What it does not: another session's uncommitted edit and its untracked probe.
+    writeFileSync(join(repo, 'server', 'lib', 'edited.ts'), 'unfinished\n')
+    writeFileSync(join(repo, 'server', 'lib', 'probe.test.ts'), 'scratch\n')
+    const head = git(repo, {}, 'rev-parse', 'HEAD').trim()
+    refs = `refs/heads/main ${head} refs/heads/main 0000000000000000000000000000000000000000\n`
+  }, HOOK_TEST_TIMEOUT)
+
+  test.each([
+    [
+      'an untracked orphan the push does not add',
+      'orphan  ',
+      'server/lib/probe.test.ts',
+      0,
+      'left alone',
+    ],
+    [
+      'an uncommitted edit the push does not carry',
+      'differs ',
+      'server/lib/edited.ts',
+      0,
+      'left alone',
+    ],
+    ['a synced file the push changes', 'differs ', 'server/lib/carried.ts', 1, 'this push carries'],
+    [
+      'a file the push adds that the kit does not ship',
+      'orphan  ',
+      'server/lib/added.ts',
+      1,
+      'this push carries',
+    ],
+  ])(
+    '%s',
+    (_name, kind, rel, status, said) => {
+      const r = spawnSync('node', [REAL_KIT_SYNC, 'origin', 'agenthydra'], {
+        cwd: repo,
+        input: refs,
+        encoding: 'utf8',
+        timeout: HOOK_TEST_TIMEOUT,
+        env: { ...envFor({}), KIT_STUB_REPORT: `[check] agenthydra\n      ! ${kind} ${at(rel)}\n` },
+      })
+      expect(r.status).toBe(status)
+      expect(r.stderr).toContain(said)
+      expect(r.stderr).toContain(at(rel))
+    },
+    HOOK_TEST_TIMEOUT,
+  )
+
+  test(
+    'a failed check that names no file still refuses',
+    () => {
+      const r = spawnSync('node', [REAL_KIT_SYNC, 'origin', 'agenthydra'], {
+        cwd: repo,
+        input: refs,
+        encoding: 'utf8',
+        timeout: HOOK_TEST_TIMEOUT,
+        env: { ...envFor({}), KIT_STUB_REPORT: 'sync.mjs: kit.config.json could not be read' },
+      })
+      expect(r.status).toBe(1)
+      expect(r.stderr).toContain('kit check for agenthydra failed')
     },
     HOOK_TEST_TIMEOUT,
   )

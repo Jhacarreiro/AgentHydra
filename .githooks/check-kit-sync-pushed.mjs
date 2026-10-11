@@ -10,10 +10,13 @@
  * host files edited in the working tree for hours held a Desk 2 and CliMayte push that touched none of
  * them).
  *
- * A drifted file blocks the push only when a commit in the push changes it. Drift the push does not
- * change (someone's uncommitted work, or a copy already on the remote) is named and left alone: the
- * remote keeps the copy it had, and whoever changes that file next is held to the kit.
- * Any other failure of the kit check (nothing it calls drifted) still refuses the push.
+ * A drifted file (the kit reports it `differs`, `missing` or `orphan`) blocks the push only when a commit
+ * in the push changes, deletes or adds it. Drift the push does not change (someone's uncommitted edit,
+ * an untracked file in a synced folder, or a copy already on the remote) is named and left alone: the
+ * remote keeps the copy it had, and whoever changes that file next is held to the kit. Reading only
+ * `differs` let one session's untracked probe test under server/tests/server-lib/ refuse every other
+ * session's push (2026-10-11). Any other failure of the kit check (nothing it calls drifted) still
+ * refuses the push.
  *
  * It never reimplements the kit's path rules: it runs `sync.mjs --check --app <key>` and reads that
  * report. Without the sibling kit checkout it exits 0 (pre-push already says so before calling it).
@@ -67,8 +70,10 @@ for (const app of apps) {
     report = `${err.stdout ?? ""}${err.stderr ?? ""}`;
   }
   if (ok) continue;
-  // Report lines look like:  "      ! differs  D:/path/to/file.ts"
-  const drifted = [...report.matchAll(/^\s*!\s+differs\s+(.+?)\s*$/gm)].map((m) => m[1].replace(/\\/g, "/"));
+  // Report lines look like:  "      ! differs  D:/path/to/file.ts"  (also `missing` and `orphan`)
+  const drifted = [...report.matchAll(/^\s*!\s+(?:differs|missing|orphan)\s+(.+?)\s*$/gm)].map((m) =>
+    m[1].replace(/\\/g, "/"),
+  );
   if (drifted.length === 0) {
     console.error(report);
     console.error(`✗ kit check for ${app} failed (see above).`);
