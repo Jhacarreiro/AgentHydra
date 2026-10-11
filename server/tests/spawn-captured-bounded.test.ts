@@ -60,16 +60,21 @@ test('a spawn that cannot start is data, not a throw', async () => {
   expect(r.stdout).toBe('')
 })
 
-test.skipIf(!hasPython)('the happy path returns both streams and the code', async () => {
-  const r = await spawnCaptured(
-    script('happy', ['import sys', 'print("on stdout")', 'sys.stderr.write("on stderr\\n")']),
-    { timeoutMs: 30_000 },
-  )
-  expect(r.timedOut).toBe(false)
-  expect(r.code).toBe(0)
-  expect(r.stdout).toContain('on stdout')
-  expect(r.stderr).toContain('on stderr')
-})
+test.skipIf(!hasPython)(
+  'the happy path returns both streams and the code',
+  async () => {
+    const r = await spawnCaptured(
+      script('happy', ['import sys', 'print("on stdout")', 'sys.stderr.write("on stderr\\n")']),
+      { timeoutMs: 30_000 },
+    )
+    expect(r.timedOut).toBe(false)
+    expect(r.code).toBe(0)
+    expect(r.stdout).toContain('on stdout')
+    expect(r.stderr).toContain('on stderr')
+    // Like the tests below: bun's 5 s default cut this Python start on a box at ~90% CPU (2026-10-11).
+  },
+  60_000,
+)
 
 // DEFECT 1: no deadline. A child that never exits must not hold the caller.
 test.skipIf(!hasPython)(

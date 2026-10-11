@@ -50,7 +50,8 @@ test('Codex RPC handshakes and scopes the child to the selected home', async () 
   } finally {
     await rpc.close()
   }
-})
+  // A child bun's start, then its handshake: 1.4-5.1 s in four suite runs on a box at ~90% CPU (2026-10-11).
+}, 20_000)
 
 test('Codex RPC rejects pending work when the child exits', async () => {
   const f = fixture()
@@ -64,12 +65,12 @@ test('Codex RPC rejects pending work when the child exits', async () => {
   } finally {
     await rpc.close()
   }
-})
+}, 20_000) // a child bun's start: 0.6-4.2 s in four suite runs on a box at ~90% CPU (2026-10-11)
 
 // The per-call timeout also bounds the initialize handshake, which waits on the child bun starting:
-// about 0.3 s here (2026-10-04). With the old 500 ms, a loaded box that started it slower failed in
-// connect, before the hang this test is about was ever sent.
-const RPC_TIMEOUT_MS = 2_000
+// about 0.3 s here (2026-10-04), but 0.3-4.4 s on a box at ~90% CPU (2026-10-11), where 2 s failed in
+// connect, before the hang this test is about was ever sent. The hang then takes this long to time out.
+const RPC_TIMEOUT_MS = 8_000
 
 test('Codex RPC times out and closes the connection', async () => {
   const f = fixture()
@@ -88,7 +89,7 @@ test('Codex RPC times out and closes the connection', async () => {
   } finally {
     await rpc.close()
   }
-}, 20_000)
+}, 40_000) // the child's start, then RPC_TIMEOUT_MS for the hang, then the kill
 
 // A Codex refresh token rotates: two app-servers refreshing one home can sign the account out. The
 // daemon's own connections to a home take turns; other homes never wait.
