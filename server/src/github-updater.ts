@@ -1223,10 +1223,15 @@ async function swapInBundle(
       copy: ctx.copy,
     })
   }
-  const legacyTrayExit = await retireLegacyTrayHost({
-    appRoot: installDir,
-    configFile: TRAY_HOST_CONFIG,
-  })
+  // Only the running install has a tray host and shortcuts to carry across the rename, the same rule
+  // defaultDesk applies to Desk 2. Any other install dir is a test's scratch copy, where the retirement
+  // was a PowerShell scanning this machine's processes and Start Menu: 1.5 s idle, 2.3 s median and up
+  // to 13.6 s under the parallel suite (measured 2026-10-11), which put successful swap tests at 2.6-8.1 s
+  // against bun's 5 s.
+  const legacyTrayExit =
+    installDir === APP_ROOT
+      ? await retireLegacyTrayHost({ appRoot: installDir, configFile: TRAY_HOST_CONFIG })
+      : null
   if (legacyTrayExit !== null)
     output.push(`retired the pre-rename tray host (exit ${legacyTrayExit})`)
 

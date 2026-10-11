@@ -11,16 +11,20 @@ test('spawnCaptured: stdout, stderr, exit code and env cross the worker', async 
   expect(r).toEqual({ code: 3, stdout: 'hello\n', stderr: 'e\n', timedOut: false })
 })
 
+// The deadline starts when Bun.spawn returns, so the child must boot a whole bun and print inside it.
+// Measured 2026-10-11 during the parallel suite on a box at 91% CPU: that boot took 0.46 s median,
+// 0.95 s p90 and 2.55 s at worst, so the old 1.5 s deadline sometimes killed the child before it
+// printed. 8 s is three times that worst case; the harness bound adds the kill and the 2 s drain wait.
 test('spawnCaptured: a hung child is killed at the deadline and reported timedOut', async () => {
   const r = await spawnCaptured(
     [process.execPath, '-e', 'console.log("a"); setInterval(()=>{},1000)'],
     {
-      timeoutMs: 1500,
+      timeoutMs: 8_000,
     },
   )
   expect(r.timedOut).toBe(true)
   expect(r.stdout).toBe('a\n')
-})
+}, 20_000)
 
 test('spawnCaptured: a command that cannot start comes back as data', async () => {
   const r = await spawnCaptured(['definitely-not-a-command-xyz'])

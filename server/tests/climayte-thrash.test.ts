@@ -130,5 +130,8 @@ describe('a worker that thrashes is continued in its own session, one rung up', 
     expect(w?.status).toBe('done')
     expect(w?.verdicts?.some((v) => v.context && v.model === HAIKU)).toBe(true)
     expect(w?.model).toBe(SONNET)
-  })
+    // Two attempts, each a runner and a fake-claude bun boot plus a 1 s scheduler tick: 2.3-6.1 s alone
+    // and under the parallel suite (2026-10-11), so bun's 5 s default cut the run off before the 60 s
+    // wait above could decide it. The harness bound sits past that wait, as its siblings' do.
+  }, 70_000)
 })
