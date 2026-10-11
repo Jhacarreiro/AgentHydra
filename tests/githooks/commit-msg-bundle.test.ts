@@ -24,7 +24,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from '../repo-root'
 
-const HOOK_TEST_TIMEOUT = 20_000
+// Each test is real git through the hook's sh and a node or bun start: on a box at ~90% CPU (2026-10-11)
+// one took 6-24.5 s with its beforeEach in the parallel suite, and 20 s cut one mid-run. Past the bound bun
+// kills the child in flight, which reads as a refused commit.
+const HOOK_TEST_TIMEOUT = 45_000
 
 const REAL_HOOK = join(REPO_ROOT, '.githooks', 'commit-msg')
 const REAL_GUARD = join(REPO_ROOT, '.githooks', 'check-bundle-message.mjs')

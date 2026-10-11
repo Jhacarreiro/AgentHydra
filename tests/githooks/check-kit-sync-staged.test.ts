@@ -38,7 +38,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { REPO_ROOT } from '../repo-root'
 
-const HOOK_TEST_TIMEOUT = 20_000 // real git init/commit + two node subprocesses; ~1s locally
+// Real git init/commit + two node subprocesses: ~1 s locally, but 10.6-16.5 s in the parallel suite on a box
+// at ~90% CPU (2026-10-11), close to the 20 s this was. Past the bound bun kills the child in flight.
+const HOOK_TEST_TIMEOUT = 45_000
 
 const REAL_PRECOMMIT = join(REPO_ROOT, '.githooks', 'pre-commit')
 const REAL_GUARD = join(REPO_ROOT, '.githooks', 'check-kit-sync-staged.mjs')

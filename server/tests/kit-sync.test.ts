@@ -131,7 +131,9 @@ describe('kit sync', () => {
     })
     expect(pub.on).toBe(false)
     expect(pub.notes[0]).toContain('public')
-  })
+    // Two git commands (each repo's origin): 0.7-4.2 s in three suite runs on a box at ~90% CPU and past
+    // bun's 5 s default in a fourth (2026-10-11).
+  }, 20_000)
 
   test('two pcs through a bare git repo: each sees the other, nothing is written twice', async () => {
     const git = (cwd: string, ...a: string[]) => {

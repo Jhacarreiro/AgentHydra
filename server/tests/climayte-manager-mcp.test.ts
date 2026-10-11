@@ -25,6 +25,10 @@ import { readWave, writeWave } from '../src/climayte-wave'
 
 const CALLER = 4242
 
+// Each test is bounded at 20 s: it starts a wave (a real git for its branch) beside the daemon's tick, whose
+// earlier workers launch and stop in the background, and wave_report adds two more git commands. 0.7-4.1 s
+// in three suite runs on a box at ~90% CPU and past bun's 5 s default in a fourth (2026-10-11).
+
 describe('manager MCP endpoint', () => {
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-mgr-'))
   const repo = join(root, 'repo')
@@ -133,7 +137,7 @@ describe('manager MCP endpoint', () => {
     const ok = await call(managerId, 'wave_state')
     expect(ok.status).toBe(200)
     expect(ok.value).toContain(`# Wave ${wave}`)
-  })
+  }, 20_000)
 
   test('wave_dispatch starts a worker in the wave group, and refuses what the plan forbids', async () => {
     const { wave, managerId } = newWave({ maxRounds: 1 })
@@ -164,7 +168,7 @@ describe('manager MCP endpoint', () => {
     writeWave(acct, w)
     const last = await call(managerId, 'wave_dispatch', { keys: ['t3'] })
     expect(workers.has(last.value.results[0].started)).toBe(true)
-  })
+  }, 20_000)
 
   test('wave_dispatch refuses the manage kind', async () => {
     const { wave, managerId } = newWave()
@@ -174,7 +178,7 @@ describe('manager MCP endpoint', () => {
     writeWave(acct, w)
     const r = await call(managerId, 'wave_dispatch', { keys: ['t1'] })
     expect(r.value.results[0].refused).toContain('manage')
-  })
+  }, 20_000)
 
   test('escalate, note and cancel change the wave record', async () => {
     const { wave, managerId } = newWave()
@@ -189,7 +193,7 @@ describe('manager MCP endpoint', () => {
     expect(rec?.tasks[2]?.state).toBe('escalated')
     expect(rec?.tasks[0]?.state).toBe('failed')
     expect(workers.get(started.started)?.status).toBe('cancelled')
-  })
+  }, 20_000)
 
   test('wave_report sets status reported with the table first', async () => {
     const { wave, managerId } = newWave()
@@ -208,5 +212,5 @@ describe('manager MCP endpoint', () => {
     expect((await call(managerId, 'wave_report', { text: 'again' })).value.error).toContain(
       'already reported',
     )
-  })
+  }, 20_000)
 })
