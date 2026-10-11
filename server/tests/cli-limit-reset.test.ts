@@ -151,8 +151,23 @@ test.each([
 // 2026-10-11: starting claude.exe held the daemon's only thread for seconds at a time, and the tray
 // watchdog kills a daemon that leaves /api/health unanswered. Here a process start holds the thread
 // that asks for it for two seconds, as it does on a loaded Windows PC; the run must not ask from this one.
+//
+// Diagnosis only: one full parallel run of nine (2026-10-11, box at ~90% CPU) saw a 1,035 ms gap here that
+// 39 later samples never showed again (alone, CPU-capped, beside normal-priority hogs on the same cores,
+// full suites), with no gap over 150 ms from the run itself. A ticker on a thread of its own runs beside
+// this one, so a failure says whether the whole process was off the CPU or this thread alone was held.
+const BESIDE = `let last = performance.timeOrigin + performance.now()
+const gaps = []
+setInterval(() => {
+  const now = performance.timeOrigin + performance.now()
+  if (now - last > 250) gaps.push([last, now - last])
+  last = now
+}, 20)
+onmessage = () => postMessage(gaps)`
+
 test("a run starts and drives the CLI without holding the daemon's thread", async () => {
   const a = account()
+  const beside = new Worker(URL.createObjectURL(new Blob([BESIDE], { type: 'text/javascript' })))
   const realSpawn = Bun.spawn
   ;(Bun as unknown as { spawn: unknown }).spawn = (...args: Parameters<typeof Bun.spawn>) => {
     Bun.sleepSync(2000)
@@ -160,9 +175,13 @@ test("a run starts and drives the CLI without holding the daemon's thread", asyn
   }
   let last = performance.now()
   let longestGap = 0
+  let longestFrom = 0
   const tick = setInterval(() => {
     const now = performance.now()
-    longestGap = Math.max(longestGap, now - last)
+    if (now - last > longestGap) {
+      longestGap = now - last
+      longestFrom = performance.timeOrigin + last
+    }
     last = now
   }, 20)
   try {
@@ -172,5 +191,17 @@ test("a run starts and drives the CLI without holding the daemon's thread", asyn
     clearInterval(tick)
     ;(Bun as unknown as { spawn: unknown }).spawn = realSpawn
   }
+  if (longestGap >= 1000) {
+    beside.postMessage(0)
+    const gaps = await new Promise<number[][]>((done) => {
+      beside.onmessage = (e) => done(e.data)
+    })
+    const until = longestFrom + longestGap
+    const also = gaps.some(([from = 0, ms = 0]) => from < until && from + ms > longestFrom)
+    console.error(
+      `longest gap ${Math.round(longestGap)} ms: the thread beside it ${also ? 'stalled too (the process was off the CPU)' : 'kept ticking (this thread alone was held)'}`,
+    )
+  }
+  beside.terminate()
   expect(longestGap).toBeLessThan(1000)
 }, 40_000)
