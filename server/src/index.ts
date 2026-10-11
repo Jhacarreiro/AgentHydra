@@ -123,6 +123,7 @@ import {
   withRenamedTools as mcpWithRenamedTools,
   withUnlistedTools as mcpWithUnlistedTools,
 } from './mcp'
+import { DESK_CHAT_HEADER, withDeskChat } from './mcp-find'
 import { handleMcpHttp, PARSE_ERROR } from './mcp-http.mjs'
 import { reassertSharedMcp, sharedMcpServer } from './mcp-hub'
 import { withOutputShaping as mcpWithOutputShaping } from './mcp-output'
@@ -410,7 +411,12 @@ app.post('/api/mcp', async (c) => {
         withRestartWarning(
           mcpWithCallBudget(
             mcpWithDaemonWarning(
-              mcpWithOutputShaping(mcpToolsForCaller(() => (callerPid ??= callerPidOf(c)))),
+              mcpWithOutputShaping(
+                withDeskChat(
+                  mcpToolsForCaller(() => (callerPid ??= callerPidOf(c))),
+                  c.req.header(DESK_CHAT_HEADER),
+                ),
+              ),
             ),
           ),
         ),

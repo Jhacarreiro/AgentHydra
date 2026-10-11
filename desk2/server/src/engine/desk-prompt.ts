@@ -43,9 +43,9 @@ export interface DeskSelf {
   base: string
 }
 
-/** How a chat moves itself: one PATCH to its own route, named by its Desk id. */
+/** How a chat moves or renames itself: the agenthydra MCP's desk_chat, which defaults to this chat. */
 export function moveLine(self: DeskSelf): string {
-  return `This is Desk chat ${self.id}. To move this chat to another folder (its sidebar group), PATCH ${self.base}/api/chats/${self.id} with JSON {"cwd":"<absolute folder>"}; check the answer's cwd. Never move it by cd, climayte_send or a Connections workspace.`
+  return `This is Desk chat ${self.id}. To move this chat to another folder (its sidebar group and workspace) or rename it, call the agenthydra MCP's desk_chat { cwd, title } (either or both; it acts on this chat); check the answer's cwd. Rename only when the chat has really changed what it works on. Never move it by cd, climayte_send or a Connections workspace, and never open another chat to work elsewhere. For any other AgentHydra job, hydra_find { query } searches every tool.`
 }
 
 /** What a chat in `cwd` gets beyond Claude Code's own prompt and tools, in-process or as a CliMayte worker: the one place that decides it. */

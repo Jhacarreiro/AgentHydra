@@ -17,7 +17,7 @@ afterEach(async () => {
 })
 
 const SELF = { id: 'c1', base: 'http://127.0.0.1:7801' }
-const LINE = `This is Desk chat c1. To move this chat to another folder (its sidebar group), PATCH http://127.0.0.1:7801/api/chats/c1 with JSON {"cwd":"<absolute folder>"}; check the answer's cwd. Never move it by cd, climayte_send or a Connections workspace.`
+const LINE = `This is Desk chat c1. To move this chat to another folder (its sidebar group and workspace) or rename it, call the agenthydra MCP's desk_chat { cwd, title } (either or both; it acts on this chat); check the answer's cwd.`
 
 test('a chat with its Desk id gets the one line that moves it, right after the standard text', () => {
   const { append } = chatAddOns('C:/Users/me/proj', true, SELF)
@@ -49,7 +49,8 @@ test("a CliMayte worker gets its chat's id and move line at its start and on eve
   while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
   const line = `This is Desk chat ${chat.id}. `
   expect(b.state.started[0]!.desk?.append).toContain(`${line}`)
-  expect(b.state.started[0]!.desk?.append).toContain(`PATCH http://127.0.0.1:7801/api/chats/${chat.id} `)
+  expect(b.state.started[0]!.desk?.append).toContain("desk_chat { cwd, title }")
   await m.send(chat.id, 'again')
-  expect(sent.at(-1)).toContain(`PATCH http://127.0.0.1:7801/api/chats/${chat.id} `)
+  expect(sent.at(-1)).toContain(`This is Desk chat ${chat.id}. `)
+  expect(sent.at(-1)).toContain("desk_chat { cwd, title }")
 })

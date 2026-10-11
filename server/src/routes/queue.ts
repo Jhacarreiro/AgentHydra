@@ -340,7 +340,7 @@ app.patch('/api/queue/:id', async (c) => {
     if (existing.status !== 'queued')
       return c.json(
         {
-          error: `cannot cancel via PATCH: item is '${existing.status}', not 'queued' — use POST /api/queue/:id/cancel for an active run`,
+          error: `cannot cancel via PATCH: item is '${existing.status}', not 'queued' — use the agenthydra MCP's cancel_queue_item (POST /api/queue/:id/cancel) for an active run`,
         },
         409,
       )

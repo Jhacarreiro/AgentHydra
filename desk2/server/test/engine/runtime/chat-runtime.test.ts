@@ -399,7 +399,8 @@ describe('ChatRuntime: start options', () => {
     expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, Jacob's own desktop for Claude Code. You have a real browser")).toBe(true)
     expect(DESK_APPEND_NO_DELEGATE).not.toContain('Sub-agents here are CliMayte workers')
     expect(DESK_APPEND).toContain('Sub-agents here are CliMayte workers')
-    expect(opts!.mcpServers).toEqual({ agenthydra: { type: 'http', url: 'http://127.0.0.1:1/mcp' } })
+    // the agenthydra server carries this chat's Desk id, so its desk_chat acts on this chat
+    expect(opts!.mcpServers).toEqual({ agenthydra: { type: 'http', url: 'http://127.0.0.1:1/mcp', headers: { 'x-hydra-desk-chat': expect.any(String) } } })
   })
 
   test('a fork resumes its source cut where it was forked; without a cut, as the source stands', () => {

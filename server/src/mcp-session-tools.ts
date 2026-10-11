@@ -240,7 +240,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   {
     name: 'chat_rename',
     description:
-      "RENAME a chat through the running app's own control - the one write that sticks while an " +
+      "RENAME a Claude DESKTOP chat (a Hydra Desk chat renames with desk_chat) through the running app's own control - the one write that sticks while an " +
       'app is open (an app holds its chat list in memory and re-saves over any file edit). Use ' +
       'it on a chat the app renders as Untitled: an imported chat shows that way whatever its ' +
       'disk title says, which both breaks the naming law and makes it UNDELIVERABLE, because ' +

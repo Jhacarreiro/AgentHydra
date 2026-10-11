@@ -240,7 +240,7 @@ test('a session over the size cap moves as a fresh session whose first message i
   const first = q.last().sent[0]!.message.content
   const text = typeof first === 'string' ? first : JSON.stringify(first)
   expect(text.length).toBeLessThanOrEqual(MAX_HANDOFF_CHARS + 200)
-  for (const want of ['about 201k tokens', `/api/chats/${chat.id}/transcript`, `session_id ${SID}`, 'Build the planet game', 'now add the win bar', 'Wrote the map and the ship routes', 'Adding the win bar now.', 'do not redo finished steps']) expect(text).toContain(want)
+  for (const want of ['about 201k tokens', 'desk_transcript', `(id ${chat.id})`, `session_id ${SID}`, 'Build the planet game', 'now add the win bar', 'Wrote the map and the ship routes', 'Adding the win bar now.', 'do not redo finished steps']) expect(text).toContain(want)
   expect(m.get(chat.id).sessionId).toBeNull()
   // The old session is still this chat's, never listed as an outside one.
   expect(m.sessionIds()).toContain(SID)

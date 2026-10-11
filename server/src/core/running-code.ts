@@ -182,5 +182,5 @@ export function createRunningCodeProbe(opts: {
 /** The sentence every surface uses, so an agent and a person read the same thing. */
 export function restartNeededMessage(status: RunningCodeStatus): string | null {
   if (!status.restartNeeded || !status.bootCommit || !status.diskCommit) return null
-  return `This AgentHydra daemon is running older code than its folder (started on ${status.bootCommit.slice(0, 7)}, the folder is now at ${status.diskCommit.slice(0, 7)}). Tools and routes added since it started are missing until it restarts: POST /api/daemon/restart, or use Restart in the app header.`
+  return `This AgentHydra daemon is running older code than its folder (started on ${status.bootCommit.slice(0, 7)}, the folder is now at ${status.diskCommit.slice(0, 7)}). Tools and routes added since it started are missing until it restarts: the agenthydra MCP's daemon_restart (through hydra_run; the route is POST /api/daemon/restart), or Restart in the app header.`
 }

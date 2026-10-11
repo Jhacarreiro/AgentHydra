@@ -7,6 +7,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Agents see a short tool list and can still reach everything.** AgentHydra lists the 28 tools agents actually
+  use instead of all 108; `hydra_find` searches every tool in plain words and `hydra_run` runs any of them, the way
+  the Connections MCP works. A chat that loads every listed tool now carries about 15,000 tokens of them instead of 35,000.
+- **A Desk chat can move itself to another project, rename itself and read its own history through tools.**
+  `desk_chat` changes the chat's folder and its name, `desk_transcript` reads its whole record, and `daemon_restart`
+  restarts the service, each in place of a raw web call an agent had to be told about.
+
 - **CliMayte keeps working when the PC is busy.** On a loaded PC its tasks could fail "stopped three times in a
   row" and its checks "never started" without a CLI ever running, and starting or watching a run could hang for
   minutes. A task now gets its full minute to start once its launch has gone out, a task that never started says so,

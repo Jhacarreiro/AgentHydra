@@ -1477,7 +1477,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chat',
     description:
-      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL (another FOLDER or workspace is desk_move_chat for a Hydra Desk chat, move_chat_folder for a Claude Desktop one) — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the MOVE waits, in the daemon, for a chat that is idle but not yet quiet enough. THE CALL WAITS AT MOST 45s FOR THE VERDICT: a move still waiting or working then answers with `operationId` and a `poll` line, and `orchestrator_operation {id}` hands back migrate_chat\'s JSON report on stdout once it lands (read `landed` and `collateral` there). Calling move_chat again with the same arguments returns that SAME operation, never a second move. THE CHAT KEEPS ITS EFFORT: the source\'s own effort + ultracode are carried and pushed into a running target app; read `effortCarried` ({from, to, verified, via}). EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it.',
+      'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the MOVE waits, in the daemon, for a chat that is idle but not yet quiet enough. THE CALL WAITS AT MOST 45s FOR THE VERDICT: a move still waiting or working then answers with `operationId` and a `poll` line, and `orchestrator_operation {id}` hands back migrate_chat\'s JSON report on stdout once it lands (read `landed` and `collateral` there). Calling move_chat again with the same arguments returns that SAME operation, never a second move. THE CHAT KEEPS ITS EFFORT: the source\'s own effort + ultracode are carried and pushed into a running target app; read `effortCarried` ({from, to, verified, via}). EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it. Another FOLDER or workspace is not this tool: desk_chat for a Hydra Desk chat, move_chat_folder for a Claude Desktop one.',
     inputSchema: S(
       {
         chat: { type: 'string', description: 'Title fragment (fuzzy) or session id.' },
@@ -1835,7 +1835,10 @@ export const TOOLS: McpEngineTool[] = [
   ...BABYSITTER_TOOLS,
   ...DEV_SERVERS_TOOLS,
   ...FAMILY_TOOLS,
-  ...findTools(() => TOOLS),
+  ...findTools(
+    () => TOOLS,
+    () => LISTED_TOOLS,
+  ),
   {
     name: 'archive_desktop_chat',
     description:
@@ -1880,7 +1883,7 @@ export const TOOLS: McpEngineTool[] = [
   {
     name: 'move_chat_folder',
     description:
-      'MUTATES: move ONE Claude DESKTOP Code chat to another working folder in its own profile (a Hydra Desk chat, the AgentHydra 2.0 window, moves with desk_move_chat). The thread keeps its transcript, title, model, effort and permission mode, but the copy gets a NEW session id (returned as newSessionId) and the old chat is archived, never deleted. Refuses a folder that does not exist, the same folder, a running or busy chat, a chat used in the last 10 minutes, or a profile without native control.',
+      'MUTATES: move ONE Claude DESKTOP Code chat to another working folder in its own profile (a Hydra Desk chat, the AgentHydra 2.0 window, moves with desk_chat). The thread keeps its transcript, title, model, effort and permission mode, but the copy gets a NEW session id (returned as newSessionId) and the old chat is archived, never deleted. Refuses a folder that does not exist, the same folder, a running or busy chat, a chat used in the last 10 minutes, or a profile without native control.',
     inputSchema: S(
       {
         session_id: { type: 'string', description: 'The chat to move (its CLI session id).' },
@@ -2305,16 +2308,21 @@ goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a hum
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
 work on his CLI accounts while they sit idle; it never takes one a person or session is using.
 
-THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch); it acts only with the
-tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,
+THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch, through hydra_run); it
+acts only with the tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,
 from, to}, or fan_out {tasks:[{cwd, prompt}]} (VISIBLE desktop chats on OTHER accounts, never
 one a person is in); fan_out_status {} reads verdicts, fan_out_send {group, text} steers.
 add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
 ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS: fan_out_delete {group}, or
-orchestrator_run delete_chat <chat>. Free web accounts: free_chat {tasks}
+hydra_run orchestrator_run delete_chat <chat>. Free web accounts: hydra_run free_chat {tasks}
 
 DEV SERVERS: never start one from the shell (vite, npm/bun run dev):
-dev_servers {action:"start", cwd} reuses the running copy, whoever started it, or starts it.`
+dev_servers {action:"start", cwd} reuses the running copy, whoever started it, or starts it.
+
+ONLY THE MOST USED TOOLS ARE LISTED. hydra_find {query} searches every AgentHydra tool in plain
+words; hydra_run {tool, args} runs any of them (the orchestrator, free_chat, instance and incident
+tools, daemon_restart...). Search there before you decide a thing cannot be done.
+A Hydra Desk chat moves to another folder (its workspace) or renames itself with desk_chat {cwd, title}.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
@@ -2370,9 +2378,53 @@ export function withRenamedTools<T extends { name: string }>(
 
 /** Tools that refuse every call. Never listed, so no agent spends a turn on one; still answered by
  *  name, so a caller that names one gets the refusal. */
-export const UNLISTED_TOOLS: ReadonlySet<string> = new Set([
+export const REFUSING_TOOLS: ReadonlySet<string> = new Set([
   'add_queue_item',
   'launch_terminal_session',
+])
+
+/** The tools listed directly; every other one is reached with hydra_find / hydra_run (mcp-find.ts) and
+ *  still answered by name. Owner, 2026-10-11: keep the tool list small, the Connections way. Picked from
+ *  the agenthydra calls in every transcript on this PC that day (105 tools, 35k tokens of schemas; these
+ *  carry over 95% of the calls), plus what this server's instructions and the Desk prompt and handoff
+ *  name. AGENTHYDRA_MCP_ALL_TOOLS=1 lists everything. */
+export const LISTED_TOOLS: ReadonlySet<string> = new Set([
+  'hydra_find',
+  'hydra_run',
+  'desk_chat',
+  'whoami',
+  'check_my_usage',
+  'usage_budget',
+  'list_usage',
+  'list_cli_instances',
+  'climayte_run',
+  'climayte_status',
+  'climayte_verdict',
+  'climayte_send',
+  'climayte_cancel',
+  'climayte_log',
+  'climayte_priority',
+  'climayte_manage',
+  'fan_out',
+  'fan_out_status',
+  'fan_out_send',
+  'fan_out_delete',
+  'move_chat',
+  'orchestrator_operation',
+  'list_chats',
+  'search_sessions',
+  'history_search',
+  'history_read',
+  'tail_session',
+  'dev_servers',
+])
+
+/** Every tool the listing leaves out: the refusing ones always, and the unlisted rest unless asked for all. */
+export const UNLISTED_TOOLS: ReadonlySet<string> = new Set([
+  ...REFUSING_TOOLS,
+  ...(process.env.AGENTHYDRA_MCP_ALL_TOOLS === '1'
+    ? []
+    : TOOLS.map((t) => t.name).filter((n) => !LISTED_TOOLS.has(n))),
 ])
 
 /** `tools` without the unlisted names in its listing; `find` still reaches every tool. */

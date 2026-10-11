@@ -179,6 +179,14 @@ export function isSignInFailureText(text: string): boolean {
   return SIGN_IN_TEXT.test(text)
 }
 
+/** The agenthydra MCP config for one chat: it carries the chat's Desk id, so the server's desk_chat moves and renames
+ *  THIS chat without being told which (a header over HTTP, an env var for a stdio server). */
+export function withDeskChatId(mcp: McpServerConfig, chatId: string): McpServerConfig {
+  const m = mcp as McpServerConfig & { type?: string; headers?: Record<string, string>; env?: Record<string, string> }
+  if (m.type === 'http' || m.type === 'sse') return { ...m, headers: { ...(m.headers ?? {}), 'x-hydra-desk-chat': chatId } } as McpServerConfig
+  return { ...m, env: { ...(m.env ?? {}), HYDRA_DESK_CHAT_ID: chatId } } as McpServerConfig
+}
+
 /** What was read from each config file last, by its size and mtime: the file grows to megabytes, and every chat start and MCP list asks for the same entry. */
 const agentHydraMcpMemo = new Map<string, { sig: string; mcp: McpServerConfig | null }>()
 
@@ -423,7 +431,7 @@ ${swap.real}` }
     const mcp = this.agentHydraMcp === undefined ? readAgentHydraMcp() : this.agentHydraMcp
     // What plain `claude` gets in this folder under the main config, on whatever account the chat runs; Hydra Desk's own agenthydra wins.
     // A running connector's servers sit under the person's own config of the same name.
-    const servers = { ...addOns.mcpServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: mcp } : {}) }
+    const servers = { ...addOns.mcpServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: withDeskChatId(mcp, chat.id) } : {}) }
     if (Object.keys(servers).length) options.mcpServers = servers
     return options
   }

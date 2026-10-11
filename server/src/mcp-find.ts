@@ -1,15 +1,18 @@
-// server/src/mcp-find.ts - the two tools that make AgentHydra's ~130 tools findable and the Desk window drivable.
+// server/src/mcp-find.ts - how an agent reaches all of AgentHydra through a short tool list, and drives its own Desk chat.
 //
-// hydra_find: search every AgentHydra tool by what you want done, the way the Connections MCP's catalog search
-// works. An agent sees only tool NAMES until it loads a schema, and with this many names a plain-word ask
-// ("move this chat to another workspace") never meets the tool that does it. Measured 2026-10-11: an agent asked to
-// switch a Desk chat's workspace opened a second chat instead, because nothing it could see said "folder".
+// AgentHydra has over a hundred tools, about 35k tokens of schemas (measured 2026-10-11), and a client that loads
+// them all pays that on every chat. So only the tools agents actually use are listed (mcp.ts LISTED_TOOLS, picked
+// from the calls in every transcript on the PC), and the rest are reached the way the Connections MCP reaches its
+// catalog: hydra_find searches every tool in plain words, hydra_run runs any of them by name.
 //
-// desk_move_chat: move a Hydra Desk chat (the AgentHydra 2.0 window) to another folder, the one thing that until
-// now was only a sentence in the Desk system prompt (PATCH /api/chats/:id {cwd}). move_chat moves a chat between
-// ACCOUNTS and move_chat_folder moves a Claude DESKTOP chat; neither touches a Desk chat.
+// desk_chat moves and renames a Hydra Desk chat (the AgentHydra 2.0 window). Until 2026-10-11 that was only a
+// sentence in the Desk system prompt (PATCH /api/chats/:id), and an agent asked to switch its workspace opened a
+// second chat instead, because no tool it could see said "folder". Desk puts the chat's own id in this server's
+// environment (HYDRA_DESK_CHAT_ID), so a chat changes itself without knowing its id.
+//
+// daemon_restart is the tool for the restart the daemon's "running older code" note asks for (POST /api/daemon/restart).
 import { statSync } from 'node:fs'
-import { S, str } from './mcp-client'
+import { api, JSON_HEADERS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 /** Words an agent says, mapped to the words the tool texts use. */
@@ -20,6 +23,8 @@ const SYNONYMS: Record<string, string[]> = {
   directory: ['folder', 'cwd'],
   switch: ['move', 'change'],
   change: ['move', 'switch', 'set'],
+  rename: ['title', 'name'],
+  title: ['rename', 'name'],
   account: ['instance'],
   instance: ['account'],
   quota: ['usage', 'limit'],
@@ -31,6 +36,7 @@ const SYNONYMS: Record<string, string[]> = {
   spawn: ['fan', 'launch', 'start'],
   parallel: ['fan'],
   server: ['dev'],
+  restart: ['relaunch', 'daemon'],
 }
 
 const STOP = new Set([
@@ -76,15 +82,22 @@ export interface FoundTool {
   name: string
   score: number
   mutates: boolean
+  listed: boolean
   summary: string
   required: string[]
 }
 
 /** Ranks tools for a plain-words ask: a word in the name counts most, then in the first sentence, then anywhere. */
-export function rankTools(tools: McpEngineTool[], query: string, limit = 8): FoundTool[] {
-  const asked = words(query)
+/** `desk`: the caller is a Hydra Desk chat, so the Desk tools (desk_*) outrank the Claude Desktop ones that share their words. */
+export function rankTools(
+  tools: McpEngineTool[],
+  query: string,
+  limit = 8,
+  listed?: ReadonlySet<string>,
+  desk = false,
+): FoundTool[] {
   const terms = new Map<string, number>()
-  for (const w of asked) {
+  for (const w of words(query)) {
     terms.set(w, Math.max(terms.get(w) ?? 0, 1))
     for (const s of SYNONYMS[w] ?? []) terms.set(s, Math.max(terms.get(s) ?? 0, 0.6))
   }
@@ -101,11 +114,13 @@ export function rankTools(tools: McpEngineTool[], query: string, limit = 8): Fou
       else if (all.has(w)) score += 0.5 * weight
     }
     if (score <= 0) continue
+    if (desk && t.name.startsWith('desk_')) score *= 1.5
     const schema = t.inputSchema as { required?: string[] } | undefined
     out.push({
       name: t.name,
       score: Math.round(score * 10) / 10,
       mutates: /^MUTATES:/.test(desc),
+      listed: listed ? listed.has(t.name) : true,
       summary: summary(desc),
       required: schema?.required ?? [],
     })
@@ -125,10 +140,9 @@ interface DeskChat {
   sessionId?: string | null
   title?: string
   cwd?: string
-  status?: string
 }
 
-/** One Desk chat from its Desk id, its Claude session id, or a title fragment (refuses an ambiguous fragment). */
+/** One Desk chat from its Desk id, its Claude session id, or a title fragment (refuses an empty or ambiguous one). */
 export function pickDeskChat(chats: DeskChat[], ref: string): DeskChat {
   const r = ref.trim()
   if (!r)
@@ -150,67 +164,141 @@ export function pickDeskChat(chats: DeskChat[], ref: string): DeskChat {
   )
 }
 
-export function findTools(getTools: () => McpEngineTool[]): McpEngineTool[] {
+/** What desk_chat sends: the folder and/or the title, each checked; refuses a call that changes nothing. */
+export function deskChatPatch(a: Record<string, unknown>): { cwd?: string; title?: string } {
+  const patch: { cwd?: string; title?: string } = {}
+  const cwd = str(a.cwd).trim()
+  if (cwd) {
+    let isFolder = false
+    try {
+      isFolder = statSync(cwd).isDirectory()
+    } catch {} // floor-ok: a stat that throws means there is no folder there, reported just below
+    if (!isFolder) throw new Error(`no folder at ${cwd}`)
+    patch.cwd = cwd
+  }
+  const title = str(a.title).trim()
+  if (title) patch.title = title.slice(0, 200)
+  if (!patch.cwd && !patch.title)
+    throw new Error('pass cwd (a folder to move the chat to), title (a new name), or both')
+  return patch
+}
+
+/** Tools that are never run through hydra_run: itself, and the search. */
+const NOT_RUNNABLE = new Set(['hydra_run', 'hydra_find'])
+
+export function findTools(
+  getTools: () => McpEngineTool[],
+  getListed: () => ReadonlySet<string>,
+): McpEngineTool[] {
   return [
     {
       name: 'hydra_find',
       description:
-        "FIND THE AGENTHYDRA TOOL FOR A JOB: say what you want in plain words ('move this chat to another workspace', " +
-        "'which account has quota left', 'run this on another account', 'start a dev server') and get the matching tools, " +
-        'best first, each with a one-line summary, whether it MUTATES, and its required parameters. AgentHydra has over a ' +
-        'hundred tools and you see only their names; search here before deciding a thing cannot be done or reaching ' +
-        'for a workaround.',
+        "FIND ANY AGENTHYDRA TOOL: say what you want in plain words ('move this chat to another workspace', 'rename this " +
+        "chat', 'which account has quota left', 'read an old session', 'restart the daemon') and get the matching tools, " +
+        'best first, each with a one-line summary, whether it MUTATES, its required parameters, and whether it is listed. ' +
+        'Only the most used tools are listed directly; every other one runs through hydra_run { tool, args }. Search here ' +
+        'before deciding a thing cannot be done or reaching for a workaround.',
       inputSchema: S(
         {
           query: { type: 'string', description: 'What you want done, in plain words.' },
           limit: { type: 'number', description: 'How many tools to return (default 8).' },
+          tool: {
+            type: 'string',
+            description:
+              "Instead of searching, return one tool's full description and input schema.",
+          },
         },
-        ['query'],
+        [],
       ),
       run: async (a) => {
+        const tools = getTools()
+        const listed = getListed()
+        const one = str(a.tool).trim()
+        if (one) {
+          const t = tools.find((x) => x.name === one)
+          if (!t) throw new Error(`no AgentHydra tool named ${one}; search with query instead`)
+          return {
+            name: t.name,
+            listed: listed.has(t.name),
+            description: t.description,
+            inputSchema: t.inputSchema,
+            call: listed.has(t.name)
+              ? `${t.name} { ... }`
+              : `hydra_run { tool: "${t.name}", args: { ... } }`,
+          }
+        }
         const query = str(a.query).trim()
-        if (!query) throw new Error('query is required: say what you want done')
+        if (!query) throw new Error('pass query (what you want done) or tool (a name to describe)')
         const limit =
           Number.isFinite(Number(a.limit)) && Number(a.limit) > 0 ? Math.floor(Number(a.limit)) : 8
-        const tools = rankTools(getTools(), query, limit)
+        const found = rankTools(
+          tools.filter((t) => !NOT_RUNNABLE.has(t.name)),
+          query,
+          limit,
+          listed,
+          !!(str(a.deskChat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim()),
+        )
         return {
           query,
-          tools,
-          note: tools.length
-            ? 'Load a tool before calling it (in Claude Code: ToolSearch "select:mcp__agenthydra__<name>").'
-            : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, server).',
+          tools: found,
+          note: found.length
+            ? 'A listed tool is called by its own name; any other one with hydra_run { tool, args }. hydra_find { tool } gives its full schema.'
+            : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, session, server).',
         }
       },
     },
     {
-      name: 'desk_move_chat',
+      name: 'hydra_run',
       description:
-        'MUTATES: move a Hydra Desk chat (the AgentHydra 2.0 window) to another folder, which is how its WORKSPACE ' +
-        'changes: the sidebar group, the project it works in, and the workspace-scoped tools (saved browsers, the ' +
-        "Connections workspace) that follow the folder. `chat` is the Desk chat id (Desk's system prompt names it), its " +
-        'Claude session id, or part of its title. The chat keeps its transcript and id; its tools pick up the new folder ' +
-        'when its next turn starts. Not for Claude DESKTOP chats (move_chat_folder) or for moving a chat to another ' +
-        'ACCOUNT (move_chat).',
+        'MUTATES (when the tool it runs does): run ANY AgentHydra tool by name, listed or not: hydra_run { tool, args }. ' +
+        'Find the tool and its arguments with hydra_find first. The answer is exactly what the tool itself answers.',
       inputSchema: S(
         {
-          chat: {
-            type: 'string',
-            description: 'Desk chat id, Claude session id, or a title fragment.',
-          },
-          cwd: {
-            type: 'string',
-            description: 'The new folder: an absolute path to an existing folder.',
-          },
+          tool: { type: 'string', description: 'The tool name, as hydra_find gives it.' },
+          args: { type: 'object', description: "The tool's own arguments." },
         },
-        ['chat', 'cwd'],
+        ['tool'],
       ),
+      run: async (a, signal?: AbortSignal) => {
+        const name = str(a.tool).trim()
+        if (NOT_RUNNABLE.has(name))
+          throw new Error(`${name} is called directly, not through hydra_run`)
+        const t = getTools().find((x) => x.name === name)
+        if (!t)
+          throw new Error(
+            `no AgentHydra tool named ${name || '(none)'}; search with hydra_find { query }`,
+          )
+        const args =
+          a.args && typeof a.args === 'object' && !Array.isArray(a.args)
+            ? (a.args as Record<string, unknown>)
+            : {}
+        return (t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown)(args, signal)
+      },
+    },
+    {
+      name: 'desk_chat',
+      description:
+        'MUTATES: move this chat (a Hydra Desk chat) to another folder or workspace, and/or rename it. `cwd` moves it, ' +
+        'which is how its WORKSPACE changes: the sidebar group, the project it works in, and the workspace-scoped tools ' +
+        '(saved browsers, the Connections workspace) that follow the folder; its tools see the new folder from its next ' +
+        'turn. `title` renames it: worth it when the chat has really changed what it works on, not on every turn. ' +
+        '`chat` defaults to THIS chat; name another by its Desk id, its Claude session id, or part of its title. Not for ' +
+        'Claude DESKTOP chats (move_chat_folder) or for moving a chat to another ACCOUNT (move_chat).',
+      inputSchema: S({
+        cwd: {
+          type: 'string',
+          description: 'The new folder: an absolute path to an existing folder.',
+        },
+        title: { type: 'string', description: 'The new name.' },
+        chat: {
+          type: 'string',
+          description:
+            'Another chat: Desk chat id, Claude session id, or a title fragment. Default: this chat.',
+        },
+      }),
       run: async (a) => {
-        const cwd = str(a.cwd).trim()
-        let isFolder = false
-        try {
-          isFolder = !!cwd && statSync(cwd).isDirectory()
-        } catch {}
-        if (!isFolder) throw new Error(`no folder at ${cwd || '(empty)'}`)
+        const patch = deskChatPatch(a)
         const base = deskBase()
         const listed = await fetch(`${base}/api/chats`).catch(() => null)
         if (!listed?.ok)
@@ -218,22 +306,124 @@ export function findTools(getTools: () => McpEngineTool[]): McpEngineTool[] {
         const chats: unknown = await listed.json().catch(() => null)
         if (!Array.isArray(chats))
           throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
-        const chat = pickDeskChat(chats as DeskChat[], str(a.chat))
+        const ref = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
+        if (!ref)
+          throw new Error(
+            'this process is not a Desk chat (no HYDRA_DESK_CHAT_ID): name the chat with `chat`',
+          )
+        const chat = pickDeskChat(chats as DeskChat[], ref)
         const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
-          body: JSON.stringify({ cwd }),
+          body: JSON.stringify(patch),
         })
         const body = (await res.json().catch(() => ({}))) as DeskChat & { error?: string }
-        if (!res.ok) throw new Error(`Desk refused the move: ${body.error ?? res.status}`)
+        if (!res.ok) throw new Error(`Desk refused the change: ${body.error ?? res.status}`)
         return {
           id: body.id ?? chat.id,
           title: body.title ?? chat.title,
-          from: chat.cwd,
-          cwd: body.cwd,
-          note: "Its tools see the new folder from the chat's next turn.",
+          cwd: body.cwd ?? chat.cwd,
+          ...(patch.cwd
+            ? { from: chat.cwd, note: "Its tools see the new folder from the chat's next turn." }
+            : {}),
         }
       },
     },
+    {
+      name: 'desk_transcript',
+      description:
+        'READ-ONLY: the whole record of a Hydra Desk chat as Desk keeps it (messages, tool calls and results, oldest first), ' +
+        'for a detail a handoff left out. `chat` defaults to THIS chat; name another by Desk id, session id or title fragment. ' +
+        '`last` keeps only the newest N items.',
+      inputSchema: S({
+        chat: {
+          type: 'string',
+          description: 'Desk chat id, Claude session id, or a title fragment. Default: this chat.',
+        },
+        last: { type: 'number', description: 'Only the newest N items.' },
+      }),
+      run: async (a) => {
+        const base = deskBase()
+        const listed = await fetch(`${base}/api/chats`).catch(() => null)
+        if (!listed?.ok)
+          throw new Error(`the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`)
+        const chats: unknown = await listed.json().catch(() => null)
+        if (!Array.isArray(chats))
+          throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
+        const ref = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
+        if (!ref)
+          throw new Error(
+            'this process is not a Desk chat (no HYDRA_DESK_CHAT_ID): name the chat with `chat`',
+          )
+        const chat = pickDeskChat(chats as DeskChat[], ref)
+        const res = await fetch(
+          `${base}/api/chats/${encodeURIComponent(chat.id)}/transcript`,
+        ).catch(() => null)
+        if (!res?.ok)
+          throw new Error(
+            `Desk did not give the transcript of ${chat.id} (${res?.status ?? 'no answer'})`,
+          )
+        const items: unknown = await res.json().catch(() => null)
+        if (!Array.isArray(items))
+          throw new Error('unexpected transcript answer (not a list of items)')
+        const last = Number(a.last)
+        return {
+          id: chat.id,
+          title: chat.title,
+          total: items.length,
+          items: Number.isFinite(last) && last > 0 ? items.slice(-Math.floor(last)) : items,
+        }
+      },
+    },
+    {
+      name: 'daemon_restart',
+      description:
+        'MUTATES: restart the AgentHydra daemon onto the code in its folder (what its "running older code" note asks for). ' +
+        'The successor starts and reports in before this one lets go, so there is no gap; dispatch runs and CliMayte ' +
+        'runners carry on. Refused while a chat move is running or a CliMayte worker runs inside the daemon itself, ' +
+        "unless `force` (a person's word).",
+      inputSchema: S({
+        force: {
+          type: 'boolean',
+          description: "A person's word: restart past in-daemon CliMayte workers.",
+        },
+      }),
+      run: (a) =>
+        api('/api/daemon/restart', {
+          method: 'POST',
+          headers: JSON_HEADERS,
+          body: JSON.stringify({ force: a.force === true }),
+        }),
+    },
   ]
+}
+
+/** The header Desk puts on each chat's agenthydra MCP connection: that chat's Desk id. */
+export const DESK_CHAT_HEADER = 'x-hydra-desk-chat'
+
+/** `tools` with desk_chat and desk_transcript defaulting to the calling Desk chat (the HTTP transport knows it from DESK_CHAT_HEADER;
+ *  stdio from HYDRA_DESK_CHAT_ID). Every other tool is the same object. */
+export function withDeskChat(
+  tools: McpEngineTool[],
+  chatId: string | null | undefined,
+): McpEngineTool[] {
+  const id = chatId?.trim()
+  if (!id) return tools
+  return tools.map((t) => {
+    const run = t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown
+    if (t.name === 'desk_chat' || t.name === 'desk_transcript')
+      return {
+        ...t,
+        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
+          run({ ...a, chat: str(a.chat).trim() || id }, signal),
+      }
+    // hydra_find ranks the Desk tools first for a Desk chat
+    if (t.name === 'hydra_find')
+      return {
+        ...t,
+        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
+          run({ ...a, deskChat: id }, signal),
+      }
+    return t
+  })
 }
