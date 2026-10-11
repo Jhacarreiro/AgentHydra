@@ -36,7 +36,11 @@ import {
 } from '../../.githooks/check-public-push.mjs'
 import { REPO_ROOT } from '../repo-root'
 
-const HOOK_TEST_TIMEOUT = 20_000 // real git init/commit/push + a node subprocess; ~1s locally
+// Real git init/commit/push, each push through Git for Windows' sh and one or two node starts. Not the
+// ~1 s once noted here: on a loaded Windows box a push took 4-9 s alone and a one-push test up to 27.7 s
+// in the parallel suite (2026-10-11). A test that pushes more than once gets this per push; past the
+// bound bun kills the push in flight, which reads as a refused push.
+const HOOK_TEST_TIMEOUT = 45_000
 
 // A single root for every scratch dir this file creates: at most one mkdtempSync may root
 // directly in the OS temp dir per file. realpathSync.native up front resolves the 8.3-short-path
@@ -281,7 +285,7 @@ describe('.githooks/pre-push: a public remote is announced and refused', () => {
         expect(ok.status).toBe(0)
         expect(originHas(origin, 'refs/tags/v2.0.0')).toBe(true)
       },
-      HOOK_TEST_TIMEOUT,
+      3 * HOOK_TEST_TIMEOUT, // three pushes
     )
 
     test(
