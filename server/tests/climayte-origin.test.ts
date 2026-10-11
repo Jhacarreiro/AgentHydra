@@ -16,6 +16,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { pathToFileURL } from 'node:url'
 import { Hono } from 'hono'
 import {
   climayteCancel,
@@ -366,8 +367,9 @@ describe('resolveOwnTranscript names the Claude home it matched', () => {
   })
 })
 
-// Each case walks the real process chain, one powershell.exe per walk on Windows and two or three
-// walks a case: MEASURED alone 2026-10-04 with 8 GB free, past bun's 5 s default in the full suite.
+// Each case walks the real process chain (then a powershell.exe per walk on Windows, now the process
+// table read in-process), two or three walks a case, and the nearest-engine case starts two bun
+// processes: MEASURED alone 2026-10-04 with 8 GB free, past bun's 5 s default in the full suite.
 // The allowance is chosen, not inherited.
 const PROCESS_WALK_TEST_MS = 30_000
 
@@ -404,14 +406,40 @@ describe('a chat registered under a CLI instance is found as the caller', () => 
 
   // The default home's registry used to be searched to the end of the chain before any instance's,
   // so a chat that a default-home session started (a desk app launched from a chat) was reported as
-  // that session. Stdio here: no caller pid, so this process's parents are walked and
-  // CLAUDE_CONFIG_DIR is the default home.
+  // that session. Stdio: no caller pid, so the asking process's parents are walked and
+  // CLAUDE_CONFIG_DIR is the default home. The asker is a grandchild of this test, so its two nearest
+  // ancestors are a relay this test starts and this test, alive whatever launched the run. Asked
+  // from here it needed two live ancestors of the runner, and a serial `bun test` from a shell whose
+  // own parent had exited has one (2026-10-11).
   test(
     'the nearest engine is the caller, whichever home registered it',
     async () => {
-      const { processAncestry } = await import('../src/core/process')
-      const chain = (await processAncestry(process.pid)) ?? []
-      expect(chain.length).toBeGreaterThanOrEqual(2)
+      const src = (file: string) =>
+        JSON.stringify(pathToFileURL(join(import.meta.dir, '..', 'src', file)).href)
+      const asker = join(scratch, 'nearest-asker.ts')
+      const relay = join(scratch, 'nearest-relay.ts')
+      writeFileSync(
+        asker,
+        [
+          `const { processAncestry } = await import(${src('core/process.ts')})`,
+          `const { resolveOwnTranscript } = await import(${src('compaction-history.ts')})`,
+          'const chain = (await processAncestry(process.pid)) ?? []',
+          'const t = await resolveOwnTranscript({',
+          '  callerPid: null,',
+          '  extraHomes: async () => [process.env.NEAREST_INSTANCE],',
+          '})',
+          'console.log(JSON.stringify({ chain: chain.slice(0, 2).map((p) => p.pid), sessionId: t.sessionId, home: t.home }))',
+        ].join('\n'),
+      )
+      // The relay starts the asker only when its stdin closes, after both engines are registered.
+      writeFileSync(
+        relay,
+        [
+          'await Bun.stdin.text()',
+          `const asker = Bun.spawn([process.execPath, ${JSON.stringify(asker)}], { stdout: 'inherit', stderr: 'inherit' })`,
+          'process.exit(await asker.exited)',
+        ].join('\n'),
+      )
       const register = (home: string, pid: number, sid: string) => {
         mkdirSync(join(home, 'sessions'), { recursive: true })
         mkdirSync(join(home, 'projects', 'p'), { recursive: true })
@@ -424,21 +452,24 @@ describe('a chat registered under a CLI instance is found as the caller', () => 
       const instance = join(scratch, 'nearest-instance')
       const defaultHome = join(scratch, 'nearest-default')
       const nearSid = '12345678-cccc-4ddd-8eee-1234567890ab'
-      register(instance, chain[0]!.pid, nearSid)
-      register(defaultHome, chain[1]!.pid, '12345678-dddd-4eee-8fff-1234567890ab')
-      const before = process.env.CLAUDE_CONFIG_DIR
-      process.env.CLAUDE_CONFIG_DIR = defaultHome
-      try {
-        const t = await resolveOwnTranscript({
-          callerPid: null,
-          extraHomes: async () => [instance],
-        })
-        expect(t.sessionId).toBe(nearSid)
-        expect(t.home).toBe(instance)
-      } finally {
-        if (before === undefined) delete process.env.CLAUDE_CONFIG_DIR
-        else process.env.CLAUDE_CONFIG_DIR = before
-      }
+      const proc = Bun.spawn([process.execPath, relay], {
+        stdin: 'pipe',
+        stdout: 'pipe',
+        stderr: 'pipe',
+        env: { ...process.env, CLAUDE_CONFIG_DIR: defaultHome, NEAREST_INSTANCE: instance },
+      })
+      register(instance, proc.pid, nearSid)
+      register(defaultHome, process.pid, '12345678-dddd-4eee-8fff-1234567890ab')
+      proc.stdin.end()
+      const [out, err] = await Promise.all([
+        new Response(proc.stdout).text(),
+        new Response(proc.stderr).text(),
+      ])
+      if ((await proc.exited) !== 0) throw new Error(`the asker failed: ${err}`)
+      const t = JSON.parse(out.trim().split('\n').at(-1) ?? '{}')
+      expect(t.chain).toEqual([proc.pid, process.pid])
+      expect(t.sessionId).toBe(nearSid)
+      expect(t.home).toBe(instance)
     },
     PROCESS_WALK_TEST_MS,
   )
