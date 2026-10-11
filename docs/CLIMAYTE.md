@@ -1723,7 +1723,9 @@ wrapped as `{ peerWarning, result }`, and an error carries it).
   a verdict covers is left out unless `all: true` (2026-10-02: the default answer was 96 KB, 80 KB
   of it already-judged work). With
   `wait_seconds` it waits for the next status change in scope (use this instead of polling); waits
-  are cut to `CLIMAYTE_MAX_WAIT_S` (45 s): an MCP client drops a call held about 60 s.
+  are cut to `CLIMAYTE_MAX_WAIT_S` (35 s), less what the call already spent finding its caller: an
+  MCP client drops a call held about 60 s, the call budget answers at 50 s, and the list read after
+  a 45 s watch ran past that seven times on 2026-10-11.
 - `climayte_log { group?, id?, since?, limit? }`: the journal as readable lines, newest last, default
   100.
 - `climayte_send { id, text, urgent?, model?, effort?, cwd? }` MUTATES: a follow-up turn in the same session;

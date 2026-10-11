@@ -253,7 +253,10 @@ export const MCP_CALL_BUDGET_MS = 50_000
  *  run's verdict (runScript). Under MCP_CALL_BUDGET_MS, so the answer that says "still running,
  *  here is the id" is itself never the one the client drops. */
 export const MCP_WAIT_MAX_MS = 45_000
-export const CLIMAYTE_MAX_WAIT_S = MCP_WAIT_MAX_MS / 1000
+/** climayte_status's longest watch, under MCP_WAIT_MAX_MS: what follows the watch (the list read, on
+ *  a daemon whose thread stalled up to 8 s at a time) ran 5-16 s past a 45 s watch seven times on
+ *  2026-10-11, and every one of those answers was lost at the call budget. */
+export const CLIMAYTE_MAX_WAIT_S = 35
 // Past this DECLARED run length, orchestrator_run, move_chats and fan_out detach AT ONCE instead
 // of first waiting MCP_WAIT_MAX_MS for a verdict that cannot arrive inside the call (2026-09-11,
 // the lost `sweep --all --yes`; lowered from 120 s on 2026-09-30, the client drops a call at ~60 s).

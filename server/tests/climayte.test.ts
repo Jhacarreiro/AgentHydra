@@ -1908,6 +1908,27 @@ describe('climayte_status scope (field notes 1, 4 and 7)', () => {
       ])
     })
 
+    // 2026-10-11: seven climayte_status {wait_seconds: 45} answers came 50-61 s after the call and
+    // were dropped at the 50 s budget. The watch is cut to what the call has left after the pings'
+    // caller lookup, which `ping: true` makes run first.
+    test('climayte_status watches only for what its call has left after the caller lookup', async () => {
+      const { setCallerTranscriptResolver } = await import('../src/mcp-self')
+      setCallerTranscriptResolver(async () => {
+        await Bun.sleep(2_100)
+        throw new Error('no calling chat in this test')
+      })
+      try {
+        const t = await tool('climayte_status')
+        await t.run({ group: 'g-1', ping: true, wait_seconds: 60 })
+        const read = urls.map((u) => new URL(u)).find((u) => u.pathname === '/api/corch/workers')
+        expect(Number(read?.searchParams.get('wait'))).toBeLessThanOrEqual(32)
+      } finally {
+        setCallerTranscriptResolver(async () => {
+          throw new Error('no calling chat in this test')
+        })
+      }
+    })
+
     test('climayte_run answers the group and, per worker, only id, title, status and account', async () => {
       const t = await tool('climayte_run')
       answer = {

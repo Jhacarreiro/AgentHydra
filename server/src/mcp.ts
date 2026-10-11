@@ -275,12 +275,14 @@ async function climayteStatusPings(
   return Object.keys(extra).length ? extra : null
 }
 
-/** climayte_status's own answer: one worker, a wave, or the list in scope. */
+/** climayte_status's own answer: one worker, a wave, or the list in scope. `waitCap`: the most it may
+ *  watch, what the call has left of CLIMAYTE_MAX_WAIT_S. */
 async function climayteStatusRead(
   a: Record<string, unknown>,
   group: string | undefined,
+  waitCap: number,
 ): Promise<unknown> {
-  const wait = Math.min(CLIMAYTE_MAX_WAIT_S, Math.max(0, Number(a.wait_seconds) || 0))
+  const wait = Math.min(waitCap, Math.max(0, Number(a.wait_seconds) || 0))
   const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
   if (a.wave != null && str(a.wave)) {
     const w = str(a.wave)
@@ -1120,10 +1122,14 @@ export const TOOLS: McpEngineTool[] = [
       },
     }),
     run: async (a) => {
+      const started = Date.now()
       const group = a.group != null && str(a.group) ? str(a.group) : undefined
       // Adoption first, so the list read after it already shows it.
       const extra = await climayteStatusPings(a, group)
-      const answer = await climayteStatusRead(a, group)
+      // The watch gets only what the call has left: the pings' caller lookup can take up to
+      // CALLER_ORIGIN_BUDGET_MS, and a full watch after it was an answer the call budget dropped.
+      const left = Math.floor(CLIMAYTE_MAX_WAIT_S - (Date.now() - started) / 1000)
+      const answer = await climayteStatusRead(a, group, Math.max(0, left))
       if (!extra) return answer
       return Array.isArray(answer)
         ? { workers: answer, ...extra }
