@@ -162,7 +162,6 @@ export type Holders = Record<string, Holder[]>
 export function readHolders(): Holders {
   try {
     const file = accountHoldersFile()
-    if (!existsSync(file)) return {}
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
     return parsed && typeof parsed === 'object' && !Array.isArray(parsed) ? parsed : {}
   } catch {

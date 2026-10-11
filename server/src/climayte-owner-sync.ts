@@ -166,7 +166,7 @@ function syncClaudeMdFile(
 function linkSkill(srcRoot: string, dstRoot: string, name: string, result: OwnerSyncResult): void {
   const dst = join(dstRoot, name)
   if (isOurLink(dst, srcRoot)) return
-  if (existsSync(dst) || lstatExists(dst)) {
+  if (lstatExists(dst)) {
     result.shadowed.push(name)
     return
   }
@@ -411,13 +411,14 @@ export function ownerMcpServers(
   deny: { names: readonly string[]; paths: readonly string[] },
 ): Record<string, McpEntry> {
   const file = join(dirname(resolve(ownerDir)), '.claude.json')
-  if (!existsSync(file)) return {}
   let servers: unknown
   try {
     servers = (JSON.parse(readFileSync(file, 'utf8')) as { mcpServers?: unknown }).mcpServers
   } catch (err) {
     const why = (err as NodeJS.ErrnoException)?.code ?? 'it is not valid JSON'
-    console.error(`[climayte] could not read the owner's MCP servers from ${file}: ${why}`)
+    // Not there: no owner config, so no servers, said by nothing.
+    if (why !== 'ENOENT' && why !== 'ENOTDIR')
+      console.error(`[climayte] could not read the owner's MCP servers from ${file}: ${why}`)
     return {}
   }
   const out: Record<string, McpEntry> = {}

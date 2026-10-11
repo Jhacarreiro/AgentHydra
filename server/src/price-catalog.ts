@@ -34,7 +34,7 @@
 //      is rejected wholesale, so a truncated download or an HTML error page cannot silently
 //      replace three thousand prices with four.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from './config'
 import { type ModelPrice, setFetchedPrices } from './pricing'
@@ -166,7 +166,6 @@ function apply(catalog: PriceCatalog): void {
 
 /** Read the on-disk cache into memory. Safe to call before any network exists. */
 export function loadCachedCatalog(): PriceCatalog | null {
-  if (!existsSync(CACHE_PATH)) return null
   try {
     const saved = JSON.parse(readFileSync(CACHE_PATH, 'utf8')) as {
       fetchedAt?: unknown

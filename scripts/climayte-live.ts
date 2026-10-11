@@ -127,13 +127,25 @@ const settled = (id: string, s = 400) =>
 const running = (id: string) => until(id, (v) => v.status === 'running', 90, 'running')
 const inBash = (id: string) =>
   until(id, (v) => /^Bash/.test(v.lastActivity ?? ''), 90, 'a Bash step')
+// The file's text, or undefined when there is no such file; any other read error is still thrown.
+const readIfThere = (p: string): string | undefined => {
+  try {
+    return readFileSync(p, 'utf8')
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    throw err
+  }
+}
 // A finished worker is its own file under corch/done; workers.json holds the work in flight.
 const rawWorker = (id: string) => {
   const done = join(AH, 'corch', 'done', `${id}.json`)
-  return (
-    JSON.parse(readFileSync(STORE, 'utf8')).workers.find((w: { id: string }) => w.id === id) ??
-    (existsSync(done) ? JSON.parse(readFileSync(done, 'utf8')) : undefined)
+  const found = JSON.parse(readFileSync(STORE, 'utf8')).workers.find(
+    (w: { id: string }) => w.id === id,
   )
+  if (found) return found
+  const text = readIfThere(done)
+  return text === undefined ? undefined : JSON.parse(text)
 }
 const path = (v: View) => v.attempts.map((a) => `#${a.account.num}:${a.outcome}`).join(' > ')
 const pidAlive = (pid: number) => {
@@ -149,7 +161,7 @@ function transcriptHas(configDir: string, sessionId: string, needle: string): bo
   if (!existsSync(root)) return false
   return readdirSync(root).some((d) => {
     const f = join(root, d, `${sessionId}.jsonl`)
-    return existsSync(f) && readFileSync(f, 'utf8').includes(needle)
+    return readIfThere(f)?.includes(needle) ?? false
   })
 }
 const dir = (name: string) => {
@@ -173,17 +185,15 @@ const blocker = (group: string, acct: string, cwd: string, secs: number) =>
     1,
   )
 
-const walls: Record<string, { reason: string; until: number }> = existsSync(WALLS)
-  ? JSON.parse(readFileSync(WALLS, 'utf8'))
-  : {}
+const walls: Record<string, { reason: string; until: number }> = JSON.parse(
+  readIfThere(WALLS) ?? '{}',
+)
 // The background refresh's readings (what CliMayte itself schedules by). An account at 98% or more of
 // a window that has not reset is skipped: CliMayte will not place a worker there, and one with paid
 // extra usage switched on would bill it.
 type Reading = { session?: { pct?: number; resetsAt?: string | null } | null } | null
 const USAGE_CACHE = join(AH, 'data', 'usage-cache.json')
-const cache: Record<string, Reading> = existsSync(USAGE_CACHE)
-  ? JSON.parse(readFileSync(USAGE_CACHE, 'utf8'))
-  : {}
+const cache: Record<string, Reading> = JSON.parse(readIfThere(USAGE_CACHE) ?? '{}')
 const full = (id: string): boolean => {
   const s = cache[`cli:${id}`]?.session
   return (s?.pct ?? 0) >= 98 && Date.parse(s?.resetsAt ?? '') > Date.now()
@@ -287,9 +297,7 @@ async function moveAndBack(a: Instance, b: Instance) {
       v.accountId === home && r.includes(c1) && r.includes(c2),
       `turn 3 moved back (${path(v)}) and knows both codewords: ${r}`,
     )
-    const relay = existsSync(join(cwd, 'relay.txt'))
-      ? readFileSync(join(cwd, 'relay.txt'), 'utf8').trim().split(/\r?\n/).join(',')
-      : ''
+    const relay = readIfThere(join(cwd, 'relay.txt'))?.trim().split(/\r?\n/).join(',') ?? ''
     check(
       relay === 'turn1,turn2,turn3',
       `relay.txt = ${relay}; moves ${v.moves}; $${v.costUsd.toFixed(2)}`,

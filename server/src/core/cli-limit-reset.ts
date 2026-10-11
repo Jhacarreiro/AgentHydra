@@ -22,7 +22,7 @@
 // Before the first run it marks the account's CLI setup finished and trusts one scratch folder in
 // the account's .claude.json, so the CLI opens straight to its prompt instead of a setup screen or
 // a "do you trust this folder" question whose default answer exits.
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CLAUDE_PROBE_NO_MCP_ARGS, DATA_DIR, resolveClaudeExe } from '../config'
 import type { CliLimitResetResult } from '../types'
@@ -101,9 +101,14 @@ export function dateAfter(screen: string): string | null {
 function prepareConfig(configDir: string): void {
   mkdirSync(WORK_DIR, { recursive: true })
   const file = join(configDir, '.claude.json')
-  const cfg = existsSync(file)
-    ? (JSON.parse(readFileSync(file, 'utf8') || '{}') as Record<string, unknown>)
-    : {}
+  let cfg: Record<string, unknown> = {}
+  try {
+    cfg = JSON.parse(readFileSync(file, 'utf8') || '{}') as Record<string, unknown>
+  } catch (err) {
+    // Not there: the CLI has never written one, which is what the empty config says.
+    const code = (err as NodeJS.ErrnoException)?.code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+  }
   const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>
   const key = WORK_DIR.replaceAll('\\', '/')
   if (cfg.hasCompletedOnboarding === true && projects[key]?.hasTrustDialogAccepted === true) return

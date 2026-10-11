@@ -204,7 +204,7 @@ export function launchRunner(spec: RunnerSpec, specPath: string): void {
 
 const readJson = <T>(path: string): T | null => {
   try {
-    return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')) as T) : null
+    return JSON.parse(readFileSync(path, 'utf8')) as T
   } catch {
     return null
   }

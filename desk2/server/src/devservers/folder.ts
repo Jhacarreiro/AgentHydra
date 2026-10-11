@@ -5,7 +5,7 @@
 // .devwebui written here is kept out of `git status` through the repo's own info/exclude, which is never committed.
 // Ported from desk2/server/src/devwebui/folder.ts, calling the manager in-process instead of over HTTP.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync } from 'node:fs'
 import { basename, dirname, resolve } from 'node:path'
 import { type DevWebFolder, type DevWebProject, projectForCwd } from '@shared/devwebui'
 import type { DevServers } from './contract'
@@ -59,7 +59,13 @@ export async function excludeFromGit(file: string): Promise<boolean> {
   if (!where) return false
   const exclude = resolve(dir, where)
   mkdirSync(dirname(exclude), { recursive: true })
-  const before = existsSync(exclude) ? readFileSync(exclude, 'utf8') : ''
+  let before = ''
+  try {
+    before = readFileSync(exclude, 'utf8')
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+  }
   appendFileSync(exclude, `${before === '' || before.endsWith('\n') ? '' : '\n'}/${prefix}${name}\n`)
   return true
 }

@@ -34,7 +34,6 @@ function thisMachine(): string {
 function readFile(): LaunchFile {
   try {
     const file = instanceLaunchesFile()
-    if (!existsSync(file)) return {}
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return {}
     const parsed: unknown = JSON.parse(raw)

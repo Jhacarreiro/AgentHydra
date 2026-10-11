@@ -1,6 +1,6 @@
 // ~/.hydra-desk-2/settings.json: the DeskSettings with SPEC.md's defaults underneath.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { DeskSettings, Effort, PermissionMode } from '@shared/protocol'
 import { isOrchestratorModel } from '@shared/orchestrator'
@@ -65,12 +65,12 @@ export function settingsPath(home: string): string {
 export function loadSettings(home: string): DeskSettings {
   const settings = { ...DEFAULT_SETTINGS }
   const file = settingsPath(home)
-  if (!existsSync(file)) return settings
   let saved: unknown
   try {
     saved = JSON.parse(readFileSync(file, 'utf8'))
   } catch (err) {
-    console.error(`[settings] ignoring unreadable ${file}: ${(err as Error).message}`)
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') console.error(`[settings] ignoring unreadable ${file}: ${(err as Error).message}`)
     return settings
   }
   if (typeof saved !== 'object' || saved === null) return settings

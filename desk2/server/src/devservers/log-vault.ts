@@ -104,7 +104,8 @@ export class LogVault {
     for (const [id, rows] of batches) {
       try {
         const f = this.file(id)
-        if (existsSync(f) && statSync(f).size >= MAX_BYTES) this.rotate(id)
+        const st = statSync(f, { throwIfNoEntry: false })
+        if (st && st.size >= MAX_BYTES) this.rotate(id)
         appendFileSync(f, rows.join(''))
       } catch {
         // a disk error must never take down the server being logged

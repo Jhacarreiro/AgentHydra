@@ -35,7 +35,7 @@
 // exactly one file: "you can delete it whenever you like" has to survive someone actually doing it.
 
 import { Database, type Statement } from 'bun:sqlite'
-import { existsSync, rmSync, statSync } from 'node:fs'
+import { rmSync, statSync } from 'node:fs'
 import { open as open_ } from 'node:fs/promises'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
@@ -835,14 +835,14 @@ export function searchIndexCoverage(files: IndexableFile[]): { covered: number; 
 }
 
 export function searchIndexStatus(): SearchIndexStatus {
-  const exists = existsSync(indexPath)
+  let exists = false
   let sizeBytes = 0
-  if (exists) {
-    try {
-      sizeBytes = statSync(indexPath).size
-    } catch {
-      /* raced with a delete */
-    }
+  try {
+    const st = statSync(indexPath, { throwIfNoEntry: false })
+    exists = st !== undefined
+    sizeBytes = st?.size ?? 0
+  } catch {
+    /* raced with a delete */
   }
   const conn = exists ? open() : null
   let sessions = 0

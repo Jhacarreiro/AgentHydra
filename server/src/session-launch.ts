@@ -204,11 +204,13 @@ export function ensureProjectTrusted(
   configDir: string | null,
 ): { trusted: boolean; mirrored: boolean; reason?: string } {
   const file = join(configDir ?? homedir(), '.claude.json')
-  if (!existsSync(file)) return { trusted: false, mirrored: false, reason: 'no-cli-config' }
   let cfg: Record<string, unknown>
   try {
     cfg = JSON.parse(readFileSync(file, 'utf8'))
-  } catch {
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR')
+      return { trusted: false, mirrored: false, reason: 'no-cli-config' }
     return { trusted: false, mirrored: false, reason: 'cli-config-unreadable' }
   }
   const projects = (cfg.projects ?? {}) as Record<string, Record<string, unknown>>
@@ -1244,12 +1246,14 @@ function findDesktopEntryInStore(
       for (const user of readdirSync(join(store, org.name), { withFileTypes: true })) {
         if (!user.isDirectory()) continue
         const p = join(store, org.name, user.name, `local_${sessionId}.json`)
-        if (!existsSync(p)) continue
         let cli: string | null = null
         try {
           const d = JSON.parse(readFileSync(p, 'utf8')) as { cliSessionId?: string }
           cli = typeof d.cliSessionId === 'string' ? d.cliSessionId : null
-        } catch {
+        } catch (err) {
+          // Not there: this profile has no such chat, so look at the next one.
+          const code = (err as NodeJS.ErrnoException).code
+          if (code === 'ENOENT' || code === 'ENOTDIR') continue
           // Shape unknown: the file existing is still visibility.
         }
         return { path: p, cliSessionId: cli }

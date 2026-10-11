@@ -4,7 +4,7 @@
  * Vendored from RepoYeti's src/signing.ts; the key lives under state/remote/.
  */
 import { createHmac, randomBytes, timingSafeEqual } from 'node:crypto'
-import { existsSync, readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { CONFIG_DIR, ensureConfigDir } from './config.ts'
 import { restrictToCurrentUser } from './fs-perms.ts'
@@ -18,8 +18,16 @@ export function key(): Buffer {
   if (KEY) return KEY
   ensureConfigDir()
   const p = keyPath()
-  if (existsSync(p)) {
-    KEY = Buffer.from(readFileSync(p, 'utf8').trim(), 'hex')
+  let saved: string | undefined
+  try {
+    saved = readFileSync(p, 'utf8')
+  } catch (err) {
+    // No key file yet means a new key below; any other read error is still thrown.
+    const code = (err as { code?: string }).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+  }
+  if (saved !== undefined) {
+    KEY = Buffer.from(saved.trim(), 'hex')
   } else {
     KEY = randomBytes(32)
     writeFileSync(p, KEY.toString('hex'), { mode: 0o600 })

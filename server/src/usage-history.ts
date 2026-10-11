@@ -16,7 +16,7 @@
 //
 // The pure math is separated from the storage so it is unit-testable without touching the disk.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { db, getSetting, setSetting } from './db'
@@ -89,19 +89,20 @@ export function pruneUsageSamples(now = Date.now()): number {
 export function importLegacyUsageHistory(path = LEGACY_PATH, force = false): number {
   if (!force && getSetting('usage_history_imported') === '1') return 0
   let added = 0
-  if (existsSync(path)) {
-    let parsed: unknown
-    try {
-      parsed = JSON.parse(readFileSync(path, 'utf8'))
-    } catch {
-      return 0 // unreadable now: leave the flag unset so a later start retries
-    }
-    if (parsed && typeof parsed === 'object') {
-      db.transaction(() => {
-        for (const [key, list] of Object.entries(parsed as History))
-          if (Array.isArray(list)) for (const s of list) if (s && insertSample(key, s)) added++
-      })()
-    }
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(path, 'utf8'))
+  } catch (err) {
+    // No legacy file is a finished import with nothing in it; any other failure is unreadable now,
+    // so leave the flag unset and let a later start retry.
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') return 0
+  }
+  if (parsed && typeof parsed === 'object') {
+    db.transaction(() => {
+      for (const [key, list] of Object.entries(parsed as History))
+        if (Array.isArray(list)) for (const s of list) if (s && insertSample(key, s)) added++
+    })()
   }
   pruneUsageSamples()
   setSetting('usage_history_imported', '1')

@@ -2,7 +2,7 @@
 // (where redesign-mcp.ts writes them). The run and the file are each one plain name; anything else, or a path that
 // resolves outside the folder, is refused.
 
-import { existsSync, realpathSync, statSync } from 'node:fs'
+import { realpathSync, statSync } from 'node:fs'
 import { join, relative, resolve, sep } from 'node:path'
 
 const RUN = /^[A-Za-z0-9][A-Za-z0-9._-]{0,127}$/
@@ -12,7 +12,7 @@ const FILE = /^option-\d{1,3}\.png$/
 export function designImagePath(dir: string, run: string, file: string): string | null {
   if (!RUN.test(run) || run.includes('..') || !FILE.test(file)) return null
   const path = resolve(join(dir, run, file))
-  if (!existsSync(path) || !statSync(path).isFile()) return null
+  if (!statSync(path, { throwIfNoEntry: false })?.isFile()) return null
   // A symlink inside the folder must not lead out of it.
   const rel = relative(realpathSync(dir), realpathSync(path))
   if (rel === '' || rel.startsWith('..') || rel.split(sep).includes('..') || resolve(rel) === rel) return null

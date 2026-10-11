@@ -71,8 +71,8 @@ function run(cmd: string, args: string[], cwd: string): void {
 }
 
 function dirSize(path: string): number {
-  if (!existsSync(path)) return 0
-  const st = statSync(path)
+  const st = statSync(path, { throwIfNoEntry: false })
+  if (!st) return 0
   if (!st.isDirectory()) return st.size
   return readdirSync(path).reduce((sum, name) => sum + dirSize(join(path, name)), 0)
 }

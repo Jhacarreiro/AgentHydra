@@ -18,7 +18,7 @@
 //     capture can be black or stale. The result carries the byte size so an implausibly small
 //     image is visible as such rather than being read as "the screen is empty".
 
-import { existsSync, mkdirSync, statSync } from 'node:fs'
+import { mkdirSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnCaptured } from './core/process.ts'
@@ -97,14 +97,14 @@ export async function captureScreen(outPath?: string): Promise<ScreenshotResult>
         reason: `screen capture timed out after ${CAPTURE_SCREEN_TIMEOUT_MS / 1000}s`,
         note: NOTE,
       }
-    if (code !== 0 || !existsSync(target))
+    const bytes = code === 0 ? statSync(target, { throwIfNoEntry: false })?.size : undefined
+    if (bytes === undefined)
       return {
         ok: false,
         reason: (err || out).trim().slice(0, 400) || 'capture failed',
         note: NOTE,
       }
     const [w, h] = out.trim().split('x').map(Number)
-    const bytes = statSync(target).size
     return { ok: true, path: target, bytes, width: w, height: h, note: NOTE }
   } catch (error) {
     return {

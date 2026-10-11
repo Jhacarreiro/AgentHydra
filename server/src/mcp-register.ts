@@ -189,11 +189,13 @@ export function readConfig(path: string): {
   config: Record<string, unknown> | null
   error: string | null
 } {
-  if (!existsSync(path)) return { config: {}, error: null }
   let raw: string
   try {
     raw = readFileSync(path, 'utf8')
   } catch (e) {
+    // A missing path (or a parent that is a file) is the "not written yet" case, not damage.
+    const code = (e as NodeJS.ErrnoException).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return { config: {}, error: null }
     return { config: null, error: `could not read ${path}: ${e instanceof Error ? e.message : e}` }
   }
   // An empty file is Claude Code's own "not written yet" state, not damage.

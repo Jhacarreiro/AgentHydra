@@ -177,7 +177,6 @@ export function readCodexAuth(codexHome: string): CodexAuthFile | null {
   try {
     if (!codexHome?.trim()) return null
     const file = path.join(codexHome, 'auth.json')
-    if (!existsSync(file)) return null
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return null
     const parsed = JSON.parse(raw)
@@ -276,7 +275,6 @@ export function codexAccountsCacheFile(): string {
 function readCodexCache(): CodexCacheFile {
   try {
     const file = codexAccountsCacheFile()
-    if (!existsSync(file)) return {}
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return {}
     const parsed = JSON.parse(raw)

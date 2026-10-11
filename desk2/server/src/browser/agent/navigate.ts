@@ -62,7 +62,8 @@ export async function profileFolder(name: string, cwd: string | undefined): Prom
   if (!result.workspace) return ensureDir(join(root, slug))
   const mine = join(root, 'ws', result.workspace, slug)
   const legacy = join(root, slug)
-  if (!existsSync(mine) && existsSync(legacy) && lstatSync(legacy).isDirectory() && !lstatSync(legacy).isSymbolicLink())
+  const legacyStat = lstatSync(legacy, { throwIfNoEntry: false })
+  if (!existsSync(mine) && legacyStat !== undefined && legacyStat.isDirectory() && !legacyStat.isSymbolicLink())
     return legacy
   return ensureDir(mine)
 }

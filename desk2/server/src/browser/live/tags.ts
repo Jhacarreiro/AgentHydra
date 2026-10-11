@@ -85,13 +85,16 @@ export function adoptConnectionsTags(file: string, legacy: string): boolean {
 export function readLiveTags(): { tags: LiveTag[]; error?: string } {
   const file = browserTagsPath()
   if (!process.env.CONNECTIONS_BROWSER_TAGS && !process.env.HYDRA_DESK_HOME) adoptConnectionsTags(file, CONNECTIONS_TAGS_PATH)
-  if (!existsSync(file)) return { tags: [] }
   let parsed: unknown
   try {
     parsed = JSON.parse(readFileSync(file, 'utf8').replace(/^﻿/, ''))
   } catch (e) {
-    const why = e instanceof Error ? e.message : String(e)
-    return { tags: [], error: `${file} is not valid JSON (${why}). Fix or delete it; no tag was changed.` }
+    const code = (e as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
+      const why = e instanceof Error ? e.message : String(e)
+      return { tags: [], error: `${file} is not valid JSON (${why}). Fix or delete it; no tag was changed.` }
+    }
+    return { tags: [] }
   }
   const tags = (parsed as { tags?: unknown })?.tags
   return { tags: Array.isArray(tags) ? (tags as LiveTag[]) : [] }

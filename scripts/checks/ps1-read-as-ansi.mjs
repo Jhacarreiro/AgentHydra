@@ -19,7 +19,7 @@
 // Self-contained by design (same reason as the other checks here): imports nothing but node stdlib,
 // and returns plain finding objects for the runner.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -59,8 +59,12 @@ export const audit = {
     const findings = []
     for (const rel of TARGETS) {
       const file = join(root, rel)
-      // A missing target means this check has drifted from the repo, not that the repo is clean.
-      if (!existsSync(file)) {
+      let text
+      try {
+        text = readFileSync(file, 'utf8')
+      } catch (err) {
+        // A missing target means this check has drifted from the repo, not that the repo is clean.
+        if (err.code !== 'ENOENT' && err.code !== 'ENOTDIR') throw err
         findings.push({
           id: ID,
           file: rel,
@@ -69,7 +73,7 @@ export const audit = {
         })
         continue
       }
-      for (const v of findViolations(readFileSync(file, 'utf8'))) {
+      for (const v of findViolations(text)) {
         findings.push({ ...v, file: rel, message: `${rel} ${v.message}` })
       }
     }

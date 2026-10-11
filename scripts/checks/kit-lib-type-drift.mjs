@@ -31,7 +31,7 @@
 // Self-contained (same rationale as this repo's other guardrails): imports only node builtins, so
 // it runs standalone in CI with no runner and no network.
 
-import { existsSync, readdirSync, readFileSync } from "node:fs";
+import { readdirSync, readFileSync } from "node:fs";
 import { basename, join, relative, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 
@@ -229,7 +229,11 @@ export const audit = {
     for (const dts of findDeclarationFiles(root)) {
       const mjs = dts.replace(/\.d\.mts$/, ".mjs");
 
-      if (!existsSync(mjs)) {
+      let runtime;
+      try {
+        runtime = runtimeValueExports(mjs);
+      } catch (err) {
+        if (err.code !== "ENOENT" && err.code !== "ENOTDIR") throw err;
         findings.push({
           file: rel(dts),
           message: `declares types for ${basename(mjs)}, which does not exist. An ambient declaration with no runtime module behind it lets every import of it typecheck and then fail at runtime.`,
@@ -237,7 +241,6 @@ export const audit = {
         continue;
       }
 
-      const runtime = runtimeValueExports(mjs);
       const declared = declaredValueExports(dts);
       checked.push(rel(mjs));
 

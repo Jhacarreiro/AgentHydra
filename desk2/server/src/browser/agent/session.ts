@@ -209,8 +209,14 @@ function writeMarker(dir: string, headless: boolean): void {
 
 export function launchedHeadless(dir: string): boolean {
   const wsPath = readPortFile(dir)?.wsPath
-  if (!wsPath || !existsSync(join(dir, HEADLESS_MARK))) return false
-  return readFileSync(join(dir, HEADLESS_MARK), 'utf8') === wsPath
+  if (!wsPath) return false
+  try {
+    return readFileSync(join(dir, HEADLESS_MARK), 'utf8') === wsPath
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+    return false
+  }
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))

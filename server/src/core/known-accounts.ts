@@ -20,7 +20,6 @@ type KnownAccountsFile = Record<string, CMAccountCacheEntry>
 export function readKnownAccounts(): KnownAccountsFile {
   try {
     const file = knownAccountsFile()
-    if (!existsSync(file)) return {}
     const parsed = JSON.parse(readFileSync(file, 'utf8'))
     return parsed && typeof parsed === 'object' ? (parsed as KnownAccountsFile) : {}
   } catch {

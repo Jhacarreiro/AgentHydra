@@ -21,7 +21,7 @@
 // (every 10 minutes, 5 from 60%, 1 from 85%). Otherwise a heavy chat could bill for most of half an
 // hour before anyone looked. No other account is ever read for this.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { climayteWorkerPids } from './climayte'
 import { BILL_GUARD_SESSION_PCT, BILL_GUARD_WEEK_PCT } from './climayte-lib'
@@ -261,7 +261,6 @@ export function stopExtraUsageGuard(): void {
 function cliOrgUuid(configDir: string): string | null {
   try {
     const path = join(configDir, '.claude.json')
-    if (!existsSync(path)) return null
     const org = JSON.parse(readFileSync(path, 'utf8'))?.oauthAccount?.organizationUuid
     return typeof org === 'string' && org.trim() ? org.trim() : null
   } catch {

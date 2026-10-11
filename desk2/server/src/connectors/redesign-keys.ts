@@ -96,9 +96,16 @@ export const fingerprint = (key: string): string => createHash('sha256').update(
 
 /** The keys of one list, in a fixed order (by fingerprint) so a re-run picks the same ones. */
 function readList(file: string): string[] {
-  if (!existsSync(file)) return []
+  let text: string
+  try {
+    text = readFileSync(file, 'utf8')
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+    return []
+  }
   const keys = new Set<string>()
-  for (const raw of readFileSync(file, 'utf8').split(/\r?\n/)) {
+  for (const raw of text.split(/\r?\n/)) {
     const line = raw.trim()
     if (line && !line.startsWith('#') && !/[\s,]/.test(line)) keys.add(line)
   }

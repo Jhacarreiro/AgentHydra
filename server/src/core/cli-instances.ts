@@ -244,7 +244,6 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
 export function cliPlanLabel(configDir: string): string | null {
   try {
     const path = join(configDir, '.credentials.json')
-    if (!existsSync(path)) return null
     const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
     const plan = typeof oauth?.subscriptionType === 'string' ? oauth.subscriptionType : null
     const tier = typeof oauth?.rateLimitTier === 'string' ? oauth.rateLimitTier : null

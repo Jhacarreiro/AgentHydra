@@ -280,13 +280,12 @@ export async function getWindowsMasterKey(instanceDir: string): Promise<Uint8Arr
     if (cached) return cached
 
     const localStatePath = join(instanceDir, 'Local State')
-    if (!existsSync(localStatePath)) return null
 
     let raw: string
     try {
       raw = readFileSync(localStatePath, 'utf8')
     } catch {
-      // Locked (Claude actively writing it) or permissions issue.
+      // Missing (never written), locked (Claude actively writing it) or permissions issue.
       return null
     }
 

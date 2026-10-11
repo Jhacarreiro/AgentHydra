@@ -91,14 +91,16 @@ type AccountsCacheFile = Record<string, CMAccountCacheEntry>
 function readAccountsCache(): AccountsCacheFile {
   try {
     const file = accountsCacheFile()
-    if (!existsSync(file)) return {}
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return {}
     const parsed = JSON.parse(raw)
     if (parsed && typeof parsed === 'object') return parsed as AccountsCacheFile
     return {}
   } catch (err) {
-    log('warn', `readAccountsCache: failed to load instances-cache.json: ${String(err)}`)
+    const code = (err as NodeJS.ErrnoException)?.code
+    // Not there: an empty cache, said by nothing. Unreadable: said, and empty too.
+    if (code !== 'ENOENT' && code !== 'ENOTDIR')
+      log('warn', `readAccountsCache: failed to load instances-cache.json: ${String(err)}`)
     return {}
   }
 }
@@ -482,7 +484,6 @@ export function orderInferenceGrants(
  *  resolveInstanceToken so the file-read/parse/decrypt chain isn't inline in the main function. */
 async function loadDecryptedTokenCache(instanceDir: string): Promise<string | null> {
   const configPath = path.join(instanceDir, 'config.json')
-  if (!existsSync(configPath)) return null
 
   let config: Record<string, unknown> | null = null
   try {
@@ -590,7 +591,6 @@ export function cliConfigDirCredentialState(
   try {
     if (!configDir?.trim()) return 'absent'
     const credPath = path.join(configDir, '.credentials.json')
-    if (!existsSync(credPath)) return 'absent'
     const raw = readFileSync(credPath, 'utf8')
     if (!raw?.trim()) return 'absent'
     const oauth = (JSON.parse(raw) as { claudeAiOauth?: Record<string, unknown> })?.claudeAiOauth
@@ -618,7 +618,6 @@ export function resolveCliConfigDirToken(
   try {
     if (!configDir?.trim()) return null
     const credPath = path.join(configDir, '.credentials.json')
-    if (!existsSync(credPath)) return null
     const raw = readFileSync(credPath, 'utf8')
     if (!raw?.trim()) return null
     const parsed = JSON.parse(raw) as { claudeAiOauth?: RawGrantValue & { scopes?: unknown } }
@@ -671,17 +670,18 @@ function loadAccountConfig(instanceDir: string): {
 } {
   const configPath = path.join(instanceDir, 'config.json')
   let config: Record<string, unknown> | null = null
-  if (existsSync(configPath)) {
-    try {
-      const raw = readFileSync(configPath, 'utf8')
-      if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
-    } catch (err) {
+  try {
+    const raw = readFileSync(configPath, 'utf8')
+    if (raw?.trim()) config = JSON.parse(raw) as Record<string, unknown>
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    // Not there: no config, said by nothing. Unreadable: said, and no config either.
+    if (code !== 'ENOENT' && code !== 'ENOTDIR')
       log(
         'warn',
         `resolveAccount: failed to read/parse config.json at '${configPath}': ${String(err)}`,
       )
-      config = null
-    }
+    config = null
   }
   const lastKnownAccountUuid =
     config && typeof config.lastKnownAccountUuid === 'string' ? config.lastKnownAccountUuid : null

@@ -105,10 +105,12 @@ export function ensureConfigDir(): void {
 
 export function loadConfig(): RemoteConfig {
   let stored: RemoteConfig = {}
-  if (existsSync(CONFIG_PATH)) {
-    try {
-      stored = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as RemoteConfig
-    } catch (err) {
+  try {
+    stored = JSON.parse(readFileSync(CONFIG_PATH, 'utf8')) as RemoteConfig
+  } catch (err) {
+    // A missing file is the defaults with no warning; anything else is reported as before.
+    const code = (err as { code?: string }).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') {
       console.warn(
         `[orchestrator-remote] ${CONFIG_PATH} is not valid JSON, using defaults: ${String(err)}`,
       )

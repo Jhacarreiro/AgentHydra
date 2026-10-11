@@ -12,7 +12,7 @@
 // these POST routes ("no action switch") first.
 // ctx.deps may carry `connections` (a ConnectionsClient over a fake loader) and `mainClaudeJson` (the config to read).
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 import {
@@ -87,7 +87,7 @@ export class DefaultsStore {
   constructor(private file: string) {
     this.writer = new AsyncFile(file)
     try {
-      if (existsSync(file)) this.data = JSON.parse(readFileSync(file, 'utf8')) ?? {}
+      this.data = JSON.parse(readFileSync(file, 'utf8')) ?? {}
     } catch {
       this.data = {}
     }

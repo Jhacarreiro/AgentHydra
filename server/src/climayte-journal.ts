@@ -10,7 +10,7 @@
 // Append-only, a few hundred bytes a line, rotated at JOURNAL_MAX_BYTES with one previous file kept
 // (`journal.1.jsonl`). A failed write is logged and dropped: the journal must never stop a worker.
 
-import { appendFileSync, existsSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'node:fs'
 import { dirname } from 'node:path'
 
 export type CliMayteJournalEvent =
@@ -148,7 +148,6 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
   const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 30)))
   const after = sinceMs(filter.since)
   const pick = (file: string): CliMayteJournalEntry[] => {
-    if (!existsSync(file)) return []
     let text = ''
     try {
       text = readFileSync(file, 'utf8')

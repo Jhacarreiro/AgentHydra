@@ -2,7 +2,7 @@
 // folder to an http MCP entry, so the claude process that owns the peer socket is found, and its session file
 // (<root>/sessions/<pid>.json) names the session and its folder. Ported from Connections' chat-owner-session.mjs.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { sessionFileRoots } from './tab-sweep'
 
@@ -36,7 +36,6 @@ export function parseNetstatPid(output: string, peerPort: number, serverPort: nu
 export function sessionForPid(roots: string[], pid: number): PeerSession | null {
   for (const root of roots) {
     const file = join(root, 'sessions', `${pid}.json`)
-    if (!existsSync(file)) continue
     let parsed: { pid?: unknown; sessionId?: unknown; cwd?: unknown }
     try {
       parsed = JSON.parse(readFileSync(file, 'utf8'))

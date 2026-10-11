@@ -87,7 +87,6 @@ function collectValidRefs(source: unknown): { byRef: Record<string, number>; hig
 function read(): RegistryFile {
   try {
     const file = instanceNumbersFile()
-    if (!existsSync(file)) return empty()
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return empty()
     const parsed = JSON.parse(raw) as unknown

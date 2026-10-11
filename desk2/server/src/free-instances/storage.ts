@@ -61,7 +61,14 @@ export class FreeStorage {
     this.file = join(home, 'free', 'accounts.json')
     this.writer = new AsyncFile(this.file, { mode: 0o600 })
     this.backupWriter = new AsyncFile(`${this.file}.bak`, { mode: 0o600 })
-    const bytes = existsSync(this.file) ? readFileSync(this.file) : null
+    let bytes: Buffer | null
+    try {
+      bytes = readFileSync(this.file)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+      bytes = null
+    }
     if (!bytes) this.migrate()
     // A power cut must never cost the Free accounts' history: the last-good backup comes before any rebuild.
     else if (bytes.every(b => b === 0)) { if (!this.restore('unwritten')) this.rebuild() }
@@ -132,7 +139,6 @@ export class FreeStorage {
   /** Restores accounts.json from its last-good backup, setting the damaged file aside (never deleted). False if there is no usable backup. */
   private restore(aside: 'unwritten' | 'damaged'): boolean {
     const backup = `${this.file}.bak`
-    if (!existsSync(backup)) return false
     let data: Data
     try { data = load(readFileSync(backup, 'utf8')) } catch { return false }
     renameSync(this.file, `${this.file}.${aside}-${Date.now()}`)

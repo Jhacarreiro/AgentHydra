@@ -19,7 +19,7 @@ export function validateCwd(cwd: unknown): string {
   if (!isAbsolute(raw)) throw new Error(`cwd '${raw}' is not an absolute path`)
   let ok = false
   try {
-    ok = existsSync(raw) && statSync(raw).isDirectory()
+    ok = statSync(raw, { throwIfNoEntry: false })?.isDirectory() ?? false
   } catch {
     // unreadable: refused below
   }

@@ -468,7 +468,6 @@ const copilotCli: Adapter = {
     for (const id of dirs(stateRoot)) {
       const dir = join(stateRoot, id)
       const yaml = join(dir, 'workspace.yaml')
-      if (!existsSync(yaml)) continue
       let meta: Record<string, string>
       try {
         meta = parseFlatYaml(readFileSync(yaml, 'utf8'))

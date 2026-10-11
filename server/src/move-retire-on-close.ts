@@ -29,7 +29,7 @@
 // failed scan skips the pass. The sweep also runs for a profile right before AgentHydra opens it,
 // so a close and reopen inside one 60s tick is not missed.
 
-import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { DATA_DIR } from './config'
 import { launchStartedSince, setBeforeLaunchHook } from './core/instances'
@@ -62,7 +62,6 @@ export function retireStoreAt(path: string): RetireStore {
   return {
     load: () => {
       try {
-        if (!existsSync(path)) return []
         const raw = JSON.parse(readFileSync(path, 'utf8')) as { entries?: unknown }
         return Array.isArray(raw?.entries)
           ? raw.entries.filter(

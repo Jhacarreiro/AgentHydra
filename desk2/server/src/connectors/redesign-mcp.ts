@@ -372,8 +372,15 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
   async function screenshotInput(file: string): Promise<string | ToolResult> {
     const ext = extname(file).toLowerCase()
     if (!MIME[ext]) return fail(`screenshot must be a png, jpg, webp, gif or bmp file, got ${ext || 'no extension'}.`)
-    if (!existsSync(file)) return fail(`No file at ${file}.`)
-    return uploadInput(basename(file), MIME[ext] as string, readFileSync(file))
+    let bytes: Buffer
+    try {
+      bytes = readFileSync(file)
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+      return fail(`No file at ${file}.`)
+    }
+    return uploadInput(basename(file), MIME[ext] as string, bytes)
   }
 
   async function urlInput(url: string): Promise<string | ToolResult> {
@@ -585,8 +592,14 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
     let from = { run, job: '' }
     let known = 0
     const sidecar = join(o.outDir, run, 'options.json')
-    if (existsSync(sidecar)) {
-      const rows = JSON.parse(readFileSync(sidecar, 'utf8')) as { option: number; run: string; job: string }[]
+    let rows: { option: number; run: string; job: string }[] | undefined
+    try {
+      rows = JSON.parse(readFileSync(sidecar, 'utf8')) as { option: number; run: string; job: string }[]
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException).code
+      if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+    }
+    if (rows) {
       known = rows.length
       from = rows.find((r) => r.option === n) ?? from
     } else {

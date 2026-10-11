@@ -2203,12 +2203,12 @@ export function endedTask(item: TranscriptItem, at?: number): TranscriptItem {
 
 const sameFolder = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase()
 
-const isFolder = (p: string): boolean => existsSync(p) && statSync(p).isDirectory()
+const isFolder = (p: string): boolean => statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false
 
 export function checkCwd(cwd: string): string {
   if (!isAbsolute(cwd)) throw new ChatError(400, `cwd must be an absolute path, got ${JSON.stringify(cwd)}`)
   const full = resolve(cwd)
-  if (!existsSync(full) || !statSync(full).isDirectory()) throw new ChatError(400, `the folder ${full} does not exist`)
+  if (!statSync(full, { throwIfNoEntry: false })?.isDirectory()) throw new ChatError(400, `the folder ${full} does not exist`)
   return full
 }
 

@@ -16,7 +16,8 @@ const GROUP = 'hydra-audio'
 export async function compileHelper(home: string): Promise<string | null> {
   const dir = join(home, 'headless-audio')
   const exe = join(dir, 'HeadlessAudioHelper.exe')
-  if (existsSync(exe) && statSync(exe).mtimeMs >= statSync(SOURCE).mtimeMs) return exe
+  const exeStat = statSync(exe, { throwIfNoEntry: false })
+  if (exeStat && exeStat.mtimeMs >= statSync(SOURCE).mtimeMs) return exe
   if (!existsSync(CSC)) return null
   mkdirSync(dir, { recursive: true })
   const proc = Bun.spawn([CSC, '/nologo', '/target:exe', '/optimize+', `/out:${exe}`, '/reference:System.Management.dll', SOURCE], {

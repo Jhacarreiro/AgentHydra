@@ -3,7 +3,7 @@
 // (sizeTasks) and the reply. climayteRun in climayte.ts enlists what this makes. Split from
 // climayte.ts on 2026-10-08; it imports only types from it.
 
-import { existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { mkdirSync, readFileSync, type Stats, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
 import type { climayteRun } from './climayte'
 import {
@@ -97,6 +97,15 @@ function autoPicksSoFar(): Map<CliMayteKind, number> {
   return autoSoFar
 }
 
+/** statSync that answers undefined when the path is not there or cannot be looked at. */
+const statMaybe = (path: string): Stats | undefined => {
+  try {
+    return statSync(path, { throwIfNoEntry: false })
+  } catch {
+    return undefined
+  }
+}
+
 /** A task's `sealed` option, validated: both files absolute and there, the MCP config one with an
  *  `mcpServers` object, at least one allowed tool. Throws on anything else, so a sealed task never
  *  starts with nothing to act with. */
@@ -106,7 +115,7 @@ export function sealedOf(v: unknown): CliMayteSealed {
     const path = s[key]
     if (typeof path !== 'string' || !isAbsolute(path))
       throw new Error(`sealed.${key} must be an absolute file path`)
-    if (!existsSync(path) || !statSync(path).isFile())
+    if (!statMaybe(path)?.isFile())
       throw new Error(`sealed.${key} '${path}' is not an existing file`)
     return path
   }
@@ -147,10 +156,7 @@ function assertRunnable(t: RunTask, i: number): void {
   if (typeof t?.prompt !== 'string' || !t.prompt.trim())
     throw new Error(`task ${i + 1}: prompt is empty`)
   // A sealed task names no folder: it runs in an empty one of its own (newWorker).
-  if (
-    !t.sealed &&
-    (typeof t.cwd !== 'string' || !existsSync(t.cwd) || !statSync(t.cwd).isDirectory())
-  )
+  if (!t.sealed && (typeof t.cwd !== 'string' || !statMaybe(t.cwd)?.isDirectory()))
     throw new Error(`task ${i + 1}: cwd '${t.cwd}' is not an existing folder`)
   if (
     t.check !== undefined &&

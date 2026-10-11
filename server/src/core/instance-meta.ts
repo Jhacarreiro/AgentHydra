@@ -64,7 +64,6 @@ function isEmpty(meta: InstanceMeta): boolean {
 function readFile(): InstanceMetaFileShape {
   try {
     const file = instanceMetaFile()
-    if (!existsSync(file)) return {}
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return {}
     const parsed = JSON.parse(raw)

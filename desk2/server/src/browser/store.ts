@@ -34,8 +34,14 @@ export const isObject = (v: unknown): v is Json =>
 
 /** A file's JSON object: null when the file is missing, throws when it exists and cannot be read as one. */
 export function readObject(file: string): Json | null {
-  if (!existsSync(file)) return null
-  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'))
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+    return null
+  }
   if (!isObject(parsed)) throw new Error('not a JSON object')
   return parsed
 }

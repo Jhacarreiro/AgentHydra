@@ -12,7 +12,7 @@
 // folder) is shown and refused, never written. Files changed through a shell command are not in the transcript's tool
 // inputs, so they are not this feature's: a file is only ever touched when the chat's own Edit/Write changed it.
 
-import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'node:fs'
 import { dirname, isAbsolute, relative, resolve, sep } from 'node:path'
 import type { ChatUndoFile, ChatUndoPlan, ChatUndoResult } from '@shared/connectors'
 
@@ -122,12 +122,12 @@ export function lineChange(a: string, b: string): { added: number; removed: numb
 
 /** The file's text, null when it is not there; undefined when it is not text (it has a NUL) or cannot be read. */
 function readDisk(path: string): string | null | undefined {
-  if (!existsSync(path)) return null
   try {
     const text = readFileSync(path, 'utf8')
     return text.includes('\0') ? undefined : text
-  } catch {
-    return undefined
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    return code === 'ENOENT' || code === 'ENOTDIR' ? null : undefined
   }
 }
 

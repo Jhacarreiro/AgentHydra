@@ -62,7 +62,6 @@ function sanitize(raw: unknown): UiPrefs {
 export function readUiPrefs(): UiPrefs {
   try {
     const file = uiPrefsFile()
-    if (!existsSync(file)) return {}
     const raw = readFileSync(file, 'utf8')
     if (!raw?.trim()) return {}
     return sanitize(JSON.parse(raw))

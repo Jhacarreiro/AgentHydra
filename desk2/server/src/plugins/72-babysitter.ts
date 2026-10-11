@@ -8,7 +8,7 @@
 // judged nor acted on. Its memory (each chat's count, the last acts) is <home>/babysitter.json, so a restart neither
 // forgets a count nor sends a continue twice. No model is asked: a look costs a few local reads.
 
-import { existsSync, readFileSync } from 'node:fs'
+import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Hono } from 'hono'
 import type { AccountInfo, ChatSummary, ExternalSession, QueueState } from '@shared/protocol'
@@ -40,12 +40,12 @@ interface Saved {
  *  a forgotten continue only means a chat counts from zero). */
 function load(file: string): Saved {
   try {
-    if (!existsSync(file)) return { memory: {}, acts: [] }
     const v = JSON.parse(readFileSync(file, 'utf8')) as Partial<Saved>
     const memory = v.memory && typeof v.memory === 'object' && !Array.isArray(v.memory) ? v.memory : {}
     return { memory, acts: Array.isArray(v.acts) ? v.acts.slice(0, ACTS_KEPT) : [] }
   } catch (err) {
-    console.error('[babysitter] babysitter.json did not load; starting with no memory:', err)
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') console.error('[babysitter] babysitter.json did not load; starting with no memory:', err)
     return { memory: {}, acts: [] }
   }
 }

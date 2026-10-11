@@ -364,12 +364,12 @@ export async function checkBox(
   add('reaper', reaperInstalled ? await reaperFindings(Date.now()) : [])
   if (table) {
     let hoards: BoxFinding[] | null = []
-    if (existsSync(alertsFile())) {
-      try {
-        hoards = hoardFindings(readFileSync(alertsFile(), 'utf8'), new Set(table.map((p) => p.pid)))
-      } catch {
-        hoards = null // unreadable: the reaper rewrites it on the next change
-      }
+    try {
+      hoards = hoardFindings(readFileSync(alertsFile(), 'utf8'), new Set(table.map((p) => p.pid)))
+    } catch (err) {
+      const code = (err as NodeJS.ErrnoException)?.code
+      // Not there: nothing recorded yet. Unreadable: the reaper rewrites it on the next change.
+      hoards = code === 'ENOENT' || code === 'ENOTDIR' ? [] : null
     }
     add('hoard:', hoards)
     findings.push({

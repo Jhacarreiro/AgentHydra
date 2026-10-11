@@ -663,9 +663,11 @@ export function load(): void {
     return
   }
   try {
-    if (existsSync(WALLS_PATH)) walls = JSON.parse(readFileSync(WALLS_PATH, 'utf8'))
-  } catch {
-    walls = {}
+    walls = JSON.parse(readFileSync(WALLS_PATH, 'utf8'))
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    // Not there: the walls stand as they were. Unreadable: start over with none.
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') walls = {}
   }
   try {
     if (orgWallsFromAttempts()) saveWalls()

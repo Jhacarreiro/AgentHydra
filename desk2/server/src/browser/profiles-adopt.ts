@@ -119,8 +119,9 @@ export async function adoptProfile(
     )
   const owned = join(root, 'ws', slug, name)
   const legacy = join(root, name)
+  const legacyStat = lstatSync(legacy, { throwIfNoEntry: false })
   const legacyInPlace =
-    !existsSync(owned) && existsSync(legacy) && lstatSync(legacy).isDirectory() && !lstatSync(legacy).isSymbolicLink()
+    !existsSync(owned) && legacyStat !== undefined && legacyStat.isDirectory() && !legacyStat.isSymbolicLink()
   const managed = legacyInPlace ? legacy : owned
   const key = legacyInPlace ? name : `${slug}/${name}`
   const scope = legacyInPlace ? 'unowned' : 'workspace'

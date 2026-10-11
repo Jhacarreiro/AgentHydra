@@ -64,7 +64,7 @@ const server = Bun.serve({
     const path = decodeURIComponent(new URL(req.url).pathname)
     if (/^\/(api|dw|ah|events)(\/|$)/.test(path)) return new Response('no data here: window-shots serves the demo window only', { status: 503 })
     const file = normalize(join(DIST, path === '/' ? 'index.html' : path))
-    if (!file.startsWith(DIST) || !existsSync(file) || !statSync(file).isFile()) return new Response(readFileSync(join(DIST, 'index.html')), { headers: { 'content-type': 'text/html' } })
+    if (!file.startsWith(DIST) || !statSync(file, { throwIfNoEntry: false })?.isFile()) return new Response(readFileSync(join(DIST, 'index.html')), { headers: { 'content-type': 'text/html' } })
     return new Response(readFileSync(file), { headers: { 'content-type': TYPES[extname(file)] ?? 'application/octet-stream' } })
   },
 })

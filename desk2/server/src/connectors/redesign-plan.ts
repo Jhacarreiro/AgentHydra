@@ -8,7 +8,7 @@
 // Pro answers RECITATION sometimes). Models are ranked by what their key pool and our own recent results say, and the
 // run takes the best ones, repeating a model (with another style hint) when fewer than `count` distinct ones work.
 
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
 import { KEY_PLAN } from './redesign-keys'
 
@@ -180,7 +180,7 @@ export function listsToRefill(ranked: Ranked[], planned: readonly string[], pool
 
 export function loadHealth(file: string): Health {
   try {
-    return existsSync(file) ? (JSON.parse(readFileSync(file, 'utf8')) as Health) : {}
+    return JSON.parse(readFileSync(file, 'utf8')) as Health
   } catch {
     return {}
   }

@@ -25,8 +25,14 @@ export function registryFile(): string {
 
 function parseRegistry(): Json | null {
   const file = registryFile()
-  if (!existsSync(file)) return {}
-  const parsed: unknown = JSON.parse(readFileSync(file, 'utf8'))
+  let parsed: unknown
+  try {
+    parsed = JSON.parse(readFileSync(file, 'utf8'))
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException).code
+    if (code !== 'ENOENT' && code !== 'ENOTDIR') throw err
+    return {}
+  }
   return isObject(parsed) ? parsed : null
 }
 

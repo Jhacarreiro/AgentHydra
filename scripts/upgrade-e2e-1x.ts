@@ -590,18 +590,25 @@ async function awaitRelease(port: number, t0: number, delayMs: number) {
   return { t2, seen113Until, last }
 }
 
+// The file's text, or undefined when there is no such file; any other read error is still thrown.
+function readIfThere(p: string): string | undefined {
+  try {
+    return readFileSync(p, 'utf8')
+  } catch (err) {
+    const code = (err as { code?: string }).code
+    if (code === 'ENOENT' || code === 'ENOTDIR') return undefined
+    throw err
+  }
+}
+
 function checkInstalled(): void {
   const exeV = spawnSync(join(INSTALL, 'AgentHydra.exe'), ['--version'], {
     encoding: 'utf8',
     windowsHide: true,
     env: { ...process.env, AGENTHYDRA_HEADLESS: '1' } as never,
   })
-  const pin = existsSync(join(INSTALL, 'app', 'bun-version'))
-    ? readFileSync(join(INSTALL, 'app', 'bun-version'), 'utf8').trim()
-    : ''
-  const stamp = existsSync(join(INSTALL, 'runtime', 'bun.version'))
-    ? readFileSync(join(INSTALL, 'runtime', 'bun.version'), 'utf8').trim()
-    : ''
+  const pin = readIfThere(join(INSTALL, 'app', 'bun-version'))?.trim() ?? ''
+  const stamp = readIfThere(join(INSTALL, 'runtime', 'bun.version'))?.trim() ?? ''
   const files = [
     'app/server.js',
     'app/release.json',
@@ -635,7 +642,7 @@ function logFiles(dir: string): string[] {
 }
 
 function checkHandoff(label: string, run0: string, oldLog: string, delayMs: number): void {
-  const oldText = existsSync(oldLog) ? readFileSync(oldLog, 'utf8') : ''
+  const oldText = readIfThere(oldLog) ?? ''
   const allText = [...logFiles(run0), ...logFiles(INSTALL)]
     .map((f) => `--- ${f}\n${readFileSync(f, 'utf8')}`)
     .join('\n')
