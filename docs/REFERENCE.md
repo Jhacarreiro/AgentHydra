@@ -921,6 +921,27 @@ same process to happen at all. Two rules came out of chasing it:
 - **Anything keyed on mtime alone needs a tiebreaker** (size, or an explicit generation counter),
   because two writes can share one tick and the second one then looks like no write at all.
 
+### A test that waits on a real process, on a loaded box
+
+A test that passes alone and times out in `bun test --parallel=4` on a busy machine is usually
+betting that a real process (a bun child, git, a hook push, PowerShell) is as fast as it is idle.
+Five such tests were fixed on 2026-10-11, on a box at 91% CPU, and the rules they left are:
+
+- **Measure before widening anything.** `--timeout 120000 --reporter=junit --reporter-outfile=<file>`
+  lets slow tests report their real durations instead of being cut off at the bound.
+- **Look for incidental work first.** Every successful update in the updater tests launched a
+  PowerShell to retire the legacy tray host, even for a test's scratch install: up to 13.6 s under
+  load. Effects on the real machine (that retirement, stopping Desk 2) run only when `installDir`
+  is `APP_ROOT`.
+- **A deadline a child must beat starts when `Bun.spawn` returns** (`spawnCaptured`), so it must
+  cover the child's boot under load: a bun child took up to 2.55 s.
+- **A test's bound covers every subprocess it runs.** A test that pushes three times gets three
+  pushes' worth (`tests/githooks/pre-push-public-guard.test.ts`).
+- **bun's timeout kills the test's children** ("killed 1 dangling process"). A `spawnSync` child
+  killed that way returns status 1, which reads like a refusal from the code under test.
+- **A failure in milliseconds is never load.** Look for a test that reads the clock separately
+  from the code it checks.
+
 ### Repo guardrails (`scripts/checks/`)
 
 Custom checks, each a standalone `bun scripts/checks/<name>.mjs` run as its own CI step, and each
