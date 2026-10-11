@@ -150,23 +150,64 @@ def _segment_rx(seg: str) -> str:
     return "".join(out)
 
 
-def glob_files(root: Path, pattern: str):
-    """The files under `root` a pathlib-style glob names, never walking into IGNORED_DIRS or a folder link.
-
-    pathlib's own glob walks node_modules and .git to the bottom before t_glob drops their hits: on 2026-10-09 one
-    `**` glob in a large repo ran for about fifteen minutes. The walk starts at the pattern's literal head, stops
-    at the depth a pattern without `**` can reach, and raises walk.WalkStopped when its minute is up."""
+def glob_plan(root: Path, pattern: str) -> tuple[list[str], int, Path, int | None]:
+    """A glob's parts, the index of its first wildcard part, the folder its literal head names (where any walk
+    starts) and how many folder levels deep a hit can sit (`base` the first; None under `**`)."""
     parts = [p for p in pattern.replace("\\", "/").strip("/").split("/") if p not in ("", ".")]
     if ".." in parts:
         raise ValueError(f"glob pattern {pattern!r} climbs out with '..'; name the folder as `path` instead")
     cut = next((i for i, part in enumerate(parts) if any(ch in part for ch in "*?[")), len(parts))
-    base = root.joinpath(*parts[:cut])
+    reach = None if "**" in parts[cut:] else len(parts) - cut
+    return parts, cut, root.joinpath(*parts[:cut]), reach
+
+
+async def rg_glob_listing(rg: str, root: Path, pattern: str) -> list[str] | None:
+    """Every file a glob could name, as `rg --files` lists them from the pattern's literal head (paths relative to
+    it); None when the pattern has no wildcard or its head is no folder. What .gitignore names is skipped, as grep's
+    rg skips it, unless the pattern starts inside it (rg started in an ignored folder lists all of it). Otherwise
+    the walk's rules: dotfiles in (--hidden), IGNORED_DIRS skipped as folders only (a trailing slash: a file named
+    `build` is still a file), no folder link entered (rg follows none by default).
+
+    ⛔ WHY (2026-10-11): a `**` glob in Connections walked 1,127,842 files, 96% of them gitignored (mutation-test
+    sandboxes copying the whole tree, build output), at 6.1 s of CPU warm and 15-30 s cold, and a 40-task swarm's
+    globs held its client at a full core for half a minute at a time, outside any fairjob; the 5000-hit cap then
+    filled with sandbox copies instead of the source. Honouring .gitignore, rg lists the 48k others in 0.3 s and
+    0.6 s of CPU. Listing everything with --no-ignore saves nothing: 9 s of rg CPU. WalkStopped past the minute."""
+    _parts, cut, base, reach = glob_plan(root, pattern)
+    if cut == len(_parts) or not base.is_dir():
+        return None
+    cmd = [rg, "--files", "--hidden", "--no-messages", "--threads", "2"]
+    if reach is not None:
+        cmd += ["--max-depth", str(reach)]
+    for d in sorted(IGNORED_DIRS):
+        cmd += ["-g", f"!{d}/"]
+    code, out, _err = await run_hidden(cmd, base, walk.WALK_S)
+    if code == TIMEOUT_EXIT:
+        raise walk.WalkStopped([])
+    # rg exits 1 when it lists nothing, 2 when some folder could not be read: the files it did list stand.
+    return [line.replace("\\", "/") for line in out.split("\n") if line.strip("\r")] if code in (0, 1, 2) else None
+
+
+def glob_files(root: Path, pattern: str, listed: list[str] | None = None):
+    """The files under `root` a pathlib-style glob names, never walking into IGNORED_DIRS or a folder link.
+
+    pathlib's own glob walks node_modules and .git to the bottom before t_glob drops their hits: on 2026-10-09 one
+    `**` glob in a large repo ran for about fifteen minutes. The walk starts at the pattern's literal head, stops
+    at the depth a pattern without `**` can reach, and raises walk.WalkStopped when its minute is up. `listed` is
+    rg_glob_listing's answer: the same files, listed by rg instead of the Python walk."""
+    parts, cut, base, reach = glob_plan(root, pattern)
     if cut == len(parts):
         if base.is_file():
             yield base
         return
-    reach = None if "**" in parts[cut:] else len(parts) - cut  # folder levels, `base` the first, a hit can sit in
     rx = glob_regex("/".join(parts), re.IGNORECASE if os.name == "nt" else 0)
+    if listed is not None:
+        head = "/".join(parts[:cut])
+        for rel in listed:
+            rel = rel.rstrip("\r").removeprefix("./")
+            if rx.fullmatch(f"{head}/{rel}" if head else rel):
+                yield base / rel
+        return
     for here, entry in walk.files(base, reach):
         prefix = here.relative_to(root).as_posix()
         if rx.fullmatch(entry.name if prefix == "." else f"{prefix}/{entry.name}"):
@@ -662,14 +703,19 @@ class Sandbox:
             cut = next((i for i, part in enumerate(parts) if any(ch in part for ch in "*?[")), len(parts))
             path, pattern = str(Path(*parts[:cut])), "/".join(parts[cut:]) or "*"
         root = self.resolve_root(path, "glob")
+        rg = shutil.which("rg")
+        try:
+            listed = await rg_glob_listing(rg, root, pattern) if rg else None
+        except walk.WalkStopped as stop:
+            return str(stop)
         # On a thread: this is the shared server's one event loop, and a walk on it leaves every chat and the
         # AgentHydra window unanswered until it ends (2026-10-09, port 7793 deaf for about fifteen minutes).
-        return await asyncio.to_thread(self._glob, root, pattern)
+        return await asyncio.to_thread(self._glob, root, pattern, listed)
 
-    def _glob(self, root: Path, pattern: str) -> str:
+    def _glob(self, root: Path, pattern: str, listed: list[str] | None = None) -> str:
         hits, stopped = [], ""
         try:
-            for p in glob_files(root, pattern):
+            for p in glob_files(root, pattern, listed):
                 if any(part in IGNORED_DIRS for part in p.relative_to(root).parts[:-1]) or not self.shown("glob", p):
                     continue
                 try:

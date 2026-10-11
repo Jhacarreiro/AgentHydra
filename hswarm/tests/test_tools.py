@@ -149,7 +149,12 @@ def test_read_slice_and_size_guard(tmp_path):
     assert run(sb.run("read_file", {"path": "big.txt", "start_line": 3, "end_line": 4})).splitlines() == ["3\t2", "4\t3"]
 
 
-def test_list_glob_grep(tmp_path, monkeypatch):
+@pytest.mark.parametrize("engine", ["rg", "python"])
+def test_list_glob_grep(tmp_path, monkeypatch, engine):
+    if engine == "rg" and not shutil.which("rg"):
+        pytest.skip("no rg on PATH")
+    if engine == "python":
+        monkeypatch.setattr(tools.shutil, "which", lambda name: None)
     sb = Sandbox(tmp_path)
     (tmp_path / "src").mkdir()
     (tmp_path / "src" / "a.py").write_text("import os\nTODO security\n")
@@ -176,7 +181,12 @@ def test_list_glob_grep(tmp_path, monkeypatch):
     monkeypatch.setattr(os, "scandir", scandir)
     g = run(sb.run("glob", {"pattern": "**/*.py"}))
     assert sorted(g.splitlines()) == ["src/a.py", "src/b.py"]
-    assert "src" in walked and "node_modules" not in walked and "loop" not in walked  # neither is walked at all
+    if engine == "python":
+        assert "src" in walked and "node_modules" not in walked and "loop" not in walked  # neither is walked at all
+    else:
+        # 2026-10-11: the Python walk cost 6-30 s of CPU per `**` glob in Connections (1.1M files); with rg on PATH,
+        # rg lists the files and Python walks nothing.
+        assert walked == []
     assert sorted(run(sb.run("glob", {"pattern": "*.py", "path": "src"})).splitlines()) == ["src/a.py", "src/b.py"]
     assert run(sb.run("glob", {"pattern": "*.py"})) == "(no matches)"  # `*` stays in one folder, as pathlib's does
     gr = run(sb.run("grep", {"pattern": "import os"}))
@@ -223,6 +233,33 @@ def test_grep_keeps_a_hit_whole_when_its_text_holds_a_unicode_line_break(tmp_pat
         monkeypatch.setattr(tools.shutil, "which", lambda name: None)
     (tmp_path / "a.txt").write_bytes("needle one\x85two three/four\x0cfive\nother\n".encode("utf-8"))
     assert run(Sandbox(tmp_path).run("grep", {"pattern": "needle"})) == "a.txt:1:needle one\x85two three/four\x0cfive"
+
+
+@pytest.mark.parametrize("engine", ["rg", "python"])
+def test_glob_lists_what_grep_searches(tmp_path, monkeypatch, engine):
+    # With rg on PATH, glob skips what .gitignore names, as grep's rg does, unless the pattern starts inside it
+    # (2026-10-11: a `**` glob walked 1.1M files under Connections, 96% gitignored, at 6-30 s of CPU; rg lists the
+    # 48k others in 0.6 s). The rest are the walk's rules on both engines: dotfiles in, IGNORED_DIRS skipped as
+    # folders only (`-g !build` would drop a FILE named build too), depth kept.
+    if engine == "rg" and not shutil.which("rg"):
+        pytest.skip("no rg on PATH")
+    if engine == "python":
+        monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    (tmp_path / ".git").mkdir()  # rg reads a .gitignore only inside a repository; a .git folder is what it looks for
+    (tmp_path / ".gitignore").write_text("gen/\n")
+    for rel in ("src/a.py", "src/deep/b.py", "gen/c.py", ".hid/d.py", "build", "src/build/e.py", "src/x.txt"):
+        (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+        (tmp_path / rel).write_text("x\n")
+    sb = Sandbox(tmp_path)
+
+    def glob(pattern):
+        return sorted(run(sb.run("glob", {"pattern": pattern})).splitlines())
+
+    kept = [".hid/d.py", "src/a.py", "src/deep/b.py"]
+    assert glob("**/*.py") == (kept if engine == "rg" else sorted([*kept, "gen/c.py"]))
+    assert glob("gen/*.py") == ["gen/c.py"]  # a pattern that starts inside an ignored folder still lists it
+    assert glob("src/*.py") == ["src/a.py"]
+    assert glob("buil?") == ["build"]
 
 
 def test_glob_takes_an_absolute_pattern_and_never_kills_the_task(tmp_path):
