@@ -29,11 +29,12 @@ test('the no-MCP probe args disable every configured server, not merely some', (
 })
 
 // Source assertions, because a spawn cannot be exercised in a unit test and the regression is
-// silent: dropping the args costs 7 extra processes per probe and nothing fails.
+// silent: dropping the args costs 7 extra processes per probe and nothing fails. The probe's argv is
+// found, not the call that starts it: since 681d18c2 it goes through spawnCaptured on its own lane.
 test('the usage.ts probe spawn still passes the no-MCP args', () => {
   const spawnLine = read('usage.ts')
     .split('\n')
-    .find((l) => l.includes('Bun.spawn([resolveClaudeExe()'))
+    .find((l) => l.includes('[resolveClaudeExe(), '))
   expect(spawnLine).toBeDefined()
   expect(spawnLine).toContain("'/usage'")
   expect(spawnLine).toContain('...CLAUDE_PROBE_NO_MCP_ARGS')
