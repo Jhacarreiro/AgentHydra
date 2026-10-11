@@ -943,7 +943,14 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
         const w = liveWorkers.get(id)
         if (w) w.wave = wave.id
       }
-      await until(() => readWave(acct, wave.id)?.tasks.every((t) => t.state !== 'running') === true)
+      // Two rounds, not one: 'outside' and 'off' fail their proof, go back for a second attempt and come
+      // back with nothing to prove, each attempt judged by git on the one worker thread four keys share.
+      // 18.6-39.9 s run alone on a box at ~90% CPU (2026-10-11), past one round's 40 s in a full
+      // `bun test --parallel=4` run that day.
+      await until(
+        () => readWave(acct, wave.id)?.tasks.every((t) => t.state !== 'running') === true,
+        4 * ATTEMPT_MS,
+      )
       await until(
         () => (climayteList({ id: ids[2] as string })[0]?.verdicts?.length ?? 0) > 0,
         ATTEMPT_MS,
@@ -989,7 +996,7 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
         'orchestrator',
       ])
     },
-    3 * ATTEMPT_MS + 10_000,
+    5 * ATTEMPT_MS + 10_000,
   )
 
   test(

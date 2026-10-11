@@ -3,7 +3,7 @@
 // per child, and a dead child never coming back. The config rewrite is covered too, since it decides what the hub
 // may take over.
 
-import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
+import { afterEach, beforeEach, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -14,6 +14,11 @@ type Json = Record<string, unknown>
 const CHILD = resolve(import.meta.dir, 'fixtures/mcp-echo-child.mjs')
 const quiet = () => {}
 const spec = { command: process.execPath, args: [CHILD], env: {} }
+
+// A hub test that reaches the child starts a bun for it, and the restart test starts two: 0.8-3.6 s and
+// 1.7-6.4 s in six runs of this file alone on a box at ~90% CPU (2026-10-11), and the restart test past
+// bun's 5 s default in a full `bun test --parallel=4` run that day.
+setDefaultTimeout(30_000)
 
 let dir: string
 let hub: SharedServer | null = null
