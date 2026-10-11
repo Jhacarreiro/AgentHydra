@@ -4,7 +4,9 @@ routes registered here and with the benchmark index (data/published-models.json)
 A model a provider starts serving is kept in ~/.hswarm/model-watch.json with a standing: `routed` (a registered route
 serves that id), `benchmarked_unrouted` (the index scores it and no route here does: add a route), `unbenchmarked` (no
 index point: source its published scores), or `gone` (listed before, not now). Owner, 2026-10-07: a new model is noted as
-a potential endpoint for its service, with its rank, its cost and what it is good and bad at.
+a potential endpoint for its service, with its rank, its cost and what it is good and bad at. A benchmarked model that a
+newer routed model of the same maker on that provider outscores is reported apart as `superseded`, not as one to route
+(owner, 2026-10-10: route the newer models, skip the ones a newer version beats).
 """
 from __future__ import annotations
 
@@ -27,6 +29,8 @@ SUFFIXES = ("-tee", "-rl", "-latest", "-instruct")
 DATE_STAMP = re.compile(r"-\d{4}$")
 # critpt is under review and left out of eligibility (selection.plan), so it is not a benchmark to rank on either.
 EXCLUDED = {"critpt"}
+# Artificial Analysis names the maker of the Kimi K2 models "Kimi" and of Kimi K3 "Moonshot AI": one maker.
+MAKER_ALIASES = {"kimi": "moonshot ai"}
 
 
 def path():
@@ -65,6 +69,22 @@ def classify(model_id: str, routed: set[str], slugs: set[str]) -> str:
     if n in routed:
         return ROUTED
     return BENCHMARKED if n in slugs else UNBENCHMARKED
+
+
+def maker(point: dict) -> str:
+    m = str(point.get("creator") or "").strip().lower()
+    return MAKER_ALIASES.get(m, m)
+
+
+def superseded_by(point: dict, routed: list[dict]) -> dict | None:
+    """The best-scoring routed index point that makes `point` not worth a route of its own: the same maker, released
+    later and scoring higher on the index. None when no routed point does, or `point` lacks a date or a score."""
+    released, score = point.get("release_date") or "", point.get("score")
+    if not (released and _num(score)):
+        return None
+    newer = [q for q in routed if maker(q) == maker(point) and (q.get("release_date") or "") > released
+             and _num(q.get("score")) and q["score"] > score]
+    return max(newer, key=lambda q: q["score"], default=None)
 
 
 def merge(previous: dict, listed: dict[str, str], now: str) -> dict:
@@ -183,10 +203,12 @@ async def _one(provider: str):
 
 def digest(state: dict, only: set[str] | None = None) -> dict:
     """What a scan found, from the stored table (offline): per provider, the new models, the benchmarked-but-unrouted
-    models with their strengths, weaknesses and blended price, and the unbenchmarked ones."""
+    models with their strengths, weaknesses and blended price, the benchmarked ones a newer routed model of the same
+    maker outscores (superseded, with the slug that does), and the unbenchmarked ones."""
     scanned = state.get("scanned_at")
     points = evidence()["points"]
     by_norm = {normalize(p["slug"]): p["slug"] for p in points}
+    by_slug = {p["slug"]: p for p in points}
     profiles = profile(points)
     out = {}
     for provider, rec in sorted((state.get("providers") or {}).items()):
@@ -196,15 +218,20 @@ def digest(state: dict, only: set[str] | None = None) -> dict:
         groups: dict[str, list[str]] = {s: [] for s in STANDINGS}
         for mid, row in models.items():
             groups.setdefault(row.get("standing"), []).append(mid)
-        unrouted = []
+        routed = [by_slug[by_norm[normalize(mid)]] for mid in groups[ROUTED] if normalize(mid) in by_norm]
+        unrouted, superseded = [], []
         for mid in sorted(groups[BENCHMARKED]):
             slug = by_norm.get(normalize(mid), "")
+            if newer := superseded_by(by_slug.get(slug, {}), routed):
+                superseded.append({"id": mid, "slug": slug, "by": newer["slug"]})
+                continue
             unrouted.append({"id": mid, "slug": slug, **profiles.get(slug, {"strengths": [], "weaknesses": [], "blended_usd_per_1m": None})})
         out[provider] = {
             "error": rec.get("error"),
             "checked_at": rec.get("checked_at"),
             "new": sorted(mid for mid, row in models.items() if row.get("first_seen") == scanned and row.get("standing") != GONE),
             "benchmarked_unrouted": unrouted,
+            "superseded": superseded,
             "unbenchmarked": sorted(groups[UNBENCHMARKED]),
             "routed": len(groups[ROUTED]),
             "gone": len(groups[GONE]),
@@ -277,13 +304,15 @@ def render(out: dict) -> str:
             lines.append(f"{provider}: FAILED ({row['error']})")
             continue
         lines.append(f"{provider}: {len(row['new'])} new, {len(row['benchmarked_unrouted'])} benchmarked but unrouted, "
-                     f"{len(row['unbenchmarked'])} unbenchmarked")
+                     f"{len(row['superseded'])} superseded, {len(row['unbenchmarked'])} unbenchmarked")
         if row["new"]:
             lines.append("  new: " + ", ".join(row["new"]))
         for r in row["benchmarked_unrouted"]:
             price = "-" if r["blended_usd_per_1m"] is None else f"${r['blended_usd_per_1m']:.4f}"
             lines.append(f"  benchmarked, no route: {r['id']} (index {r['slug']}, blended {price}/1M) "
                          f"strong: {', '.join(r['strengths']) or '-'}; weak: {', '.join(r['weaknesses']) or '-'}")
+        if row["superseded"]:
+            lines.append("  superseded by a newer routed model: " + ", ".join(f"{r['id']} (by {r['by']})" for r in row["superseded"]))
         if row["unbenchmarked"]:
             lines.append("  unbenchmarked: " + ", ".join(row["unbenchmarked"]))
     return "\n".join(lines)

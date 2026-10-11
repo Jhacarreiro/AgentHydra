@@ -286,6 +286,9 @@ all in parallel; a provider that fails is recorded with its error and hides noth
 
 - `routed`: a registered model or `rank:` route on that provider serves the id.
 - `benchmarked_unrouted`: the index (`data/published-models.json`) scores it and no route here does. Register the route with its sourced price.
+- `superseded` (reported, not stored): benchmarked and unrouted, but a route on the same provider serves a model of the
+  same maker released later that scores higher on the index, so it gets no route (owner, 2026-10-10). Artificial
+  Analysis's maker "Kimi" counts as Moonshot AI.
 - `unbenchmarked`: no index point. Source its published scores into the index.
 - `gone`: listed before, not now.
 

@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm routes the newer models on Nebius.** GLM-5.3, GLM-5.3-Flash, Kimi K3, DeepSeek V4.1 Flash, Qwen3.8 27B,
+  MiniMax M3 and gpt-oss-120b join the price-ranked routes at Nebius's listed prices. Model watch now reports an
+  older model that a newer routed version from the same maker beats as superseded, instead of asking for a route to it.
 - **HSwarm's typed decisions start lighter outside the MCP server.** A script that asks Jev through HSwarm now
   imports `hswarm.booking.decide` instead of the MCP server's `hswarm_decide`. It is the same cascade with the same
   booking, without the MCP SDK and pydantic: each start costs 63 MB instead of 101 MB.

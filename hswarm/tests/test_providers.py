@@ -54,7 +54,9 @@ def test_without_the_overlay_the_builtins_stand():
     # + 18 ranked routes: GPT-6.1 Sol, Grok 4.3-4.7, GLM-5.1/5.2, DeepSeek-V4-Flash, Qwen and Kimi on Baseten, Together,
     #   Chutes and Z.ai (2026-10-07)
     # + 6 ranked routes on Fireworks: Kimi K3, GLM 5.3, GLM 5.3 Flash, DeepSeek V4.1 Flash, gpt-oss-120b, MiniMax M3 (2026-10-07)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 111
+    # + 7 ranked routes on Nebius: GLM 5.3, GLM 5.3 Flash, Kimi K3, DeepSeek V4.1 Flash, Qwen3.8 27B, MiniMax M3, gpt-oss-120b
+    #   (2026-10-10)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 118
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",

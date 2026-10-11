@@ -1054,6 +1054,48 @@
    "cache_read": 0.03,
    "source": "https://docs.z.ai/guides/overview/pricing",
    "verified_at": "2026-10-03"
+  },
+  "nebius/rank:deepseek-v4-1-flash:nebius": {
+   "input": 0.3,
+   "output": 1.2,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:kimi-k3:nebius": {
+   "input": 3,
+   "output": 15,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:glm-5-3:nebius": {
+   "input": 1.4,
+   "output": 4.4,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:glm-5-3-flash:nebius": {
+   "input": 0.15,
+   "output": 0.5,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:qwen3-8-27b:nebius": {
+   "input": 0.45,
+   "output": 3,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:minimax-m3:nebius": {
+   "input": 0.3,
+   "output": 1.2,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
+  },
+  "nebius/rank:gpt-oss-120b:nebius": {
+   "input": 0.15,
+   "output": 0.6,
+   "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
+   "verified_at": "2026-10-10"
   }
  }
 }

@@ -74,6 +74,30 @@ def test_strengths_and_weaknesses_use_the_index_quartiles():
     assert out["p3"] == {"strengths": [], "weaknesses": [], "blended_usd_per_1m": None}
 
 
+
+def test_a_newer_routed_model_of_the_same_maker_supersedes_an_older_one(monkeypatch):
+    # Owner, 2026-10-10: route the newer models a provider serves, skip the ones a newer routed version beats. Only the
+    # same maker, released later and scoring higher, supersedes; Artificial Analysis's "Kimi" is Moonshot AI.
+    points = [
+        {"slug": "example-alpha-2", "creator": "Example Labs", "release_date": "2026-08-01", "score": 40.0},
+        {"slug": "example-alpha-1", "creator": "Example Labs", "release_date": "2026-05-01", "score": 30.0},
+        {"slug": "example-alpha-3", "creator": "Example Labs", "release_date": "2026-09-01", "score": 35.0},
+        {"slug": "example-beta-1", "creator": "Other Labs", "release_date": "2026-01-01", "score": 10.0},
+        {"slug": "kimi-k3", "creator": "Moonshot AI", "release_date": "2026-07-16", "score": 43.6},
+        {"slug": "kimi-k2-6", "creator": "Kimi", "release_date": "2026-04-20", "score": 27.0},
+    ]
+    monkeypatch.setattr(model_watch, "evidence", lambda: {"points": points})
+    standings = {"Example-Alpha-2": "routed", "Example-Alpha-1": "benchmarked_unrouted", "Example-Alpha-3": "benchmarked_unrouted",
+                 "Example-Beta-1": "benchmarked_unrouted", "moonshotai/Kimi-K3": "routed", "moonshotai/Kimi-K2.6": "benchmarked_unrouted"}
+    state = {"scanned_at": "t", "providers": {"example-a": {"models": {m: {"first_seen": "t0", "standing": s} for m, s in standings.items()}},
+                                               "example-b": {"models": {"Example-Alpha-1": {"first_seen": "t0", "standing": "benchmarked_unrouted"}}}}}
+    row = model_watch.digest(state)["providers"]["example-a"]
+    assert row["superseded"] == [{"id": "Example-Alpha-1", "slug": "example-alpha-1", "by": "example-alpha-2"},
+                                 {"id": "moonshotai/Kimi-K2.6", "slug": "kimi-k2-6", "by": "kimi-k3"}]
+    assert [r["id"] for r in row["benchmarked_unrouted"]] == ["Example-Alpha-3", "Example-Beta-1"]
+    # nothing newer is routed on another provider, so the same model still asks for a route there
+    assert [r["id"] for r in model_watch.digest(state)["providers"]["example-b"]["benchmarked_unrouted"]] == ["Example-Alpha-1"]
+
 class FakeClient:
     answers: dict = {}
 
