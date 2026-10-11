@@ -83,12 +83,14 @@ interface Ran {
 const GIT_TIMEOUT_MS = 5 * 60_000
 
 /** On the spawn worker: a git start held the daemon's thread 240-345 ms on MPC-HELL, and a sync pass runs
- *  a dozen of them back to back (48 s of STALL in 140 min of daemon.log, 2026-10-11). */
+ *  a dozen of them back to back (48 s of STALL in 140 min of daemon.log, 2026-10-11). Its own lane, so
+ *  those dozen starts never queue the shared thread's netstat and taskkill captures behind them. */
 async function git(cwd: string, args: string[], input?: string): Promise<Ran> {
   const r = await spawnCaptured(['git', ...args], {
     cwd,
     stdin: input,
     timeoutMs: GIT_TIMEOUT_MS,
+    lane: 'kit-sync',
     env: { ...process.env, GIT_TERMINAL_PROMPT: '0' },
   })
   const err = r.timedOut ? `timed out after ${GIT_TIMEOUT_MS / 1000} s` : r.stderr.trim()
