@@ -167,15 +167,21 @@ function open(): Database | null {
       '1'
     ) {
       const conn = db
-      conn.transaction(() => {
-        const dropSegments = conn.query('delete from conv where rowid >= ? and rowid < ?')
-        for (const { rowid } of conn
-          .query("select rowid from doc where source = 'codex'")
-          .all() as Array<{ rowid: number }>)
-          dropSegments.run(rowid * SEGMENT_STRIDE, (rowid + 1) * SEGMENT_STRIDE)
-        conn.exec("delete from doc where source = 'codex'")
-        conn.query('insert or replace into meta (k, v) values (?, ?)').run('codex_text', '1')
-      })()
+      // IMMEDIATE: this transaction reads before it writes. A deferred one asks for the write lock only
+      // at its first write, and if another connection is writing by then SQLite answers "database is
+      // locked" at once, never waiting out busy_timeout. The open then failed and the cooldown switched
+      // the index off for 30 s (the root suite, 2026-10-11: a fresh index opened beside a writer).
+      conn
+        .transaction(() => {
+          const dropSegments = conn.query('delete from conv where rowid >= ? and rowid < ?')
+          for (const { rowid } of conn
+            .query("select rowid from doc where source = 'codex'")
+            .all() as Array<{ rowid: number }>)
+            dropSegments.run(rowid * SEGMENT_STRIDE, (rowid + 1) * SEGMENT_STRIDE)
+          conn.exec("delete from doc where source = 'codex'")
+          conn.query('insert or replace into meta (k, v) values (?, ?)').run('codex_text', '1')
+        })
+        .immediate()
     }
     return db
   } catch {
@@ -496,7 +502,9 @@ async function indexOneStaleFile(
     let first = 0
     // One transaction per file: every autocommit statement is its own journal fsync, and on Windows
     // those commits (not the FTS work) were the statements that stalled the loop past 100 ms.
-    stmts.exec('begin')
+    // IMMEDIATE, as in open(): a rebuild reads its old segments before deleting them, and a deferred
+    // transaction that has read is refused at once, not made to wait, when another process writes.
+    stmts.exec('begin immediate')
     inTx = true
     if (append) {
       first = existing.nseg
@@ -873,9 +881,12 @@ export function dropSearchIndex(): boolean {
   }
 }
 
-/** Test seam: point the index at a scratch file and forget any open handle. */
+/** Test seam: point the index at a scratch file and forget any open handle, and any upkeep queued for
+ *  the old file: left to fire, it opened the next test's file a second later, in the middle of that test. */
 export function setSearchIndexPathForTests(path: string) {
   close()
+  if (upkeepTimer) clearTimeout(upkeepTimer)
+  upkeepTimer = null
   openBlockedUntil = 0
   indexPath = path
 }

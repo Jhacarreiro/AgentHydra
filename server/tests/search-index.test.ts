@@ -90,6 +90,39 @@ function session(id: string, lines: string[]): IndexableFile {
   return { session_id: id, source: 'claude', path, mtime_ms: st.mtimeMs, size_bytes: st.size }
 }
 
+/** A second process that opens the index at `path`, runs `sql` (the last statement takes the lock) and
+ *  lets go 500 ms later. Answers once the lock is held, with the child, for its exit code. */
+async function holdIndex(path: string, ...sql: string[]) {
+  const holder = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `const { Database } = require('bun:sqlite')
+const db = new Database(process.argv[1], { create: true })
+db.exec('pragma busy_timeout = 2000')
+db.exec('pragma journal_mode = delete')
+db.exec('create table if not exists hold (x integer)')
+for (const sql of process.argv.slice(2)) db.exec(sql)
+console.log('locked')
+setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
+      path,
+      ...sql,
+    ],
+    { stdout: 'pipe', stderr: 'pipe' },
+  )
+  const lines = holder.stdout.pipeThrough(new TextDecoderStream()).getReader()
+  let seen = ''
+  while (!seen.includes('locked')) {
+    const { value, done } = await lines.read()
+    if (done) break
+    seen += value
+  }
+  // A child that dies before taking the lock says why on stderr, which is otherwise never read.
+  if (!seen.includes('locked')) throw new Error(await new Response(holder.stderr).text())
+  expect(seen).toContain('locked')
+  return holder
+}
+
 describe('conversationText', () => {
   test('keeps what was said', () => {
     const text = conversationText(
@@ -356,32 +389,7 @@ describe('refresh and query', () => {
   test('a file another process holds for a moment is waited for, not reported as unavailable', async () => {
     const path = join(dir, 'index.db')
     setSearchIndexPathForTests(path)
-    const holder = Bun.spawn(
-      [
-        process.execPath,
-        '-e',
-        `const { Database } = require('bun:sqlite')
-const db = new Database(process.argv[1], { create: true })
-db.exec('pragma busy_timeout = 2000')
-db.exec('pragma journal_mode = delete')
-db.exec('create table if not exists hold (x integer)')
-db.exec('begin exclusive')
-console.log('locked')
-setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
-        path,
-      ],
-      { stdout: 'pipe', stderr: 'pipe' },
-    )
-    const lines = holder.stdout.pipeThrough(new TextDecoderStream()).getReader()
-    let seen = ''
-    while (!seen.includes('locked')) {
-      const { value, done } = await lines.read()
-      if (done) break
-      seen += value
-    }
-    // A child that dies before taking the lock says why on stderr, which is otherwise never read.
-    if (!seen.includes('locked')) throw new Error(await new Response(holder.stderr).text())
-    expect(seen).toContain('locked')
+    const holder = await holdIndex(path, 'begin exclusive')
 
     const r = await refreshSearchIndex([session('a', [turn('user', 'written while held')])])
     expect(r.indexed).toBe(1)
@@ -390,6 +398,39 @@ setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
     // 20 s: a real bun child starts and holds the lock for 500 ms; a cold Windows CI runner has been
     // seen at ~9.5x local (scripts/checks/spawn-test-without-timeout.mjs).
   }, 20_000)
+
+  // Regression: a transaction that READS before it writes, begun deferred, asks for the write lock only
+  // at its first write, and SQLite refuses that at once, busy_timeout unconsulted, while another process
+  // writes. The one-time Codex upgrade in open() failed so (the root suite, 2026-10-11: the index off for
+  // 30 s and the held-file test above indexing nothing), and a changed session's rebuild did too.
+  test('a write another process is making is waited for, at the upgrade on open and at a rebuild', async () => {
+    const a = session('a', [turn('user', 'original wording')])
+    await refreshSearchIndex([a])
+    setSearchIndexPathForTests(searchIndexPath()) // let go of the file, to make it what the old code left
+    const old = new Database(searchIndexPath())
+    old.exec("delete from meta where k = 'codex_text'")
+    old.close()
+    // Shorter each time, so each pass rebuilds the session (reads its segments, then deletes them).
+    const rewrite = (text: string): IndexableFile => {
+      writeFileSync(a.path, `${turn('user', text)}\n`)
+      const st = statSync(a.path)
+      return { ...a, mtime_ms: st.mtimeMs, size_bytes: st.size }
+    }
+
+    // A writer: its write lock taken, a row written, the commit 500 ms away.
+    const writing = ['begin immediate', 'insert into hold values (1)']
+    // Reopened beside a writer: everything before the upgrade's transaction only reads.
+    let writer = await holdIndex(searchIndexPath(), ...writing)
+    expect((await refreshSearchIndex([rewrite('first rewrite')])).indexed).toBe(1)
+    expect(await writer.exited).toBe(0)
+    // Open and upgraded now, so only the rebuild's transaction meets this writer.
+    writer = await holdIndex(searchIndexPath(), ...writing)
+    expect((await refreshSearchIndex([rewrite('second')])).indexed).toBe(1)
+    expect(await writer.exited).toBe(0)
+    expect(candidateKeys('second')).toEqual(new Set([claudeKey('a')]))
+    expect(candidateKeys('original')).toEqual(new Set())
+    // 40 s: the held-file test's 20 s, for two such children.
+  }, 40_000)
 })
 
 // The ladder: phrase, then all words, then typo repair, then any word. Each test pins one rung's
