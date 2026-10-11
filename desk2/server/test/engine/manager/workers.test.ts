@@ -409,12 +409,16 @@ test('a worker chat takes a picture as a saved file named in the message, and a 
   const path = /\[Image: source: (.+)\]/.exec(sent)![1]!
   expect(readFileSync(path).length).toBeGreaterThan(0)
 
+  // A second manager gets a home of its own: two stores on one chats.json in one process write the same temp
+  // names, and m's closeAll then collides with m2's writes still in flight. The refusal does not depend on the home.
+  const home2 = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home2)
   const failing = fakeBridge()
   failing.bridge.startWorker = async () => {
     throw new Error('AgentHydra is not running')
   }
-  const m2 = newManager(home, failing)
-  const c2 = await m2.create({ cwd: home, prompt: 'keep these words' })
+  const m2 = newManager(home2, failing)
+  const c2 = await m2.create({ cwd: home2, prompt: 'keep these words' })
   while (m2.get(c2.id).status !== 'error') await new Promise((r) => setTimeout(r, 5))
   const note = m2.listItems(c2.id).find((i) => i.kind === 'system' && /was not sent/.test(i.text))
   expect(note && 'text' in note && note.text).toContain('keep these words')
