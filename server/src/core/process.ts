@@ -25,7 +25,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { normalizePath } from './paths.ts'
 import { createScanCache } from './scan-cache.ts'
-import { captureInWorker } from './spawn-worker.ts'
+import { captureInWorker, type StartedChild, StartFailed, startInWorker } from './spawn-worker.ts'
 import { nativeProcessesNamed, nativeProcessInfo, nativeProcessTable } from './win-process-table.ts'
 import { TCP_STATE_ESTABLISHED, type TcpRow, windowsTcpTable } from './win-tcp-table.ts'
 
@@ -407,6 +407,39 @@ export async function spawnCaptured(
   if (stdin !== undefined) writeStdin(proc, stdin)
 
   return capturePipedProc(proc, { timeoutMs, wantStderr })
+}
+
+/** A long-lived child (a server), started on `lane`'s spawn-worker thread, which watches it for its
+ *  exit: CreateProcess never holds this thread. stdout and stderr go to the given fds, else nowhere.
+ *  Throws, as Bun.spawn does, when it cannot be started. Inline where no worker can run, or where
+ *  this thread's Bun.spawn was replaced (spawnCaptured). */
+export async function startProcess(
+  cmd: string[],
+  opts: {
+    lane: string
+    cwd?: string
+    env?: Record<string, string | undefined>
+    stdout?: number
+    stderr?: number
+  },
+): Promise<StartedChild> {
+  if (Bun.spawn === nativeSpawn) {
+    try {
+      return await startInWorker(cmd, opts)
+    } catch (err) {
+      if (err instanceof StartFailed) throw err
+      // worker unavailable or wedged: start on this thread
+    }
+  }
+  const proc = Bun.spawn(cmd, {
+    stdin: 'ignore',
+    stdout: opts.stdout ?? 'ignore',
+    stderr: opts.stderr ?? 'ignore',
+    windowsHide: true,
+    ...(opts.cwd ? { cwd: opts.cwd } : {}),
+    ...(opts.env ? { env: opts.env } : {}),
+  })
+  return { pid: proc.pid, exited: proc.exited, kill: () => proc.kill('SIGKILL') }
 }
 
 /** Write `text` to a child's piped stdin and close it, without awaiting: the write is buffered by Bun,

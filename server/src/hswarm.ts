@@ -10,7 +10,8 @@ import { closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { APP_ROOT, appEnv, DATA_DIR } from './config'
-import { killProcessTree } from './core/process'
+import { killProcessTree, spawnCaptured, startProcess } from './core/process'
+import type { StartedChild } from './core/spawn-worker'
 import { IS_PRIMARY_INSTALL } from './instance'
 
 /** Default port hswarm listens on. */
@@ -127,8 +128,10 @@ let state: HSwarmState = {
   lastError: null,
 }
 
-let proc: ReturnType<typeof Bun.spawn> | null = null
+let proc: StartedChild | null = null
 let stopRequested = false
+/** A start awaiting its worker (spawnServer): a second start meanwhile would run a second server. */
+let starting = false
 /** Close one spawn's log handle. Each handle is closed exactly once, by the spawn that opened it
  *  (its exit handler, or its own failed start): a second close could hit a reused fd number. */
 function closeLog(fd: number): void {
@@ -256,7 +259,7 @@ export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
   }
 
   if (await settleLive(deps, { port, dir, python, env })) return
-  spawnServer(deps, { port, dir, python, env })
+  await spawnServer(deps, { port, dir, python, env })
 }
 
 /** The package folder to run, or null (state.lastError says why) when hswarm is off or has none. */
@@ -337,7 +340,7 @@ const CHILD_PROBE_TIMEOUT_MS = 3_000
 
 /** Looks at our own child's /health on an interval: `state.answering` says what it saw, and a child silent for
  *  SILENT_LIMIT_MS is ended, which its exit handler answers with a fresh start. */
-function watchChild(deps: HSwarmDeps, child: ReturnType<typeof Bun.spawn>, port: number): void {
+function watchChild(deps: HSwarmDeps, child: StartedChild, port: number): void {
   clearAdoptTimer()
   let heardAt = Date.now()
   let gone = false
@@ -371,25 +374,40 @@ function watchChild(deps: HSwarmDeps, child: ReturnType<typeof Bun.spawn>, port:
   adoptTimer = setTimeout(tick, deps.watchEveryMs ?? ADOPT_WATCH_MS)
 }
 
-function spawnServer(deps: HSwarmDeps, plan: StartPlan): void {
+async function spawnServer(deps: HSwarmDeps, plan: StartPlan): Promise<void> {
+  if (starting) return
+  starting = true
   const { port, dir, python, env } = plan
   let fd = -1
   try {
     fd = openHSwarmLog(deps.logDir ?? join(DATA_DIR, 'logs'))
-    const spawnFn = deps.spawn ?? Bun.spawn
 
     // The shared server itself, in the foreground: `hswarm ui` only starts it detached and exits,
     // which read as a crash here and restarted it forever.
     const command = [python, '-m', 'hswarm', 'mcp', '--http', '--port', String(port)]
 
-    proc = spawnFn(command, {
-      cwd: dir,
-      stdout: fd,
-      stderr: fd,
-      stdin: 'ignore',
-      windowsHide: true,
-      env,
-    })
+    // Started on a spawn-worker thread of its own, which watches it for its exit: CreateProcess of
+    // python held the daemon's thread for seconds on a loaded box (STALL lines on this call,
+    // 2026-10-11), and that thread serves every route.
+    const child: StartedChild = deps.spawn
+      ? deps.spawn(command, {
+          cwd: dir,
+          stdout: fd,
+          stderr: fd,
+          stdin: 'ignore',
+          windowsHide: true,
+          env,
+        })
+      : await startProcess(command, { cwd: dir, stdout: fd, stderr: fd, env, lane: 'hswarm' })
+    if (stopRequested) {
+      // stopHSwarm ran while it started and found no child to end.
+      const logFd = fd
+      void child.exited.finally(() => closeLog(logFd))
+      if (child.pid) killProcessTree(child.pid)
+      else child.kill()
+      return
+    }
+    proc = child
 
     state.running = true
     state.answering = null
@@ -415,6 +433,8 @@ function spawnServer(deps: HSwarmDeps, plan: StartPlan): void {
     state.pid = null
     state.lastError = e instanceof Error ? e.message : String(e)
     scheduleRestart(deps)
+  } finally {
+    starting = false
   }
 }
 
@@ -426,6 +446,8 @@ function scheduleRestart(deps: HSwarmDeps): void {
 }
 
 const ZSWARM_IMPORT_FIRST_MS = 30_000
+/** A ZSwarm import still running after this is ended, and tried again within the hour. */
+const ZSWARM_IMPORT_TIMEOUT_MS = 10 * 60_000
 const ZSWARM_IMPORT_EVERY_MS = 60 * 60 * 1000
 let importTimer: ReturnType<typeof setTimeout> | null = null
 let importRunning = false
@@ -467,7 +489,31 @@ export function startZswarmImport(deps: {
   const homeDir = deps.env.HOME || deps.env.USERPROFILE || homedir()
   const zswarmHome = deps.env.ZSWARM_HOME?.trim() || join(homeDir, '.zswarm')
   if (importTimer) clearTimeout(importTimer)
-  const spawnFn = deps.spawn ?? Bun.spawn
+  const cmd = [deps.python, '-m', 'hswarm', 'import-zswarm', '--json']
+  // On the hswarm lane's spawn worker, never the daemon's thread (spawnServer); a test's fake spawn
+  // runs here.
+  const run = async (): Promise<{ code: number | null; out: string }> => {
+    if (!deps.spawn) {
+      const r = await spawnCaptured(cmd, {
+        cwd: deps.dir,
+        env: deps.env,
+        wantStderr: false,
+        timeoutMs: ZSWARM_IMPORT_TIMEOUT_MS,
+        lane: 'hswarm',
+      })
+      return { code: r.code, out: r.stdout }
+    }
+    const child = deps.spawn(cmd, {
+      cwd: deps.dir,
+      stdout: 'pipe',
+      stderr: 'ignore',
+      stdin: 'ignore',
+      windowsHide: true,
+      env: deps.env,
+    })
+    const out = await new Response(child.stdout as ReadableStream).text()
+    return { code: await child.exited, out }
+  }
   const tick = async () => {
     importTimer = null
     if (stopRequested) return
@@ -475,16 +521,7 @@ export function startZswarmImport(deps: {
     if (existsSync(zswarmHome) && !importRunning) {
       importRunning = true
       try {
-        const child = spawnFn([deps.python, '-m', 'hswarm', 'import-zswarm', '--json'], {
-          cwd: deps.dir,
-          stdout: 'pipe',
-          stderr: 'ignore',
-          stdin: 'ignore',
-          windowsHide: true,
-          env: deps.env,
-        })
-        const out = await new Response(child.stdout as ReadableStream).text()
-        const code = await child.exited
+        const { code, out } = await run()
         done = code === 0
         console.log(
           `[hswarm] zswarm import ${code === 0 ? importSummary(out) : `failed (exit ${code})`}`,
@@ -523,7 +560,7 @@ export async function stopHSwarm(): Promise<void> {
     if (proc.pid) {
       killProcessTree(proc.pid)
     } else {
-      proc.kill('SIGKILL')
+      proc.kill()
     }
   } catch {
     // already gone
@@ -563,5 +600,6 @@ export function resetHSwarmStateForTests(): void {
   clearAdoptTimer()
   state = { running: false, answering: null, port: null, pid: null, lastError: null }
   proc = null
+  starting = false
   backoffMs = MIN_BACKOFF_MS
 }

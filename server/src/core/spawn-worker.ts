@@ -22,6 +22,9 @@
 // left a 3 s capture no time to print). The main thread answers by itself if the worker has not
 // by 2 x `timeoutMs` + WORKER_GRACE_MS, whatever that thread is doing. A capture that must not wait
 // behind the rest asks for a lane: a worker thread of its own.
+//
+// A LONG-LIVED CHILD (a server) is started here too (startInWorker): the worker spawns it, answers
+// with its pid, watches it and reports its exit; a kill goes through the worker that holds it.
 
 export interface WorkerCapture {
   code: number | null
@@ -96,8 +99,33 @@ async function capture(cmd, opts) {
     if (proc.exitCode === null && !proc.killed && proc.pid) killTree(proc.pid)
   }
 }
+const started = new Map()
+function start(id, cmd, opts) {
+  let proc
+  try {
+    proc = Bun.spawn(cmd, {
+      stdin: 'ignore', stdout: opts.stdout ?? 'ignore', stderr: opts.stderr ?? 'ignore', windowsHide: true,
+      ...(opts.cwd ? { cwd: opts.cwd } : {}),
+      ...(opts.env ? { env: opts.env } : {}),
+    })
+  } catch (err) {
+    self.postMessage({ id, failed: String((err && err.message) || err) })
+    return
+  }
+  started.set(id, proc)
+  self.postMessage({ id, pid: proc.pid })
+  proc.exited.then((code) => code, () => null).then((code) => {
+    started.delete(id)
+    self.postMessage({ id, exit: code })
+  })
+}
 self.onmessage = async (e) => {
-  const { id, cmd, opts } = e.data
+  const { id, cmd, opts, kind } = e.data
+  if (kind === 'start') return start(id, cmd, opts)
+  if (kind === 'kill') {
+    try { started.get(id)?.kill('SIGKILL') } catch {}
+    return
+  }
   // It waited its whole deadline for this thread: answered, never started.
   if (Date.now() - opts.askedAt >= opts.timeoutMs) {
     self.postMessage({ id, result: { code: null, stdout: '', stderr: '', timedOut: true } })
@@ -125,6 +153,21 @@ const workers = new Map<string, Worker>()
 const pending = new Map<number, Pending>()
 let nextId = 0
 
+/** A long-lived child a worker started (startInWorker), by id, until it exits. */
+interface Child {
+  lane: string
+  started: (pid: number | undefined) => void
+  failed: (err: Error) => void
+  ended: (code: number | null) => void
+}
+const children = new Map<number, Child>()
+
+type WorkerReply =
+  | { id: number; result: WorkerCapture }
+  | { id: number; pid: number | undefined }
+  | { id: number; failed: string }
+  | { id: number; exit: number | null }
+
 function settle(id: number): Pending | undefined {
   const p = pending.get(id)
   if (!p) return undefined
@@ -135,6 +178,13 @@ function settle(id: number): Pending | undefined {
 
 function failLane(lane: string, err: Error): void {
   for (const [id, p] of pending) if (p.lane === lane) settle(id)?.reject(err)
+  // A child it started may still run, but nothing watches it now: its exit is unknown (null).
+  for (const [id, c] of children)
+    if (c.lane === lane) {
+      children.delete(id)
+      c.failed(err)
+      c.ended(null)
+    }
 }
 
 function ensureWorker(lane: string): Worker {
@@ -144,8 +194,20 @@ function ensureWorker(lane: string): Worker {
   // Never what keeps the process alive: a test run or one-shot CLI must be free to exit.
   // Bun's Worker has unref(); the DOM Worker type this file compiles against does not list it.
   ;(w as Worker & { unref(): void }).unref()
-  w.onmessage = (e: MessageEvent<{ id: number; result: WorkerCapture }>) => {
-    settle(e.data.id)?.resolve(e.data.result)
+  w.onmessage = (e: MessageEvent<WorkerReply>) => {
+    const d = e.data
+    if ('result' in d) {
+      settle(d.id)?.resolve(d.result)
+      return
+    }
+    const c = children.get(d.id)
+    if (!c) return
+    if ('pid' in d) c.started(d.pid)
+    else {
+      children.delete(d.id)
+      if ('failed' in d) c.failed(new StartFailed(d.failed))
+      else c.ended(d.exit)
+    }
   }
   w.onerror = (e) => {
     // A dead worker fails what it held and is replaced on the next call.
@@ -191,6 +253,89 @@ export function captureInWorker(
       w.postMessage({ id, cmd, opts: { ...rest, askedAt: Date.now() } })
     } catch (err) {
       settle(id)
+      reject(err instanceof Error ? err : new Error(String(err)))
+    }
+  })
+}
+
+/** A long-lived child started on a worker thread (startInWorker). The thread that spawned it watches it
+ *  for its exit; this thread holds only the handle. */
+export interface StartedChild {
+  pid: number | undefined
+  /** Its exit code once it ends; null when the thread watching it died first. */
+  exited: Promise<number | null>
+  /** SIGKILL the process itself (its tree: killProcessTree by pid). */
+  kill(): void
+}
+
+/** The child could not be started (Bun.spawn threw in the worker): the message is Bun's. */
+export class StartFailed extends Error {}
+
+/** How long a start waits for its worker to answer with a pid before it is given up; a child that
+ *  starts after that is killed, since nobody holds it. */
+const START_WAIT_MS = 60_000
+
+/** Start a long-lived child (a server) on `lane`'s worker thread, which watches it for its exit.
+ *  stdout and stderr go to the given fds (a log opened on this thread), else nowhere. Rejects with
+ *  StartFailed when it cannot be started, and with any other error when the worker cannot be used
+ *  (the caller then starts it inline). */
+export function startInWorker(
+  cmd: string[],
+  opts: {
+    lane: string
+    cwd?: string
+    env?: Record<string, string | undefined>
+    stdout?: number
+    stderr?: number
+  },
+): Promise<StartedChild> {
+  const { lane, ...rest } = opts
+  let w: Worker
+  try {
+    w = ensureWorker(lane)
+  } catch (err) {
+    return Promise.reject(err instanceof Error ? err : new Error(String(err)))
+  }
+  const id = ++nextId
+  const kill = (): void => {
+    try {
+      w.postMessage({ id, kind: 'kill' })
+    } catch {
+      // its worker is gone, and with it the handle
+    }
+  }
+  let ended: (code: number | null) => void = () => {}
+  const exited = new Promise<number | null>((resolve) => {
+    ended = resolve
+  })
+  return new Promise<StartedChild>((resolve, reject) => {
+    let answered = false
+    const guard = setTimeout(() => {
+      answered = true
+      reject(new Error(`spawn worker did not start ${cmd[0]} within ${START_WAIT_MS / 1000} s`))
+    }, START_WAIT_MS)
+    ;(guard as { unref?(): void }).unref?.()
+    children.set(id, {
+      lane,
+      started: (pid) => {
+        clearTimeout(guard)
+        if (answered) return kill()
+        answered = true
+        resolve({ pid, exited, kill })
+      },
+      failed: (err) => {
+        clearTimeout(guard)
+        if (answered) return
+        answered = true
+        reject(err)
+      },
+      ended,
+    })
+    try {
+      w.postMessage({ id, kind: 'start', cmd, opts: rest })
+    } catch (err) {
+      children.delete(id)
+      clearTimeout(guard)
       reject(err instanceof Error ? err : new Error(String(err)))
     }
   })

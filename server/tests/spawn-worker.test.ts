@@ -1,8 +1,8 @@
 import { expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, rmSync } from 'node:fs'
+import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { spawnCaptured } from '../src/core/process.ts'
+import { spawnCaptured, startProcess } from '../src/core/process.ts'
 
 // spawnCaptured runs on a worker thread so Bun.spawn's 100-280 ms hold never lands on the daemon's
 // loop; the contract the callers rely on must survive the hop.
@@ -54,3 +54,33 @@ test('spawnCaptured: a command that cannot start comes back as data', async () =
   const r = await spawnCaptured(['definitely-not-a-command-xyz'])
   expect(r).toEqual({ code: null, stdout: '', stderr: '', timedOut: false })
 })
+
+// A long-lived child (the hswarm server) is started on a worker thread that watches it. The daemon
+// restarts the server on its exit and stops it with kill(), so the pid, the child's own exit code, a
+// log fd opened on this thread, and the kill must all cross the worker.
+test('startProcess: a started child reports its pid, its exit code and its log, and kill() ends it', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'spawn-worker-start-'))
+  const log = join(dir, 'out.log')
+  const fd = openSync(log, 'a')
+  try {
+    const quits = await startProcess(
+      [process.execPath, '-e', 'console.log("up"); process.exit(3)'],
+      { lane: 'spawn-worker-test', stdout: fd, stderr: fd },
+    )
+    expect(quits.pid).toBeGreaterThan(0)
+    expect(await quits.exited).toBe(3)
+    expect(readFileSync(log, 'utf8')).toBe('up\n')
+    const runs = await startProcess([process.execPath, '-e', 'setInterval(() => {}, 1000)'], {
+      lane: 'spawn-worker-test',
+    })
+    runs.kill()
+    const ended = await Promise.race([
+      runs.exited.then(() => 'ended'),
+      Bun.sleep(10_000).then(() => 'still running'),
+    ])
+    expect(ended).toBe('ended')
+  } finally {
+    closeSync(fd)
+    rmSync(dir, { recursive: true, force: true })
+  }
+}, 20_000)
