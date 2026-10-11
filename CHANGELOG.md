@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte keeps working when the PC is busy.** On a loaded PC its tasks could fail "stopped three times in a
+  row" and its checks "never started" without a CLI ever running, and starting or watching a run could hang for
+  minutes. A task now gets its full minute to start once its launch has gone out, a task that never started says so,
+  and starting a run answers within 15 s (without the finish message if the calling chat cannot be found in that
+  time).
+
 - **AgentHydra no longer freezes for about an hour a day.** Its background service was stuck for 58 minutes over
   one day while it judged CliMayte checks, read every account's past logins, listed sessions, built the spend report
   and cancelled tasks. Those now run beside it, so the window, HSwarm and CliMayte keep answering, and cancelling a

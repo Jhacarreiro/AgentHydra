@@ -263,7 +263,14 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   unless it ends in one, so npm's extensionless `claude` shim starts the `claude.cmd` beside it.
 - The attempt records `runner: { pid, pidFile, exitFile, launchedAt }`; `attempt.pid` is the CLI's.
   `attemptExited()` reads only files: an exit file means ended; a runner gone without one died
-  (`finish` reads it as interrupted); no pid file within a minute means it never started. A runner
+  (`finish` reads it as interrupted); no pid file a minute (`RUNNER_CLAIM_MS`) after the hand-off
+  ended means it never started, and `finish` says so (`RUNNER_NEVER_STARTED_NOTICE`, repeated by the
+  three-in-a-row failure). That minute counts from the moment the hand-off PowerShell returned
+  (`noteHandoff`, `unclaimedFor`), and while it is still queued or running nothing is voided: on
+  2026-10-11 the minute counted from the launch while hand-offs waited behind a jammed spawn worker,
+  so 405 checks were voided "never started" and 80 workers failed "stopped three times in a row"
+  with no CLI ever started. A launch an earlier daemon made still counts from `launchedAt`. The
+  hand-off runs on its own spawn-worker lane (`climayte-runner`), never behind netstat. A runner
   pid is trusted only once its command line names the attempt's spec (`isOurRunner`), so a pid
   Windows reused is never followed or killed. `killAttempts` kills the runners' trees, all in one
   `killRunners` call: one identity check for the lot, then one `taskkill` on the spawn worker, off the
@@ -1097,7 +1104,11 @@ process, and the tool turns that into the chat's transcript (`callerOrigin`, usi
 its own tool arguments is ignored. The tool posts the resolved origin to `POST /api/corch/workers`
 (or `/api/corch/waves`), and the route checks it again before storing it: `sessionId` must be a
 UUID and `home` an absolute folder that exists; a malformed one is dropped and pings are off for
-that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends no origin at all.
+that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends no origin at all. The
+lookup gets 15 s (`CALLER_ORIGIN_BUDGET_MS`); past that the dispatch goes on with pings off, as for
+a caller it could not trace, and `climayte_status` takes what the lookup spent off its watch. On
+2026-10-11 the lookup's netstat waited 150-1,600 s behind a jammed spawn worker, and three
+dispatches were still waiting when the daemon restarted, so they were never sent.
 
 - A `climayte_run` whose caller is itself a CliMayte worker's session gets
   `{ kind: 'worker', workerId }`: the worker hears of it through `climayteSend` (non-urgent), never

@@ -934,7 +934,11 @@ Five such tests were fixed on 2026-10-11, on a box at 91% CPU, and the rules the
   load. Effects on the real machine (that retirement, stopping Desk 2) run only when `installDir`
   is `APP_ROOT`.
 - **A deadline a child must beat starts when `Bun.spawn` returns** (`spawnCaptured`), so it must
-  cover the child's boot under load: a bun child took up to 2.55 s.
+  cover the child's boot under load: a bun child took up to 2.55 s. A capture that waited its whole
+  `timeoutMs` for the spawn worker's thread is answered `timedOut` and never started, and the main
+  thread answers by itself at 2 x `timeoutMs` + 10 s, so `spawnCaptured` always comes back. A capture
+  that must not queue behind the rest passes `lane: '<name>'` for a worker thread of its own (the
+  CliMayte runner hand-off, 2026-10-11).
 - **A test's bound covers every subprocess it runs.** A test that pushes three times gets three
   pushes' worth (`tests/githooks/pre-push-public-guard.test.ts`).
 - **bun's timeout kills the test's children** ("killed 1 dangling process"). A `spawnSync` child
