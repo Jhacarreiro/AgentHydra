@@ -8,6 +8,7 @@ import {
   climayteCancel,
   climayteRun,
   climayteSend,
+  killsLanded,
   setCliMayteAccountsProvider,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
@@ -24,8 +25,9 @@ beforeAll(() => {
   for (const d of [OLD, NEW, CONFIG]) mkdirSync(d, { recursive: true })
   setCliMayteAccountsProvider(() => [])
 })
-afterAll(() => {
+afterAll(async () => {
   climayteCancel({ group: 'cwd-test' })
+  await killsLanded()
   setCliMayteAccountsProvider(null)
   rmSync(scratch, { recursive: true, force: true })
 })

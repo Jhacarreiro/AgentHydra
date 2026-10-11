@@ -13,6 +13,7 @@ import {
   climayteCancel,
   climayteRun,
   climayteWaveStart,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -51,8 +52,9 @@ describe('manager MCP endpoint', () => {
     startCliMayte()
   }, 30_000)
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     for (const [id, w] of workers) if (w.kind === 'manage') workers.delete(id)
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)

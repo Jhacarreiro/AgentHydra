@@ -8,6 +8,7 @@ import {
   climayteCapacity,
   climayteList,
   climayteRun,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteMemoryReader,
@@ -421,8 +422,9 @@ describe('a task waits for memory, and starts on the first tick with room', () =
   for (const d of [cwd, acctDir]) mkdirSync(d, { recursive: true })
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     setCliMayteMemoryReader(null)
@@ -488,8 +490,9 @@ describe('a reading over 10 minutes old is read again before a task starts there
   for (const d of [cwd, oldDir, busyDir]) mkdirSync(d, { recursive: true })
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })

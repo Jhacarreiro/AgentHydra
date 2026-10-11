@@ -13,6 +13,7 @@ import {
   climayteCancel,
   climayteLeanWave,
   climayteRun,
+  killsLanded,
   setCliMayteAccountsProvider,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
@@ -29,8 +30,9 @@ mkdirSync(CWD, { recursive: true })
 const GROUP = 'lean-g'
 
 beforeAll(() => setCliMayteAccountsProvider(() => []))
-afterAll(() => {
+afterAll(async () => {
   climayteCancel({ group: GROUP })
+  await killsLanded()
   setCliMayteAccountsProvider(null)
   rmSync(scratch, { recursive: true, force: true })
 })

@@ -96,7 +96,9 @@ function stopCheckRunner(r: CheckRunner): boolean {
   } else if (!readRunnerExit(r.exitFile)) {
     // Unconfirmed: checkRunners asks WMI on its own beat; a synchronous ask here would stall every tick.
     if (runnerIdentity(r.pid) === 'unknown') return false
-    killRunners([{ pid: r.pid, log: r.log }])
+    // Its files go once its tree has: the kill runs off the daemon's thread (killRunners).
+    killRunners([{ pid: r.pid, log: r.log }], () => removeCheckFiles(r))
+    return true
   }
   removeCheckFiles(r)
   return true

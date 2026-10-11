@@ -7,6 +7,7 @@ import { join } from 'node:path'
 import {
   climayteCancel,
   climayteRun,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -26,8 +27,9 @@ beforeAll(() => {
   setCliMayteClaudeCommand(['claude'])
   setCliMayteOwnerDir(OWNER)
 })
-afterAll(() => {
+afterAll(async () => {
   climayteCancel({ group: 'browser-mcp-test' })
+  await killsLanded()
   for (const w of workers.values())
     if (w.group === 'browser-mcp-test') rmSync(w.cwd, { recursive: true, force: true })
   setCliMayteOwnerDir(null)

@@ -20,6 +20,7 @@ import {
   climayteSend,
   climayteVerdict,
   climayteWait,
+  killsLanded,
   SENT_NOW_PREFIX,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
@@ -40,8 +41,9 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
   writeFileSync(join(slowDir, 'fake-slow'), '')
   const groups: string[] = []
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -287,8 +289,9 @@ describe('integration: a task with a check is judged by it', () => {
   for (const d of [cwd, acct]) mkdirSync(d, { recursive: true })
   const groups: string[] = []
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })

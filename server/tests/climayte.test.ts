@@ -42,6 +42,7 @@ import {
   dueOrder,
   freshestPct,
   joinResults,
+  killsLanded,
   livePct,
   MAX_PER_ACCOUNT,
   MAX_RESULTS,
@@ -784,8 +785,9 @@ describe('integration: a quota wall hands the session to the next account', () =
   writeFileSync(join(ownerDir, 'CLAUDE.md'), 'owner rules')
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     setCliMayteOwnerDir(null)
@@ -881,8 +883,9 @@ describe('integration: a move copies from the account that RAN the session (fiel
   writeFileSync(join(refusedDir, 'fake-org-disabled'), '')
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -968,8 +971,9 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
   writeFileSync(join(bareDir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
   const groups: string[] = []
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     setCliMayteOwnerDir(null)
@@ -1366,8 +1370,9 @@ describe('integration: paid extra usage is never spent', () => {
   writeFileSync(join(overDir, 'fake-overage'), '')
   const groups: string[] = []
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1703,8 +1708,9 @@ describe('integration: near its limit a worker hands off to a fresh session', ()
   writeFileSync(join(nearDir, 'fake-winddown'), '')
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1886,8 +1892,9 @@ describe('spend per attempt (field note 41): what each run used, the re-read aft
   writeFileSync(join(nextDir, 'fake-reread'), '2000000')
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -1959,8 +1966,9 @@ describe.skipIf(process.platform !== 'win32')(
     writeFileSync(join(dir, 'fake-leftover'), '')
     let group: string | null = null
 
-    afterAll(() => {
+    afterAll(async () => {
       if (group) climayteCancel({ group })
+      await killsLanded()
       setCliMayteClaudeCommand(null)
       setCliMayteAccountsProvider(null)
       rmSync(root, { recursive: true, force: true })

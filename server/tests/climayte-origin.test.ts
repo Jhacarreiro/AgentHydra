@@ -22,6 +22,7 @@ import {
   climayteGet,
   climaytePing,
   climayteRun,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMaytePingDeps,
   startCliMayte,
@@ -85,13 +86,14 @@ beforeAll(() => {
   }
 })
 
-afterAll(() => {
+afterAll(async () => {
   // Every group here is 'og-*'. Its workers wait for an account that never comes; left queued in
   // the shared store, they would take the accounts a later suite in this process hands out.
   const groups = new Set(
     [...workers.values()].map((w) => w.group).filter((g) => g?.startsWith('og-')),
   )
   for (const group of groups) climayteCancel({ group })
+  await killsLanded()
   globalThis.fetch = realFetch
   setCallerTranscriptResolver(null)
   setCliMaytePingDeps(null)

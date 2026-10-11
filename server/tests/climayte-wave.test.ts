@@ -15,6 +15,7 @@ import {
   climayteWaveResolve,
   climayteWaveStart,
   climayteWaveVerify,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -844,8 +845,9 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     startCliMayte()
   }, 30_000) // five git commits take over the default 5 s on a loaded box
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     forgetManagers()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
@@ -1130,8 +1132,9 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
     ])
     startCliMayte()
   }, 30_000) // git init and the fake CLI setup spawn processes: under a second here, seconds on a loaded box
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     forgetManagers()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
@@ -1285,8 +1288,9 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     ])
     startCliMayte()
   }, 30_000) // git init and the fake CLI setup spawn processes: under a second here, seconds on a loaded box
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     forgetManagers()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)

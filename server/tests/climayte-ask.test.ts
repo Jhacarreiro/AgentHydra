@@ -16,6 +16,7 @@ import {
   climayteReady,
   climayteRun,
   climayteSend,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMaytePingDeps,
   startCliMayte,
@@ -45,8 +46,9 @@ beforeAll(async () => {
   await climayteReady()
 })
 
-afterAll(() => {
+afterAll(async () => {
   for (const group of ['og-ask', 'og-ask2']) climayteCancel({ group })
+  await killsLanded()
   setCliMaytePingDeps(null)
   stopCliMaytePing()
   setCliMayteAccountsProvider(null)

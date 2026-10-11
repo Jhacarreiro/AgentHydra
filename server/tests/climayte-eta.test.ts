@@ -19,6 +19,7 @@ import {
   climayteScorecard,
   climayteStopHook,
   climayteWait,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -206,9 +207,10 @@ describe('integration: a worker estimates, finishes, and the next brief is calib
   const seeded: string[] = []
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const id of seeded) workers.delete(id)
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })

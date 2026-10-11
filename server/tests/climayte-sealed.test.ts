@@ -12,6 +12,7 @@ import {
   climayteCancel,
   climayteRun,
   climayteVerdict,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -38,8 +39,9 @@ beforeAll(() => {
   setCliMayteClaudeCommand(['claude'])
   setCliMayteOwnerDir(OWNER)
 })
-afterAll(() => {
+afterAll(async () => {
   climayteCancel({ group: 'sealed-test' })
+  await killsLanded()
   for (const w of workers.values())
     if (w.group === 'sealed-test') rmSync(w.cwd, { recursive: true, force: true })
   setCliMayteOwnerDir(null)

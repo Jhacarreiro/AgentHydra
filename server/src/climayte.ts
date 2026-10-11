@@ -157,6 +157,7 @@ import {
   forgetRead,
   killAttempts,
   killLateStarts,
+  killsLanded,
   noteReading,
   readLog,
   recheckCredentialWall,
@@ -225,6 +226,7 @@ export {
   climayteRunningCount,
   climayteSignedOutReason,
   climayteWorkerPids,
+  killsLanded,
 } from './climayte-stops'
 export { planStorage, type StoragePlan } from './climayte-storage'
 export { climayteTotals } from './climayte-totals'
@@ -606,6 +608,9 @@ async function tick(): Promise<void> {
     saveLive()
     pollChecks()
     recheckSignedOut(accounts)
+    // A stop's kill runs off the daemon's thread (killRunners): nothing launches beside a CLI still
+    // being killed, as the next turn of a worker stopped to deliver an urgent message would.
+    await killsLanded()
     const state = tickState(accounts, now)
     const due = [...workers.values()].filter(
       (w) =>
@@ -1603,15 +1608,23 @@ function pollBeforeStop(w: CliMayteWorker): boolean {
   return true
 }
 
-/** Record an attempt whose CLI was killed (killAttempts) as stopped, with its spend. */
+/** Record an attempt whose CLI is being killed (killAttempts) as stopped, with its spend. */
 function recordStop(w: CliMayteWorker, at: Attempt, notice: string | null): void {
   at.outcome = 'cancelled'
   at.notice = notice
   at.endedAt = Date.now()
   charge(w, at)
   forgetRead(at.log)
-  rmSync(signalPath(w.id), { force: true })
-  removeWorkerFiles(w.id)
+}
+
+/** A stopped worker's signal and settings files, removed once its CLI's tree is gone. */
+function removeStopFiles(w: CliMayteWorker): void {
+  try {
+    rmSync(signalPath(w.id), { force: true })
+    removeWorkerFiles(w.id)
+  } catch (err) {
+    console.error(`[climayte] ${w.id}: its stop's files could not be removed:`, err)
+  }
 }
 
 /** End a running worker's attempt now: kill its CLI and record the attempt as stopped, with its
@@ -1621,14 +1634,15 @@ function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
   if (!pollBeforeStop(w)) return false
   const at = runningAttempt(w)
   if (at) {
-    killAttempts([at])
+    killAttempts([at], () => removeStopFiles(w))
     recordStop(w, at, notice)
   }
   return true
 }
 
 /** Queued messages survive a cancel (field note 11, 2026-09-30: a cancel dropped three silently):
- *  they are delivered, in order, when the worker is continued, and the answer counts them. */
+ *  they are delivered, in order, when the worker is continued, and the answer counts them. The kill
+ *  lands after this returns (killRunners): await killsLanded() before relying on the CLIs being gone. */
 export function climayteCancel(filter: { id?: string; group?: string }): {
   cancelled: string[]
   keptMessages: Record<string, number>
@@ -1644,13 +1658,19 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
     if (pollBeforeStop(w)) stopping.push({ w, at: runningAttempt(w) })
   }
   // Every running CLI in one kill (killRunners), not one each: a group of 11 took 15.8 s that way.
-  killAttempts(stopping.flatMap((s) => (s.at ? [s.at] : [])))
+  const killing = stopping.filter((s) => s.at)
+  killAttempts(
+    killing.map((s) => s.at as Attempt),
+    () => {
+      for (const { w } of killing) removeStopFiles(w)
+    },
+  )
   for (const { w, at: running } of stopping) {
     try {
       if (running) recordStop(w, running, null)
     } catch (err) {
-      // Killed already: the worker is cancelled even when its files could not be tidied, or the next
-      // tick would read its dead CLI as interrupted and resume it.
+      // Being killed: the worker is cancelled even when its stop could not be recorded in full, or
+      // the next tick would read its dead CLI as interrupted and resume it.
       console.error(`[climayte] ${w.id}: its stop could not be recorded in full:`, err)
     }
     const at = w.attempts[w.attempts.length - 1]

@@ -55,7 +55,7 @@ import {
   windDownMessage,
 } from './climayte-lib'
 import { type RunnerPids, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { isPidAlive, killProcessTrees, spawnCaptured } from './core/process'
+import { isPidAlive, killProcessTreesAsync, spawnCaptured } from './core/process'
 import { nativeCommandLines } from './core/win-process-table'
 import { parseResetTime } from './usage'
 
@@ -383,7 +383,7 @@ export function attemptExited(w: CliMayteWorker, at: Attempt): boolean {
  *  first: nothing ever starts. Claimed first: the runner is marked killOnStart and killLateStarts
  *  kills it once its pid file appears. Every caller saves the workers right after (changed), which
  *  keeps the mark. */
-export function killAttempts(ats: Attempt[]): void {
+export function killAttempts(ats: Attempt[], after?: () => void): void {
   const kill: { at: Attempt; runner: NonNullable<Attempt['runner']>; pid: number }[] = []
   for (const at of ats) {
     const runner = at.runner
@@ -399,15 +399,19 @@ export function killAttempts(ats: Attempt[]): void {
     }
     kill.push({ at, runner, pid: runner.pid as number })
   }
-  killRunners(kill.map((k) => ({ pid: k.pid, log: k.at.log })))
-  for (const { at, runner, pid } of kill) {
-    const identity = runnerIdentity(pid)
-    // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
-    if (identity === 'gone') removeRunnerFiles(at)
-    // Not confirmed as ours (WMI failed or timed out): killLateStarts tries again once checkRunners
-    // knows, instead of the stop being forgotten while the CLI runs on (re-review, 2026-10-02).
-    else if (identity === 'unknown') runner.killOnStart = true
-  }
+  killRunners(
+    kill.map((k) => ({ pid: k.pid, log: k.at.log })),
+    () => {
+      // Killed, or already ended: its pid and exit files would otherwise stay for good (review, 2026-10-02).
+      for (const { at, pid } of kill) if (runnerIdentity(pid) === 'gone') removeRunnerFiles(at)
+      after?.()
+    },
+  )
+  // Not confirmed as ours (WMI failed or timed out), so not killed: killLateStarts tries again once
+  // checkRunners knows, instead of the stop being forgotten while the CLI runs on (re-review,
+  // 2026-10-02). Marked now, so the caller's save keeps it.
+  for (const { runner, pid } of kill)
+    if (runnerIdentity(pid) === 'unknown') runner.killOnStart = true
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
@@ -421,27 +425,40 @@ export function killLateStarts(): void {
       if (!runner?.killOnStart) continue
       const pids = readRunnerPids(runner.pidFile)
       // A runner that already wrote its exit file has ended: its pid may be a stranger's by now.
+      // Killed, ended on its own, or a runner that claimed its spec and died before writing a pid.
+      const settle = () => {
+        cleanUpRunner(w, at)
+        delete runner.killOnStart
+        changed(w)
+      }
       if (pids && !readRunnerExit(runner.exitFile)) {
         takeRunnerPids(at, runner, pids)
         if (runnerIdentity(pids.runner) === 'unknown') continue // checkRunners confirms it first
-        killRunners([{ pid: pids.runner, log: at.log }])
+        killRunners([{ pid: pids.runner, log: at.log }], settle)
       } else if (
-        !pids &&
-        !readRunnerExit(runner.exitFile) &&
-        Date.now() - runner.launchedAt <= RUNNER_CLAIM_GIVE_UP_MS
+        pids ||
+        readRunnerExit(runner.exitFile) ||
+        Date.now() - runner.launchedAt > RUNNER_CLAIM_GIVE_UP_MS
       )
-        continue
-      // Killed, ended on its own, or a runner that claimed its spec and died before writing a pid.
-      cleanUpRunner(w, at)
-      delete runner.killOnStart
-      changed(w)
+        settle()
     }
 }
 
-/** Kill runners' whole trees, each only if it is still its attempt's (or check's) runner. ONE WMI ask
- *  for the unconfirmed and ONE taskkill for the lot: each call walks every process on the box, and a
- *  group cancel that killed its 11 workers one call each held the daemon 15.8 s (2026-10-03). */
-export function killRunners(runners: { pid: number; log: string }[]): void {
+/** Kills started by killRunners, each with what runs once its trees are gone. The tick waits for them
+ *  before it launches anything (killsLanded), so no turn starts beside a CLI still being killed. */
+const landing = new Set<Promise<void>>()
+
+/** Resolves once every kill started so far has landed and what follows it has run. */
+export async function killsLanded(): Promise<void> {
+  while (landing.size) await Promise.allSettled([...landing])
+}
+
+/** Kill runners' whole trees, each only if it is still its attempt's (or check's) runner, then run
+ *  `after`. ONE WMI ask for the unconfirmed and ONE taskkill for the lot: each call walks every process
+ *  on the box, and a group cancel that killed its 11 workers one call each held the daemon 15.8 s
+ *  (2026-10-03). The taskkill runs off the daemon's thread: on it, one cancel still held the daemon
+ *  2.1 s (2026-10-11). */
+export function killRunners(runners: { pid: number; log: string }[], after?: () => void): void {
   const unknown = runners.filter((r) => runnerIdentity(r.pid) === 'unknown')
   if (unknown.length) {
     // A stop cannot wait for the next tick's check: ask about these now. In-process when it can
@@ -465,7 +482,11 @@ export function killRunners(runners: { pid: number; log: string }[]): void {
       console.error(`[climayte] runner ${pid} could not be confirmed as ${log}'s; not killed`)
     if (identity === 'ours') ours.push(pid)
   }
-  killProcessTrees(ours)
+  const landed: Promise<void> = killProcessTreesAsync(ours)
+    .then(() => after?.())
+    .catch((err) => console.error('[climayte] after a kill:', err))
+    .finally(() => landing.delete(landed))
+  landing.add(landed)
 }
 
 /** When this daemon loaded: an attempt started before then was started by an earlier daemon. */

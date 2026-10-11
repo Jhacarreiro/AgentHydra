@@ -12,6 +12,7 @@ import {
   climayteCancel,
   climayteRun,
   climayteSend,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   setCliMayteOwnerDir,
@@ -36,8 +37,9 @@ beforeAll(() => {
   setCliMayteClaudeCommand(['claude'])
   setCliMayteOwnerDir(OWNER)
 })
-afterAll(() => {
+afterAll(async () => {
   climayteCancel({ group: 'chat-test' })
+  await killsLanded()
   setCliMayteOwnerDir(null)
   setCliMayteClaudeCommand(null)
   setCliMayteAccountsProvider(null)

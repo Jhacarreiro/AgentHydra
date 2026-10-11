@@ -12,6 +12,7 @@ import {
   climayteList,
   climayteRun,
   climayteWait,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -122,8 +123,9 @@ describe('integration: an identity-walled account moves its task and is not pick
   writeFileSync(join(idDir, 'fake-identity'), '')
   let group: string | null = null
 
-  afterAll(() => {
+  afterAll(async () => {
     if (group) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     delete walls['idn-move-a']

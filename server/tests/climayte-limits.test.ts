@@ -15,6 +15,7 @@ import {
   climayteRun,
   climayteVerdict,
   climayteWait,
+  killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
   startCliMayte,
@@ -37,8 +38,9 @@ describe('sizing (owner, 2026-10-01): too big for a window is split, one that fi
   let factor = 1
   let resetAt = Date.now() + 2 * 3_600_000
 
-  afterAll(() => {
+  afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     setCliMayteClaudeCommand(null)
     setCliMayteAccountsProvider(null)
     rmSync(root, { recursive: true, force: true })
@@ -302,6 +304,7 @@ describe('integration: the five-minute rule (owner, 2026-10-03)', () => {
 
   afterAll(async () => {
     for (const group of groups) climayteCancel({ group })
+    await killsLanded()
     // The folder goes once the stopped CLIs have exited: on Windows one still running in `cwd`
     // holds it open (EBUSY, 2026-10-03). Read after the cancel, which fills in the pids it found,
     // and again each round: a runner that claimed its spec without writing a pid is killed by a

@@ -38,6 +38,7 @@ import {
   climayteWaveStart,
   climayteWaves,
   climayteWaveVerify,
+  killsLanded,
   verdictNoteTooLong,
 } from '../climayte'
 import type { CliMayteWorkerView } from '../climayte-lib'
@@ -378,7 +379,10 @@ app.post('/api/corch/cancel', async (c) => {
   const id = optStr(body.id)
   const group = optStr(body.group)
   if (!id && !group) return c.json({ error: 'id or group is required' }, 400)
-  return c.json(climayteCancel({ id, group }))
+  const cancelled = climayteCancel({ id, group })
+  // The answer comes once the CLIs are gone, as when the kill held the daemon's thread.
+  await killsLanded()
+  return c.json(cancelled)
 })
 
 // What CliMayte has offloaded, over every task on record: the CliMayte view's counter.
@@ -401,6 +405,8 @@ app.post('/api/corch/remove', async (c) => {
     ? body.ids.filter((x): x is string => typeof x === 'string')
     : []
   if (!ids.length) return c.json({ error: 'ids is required' }, 400)
+  // A task cancelled a moment ago may still have its CLI being killed, holding the log the remove archives.
+  await killsLanded()
   return c.json(climayteRemove(ids))
 })
 
