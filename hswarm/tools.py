@@ -786,7 +786,9 @@ class Sandbox:
         kept = []
         for ln in lines:
             m = GREP_LINE_RX.match(ln)
-            key = m.group(1) if m else ln
+            if m is None:
+                continue  # not a hit: a line with no path:line prefix is never judged as a path
+            key = m.group(1)
             if key not in verdicts:
                 verdicts[key] = self.shown("grep", _hit_path(ln, self.cwd))
             if verdicts[key]:

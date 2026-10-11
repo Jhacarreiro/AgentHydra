@@ -3,6 +3,7 @@ from __future__ import annotations
 
 import asyncio
 import os
+import shutil
 import sys
 import threading
 from pathlib import Path
@@ -209,6 +210,19 @@ def test_walks_leave_the_shared_server_answering(tmp_path, monkeypatch, tool, ar
         return await Sandbox(tmp_path).run(tool, args)
 
     assert run(main()) == answer
+
+
+@pytest.mark.parametrize("engine", ["rg", "python"])
+def test_grep_keeps_a_hit_whole_when_its_text_holds_a_unicode_line_break(tmp_path, monkeypatch, engine):
+    # 2026-10-11: a worker's grep matched a 12.7 MB line of a .heapsnapshot that held "\x85". str.splitlines() cuts
+    # there too, so the line's tail came back as a hit with no path:line prefix, was judged as a file path of ~490k
+    # parts, and is_key_path's parents scan held one thread at a full core for over 40 minutes. Only "\n" ends a line.
+    if engine == "rg" and not shutil.which("rg"):
+        pytest.skip("no rg on PATH")
+    if engine == "python":
+        monkeypatch.setattr(tools.shutil, "which", lambda name: None)
+    (tmp_path / "a.txt").write_bytes("needle one\x85two three/four\x0cfive\nother\n".encode("utf-8"))
+    assert run(Sandbox(tmp_path).run("grep", {"pattern": "needle"})) == "a.txt:1:needle one\x85two three/four\x0cfive"
 
 
 def test_glob_takes_an_absolute_pattern_and_never_kills_the_task(tmp_path):

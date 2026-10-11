@@ -19,6 +19,16 @@ from .toolspecs import IGNORED_DIRS
 GREP_LINE_RX = re.compile(r"^(.+?):(\d+):(.*)$")
 
 
+def split_lines(text: str) -> list[str]:
+    """`text` cut at "\\n" only, the one line end rg knows, with a CRLF line's "\\r" dropped. str.splitlines() also cuts
+    at \\x85, \\u2028, \\x0b, \\x0c and \\x1c-\\x1e: a hit holding one came back as a prefix-less tail that _shown_hits
+    judged as a file path, and a 12.7 MB .heapsnapshot line held a run's thread at a full core for 40+ minutes (2026-10-11)."""
+    lines = text.split("\n")
+    if lines[-1] == "":
+        lines.pop()
+    return [ln[:-1] if ln.endswith("\r") else ln for ln in lines]
+
+
 async def rg_lines(rg: str, cwd: Path, pattern: str, root: Path, glob: str | None, ignore_case: bool) -> list[str] | str:
     # --threads 2: one worker's grep must not fan across every core of a shared box; the process gate bounds how many run at once.
     cmd = [rg, "--line-number", "--no-heading", "--color", "never", "--no-messages", "--threads", "2", "-e", pattern]
@@ -30,7 +40,7 @@ async def rg_lines(rg: str, cwd: Path, pattern: str, root: Path, glob: str | Non
         cmd += ["-g", f"!{d}"]
     code, out, _err = await run_hidden(cmd + [str(root)], cwd, 60)
     # rg exits 1 for "no matches", which is an answer, not an error.
-    return out.splitlines() if code in (0, 1) else f"ERROR: rg exit {code}"
+    return split_lines(out) if code in (0, 1) else f"ERROR: rg exit {code}"
 
 
 def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit: int) -> list[str]:
@@ -43,7 +53,7 @@ def py_grep(pattern: str, root: Path, glob: str | None, ignore_case: bool, limit
                 continue
             p = folder / entry.name
             try:
-                for i, line in enumerate(p.read_text(encoding="utf-8", errors="replace").splitlines(), 1):
+                for i, line in enumerate(split_lines(p.read_text(encoding="utf-8", errors="replace")), 1):
                     if rx.search(line):
                         lines.append(f"{p}:{i}:{line}")
                         if len(lines) >= limit:
