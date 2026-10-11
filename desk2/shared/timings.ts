@@ -28,6 +28,7 @@ export const TIMING_STAGES = [
   'sync_poll',
   // The server
   'chat_open',
+  'external_open',
   'title',
   'warm',
   // The event loop was blocked this long (engine/loop-stall.ts)
@@ -68,9 +69,15 @@ export interface TimingSpan {
   cpu?: number
   /** A `turn` line: ms per stage inside it (hooks and tools summed). */
   stages?: Record<string, number>
-  /** A `sync_poll` line: how many polls the minute held, and the slowest. A `chat_open` line: `n` is the items served. */
+  /** A `sync_poll` line: how many polls the minute held, and the slowest. A `chat_open` or `external_open` line: `n` is the items served. */
   n?: number
   max?: number
+  /** An `external_open` line: ms spent finding the session's file in the projects folders, waiting on AgentHydra's tail, and
+   *  parsing the file; `searched` when the file had to be looked for (no file remembered for the session). */
+  find?: number
+  daemon?: number
+  parse?: number
+  searched?: boolean
 }
 
 export interface StageStats {

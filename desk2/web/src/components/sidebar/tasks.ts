@@ -518,11 +518,15 @@ function settleAdded(st: AddedRows): void {
   }
 }
 
-/** What an added row's dot shows: its worker's or its job's state; a chat's own is not known here, so it is idle. */
-export function addedStatus(r: Pick<AddedRow, 'worker' | 'job'>): ExternalSession['status'] {
-  const w = r.worker
-  if (w?.active) return w.status === 'waiting' ? 'needs_you' : w.status === 'queued' ? 'idle' : 'working'
-  return r.job?.active ? 'working' : 'idle'
+/**
+ * What an added row's dot shows: its worker's or its job's state, and for a caller row (no worker, no job) whether its own
+ * tasks or jobs run. A worker queued or waiting for an account runs as far as the owner is concerned: it needs nobody, and
+ * it is not done (owner, 2026-10-10: yellow only when "it needs me to look at stuff", dimmed only when "not running").
+ */
+export function addedStatus(r: Pick<AddedRow, 'worker' | 'job' | 'nodes' | 'jobs'>): ExternalSession['status'] {
+  if (r.worker?.active) return 'working'
+  if (r.job?.active || r.nodes.some((n) => n.worker.active) || r.jobs.some((j) => j.active)) return 'working'
+  return 'idle'
 }
 
 /**

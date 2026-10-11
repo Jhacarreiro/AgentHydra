@@ -19,7 +19,7 @@ const MCP_MAX_MS = 30_000
 /** SessionStart hooks that ended and were followed by nothing for this long are one finished group. */
 const HOOK_GROUP_SETTLE_MS = 1000
 /** What the owner waits on: the stages "what is slow right now" ranks (a whole turn, the model's own time and the background polls are not waits). */
-const WAIT_STAGES = new Set<TimingStage>(['click_to_server', 'click_to_bubble', 'open_to_paint', 'process_start', 'session_start_hooks', 'hook', 'mcp_connect', 'ready', 'queue_wait', 'first_token', 'tool', 'worker_accept', 'worker_queue', 'worker_first_item', 'account_move', 'chat_open', 'title'])
+const WAIT_STAGES = new Set<TimingStage>(['click_to_server', 'click_to_bubble', 'open_to_paint', 'process_start', 'session_start_hooks', 'hook', 'mcp_connect', 'ready', 'queue_wait', 'first_token', 'tool', 'worker_accept', 'worker_queue', 'worker_first_item', 'account_move', 'chat_open', 'external_open', 'title'])
 /** Stages listed one row per name. */
 const NAMED = new Set<TimingStage>(['hook', 'tool', 'mcp_connect', 'session_start_hooks', 'account_move'])
 

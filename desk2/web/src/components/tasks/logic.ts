@@ -1,7 +1,8 @@
 // The Background tasks panel's model (the real app's side panel, with CliMayte as its workflows): the
 // CliMayte workers a chat dispatched, one unit per group (a worker without a group is its own unit),
-// plus the chat's own background tasks, running and finished. Pure, so the grouping and the labels are tested.
-import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
+// the chat's own background tasks, running and finished, and the HSwarm jobs the chat called, one unit
+// each (the same jobs the sidebar's HSwarm badge counts). Pure, so the grouping and the labels are tested.
+import type { CliMayteWorker, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 import { chatWorkers } from '@/components/climayte/dock'
 
@@ -172,6 +173,41 @@ function taskUnit(t: TaskItem, deskChat: boolean): TaskUnit {
   }
 }
 
+/** The HSwarm jobs a session called: its caller id is the session, or the 8-character prefix a job stamps
+ *  for it. Another session's job never matches; the prefix match cannot tell two sessions that share it apart. */
+function chatJobs(jobs: readonly SwarmJob[], sessionId: string | null | undefined): SwarmJob[] {
+  if (!sessionId) return []
+  const mine = (id: string | null) => !!id && (id === sessionId || (id.length === 8 && sessionId.startsWith(id)))
+  return jobs.filter((j) => mine(j.callerSessionId) || mine(j.callerHostSessionId))
+}
+
+/** A job as a unit: its tasks are the description, and nothing is stoppable here (Stop lives in the HSwarm tab). */
+export function jobUnit(j: SwarmJob): TaskUnit {
+  const { total, done, failed } = j.tasks
+  return {
+    id: `job:${j.id}`,
+    name: j.title,
+    label: 'HSwarm',
+    running: j.active,
+    startedAt: j.startedAt ?? null,
+    // A cancelled job has no finished time from the daemon: a dash, never a time counted from nothing.
+    endedAt: j.active || !j.endedAt ? null : j.endedAt,
+    agents: total,
+    tokens: null,
+    description: `${done} of ${total} done`,
+    account: null,
+    phases: [],
+    stoppable: [],
+    stopTask: null,
+    keys: [`job:${j.id}`],
+    failed: j.status === 'cancelled' || failed > 0,
+    etaEndsAt: null
+  }
+}
+
+/** The HSwarm job a unit opens, null for any other unit. */
+export const jobIdOf = (u: TaskUnit): string | null => (u.id.startsWith('job:') ? u.id.slice('job:'.length) : null)
+
 /** Workers grouped into units: a group is one unit, a worker with no group its own. */
 export function workerUnits(workers: CliMayteWorker[]): TaskUnit[] {
   const groups = new Map<string, CliMayteWorker[]>()
@@ -199,12 +235,14 @@ export interface PanelLists {
  * every worker AgentHydra lists); `items` adds the chat's own task items, running or finished
  * (completed, failed, stopped), so a chat's finished background tasks list and count as the real
  * app's do (owner, 2026-10-05: "there actually is one running and one finished"); a Desk chat's running
- * task can be stopped (`chatId`). Running
+ * task can be stopped (`chatId`). `jobs` (the window's HSwarm jobs) adds the ones this session called, one unit
+ * each, running or finished like the rest. Running
  * units newest first; finished ones most recent first, minus the cleared, capped at FINISHED_CAP.
  */
 export function panelLists(o: {
   workers: CliMayteWorker[]
   items?: TranscriptItem[]
+  jobs?: readonly SwarmJob[]
   sessionId: string | null | undefined
   workerIds?: readonly string[]
   all?: boolean
@@ -214,7 +252,8 @@ export function panelLists(o: {
 }): PanelLists {
   const scoped = o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds)
   const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map((t) => taskUnit(t, !!o.chatId))
-  const units = [...workerUnits(scoped), ...tasks]
+  const jobs = chatJobs(o.jobs ?? [], o.sessionId).map(jobUnit)
+  const units = [...workerUnits(scoped), ...tasks, ...jobs]
   const cleared = o.cleared ?? new Set<string>()
   const running = units.filter((u) => u.running).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
   const finished = units

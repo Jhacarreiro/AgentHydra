@@ -11,6 +11,7 @@ import WorkingMark from '@/components/transcript/parts/WorkingMark.vue'
 import RevealStep from '@/components/transcript/parts/RevealStep.vue'
 import { nowDoing, runningFor } from '@/components/transcript/lib/now-doing'
 import { useClock } from '@/lib/clock'
+import { reportAtPaint } from '@/lib/timing'
 import Composer from '@/components/composer/Composer.vue'
 import { Tip } from '@/components/ui/tooltip'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
@@ -138,9 +139,12 @@ async function loadItems(quiet = false) {
   try {
     if (!quiet) loading.value = true
     error.value = null
-    const next = await api.externalItems(props.sessionId)
+    const from = performance.now()
+    const next = await api.externalItems(props.sessionId, session.value?.cwd)
     if (quiet && sameItems(items.value, next)) return
     items.value = next
+    // The open as the window draws it (polls are not opens).
+    if (!quiet) reportAtPaint('open_to_paint', from, props.sessionId)
   } catch (err) {
     error.value = err instanceof Error ? err.message : 'Failed to load session items'
   } finally {

@@ -35,7 +35,7 @@ const props = withDefaults(
     groups?: string[]
     /** The menu in place of an outside session's; without Rename, the row cannot be renamed. */
     entries?: RowMenuEntry[]
-    /** The dot in place of the session's: an added row that is a running HSwarm job pulses blue (Sidebar.vue addedGlyph). */
+    /** The dot in place of the session's (Sidebar.vue entryGlyph): an added row that is a running HSwarm job pulses blue, and a row with running sub-tasks runs. */
     dot?: StatusGlyph
     /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */
     compact?: boolean

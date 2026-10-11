@@ -407,7 +407,7 @@ export function recordCloudOrder(order: SidebarOrder, rows: readonly string[]): 
   }
 }
 
-/** Whether a row shows an attention dot: orange (waiting on you, or background tasks running) or green (done, unread). */
+/** Whether a row shows an attention dot: yellow (waiting on you) or green (done, unread). Running sub-tasks no longer count. */
 export function isOrange(e: SidebarEntry): boolean {
   const tone = (e.kind === 'chat' ? statusGlyph(e.chat) : externalGlyph(e.session)).tone
   return tone === 'warning' || tone === 'success'
@@ -489,21 +489,21 @@ export function groupChoices(chats: Pick<ChatSummary, 'cwd' | 'group'>[], extern
   return [...names.values()].sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }))
 }
 
-/** The dot of a session running elsewhere: the same language, stale is a dim ring, unread (marked here) orange. */
+/** The dot of a session running elsewhere: the same language, stale is a hollow ring, unread (marked here) green. */
 export function externalGlyph(s: Pick<ExternalSession, 'status' | 'unread'>): StatusGlyph {
   switch (s.status) {
     case 'working':
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Running elsewhere' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Running elsewhere' }
     case 'needs_you':
-      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you elsewhere' }
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', active: true, label: 'Needs you elsewhere' }
     case 'stale':
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: true, active: true, label: 'Unread' }
-        : { shape: 'ring', tone: 'muted', motion: 'none', dim: true, active: false, label: 'Stale' }
+        ? { shape: 'dot', tone: 'success', motion: 'none', active: true, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', active: false, label: 'Stale' }
     default:
       return s.unread
-        ? { shape: 'dot', tone: 'warning', motion: 'none', dim: false, active: true, label: 'Unread' }
-        : { shape: 'ring', tone: 'muted', motion: 'none', dim: false, active: false, label: 'Idle elsewhere' }
+        ? { shape: 'dot', tone: 'success', motion: 'none', active: true, label: 'Unread' }
+        : { shape: 'ring', tone: 'muted', motion: 'none', active: false, label: 'Idle elsewhere' }
   }
 }
 
@@ -513,17 +513,16 @@ export function sourceLabel(source: ExternalSession['source']): string {
 }
 
 /**
- * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Hydra Desk
- * paints every "waiting for you" state orange: a question or permission (pulsing) and a finished turn
- * not looked at yet (solid; the real app uses blue there). Error is red, a usage limit a pink hollow
- * ring (it waits for the reset, not for you), closed dims the title. Blue is HSwarm's alone: only a row
- * that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
+ * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow is
+ * for what needs the owner: a question or permission (pulsing). A finished turn not looked at yet is
+ * green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow ring (it waits
+ * for the reset, not for you). Running sub-tasks look like running (THREADS_RUNNING), never like done.
+ * Blue is HSwarm's alone: only a row that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
  */
 export interface StatusGlyph {
   shape: 'ring' | 'dot'
   tone: 'muted' | 'warning' | 'success' | 'danger' | 'limited' | 'swarm'
   motion: 'none' | 'blink' | 'pulse'
-  dim: boolean // the row title is dimmed (closed)
   active: boolean // what Active only keeps (isActive): running, starting, background work still running, or waiting on you: a question, a reply not read yet, an error
   label: string // aria-label of the dot, in words
 }
@@ -531,6 +530,15 @@ export interface StatusGlyph {
 /** Whether a row's dot says it is active (Active only). Undefined is a row with no dot known, drawn as an idle ring. */
 export function isActive(glyph: StatusGlyph | undefined): boolean {
   return glyph?.active ?? false
+}
+
+/**
+ * Whether a row is quiet, so its title and its logo dim: nothing runs in it, none of its threads runs, nothing waits on
+ * the owner, and it has no unread reply (owner, 2026-10-10: "If the task is not running, the text should be dimmed and so
+ * should the icon"). The selected row is never dimmed. The title and the logo both read this one predicate, so they agree.
+ */
+export function isQuiet(glyph: StatusGlyph | undefined, selected: boolean): boolean {
+  return !isActive(glyph) && !selected
 }
 
 /** A CliMayte chat whose worker waits for an account: it is not launching, whatever its status says. */
@@ -544,39 +552,55 @@ export function waitingLine(wait: NonNullable<ChatSummary['waiting']>, now: numb
 export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { waiting?: ChatSummary['waiting']; climayteActive?: number; backgroundActive?: number }): StatusGlyph {
   switch (chat.status) {
     case 'starting':
-      if (chat.waiting) return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Waiting' }
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Starting' }
+      if (chat.waiting) return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Waiting' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Starting' }
     case 'working':
-      return { shape: 'dot', tone: 'muted', motion: 'blink', dim: false, active: true, label: 'Running' }
+      return { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Running' }
     case 'needs_you':
-      return { shape: 'dot', tone: 'warning', motion: 'pulse', dim: false, active: true, label: 'Needs you' }
+      return { shape: 'dot', tone: 'warning', motion: 'pulse', active: true, label: 'Needs you' }
     case 'error':
-      return { shape: 'dot', tone: 'danger', motion: 'none', dim: false, active: true, label: 'Error' }
+      return { shape: 'dot', tone: 'danger', motion: 'none', active: true, label: 'Error' }
     case 'limited':
-      return { shape: 'ring', tone: 'limited', motion: 'none', dim: false, active: false, label: 'Usage limit' }
+      return { shape: 'ring', tone: 'limited', motion: 'none', active: false, label: 'Usage limit' }
     case 'closed':
-      return settledGlyph(chat, true, 'Closed')
+      return settledGlyph(chat, 'Closed')
     default: // idle, stopped
-      return settledGlyph(chat, false, chat.status === 'stopped' ? 'Stopped' : 'Idle')
+      return settledGlyph(chat, chat.status === 'stopped' ? 'Stopped' : 'Idle')
   }
 }
 
 /**
- * A chat that is not running. Background work still running keeps it orange whether or not it was read
- * (Jacob, 2026-10-04: it must never look done while its workers run): its CliMayte workers, and its own
- * background tasks less the long-lived ones (a dev server never ends, so it does not count). Done and
- * not looked at is green.
+ * The dot of a row whose sub-tasks run while the row itself does not: its CliMayte tasks, its HSwarm jobs, its own
+ * background tasks less the long-lived ones (a dev server never ends, so it does not count), its nested rows that run.
+ * It looks as a running row does, the strobing outline (owner, 2026-10-10: "some of them have sub-tasks running, but
+ * have no icon"; "never look done while its workers run", the rule Jacob's desk kept).
  */
-function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, dim: boolean, idle: string): StatusGlyph {
+export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' }
+
+/**
+ * A row's dot with its running sub-tasks counted (Sidebar.vue's runningThreads): a row whose own dot is not running,
+ * waits on the owner or errs, but which has `running` sub-tasks, shows THREADS_RUNNING. Yellow (needs you) and red
+ * (error) stay as they are, and so does a dot that already runs.
+ */
+export function withThreads(glyph: StatusGlyph, running: number): StatusGlyph {
+  if (!running || glyph.motion === 'blink' || glyph.tone === 'warning' || glyph.tone === 'danger') return glyph
+  return THREADS_RUNNING
+}
+
+/**
+ * A chat that is not running. Its background work still running keeps it running, read or not: its CliMayte workers,
+ * and its own background tasks less the long-lived ones. Done and not looked at is green.
+ */
+function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, idle: string): StatusGlyph {
   const background = (chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0
-  if (background) return { shape: 'dot', tone: 'warning', motion: 'none', dim, active: true, label: 'Replied, background tasks running' }
+  if (background) return THREADS_RUNNING
   return chat.unread
-    ? { shape: 'dot', tone: 'success', motion: 'none', dim, active: true, label: 'Done, unread' }
-    : { shape: 'ring', tone: 'muted', motion: 'none', dim, active: false, label: idle }
+    ? { shape: 'dot', tone: 'success', motion: 'none', active: true, label: 'Done, unread' }
+    : { shape: 'ring', tone: 'muted', motion: 'none', active: false, label: idle }
 }
 
 /** The dot of a row that stands for a running HSwarm job no chat is known to have called (tasks.ts AddedRow.job). */
-export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', dim: false, active: true, label: 'HSwarm job running' }
+export const SWARM_RUNNING: StatusGlyph = { shape: 'dot', tone: 'swarm', motion: 'blink', active: true, label: 'HSwarm job running' }
 
 /** The rows nested under each row (nestChildren's `under`), by that row's entryKey, in the order the list shows them. */
 export function childrenByRow(groups: readonly ChatGroup[]): Map<string, SidebarEntry[]> {
@@ -650,8 +674,8 @@ export function glyphDotClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>)
  * going on has one (owner, 2026-10-10: "so I can still see which chats have activity, like which are active and which
  * are waiting on me"). A 1.5px gradient per dot state, fading from the dot's colour at 80% to 40% (owner, 2026-10-10:
  * "slightly more subtle" than the first 2px, full-strength ring): running (the dot's blinking gray, and an HSwarm job) is
- * the live blue, needs you and unread the dot's orange, done-unread its green, an error its red; a usage limit keeps the
- * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own; closed dims it.
+ * the live blue, needs you the dot's yellow, done-unread its green, an error its red; a usage limit keeps the
+ * dot's pink, flat. Idle, stale and closed-idle chats have none. Motion is the dot's own.
  * Every class string is written out whole, so Tailwind sees each one.
  */
 const RING_GRADIENT = {
@@ -662,11 +686,10 @@ const RING_GRADIENT = {
   swarm: 'bg-[linear-gradient(135deg,color-mix(in_srgb,var(--accent-text)_80%,transparent),color-mix(in_srgb,var(--accent-text)_40%,transparent))]',
   limited: 'bg-[color-mix(in_srgb,var(--status-limited)_70%,transparent)]'
 }
-export function glyphRingClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion' | 'dim'>): string {
-  const dim = g.dim ? ' opacity-50' : ''
-  if (g.shape === 'ring') return g.tone === 'limited' ? RING_GRADIENT.limited + dim : ''
+export function glyphRingClass(g: Pick<StatusGlyph, 'shape' | 'tone' | 'motion'>): string {
+  if (g.shape === 'ring') return g.tone === 'limited' ? RING_GRADIENT.limited : ''
   const motion = { none: '', blink: ' run-pulse', pulse: ' animate-dot-pulse' }[g.motion]
-  return RING_GRADIENT[g.tone] + motion + dim
+  return RING_GRADIENT[g.tone] + motion
 }
 
 /** Elapsed time of a running turn, short: "12s", "4m", "1h 5m". */

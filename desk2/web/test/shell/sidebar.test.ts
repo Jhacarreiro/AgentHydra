@@ -33,6 +33,7 @@ import {
   sortFolders,
   statusGlyph,
   SWARM_RUNNING,
+  withThreads,
   type AccountChoice,
   type ChatGroup,
   type RowMenuEntry,
@@ -40,6 +41,7 @@ import {
   type RowMenuItem
 } from '@/components/sidebar/logic'
 import { runShortcut } from '@/components/sidebar/menuClasses'
+import { dimText } from '@/components/sidebar/rowClasses'
 
 const ids = (g: ChatGroup | null | undefined) => g?.entries.map((e) => e.id)
 
@@ -205,10 +207,10 @@ describe('sessions running elsewhere in the same list', () => {
     expect(groupChats([], { external, filter: 'archived' }).folders).toEqual([])
   })
 
-  it('draws their dot in the same language, stale dim, marked unread orange', () => {
+  it('draws their dot in the same language, stale a hollow ring, marked unread green', () => {
     expect(externalGlyph({ status: 'working', unread: false })).toMatchObject({ shape: 'dot', motion: 'blink' })
-    expect(externalGlyph({ status: 'stale', unread: false })).toMatchObject({ shape: 'ring', dim: true })
-    expect(externalGlyph({ status: 'idle', unread: true })).toMatchObject({ shape: 'dot', tone: 'warning', label: 'Unread' })
+    expect(externalGlyph({ status: 'stale', unread: false })).toMatchObject({ shape: 'ring', active: false })
+    expect(externalGlyph({ status: 'idle', unread: true })).toMatchObject({ shape: 'dot', tone: 'success', label: 'Unread' })
   })
 
   it('takes Hydra Desk marks: pinned to Pinned, archived to Archived, a moved-to group', () => {
@@ -298,24 +300,55 @@ describe('status glyph language', () => {
   it('a finished turn unread is a solid green dot; a question is orange and pulsing', () => {
     expect(statusGlyph({ status: 'idle', unread: true })).toMatchObject({ shape: 'dot', tone: 'success', motion: 'none', label: 'Done, unread' })
     expect(statusGlyph({ status: 'stopped', unread: true })).toMatchObject({ shape: 'dot', tone: 'success' })
-    expect(statusGlyph({ status: 'closed', unread: true })).toMatchObject({ shape: 'dot', tone: 'success', dim: true })
+    expect(statusGlyph({ status: 'closed', unread: true })).toMatchObject({ shape: 'dot', tone: 'success', active: true })
     expect(statusGlyph({ status: 'needs_you', unread: true })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'pulse' })
   })
 
-  it('a replied chat whose background tasks still run stays orange, read or not', () => {
+  it('a replied chat whose background tasks still run has the running look, read or not, never the calm ring', () => {
     for (const status of ['idle', 'stopped', 'closed'] as const)
-      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning', label: 'Replied, background tasks running' })
-    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'warning' })
+      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
+    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'muted', label: 'Sub-tasks running' })
   })
 
-  it("a replied chat whose own background commands still run stays orange, with no CliMayte worker", () => {
-    // The NexusCode chat, 2026-10-04: read, deploy still building, a gray ring.
-    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning' })
+  it("a replied chat whose own background commands still run has the running look, with no CliMayte worker", () => {
+    // The NexusCode chat, 2026-10-04: read, deploy still building, a gray ring; it must never look done while it runs.
+    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink' })
   })
 
   it('once read, a finished chat is the calm idle ring again', () => {
     expect(statusGlyph({ status: 'idle', unread: false })).toMatchObject({ shape: 'ring', tone: 'muted' })
-    expect(statusGlyph({ status: 'closed', unread: false })).toMatchObject({ shape: 'ring', dim: true })
+    expect(statusGlyph({ status: 'closed', unread: false })).toMatchObject({ shape: 'ring', active: false })
+  })
+
+  it('a row is quiet, its title and logo dimmed, when nothing in it runs, waits on you or is unread; selected never dims', () => {
+    // Owner, 2026-10-10: "the text should be dimmed and so should the icon" when the task is not running. The one predicate is
+    // isQuiet (ProjectRing reads it too); the old per-glyph dim flag dimmed a closed unread chat's title and not its idle one.
+    for (const g of [statusGlyph({ status: 'idle', unread: false }), statusGlyph({ status: 'closed', unread: false }), externalGlyph({ status: 'stale', unread: false })])
+      expect(dimText(g, false)).toBe('text-text-muted')
+    expect(dimText(statusGlyph({ status: 'idle', unread: false }), true)).toBe('')
+    for (const g of [
+      statusGlyph({ status: 'working', unread: false }),
+      statusGlyph({ status: 'needs_you', unread: true }),
+      statusGlyph({ status: 'idle', unread: true }),
+      statusGlyph({ status: 'closed', unread: true }),
+      statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }),
+      statusGlyph({ status: 'error', unread: false })
+    ])
+      expect(dimText(g, false)).toBe('')
+  })
+
+  it('an idle row whose sub-tasks run has the running look and is not dimmed; a row with none keeps its ring', () => {
+    // The sub-tasks are CliMayte tasks, HSwarm jobs or nested rows; Sidebar.vue counts them and passes the count here.
+    const idle = statusGlyph({ status: 'idle', unread: false })
+    expect(withThreads(idle, 0)).toBe(idle)
+    expect(withThreads(idle, 2)).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
+    expect(dimText(withThreads(idle, 1), false)).toBe('')
+  })
+
+  it('sub-tasks never take a question its yellow or an error its red; a green unread row with sub-tasks runs', () => {
+    expect(withThreads(statusGlyph({ status: 'needs_you', unread: false }), 2)).toMatchObject({ tone: 'warning', motion: 'pulse' })
+    expect(withThreads(statusGlyph({ status: 'error', unread: false }), 2)).toMatchObject({ tone: 'danger' })
+    expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ label: 'Sub-tasks running' })
   })
 
   it('a usage limit is its own pink ring, unread or not; error stays red', () => {
@@ -325,7 +358,7 @@ describe('status glyph language', () => {
 
   it('draws each glyph with its own token', () => {
     expect(glyphDotClass(statusGlyph({ status: 'idle', unread: true }))).toBe('bg-[var(--status-done)]')
-    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-needs-you)]')
+    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-working)] run-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'needs_you', unread: true }))).toBe('bg-[var(--status-needs-you)] animate-dot-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'working', unread: false }))).toBe('bg-[var(--status-working)] run-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'limited', unread: true }))).toBe('border-[1.5px] border-[var(--status-limited)]')

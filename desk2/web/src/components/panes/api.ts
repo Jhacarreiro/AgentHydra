@@ -27,7 +27,7 @@ export interface PaneApi {
   putSettings(patch: Partial<DeskSettings>): Promise<DeskSettings>
   accounts(): Promise<AccountInfo[]>
   pickAccount(): Promise<AccountRef>
-  externalItems(sessionId: string): Promise<TranscriptItem[]>
+  externalItems(sessionId: string, cwd?: string | null): Promise<TranscriptItem[]>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
    *  POST of it (the orchestrator's Arm). */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
@@ -73,7 +73,8 @@ export const httpPaneApi: PaneApi = {
     }),
   accounts: () => json('/accounts'),
   pickAccount: () => json('/accounts/pick'),
-  externalItems: (sessionId) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items`),
+  // The cwd names the session's project folder, so the server looks there first.
+  externalItems: (sessionId, cwd) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))

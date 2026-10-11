@@ -12,6 +12,7 @@ import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloud
 import { createPoller } from '../bridge/poller'
 import { SEARCH_LIMIT_DEFAULT, SEARCH_LIMIT_MAX, SEARCH_MIN_CHARS } from '../bridge/search'
 import { HOME_STATS_RANGES, isHomeStatsRange } from '../bridge/stats'
+import { Timings } from '../engine/timings'
 
 function pickBridge(deps: Record<string, unknown>): Bridge {
   if (deps.bridge) return deps.bridge as Bridge
@@ -143,6 +144,8 @@ function startPoller(ctx: ServerContext, b: Bridge): void {
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const b = pickBridge(ctx.deps)
+  // The one timings log of the data home (the chat routes write the same file).
+  const timings = Timings.for(ctx.home)
 
   app.get('/api/bridge/status', async (c) => c.json(await b.status()))
   app.get('/api/accounts', (c) => guarded(c, b, async () => c.json(await b.listAccounts())))
@@ -150,7 +153,16 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/external/sessions', async (c) => c.json(await b.externalSessions()))
   // One session by id, however old (the list only holds the last day's): a search hit opens with it.
   app.get('/api/external/sessions/:id', (c) => guarded(c, b, async () => c.json(await b.externalSession(c.req.param('id')))))
-  app.get('/api/external/sessions/:id/items', (c) => guarded(c, b, async () => c.json(await b.externalItems(c.req.param('id')))))
+  // The window sends the session's cwd, so its folder is looked in first. The open is timed: where its time went goes to timings.jsonl.
+  app.get('/api/external/sessions/:id/items', (c) =>
+    guarded(c, b, async () => {
+      const open = { find: 0, daemon: 0, parse: 0, cold: false }
+      const from = Date.now()
+      const items = await b.externalItems(c.req.param('id'), c.req.query('cwd') || null, open)
+      timings.span({ stage: 'external_open', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length, find: open.find, daemon: open.daemon, parse: open.parse, searched: open.cold })
+      return c.json(items)
+    }),
+  )
   app.post('/api/external/sessions/:id/message', (c) => desktopMessage(c, b))
   app.post('/api/external/sessions/:id/branch', (c) => branchSession(c, b))
   app.get('/api/search', (c) => search(c, b))

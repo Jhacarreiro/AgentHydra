@@ -18,7 +18,7 @@ import { cleanSidebar } from '@/components/sidebar/clean'
 import { compactSidebar } from '@/components/sidebar/compact'
 import ProjectRing from '@/components/sidebar/ProjectRing.vue'
 import ProjectMenuItems from '@/components/sidebar/ProjectMenuItems.vue'
-import { HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
+import { dimText, HEADER_BTN, LIST_ROW } from '@/components/sidebar/rowClasses'
 import { useRowDrag } from '@/components/sidebar/rowDrag'
 import { glyphDotClass, HIDE_TITLE, newChatFolder, runPulse, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from '@/components/sidebar/logic'
 import { leaveUnlessFiltered } from '@/lib/row-leave'
@@ -76,7 +76,7 @@ const rowIcon = (r: CloudSession) => {
   const g = groupOfRow.value.get(r.id)
   return g && props.iconOf ? props.iconOf(g) : null
 }
-const IDLE_GLYPH: StatusGlyph = { shape: 'ring', tone: 'muted', motion: 'none', dim: false, active: false, label: 'Idle' }
+const IDLE_GLYPH: StatusGlyph = { shape: 'ring', tone: 'muted', motion: 'none', active: false, label: 'Idle' }
 /** A row's compact ring state: its desk row's dot, or the idle ring for an archived or cloud-only row (as dotClass draws it). */
 const ringOf = (r: CloudSession): StatusGlyph => (r.archived ? IDLE_GLYPH : (props.glyph?.(r.id) ?? IDLE_GLYPH))
 // A group's right-click hides it here and on the desk list alike (sidebar/hidden.ts); the store leaves it out.
@@ -293,7 +293,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
             tabindex="0"
             :aria-current="props.selectedId === r.id ? 'page' : undefined"
             :aria-pressed="cloud.selectMode.value ? cloud.selected.value.has(r.id) : undefined"
-            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : '']"
+            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', dimText(ringOf(r), props.selectedId === r.id)]"
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >
@@ -312,7 +312,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
             tabindex="0"
             :aria-current="props.selectedId === r.id ? 'page' : undefined"
             :aria-pressed="cloud.selectMode.value ? cloud.selected.value.has(r.id) : undefined"
-            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', r.archived ? 'text-text-muted' : '']"
+            :class="[ROW, props.selectedId === r.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover', dimText(ringOf(r), props.selectedId === r.id)]"
             @click="onRow(r)"
             @keydown.enter.self="onRow(r)"
           >

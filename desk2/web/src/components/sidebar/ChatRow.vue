@@ -5,7 +5,7 @@ import { shellGlyphs } from '@/lib/icons'
 import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem } from './logic'
+import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem, type StatusGlyph } from './logic'
 import ProjectRing from './ProjectRing.vue'
 import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
@@ -20,15 +20,16 @@ import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
 // the "More options" button. The three-dot menu and the right-click menu are the same list.
-const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null }>(), {
+const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null; /** The dot in place of the chat's own: Sidebar.vue's, with the row's running sub-tasks counted. */ dot?: StatusGlyph }>(), {
   selected: false,
   groups: () => [],
   compact: false,
-  icon: null
+  icon: null,
+  dot: undefined
 })
 const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
 
-const glyph = computed(() => statusGlyph(props.chat))
+const glyph = computed(() => props.dot ?? statusGlyph(props.chat))
 const speaker = computed(() => isMuted(props.chat.id) || isAudible(props.chat.id))
 const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups))
 // The clock is read only while the row shows a time that moves (a working chat's elapsed time, a limited

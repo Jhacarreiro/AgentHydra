@@ -73,7 +73,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   chats, and each chat's status dot becomes its project's icon (`ProjectRing.vue`). A chat with something going on
   wears a square ring with slightly rounded corners around the icon, as a story ring does: the accent gradient while it runs, amber when it
   waits on you, green when it finished, red on an error, each pulsing or blinking as its dot did; an idle chat shows
-  the icon alone. The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
+  the icon alone. A quiet chat, with nothing running in it or under it, nothing waiting on you and nothing unread,
+  dims its title and its icon together; one whose sub-tasks run (its CliMayte tasks, the HSwarm jobs it called, a chat
+  nested under it) looks like a running one, never done (owner, 2026-10-10: "If the task has threads running, it should
+  not be dimmed, the icon or the text"; `isQuiet` and `withThreads` in `sidebar/logic.ts`). The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
   on keeps the icons. Each chrome-bar toggle's tooltip names what a click does ("Enable cloud sessions", "Show
   fewer details", "Enable compact mode", "Open AgentHydra"), and its two dividers have more room either side.
 - **A project header's right-click menu** (owner, 2026-10-10: "open project folder, collapse ... some stats ... if
@@ -448,7 +451,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   is idle. The title bar's list button, beside the session header's panel button, opens the panel, for
   Desk's own chats too, with a blue count while tasks run (owner, 2026-10-05: "the one that shows me,
   like, background running tasks. Which I have not been able to figure out how to view").
-  A chat's finished tasks count under Finished, in Desk's own chats too. The count lives in one
+  A chat's finished tasks count under Finished, in Desk's own chats too, and so do the HSwarm jobs it called, the
+  ones its sidebar row's HSwarm badge counts (owner, 2026-10-10: "it shows it has a H Swarm item, but it doesn't show
+  the H Swarm in line"); a job's name opens it on the HSwarm tab. The count lives in one
   place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,

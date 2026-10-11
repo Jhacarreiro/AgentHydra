@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test'
-import type { CliMayteWorker, TranscriptItem } from '@shared/protocol'
+import type { CliMayteWorker, SwarmJob, TranscriptItem } from '@shared/protocol'
 import {
   agentState,
   canStop,
@@ -43,6 +43,21 @@ function w(id: string, over: Partial<CliMayteWorker> = {}): CliMayteWorker {
 }
 const done = (id: string, over: Partial<CliMayteWorker> = {}) =>
   w(id, { status: 'done', active: false, verdict: 'ok', endedAt: 5_000, ...over })
+
+const job = (id: string, over: Partial<SwarmJob> = {}): SwarmJob => ({
+  id,
+  title: `job ${id}`,
+  status: 'running',
+  active: true,
+  startedAt: 1_000,
+  endedAt: null,
+  tasks: { total: 3, done: 1, failed: 0, cancelled: 0 },
+  callerSessionId: 'chat-1',
+  callerHostSessionId: null,
+  callerTitle: null,
+  pc: null,
+  ...over
+})
 
 const task = (id: string, status: 'running' | 'completed' | 'failed', over: Partial<Extract<TranscriptItem, { kind: 'task' }>> = {}): TranscriptItem => ({
   id,
@@ -148,6 +163,28 @@ describe('panelLists', () => {
     expect([worker.stopTask, canStop(worker)]).toEqual([null, true])
     const outside = panelLists({ workers: [], items, sessionId: 'chat-1', chatId: null })
     expect(outside.running.map((u) => [u.stopTask, canStop(u)])).toEqual([[null, false]])
+  })
+
+  test("an HSwarm job this session called lists running while active, finished once settled; another session's is left out", () => {
+    const jobs = [
+      job('live'),
+      job('done', { active: false, status: 'done', startedAt: 2_000, endedAt: 5_000, tasks: { total: 2, done: 2, failed: 0, cancelled: 0 } }),
+      job('stopped', { active: false, status: 'cancelled', endedAt: null }),
+      job('theirs', { callerSessionId: 'chat-2' })
+    ]
+    const lists = panelLists({ workers: [], sessionId: 'chat-1', jobs })
+    expect(lists.running.map((u) => [u.id, u.label, u.name, u.description])).toEqual([['job:live', 'HSwarm', 'job live', '1 of 3 done']])
+    // A cancelled job has no finished time: its end stays null, never NaN, and it reads as failed.
+    expect(lists.finished.map((u) => [u.id, u.endedAt, !!u.failed, u.stoppable])).toEqual([
+      ['job:done', 5_000, false, []],
+      ['job:stopped', null, true, []]
+    ])
+  })
+
+  test("a job's 8-character caller id, the prefix it stamps, matches the session that begins with it", () => {
+    const sid = 'a1b2c3d4-0000-4000-8000-000000000000'
+    const lists = panelLists({ workers: [], sessionId: sid, jobs: [job('short', { callerSessionId: 'a1b2c3d4' }), job('other', { callerSessionId: 'ffffffff' })] })
+    expect(lists.running.map((u) => u.id)).toEqual(['job:short'])
   })
 
   test("a chat's finished background tasks list and count under finished, a failed one marked", () => {

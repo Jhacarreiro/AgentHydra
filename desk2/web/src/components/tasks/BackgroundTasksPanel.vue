@@ -17,8 +17,9 @@ import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
 import { useClock } from '@/lib/clock'
+import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
-import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -55,7 +56,7 @@ function toggleAll() {
   }
 }
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
+  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
 )
 
 // The progress squares of every phase on show, worked out once per list change.
@@ -149,6 +150,12 @@ function openAgent(a: TaskAgent) {
   if (a.sessionId) src.select({ kind: 'external', id: a.sessionId })
 }
 
+// An HSwarm job's name opens it on the HSwarm tab, as the sidebar's job line does.
+function openJob(u: TaskUnit) {
+  const job = jobIdOf(u)
+  if (job) openSwarmInHydra(job)
+}
+
 const SQUARE: Record<AgentState, string> = {
   done: 'bg-[var(--accent)]/75',
   running: 'bg-[var(--accent)]',
@@ -203,7 +210,10 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
             <div class="min-w-0 flex-1">
               <!-- What the unit was told is its name's tooltip, never a paragraph in the card (owner, 2026-10-08: "overly verbose, hide the text"). -->
               <Tip :label="u.description" :disabled="!u.description" side="bottom" align="start">
-                <h3 class="truncate font-normal text-(--text-2)">{{ u.name }}</h3>
+                <h3 class="truncate font-normal text-(--text-2)">
+                  <button v-if="jobIdOf(u)" type="button" class="max-w-full truncate text-start hover:underline" @click="openJob(u)">{{ u.name }}</button>
+                  <template v-else>{{ u.name }}</template>
+                </h3>
               </Tip>
               <p class="mt-0.5 flex gap-2.5">
                 <span class="font-semibold text-(--text-2)">{{ u.label }}</span>
@@ -326,7 +336,8 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
         >
           <Check v-if="!u.failed && u.phases.every((p) => p.agents.every((a) => a.state === 'done'))" class="size-3 shrink-0" :stroke-width="1.5" />
           <X v-else class="size-3 shrink-0 text-(--danger-text)" :stroke-width="1.5" />
-          <span class="min-w-0 flex-1 truncate text-(--text-2)">{{ u.name }}</span>
+          <button v-if="jobIdOf(u)" type="button" class="min-w-0 flex-1 truncate text-start text-(--text-2) hover:underline" @click="openJob(u)">{{ u.name }}</button>
+          <span v-else class="min-w-0 flex-1 truncate text-(--text-2)">{{ u.name }}</span>
           <span v-if="u.agents > 1" class="tnum shrink-0">{{ u.agents }} agents</span>
           <span class="tnum shrink-0">{{ formatTokens(u.tokens) }}</span>
           <span class="tnum w-15 shrink-0 text-end">{{ elapsedOf(u.startedAt, u.endedAt, now) }}</span>

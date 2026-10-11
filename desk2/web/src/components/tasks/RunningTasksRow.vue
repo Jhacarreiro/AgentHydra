@@ -7,17 +7,19 @@
 import { computed, effectScope, onBeforeUnmount, shallowRef, watch, type EffectScope, type Ref } from 'vue'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
+import { useDesk } from '@/stores/desk'
 import { useClock } from '@/lib/clock'
 import { cleared, openBackgroundTasks } from './api'
 import { latestEtaEnd, panelLists, runningLabel } from './logic'
 
 const props = defineProps<{ chat: ChatSummary; items: TranscriptItem[] }>()
 const src = useShellSource()
+const desk = useDesk()
 
-// Running and finished, as the Background tasks panel lists them for this chat (its CliMayte workers and
-// its own background tasks), minus the finished ones cleared there.
+// Running and finished, as the Background tasks panel lists them for this chat (its CliMayte workers, its
+// own background tasks and the HSwarm jobs it called), minus the finished ones cleared there.
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
+  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
 )
 const etaEndsAt = computed(() => latestEtaEnd(lists.value.running))
 

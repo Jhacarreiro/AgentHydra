@@ -156,7 +156,10 @@ export function createBridge(opts: BridgeOptions = {}) {
   function cliInstances(): Promise<AhCliInstance[]> {
     if (instancesRead && now() - instancesRead.at < INSTANCES_FRESH_MS) return instancesRead.read
     const read = client.cliInstances().then((list) => {
-      knownCliDirs = list.map((i) => i.configDir)
+      const dirs = list.map((i) => i.configDir)
+      // A folder that appeared since the last read may hold a session a miss already looked for: look again.
+      if (dirs.join('\n') !== knownCliDirs.join('\n')) notFound.clear()
+      knownCliDirs = dirs
       return list
     })
     const entry = { at: now(), read }
@@ -494,23 +497,51 @@ export function createBridge(opts: BridgeOptions = {}) {
     return roots
   }
 
-  async function externalItems(sessionId: string): Promise<TranscriptItem[]> {
+  /** Where an outside session's open spent its time: the find in the folders, the daemon's answer, the parse. `cold`: its file had to be searched for. */
+  interface ExternalOpen {
+    find: number
+    daemon: number
+    parse: number
+    cold: boolean
+  }
+
+  /** An outside session's items: from the file it was last found in, else a search of the folders the last read knew, else
+   *  the daemon's tail. The open never waits on the daemon for the folders (the refresh lands behind it), and a session with
+   *  no file is not searched for again for a while, so its polls go straight to the tail. */
+  async function externalItems(sessionId: string, cwd: string | null = null, open: ExternalOpen = { find: 0, daemon: 0, parse: 0, cold: false }): Promise<TranscriptItem[]> {
     // A Claude Code session's own .jsonl keeps every newline, list and code fence; the tail flattens them.
     const known = foundAt.get(sessionId)
     const items = known ? readItems(known) : null
     if (items) return items
-    const file = await findSessionJsonlAsync(sessionId, await projectRoots())
-    if (file) {
-      rememberFile(sessionId, file)
-      return sessionJsonlItems(file)
+    void cliInstances().catch(() => {})
+    const key = `ext|${sessionId}`
+    if (!searchedLately(key)) {
+      open.cold = true
+      const t0 = now()
+      const file = await findSessionJsonlAsync(sessionId, opts.projectRoots ? await projectRoots() : sessionRoots(), cwd)
+      open.find = now() - t0
+      if (file) {
+        notFound.delete(key)
+        rememberFile(sessionId, file)
+        const t1 = now()
+        const parsed = sessionJsonlItems(file)
+        open.parse = now() - t1
+        return parsed
+      }
+      rememberMiss(key)
     }
-    const tail = await client.tail(sessionId)
-    if (!tail.error) return tailToItems(tail)
-    // Not in the transcript index: a CliMayte worker's session lives in its CLI instance's folder.
-    const all = await rawWorkers(true)
-    const w = all.find((x) => x.sessionId === sessionId || x.sessions?.includes(sessionId))
-    if (!w) throw new BridgeError('http', `AgentHydra has no transcript for session ${sessionId}`, 404)
-    return workerDetailToItems(await client.worker(w.id))
+    const t2 = now()
+    try {
+      const tail = await client.tail(sessionId)
+      if (!tail.error) return tailToItems(tail)
+      // Not in the transcript index: a CliMayte worker's session lives in its CLI instance's folder.
+      const all = await rawWorkers(true)
+      const w = all.find((x) => x.sessionId === sessionId || x.sessions?.includes(sessionId))
+      if (!w) throw new BridgeError('http', `AgentHydra has no transcript for session ${sessionId}`, 404)
+      return workerDetailToItems(await client.worker(w.id))
+    } finally {
+      open.daemon = now() - t2
+    }
   }
 
   const searchRows = new Map<string, { at: number; row: AhSessionRow | null }>()

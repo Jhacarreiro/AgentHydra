@@ -260,6 +260,14 @@ test('a Desk chat running as a worker on another PC is its own row, with its tas
   expect(runningTasksIn([row!.nodes]) + runningJobsIn([row!.jobs])).toBe(2)
 })
 
+// Yellow is for what needs the owner (2026-10-10), and a row whose work runs is never drawn done.
+test("an added row's dot: a queued or account-waiting worker runs, never needs you; a caller row runs while its tasks or jobs do", () => {
+  const statuses: CliMayteWorker['status'][] = ['queued', 'waiting', 'running']
+  expect(statuses.map((status) => addedStatus({ worker: worker('w', 1, { status }), job: null, nodes: [], jobs: [] }))).toEqual(['working', 'working', 'working'])
+  const caller = (active: boolean) => addedStatus({ worker: null, job: null, nodes: [], jobs: [swarmJob('j', { active, status: active ? 'running' : 'done' })] })
+  expect([caller(true), caller(false)]).toEqual(['working', 'idle'])
+})
+
 test("a task dispatched from a remote worker's earlier session sits under that worker", () => {
   const mgr = worker('mgr', 1, { pc: 'PC-X', originSessionId: 's-chat-abcd', sessionId: 's-new', sessions: ['s-old', 's-new'] })
   const kid = worker('kid', 2, { pc: 'PC-X', originSessionId: 's-old' })

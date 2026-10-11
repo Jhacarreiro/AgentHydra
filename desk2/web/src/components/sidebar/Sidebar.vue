@@ -77,6 +77,7 @@ import {
   accountMenu,
   chatRow,
   childrenByRow,
+  entryKey,
   entryRunning,
   foldChildren,
   externalGlyph,
@@ -91,6 +92,7 @@ import {
   hideable,
   isOrange,
   raiseNewlyOrange,
+  withThreads,
   recordCloudOrder,
   recordDeskOrder,
   moveTarget,
@@ -314,13 +316,15 @@ const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value &&
 const seenJobs: SeenJobs = new Map()
 const listeningSince = Date.now()
 const heldTick = useClock(5000)
-const nesting = computed<NestedTasks | null>(() => {
+// The tasks and jobs every row knows (its threads, whether drawn or not: a row whose threads run shows running, owner,
+// 2026-10-10), and what the list draws of them: nothing while the CliMayte toggle is off (its lines, badges and added rows).
+const threadNesting = computed<NestedTasks | null>(() => {
   const out = nestAll()
   if (out?.held) void heldTick.value
   return out
 })
+const nesting = computed<NestedTasks | null>(() => (showTasks.value ? threadNesting.value : null))
 function nestAll(): NestedTasks | null {
-  if (!showTasks.value) return null
   const workers = [...src.workers.value, ...remoteWorkers.value]
   const jobs = swarmJobs.value
   const o = { seenJobs, now: Date.now(), since: listeningSince }
@@ -342,20 +346,20 @@ function nestAll(): NestedTasks | null {
 }
 /** The rows added for running work no drawn row lists (tasks.ts AddedRow), by id. */
 const addedRows = computed(() => new Map((nesting.value?.added ?? []).map((a) => [a.id, a])))
-/** The added row a row key (`external:` or `cloud:`, then its id) is, if any. */
-const addedAt = (key: string) => addedRows.value.get(key.slice(key.indexOf(':') + 1))
-const tasksOf = (key: string) => nesting.value?.byRow.get(key) ?? addedAt(key)?.nodes ?? null
-const jobsOf = (key: string) => nesting.value?.jobsByRow.get(key) ?? addedAt(key)?.jobs ?? null
+/** The added row a row key (`external:` or `cloud:`, then its id) is, if any: among the threads (every one), and among the drawn ones. */
+const threadAddedAt = (key: string) => (threadNesting.value?.added ?? []).find((a) => a.id === key.slice(key.indexOf(':') + 1))
+const tasksOf = (key: string) => threadNesting.value?.byRow.get(key) ?? threadAddedAt(key)?.nodes ?? null
+const jobsOf = (key: string) => threadNesting.value?.jobsByRow.get(key) ?? threadAddedAt(key)?.jobs ?? null
 /** An added row that is itself a running HSwarm job no chat is known to have called: its dot pulses blue and a folded heading counts it with the jobs. */
 const jobRow = (a: AddedRow | undefined): boolean => !!a?.job?.active && !a.worker
 /** The HSwarm jobs a folded group's heading counts under a row: its jobs, and the job an added row is itself. */
 const jobsCounted = (key: string): SwarmJob[] | null => {
-  const a = addedAt(key)
+  const a = threadAddedAt(key)
   return jobRow(a) ? [a!.job!, ...(jobsOf(key) ?? [])] : jobsOf(key)
 }
-/** What a row draws of its tasks and jobs: lines, a badge, or both once the badge is opened (subitems.ts). */
+/** What a row draws of its tasks and jobs: lines, a badge, or both once the badge is opened (subitems.ts). Nothing while the toggle is off. */
 const subOf = (key: string, tasks: TaskNode[] | null, jobs: SwarmJob[] | null) => rowSubItems(key, tasks, jobs, { tasks: subModes.tasks.value, jobs: subModes.jobs.value }, expanded.value)
-const rowSub = (key: string) => subOf(key, tasksOf(key), jobsOf(key))
+const rowSub = (key: string) => subOf(key, nesting.value ? tasksOf(key) : null, nesting.value ? jobsOf(key) : null)
 
 // The desk list as drawn: its own groups, the rows added for running work no row of it lists, each in its folder's
 // group among the list's own rows (tasks.ts addToDeskGroups; this PC's, and with the cloud on every PC's the Computer
@@ -373,14 +377,25 @@ const deskShown = computed<SidebarGroups>(() => {
   const withAdded = added.length ? addToDeskGroups(g.folders, added, placing) : g.folders
   return { ...g, folders: others.length ? addRemoteToDeskGroups(withAdded, others, placing) : withAdded }
 })
-const groupList = computed<ChatGroup[]>(() => {
+/** The desk list's groups before Active only leaves rows out: a row's threads count the nested rows among them, drawn or not. */
+const allGroups = computed<ChatGroup[]>(() => {
   const g = deskShown.value
-  const list = [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
-  return activeOnly.value ? onlyActive(list, entryGlyph) : list
+  return [...(g.pinned ? [g.pinned] : []), ...g.folders, ...(g.archived ? [g.archived] : [])]
 })
+const groupList = computed<ChatGroup[]>(() => (activeOnly.value ? onlyActive(allGroups.value, entryGlyph) : allGroups.value))
 // The chats started from each row, which sit under it (logic.ts nestChildren), and the list as drawn: a folded row's
 // left out (folded.ts), the open one kept in sight; all of them while a search is typed, which shows what it matches.
 const childrenOf = computed(() => childrenByRow(groupList.value))
+const threadChildren = computed(() => childrenByRow(allGroups.value))
+/** The desk row key of each session id, for the cloud list's dot (a row's threads are found by its key). */
+const deskKeyOf = computed(() => {
+  const out = new Map<string, string>()
+  for (const e of allGroups.value.flatMap((g) => g.entries)) {
+    const sid = e.kind === 'chat' ? e.chat.sessionId : e.session.id
+    if (sid && !out.has(sid)) out.set(sid, entryKey(e))
+  }
+  return out
+})
 const isOpenEntry = (e: SidebarEntry) => (e.kind === 'chat' ? selectedChatId.value === e.id : selectedExternalId.value === e.id)
 const drawnList = computed<ChatGroup[]>(() => (query.value.trim() ? groupList.value : foldChildren(groupList.value, folded.value, isOpenEntry)))
 /** A row's fold button (FoldButton.vue): how many chats sit under it, whether they show, and what the hidden ones do. */
@@ -388,7 +403,7 @@ const foldOf = (key: string) => {
   const kids = childrenOf.value.get(key)
   if (!kids || query.value.trim()) return null
   const open = !folded.value.has(key)
-  return { count: kids.length, open, running: !open && kids.some(entryRunning), needsYou: !open && kids.some((e) => entryGlyph(e)?.tone === 'warning') }
+  return { count: kids.length, open, running: !open && kids.some(entryRunning), needsYou: !open && kids.some((e) => entryGlyph(e).tone === 'warning') }
 }
 /** A group's icon: its Project Hydra project's icon, or null for none (projectOfGroup). The cloud list uses it too. */
 const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
@@ -436,8 +451,8 @@ const foldedRunning = computed(() => {
   const out = new Map<string, { tasks: number; jobs: number; chats: number }>()
   for (const g of groupList.value) {
     if (!collapsed.value.has(g.key)) continue
-    const tasks = runningTasksIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`)))
-    const jobs = runningJobsIn(g.entries.map((e) => jobsCounted(`${e.kind}:${e.id}`)))
+    const tasks = nesting.value ? runningTasksIn(g.entries.map((e) => tasksOf(`${e.kind}:${e.id}`))) : 0
+    const jobs = nesting.value ? runningJobsIn(g.entries.map((e) => jobsCounted(`${e.kind}:${e.id}`))) : 0
     const chats = g.entries.filter((e) => entryRunning(e) && !jobRow(addedRows.value.get(e.id))).length
     if (tasks || jobs || chats) out.set(g.key, { tasks, jobs, chats })
   }
@@ -462,10 +477,28 @@ const addedGlyph = (id: string): StatusGlyph | undefined => {
   if (!a) return undefined
   return jobRow(a) ? SWARM_RUNNING : externalGlyph({ status: addedStatus(a), unread: false })
 }
-/** A cloud row's dot: an added row's, or its desk row's. */
-const cloudDot = (id: string) => addedGlyph(id) ?? deskDots.value.get(id)
-/** A desk-list entry's dot, as its row draws it: a chat's, or an outside session's (an added row's, when it is one). */
-const entryGlyph = (e: SidebarEntry): StatusGlyph | undefined => (e.kind === 'chat' ? statusGlyph(e.chat) : (addedGlyph(e.id) ?? externalGlyph(e.session)))
+/**
+ * The running threads under a row: its CliMayte tasks and HSwarm jobs, and its nested rows that run. A nested row counts by
+ * its own state, never its parent's, so the recursion stops at one level down.
+ */
+const runningThreads = (key: string): number =>
+  runningTasksIn([tasksOf(key)]) + runningJobsIn([jobsOf(key)]) + (threadChildren.value.get(key) ?? []).filter(entryRunning).length
+/** A cloud row's dot: an added row's, or its desk row's, with the threads of that row counted. */
+const cloudDot = (id: string): StatusGlyph | undefined => {
+  const added = addedGlyph(id)
+  if (added) return added
+  const dot = deskDots.value.get(id)
+  const key = deskKeyOf.value.get(id)
+  return dot && key ? withThreads(dot, runningThreads(key)) : dot
+}
+/**
+ * A desk-list entry's dot, as its row draws it: a chat's, or an outside session's (an added row's, when it is one), and
+ * a row with running threads runs too (withThreads). Shared by the Active only filter, the folded headings and both dims.
+ */
+const entryGlyph = (e: SidebarEntry): StatusGlyph => {
+  const base = e.kind === 'chat' ? statusGlyph(e.chat) : (addedGlyph(e.id) ?? externalGlyph(e.session))
+  return withThreads(base, runningThreads(entryKey(e)))
+}
 /** Back to the unfiltered list: the Active default and Active only off. */
 const showAll = () => {
   activeOnly.value = false
@@ -954,6 +987,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 :groups="groupNames"
                 :compact="compactSidebar && !entry.under"
                 :icon="groupIcons.get(group.key) ?? null"
+                :dot="entryGlyph(entry)"
                 @select="src.select({ kind: 'chat', id: entry.id })"
                 @action="(item: RowMenuItem) => act({ kind: 'chat', chat: entry.chat }, item)"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
@@ -967,7 +1001,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 :selected="selectedExternalId === entry.id"
                 :groups="groupNames"
                 :entries="externalMenu(entry.id)"
-                :dot="addedGlyph(entry.id)"
+                :dot="entryGlyph(entry)"
                 :compact="compactSidebar && !entry.under"
                 :icon="groupIcons.get(group.key) ?? null"
                 @select="selectExternal(entry.session)"

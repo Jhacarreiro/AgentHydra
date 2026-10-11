@@ -14,8 +14,11 @@ export const LOOP_STALL_MS = 200
  * server's thread was busy for 7 to 80 s at a time, 181 times that day (2,420 s), and nothing could say on what. The
  * profiler cannot be stopped once started, so it starts only on a server that has stalled this long: it samples the
  * thread every millisecond, and the samples between stalls are dropped every DRAIN_MS.
+ * 1 s since 2026-10-11: after the restart that took the 7-80 s freezes away, the server still froze for 1.1 to 2.1 s
+ * every few minutes (five in 20 minutes, one with no CPU at all) while the owner found the transcript slow to load, and
+ * at 2 s only one of them started the profiler and none was written.
  */
-export const PROFILE_STALL_MS = 2000
+export const PROFILE_STALL_MS = 1000
 const TICK_MS = 50
 const DRAIN_MS = 1000
 const FRAMES_KEPT = 12

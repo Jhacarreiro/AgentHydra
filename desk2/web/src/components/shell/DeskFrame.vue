@@ -33,6 +33,7 @@ import { CHROME_COLLAPSED, SIDEBAR_WIDTH_KEY, chromeOverhang, savedSidebarWidth 
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
 import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@/components/tasks/api'
 import { panelLists } from '@/components/tasks/logic'
+import { useDesk } from '@/stores/desk'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
 import { ownFrame, startOwnFrame } from '@/lib/host-window'
@@ -593,8 +594,9 @@ const tasks = computed<TasksState | null>({
   }
 })
 // The title bar's Background tasks button: the panel for the session on view, open or shut (a chat, or an outside session).
+const desk = useDesk()
 const tasksRunningCount = computed(
-  () => panelLists({ workers: src.workers.value, items: tasksItems.value, sessionId: tasksSessionId.value, workerIds: tasksWorkerIds.value, cleared: cleared.value }).running.length
+  () => panelLists({ workers: src.workers.value, items: tasksItems.value, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], sessionId: tasksSessionId.value, workerIds: tasksWorkerIds.value, cleared: cleared.value }).running.length
 )
 function toggleTasksPanel() {
   if (tasks.value) {

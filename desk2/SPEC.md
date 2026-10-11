@@ -562,12 +562,12 @@ title, truncated:
 | --- | --- |
 | starting, working | solid grey dot blinking (as Claude Desktop), plus the elapsed time on the right ("2m") |
 | needs_you | pulsing orange (`--status-needs-you`) dot |
-| idle / stopped / closed, `climayteActive > 0` (replied, background tasks still running) | solid orange dot, "Replied, background tasks running"; read or not, reading never clears it (a chat must never look done while its workers run). The transcript's end-of-turn line reads "Replied in 19s · 2 background tasks still running" until they finish |
+| idle / stopped / closed, sub-tasks still running (its CliMayte tasks, its own background tasks, the HSwarm jobs it called, a chat nested under it that runs) | the working dot, "Sub-tasks running"; read or not (a chat must never look done while its workers run; owner, 2026-10-10: the needs-you colour is only for what needs him). The transcript's end-of-turn line reads "Replied in 19s · 2 background tasks still running" until they finish |
 | idle / stopped / closed, no background running, unread (a finished turn not looked at) | solid green dot (`--status-done`), "Done, unread". When the background work of a replied chat finishes the server marks the chat unread again, so it turns green |
 | idle / stopped, read, nothing running | hollow grey ring (as Claude Desktop) |
 | error | red dot |
 | limited | hollow pink ring (`--status-limited`), "resets ..." beside the title |
-| closed | the title dims |
+| quiet: nothing running in the row or under it, nothing waiting, nothing unread | the title and, in the compact sidebar, the project logo dim together (`isQuiet`), unless the row is open |
 
 Details in `docs/fidelity/shell.md` "Status dots".
 
@@ -883,6 +883,7 @@ Every stage (`TIMING_STAGES`):
 | `click_to_bubble` | Send clicked -> the user bubble drawn (next frame after its `item.upsert`) | window |
 | `open_to_paint` | a chat opened -> its history fetched and painted | window |
 | `chat_open` | `GET /api/chats/:id/items` from request to items served (`n` = items) | server |
+| `external_open` | `GET /api/external/sessions/:id/items` from request to items served (`n` = items; `find`, `daemon`, `parse` = ms finding its file, waiting on AgentHydra's tail, parsing; `searched` = its file was looked for) | server |
 | `process_start` | the SDK process started -> its first message | server |
 | `hook` | one hook, `hook_started` -> `hook_response`; `name` is `Event:script.mjs` when the hook's output names its file, else the SDK's `hook_name` (`SessionStart:startup`) | server, SDK messages |
 | `session_start_hooks` | the SessionStart group: first hook started -> last ended (they run in parallel), `name` = startup / resume | server, SDK messages |
