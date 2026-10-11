@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
@@ -61,8 +61,8 @@ const models = ref<ModelChoice[]>([])
 const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
-const babysitter = ref<BabysitterStatus | null>(null)
-const orchestratorModel = ref<OrchestratorModelStatus | null>(null)
+const babysitter = shallowRef<BabysitterStatus | null>(null)
+const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
 const customModelDraft = ref('')

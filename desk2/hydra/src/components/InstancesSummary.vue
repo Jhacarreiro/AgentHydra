@@ -16,7 +16,7 @@
 import type { FleetUsageHistory, SpendReport } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
 import { useElementSize, useStorage } from '@vueuse/core'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import CombinedModels from '@/components/CombinedModels.vue'
@@ -76,7 +76,7 @@ const sourceLabel = (s: TokenSource) =>
     hswarm: t('instances.summary.sourceHswarm'),
   })[s]
 
-const history = ref<FleetUsageHistory | null>(null)
+const history = shallowRef<FleetUsageHistory | null>(null)
 const historyFailed = ref(false)
 const tokenDays = ref<Array<{ key: string; values: number[] }> | null>(null)
 const tokensFailed = ref(false)

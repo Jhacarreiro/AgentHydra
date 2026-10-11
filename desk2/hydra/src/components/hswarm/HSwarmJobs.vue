@@ -22,7 +22,7 @@ import {
   X,
 } from '@lucide/vue'
 import type { Component } from 'vue'
-import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, reactive, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -291,7 +291,7 @@ function showOlder() {
 
 const jobs = ref<Job[]>([])
 const selectedJobId = ref<string | null>(null)
-const jobDetail = ref<JobDetail | null>(null)
+const jobDetail = shallowRef<JobDetail | null>(null)
 const isLoading = ref(true)
 const isLoadingDetail = ref(false)
 const error = ref<string | null>(null)

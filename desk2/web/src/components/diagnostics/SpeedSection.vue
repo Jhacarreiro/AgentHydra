@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import type { GroupStats, StageStats, TimingsResponse } from '@shared/timings'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
@@ -10,7 +10,7 @@ import { barPct, ms, partLabel, rowLabel, stageParts } from './speed'
 // start is made of, the worker chats' waits, and turns by account, model and folder.
 const api = usePaneApi()
 const src = useShellSource()
-const data = ref<TimingsResponse | null>(null)
+const data = shallowRef<TimingsResponse | null>(null)
 const error = ref<string | null>(null)
 const range = ref<'today' | 'week'>('today')
 

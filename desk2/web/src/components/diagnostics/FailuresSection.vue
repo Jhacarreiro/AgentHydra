@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import type { FailuresResponse } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
@@ -9,8 +9,8 @@ import { causeLabel, dayStart, duration, ranked } from './failures'
 // Failures: counts by cause (today, 7 days), by account over 7 days (a dead account stands out), the latest rows.
 const api = usePaneApi()
 const src = useShellSource()
-const today = ref<FailuresResponse | null>(null)
-const week = ref<FailuresResponse | null>(null)
+const today = shallowRef<FailuresResponse | null>(null)
+const week = shallowRef<FailuresResponse | null>(null)
 const error = ref<string | null>(null)
 
 async function load(): Promise<void> {

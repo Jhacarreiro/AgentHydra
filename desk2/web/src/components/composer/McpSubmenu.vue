@@ -2,7 +2,7 @@
 // The plus menu's Connectors: the MCP servers a chat here loads (the account's user servers, the folder's
 // .mcp.json, Hydra Desk's agenthydra). In a live chat each row shows the session's state and a click
 // turns the server on or off in that session; otherwise the rows only inform.
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { McpServerInfo, McpStatus } from '@shared/protocol'
 import { composerIcons } from '@/lib/icons'
 import { DropdownMenuItem, DropdownMenuSub, DropdownMenuSubContent, DropdownMenuSubTrigger } from '@/components/ui/dropdown-menu'
@@ -26,7 +26,7 @@ const DOT: Record<McpDot, string> = {
   off: 'border border-[var(--text-muted)]'
 }
 
-const servers = ref<McpServerInfo[] | null>(null)
+const servers = shallowRef<McpServerInfo[] | null>(null)
 const status = ref<McpStatus | null>(null)
 const failed = ref(false)
 const rows = computed(() => mcpRows(servers.value ?? [], status.value))

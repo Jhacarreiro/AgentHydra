@@ -10,7 +10,7 @@
 // (owner, 2026-10-01: "verbose as FUCK", then "give it one of those little info bubbles"). CLI and
 // desktop logins are listed together, each tagged with its kind. Nothing here shows a login.
 import { Cloud, Copy, LoaderCircle, Monitor, Pause, Play, RefreshCw, Unplug } from '@lucide/vue'
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import InstanceNumber from '@/components/InstanceNumber.vue'
@@ -47,7 +47,7 @@ const open = defineModel<boolean>('open', { default: false })
 const emit = defineEmits<{ changed: [] }>()
 
 const { t } = useI18n()
-const status = ref<CliLoginSyncStatusQueue | null>(null)
+const status = shallowRef<CliLoginSyncStatusQueue | null>(null)
 /** The owner turned "Sync all" off to choose logins; the list is open until it is turned back on. */
 const choosing = ref(false)
 const working = ref(false)

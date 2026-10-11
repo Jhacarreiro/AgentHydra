@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef } from 'vue'
 import type { AccountInfo, AccountRef } from '@shared/protocol'
 import { icons, shellIcons } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
@@ -16,8 +16,8 @@ const emit = defineEmits<{ chosen: [id: string]; settings: [] }>()
 const api = usePaneApi()
 const src = useShellSource()
 
-const fetched = ref<AccountInfo[]>([])
-const pick = ref<AccountRef | null>(null)
+const fetched = shallowRef<AccountInfo[]>([])
+const pick = shallowRef<AccountRef | null>(null)
 const error = ref<string | null>(null)
 const loaded = ref(false)
 const saving = ref<string | null>(null)

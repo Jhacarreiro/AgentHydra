@@ -7,7 +7,7 @@
 //
 // Reloads when the task changes (its `updatedAt`), and every 10 s for a hand-off's log, whose other
 // tasks change without this one noticing.
-import { computed, onUnmounted, ref, watch } from 'vue'
+import { computed, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Button } from '@/components/ui/button'
 import type { CliMayteJournalEntry } from '@/lib/api'
@@ -21,7 +21,7 @@ const props = defineProps<{ workerId: string; group: string; updatedAt: number; 
 
 const { t } = useI18n()
 const scope = ref<'task' | 'group'>('task')
-const entries = ref<CliMayteJournalEntry[]>([])
+const entries = shallowRef<CliMayteJournalEntry[]>([])
 const failed = ref(false)
 const loadedOnce = ref(false)
 // Rests while the page is hidden (lib/visible-poll.ts) and reads once when it is seen again.

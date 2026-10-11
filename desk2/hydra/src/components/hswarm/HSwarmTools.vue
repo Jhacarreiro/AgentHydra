@@ -1,7 +1,7 @@
 <script setup lang="ts">
 // The HSwarm tab's tools view. Strings: i18n/locales/en/hswarm/tools.ts (t('hswarm.v.tools.<key>')).
 import { AlertCircle, Check, Loader2, Play, RotateCcw, X } from '@lucide/vue'
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -46,7 +46,7 @@ const askLoading = ref(false)
 const askResult = ref<AskResponse | null>(null)
 
 const doctorLoading = ref(false)
-const doctorResult = ref<DoctorResponse | null>(null)
+const doctorResult = shallowRef<DoctorResponse | null>(null)
 
 const models = computed(() => {
   if (!props.state?.models) return []

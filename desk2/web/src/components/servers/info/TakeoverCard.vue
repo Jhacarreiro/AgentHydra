@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import type { DevWebTakeOverResult, DevWebTrigger } from '@shared/devwebui'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { CheckCircle2, Code2, Zap } from '@lucide/vue'
 import { restoreTakeover, takeOver, takeoverCheck } from '../api'
 import { BTN, BTN_GHOST, BTN_PRIMARY, CARD, MONO } from './kit/kit'
@@ -14,13 +14,13 @@ import Notice from './kit/Notice.vue'
 // a page; embedded (AddProject's done state) it is one compact card, and nothing at all when there is nothing to show.
 const props = defineProps<{ projectId: string; triggers?: DevWebTrigger[]; embedded?: boolean }>()
 
-const found = ref<DevWebTrigger[]>(props.triggers ?? [])
+const found = shallowRef<DevWebTrigger[]>(props.triggers ?? [])
 const backups = ref<string[]>([])
 const confirming = ref(false)
 const confirmingRestore = ref(false)
 const busy = ref(false)
 const error = ref<string | null>(null)
-const result = ref<DevWebTakeOverResult | null>(null)
+const result = shallowRef<DevWebTakeOverResult | null>(null)
 const restored = ref<string[] | null>(null)
 const loaded = ref(false)
 

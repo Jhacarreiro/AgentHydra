@@ -5,7 +5,7 @@
 // edit-survival scoring is HSwarm's own (`model-stats`). Each range is kept once it has been read, so switching
 // back is instant, and the scoring joins in after the page has painted.
 import { ThumbsDown, ThumbsUp } from '@lucide/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BarRows from '@/components/charts/BarRows.vue'
 import TrendBars from '@/components/charts/TrendBars.vue'
@@ -85,7 +85,7 @@ const { apiCall } = useHswarmApi()
 
 const range = ref<Range>(14)
 const source = ref<ResultsSource>('both')
-const kit = ref<Kit | null>(null)
+const kit = shallowRef<Kit | null>(null)
 const climayte = ref<CliMayteScorecard | null>(null)
 const scores = ref<Scores>({})
 const error = ref('')

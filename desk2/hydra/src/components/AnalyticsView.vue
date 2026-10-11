@@ -35,7 +35,7 @@
 // answers "what would this have cost on the API", which is why the tile says "at API rates" rather
 // than letting a dollar sign imply a bill.
 import { BarChart3, DollarSign, FolderGit2, Hash, RefreshCw } from '@lucide/vue'
-import { computed, inject, onMounted, ref, watch } from 'vue'
+import { computed, inject, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CommandCorrections from '@/components/CommandCorrections.vue'
@@ -94,7 +94,7 @@ const { analyticsPeriod, analyticsTokenMode, analyticsSources, analyticsPc, togg
 const TOP = 5
 
 /** acct id -> who it is, for the per-account rows (empty when the daemon cannot say). */
-const accountNames = ref<Record<string, HswarmAccountName>>({})
+const accountNames = shallowRef<Record<string, HswarmAccountName>>({})
 
 function sourceLabel(value: string): string {
   const key = ANALYTICS_SOURCE_LABEL_KEY[value as AnalyticsSource]

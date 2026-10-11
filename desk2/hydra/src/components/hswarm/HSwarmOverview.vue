@@ -9,7 +9,7 @@ import {
   TrendingUp,
   Zap,
 } from '@lucide/vue'
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import AreaLine from '@/components/charts/AreaLine.vue'
 import BarRows from '@/components/charts/BarRows.vue'
@@ -84,9 +84,9 @@ const { apiCall } = useHswarmApi()
 const { totals, scorecard, refreshCliMayte } = useCliMayteData()
 
 // API data
-const usage = ref<UsageData | null>(null)
-const clients = ref<Client[] | null>(null)
-const doctor = ref<DoctorResult | null>(null)
+const usage = shallowRef<UsageData | null>(null)
+const clients = shallowRef<Client[] | null>(null)
+const doctor = shallowRef<DoctorResult | null>(null)
 const ask = ref<AskResult | null>(null)
 
 const askPrompt = ref('')

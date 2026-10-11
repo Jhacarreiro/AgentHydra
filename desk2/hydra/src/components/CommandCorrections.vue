@@ -10,7 +10,7 @@
 // The most frequent few show; the rest fold behind "+N more", like every list on the Analytics tab
 // (owner, 2026-10-05).
 import { ClipboardCopy, RefreshCw } from '@lucide/vue'
-import { computed, ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
@@ -20,7 +20,7 @@ import * as api from '@/lib/api'
 import InfoHint from '@/shell/InfoHint.vue'
 
 const { t } = useI18n()
-const report = ref<CorrectionReport | null>(null)
+const report = shallowRef<CorrectionReport | null>(null)
 const loading = ref(false)
 /** Groups shown before the fold. */
 const TOP = 5

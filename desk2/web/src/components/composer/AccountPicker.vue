@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref, watch } from 'vue'
+import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import type { AccountInfo, AccountRef } from '@shared/protocol'
 import { accountTitle } from '@/components/accounts/format'
 import { Tip } from '@/components/ui/tooltip'
@@ -9,7 +9,7 @@ import type { ComposerApi } from './api'
 // chosen from the profile control at the bottom left; this only names it.
 const props = defineProps<{ modelValue: string; api: ComposerApi; accounts: AccountInfo[] }>()
 
-const fetched = ref<AccountInfo[]>([])
+const fetched = shallowRef<AccountInfo[]>([])
 const autoPick = ref<AccountRef | null>(null)
 
 const list = computed(() => (props.accounts.length ? props.accounts : fetched.value))

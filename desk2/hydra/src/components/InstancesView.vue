@@ -30,7 +30,7 @@ import {
   UserRound,
 } from '@lucide/vue'
 import { useStorage } from '@vueuse/core'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliInstanceRows from '@/components/CliInstanceRows.vue'
@@ -1333,7 +1333,7 @@ function openChats(inst: CMInstance) {
 // every few seconds. A reading younger than CHAT_COUNTS_FRESH_MS is reused, so opening menus
 // row after row costs one scan. Until the first answer the badge is simply absent, never a 0.
 const CHAT_COUNTS_FRESH_MS = 5_000
-const chatCounts = ref<Record<string, { active: number; archived: number }>>({})
+const chatCounts = shallowRef<Record<string, { active: number; archived: number }>>({})
 let chatCountsAt = 0
 let chatCountsInFlight: Promise<void> | null = null
 function refreshChatCounts(force = false): Promise<void> {
@@ -1440,7 +1440,7 @@ function isBusy(inst: CMInstance): boolean {
 // Windows ships two Claude Desktop builds; only the classic (Squirrel .exe) one can be
 // launched with an isolated profile. Warn when this machine has only the MSIX package
 // (or nothing at all) — see server/src/core/desktop-install.ts.
-const desktopInstall = ref<CMDesktopInstall | null>(null)
+const desktopInstall = shallowRef<CMDesktopInstall | null>(null)
 const desktopWarning = computed<{ titleKey: string; bodyKey: string } | null>(() => {
   const d = desktopInstall.value
   if (d?.platform !== 'win32' || d.manageable) return null

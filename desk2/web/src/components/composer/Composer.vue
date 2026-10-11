@@ -272,7 +272,7 @@ async function patch(p: { model?: string | null; effort?: Effort | null; permiss
 }
 
 // Models
-const models = ref<ModelChoice[]>([])
+const models = shallowRef<ModelChoice[]>([])
 const modelSplit = computed(() => splitModels(models.value))
 const modelText = computed(() => modelTriggerLabel(model.value, models.value))
 function pickModel(value: string | null) {

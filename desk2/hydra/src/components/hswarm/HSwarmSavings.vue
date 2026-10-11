@@ -48,7 +48,7 @@ const days = ref(14)
 const mode = ref<'list' | 'plan'>('list')
 // Shallow: the payload is only ever replaced whole.
 const stats = shallowRef<Stats | null>(null)
-const names = ref<Record<string, HswarmAccountName>>({})
+const names = shallowRef<Record<string, HswarmAccountName>>({})
 const error = ref<string | null>(null)
 const loading = ref(false)
 
