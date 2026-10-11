@@ -132,10 +132,13 @@ every push and enforces two rules that used to be memory only, then runs the hos
    A tag is also refused when `scripts/release-notes.mjs` would refuse it: below 2.0.0, no
    CHANGELOG section, or a long section with no TL;DR (read from the tagged commit).
 3. **The kit check runs, and a release tag needs green CI on its commit.** On a machine with the
-   private `../../lunarwerx-ui` checkout, every push runs `bun run check:local` (kit drift), the
-   one lane GitHub structurally cannot run. With a `v*.*.*` tag in the push, the hook also asks
+   private `../../lunarwerx-ui` checkout, every push runs the kit drift lane
+   (`.githooks/check-kit-sync-pushed.mjs`), the one lane GitHub structurally cannot run. It refuses
+   only drift the push itself carries: a synced file that a commit in the push changes, deletes or
+   adds. Another session's uncommitted edit or untracked file in a synced folder is named and left
+   alone. With a `v*.*.*` tag in the push, the hook also asks
    `gh` for a `ci.yml` run on the exact commit the tag points to whose conclusion is success. If
-   there is one, `check:local` is all that runs locally: every other lane of `bun run check:deep`
+   there is one, the kit drift lane is all that runs locally: every other lane of `bun run check:deep`
    (Biome, the i18n check, every typecheck, `bun test` with orchestrator/server's tests, the
    orchestrator Python suite) is a `ci.yml` step that already passed on that commit, so re-running
    them made every release wait on a duplicate 25-minute gate (measured on 1.7.0, 2026-10-02).
