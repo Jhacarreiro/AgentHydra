@@ -183,8 +183,8 @@ try {
   /** Load the page fresh and wait until the case's target is on screen and has stopped changing: rows are replaced as data
    *  arrives after mount, so the SAME element (marked on first sight) must hold the same box for 1.5 s. The pane also waits out
    *  its warm data (App.vue starts it at idle, at the latest 4 s after mount), which re-sorts the desktop table once: a row that
-   *  moves loses its focus and its open tooltip. */
-  async function load(c: Case): Promise<boolean> {
+   *  moves loses its focus and its open tooltip. Answers null when the target is on screen and still, else why not. */
+  async function load(c: Case): Promise<string | null> {
     const settled = Date.now() + (c.page === 'pane' ? 6000 : 0)
     await park()
     // Page.navigate answers before the old document goes: mark it, and wait for a document without the mark.
@@ -195,12 +195,12 @@ try {
     const fresh = `!window.__previous && document.readyState === 'complete'`
     if (c.page === 'pane') {
       // The tab shortcut is listened for once the app has mounted its tab bar.
-      if (!(await until(`${fresh} && document.querySelectorAll('button').length > 5`, 20_000))) return false
+      if (!(await until(`${fresh} && document.querySelectorAll('button').length > 5`, 20_000))) return 'the pane did not load in 20 s'
       await sleep(500)
       const tab = c.tab ?? '3'
       for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: tab, code: `Digit${tab}`, modifiers: 2, windowsVirtualKeyCode: 48 + Number(tab) })
     } else {
-      if (!(await until(`${fresh} && !!document.querySelector('button[aria-label="Hide sidebar"], button[aria-label="Show sidebar"]')`, 20_000))) return false
+      if (!(await until(`${fresh} && !!document.querySelector('button[aria-label="Hide sidebar"], button[aria-label="Show sidebar"]')`, 20_000))) return 'Desk did not load in 20 s'
       if (await ev(HIDDEN)) {
         // A tap in an earlier case hid the sidebar and Desk remembers it: show it again, then load fresh so every stand-in is untouched.
         await ev(`document.querySelector('button[aria-label="Show sidebar"]').click()`)
@@ -213,20 +213,21 @@ try {
     let last = ''
     let since = Date.now()
     for (const end = Date.now() + 25_000; ; await sleep(150)) {
-      if (Date.now() > end) return false
+      if (Date.now() > end) return last ? 'the target never held still for 1.5 s in 25 s' : 'no matching control was visible and uncovered in 25 s'
       const now = await ev(seen)
       if (now !== last) { last = now; since = Date.now() } else if (now && Date.now() - since >= 1500 && Date.now() >= settled) break
     }
     await park()
     await sleep(300)
-    return true
+    return null
   }
 
   const only = process.env.GESTURE_ONLY
   const what = process.env.GESTURE_WHAT
   for (const c of CASES.filter((c) => (!only || c.page === only) && (!what || c.what.includes(what)))) {
     const name = `${c.page} | ${c.what} | ${c.kind}${c.wait ? ` ${c.wait}ms` : ''}`
-    if (!(await load(c))) { lines.push({ ok: false, line: `FAIL ${name} :: no target on screen` }); console.log(lines.at(-1)!.line); continue }
+    const missing = await load(c)
+    if (missing) { lines.push({ ok: false, line: `FAIL ${name} :: no target on screen (${missing})` }); console.log(lines.at(-1)!.line); continue }
     const p = await ev(`(() => { const el = ${c.pick}; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + r.width / 2, y: r.top + r.height / 2, label: el.getAttribute('aria-label') || '' } })()`)
     if (!p) { lines.push({ ok: false, line: `FAIL ${name} :: the target left the screen` }); console.log(lines.at(-1)!.line); continue }
     const ok = c.ok.replaceAll('X', String(p.x)).replaceAll('Y', String(p.y))
