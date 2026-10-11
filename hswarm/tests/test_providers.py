@@ -56,7 +56,11 @@ def test_without_the_overlay_the_builtins_stand():
     # + 6 ranked routes on Fireworks: Kimi K3, GLM 5.3, GLM 5.3 Flash, DeepSeek V4.1 Flash, gpt-oss-120b, MiniMax M3 (2026-10-07)
     # + 7 ranked routes on Nebius: GLM 5.3, GLM 5.3 Flash, Kimi K3, DeepSeek V4.1 Flash, Qwen3.8 27B, MiniMax M3, gpt-oss-120b
     #   (2026-10-10)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 118
+    # + 8 ranked routes on Hugging Face (Qwen3.8 2.4T, MiMo V2.6 Flash, Granite 4.2 30B/8B/3B, gpt-oss-20b, Hy3,
+    #   Inkling Small) and Qwen3.8 2.4T on Together (2026-10-10)
+    # + 13 ranked routes on OpenRouter: Haiku 5.5 at five efforts, GPT-6.1 Sol, Kimi K3, Grok 4.7, Qwen3.8 2.4T,
+    #   MiMo V2.6 Flash, Inkling Small, Hy3, Granite 4.2 8B (2026-10-10)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 140
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",
@@ -190,7 +194,8 @@ def _index_slugs() -> set[str]:
 # so AUTO ranks it on a real number.
 def test_each_h1_ranked_route_names_an_indexed_slug_and_a_sourced_price():
     routes = [m for m in config.MODELS if m.startswith("rank:") and m.rsplit(":", 1)[1] in H1_PROVIDERS]
-    assert len(routes) == 47
+    # 47, + 8 on Hugging Face and 1 on Together (2026-10-10)
+    assert len(routes) == 56
     slugs = _index_slugs()
     sourced = json.loads((DATA / "prices.json").read_text(encoding="utf-8"))["providers"]
     for name in routes:

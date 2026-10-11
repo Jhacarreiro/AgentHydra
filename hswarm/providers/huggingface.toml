@@ -111,3 +111,67 @@ ctx = 262144
 tools = true
 price_ref = "huggingface/rank:nvidia-nemotron-3-ultra-550b-a55b:huggingface"
 cc_effort = false
+
+[models."rank:qwen3-8-2-4t-a95b:huggingface"]
+api_id = "Qwen/Qwen3.8-2.4T-A95B:novita"
+benchmark_slug = "qwen3-8-2-4t-a95b"
+ctx = 1000000
+tools = true
+price_ref = "huggingface/rank:qwen3-8-2-4t-a95b:huggingface"
+cc_effort = false
+
+[models."rank:mimo-v2-6-flash:huggingface"]
+api_id = "XiaomiMiMo/MiMo-V2.6-Flash-RL:novita"
+benchmark_slug = "mimo-v2-6-flash"
+ctx = 1048576
+tools = true
+price_ref = "huggingface/rank:mimo-v2-6-flash:huggingface"
+cc_effort = false
+
+[models."rank:granite-4-2-30b:huggingface"]
+api_id = "ibm-granite/granite-4.2-30b:deepinfra"
+benchmark_slug = "granite-4-2-30b"
+ctx = 131072
+tools = true
+price_ref = "huggingface/rank:granite-4-2-30b:huggingface"
+cc_effort = false
+
+[models."rank:granite-4-2-8b:huggingface"]
+api_id = "ibm-granite/granite-4.2-8b:deepinfra"
+benchmark_slug = "granite-4-2-8b"
+ctx = 131072
+tools = true
+price_ref = "huggingface/rank:granite-4-2-8b:huggingface"
+cc_effort = false
+
+[models."rank:granite-4-2-3b:huggingface"]
+api_id = "ibm-granite/granite-4.2-3b:deepinfra"
+benchmark_slug = "granite-4-2-3b"
+ctx = 131072
+tools = true
+price_ref = "huggingface/rank:granite-4-2-3b:huggingface"
+cc_effort = false
+
+[models."rank:gpt-oss-20b:huggingface"]
+api_id = "openai/gpt-oss-20b:deepinfra"
+benchmark_slug = "gpt-oss-20b"
+ctx = 131072
+tools = true
+price_ref = "huggingface/rank:gpt-oss-20b:huggingface"
+cc_effort = false
+
+[models."rank:hy3:huggingface"]
+api_id = "tencent/Hy3:deepinfra"
+benchmark_slug = "hy3"
+ctx = 262144
+tools = true
+price_ref = "huggingface/rank:hy3:huggingface"
+cc_effort = false
+
+[models."rank:inkling-small:huggingface"]
+api_id = "thinkingmachines/Inkling-Small:deepinfra"
+benchmark_slug = "inkling-small"
+ctx = 524288
+tools = true
+price_ref = "huggingface/rank:inkling-small:huggingface"
+cc_effort = false

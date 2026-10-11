@@ -1096,6 +1096,157 @@
    "output": 0.6,
    "source": "https://api.tokenfactory.nebius.com/v1/models?verbose=true",
    "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:qwen3-8-2-4t-a95b:huggingface": {
+   "input": 2,
+   "output": 6,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:mimo-v2-6-flash:huggingface": {
+   "input": 0.14,
+   "output": 0.28,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:granite-4-2-30b:huggingface": {
+   "input": 0.16,
+   "output": 0.65,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:granite-4-2-8b:huggingface": {
+   "input": 0.06,
+   "output": 0.25,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:granite-4-2-3b:huggingface": {
+   "input": 0.03,
+   "output": 0.12,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:gpt-oss-20b:huggingface": {
+   "input": 0.03,
+   "output": 0.14,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:hy3:huggingface": {
+   "input": 0.13,
+   "output": 0.53,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "huggingface/rank:inkling-small:huggingface": {
+   "input": 0.45,
+   "output": 1.2,
+   "source": "https://router.huggingface.co/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "together/rank:qwen3-8-2-4t-a95b:together": {
+   "input": 2,
+   "output": 6,
+   "source": "https://www.together.ai/pricing",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:claude-haiku-5-5": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:claude-haiku-5-5-xhigh": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:claude-haiku-5-5-high": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:claude-haiku-5-5-medium": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:claude-haiku-5-5-low": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "cache_write_5m": 0.125,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:gpt-6-1-sol": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.1,
+   "cache_write_5m": 2.5,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:kimi-k3": {
+   "input": 0.8,
+   "output": 15.0,
+   "cache_read": 0.55,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:grok-4-7": {
+   "input": 2.0,
+   "output": 6.0,
+   "cache_read": 0.5,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:qwen3-8-2-4t-a95b": {
+   "input": 2.0,
+   "output": 6.0,
+   "cache_read": 0.25,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:mimo-v2-6-flash": {
+   "input": 0.14,
+   "output": 0.28,
+   "cache_read": 0.0028,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:inkling-small": {
+   "input": 0.45,
+   "output": 1.2,
+   "cache_read": 0.1,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:hy3": {
+   "input": 0.132,
+   "output": 0.528,
+   "cache_read": 0.033,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
+  },
+  "openrouter/rank:granite-4-2-8b": {
+   "input": 0.06,
+   "output": 0.25,
+   "cache_read": 0.015,
+   "source": "https://openrouter.ai/api/v1/models",
+   "verified_at": "2026-10-10"
   }
  }
 }

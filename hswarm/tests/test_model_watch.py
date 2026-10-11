@@ -36,6 +36,8 @@ def test_ids_of_takes_a_bare_list_or_a_data_object_and_drops_repeats():
 ROUTES = {
     "example-route": {"provider": "example-a", "api_id": "Example-Alpha-1"},
     "rank:example-beta:example-b": {"provider": "example-b", "api_id": "example-beta-x", "benchmark_slug": "example-beta"},
+    # Hugging Face's router pins a backend after a colon and lists the bare model id
+    "rank:example-alpha:example-hf": {"provider": "example-hf", "api_id": "org/Example-Alpha:some-backend"},
 }
 POINTS = [{"slug": "example-alpha"}, {"slug": "example-beta"}]
 
@@ -49,6 +51,7 @@ def test_standing_follows_the_route_and_the_index():
     assert model_watch.classify("example-beta-x", model_watch.routed_for("example-b", ROUTES), slugs) == "routed"
     # a route on another provider serves nothing on this one
     assert model_watch.classify("example-alpha-1", model_watch.routed_for("example-c", ROUTES), slugs) == "unbenchmarked"
+    assert model_watch.classify("org/Example-Alpha", model_watch.routed_for("example-hf", ROUTES), slugs) == "routed"
 
 
 def test_merge_keeps_first_seen_and_marks_what_stopped_being_listed_gone():

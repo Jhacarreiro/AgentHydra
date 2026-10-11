@@ -129,7 +129,7 @@ never retried. Where a provider file sets `[limits]`, a request waits unsent for
 prefixes such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:`, `stepfun:` and `inworld:`; these
 models become candidates for automatic routing only after evaluation.
 
-Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius has none yet: no per-token price was on its pricing pages. StepFun has none either: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
+Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius's are priced from its own model listing (`/v1/models?verbose=true`), the only place it publishes per-token rates. StepFun has none: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
 
 ### Configuration Directory
 

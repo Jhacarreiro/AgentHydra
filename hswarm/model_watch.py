@@ -50,13 +50,16 @@ def normalize(model_id: str) -> str:
 
 
 def routed_for(provider: str, models: dict) -> set[str]:
-    """The normalized id each registered route of `provider` serves: its `api_id`, else its registry name."""
+    """The normalized id each registered route of `provider` serves: its `api_id`, else its registry name. Hugging
+    Face's router pins a backend as `<model>:<backend>` and lists the bare model, so an api_id serves both forms."""
     out = set()
     for name, entry in models.items():
-        if entry.get("provider") == provider:
-            raw = entry.get("api_id") or name
-            if ":" not in raw:  # a `rank:` route with no api_id of its own serves no id a provider lists
-                out.add(normalize(raw))
+        if entry.get("provider") != provider:
+            continue
+        if api := entry.get("api_id"):
+            out |= {normalize(api), normalize(api.split(":", 1)[0])}
+        elif ":" not in name:  # a `rank:` route with no api_id of its own serves no id a provider lists
+            out.add(normalize(name))
     return out
 
 

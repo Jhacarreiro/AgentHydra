@@ -7,6 +7,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm routes the newer models on Hugging Face, Together and OpenRouter.** Qwen3.8 2.4T, MiMo V2.6 Flash,
+  Granite 4.2 (30B, 8B, 3B), gpt-oss-20b, Hy3 and Inkling Small join the ranked routes on Hugging Face, Qwen3.8 2.4T
+  on Together, and Haiku 5.5, GPT-6.1 Sol, Kimi K3, Grok 4.7 and five of those on OpenRouter, each at the host's
+  listed price. Model watch now counts a Hugging Face route pinned to a host (`model:host`) as routed, and eleven
+  newer models have their published scores in the index.
 - **HSwarm routes the newer models on Nebius.** GLM-5.3, GLM-5.3-Flash, Kimi K3, DeepSeek V4.1 Flash, Qwen3.8 27B,
   MiniMax M3 and gpt-oss-120b join the price-ranked routes at Nebius's listed prices. Model watch now reports an
   older model that a newer routed version from the same maker beats as superseded, instead of asking for a route to it.

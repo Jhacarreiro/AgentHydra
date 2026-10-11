@@ -357,3 +357,154 @@ price_ref = "openrouter/rank:gpt-oss-120b"
 default_reasoning_effort = "high"
 default_thinking = true
 cc_effort = false
+
+[models."rank:claude-haiku-5-5"]
+api_id = "anthropic/claude-haiku-5.5"
+benchmark_slug = "claude-haiku-5-5"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:claude-haiku-5-5"
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = true
+
+[models."rank:claude-haiku-5-5-xhigh"]
+api_id = "anthropic/claude-haiku-5.5"
+benchmark_slug = "claude-haiku-5-5-xhigh"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:claude-haiku-5-5-xhigh"
+default_reasoning_effort = "xhigh"
+default_thinking = true
+cc_effort = true
+
+[models."rank:claude-haiku-5-5-high"]
+api_id = "anthropic/claude-haiku-5.5"
+benchmark_slug = "claude-haiku-5-5-high"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:claude-haiku-5-5-high"
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = true
+
+[models."rank:claude-haiku-5-5-medium"]
+api_id = "anthropic/claude-haiku-5.5"
+benchmark_slug = "claude-haiku-5-5-medium"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:claude-haiku-5-5-medium"
+default_reasoning_effort = "medium"
+default_thinking = true
+cc_effort = true
+
+[models."rank:claude-haiku-5-5-low"]
+api_id = "anthropic/claude-haiku-5.5"
+benchmark_slug = "claude-haiku-5-5-low"
+ctx = 1000000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:claude-haiku-5-5-low"
+default_reasoning_effort = "low"
+default_thinking = true
+cc_effort = true
+
+[models."rank:gpt-6-1-sol"]
+api_id = "openai/gpt-6.1-sol"
+benchmark_slug = "gpt-6-1-sol"
+ctx = 1050000
+max_out = 128000
+vision = true
+tools = true
+price_ref = "openrouter/rank:gpt-6-1-sol"
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+
+[models."rank:kimi-k3"]
+api_id = "moonshotai/kimi-k3"
+benchmark_slug = "kimi-k3"
+ctx = 1048576
+max_out = 943718
+vision = true
+tools = true
+price_ref = "openrouter/rank:kimi-k3"
+default_reasoning_effort = "max"
+default_thinking = true
+cc_effort = false
+
+[models."rank:grok-4-7"]
+api_id = "x-ai/grok-4.7"
+benchmark_slug = "grok-4-7"
+ctx = 500000
+max_out = 450000
+vision = true
+tools = true
+price_ref = "openrouter/rank:grok-4-7"
+default_reasoning_effort = "xhigh"
+default_thinking = true
+cc_effort = false
+
+[models."rank:qwen3-8-2-4t-a95b"]
+api_id = "qwen/qwen3.8-2.4t-a95b"
+benchmark_slug = "qwen3-8-2-4t-a95b"
+ctx = 1048576
+max_out = 131072
+vision = false
+tools = true
+price_ref = "openrouter/rank:qwen3-8-2-4t-a95b"
+default_thinking = true
+cc_effort = false
+
+[models."rank:mimo-v2-6-flash"]
+api_id = "xiaomi/mimo-v2.6-flash"
+benchmark_slug = "mimo-v2-6-flash"
+ctx = 1050000
+max_out = 131072
+vision = true
+tools = true
+price_ref = "openrouter/rank:mimo-v2-6-flash"
+default_thinking = true
+cc_effort = false
+
+[models."rank:inkling-small"]
+api_id = "thinkingmachines/inkling-small"
+benchmark_slug = "inkling-small"
+ctx = 524288
+max_out = 262144
+vision = true
+tools = true
+price_ref = "openrouter/rank:inkling-small"
+default_thinking = true
+cc_effort = false
+
+[models."rank:hy3"]
+api_id = "tencent/hy3"
+benchmark_slug = "hy3"
+ctx = 262144
+max_out = 128000
+vision = false
+tools = true
+price_ref = "openrouter/rank:hy3"
+default_thinking = true
+cc_effort = false
+
+[models."rank:granite-4-2-8b"]
+api_id = "ibm-granite/granite-4.2-8b"
+benchmark_slug = "granite-4-2-8b"
+ctx = 131072
+max_out = 117964
+vision = false
+tools = true
+price_ref = "openrouter/rank:granite-4-2-8b"
+default_thinking = true
+cc_effort = false
