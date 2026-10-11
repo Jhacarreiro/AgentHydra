@@ -31,5 +31,6 @@ describe('desk_move_chat chat resolution', () => {
   test('an ambiguous or unknown fragment is refused, never guessed', () => {
     expect(() => pickDeskChat(chats, 'example')).toThrow(/matches 2/)
     expect(() => pickDeskChat(chats, 'nothing')).toThrow(/no Desk chat/)
+    expect(() => pickDeskChat(chats, '  ')).toThrow(/chat is required/)
   })
 })

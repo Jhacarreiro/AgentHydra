@@ -8,7 +8,7 @@
 // desk_move_chat: move a Hydra Desk chat (the AgentHydra 2.0 window) to another folder, the one thing that until
 // now was only a sentence in the Desk system prompt (PATCH /api/chats/:id {cwd}). move_chat moves a chat between
 // ACCOUNTS and move_chat_folder moves a Claude DESKTOP chat; neither touches a Desk chat.
-import { existsSync, statSync } from 'node:fs'
+import { statSync } from 'node:fs'
 import { S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -131,6 +131,8 @@ interface DeskChat {
 /** One Desk chat from its Desk id, its Claude session id, or a title fragment (refuses an ambiguous fragment). */
 export function pickDeskChat(chats: DeskChat[], ref: string): DeskChat {
   const r = ref.trim()
+  if (!r)
+    throw new Error('chat is required: pass the Desk chat id, its session id, or part of its title')
   const exact = chats.find((c) => c.id === r || c.sessionId === r)
   if (exact) return exact
   const low = r.toLowerCase()
@@ -204,13 +206,19 @@ export function findTools(getTools: () => McpEngineTool[]): McpEngineTool[] {
       ),
       run: async (a) => {
         const cwd = str(a.cwd).trim()
-        if (!cwd || !existsSync(cwd) || !statSync(cwd).isDirectory())
-          throw new Error(`no folder at ${cwd || '(empty)'}`)
+        let isFolder = false
+        try {
+          isFolder = !!cwd && statSync(cwd).isDirectory()
+        } catch {}
+        if (!isFolder) throw new Error(`no folder at ${cwd || '(empty)'}`)
         const base = deskBase()
         const listed = await fetch(`${base}/api/chats`).catch(() => null)
         if (!listed?.ok)
           throw new Error(`the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`)
-        const chat = pickDeskChat((await listed.json()) as DeskChat[], str(a.chat))
+        const chats: unknown = await listed.json().catch(() => null)
+        if (!Array.isArray(chats))
+          throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
+        const chat = pickDeskChat(chats as DeskChat[], str(a.chat))
         const res = await fetch(`${base}/api/chats/${encodeURIComponent(chat.id)}`, {
           method: 'PATCH',
           headers: { 'content-type': 'application/json' },
