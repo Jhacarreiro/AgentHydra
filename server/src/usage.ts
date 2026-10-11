@@ -23,7 +23,7 @@ import {
 } from './config'
 import { cliConfigDirCredentialState, resolveCliConfigDirToken } from './core/accounts'
 import { pinHaikuModel } from './core/haiku-pin'
-import { capturePipedProc } from './core/process.ts'
+import { spawnCaptured } from './core/process.ts'
 import { encodeCwdKey } from './transcript'
 import type { UsageAdvice, UsageSnapshot } from './types'
 import { fetchUsageApi } from './usage-api'
@@ -715,38 +715,33 @@ async function spawnUsageProbe(
   const probeCwd = usageProbeCwd()
   if (probeCwd) env.PWD = probeCwd
 
-  let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
-  try {
-    // windowsHide matters more here than at the other spawn sites: resolveClaudeExe() falls back to
-    // `claude.cmd` when the packaged claude.exe is absent, and a .cmd runs THROUGH cmd.exe. This
-    // refresh is also periodic, so on a machine without the .exe an unhidden spawn is a CMD window
-    // that flashes on its own schedule, with no user action to blame it on.
-    // ⛔ NO MCP SERVERS - see CLAUDE_PROBE_NO_MCP_ARGS in config.ts. `/usage` reads a number off a
-    // screen and uses no tools, so booting the machine's whole MCP roster to ask it was 7 child
-    // processes per probe, on a periodic schedule, for nothing.
-    proc = Bun.spawn([resolveClaudeExe(), '-p', '/usage', ...CLAUDE_PROBE_NO_MCP_ARGS], {
-      env,
-      cwd: probeCwd ?? undefined,
-      stdin: 'ignore',
-      stdout: 'pipe',
-      stderr: 'pipe',
-      windowsHide: true,
-    }) as Bun.Subprocess<'ignore', 'pipe', 'pipe'>
-  } catch {
-    return parseUsageOutput('', label) // never even launched → no data
-  }
-
   // Bounded through the one bounded spawn (swept 2026-09-18): the old timer killed the process
   // but the await sat on the DRAIN, which ends when the PIPE closes, not when the child does.
+  // It is spawned hidden (windowsHide matters more here than at the other spawn sites:
+  // resolveClaudeExe() falls back to `claude.cmd` when the packaged claude.exe is absent, a .cmd
+  // runs THROUGH cmd.exe, and this refresh is periodic, so an unhidden spawn is a CMD window that
+  // flashes on its own schedule).
+  // ⛔ NO MCP SERVERS - see CLAUDE_PROBE_NO_MCP_ARGS in config.ts. `/usage` reads a number off a
+  // screen and uses no tools, so booting the machine's whole MCP roster to ask it was 7 child
+  // processes per probe, on a periodic schedule, for nothing.
+  // On its own spawn-worker lane (2026-10-11): starting claude.exe held the daemon's thread for
+  // 2.2 s at a time (STALL profiles, spawnUsageProbe), and on the shared lane a 250 MB start would
+  // queue every netstat and taskkill capture behind it.
   let out = ''
   try {
-    const r = await capturePipedProc(proc, {
-      timeoutMs: opts.timeoutMs ?? 60_000,
-      wantStderr: false,
-    })
+    const r = await spawnCaptured(
+      [resolveClaudeExe(), '-p', '/usage', ...CLAUDE_PROBE_NO_MCP_ARGS],
+      {
+        env,
+        cwd: probeCwd ?? undefined,
+        timeoutMs: opts.timeoutMs ?? 60_000,
+        wantStderr: false,
+        lane: 'usage-probe',
+      },
+    )
+    // Never even launched: no data, and no cooldown started for a probe that did not run.
+    if (r.code === null && !r.timedOut && !r.stdout) return parseUsageOutput('', label)
     out = r.stdout
-  } catch {
-    // read/exit error → whatever we captured (likely empty) parses to no-data
   } finally {
     // The probe has exited, so its transcript is closed and safe to drop. Swept every time rather
     // than on a schedule: the stub has no value the moment the numbers above are parsed, and the
