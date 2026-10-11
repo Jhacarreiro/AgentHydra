@@ -452,11 +452,20 @@ describe('a chat registered under a CLI instance is found as the caller', () => 
       const instance = join(scratch, 'nearest-instance')
       const defaultHome = join(scratch, 'nearest-default')
       const nearSid = '12345678-cccc-4ddd-8eee-1234567890ab'
+      // A scratch user folder too: the walk also reads ~/.claude's registry, where a crashed
+      // session's leftover `<pid>.json` can name a pid Windows has since given to the new relay.
+      const user = join(scratch, 'nearest-user')
       const proc = Bun.spawn([process.execPath, relay], {
         stdin: 'pipe',
         stdout: 'pipe',
         stderr: 'pipe',
-        env: { ...process.env, CLAUDE_CONFIG_DIR: defaultHome, NEAREST_INSTANCE: instance },
+        env: {
+          ...process.env,
+          CLAUDE_CONFIG_DIR: defaultHome,
+          NEAREST_INSTANCE: instance,
+          HOME: user,
+          USERPROFILE: user,
+        },
       })
       register(instance, proc.pid, nearSid)
       register(defaultHome, process.pid, '12345678-dddd-4eee-8fff-1234567890ab')
@@ -465,8 +474,9 @@ describe('a chat registered under a CLI instance is found as the caller', () => 
         new Response(proc.stdout).text(),
         new Response(proc.stderr).text(),
       ])
-      if ((await proc.exited) !== 0) throw new Error(`the asker failed: ${err}`)
-      const t = JSON.parse(out.trim().split('\n').at(-1) ?? '{}')
+      const answer = out.trim().split('\n').at(-1)
+      if ((await proc.exited) !== 0 || !answer) throw new Error(`the asker failed: ${err}`)
+      const t = JSON.parse(answer)
       expect(t.chain).toEqual([proc.pid, process.pid])
       expect(t.sessionId).toBe(nearSid)
       expect(t.home).toBe(instance)
