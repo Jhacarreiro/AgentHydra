@@ -15,10 +15,10 @@
 // to the default login, sessions and workers to []. Writes (cancel, send) and a single transcript read
 // do throw a BridgeError.
 
-import type { AccountInfo, AccountRef, CliMayteWorker, ExternalSession, SearchHit, SwarmJob, TranscriptItem } from '@shared/protocol'
+import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptItem } from '@shared/protocol'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
-import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers } from './climayte'
+import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
 import {
   BridgeError,
   createClient,
@@ -70,6 +70,10 @@ const SEARCH_ROW_FRESH_MS = 60_000
 const SESSIONS_FRESH_MS = 10_000
 /** How long the other PCs' queues (remote workers) are reused. */
 const REMOTES_FRESH_MS = 30_000
+/** How long one read of a session's own workers and jobs (sessionTasks) serves every window showing it. */
+const SESSION_TASKS_FRESH_MS = 5000
+/** The sessions whose last read sessionTasks keeps (a window shows one at a time; a few windows, a few more). */
+const SESSION_TASKS_KEPT = 20
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
@@ -364,6 +368,41 @@ export function createBridge(opts: BridgeOptions = {}) {
       }
       throw err
     }
+  }
+
+  /** One session's own workers and jobs (SessionTasks), read at most every SESSION_TASKS_FRESH_MS per session. Each
+   *  answer is cut to the session's own here too: an older AgentHydra or HSwarm ignores the filter and answers its newest
+   *  of the whole PC. A jobs read that fails (HSwarm off, deaf or out of reach) keeps the session's last jobs. */
+  const sessionReads = new Map<string, { at: number; answer: Promise<SessionTasks>; kept: { jobs: SwarmJob[] } }>()
+  function sessionTasks(sessionId: string): Promise<SessionTasks> {
+    const hit = sessionReads.get(sessionId)
+    if (hit && now() - hit.at < SESSION_TASKS_FRESH_MS) return hit.answer
+    const kept = { jobs: hit?.kept.jobs ?? [] }
+    const answer = (async (): Promise<SessionTasks> => {
+      const chats = await chatsIndex()
+      // A Claude Desktop chat's jobs name its chat id, not its session.
+      const hosts = [...chats].filter(([, c]) => c.sessionId === sessionId).map(([id]) => id)
+      const [raw, jobs] = await Promise.all([
+        client.workers({ origin: [sessionId], limit: SESSION_FINISHED }),
+        client.hswarmJobs(SESSION_FINISHED, [sessionId, ...hosts]).catch(() => null),
+      ])
+      // A chat that is itself a worker is not in the answer, yet the workers it dispatched name it: read it, so they
+      // place under its session.
+      const have = new Set(raw.map((w) => w.id))
+      const up = [...new Set(raw.flatMap((w) => (w.origin?.kind === 'worker' && !have.has(w.origin.workerId) ? [w.origin.workerId] : [])))]
+      const all = up.length ? [...raw, ...(await client.workersByIds(up).catch(() => []))] : raw
+      if (jobs) kept.jobs = mapSwarmJobs(jobs, chats, SESSION_FINISHED).filter((j) => j.callerSessionId === sessionId || j.callerHostSessionId === sessionId)
+      return { sessionId, workers: workersOfChat(mapWorkers(all), { sessionId }), jobs: kept.jobs }
+    })()
+    const entry = { at: now(), answer, kept }
+    sessionReads.delete(sessionId)
+    sessionReads.set(sessionId, entry)
+    while (sessionReads.size > SESSION_TASKS_KEPT) sessionReads.delete(sessionReads.keys().next().value as string)
+    // A failed read is not kept: the next ask reads again.
+    answer.catch(() => {
+      if (sessionReads.get(sessionId) === entry) sessionReads.set(sessionId, { ...entry, at: 0 })
+    })
+    return answer
   }
 
   async function activeWorkersFor(originSessionId: string): Promise<CliMayteWorker[]> {
@@ -823,6 +862,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     sessionRoots,
     workers,
     swarmJobs,
+    sessionTasks,
     activeWorkersFor,
     /** This PC's workers from the last read (by the poller or a route), without asking AgentHydra; never another PC's. */
     lastWorkers: (): CliMayteWorker[] => lastWorkers?.workers ?? [],

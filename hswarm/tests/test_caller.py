@@ -180,3 +180,30 @@ def test_jobs_list_keeps_a_running_job_older_than_the_limit(tmp_path, monkeypatc
     assert ids == ["20260102-000004-aaaa", "20260102-000003-aaaa", "20260101-000001-aaaa"]
     assert rows[-1]["caller_ids"]["session_id"].startswith("11111111-2222")
     assert [r["job_id"] for r in _jobs_list(monkeypatch, m, limit=2, state="running")] == ["20260101-000001-aaaa"]
+
+
+def test_jobs_list_by_session_keeps_that_callers_jobs_past_the_limit(tmp_path, monkeypatch):
+    _isolate(monkeypatch, tmp_path)
+    mine = "33333333-4444-4555-8666-777777777777"
+    twin = "33333333-0000-4000-8000-000000000000"  # the same 8 characters, another session
+    chat = "local_44444444-5555-4666-8777-888888888888"
+
+    def write(job_id, stamp):
+        d = config.JOBS_DIR / job_id
+        d.mkdir(parents=True)
+        summary = {"job_id": job_id, "state": "done", "finished": True, "caller": caller.key(stamp)}
+        (d / "job.json").write_text(json.dumps({"summary": summary, "caller": stamp}), encoding="utf-8")
+
+    write("20260103-000001-aaaa", {"session_id": mine, "instance": "temp1", "cwd": "D:/x/proj"})
+    write("20260103-000002-aaaa", {"session_id": "", "chat_id": chat, "instance": "temp1"})
+    write("20260103-000003-aaaa", {"session_id": twin, "instance": "temp1"})
+    for i in range(4, 9):  # newer jobs of nobody in particular
+        write(f"20260103-00000{i}-aaaa", {})
+    m = JobManager(client=_FakeClient())
+    assert "20260103-000001-aaaa" not in [r["job_id"] for r in _jobs_list(monkeypatch, m, limit=3)]
+    assert [r["job_id"] for r in _jobs_list(monkeypatch, m, limit=3, session=mine)] == ["20260103-000001-aaaa"]
+    both = _jobs_list(monkeypatch, m, limit=3, session=f"{mine},{chat}")
+    assert [r["job_id"] for r in both] == ["20260103-000002-aaaa", "20260103-000001-aaaa"]
+    assert both[0]["caller_ids"]["chat_id"] == chat
+    # `limit` counts the caller's finished jobs: the newest of its two.
+    assert [r["job_id"] for r in _jobs_list(monkeypatch, m, limit=1, session=f"{mine},{chat}")] == ["20260103-000002-aaaa"]

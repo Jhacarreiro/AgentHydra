@@ -153,14 +153,62 @@ export function matches(
   )
 }
 
+/**
+ * The workers these chat sessions dispatched: each whose origin is one of them, each a worker of theirs
+ * dispatched (through any depth, cycle-safe), and each task of a wave whose manager is theirs (a wave's
+ * tasks carry no origin, only their `wave`). A chat that is itself a worker (the session is that worker's,
+ * current or earlier) counts the workers that worker dispatched, never the worker itself.
+ */
+export function dispatchedFrom(
+  all: Iterable<CliMayteWorker>,
+  sessions: readonly string[],
+): Set<string> {
+  const want = new Set(sessions)
+  const list = [...all]
+  const managers = new Map<string, string>()
+  for (const w of list) if (w.kind === 'manage' && w.wave) managers.set(w.wave, w.id)
+  const children = new Map<string, string[]>()
+  const seeds: string[] = []
+  for (const w of list) {
+    const up =
+      w.origin?.kind === 'worker'
+        ? w.origin.workerId
+        : !w.origin && w.wave && w.kind !== 'manage'
+          ? managers.get(w.wave)
+          : undefined
+    if (up && up !== w.id) {
+      const list = children.get(up)
+      if (list) list.push(w.id)
+      else children.set(up, [w.id])
+    }
+    if (w.origin?.kind === 'chat' && want.has(w.origin.sessionId)) seeds.push(w.id)
+  }
+  for (const w of list)
+    if ([w.sessionId, ...(w.sessions ?? [])].some((s) => s && want.has(s)))
+      seeds.push(...(children.get(w.id) ?? []))
+  const mine = new Set<string>()
+  for (let queue = seeds; queue.length; ) {
+    const next: string[] = []
+    for (const id of queue) {
+      if (mine.has(id)) continue
+      mine.add(id)
+      next.push(...(children.get(id) ?? []))
+    }
+    queue = next
+  }
+  return mine
+}
+
 /** `limit`: keep every active worker and only the `limit` most recently finished ones
  *  (recentWorkers); `brief`: rows without the prompt and with the last 3 attempts (toBrief);
- *  `ids`: only these workers. */
+ *  `ids`: only these workers; `origin`: only the workers these chat sessions dispatched
+ *  (dispatchedFrom), `limit` then counting their finished ones. */
 export interface CliMayteListFilter {
   group?: string
   id?: string
   ids?: string[]
   active?: boolean
+  origin?: string[]
   limit?: number
   brief?: boolean
   /** With `brief`: also list finished work a verdict already covers (left out by default). */
@@ -176,8 +224,9 @@ export function climayteList(
 ): CliMayteWorkerView[] | CliMayteWorkerBrief[] {
   load()
   const now = Date.now()
+  const mine = filter.origin?.length ? dispatchedFrom(workers.values(), filter.origin) : null
   const views = recentWorkers(
-    [...workers.values()].filter((w) => matches(w, filter)),
+    [...workers.values()].filter((w) => matches(w, filter) && (!mine || mine.has(w.id))),
     filter.limit,
   ).map((w) => toView(w, now))
   if (!filter.brief) return views

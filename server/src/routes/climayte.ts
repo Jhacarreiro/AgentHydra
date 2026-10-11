@@ -114,16 +114,23 @@ function pingReply(
 // active worker and only that many recently finished ones; `brief=1` leaves out the prompt and all
 // but the last 3 attempts (climayte_status uses both; the CliMayte view reads the full list).
 // `report=1` answers the report view instead (toReport: status, verdict, what it used, `chars` of its
-// report, default 1500); `ids` (comma-separated) keeps only those workers.
+// report, default 1500); `ids` (comma-separated) keeps only those workers; `origin` (comma-separated
+// session ids) keeps only the workers those chats dispatched, through the workers they dispatched
+// (dispatchedFrom): Desk 2's Background tasks panel asks it for the open chat, whose finished workers
+// leave the machine-wide recent window within minutes on a busy PC.
 app.get('/api/corch/workers', async (c) => {
-  const ids = optStr(c.req.query('ids'))
-    ?.split(',')
-    .map((s) => s.trim())
-    .filter(Boolean)
+  const list = (v: string | undefined) =>
+    optStr(v)
+      ?.split(',')
+      .map((s) => s.trim())
+      .filter(Boolean)
+  const ids = list(c.req.query('ids'))
+  const origin = list(c.req.query('origin'))
   const filter = {
     group: optStr(c.req.query('group')),
     id: optStr(c.req.query('id')),
     ids: ids?.length ? ids : undefined,
+    origin: origin?.length ? origin : undefined,
     active: flag(c.req.query('active')) ? true : undefined,
     limit: optInt(c.req.query('limit')),
     brief: flag(c.req.query('brief')),

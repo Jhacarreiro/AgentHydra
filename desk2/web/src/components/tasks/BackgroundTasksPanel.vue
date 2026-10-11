@@ -9,7 +9,7 @@
 // (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
 // that for every running unit listed. The trash in the header, beside Expand and Close (owner, 2026-10-08: "move
 // this here", from the Finished row), only hides finished units here.
-import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, watch, type EffectScope, type Ref } from 'vue'
+import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
@@ -20,6 +20,7 @@ import { useClock } from '@/lib/clock'
 import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
 import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { useSessionTasks } from './session'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -55,8 +56,10 @@ function toggleAll() {
     /* storage unavailable: the choice lasts until the panel closes */
   }
 }
+// The session's own workers and jobs, read while the panel is open: they outlast the window's lists.
+const own = useSessionTasks(toRef(props, 'sessionId'))
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
+  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
 )
 
 // The progress squares of every phase on show, worked out once per list change.

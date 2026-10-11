@@ -11,15 +11,17 @@ import { useDesk } from '@/stores/desk'
 import { useClock } from '@/lib/clock'
 import { cleared, openBackgroundTasks } from './api'
 import { latestEtaEnd, panelLists, runningLabel } from './logic'
+import { useSessionTasks } from './session'
 
 const props = defineProps<{ chat: ChatSummary; items: TranscriptItem[] }>()
 const src = useShellSource()
 const desk = useDesk()
 
 // Running and finished, as the Background tasks panel lists them for this chat (its CliMayte workers, its
-// own background tasks and the HSwarm jobs it called), minus the finished ones cleared there.
+// own background tasks and the HSwarm jobs it called, with those the server keeps for it), minus the finished ones cleared there.
+const own = useSessionTasks(computed(() => props.chat.sessionId))
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
+  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
 )
 const etaEndsAt = computed(() => latestEtaEnd(lists.value.running))
 

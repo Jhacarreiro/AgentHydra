@@ -82,16 +82,16 @@ export function mapSwarmJob(j: AhHswarmJob, chats: ChatIndex = new Map()): Swarm
   return jobOf({ ...j, id: j.job_id }, callerOf(j, chats), null)
 }
 
-/** One PC's jobs: every running one and the RECENT_FINISHED newest finished ones, newest first within each. */
-function pick(list: SwarmJob[]): SwarmJob[] {
+/** One PC's jobs: every running one and the `finished` newest finished ones, newest first within each. */
+function pick(list: SwarmJob[], finished = RECENT_FINISHED): SwarmJob[] {
   const newest = (a: SwarmJob, b: SwarmJob) => (b.startedAt ?? 0) - (a.startedAt ?? 0)
-  return [...list.filter((j) => j.active).sort(newest), ...list.filter((j) => !j.active).sort(newest).slice(0, RECENT_FINISHED)]
+  return [...list.filter((j) => j.active).sort(newest), ...list.filter((j) => !j.active).sort(newest).slice(0, finished)]
 }
 
-/** This PC's jobs from HSwarm's list. */
-export function mapSwarmJobs(answer: AhHswarmJobs | null | undefined, chats: ChatIndex = new Map()): SwarmJob[] {
+/** This PC's jobs from HSwarm's list, every running one and the `finished` newest finished ones. */
+export function mapSwarmJobs(answer: AhHswarmJobs | null | undefined, chats: ChatIndex = new Map(), finished = RECENT_FINISHED): SwarmJob[] {
   if (!Array.isArray(answer?.jobs)) return []
-  return pick(answer.jobs.filter((j) => j?.job_id).map((j) => mapSwarmJob(j, chats)))
+  return pick(answer.jobs.filter((j) => j?.job_id).map((j) => mapSwarmJob(j, chats)), finished)
 }
 
 export function mapRemoteJob(j: AhRemoteJob, pc: string, chats: ChatIndex = new Map()): SwarmJob {

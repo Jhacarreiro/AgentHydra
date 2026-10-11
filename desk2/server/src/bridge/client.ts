@@ -375,6 +375,9 @@ export interface WorkerListQuery {
   limit?: number
   /** Only this dispatch group's workers (a wave's manager is alone in `mgr-<wave>`). */
   group?: string
+  /** Only the workers these chat sessions dispatched, through the workers they dispatched; `limit` then counts their
+   *  finished ones. An older AgentHydra ignores it and answers the whole list. */
+  origin?: string[]
 }
 
 /**
@@ -460,6 +463,7 @@ export function createClient(opts: HydraClientOptions = {}) {
       const query = new URLSearchParams()
       if (q.limit !== undefined) query.set('limit', String(q.limit))
       if (q.group) query.set('group', q.group)
+      if (q.origin?.length) query.set('origin', q.origin.join(','))
       // `lean`: the rows without the long text no list reads (result, reports, whole attempts); an older AgentHydra ignores it.
       query.set('lean', '1')
       return get<AhWorker[]>(`/api/corch/workers?${query}`)
@@ -518,7 +522,10 @@ export function createClient(opts: HydraClientOptions = {}) {
       get<AhCorchTotals>(`/api/corch/totals${since === undefined ? '' : `?since=${enc(new Date(since).toISOString())}`}`, STATS_TIMEOUT_MS),
     /* HSwarm's own stats over the last `days` days; its proxy errors while HSwarm is down. */
     /** HSwarm's job list (verbose: each summary with `created`, `finished` and its caller key), newest first. */
-    hswarmJobs: (limit: number) => get<AhHswarmJobs>(`/api/hswarm/api/jobs?limit=${limit}`, STATS_TIMEOUT_MS),
+    /** `callers` (session or chat ids): only the jobs they started, from HSwarm's newest few hundred; an older HSwarm
+     *  ignores it and answers the newest jobs. */
+    hswarmJobs: (limit: number, callers: string[] = []) =>
+      get<AhHswarmJobs>(`/api/hswarm/api/jobs?limit=${limit}${callers.length ? `&session=${callers.map(enc).join(',')}` : ''}`, STATS_TIMEOUT_MS),
     hswarmStats: (days: number) => get<AhHswarmStats>(`/api/hswarm/api/stats?days=${days}`, STATS_TIMEOUT_MS),
   }
 }

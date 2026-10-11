@@ -172,6 +172,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   })
   // HSwarm's running jobs and newest finished ones, for debugging: the window gets them in the poller's swarm.update event.
   app.get('/api/swarm/jobs', async (c) => c.json(await b.swarmJobs()))
+  // One session's own workers and jobs (SessionTasks), for its Background tasks panel and tasks line while on screen.
+  app.get('/api/session-tasks/:id', (c) => {
+    const id = c.req.param('id')
+    if (!/^[\w-]{1,200}$/.test(id)) return c.json({ error: 'not a session id' }, 400)
+    return guarded(c, b, async () => c.json(await b.sessionTasks(id)))
+  })
   app.post('/api/climayte/workers/:id/cancel', (c) =>
     guarded(c, b, async () => {
       await b.cancelWorker(c.req.param('id'))

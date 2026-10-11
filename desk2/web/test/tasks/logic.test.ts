@@ -181,6 +181,27 @@ describe('panelLists', () => {
     ])
   })
 
+  test("the session's own workers and jobs list beside the window's, which wins for one in both; an old read's running copy waits", () => {
+    const own = {
+      sessionId: 'chat-1',
+      workers: [done('dropped', { endedAt: 3_000 }), done('listed', { endedAt: 3_000 }), w('stale'), done('deep', { originSessionId: 's-mid' })],
+      jobs: [job('old', { active: false, status: 'done', endedAt: 2_000 }), job('ran', { active: false, status: 'done', endedAt: 2_000 })]
+    }
+    // The window still lists 'listed' (finished later than the read saw), the running 'deep' that no origin ties to the
+    // chat, and the job 'ran' still running; it dropped 'dropped', 'stale' (finished since) and the job 'old'.
+    const workers = [done('listed', { endedAt: 9_000 }), w('deep', { originSessionId: 's-mid' })]
+    const jobs = [job('ran')]
+    const lists = panelLists({ workers, jobs, own, sessionId: 'chat-1' })
+    expect(lists.running.map((u) => u.id).sort()).toEqual(['job:ran', 'worker:deep'])
+    expect(lists.finished.map((u) => [u.id, u.endedAt])).toEqual([
+      ['worker:listed', 9_000],
+      ['worker:dropped', 3_000],
+      ['job:old', 2_000]
+    ])
+    // A read for another session is never this one's.
+    expect(panelLists({ workers: [], own, sessionId: 'chat-2' }).finished).toEqual([])
+  })
+
   test("a job's 8-character caller id, the prefix it stamps, matches the session that begins with it", () => {
     const sid = 'a1b2c3d4-0000-4000-8000-000000000000'
     const lists = panelLists({ workers: [], sessionId: sid, jobs: [job('short', { callerSessionId: 'a1b2c3d4' }), job('other', { callerSessionId: 'ffffffff' })] })

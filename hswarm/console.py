@@ -208,22 +208,48 @@ def _with_caller_ids(rows: list[dict], live: dict) -> list[dict]:
     return [{**r, "caller_ids": _caller_ids(r["job_id"], live.get(r["job_id"]))} for r in rows]
 
 
+# How many of the newest jobs a `session` read looks through: inside Job.list_on_disk's 512 cached summaries, so a
+# repeat read stats each record and parses none.
+SESSION_SCAN = 480
+
+
+def _called_by(rows: list[dict], callers: set[str], live: dict) -> list[dict]:
+    """The rows whose caller's session or chat id is one of `callers`. The summary's key carries 8 characters of the
+    caller (caller.key), so only a row they match has its full stamp read."""
+    short = {c[:8] for c in callers}
+    out = []
+    for r in rows:
+        part = str(r.get("caller") or "").split(" / ")
+        if len(part) < 2 or part[1] not in short:
+            continue
+        ids = _caller_ids(r["job_id"], live.get(r["job_id"]))
+        if ids["session_id"] in callers or ids["chat_id"] in callers:
+            out.append(r)
+    return out
+
+
 async def _jobs(b: dict) -> dict:
     """GET jobs: newest first, each as hswarm_status answers it plus `caller_ids` {session_id, chat_id, instance} (the full
     values of the job's stamp, "" when unknown) and its `folder`'s last name, beside the `caller` key string.
 
     `limit` (default 20) counts FINISHED jobs only: every RUNNING job is always listed, however many newer finished jobs
-    exist. `state=running` lists only the running jobs; any other `state` value keeps the finished jobs in that state."""
+    exist. `state=running` lists only the running jobs; any other `state` value keeps the finished jobs in that state.
+    `session` (comma-separated session or chat ids) keeps only the jobs those callers started, from the newest
+    SESSION_SCAN on disk: Desk 2's Background tasks panel asks it for the open chat, whose finished jobs leave the
+    newest `limit` within minutes on a busy PC."""
     from .jobs import manager
     from .mcp_server import hswarm_jobs
 
     limit = int(b.get("limit") or 20)
     want = str(b.get("state") or "").strip().lower()
+    callers = {s.strip() for s in str(b.get("session") or "").split(",") if s.strip()}
     live = dict(manager().jobs)
     live_running = {i: j for i, j in live.items() if j.state == "running"}
-    rows = await hswarm_jobs(limit + len(live_running), verbose=True)  # the jobs page shows `created`
+    rows = await hswarm_jobs(SESSION_SCAN if callers else limit + len(live_running), verbose=True)  # the jobs page shows `created`
     have = {r["job_id"] for r in rows}
     rows += [j.summary() for i, j in live_running.items() if i not in have]  # a long job older than the window
+    if callers:
+        rows = await asyncio.to_thread(_called_by, rows, callers, live)
     running = [r for r in rows if r["job_id"] in live_running or r.get("state") == "running"]
     finished = [r for r in rows if r not in running]
     if want and want != "running":

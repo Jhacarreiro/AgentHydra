@@ -430,6 +430,22 @@ export interface SwarmJob {
   folder?: string | null
 }
 
+/** How many finished workers and jobs of one session GET /api/session-tasks/:sessionId keeps: the Background tasks panel's
+ *  Finished list holds 50, as the real app's does. */
+export const SESSION_FINISHED = 50
+
+/**
+ * GET /api/session-tasks/:sessionId: the CliMayte workers (through the workers they dispatched) and the HSwarm jobs one
+ * session called on this PC, each running one and the SESSION_FINISHED newest finished ones of each. The window's own
+ * lists keep the 20 newest finished of the whole PC, which a busy PC turns over in minutes, so the Background tasks
+ * panel and the tasks line ask for these while they are on screen and list them beside those.
+ */
+export interface SessionTasks {
+  sessionId: string
+  workers: CliMayteWorker[]
+  jobs: SwarmJob[]
+}
+
 export interface AccountInfo extends AccountRef {
   email: string | null
   plan: string | null // 'Pro', 'Max 5x', 'Max 20x', ...

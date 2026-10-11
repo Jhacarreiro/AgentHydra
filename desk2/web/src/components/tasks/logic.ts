@@ -1,8 +1,9 @@
 // The Background tasks panel's model (the real app's side panel, with CliMayte as its workflows): the
 // CliMayte workers a chat dispatched, one unit per group (a worker without a group is its own unit),
 // the chat's own background tasks, running and finished, and the HSwarm jobs the chat called, one unit
-// each (the same jobs the sidebar's HSwarm badge counts). Pure, so the grouping and the labels are tested.
-import type { CliMayteWorker, SwarmJob, TranscriptItem } from '@shared/protocol'
+// each (the same jobs the sidebar's HSwarm badge counts), and the session's own of both that the server read for it
+// (session.ts), which outlast the window's lists. Pure, so the grouping and the labels are tested.
+import type { CliMayteWorker, SessionTasks, SwarmJob, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 import { chatWorkers } from '@/components/climayte/dock'
 
@@ -181,6 +182,23 @@ function chatJobs(jobs: readonly SwarmJob[], sessionId: string | null | undefine
   return jobs.filter((j) => mine(j.callerSessionId) || mine(j.callerHostSessionId))
 }
 
+/**
+ * `listed` plus each of the session's own (`own`) it lacks: the window's copy when the window lists it (fresher), else
+ * the session's copy of a finished one. The window lists every running worker and job, so an own copy still running
+ * that the window lacks is a read from before it finished, and waits for the next. Both are this PC's: another PC's ids
+ * may repeat them.
+ */
+function withOwn<T extends { id: string; active: boolean; pc?: string | null }>(listed: T[], own: readonly T[], window: readonly T[]): T[] {
+  if (!own.length) return listed
+  const shown = new Set(listed.filter((x) => !x.pc).map((x) => x.id))
+  const live = new Map(window.filter((x) => !x.pc).map((x) => [x.id, x]))
+  const more = own.filter((x) => !shown.has(x.id)).flatMap((x) => {
+    const l = live.get(x.id)
+    return l ? [l] : x.active ? [] : [x]
+  })
+  return more.length ? [...listed, ...more] : listed
+}
+
 /** A job as a unit: its tasks are the description, and nothing is stoppable here (Stop lives in the HSwarm tab). */
 export function jobUnit(j: SwarmJob): TaskUnit {
   const { total, done, failed } = j.tasks
@@ -236,13 +254,16 @@ export interface PanelLists {
  * (completed, failed, stopped), so a chat's finished background tasks list and count as the real
  * app's do (owner, 2026-10-05: "there actually is one running and one finished"); a Desk chat's running
  * task can be stopped (`chatId`). `jobs` (the window's HSwarm jobs) adds the ones this session called, one unit
- * each, running or finished like the rest. Running
+ * each, running or finished like the rest. `own` (the session's own workers and jobs, read for it) adds those the
+ * window's lists dropped: they keep the 20 newest finished of the whole PC, and a busy PC turns that over in minutes
+ * (owner, 2026-10-10: the session view shows the HSwarm and CliMayte items the session called). Running
  * units newest first; finished ones most recent first, minus the cleared, capped at FINISHED_CAP.
  */
 export function panelLists(o: {
   workers: CliMayteWorker[]
   items?: TranscriptItem[]
   jobs?: readonly SwarmJob[]
+  own?: SessionTasks | null
   sessionId: string | null | undefined
   workerIds?: readonly string[]
   all?: boolean
@@ -250,9 +271,10 @@ export function panelLists(o: {
   /** The Hydra Desk chat the items are of; null or absent for a session outside it (its tasks get no Stop). */
   chatId?: string | null
 }): PanelLists {
-  const scoped = o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds)
+  const own = o.own && o.own.sessionId === o.sessionId ? o.own : null
+  const scoped = withOwn(o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds), own?.workers ?? [], o.workers)
   const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map((t) => taskUnit(t, !!o.chatId))
-  const jobs = chatJobs(o.jobs ?? [], o.sessionId).map(jobUnit)
+  const jobs = withOwn(chatJobs(o.jobs ?? [], o.sessionId), own?.jobs ?? [], o.jobs ?? []).map(jobUnit)
   const units = [...workerUnits(scoped), ...tasks, ...jobs]
   const cleared = o.cleared ?? new Set<string>()
   const running = units.filter((u) => u.running).sort((a, b) => (b.startedAt ?? 0) - (a.startedAt ?? 0))
