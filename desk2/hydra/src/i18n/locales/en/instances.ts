@@ -546,5 +546,10 @@ export default {
     usageMore: '+{n} more',
     usageFewer: 'Show fewer',
     usageUnavailable: 'Usage is unavailable right now',
+    // All's one list of models, Desktop, CLI and Free together (owner, 2026-10-10: All "still doesn't properly... show
+    // the combined list of models"). Free's record keeps 30 days, so its part can cover other days than the period's.
+    allModelsTitle: 'All models {span}',
+    allModelsFreeSpan: 'Free accounts {freeSpan}',
+    allModelsMissing: 'Not counted, their usage is unavailable: {sources}',
   },
 }

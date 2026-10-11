@@ -820,7 +820,10 @@ Neither does desktop, and all only shows, like, free ... CLI doesn't show model 
 card follows the table's tab: Desktop and CLI each have a header line (tokens and sessions over 7 days) and, opened,
 tiles and their models by tokens, top eight then "+N more", from one 7-day spend report per source (CLI is `cli`
 and `climayte` merged by model; `hydra/src/components/SpendSummary.vue`, `lib/usage-stats.ts`). All shows the
-Desktop, CLI and Free blocks, and its header adds the three over the same period. A toggle at the top of the open
+Desktop, CLI and Free blocks, and its header adds the three over the same period. All's models are one list (owner,
+2026-10-10: All "still doesn't properly... show the combined list of models"): every model Desktop, CLI and Free used,
+one row each whichever accounts ran it, its tokens added up, the most first, marked Desktop, CLI or Free with each
+one's share, in place of each block's own list (`hydra/src/components/CombinedModels.vue`, `combineModels`). A toggle at the top of the open
 card picks the period, 24 hours, 7 days, 30 days or All time (owner, 2026-10-10: "toggles for, like, seven days, 30
 days, all time, et cetera"; `composables/useUsagePeriod.ts`, remembered): Desktop and CLI read that spend period,
 Free its daily record's days (today for 24 hours; the record keeps 30, so its All time is those 30 and says so).

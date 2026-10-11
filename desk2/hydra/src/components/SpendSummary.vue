@@ -1,7 +1,8 @@
 <script setup lang="ts">
 // The Desktop and CLI parts of the Usage history card (owner, 2026-10-10: "CLI doesn't show model stats, neither does
 // desktop, like free does"): tiles for the window's totals, then the models by tokens. Like the bar charts, the top eight
-// show and the rest sit behind a "+N more" toggle. The parent reads the reports; this only draws them.
+// show and the rest sit behind a "+N more" toggle. The parent reads the reports; this only draws them. On All the models
+// are one list of every source's (CombinedModels), so `hideModels` leaves this block its tiles.
 import { computed, ref } from 'vue'
 import { formatTokens } from '@/lib/kit'
 import { useUsageSpan } from '@/composables/useUsagePeriod'
@@ -13,6 +14,7 @@ const props = defineProps<{
   /** Null while the reports load. */
   summary: UsageSummary | null
   failed: boolean
+  hideModels?: boolean
 }>()
 
 const TOP = 8
@@ -36,7 +38,7 @@ const hidden = computed(() => Math.max(0, models.value.length - TOP))
         </div>
       </div>
 
-      <div>
+      <div v-if="!hideModels">
         <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('instances.summary.usageByModel', { span }) }}</h4>
         <p v-if="!models.length" class="py-2 text-center text-2xs text-muted-foreground">
           {{ $t('instances.summary.usageNoModels', { span }) }}

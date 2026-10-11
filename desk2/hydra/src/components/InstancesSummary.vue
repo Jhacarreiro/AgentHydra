@@ -10,13 +10,16 @@
 // Owner, 2026-10-10: each tab shows its own part in the header and when open: Desktop and CLI tokens, sessions, turns
 // and models (SpendSummary); All shows Desktop, CLI and Free together. The table's tab is `view`. A toggle at the top of
 // the open card picks the period, 24 hours, 7 days, 30 days or All time (owner, the same day: "toggles for, like, seven
-// days, 30 days, all time, et cetera"); Free's record keeps 30 days, so its All time is those 30 (useUsagePeriod).
+// days, 30 days, all time, et cetera"); Free's record keeps 30 days, so its All time is those 30 (useUsagePeriod). All's
+// models are one list, Desktop, CLI and Free together (CombinedModels; owner, the same day: All "still doesn't
+// properly... show the combined list of models"), in place of each block's own.
 import type { FleetUsageHistory, SpendReport } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
 import { useElementSize, useStorage } from '@vueuse/core'
 import { computed, onMounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
+import CombinedModels from '@/components/CombinedModels.vue'
 import FreeSummary from '@/components/FreeSummary.vue'
 import SpendSummary from '@/components/SpendSummary.vue'
 import { Button } from '@/components/ui/button'
@@ -30,7 +33,7 @@ import { axisMax, seriesColor, ticks } from '@/lib/chart'
 import { answeredShare, summarizeFree } from '@/lib/free-stats'
 import { formatTokens } from '@/lib/kit'
 import { dayLabel, formatAt, type PlotBox, segmentPaths } from '@/lib/usage-history'
-import { summarizeUsage, USAGE_PERIODS, type UsagePeriod } from '@/lib/usage-stats'
+import { combineModels, type ModelSource, summarizeUsage, USAGE_PERIODS, type UsagePeriod } from '@/lib/usage-stats'
 
 const props = defineProps<{ /** The table's tab: All, Desktop, CLI or Free. */ view: KindView }>()
 const { t } = useI18n()
@@ -39,10 +42,11 @@ const open = useStorage('agenthydra.instances.summaryOpen', false)
 const showFree = computed(() => props.view === 'all' || props.view === 'free')
 const showDesktop = computed(() => props.view === 'all' || props.view === 'desktop')
 const showCli = computed(() => props.view === 'all' || props.view === 'cli')
+const isAll = computed(() => props.view === 'all')
 
 // The Free record is read again whenever an account's numbers move (a message ended), while the Free rows show.
 const { instances: freeInstances, tokens: freeTokens, health: freeHealth } = useFreeInstances()
-const { rows: freeRows } = useFreeStats()
+const { rows: freeRows, failed: freeStatsFailed } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
 watch([showFree, freeTokens, freeHealth, freeStatDays], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
 const { span, freeSpan } = useUsageSpan()
@@ -211,6 +215,21 @@ const cliTiles = computed(() => {
   ]
 })
 
+// All's one list of models: every report that has not failed, merged by model; null until they are all in.
+const allFailed = computed(() => {
+  const out: ModelSource[] = []
+  if (desktopFailed.value) out.push('desktop')
+  if (cliFailed.value) out.push('cli')
+  if (freeStatsFailed.value) out.push('free')
+  return out
+})
+const allModels = computed(() => {
+  const failed = allFailed.value
+  const freeWaiting = freeInstances.value.length > 0 && !freeRows.value
+  if ((!desktopUsage.value && !failed.includes('desktop')) || (!cliUsage.value && !failed.includes('cli')) || (freeWaiting && !failed.includes('free'))) return null
+  return combineModels({ desktop: desktopUsage.value?.models, cli: cliUsage.value?.models, free: freeSummary.value?.models })
+})
+
 // The header line: the tab's own part; All adds Desktop, CLI and Free, its parts in the tooltip.
 const headerLine = computed(() => {
   const d = desktopUsage.value
@@ -287,12 +306,14 @@ const headerTip = computed(() => {
           @click="usagePeriod = p"
         >{{ periodLabel(p) }}</Button>
       </div>
+      <CombinedModels v-if="isAll" :models="allModels" :failed="allFailed" />
       <SpendSummary
         v-if="showDesktop"
         :title="$t('instances.summary.desktopTitle')"
         :tiles="desktopTiles"
         :summary="desktopUsage"
         :failed="desktopFailed"
+        :hide-models="isAll"
       />
       <SpendSummary
         v-if="showCli"
@@ -300,8 +321,9 @@ const headerTip = computed(() => {
         :tiles="cliTiles"
         :summary="cliUsage"
         :failed="cliFailed"
+        :hide-models="isAll"
       />
-      <FreeSummary v-if="showFree" />
+      <FreeSummary v-if="showFree" :hide-models="isAll" />
       <div>
         <h3 class="mb-1 text-xs font-semibold">{{ $t('instances.summary.fleetTitle') }}</h3>
         <p v-if="historyFailed" class="py-6 text-center text-2xs text-muted-foreground">

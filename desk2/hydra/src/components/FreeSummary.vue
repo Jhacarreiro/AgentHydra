@@ -2,7 +2,8 @@
 // The Free accounts' part of the Usage history card (owner, 2026-10-08: "total tokens ... Claude and ChatGPT ... per
 // each ... also the success rate across which models ... were used on each"): the token totals in the table's window,
 // the success rate by model, and Free tokens per day. A list of every account with its models was here briefly and
-// came out the same day (owner: "don't need this"); each account's tokens are the table's own column.
+// came out the same day (owner: "don't need this"); each account's tokens are the table's own column. On All the models
+// are one list of every source's (CombinedModels), so `hideModels` leaves out the answered-by-model list.
 import type { FreeProvider } from '@desk/shared/free-instances'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -18,6 +19,7 @@ import { answeredShare, type FreeTally, summarizeFree } from '@/lib/free-stats'
 import { formatTokens } from '@/lib/kit'
 import { dayLabel } from '@/lib/usage-history'
 
+defineProps<{ hideModels?: boolean }>()
 const { t } = useI18n()
 const { instances, tokens } = useFreeInstances()
 const { rows, failed } = useFreeStats()
@@ -68,7 +70,7 @@ const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sen
 
     <p v-if="failed" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.unavailable') }}</p>
     <template v-else>
-      <div>
+      <div v-if="!hideModels">
         <h4 class="mb-1 text-2xs font-semibold text-muted-foreground">{{ $t('freeInstances.stats.byModel', { span: freeSpan }) }}</h4>
         <p v-if="!summary.models.length" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noModels') }}</p>
         <ul v-else class="divide-y rounded-md border text-xs">

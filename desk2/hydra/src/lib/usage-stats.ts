@@ -25,7 +25,8 @@ export interface UsageSummary extends UsageTotals {
   models: UsageModel[]
 }
 
-const byTokens = (a: UsageModel, b: UsageModel) => b.tokens - a.tokens || a.model.localeCompare(b.model)
+const byTokens = (a: Pick<UsageModel, 'model' | 'tokens'>, b: Pick<UsageModel, 'model' | 'tokens'>) =>
+  b.tokens - a.tokens || a.model.localeCompare(b.model)
 
 /** The totals of the reports added up, and their models merged by id, the most tokens first. A missing report counts for nothing. */
 export function summarizeUsage(reports: ReadonlyArray<SpendReport | null | undefined>): UsageSummary {
@@ -45,4 +46,32 @@ export function summarizeUsage(reports: ReadonlyArray<SpendReport | null | undef
     }
   }
   return { ...totals, models: [...models.values()].sort(byTokens) }
+}
+
+/** Where a model's tokens came from on the All tab: the table's own kinds. */
+export const MODEL_SOURCES = ['desktop', 'cli', 'free'] as const
+export type ModelSource = (typeof MODEL_SOURCES)[number]
+export interface CombinedModel {
+  model: string
+  tokens: number
+  /** Each source that used it, with its tokens, in MODEL_SOURCES order. */
+  parts: Array<{ source: ModelSource; tokens: number }>
+}
+
+/** The All tab's one list of models (owner, 2026-10-10: All "still doesn't properly... show the combined list of
+ *  models"): a model is one row whichever accounts ran it, its tokens added up, the most first. A model a source lists
+ *  twice (Free lists one per provider) adds into that source's one part. */
+export function combineModels(sources: Partial<Record<ModelSource, ReadonlyArray<{ model: string; tokens: number }>>>): CombinedModel[] {
+  const rows = new Map<string, CombinedModel>()
+  for (const source of MODEL_SOURCES) {
+    for (const m of sources[source] ?? []) {
+      const row = rows.get(m.model) ?? { model: m.model, tokens: 0, parts: [] }
+      const part = row.parts.find((p) => p.source === source)
+      if (part) part.tokens += m.tokens
+      else row.parts.push({ source, tokens: m.tokens })
+      row.tokens += m.tokens
+      rows.set(m.model, row)
+    }
+  }
+  return [...rows.values()].sort(byTokens)
 }
