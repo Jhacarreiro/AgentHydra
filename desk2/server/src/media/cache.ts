@@ -18,11 +18,13 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 export const MAX_GIF_BYTES = 30 * 1024 * 1024
 /** Videos (screen recordings, test runs) are copied in, never read whole: they may be far bigger. */
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024
+/** An html preview is a page a reply shows live: capped like a picture, read whole. */
+export const MAX_HTML_BYTES = 5 * 1024 * 1024
 /** How many picture files fileRef remembers. */
 const KNOWN_MAX = 2000
 export const MEDIA_ROUTE = '/api/media/'
 
-type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm'
+type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm' | 'html'
 
 const CONTENT_TYPE: Record<Ext, string> = {
   png: 'image/png',
@@ -31,8 +33,11 @@ const CONTENT_TYPE: Record<Ext, string> = {
   webp: 'image/webp',
   mp4: 'video/mp4',
   webm: 'video/webm',
+  html: 'text/html; charset=utf-8',
 }
-const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp|mp4|webm)$/
+const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp|mp4|webm|html)$/
+/** An html file a reply shows as a preview (.htm too). */
+export const HTML_FILE = /\.html?$/i
 
 /** Video extensions copied into the cache (a .mov is QuickTime's MP4 family and plays as one). */
 export const VIDEO = /\.(mp4|m4v|mov|webm)$/i
@@ -101,6 +106,8 @@ export interface MediaCache {
   putBase64(data: string, name?: string): ImageRef | null
   /** A file a transcript names: pictures and videos cached with a url, anything else a card (name, size, type) only. */
   fileRef(path: string): ImageRef | null
+  /** An html file a reply names, cached as a live preview (text/html); null for anything else, a binary or an over-cap file. */
+  preview(path: string): ImageRef | null
   /** The cached file for a route id `<sha256>.<ext>`; null for anything else, a path-looking id included. */
   lookup(id: string): { path: string; contentType: string } | null
   /** The local file a cached id was made from (the last one a transcript named); null when this run has not seen it. */
@@ -191,6 +198,26 @@ export function createMediaCache(dir: string): MediaCache {
         if (sources.size > SOURCES_MAX) sources.delete(sources.keys().next().value!)
       }
       return ref
+    },
+    preview(path) {
+      if (!HTML_FILE.test(path)) return null
+      try {
+        const st = statSync(path)
+        if (!st.isFile() || st.size > MAX_HTML_BYTES) return null
+        const bytes = new Uint8Array(readFileSync(path))
+        if (!bytes.length || bytes.includes(0)) return null
+        const id = `${createHash('sha256').update(bytes).digest('hex')}.html`
+        const file = join(dir, id)
+        if (!existsSync(file)) {
+          mkdirSync(dir, { recursive: true })
+          const tmp = `${file}.${process.pid}.${Date.now()}.tmp`
+          writeFlushed(tmp, bytes)
+          renameOver(tmp, file)
+        }
+        return { mediaType: 'text/html', url: MEDIA_ROUTE + id, bytes: bytes.length, name: basename(path) }
+      } catch {
+        return null
+      }
     },
     lookup(id) {
       const m = ID.exec(id)

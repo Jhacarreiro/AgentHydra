@@ -15,7 +15,7 @@ const DELEGATE = [
 
 /** How to put a picture, GIF or video in the reply itself: the window plays it in place (normalize.ts rewriteLocalImages). */
 export const MEDIA =
-  'To show the person a picture, GIF or video, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov or webm (videos up to 200 MB) appear and play right in the chat, so never only name the path of a screenshot, GIF or recording you made or found.'
+  'To show the person a picture, GIF, video or web page, put it in your reply as a markdown image of its absolute path, ![what it shows](C:/absolute/path.mp4): png, jpg, gif, webp, mp4, mov, webm or html (videos up to 200 MB) appear and play right in the chat, and an .html file renders as a live preview (an email as recipients will see it), so never only name the path of a screenshot, GIF, recording or page you made or found.'
 
 /** Appended in every mode: the real browser, saved browsers and inline pictures and videos. */
 export const BROWSER = [

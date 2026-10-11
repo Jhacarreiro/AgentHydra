@@ -21,6 +21,9 @@ export function byteRange(header: string | undefined, size: number): { start: nu
   return { start, end }
 }
 
+/** An html preview runs no script and has no origin of the Desk's; remote pictures and styles in an email still load. */
+const HTML_CSP = "sandbox; default-src 'none'; img-src data: blob: https:; style-src 'unsafe-inline' https:; font-src data: https:; media-src data: blob: https:"
+
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const cache = mediaCache(ctx.home)
   app.get('/api/media/:id', (c) => {
@@ -31,7 +34,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       'content-type': hit.contentType,
       'cache-control': 'public, max-age=31536000, immutable',
       'x-content-type-options': 'nosniff',
-      'content-security-policy': "default-src 'none'",
+      'content-security-policy': hit.contentType.startsWith('text/html') ? HTML_CSP : "default-src 'none'",
       'accept-ranges': 'bytes',
     }
     const range = byteRange(c.req.header('range'), file.size)

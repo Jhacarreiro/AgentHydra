@@ -14,7 +14,7 @@ export const CODE_CAP_LINES = 24
 
 /** Pictures and videos the server serves from its cache; the only image targets the window loads. */
 export const MEDIA_PREFIX = '/api/media/'
-const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm)$/
+const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm|html)$/
 
 // lucide Copy, Check and File (stroke 1.5), inline because markdown-it emits a string, not components.
 const svg = (body: string, size = 14) =>
@@ -90,6 +90,10 @@ export function createMarkdown(getHighlight: () => Highlight | null = () => null
     const src = t.attrGet('src') ?? ''
     const alt = t.content || fileName(src)
     const kind = MEDIA_ID.exec(src)?.[1]
+    if (kind === 'html') {
+      const label = escapeHtml(alt || 'Preview')
+      return `<span class="html-preview" data-html-preview><span class="html-preview-bar"><span class="html-preview-name">${label}</span><button type="button" class="html-preview-btn" data-html-phone aria-pressed="false">Phone</button><button type="button" class="html-preview-btn" data-html-expand aria-expanded="false">Expand</button></span><iframe class="html-preview-frame" src="${escapeHtml(src)}" sandbox="" title="${label}" loading="lazy"></iframe></span>`
+    }
     if (kind === 'mp4' || kind === 'webm') {
       return `<video class="md-video" src="${escapeHtml(src)}" aria-label="${escapeHtml(alt)}" title="${escapeHtml(alt)}" controls autoplay muted loop playsinline preload="metadata"></video>`
     }

@@ -335,6 +335,57 @@
 .tx-inline-video:not([data-unmuted])::-webkit-media-controls-volume-control-container {
   min-width: 0;
 }
+/* An html file's live preview: a sandboxed page at full message width, white like the paper it is. */
+.html-preview {
+  display: block;
+  width: 100%;
+  margin: 4px 0;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  overflow: hidden;
+  background: #fff;
+}
+.html-preview-bar {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 4px 8px;
+  border-bottom: 1px solid var(--border);
+  background: var(--bg-pure-black);
+  color: var(--text-secondary);
+  font-size: 12px;
+}
+.html-preview-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.html-preview-btn {
+  padding: 2px 8px;
+  border-radius: 4px;
+  cursor: pointer;
+}
+.html-preview-btn[aria-pressed='true'],
+.html-preview-btn[aria-expanded='true'] {
+  color: var(--text-primary);
+}
+.html-preview-frame {
+  display: block;
+  width: 100%;
+  height: 600px;
+  border: 0;
+  background: #fff;
+}
+.html-preview.is-big .html-preview-frame {
+  height: 85vh;
+}
+.html-preview.is-phone {
+  max-width: 390px;
+  margin-left: auto;
+  margin-right: auto;
+}
 .md-file-chip {
   display: inline-flex;
   align-items: center;

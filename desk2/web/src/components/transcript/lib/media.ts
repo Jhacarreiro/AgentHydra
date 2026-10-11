@@ -9,7 +9,7 @@ export { isSendFileTool } from './tools'
 
 /** The picture's address: the server's cache url, else the bytes the window itself sent; null for a video or a file card only. */
 export function imageSrc(img: ImageRef): string | null {
-  if (img.url && img.url.startsWith('/api/media/') && !img.mediaType.startsWith('video/')) return img.url
+  if (img.url && img.url.startsWith('/api/media/') && !img.mediaType.startsWith('video/') && img.mediaType !== 'text/html') return img.url
   if (img.dataBase64 && /^image\/(png|jpeg|gif|webp)$/.test(img.mediaType)) return `data:${img.mediaType};base64,${img.dataBase64}`
   return null
 }
@@ -17,6 +17,11 @@ export function imageSrc(img: ImageRef): string | null {
 /** A video's address: the server's cache url of an mp4 or webm; null for anything else. */
 export function videoSrc(img: ImageRef): string | null {
   return img.mediaType.startsWith('video/') && img.url?.startsWith('/api/media/') ? img.url : null
+}
+
+/** An html preview's address: the server's cache url of a page a reply shows live; null for anything else. */
+export function htmlSrc(img: ImageRef): string | null {
+  return img.mediaType === 'text/html' && img.url?.startsWith('/api/media/') ? img.url : null
 }
 
 /** The type badge of a file card: the extension in capitals ("PNG"), else the media subtype. */

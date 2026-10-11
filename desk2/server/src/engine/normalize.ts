@@ -170,16 +170,16 @@ const MD_IMAGE = /!\[([^\]\n]*)\]\(\s*(<[^>\n]+>|[^)\s]+)(\s+"[^"\n]*")?\s*\)/g
 
 /**
  * Markdown images in assistant text whose target is an absolute local picture or video (png, jpeg, gif,
- * webp, mp4, m4v, mov, webm: the cache checks the file exists, its first bytes and its size) become the
- * cached file's url, named earlier in the transcript or not; any other target is left as written (a file
- * chip, never loaded).
+ * webp, mp4, m4v, mov, webm, or an html file: the cache checks the file exists, its first bytes and its size)
+ * become the cached file's url, named earlier in the transcript or not; any other target is left as written
+ * (a file chip, never loaded).
  */
 export function rewriteLocalImages(text: string, _named: ReadonlySet<string>, media: MediaCache | null, cwd?: string | null): string {
   if (!media || !text.includes('![')) return text
   return text.replace(MD_IMAGE, (all, alt: string, target: string, title: string | undefined) => {
     const path = localTarget(target, cwd)
-    if (!path || !RENDERABLE.test(path)) return all
-    const ref = media.fileRef(path)
+    if (!path) return all
+    const ref = RENDERABLE.test(path) ? media.fileRef(path) : media.preview(path)
     return ref?.url ? `![${alt}](${ref.url}${title ?? ''})` : all
   })
 }

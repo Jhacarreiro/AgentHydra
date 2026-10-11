@@ -6,8 +6,9 @@
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import type { ImageRef } from '@shared/protocol'
 import FileCard from './FileCard.vue'
+import HtmlPreview from './HtmlPreview.vue'
 import { aspectOf, galleryLayout } from '../lib/gallery'
-import { imageSrc, openLightbox, tileKey } from '../lib/media'
+import { htmlSrc, imageSrc, openLightbox, tileKey } from '../lib/media'
 
 const props = defineProps<{ images: ImageRef[]; align?: 'start' | 'end' }>()
 
@@ -67,6 +68,7 @@ onBeforeUnmount(() => observer?.disconnect())
       >
         <img :src="imageSrc(img)!" :alt="img.name || 'picture'" loading="lazy" @load="onLoad(i, $event)" />
       </button>
+      <HtmlPreview v-else-if="htmlSrc(img)" :src="htmlSrc(img)!" :name="img.name" />
       <FileCard v-else :file="img" />
     </template>
   </div>
