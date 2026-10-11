@@ -361,12 +361,16 @@ export async function spawnCaptured(
     cwd,
     env,
     wantStderr = true,
+    stdin,
   }: {
     timeoutMs?: number
     cwd?: string
     env?: Record<string, string | undefined>
     /** false only when the caller genuinely does not want stderr text; it is still DRAINED. */
     wantStderr?: boolean
+    /** Text written to the child's stdin, then closed (`git patch-id` reads its diff this way). Absent:
+     *  the child's stdin is ignored, as it always was. */
+    stdin?: string
   } = {},
 ): Promise<CapturedRun> {
   // Spawned on a worker thread: Bun.spawn holds its caller for 100-280 ms on Windows, and the
@@ -376,7 +380,7 @@ export async function spawnCaptured(
   // otherwise be bypassed and a real process launched behind its back.
   if (Bun.spawn === nativeSpawn) {
     try {
-      return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr })
+      return await captureInWorker(cmd, { timeoutMs, cwd, env, wantStderr, stdin })
     } catch {
       // worker unavailable or died: capture on this thread
     }
@@ -384,7 +388,7 @@ export async function spawnCaptured(
   let proc: Bun.Subprocess<'ignore', 'pipe', 'pipe'>
   try {
     proc = Bun.spawn(cmd, {
-      stdin: 'ignore',
+      stdin: stdin === undefined ? 'ignore' : 'pipe',
       stdout: 'pipe',
       stderr: 'pipe',
       windowsHide: true,
@@ -395,8 +399,23 @@ export async function spawnCaptured(
     // Command not found / spawn rejected outright. Not a timeout: there was never a child.
     return { code: null, stdout: '', stderr: '', timedOut: false }
   }
+  if (stdin !== undefined) writeStdin(proc, stdin)
 
   return capturePipedProc(proc, { timeoutMs, wantStderr })
+}
+
+/** Write `text` to a child's piped stdin and close it, without awaiting: the write is buffered by Bun,
+ *  so the caller never holds its thread on it, and the reads of stdout and stderr run beside it. A
+ *  child that exits without reading its input closes the pipe under the write (EPIPE); that is its
+ *  exit's business, not this call's, so the error is swallowed here and the exit code tells the rest. */
+function writeStdin(proc: { stdin: unknown }, text: string): void {
+  try {
+    const sink = proc.stdin as { write(chunk: string): unknown; end(): unknown }
+    sink.write(text)
+    void Promise.resolve(sink.end()).catch(() => {})
+  } catch {
+    // the child closed its stdin already
+  }
 }
 
 /**

@@ -127,10 +127,11 @@ export function checkLost(r: CheckRunner): 'never started' | 'ended without an e
 }
 
 /** The worker's changed files git still shows uncommitted (climayte-unsaved.ts); [] when the
- *  accounts or git cannot be read, so a read failure never fails a passing check. */
-export function unsavedOf(w: CliMayteWorker): string[] {
+ *  accounts or git cannot be read, so a read failure never fails a passing check. Gathered off the
+ *  main thread: the check's judge applies it only after re-checking the state it was read for. */
+export async function unsavedOf(w: CliMayteWorker): Promise<string[]> {
   try {
-    return unsavedEdits(w, accountsProvider())
+    return await unsavedEdits(w, accountsProvider())
   } catch (err) {
     console.error(`[climayte] ${w.id}: its uncommitted files could not be read:`, err)
     return []
@@ -148,17 +149,26 @@ function editedOf(w: CliMayteWorker): string[] | null {
   }
 }
 
+/** The git facts checkSeverity judges by, read off the main thread: the files the sessions edited
+ *  (null when unreadable) and the repository's dirty files (null when there is no edited list to
+ *  compare them with, or git cannot say). */
+export async function severityFactsOf(
+  w: CliMayteWorker,
+): Promise<{ edited: string[] | null; dirty: string[] | null }> {
+  const edited = editedOf(w)
+  return { edited, dirty: edited ? await dirtyFiles(w.cwd) : null }
+}
+
 /** How bad a failed check was (CliMayteVerdict.severity): 0 when it could not run, timed out, or
  *  failed only on another session's uncommitted files in a shared checkout (failsOnlyOnOthersFiles);
- *  else 2 (rework). `others` says which of those it was. */
+ *  else 2 (rework). `others` says which of those it was. Pure: `facts` comes from severityFactsOf. */
 export function checkSeverity(
-  w: CliMayteWorker,
   code: number | null,
   output: string,
+  facts: { edited: string[] | null; dirty: string[] | null } | null,
 ): { severity: 0 | 2; others: boolean } {
   if (code === null || code === 126 || code === 127) return { severity: 0, others: false }
-  const edited = editedOf(w)
-  const dirty = edited ? dirtyFiles(w.cwd) : null
-  const others = !!edited && !!dirty && failsOnlyOnOthersFiles(output, edited, dirty)
+  const others =
+    !!facts?.edited && !!facts.dirty && failsOnlyOnOthersFiles(output, facts.edited, facts.dirty)
   return { severity: others ? 0 : 2, others }
 }

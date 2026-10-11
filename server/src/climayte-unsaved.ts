@@ -3,11 +3,11 @@
 // whether the work was saved. On 2026-10-05 a worker's check passed with 15 of its files uncommitted,
 // and the task sat 'done' for 2h26m while the two tasks after it waited on work that was never in git.
 
-import { spawnSync } from 'node:child_process'
 import { realpathSync, statSync } from 'node:fs'
 import { isAbsolute, join, relative, resolve } from 'node:path'
 import { tailText, transcriptCandidates, transcriptFile } from './climayte-core'
 import type { CliMayteAccount, CliMayteWorker } from './climayte-lib'
+import { spawnCaptured } from './core/process'
 
 /** The tools whose input names a file the session changed. */
 const EDIT_TOOLS = new Set(['Edit', 'Write', 'MultiEdit', 'NotebookEdit'])
@@ -55,8 +55,8 @@ export function failsOnlyOnOthersFiles(output: string, edited: string[], dirty: 
 }
 
 /** The files `cwd`'s repository shows changed or untracked, repo-relative; null when git cannot say. */
-export function dirtyFiles(cwd: string): string[] | null {
-  const out = git(cwd, ['status', '--porcelain', '-z', '-uall'])
+export async function dirtyFiles(cwd: string): Promise<string[] | null> {
+  const out = await git(cwd, ['status', '--porcelain', '-z', '-uall'])
   if (out === null) return null
   const files: string[] = []
   const parts = out.split('\0')
@@ -113,17 +113,19 @@ function canonical(p: string): string {
   }
 }
 
-function git(cwd: string, args: string[]): string | null {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
-  return r.status === 0 ? (r.stdout ?? '') : null
+/** A git command in `cwd` on the worker thread (spawnCaptured): its stdout, or null when git failed,
+ *  timed out or could not start. */
+async function git(cwd: string, args: string[]): Promise<string | null> {
+  const r = await spawnCaptured(['git', ...args], { cwd, timeoutMs: 30_000, wantStderr: false })
+  return r.code === 0 ? r.stdout : null
 }
 
 /** Of `edits` (from editedPaths), the ones inside `cwd`'s repository that git still shows changed or
  *  untracked and that nobody changed after the session's last write to them: repo-relative, sorted.
  *  Ignored files never show. [] outside a repository. */
-export function uncommittedOf(cwd: string, edits: Map<string, number>): string[] {
+export async function uncommittedOf(cwd: string, edits: Map<string, number>): Promise<string[]> {
   if (!edits.size) return []
-  const shown = git(cwd, ['rev-parse', '--show-toplevel'])?.trim()
+  const shown = (await git(cwd, ['rev-parse', '--show-toplevel']))?.trim()
   if (!shown) return []
   const top = canonical(shown)
   const lastWrite = new Map<string, number>()
@@ -136,7 +138,7 @@ export function uncommittedOf(cwd: string, edits: Map<string, number>): string[]
   }
   const dirty = new Set<string>()
   for (let i = 0; i < rels.length; i += PATHSPEC_CHUNK) {
-    const out = git(top, [
+    const out = await git(top, [
       '--literal-pathspecs',
       'status',
       '--porcelain',
@@ -170,7 +172,10 @@ export function uncommittedOf(cwd: string, edits: Map<string, number>): string[]
 
 /** The files the worker's sessions changed and never committed, in its folder's repository; [] for a
  *  task that says not to commit. */
-export function unsavedEdits(w: CliMayteWorker, accounts: CliMayteAccount[]): string[] {
+export async function unsavedEdits(
+  w: CliMayteWorker,
+  accounts: CliMayteAccount[],
+): Promise<string[]> {
   if (NO_COMMIT.test(w.prompt)) return []
   return uncommittedOf(w.cwd, editsOf(w, accounts))
 }

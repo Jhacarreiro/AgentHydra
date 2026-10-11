@@ -852,9 +852,14 @@ describe('integration: the daemon judges a wave by command, a manager costs wake
     rmSync(root, { recursive: true, force: true })
   })
 
+  // climayteWait answers at once when no worker is active, so each pass also lets timers run: a verdict
+  // gathered off the thread is written by the next tick, which a microtask-only loop would starve.
   const until = async (ok: () => boolean, ms = 25_000) => {
     const deadline = Date.now() + ms
-    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    while (!ok() && Date.now() < deadline) {
+      await climayteWait({}, 1_000)
+      await Bun.sleep(20)
+    }
     return ok()
   }
   const blankWave = (id: string): CliMayteWave => ({
@@ -1053,9 +1058,14 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
   const acctB = join(root, 'acct-b')
   const groups: string[] = []
   const fake = [process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')]
+  // climayteWait answers at once when no worker is active, so each pass also lets timers run: a verdict
+  // gathered off the thread is written by the next tick, which a microtask-only loop would starve.
   const until = async (ok: () => boolean, ms = 25_000) => {
     const deadline = Date.now() + ms
-    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    while (!ok() && Date.now() < deadline) {
+      await climayteWait({}, 1_000)
+      await Bun.sleep(20)
+    }
     return ok()
   }
   const oneTask = (id: string, workerId: string): CliMayteWave => ({
@@ -1254,9 +1264,14 @@ describe('the orchestrator starts and verifies a wave (piece 7)', () => {
     ...extra,
   })
   const three = [task('a'), task('b'), task('c', { after: ['a'] })]
+  // climayteWait answers at once when no worker is active, so each pass also lets timers run: a verdict
+  // gathered off the thread is written by the next tick, which a microtask-only loop would starve.
   const until = async (ok: () => boolean, ms = 25_000) => {
     const deadline = Date.now() + ms
-    while (!ok() && Date.now() < deadline) await climayteWait({}, 1_000)
+    while (!ok() && Date.now() < deadline) {
+      await climayteWait({}, 1_000)
+      await Bun.sleep(20)
+    }
     return ok()
   }
 
@@ -1447,7 +1462,7 @@ describe('judging a wave task by its commits (field notes 93 and 94)', () => {
   })
   afterAll(() => rmSync(repo, { recursive: true, force: true }))
 
-  test('a commit rebased onto a moved branch is found by its patch-id and passes', () => {
+  test('a commit rebased onto a moved branch is found by its patch-id and passes', async () => {
     git('checkout', '-q', '-b', 'work')
     put('src/b.txt', 'task\n')
     const mine = commit('task work')
@@ -1457,29 +1472,34 @@ describe('judging a wave task by its commits (field notes 93 and 94)', () => {
     git('cherry-pick', mine)
     const landed = git('rev-parse', 'HEAD')
     expect(landed).not.toBe(mine)
-    const j = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${mine}`, null)
+    const j = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${mine}`, null)
     expect(j.verdict).toBe('pass')
     expect(j.note).toContain(`found on main as ${landed.slice(0, 10)} after a rebase`)
     git('checkout', '-q', 'work')
     put('src/unlanded.txt', 'never landed\n')
     const stray = commit('never landed')
     git('checkout', '-q', 'main')
-    const none = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${stray}`, null)
+    const none = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${stray}`, null)
     expect(none.verdict).toBe('fail')
     expect(none.note).toContain('is not on the branch main')
   }, 60_000)
 
-  test('an edit outside paths that the next commit reverts passes; a kept one fails', () => {
+  test('an edit outside paths that the next commit reverts passes; a kept one fails', async () => {
     const before = git('rev-parse', 'HEAD')
     put('docs/x.md', 'changed\n')
     put('src/c.txt', 'c\n')
     const c1 = commit('edit too much')
     put('docs/x.md', 'x\n')
     const c2 = commit('restore docs')
-    const ok = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1} ${c2}`, null)
+    const ok = await judgeWaveTask(
+      task,
+      { cwd: repo, branch: 'main' },
+      `Commits: ${c1} ${c2}`,
+      null,
+    )
     expect(ok.verdict).toBe('pass')
     expect(ok.proof.paths).toBe(true)
-    const bad = judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1}`, null)
+    const bad = await judgeWaveTask(task, { cwd: repo, branch: 'main' }, `Commits: ${c1}`, null)
     expect(bad.verdict).toBe('fail')
     expect(bad.note).toContain('docs/x.md')
     expect(before).not.toBe(c2)

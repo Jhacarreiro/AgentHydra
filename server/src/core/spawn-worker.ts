@@ -32,12 +32,19 @@ async function capture(cmd, opts) {
   let proc
   try {
     proc = Bun.spawn(cmd, {
-      stdin: 'ignore', stdout: 'pipe', stderr: 'pipe', windowsHide: true,
+      stdin: opts.stdin === undefined ? 'ignore' : 'pipe', stdout: 'pipe', stderr: 'pipe', windowsHide: true,
       ...(opts.cwd ? { cwd: opts.cwd } : {}),
       ...(opts.env ? { env: opts.env } : {}),
     })
   } catch {
     return { code: null, stdout: '', stderr: '', timedOut: false }
+  }
+  if (opts.stdin !== undefined) {
+    // Buffered by Bun, never awaited; an early exit closes the pipe under it (EPIPE), which the exit code reports.
+    try {
+      proc.stdin.write(opts.stdin)
+      Promise.resolve(proc.stdin.end()).catch(() => {})
+    } catch {}
   }
   const held = { stdout: '', stderr: '' }
   const drain = async (stream, into) => {
@@ -125,6 +132,7 @@ export function captureInWorker(
     cwd?: string
     env?: Record<string, string | undefined>
     wantStderr: boolean
+    stdin?: string
   },
 ): Promise<WorkerCapture> {
   let w: Worker

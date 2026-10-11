@@ -9,6 +9,7 @@ import { mkdirSync } from 'node:fs'
 import { join } from 'node:path'
 import type { CliMayteWave, CliMayteWorker } from './climayte-lib'
 import { type JsonStoreSpec, mutateJsonStore, readJsonStore } from './core/json-store'
+import { spawnCaptured } from './core/process'
 
 type CliMayteTask = CliMayteWave['tasks'][0]
 
@@ -276,33 +277,37 @@ export function commitsOf(report: string | null): string[] {
   return last.split(/[\s,;]+/).filter(Boolean)
 }
 
-/** A git command in `cwd`, hidden: its exit code and output. */
-function git(cwd: string, args: string[]): { code: number | null; out: string } {
-  const r = spawnSync('git', args, { cwd, encoding: 'utf8', windowsHide: true, timeout: 30_000 })
-  return { code: r.status, out: (r.stdout ?? '').trim() }
+/** A git command in `cwd`, hidden and run on the worker thread (spawnCaptured), so the daemon's one
+ *  thread never waits on it: its exit code (null when it timed out or could not start) and output. */
+async function git(cwd: string, args: string[]): Promise<{ code: number | null; out: string }> {
+  const r = await spawnCaptured(['git', ...args], { cwd, timeoutMs: 30_000, wantStderr: false })
+  return { code: r.code, out: r.stdout.trim() }
 }
 
 /** How many of the branch's newest commits are searched for a rebased copy of a task's commit. */
 const PATCH_ID_SEARCH = 500
 
 /** The commit among the branch's newest PATCH_ID_SEARCH with the same stable patch-id as `sha`, or null. */
-export function findByPatchId(cwd: string, sha: string, branch: string): string | null {
-  const run = (args: string[], input?: string) => {
-    const r = spawnSync('git', args, {
+export async function findByPatchId(
+  cwd: string,
+  sha: string,
+  branch: string,
+): Promise<string | null> {
+  // `git patch-id` reads the diff on its stdin: it is piped in, never written to a file.
+  const run = async (args: string[], input?: string) => {
+    const r = await spawnCaptured(['git', ...args], {
       cwd,
-      encoding: 'utf8',
-      windowsHide: true,
-      timeout: 60_000,
-      maxBuffer: 512 * 1024 * 1024,
-      input,
+      timeoutMs: 60_000,
+      wantStderr: false,
+      stdin: input,
     })
-    return r.status === 0 ? (r.stdout ?? '') : ''
+    return r.code === 0 ? r.stdout : ''
   }
-  const mine = run(['diff-tree', '-p', '--root', sha])
-  const wanted = run(['patch-id', '--stable'], mine).split(/\s+/)[0]
+  const mine = await run(['diff-tree', '-p', '--root', sha])
+  const wanted = (await run(['patch-id', '--stable'], mine)).split(/\s+/)[0]
   if (!wanted) return null
-  const log = run(['log', '-p', '--format=%H', '-n', String(PATCH_ID_SEARCH), branch])
-  for (const line of run(['patch-id', '--stable'], log).split('\n')) {
+  const log = await run(['log', '-p', '--format=%H', '-n', String(PATCH_ID_SEARCH), branch])
+  for (const line of (await run(['patch-id', '--stable'], log)).split('\n')) {
     const [pid, commit] = line.trim().split(/\s+/)
     if (pid === wanted && commit) return commit
   }
@@ -311,27 +316,35 @@ export function findByPatchId(cwd: string, sha: string, branch: string): string 
 
 /** Files the commits change taken together: a file restored to its original content does not count.
  *  Judged against `globs`; returns the files outside them. */
-function netOutside(cwd: string, shas: string[], globs: Bun.Glob[]): string[] {
-  const count = (s: string) => Number(git(cwd, ['rev-list', '--count', s]).out) || 0
-  const ordered = [...new Set(shas)].sort((a, b) => count(a) - count(b))
+async function netOutside(cwd: string, shas: string[], globs: Bun.Glob[]): Promise<string[]> {
+  // Each sha's commit count is read once, before the sort: a sort comparator cannot await git.
+  const counts = new Map<string, number>()
+  for (const s of new Set(shas))
+    counts.set(s, Number((await git(cwd, ['rev-list', '--count', s])).out) || 0)
+  const ordered = [...counts.keys()].sort((a, b) => (counts.get(a) ?? 0) - (counts.get(b) ?? 0))
   const first = ordered[0] as string
   const last = ordered[ordered.length - 1] as string
   const touched = new Set<string>()
   for (const s of ordered)
-    for (const f of git(cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', s])
-      .out.split('\n')
+    for (const f of (
+      await git(cwd, ['diff-tree', '--no-commit-id', '--name-only', '-r', '--root', s])
+    ).out
+      .split('\n')
       .map((x) => x.trim())
       .filter(Boolean))
       touched.add(f)
-  const hasParent = git(cwd, ['rev-parse', '--verify', '-q', `${first}^`]).code === 0
-  const blob = (rev: string, f: string) => {
-    const r = git(cwd, ['rev-parse', '--verify', '-q', `${rev}:${f}`])
+  const hasParent = (await git(cwd, ['rev-parse', '--verify', '-q', `${first}^`])).code === 0
+  const blob = async (rev: string, f: string) => {
+    const r = await git(cwd, ['rev-parse', '--verify', '-q', `${rev}:${f}`])
     return r.code === 0 ? r.out : ''
   }
-  return [...touched].filter(
-    (f) =>
-      !globs.some((g) => g.match(f)) && (hasParent ? blob(`${first}^`, f) : '') !== blob(last, f),
-  )
+  const outside: string[] = []
+  for (const f of touched) {
+    if (globs.some((g) => g.match(f))) continue
+    const before = hasParent ? await blob(`${first}^`, f) : ''
+    if (before !== (await blob(last, f))) outside.push(f)
+  }
+  return outside
 }
 
 export interface WaveJudgement {
@@ -345,13 +358,14 @@ export interface WaveJudgement {
  *  (`checkPassed`: null when it has none), and for each sha on the report's `Commits:` line that the
  *  commit exists, is on the wave's branch, and its diff stays inside the brief's `paths` (globs;
  *  [] = the task must not commit). A pass is only ever provisional until the orchestrator accepts
- *  the wave; a failed proof says what to fix. */
-export function judgeWaveTask(
+ *  the wave; a failed proof says what to fix. Async only for git: the verdict itself is decided from
+ *  the git facts it gathers, and the caller applies it after re-checking the state it was gathered for. */
+export async function judgeWaveTask(
   task: CliMayteTask,
   wave: Pick<CliMayteWave, 'cwd' | 'branch'>,
   report: string | null,
   checkPassed: boolean | null,
-): WaveJudgement {
+): Promise<WaveJudgement> {
   const commits = commitsOf(report)
   const proof: WaveJudgement['proof'] = { check: checkPassed, commits, paths: null, note: '' }
   const fail = (note: string): WaveJudgement => {
@@ -364,11 +378,11 @@ export function judgeWaveTask(
   for (const sha of commits) {
     if (!/^[0-9a-f]{7,40}$/i.test(sha))
       return fail(`\`${sha}\` on the Commits line is not a commit sha.`)
-    if (git(wave.cwd, ['cat-file', '-e', `${sha}^{commit}`]).code !== 0)
+    if ((await git(wave.cwd, ['cat-file', '-e', `${sha}^{commit}`])).code !== 0)
       return fail(`Commit ${sha} does not exist in ${wave.cwd}.`)
-    if (git(wave.cwd, ['merge-base', '--is-ancestor', sha, wave.branch]).code !== 0) {
+    if ((await git(wave.cwd, ['merge-base', '--is-ancestor', sha, wave.branch])).code !== 0) {
       // Another session's landing tool may have rebased the commit onto the branch: look for it by content.
-      const moved = findByPatchId(wave.cwd, sha, wave.branch)
+      const moved = await findByPatchId(wave.cwd, sha, wave.branch)
       if (!moved) return fail(`Commit ${sha} is not on the branch ${wave.branch}.`)
       resolved.push(moved)
       notes.push(`${sha} found on ${wave.branch} as ${moved.slice(0, 10)} after a rebase`)
@@ -377,7 +391,7 @@ export function judgeWaveTask(
     resolved.push(sha)
   }
   if (resolved.length) {
-    const outside = netOutside(wave.cwd, resolved, globs)
+    const outside = await netOutside(wave.cwd, resolved, globs)
     if (outside.length) {
       proof.paths = false
       return fail(

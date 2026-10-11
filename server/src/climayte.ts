@@ -49,6 +49,7 @@ import {
   checkShell,
   MAX_CHECK_FAILS,
   removeCheckFiles,
+  severityFactsOf,
   stopCheck,
   stopStaleChecks,
   takeCheckPid,
@@ -176,7 +177,7 @@ import {
   storagePass,
 } from './climayte-storage'
 import { matches, onCliMayteChange } from './climayte-view'
-import { judgeWaveTask, waveBatch, writeWave } from './climayte-wave'
+import { judgeWaveTask, type WaveJudgement, waveBatch, writeWave } from './climayte-wave'
 import {
   addToWaveBatch,
   endedInWave,
@@ -350,7 +351,12 @@ function startCheck(w: CliMayteWorker, relaunches = 0): void {
     )
   } catch (err) {
     w.checkRunner = null
-    judgeCheck(w, null, `could not start: ${err instanceof Error ? err.message : String(err)}`)
+    judgeCheck(
+      w,
+      null,
+      `could not start: ${err instanceof Error ? err.message : String(err)}`,
+      NO_FACTS,
+    )
     changed(w)
   }
 }
@@ -398,26 +404,91 @@ function pollCheck(w: CliMayteWorker): void {
     return
   }
   if (Date.now() - r.launchedAt > CHECK_TIMEOUT_MS && stopCheck(w)) {
-    judgeCheck(w, null, 'timed out after 20 minutes')
+    judgeCheck(w, null, 'timed out after 20 minutes', NO_FACTS)
     changed(w)
   }
 }
 
+/** The git facts a check's judgement reads, gathered off the main thread before it judges
+ *  (gatherCheck). `wave` is set when a passing check's task is a wave task; otherwise `unsaved` holds a
+ *  passing check's uncommitted files. `severity` holds a failed check's facts. */
+interface CheckFacts {
+  wave: WaveGather | null
+  unsaved: string[]
+  severity: { edited: string[] | null; dirty: string[] | null } | null
+}
+
+/** The facts of a check judged without git: one that could not start, or timed out. */
+const NO_FACTS: CheckFacts = { wave: null, unsaved: [], severity: null }
+
+/** Workers whose judgement is being gathered: a second gather for the same worker waits until the first
+ *  has decided or dropped its facts (a tick never starts two). */
+const gathering = new Set<string>()
+
 /** Judge a check from the exit file its runner wrote, then remove its files, only once the verdict is
- *  saved: a daemon killed before that reads the same exit file again. */
+ *  saved: a daemon killed before that reads the same exit file again. A check that could not start
+ *  needs no git and is judged now; any other exit gathers its git facts first (gatherAndJudgeCheck). */
 function judgeFromExit(
   w: CliMayteWorker,
   r: CheckRunner,
   exit: NonNullable<ReturnType<typeof readRunnerExit>>,
 ): void {
-  w.checkRunner = null
-  judgeCheck(
-    w,
-    exit.error ? null : exit.code,
-    exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500),
+  const code = exit.error ? null : exit.code
+  const output = exit.error ? `could not start: ${exit.error}` : tailText(r.log, 1500)
+  if (code === null) {
+    w.checkRunner = null
+    judgeCheck(w, null, output, NO_FACTS)
+    changed(w)
+    removeCheckFiles(r)
+    return
+  }
+  if (gathering.has(w.id)) return
+  gatherAndJudgeCheck(w, r, code, output).catch((err) =>
+    console.error(`[climayte] ${w.id}: its check could not be judged:`, err),
   )
+}
+
+/** Gather a check's git facts off the main thread, then judge it if the worker is still checking on this
+ *  same runner. Dropped otherwise: the exit file stays, and the next tick gathers again. */
+async function gatherAndJudgeCheck(
+  w: CliMayteWorker,
+  r: CheckRunner,
+  code: number,
+  output: string,
+): Promise<void> {
+  gathering.add(w.id)
+  let facts: CheckFacts
+  try {
+    facts = await gatherCheck(w, code)
+  } finally {
+    gathering.delete(w.id)
+  }
+  // Decided in this same step, with no await since the state was read.
+  if (w.status !== 'checking' || w.checkRunner !== r) return
+  if (facts.wave) {
+    const found = gatheredTask(w, facts.wave)
+    if (!found) return
+    w.checkRunner = null
+    w.status = 'done'
+    applyWaveJudgement(w, facts.wave, found, Date.now())
+  } else {
+    w.checkRunner = null
+    judgeCheck(w, code, output, facts)
+  }
   changed(w)
   removeCheckFiles(r)
+  // Landed between ticks: the next one writes the wave and wakes its manager (processBatchWakes).
+  schedule(50)
+}
+
+/** The git facts one check's exit needs (CheckFacts). A passing check that is a wave task is judged by
+ *  its wave; a passing check that is not reads its uncommitted files; a failed check reads its severity
+ *  facts. Nothing is read for a code 126 or 127: it says nothing about the work. */
+async function gatherCheck(w: CliMayteWorker, code: number): Promise<CheckFacts> {
+  const wave = code === 0 ? await gatherWave(w, true) : null
+  const unsaved = code === 0 && !wave ? await unsavedOf(w) : []
+  const severity = code !== 0 && code !== 126 && code !== 127 ? await severityFactsOf(w) : null
+  return { wave, unsaved, severity }
 }
 
 /** Start the same round of a lost check again (it never gave an answer), or judge it a broken check
@@ -427,7 +498,7 @@ function relaunchCheck(w: CliMayteWorker, r: CheckRunner, how: string): void {
   w.checkRunner = null
   const relaunches = (r.relaunches ?? 0) + 1
   if (relaunches > CHECK_RELAUNCHES) {
-    judgeCheck(w, null, `its runner ${how} ${relaunches} times in a row`)
+    judgeCheck(w, null, `its runner ${how} ${relaunches} times in a row`, NO_FACTS)
     changed(w)
     return
   }
@@ -435,14 +506,19 @@ function relaunchCheck(w: CliMayteWorker, r: CheckRunner, how: string): void {
   startCheck(w, relaunches)
 }
 
-function judgeCheck(w: CliMayteWorker, code: number | null, output: string): void {
+/** Set the check's verdict from its exit `code` and the facts gathered for it (gatherCheck). A task of a
+ *  wave is judged on the check and its commits together by its wave, not here (gatherAndJudgeCheck). */
+function judgeCheck(
+  w: CliMayteWorker,
+  code: number | null,
+  output: string,
+  facts: CheckFacts,
+): void {
   w.status = 'done'
   const cmd = firstLine(w.check, 200)
-  // A task of a wave is judged by the daemon on the check and the commits together (piece 5).
-  if (code === 0 && judgeInWave(w, true)) return
   // A pass with the worker's own files still uncommitted is not done: on 2026-10-05 one passed with
   // 15 files never committed and sat 'done' 2h26m while the tasks after it waited on that work.
-  const unsaved = code === 0 ? unsavedOf(w) : []
+  const unsaved = facts.unsaved
   if (code === 0 && !unsaved.length) {
     climayteVerdict(w.id, { verdict: 'pass', note: `The check passed: ${cmd}`, by: 'check' })
     return
@@ -470,7 +546,7 @@ function judgeCheck(w: CliMayteWorker, code: number | null, output: string): voi
   const files = `${unsaved.slice(0, 15).join(', ')}${unsaved.length > 15 ? ` and ${unsaved.length - 15} more` : ''}`
   const sev = unsaved.length
     ? { severity: 1 as const, others: false }
-    : checkSeverity(w, code, output)
+    : checkSeverity(code, output, facts.severity)
   const note = unsaved.length
     ? `The check \`${cmd}\` passed, but files you changed are not committed: ${files}. Commit them by pathspec (and push if the task pushes), then report again.`
     : `The check \`${cmd}\` failed (${code === null ? output : `exit ${code}`}). The end of its output:
@@ -617,50 +693,131 @@ function poll(w: CliMayteWorker): void {
   noteActivity(w, r, exited)
 }
 
-/** Piece 5: judge a finished wave task by command (judgeWaveTask) instead of the manager's word:
- *  the check (`checkPassed`, null with none) and its commits. A pass is provisional (it stays out of
- *  the scorecard until the orchestrator accepts the wave); a failed proof sends the task back one
- *  rung up like a failed check, three rounds and then failed; nothing provable records no verdict and
- *  escalates the key as `unproven`. False when the worker is no task of a running wave. */
-function judgeInWave(w: CliMayteWorker, checkPassed: boolean | null): boolean {
-  if (!w.wave || w.kind === 'manage') return false
+/** A running wave and the task of `w` in it, as the wave is read now. */
+interface WaveTaskRef {
+  wave: CliMayteWave
+  configDir: string
+  task: CliMayteWave['tasks'][number]
+}
+
+/** The running wave's task that `w` is, or null: the sync test of "is this a task of a running wave". A
+ *  wave is read in the account it was started on, which is not always the worker's own. */
+function waveTaskOf(w: CliMayteWorker): WaveTaskRef | null {
+  if (!w.wave || w.kind === 'manage') return null
   try {
-    // The wave sits in the account it was started on, which is not always the worker's own.
     const found = liveWave(w.wave)
     const wave = found?.wave
     const task = wave?.tasks.find((t) => t.workerId === w.id)
-    if (!found || !wave || !task || wave.status !== 'running') return false
-    const now = Date.now()
-    const j = judgeWaveTask(task, wave, w.result, checkPassed)
-    task.proof = j.proof
-    if (j.verdict === 'pass') {
-      task.state = 'passed'
-      climayteVerdict(w.id, { verdict: 'pass', note: j.note, by: 'wave', provisional: true })
-    } else if (j.verdict === 'fail') {
-      const fails =
-        (w.verdicts ?? []).filter((v) => v.by === 'wave' && v.verdict === 'fail').length + 1
-      const retry = fails < MAX_CHECK_FAILS
-      task.state = retry ? 'running' : 'failed'
-      if (!retry) {
-        w.status = 'failed'
-        w.error = `The wave's proof still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(j.note)}`
-        journal(w, 'failed', { error: firstLine(w.error) })
-      }
-      // Commits outside the brief's paths are a slip; any other failed proof is rework.
-      const severity = j.proof.paths === false ? 1 : 2
-      climayteVerdict(w.id, { verdict: 'fail', note: j.note, retry, by: 'wave', severity })
-    } else {
-      task.state = 'escalated'
-      wave.escalations.push({ key: task.key, reason: `unproven: ${j.note}`, at: now })
-    }
-    modifiedWaves.set(w.wave, { wave, configDir: found.configDir })
-    // A task sent back for another round is no change the manager needs yet.
-    if (task.state !== 'running') addToWaveBatch(w, now, true)
-    return true
+    if (!found || !wave || !task || wave.status !== 'running') return null
+    return { wave, configDir: found.configDir, task }
   } catch {
-    // A wave that cannot be read judges as an ordinary task.
-    return false
+    return null
   }
+}
+
+/** A wave task's judgement as gathered: the wave and task it judged, the result it judged, and the
+ *  verdict. gatheredTask checks these are still the state it stands for before it is applied. */
+interface WaveGather {
+  waveId: string
+  key: string
+  result: string | null
+  judgement: WaveJudgement
+}
+
+/** judgeWaveTask for `w`'s task of a running wave, its git read off the main thread. Null when `w` is
+ *  no wave task, or when its judgement cannot be made: a wave that cannot be read judges as an ordinary
+ *  task. */
+async function gatherWave(
+  w: CliMayteWorker,
+  checkPassed: boolean | null,
+): Promise<WaveGather | null> {
+  const found = waveTaskOf(w)
+  if (!found) return null
+  const result = w.result
+  try {
+    const judgement = await judgeWaveTask(found.task, found.wave, result, checkPassed)
+    return { waveId: found.wave.id, key: found.task.key, result, judgement }
+  } catch {
+    return null
+  }
+}
+
+/** The running wave task a gather judged, if it is still `w`'s on the same wave and result; else null. */
+function gatheredTask(w: CliMayteWorker, g: WaveGather): WaveTaskRef | null {
+  const found = waveTaskOf(w)
+  if (!found || found.wave.id !== g.waveId || found.task.key !== g.key || w.result !== g.result)
+    return null
+  return found
+}
+
+/** Apply a gathered wave judgement to its task (gatheredTask has confirmed the state it stands for).
+ *  Piece 5: the task is judged by command instead of the manager's word: its check and its commits. A
+ *  pass is provisional (it stays out of the scorecard until the orchestrator accepts the wave); a failed
+ *  proof sends the task back one rung up like a failed check, three rounds and then failed; nothing
+ *  provable records no verdict and escalates the key as `unproven`. */
+function applyWaveJudgement(
+  w: CliMayteWorker,
+  g: WaveGather,
+  found: WaveTaskRef,
+  now: number,
+): void {
+  const { wave, configDir, task } = found
+  const j = g.judgement
+  task.proof = j.proof
+  if (j.verdict === 'pass') {
+    task.state = 'passed'
+    climayteVerdict(w.id, { verdict: 'pass', note: j.note, by: 'wave', provisional: true })
+  } else if (j.verdict === 'fail') {
+    const fails =
+      (w.verdicts ?? []).filter((v) => v.by === 'wave' && v.verdict === 'fail').length + 1
+    const retry = fails < MAX_CHECK_FAILS
+    task.state = retry ? 'running' : 'failed'
+    if (!retry) {
+      w.status = 'failed'
+      w.error = `The wave's proof still failed after ${MAX_CHECK_FAILS} rounds; it needs the orchestrator. Last: ${firstLine(j.note)}`
+      journal(w, 'failed', { error: firstLine(w.error) })
+    }
+    // Commits outside the brief's paths are a slip; any other failed proof is rework.
+    const severity = j.proof.paths === false ? 1 : 2
+    climayteVerdict(w.id, { verdict: 'fail', note: j.note, retry, by: 'wave', severity })
+  } else {
+    task.state = 'escalated'
+    wave.escalations.push({ key: task.key, reason: `unproven: ${j.note}`, at: now })
+  }
+  modifiedWaves.set(wave.id, { wave, configDir })
+  // A task sent back for another round is no change the manager needs yet.
+  if (task.state !== 'running') addToWaveBatch(w, now, true)
+}
+
+/** Judge a finished worker's wave task (no check, or a reconciled one) off the main thread: gather its
+ *  git facts, then, if the worker is still done on the same result, apply the verdict in the same step.
+ *  `unjudged` runs when the task is no wave task's to judge after all, so the finish still batches. */
+async function judgeWave(
+  w: CliMayteWorker,
+  checkPassed: boolean | null,
+  unjudged?: () => void,
+): Promise<void> {
+  if (gathering.has(w.id)) return
+  gathering.add(w.id)
+  let g: WaveGather | null
+  try {
+    g = await gatherWave(w, checkPassed)
+  } finally {
+    gathering.delete(w.id)
+  }
+  // Decided in this same step, with no await since the state was read.
+  if (w.status !== 'done') return
+  if (!g) return unjudged?.()
+  const found = gatheredTask(w, g)
+  if (!found) {
+    // A result that changed while the facts were gathered is a new finish: that one is judged.
+    if (w.result !== g.result) await judgeWave(w, checkPassed, unjudged)
+    return
+  }
+  applyWaveJudgement(w, g, found, Date.now())
+  changed(w)
+  // Landed between ticks: the next one writes the wave and wakes its manager (processBatchWakes).
+  schedule(50)
 }
 
 /** A run that ended in Claude Code's context thrash error continues its session one rung up
@@ -747,10 +904,15 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
   if (w.question && !asking) delete w.question
-  // A wave task with no check is judged now; with one, when its check ends (judgeCheck).
-  const judged = !asking && w.status === 'done' && !w.check && judgeInWave(w, null)
+  // A wave task with no check is judged now, off the main thread, and batched once judged (or at once
+  // when it is no wave task after all); with one, when its check ends (gatherAndJudgeCheck).
+  const judging = !asking && w.status === 'done' && !w.check && waveTaskOf(w) !== null
+  if (judging)
+    judgeWave(w, null, () => addToWaveBatch(w, now)).catch((err) =>
+      console.error(`[climayte] ${w.id}: its wave task could not be judged:`, err),
+    )
   if (!asking && w.status === 'done' && w.check) startCheck(w)
-  if (!asking && !judged && w.status !== 'checking') addToWaveBatch(w, now)
+  if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
 
   changed(w)
   schedule(50)
@@ -1262,7 +1424,9 @@ function reconcileWaveTask(id: string, task: CliMayteWave['tasks'][number], now:
       // With a check, only its own latest pass settles the task (a fail sends the worker back).
       const last = w.verdicts?.at(-1)
       if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
-      judgeInWave(w, w.check ? true : null)
+      judgeWave(w, w.check ? true : null).catch((err) =>
+        console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
+      )
     } else if (w.status === 'failed' || w.status === 'cancelled') {
       const found = liveWave(id)
       const t = found?.wave.tasks.find((x) => x.key === task.key)
@@ -1289,7 +1453,7 @@ function reconcileWaveTasks(id: string, now: number): void {
 
 /** A task of a running wave that is `running` while its worker has finished was missed by the
  *  worker's finish (a wave read from the wrong account, a daemon restarted mid-check): judge it now.
- *  A finished worker is judged on its check and commits (judgeInWave), a failed or cancelled one
+ *  A finished worker is judged on its check and commits (judgeWave), a failed or cancelled one
  *  ends its task `failed`. A pass stays provisional until the orchestrator accepts the wave. */
 function reconcileWaves(now: number): void {
   if (now < nextWaveReconcile) return

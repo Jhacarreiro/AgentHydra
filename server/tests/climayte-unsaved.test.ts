@@ -63,7 +63,7 @@ describe('uncommittedOf', () => {
   git(repo, 'add', '-A')
   git(repo, 'commit', '-q', '-m', 'start')
 
-  test('lists changed and untracked files the session wrote, not committed, ignored or peer-changed ones', () => {
+  test('lists changed and untracked files the session wrote, not committed, ignored or peer-changed ones', async () => {
     const now = Date.now()
     writeFileSync(join(repo, 'src', 'kept.ts'), 'two\n') // tracked, changed
     mkdirSync(join(repo, 'src', 'fresh'), { recursive: true })
@@ -84,14 +84,17 @@ describe('uncommittedOf', () => {
       ]),
     )
     edits.set(join(root, 'outside.ts'), now)
-    expect(uncommittedOf(join(repo, 'src'), edits)).toEqual(['src/fresh/new.ts', 'src/kept.ts'])
+    expect(await uncommittedOf(join(repo, 'src'), edits)).toEqual([
+      'src/fresh/new.ts',
+      'src/kept.ts',
+    ])
   })
 
-  test('outside a repository there is nothing to hold it to', () => {
+  test('outside a repository there is nothing to hold it to', async () => {
     const plain = join(root, 'plain')
     mkdirSync(plain, { recursive: true })
     writeFileSync(join(plain, 'a.ts'), 'a\n')
-    expect(uncommittedOf(plain, new Map([[join(plain, 'a.ts'), Date.now()]]))).toEqual([])
+    expect(await uncommittedOf(plain, new Map([[join(plain, 'a.ts'), Date.now()]]))).toEqual([])
   })
 })
 
