@@ -86,7 +86,10 @@ describe('pickFreeAccount', () => {
     expect(pickFreeAccount([gpt], new Set(), {})).toBeNull()
     expect(pickFreeAccount([gpt, INSTANCES[0]], new Set(), {})?.num).toBe(1)
     expect(pickFreeAccount([gpt], new Set(), { account: 2 })?.num).toBe(2) // a named account is never held back
-    expect(paceCap(gpt, now + 30 * 60_000)).toBe(73)
+    // pickFreeAccount reads the real clock, so the held window began a few ms after `now` whenever the
+    // box was busy (2026-10-11: 70, not 73, in the parallel suite). A full window is counted from after it.
+    const heldAt = Date.now()
+    expect(paceCap(gpt, heldAt + 30 * 60_000)).toBe(73)
     // Locked out with 60 chats allowed in the window: the cap goes a tenth under that.
     resetFreeHealth()
     for (let n = 0; n < 61; n++) noteFreeSend('b', now - n * 1000)
