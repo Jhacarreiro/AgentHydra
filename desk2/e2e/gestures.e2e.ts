@@ -63,9 +63,14 @@ const ROW_MENU = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num
 const ROW_CELL = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] td:nth-child(2)')])`
 const HIDE = `(${VISIBLE})([...document.querySelectorAll('button[aria-label="Hide sidebar"]')])`
 const HIDDEN = `!!document.querySelector('button[aria-label="Show sidebar"]')`
-const ROW = `(${VISIBLE})([...document.querySelectorAll('[role="button"][aria-description^="Runs in"]')].filter((el) => !el.getAttribute('aria-current')))`
+// Sidebar rows holding an open disclosure come first (a fold button or count badge showing the chats under the row): the
+// lazy menus' stand-in took that aria-expanded for an open menu and never armed (2026-10-10), which the first row on
+// screen showed only when it happened to be one.
+const DISCLOSED = `(el) => !!el.closest('[role="button"]')?.querySelector('[aria-expanded="true"]:not([aria-haspopup])')`
+const disclosedFirst = (els: string) => `${els}.sort((a, b) => (${DISCLOSED})(b) - (${DISCLOSED})(a))`
+const ROW = `(${VISIBLE})(${disclosedFirst(`[...document.querySelectorAll('[role="button"][aria-description^="Runs in"]')].filter((el) => !el.getAttribute('aria-current'))`)})`
 const SELECTED = `(() => { const at = document.elementFromPoint(X, Y); const row = at && at.closest('[role="button"][aria-description^="Runs in"]'); return !!row && row.getAttribute('aria-current') === 'page' })()`
-const ROW_MORE = `(${VISIBLE})([...document.querySelectorAll('button[aria-label^="More options for"]')].filter((b) => !b.closest('[aria-current]')))`
+const ROW_MORE = `(${VISIBLE})(${disclosedFirst(`[...document.querySelectorAll('button[aria-label^="More options for"]')].filter((b) => !b.closest('[aria-current]'))`)})`
 const HISTORY = `(${VISIBLE})([...document.querySelectorAll('button[aria-label^="Accounts signed in on #"]')])`
 // A tooltip-wrapped toggle (aria-pressed): its first value is noted when it is first picked.
 const toggle = (sel: string) => `(() => { const b = (${VISIBLE})([...document.querySelectorAll('${sel}')]); if (b && window.__p0 === undefined) window.__p0 = b.getAttribute('aria-pressed'); return b })()`

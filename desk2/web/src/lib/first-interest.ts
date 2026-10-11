@@ -157,11 +157,14 @@ type Listeners = Record<string, (event: any) => void>
  * Arming swaps the stand-in for a new element and mounts everything inside it again, so a menu or
  * popover in there that is open (the press that just ran on the stand-in opened it) would close. Nothing
  * arms while one is open; the first hover or focus after it closes arms it. A popover or dropdown trigger
- * says so with aria-expanded; a context menu trigger only with data-state="open" (a row's menu inside a
- * Tip's stand-in, opened by the same right-click that arms the Tip), so a trigger in that state counts too.
+ * says so with aria-expanded beside aria-haspopup; a context menu trigger only with data-state="open" (a row's
+ * menu inside a Tip's stand-in, opened by the same right-click that arms the Tip), so a trigger in that state
+ * counts too. A disclosure toggle is aria-expanded with no popup (a row's fold button or count badge showing
+ * the chats under it): what it shows lives outside the swap, and counting it left such a row's menus and Tip
+ * never armed, so no gesture opened its menus (2026-10-10).
  */
 function holdsOpen(standIn: Element | null): boolean {
-  return !!standIn?.querySelector('[aria-expanded="true"], [data-slot$="-trigger"][data-state="open"]')
+  return !!standIn?.querySelector('[aria-haspopup][aria-expanded="true"], [data-slot$="-trigger"][data-state="open"]')
 }
 type Fire = (event: Event, from: HTMLElement | null, menu: MouseEvent | null) => void
 
