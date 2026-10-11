@@ -1,6 +1,10 @@
 import { join } from 'node:path'
 import { markSessionGone } from './analytics'
-import { climayteEffortBySession, climayteTasksBySession } from './climayte-effort'
+import {
+  climayteEffortBySession,
+  climayteEffortReady,
+  climayteTasksBySession,
+} from './climayte-effort'
 import { chatsFromElsewhere, type ElsewhereChat } from './core/desktop-chat-sync'
 import { allInstanceNumbers, instanceRef } from './core/instance-numbers'
 import { mapPool } from './core/map-pool'
@@ -1442,6 +1446,7 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
   const dmap = doneMarkMap()
+  await climayteEffortReady()
   const lookups = rowLookups()
 
   const budget = scanBudget()
@@ -1995,6 +2000,7 @@ export async function getSession(
   const dmap = doneMarkMap()
   // Same resolution the list uses, so a row does not change its account when you click it.
   const meta = deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
+  await climayteEffortReady()
   const lookups = rowLookups()
   const other = elsewhereFor(tf, lookups)
   return {

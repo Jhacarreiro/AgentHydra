@@ -35,6 +35,7 @@ const UNNUMBERED = 'aaaaaaaa-0000-4000-8000-000000000002' // Desktop profile the
 const STAMPED = 'aaaaaaaa-0000-4000-8000-000000000003' // transcript stamps effort 'low'
 const CLIMAYTE = 'aaaaaaaa-0000-4000-8000-000000000004' // CliMayte launched it at 'medium'
 const BARE = 'aaaaaaaa-0000-4000-8000-000000000005' // nothing records an effort
+const LATE = 'aaaaaaaa-0000-4000-8000-000000000006' // its worker is filed after the first list
 
 /** A transcript with one real exchange. `effort` is the stamp Claude writes on an assistant turn. */
 function transcript(sessionId: string, mtimeSec: number, effort?: string): void {
@@ -70,6 +71,7 @@ transcript(UNNUMBERED, 1_780_000_100)
 transcript(STAMPED, 1_780_000_200, 'low')
 transcript(CLIMAYTE, 1_780_000_300, 'low')
 transcript(BARE, 1_780_000_400)
+transcript(LATE, 1_780_000_500)
 desktopRecord('acct-known', KNOWN, {})
 desktopRecord('acct-unnumbered', UNNUMBERED, {})
 // The app's own setting for this chat disagrees with CliMayte's record; CliMayte chose the effort.
@@ -84,6 +86,8 @@ interface Row {
 interface Listed {
   number: number
   rows: Row[]
+  /** LATE's effort on a second list, right after its worker was filed. */
+  late: string | null
 }
 let listed: Listed | null = null
 
@@ -106,8 +110,14 @@ function list(): Listed {
     }));
     const { listSessions } = await import(${SRC('sessions.ts')});
     const rows = await listSessions({ limit: 50, sinceMs: null, archived: 'include' });
+    writeFileSync(join(POINTER_DIR, 'corch', 'done', 'w-late.json'), JSON.stringify({
+      id: 'w-late',
+      attempts: [{ sessionId: ${JSON.stringify(LATE)}, requested: { model: null, effort: 'xhigh' } }],
+    }));
+    const again = await listSessions({ limit: 50, sinceMs: null, archived: 'include' });
     console.log(JSON.stringify({ number, rows: rows.map((r) => ({
-      id: r.session_id, instance: r.instance, instance_num: r.instance_num, effort: r.effort })) }));`
+      id: r.session_id, instance: r.instance, instance_num: r.instance_num, effort: r.effort })),
+      late: again.find((r) => r.session_id === ${JSON.stringify(LATE)})?.effort ?? null }));`
   const proc = Bun.spawnSync([process.execPath, '-e', body], {
     env,
     stdout: 'pipe',
@@ -147,6 +157,17 @@ test(
   'a session CliMayte launched shows the effort CliMayte recorded, over the transcript and the app',
   () => {
     expect(row(CLIMAYTE).effort).toBe('medium')
+  },
+  SPAWNS_A_CHILD_BUN,
+)
+
+// The Sessions list reads CliMayte's finished workers off the thread and waits for a pass whenever done/ moved
+// (climayte-effort.ts): a worker filed between two lists is on the second.
+test(
+  'a worker CliMayte files after a list shows on the next list',
+  () => {
+    expect(row(LATE).effort).toBeNull()
+    expect(list().late).toBe('xhigh')
   },
   SPAWNS_A_CHILD_BUN,
 )
