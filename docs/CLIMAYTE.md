@@ -265,7 +265,13 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   `attemptExited()` reads only files: an exit file means ended; a runner gone without one died
   (`finish` reads it as interrupted); no pid file within a minute means it never started. A runner
   pid is trusted only once its command line names the attempt's spec (`isOurRunner`), so a pid
-  Windows reused is never followed or killed. `killAttempt` kills the runner's tree.
+  Windows reused is never followed or killed. `killAttempts` kills the runners' trees, all in one
+  `killRunners` call: one identity check for the lot, then one `taskkill` on the spawn worker, off the
+  daemon's thread (a cancel's `taskkill` held the daemon 2.1 s, 2026-10-11). The worker's state
+  changes at once; what needs the tree gone (the runner's pid and exit files, the worker's settings
+  and signal files, a check's files) runs once it has. `killsLanded()` resolves when every kill
+  started so far has landed, and the tick awaits it before it schedules, so no turn starts beside a
+  CLI still being killed (the next turn of an urgent message, a session moved after an overage stop).
 - `climayteRunningCount()` counts only pre-runner workers, so `/api/daemon/restart` needs no `force`
   for runner workers. Proven live: two restarts with 6-7 workers running left every attempt count
   unchanged and every worker running.
@@ -1665,8 +1671,10 @@ the chat failed, and it looked like the account was broken. Now:
 - `POST /api/corch/workers/:id/deliver-now` `{ text? }` → `climayteDeliverNow`
 - `POST /api/corch/workers/:id/handoff` → `climayteHandoff`
 - `POST /api/corch/workers/:id/priority` `{ priority }` → `climayteSetPriority` (400 on a bad value)
-- `POST /api/corch/cancel` `{ id? , group? }` → `climayteCancel`
-- `GET /api/corch/totals` → `climayteTotals`; `POST /api/corch/remove` `{ ids }` → `climayteRemove`
+- `POST /api/corch/cancel` `{ id? , group? }` → `climayteCancel`, answered once its CLIs are gone
+  (`killsLanded`)
+- `GET /api/corch/totals` → `climayteTotals`; `POST /api/corch/remove` `{ ids }` → `climayteRemove`, after
+  any kill still landing (a task cancelled a moment ago may still hold the log the remove archives)
 - `GET /api/corch/remote` → the other PCs' shared queues `{ enabled, pcs: [{ pc, name, at, stale,
   workers }] }` (climayte-remote.ts; "Two PCs" above); `POST /api/cli-instances/sync/queue
   { enabled }` turns the sharing on or off on this PC

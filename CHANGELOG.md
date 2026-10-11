@@ -7,6 +7,42 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **AgentHydra no longer freezes for about an hour a day.** Its background service was stuck for 58 minutes over
+  one day while it judged CliMayte checks, read every account's past logins, listed sessions, built the spend report
+  and cancelled tasks. Those now run beside it, so the window, HSwarm and CliMayte keep answering, and cancelling a
+  task no longer holds everything for two seconds.
+- **The window's own server stops freezing on chat lists, transcripts and new processes.** Free chat lists, starting
+  git and Free sends, and saving Free accounts no longer hold the window's server, so the AgentHydra and HSwarm pages
+  load quickly after a restart. HSwarm's tree loads first, and its model stats answer from a cache.
+- **A compact sidebar.** A new button drops the project headers and shows each chat's project icon in a ring that
+  strobes while the chat works and lights when it needs you. Project icons stay with Cloud on, and the sidebar's
+  buttons have tooltips.
+- **Right-click a project header for its stats.** The menu shows the project's git and Project Hydra stats, and on
+  Scratch, Auto-categorize moves its chats to the projects they belong to.
+- **Fold the chats started from a chat.** A row with chats under it gets a fold button with their count. Folded, it
+  turns orange when one of them needs you and pulses while one runs.
+- **The sidebar can be as narrow as 200px.**
+- **The cloud button keeps your list as it is.** Turning it on adds the other PC's chats to the same list instead of
+  switching to a different one.
+- **A chat dims only when nothing is going on in it.** Its title and project logo dim when it is idle with no running
+  sub-tasks and nothing waiting on you. A chat whose CliMayte tasks, HSwarm jobs or sub-chats run shows a running dot,
+  yellow means it needs you, and the CliMayte count pill on chat rows is gone.
+- **A chat's Background tasks show its HSwarm jobs and keep its finished work.** The tasks line under the last message
+  and the Background tasks panel list the HSwarm jobs the chat called beside its CliMayte workers, running or
+  finished, and a busy PC no longer pushes its finished ones out of the list.
+- **The transcript's message arrows land on the message, with a peek.** The up and down arrows reach the message
+  every time, the last message has room under it, and an eye under the arrows shows the previous message in a small
+  tray without moving the view.
+- **A tool run opens with its edits closed, and Claude Desktop's spare engines are no longer listed.** Desktop keeps a
+  spare engine beside each chat, which showed as a row titled by its ID that opened to nothing.
+- **CliMayte is part of HSwarm.** HSwarm's page lists CliMayte above Providers, CliMayte's runs and HSwarm's jobs
+  share one Jobs list, and the Settings section is called HSwarm. Its Overview holds CliMayte's stats, and model
+  results are cards with the top 10 first.
+- **Usage history covers Desktop and CLI, over the time you pick.** Desktop and CLI show their tokens and models as
+  Free does, a toggle picks 24 hours, 7 days, 30 days or all time, and All ranks every account in one list with a
+  Type column and one combined list of models. A Desktop account linked to a CLI one counts once.
+- **A Free reply is no longer lost before the task reads it.** Under load a finished Free reply could be dropped
+  before the task that asked for it read it. It now stays until it is read, and no reply shows an "unknown" model.
 - **HSwarm routes the newer models on Hugging Face, Together and OpenRouter.** Qwen3.8 2.4T, MiMo V2.6 Flash,
   Granite 4.2 (30B, 8B, 3B), gpt-oss-20b, Hy3 and Inkling Small join the ranked routes on Hugging Face, Qwen3.8 2.4T
   on Together, and Haiku 5.5, GPT-6.1 Sol, Kimi K3, Grok 4.7 and five of those on OpenRouter, each at the host's

@@ -589,8 +589,11 @@ that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the 
 The profile comes from a sampler that runs from boot: `on top` is where the samples were,
 `innermost daemon frame` the daemon function closest to them and `outermost daemon frame` the timer or
 route that started it. That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
-delivery, a synchronous chat list and process queries, CliMayte's boot reading every finished worker), so read
-these lines before profiling a second daemon.
+delivery, a synchronous chat list and process queries, CliMayte's boot reading every finished worker), and the
+3,510 s the daemon spent blocked in the 24 h to 2026-10-11 (the spend report's cold read, CliMayte's check and
+wave judges running git, the account map reading every profile's past logins, the Sessions list re-checking
+CliMayte's finished workers, a cancel's `taskkill`; each now runs off the thread), so read these lines before
+profiling a second daemon.
 
 ## Auto-update
 
