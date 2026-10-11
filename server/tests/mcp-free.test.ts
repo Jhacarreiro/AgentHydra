@@ -121,6 +121,9 @@ describe('free_chat through a stand-in Desk 2', () => {
   let port: string | undefined
 
   beforeAll(() => {
+    // From no sends, rests or caps: a pacing test above that fails before its own reset leaves #2 at its
+    // cap, and two of these then waited out their 30 s for an account that never frees (2026-10-11).
+    resetFreeHealth()
     server = Bun.serve({
       port: 0,
       async fetch(req) {
