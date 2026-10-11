@@ -147,6 +147,17 @@ packed one. The prompt of each attempt is written to
 Account walls (an account that hit its limit or is signed out) are kept in memory and in
 `<CONFIG_DIR>/corch/walls.json`: `{ [accountId]: { until: number, reason: string } }`.
 
+**Store writes leave the daemon's thread** (`climayte-store-writer.ts`). `save()`, `saveWalls()` and
+`saveLive()` serialize on the thread and queue the text; a chain writes it through
+`node:fs/promises` (`writeJsonTextAtomic`: temp file, then rename, retried on transient codes with
+timer waits). The store chain writes in crash-safe order: done files first, then `workers.json`,
+then the removed done files. So a finished worker is filed before it leaves `workers.json`, and
+unfiled only once it is back. Rounds queued while one writes merge, newest text per file. A round
+the disk refuses is requeued under any newer one and retried in 5 seconds or by the next save.
+`walls.json` and `live.json` go on a side chain. `flushCliMayteStore` waits up to 5 seconds for both
+chains on every graceful exit: `/api/shutdown`, SIGINT/SIGTERM, the relaunch hand-off and the tray's
+shutdown.
+
 ### Launch (one attempt)
 
 ```
@@ -430,8 +441,13 @@ finishes, not at a limit or a handoff. A check that cannot run (no start, exit 1
 the task at once as a broken check instead of sending it back.
 
 **The pool is read at most every 3 seconds** (`signedInAccounts`, `POOL_MS`); it rebuilt from disk
-every second while work ran. The live-session count per account is `liveSessionIds`, which skips
-the transcript lookups.
+every second while work ran. The live-session count per account (`otherSessions`) is read off the
+daemon's thread: before it reads the accounts, each tick awaits `refreshPoolSessions`, which reads
+the session registrations of every pool account last read 3 seconds ago or more
+(`readRegistrationsAsync`, `node:fs/promises`, eight folders at a time) and drops the cached pool.
+Each pool build then judges those registrations on the thread (`liveIdsOf`: the pid, then the pipe),
+with no transcript lookups. An account not read yet counts no other sessions until its read lands.
+The tick reads every account before it places work.
 
 ### Pure helpers (exported; the tests pin these)
 

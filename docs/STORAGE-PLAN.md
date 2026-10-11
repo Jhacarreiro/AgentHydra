@@ -67,8 +67,8 @@ From the code (agent inventory, file:line) and the 7-minute stat sample:
 | `DATA_DIR/usage-history.json` (`usage-history.ts:58-89`) | 2.2 MB | Non-atomic full rewrite per recorded sample | full parse per forecast/budget call | Biggest whole-file rewrite; the key count is unbounded |
 | `DATA_DIR/usage-cache.json` (`usage-cache.ts`) | 46 KB | Non-atomic RMW per usage check per account | re-read from disk on **every** get, with no memory cache | One of six usage stores (see Overlaps) |
 | `DATA_DIR/price-catalog.json` | 2.26 MB | Non-atomic, at most daily | once at boot | fine; could be zstd (JSON) |
-| `corch/workers.json` (`save`, `climayte-core.ts`) | 231-270 KB | Atomic rewrite on every `changed(w)`, **no lock** | once at boot | Rewritten on every worker change. The rewrite counter was still queued at writing time (see Open). |
-| `corch/live.json` | 6.6 KB | at most once a tick (1-15 s) | at boot | fine |
+| `corch/workers.json` (`save`, `climayte-core.ts`) | 231-270 KB | Atomic rewrite on every `changed(w)`, **no lock**; since 2026-10-11 queued off the thread (`climayte-store-writer.ts`), merged and flushed on graceful exits | once at boot | Rewritten on every worker change. The rewrite counter was still queued at writing time (see Open). |
+| `corch/live.json` | 6.6 KB | at most once a tick (1-15 s), queued off the thread with `walls.json` | at boot | fine |
 | `CONFIG_DIR/cli-instances.json` (`json-store`) | 47 KB | lock + atomic, including `lastUsageCheck` on every usage check | per UI poll (~4 s) | A volatile field in a registry file |
 | `CONFIG_DIR/login-sync.json` | 14 KB | atomic rewrite on **every pass** (`cli-login-sync.ts:1214`) | **every 30 s tick** | Rewritten even when nothing changed but `lastSyncAt` |
 | `CONFIG_DIR/desktop-chat-sync.json` | 12.6 KB | atomic per chat pass | per pass | fine |
