@@ -115,4 +115,22 @@ describe('desk_chat', () => {
     await withDeskChat(fake as never, 'c9')[0].run({ title: 'x', chat: 'c2' })
     expect(seen.chat).toBe('c2')
   })
+  test('hydra_run passes the calling chat on to the tool it runs', async () => {
+    let seen: Record<string, unknown> = {}
+    const fake = [
+      {
+        name: 'hydra_run',
+        description: '',
+        inputSchema: {},
+        run: async (a: Record<string, unknown>) => (seen = a),
+      },
+    ]
+    const hydraRun = withDeskChat(fake as never, 'c9')[0]
+    await hydraRun.run({ tool: 'dashboard_write', args: { put: [] } })
+    expect(seen.args).toEqual({ put: [], deskChat: 'c9' })
+    await hydraRun.run({ tool: 'desk_chat', args: { title: 'x' } })
+    expect(seen.args).toEqual({ title: 'x', chat: 'c9' })
+    await hydraRun.run({ tool: 'list_usage' })
+    expect(seen.args).toEqual({})
+  })
 })

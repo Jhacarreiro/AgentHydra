@@ -405,8 +405,31 @@ export function findTools(
 /** The header Desk puts on each chat's agenthydra MCP connection: that chat's Desk id. */
 export const DESK_CHAT_HEADER = 'x-hydra-desk-chat'
 
-/** `tools` with desk_chat and desk_transcript defaulting to the calling Desk chat (the HTTP transport knows it from DESK_CHAT_HEADER;
- *  stdio from HYDRA_DESK_CHAT_ID). Every other tool is the same object. */
+/** The tools that default to the calling Desk chat. */
+const DESK_CHAT_BOUND = new Set([
+  'desk_chat',
+  'desk_transcript',
+  'dashboard_read',
+  'dashboard_write',
+  'hydra_find',
+])
+
+/** A tool's arguments with the calling Desk chat filled in, for the tools that default to it; any other tool's as given. */
+function bindDeskChat(
+  name: string,
+  a: Record<string, unknown>,
+  id: string,
+): Record<string, unknown> {
+  if (name === 'desk_chat' || name === 'desk_transcript')
+    return { ...a, chat: str(a.chat).trim() || id }
+  // hydra_find ranks the Desk tools first for a Desk chat
+  if (DESK_CHAT_BOUND.has(name)) return { ...a, deskChat: id }
+  return a
+}
+
+/** `tools` with desk_chat, desk_transcript and the dashboard tools defaulting to the calling Desk chat (the HTTP transport knows it
+ *  from DESK_CHAT_HEADER; stdio from HYDRA_DESK_CHAT_ID), also when reached through hydra_run, which runs the bare tool (a chat
+ *  whose list was fixed before a tool was added reaches it only that way). Every other tool is the same object. */
 export function withDeskChat(
   tools: McpEngineTool[],
   chatId: string | null | undefined,
@@ -415,25 +438,22 @@ export function withDeskChat(
   if (!id) return tools
   return tools.map((t) => {
     const run = t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown
-    if (t.name === 'desk_chat' || t.name === 'desk_transcript')
+    if (t.name === 'hydra_run')
       return {
         ...t,
-        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
-          run({ ...a, chat: str(a.chat).trim() || id }, signal),
+        run: (a: Record<string, unknown>, signal?: AbortSignal) => {
+          const args =
+            a.args && typeof a.args === 'object' && !Array.isArray(a.args)
+              ? (a.args as Record<string, unknown>)
+              : {}
+          return run({ ...a, args: bindDeskChat(str(a.tool).trim(), args, id) }, signal)
+        },
       }
-    if (t.name === 'dashboard_read' || t.name === 'dashboard_write')
-      return {
-        ...t,
-        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
-          run({ ...a, deskChat: id }, signal),
-      }
-    // hydra_find ranks the Desk tools first for a Desk chat
-    if (t.name === 'hydra_find')
-      return {
-        ...t,
-        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
-          run({ ...a, deskChat: id }, signal),
-      }
-    return t
+    if (!DESK_CHAT_BOUND.has(t.name)) return t
+    return {
+      ...t,
+      run: (a: Record<string, unknown>, signal?: AbortSignal) =>
+        run(bindDeskChat(t.name, a, id), signal),
+    }
   })
 }
