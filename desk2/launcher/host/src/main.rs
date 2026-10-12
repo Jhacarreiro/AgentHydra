@@ -1676,7 +1676,7 @@ fn build_webview(
     // The page's page tabs show their addresses in views of this window's own (native-browser.ts). frame: the main
     // window's page draws its own title bar (the window's frame), a side window keeps Windows' caption.
     let host = if main {
-        "window.agentHydraHost=Object.freeze({browser:1,audio:1,frame:1});"
+        "window.agentHydraHost=Object.freeze({browser:1,audio:1,frame:1,collapse:1});"
     } else {
         "window.agentHydraHost=Object.freeze({browser:1,audio:1});"
     };
