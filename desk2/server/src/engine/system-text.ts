@@ -239,6 +239,8 @@ export function noteOf(text: string): { from: string; text: string } | null {
 /** The note AgentHydra's continuationPrompt (server/src/climayte-lib.ts) puts between the task and the rest. */
 const CONTINUED = /\n\n---\nAn earlier session already worked on this task (on this account|on another account) and ([^.\n]*)\. Continue from its handoff below/
 const HANDOFF_MARK = '\n\n--- HANDOFF ---\n'
+/** Only a CliMayte chat's continuation says this: its first line is the owner's message (climayte-lib continuationPrompt). */
+const CHAT_HEIR = "That session was this chat's main agent before you:"
 /** The messages that session did not get to, `- <message>` each. */
 const CONTINUED_MESSAGES = /\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n([\s\S]*?)\n\n--- HANDOFF ---\n/
 const CONTINUED_WHY: [RegExp, string][] = [
@@ -254,7 +256,7 @@ const CONTINUED_WHY: [RegExp, string][] = [
  * 2026-10-05: every such handoff showed the owner the whole prompt as his own message ("I don't want to see
  * the chat that they send to move me over to a new account").
  */
-export function continuationOf(text: string): { messages: string | null; line: string } | null {
+export function continuationOf(text: string): { said: string | null; messages: string | null; line: string } | null {
   const m = CONTINUED.exec(text)
   if (!m || !text.includes(HANDOFF_MARK, m.index)) return null
   const list = CONTINUED_MESSAGES.exec(text.slice(m.index))?.[1]?.trim() ?? ''
@@ -262,7 +264,10 @@ export function continuationOf(text: string): { messages: string | null; line: s
   const messages = list ? (list.startsWith('- ') && !list.includes('\n- ') ? list.slice(2).trim() : list) : null
   const why = CONTINUED_WHY.find(([re]) => re.test(m[2]))?.[1]
   const where = m[1] === 'on another account' ? ' on another account' : ''
-  return { messages: messages || null, line: `${CONTINUED_LINE}${where}${why ? `: ${why}` : ''}.` }
+  // A chat's continuation opens with the owner's message it answers, then the same note.
+  const lead = text.slice(0, m.index).trim()
+  const said = text.includes(CHAT_HEIR, m.index) && lead && !CONTINUED.test(lead) ? lead : null
+  return { said, messages: messages || null, line: `${CONTINUED_LINE}${where}${why ? `: ${why}` : ''}.` }
 }
 
 /**
@@ -313,16 +318,33 @@ export function userTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | nul
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = raw
     return { ...rest, kind: 'system', level: 'info', text: continued.line }
   }
-  const said = continued?.messages ? { ...raw, text: continued.messages } : raw
+  return personTurn(continued?.messages ? { ...raw, text: continued.messages } : raw, media)
+}
+
+/** The person's message as the transcript shows it: a note when a program sent it, else the bubble. */
+function personTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): UserItem | NoteItem {
   // A message sent now reads as the person typed it, without the preface that told the worker why its turn ended.
-  const preface = SENT_NOW.test(said.text) ? SENT_NOW : URGENT.test(said.text) ? URGENT : null
-  const item = preface ? { ...said, text: said.text.replace(preface, '') } : said
+  const preface = SENT_NOW.test(raw.text) ? SENT_NOW : URGENT.test(raw.text) ? URGENT : null
+  const item = preface ? { ...raw, text: raw.text.replace(preface, '') } : raw
   const note = noteOf(item.text)
   if (note) {
     const { kind: _k, text: _t, images: _i, queued: _q, ...rest } = item
     return { ...rest, kind: 'note', from: note.from, text: note.text }
   }
   return withNamedFiles(item, media)
+}
+
+/**
+ * A CliMayte chat's continuation: the owner's message it answers (as his own bubble, under the turn's id, so
+ * the stand-in he sent matches it and the bubble keeps its place), the muted line that says the chat went on in
+ * a fresh session, then any messages the old session did not get to.
+ */
+function continuedChatTurns(raw: UserItem, c: NonNullable<ReturnType<typeof continuationOf>> & { said: string }, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+  const lead = personTurn({ ...raw, text: c.said }, media)
+  const line: SystemItem = { kind: 'system', id: `${raw.id}:continued`, ts: raw.ts, parentToolUseId: raw.parentToolUseId, level: 'info', text: c.line }
+  const { images: _i, ...bare } = raw
+  const listed = c.messages ? [personTurn({ ...bare, id: `${raw.id}:listed`, text: c.messages }, media)] : []
+  return [lead, line, ...listed]
 }
 
 /**
@@ -374,6 +396,8 @@ function carriedEntries(text: string): Array<{ from: string; text: string } | st
  * I didn't."
  */
 export function userTurns(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+  const continued = continuationOf(raw.text)
+  if (continued?.said) return continuedChatTurns(raw, { ...continued, said: continued.said }, media)
   const turn = userTurn(raw, media)
   if (turn?.kind !== 'user') return turn ? [turn] : []
   const entries = carriedEntries(turn.text)

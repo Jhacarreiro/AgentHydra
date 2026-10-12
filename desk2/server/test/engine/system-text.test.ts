@@ -438,6 +438,28 @@ describe("a handoff's continuation prompt", () => {
     expect(userTurn(user(chat), null)).toMatchObject({ kind: 'user', text: 'why did it stop?' })
   })
 
+  test("a chat's continuation shows the owner's message as his bubble, the muted line beside it, and the messages it carries", () => {
+    const chat = (messages?: string[]) =>
+      continued({ messages }).replace(
+        'Do not redo steps it reports finished.',
+        "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+      )
+    expect(userTurns(user(chat()), null)).toEqual([
+      { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
+      { kind: 'system', id: 'u9:continued', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' },
+    ])
+    expect(userTurns(user(chat(['why did it stop?'])), null)).toEqual([
+      { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
+      { kind: 'system', id: 'u9:continued', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' },
+      { kind: 'user', id: 'u9:listed', ts: 7, text: 'why did it stop?', parentToolUseId: null },
+    ])
+  })
+
+  test("a non-chat continuation hides the repeated task as before", () => {
+    expect(userTurns(user(continued()), null)).toEqual([userTurn(user(continued()), null)!])
+    expect(userTurns(user(continued({ messages: ['why did it stop?'] })), null)).toEqual([userTurn(user(continued({ messages: ['why did it stop?'] })), null)!])
+  })
+
   test("pings it carries are AgentHydra's notes, each its own, and only the person's messages between them are theirs", () => {
     const later = '[AgentHydra · CliMayte] Not from the user. Ping 5, 1 update since 09:10:\n• worker 14 finished: done'
     expect(userTurns(user(continued({ messages: [PING, later] })), null)).toEqual([
