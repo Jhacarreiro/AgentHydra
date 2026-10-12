@@ -692,11 +692,16 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   }
 
   // Last resort: the human hears of it, and the caller's next climayte_status shows it.
-  const giveUp = async (box: OriginBox, batch: QueuedPing[], text: string) => {
+  const giveUp = async (
+    box: OriginBox,
+    batch: QueuedPing[],
+    text: string,
+    why = 'was not reachable for 2 hours',
+  ) => {
     const groups = [...new Set(batch.map((e) => e.group))].join(', ')
     await toast({
       title: 'CliMayte: a chat missed its ping',
-      body: `Chat ${originLabel(box.origin)} was not reachable for 2 hours. Ping ${seqRange(batch)}: ${batch.length} update${batch.length === 1 ? '' : 's'} (${groups}). It shows in that chat's next climayte_status.`,
+      body: `Chat ${originLabel(box.origin)} ${why}. Ping ${seqRange(batch)}: ${batch.length} update${batch.length === 1 ? '' : 's'} (${groups}). It shows in that chat's next climayte_status.`,
     }).catch(() => undefined)
     box.unread = [...box.unread, { at: clock.now(), seqs: seqRange(batch), text }].slice(
       -UNREAD_MAX,
@@ -724,7 +729,12 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       if (n.ok) return settle(box, batch)
       if (!n.unavailable) {
         fail(box, batch, 'native', n.reason ?? 'the app did not confirm the message')
-        return giveUp(box, batch, text)
+        return giveUp(
+          box,
+          batch,
+          text,
+          "did not confirm the app's native send, which is never repeated",
+        )
       }
     }
     // Without a transcript nothing can grow, so there is nothing to wait 45 s for.
