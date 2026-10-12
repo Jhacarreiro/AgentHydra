@@ -16,6 +16,13 @@ export function closeDashboard(): void {
   dashboardOpen.value = false
 }
 
+/** The page's Open in tab: DeskFrame slides the page back and the browser pane shows the site in a tab, in its folder. */
+export const dashboardTab = shallowRef<{ cwd: string; url: string } | null>(null)
+
+export function openDashboardTab(cwd: string, url: string): void {
+  dashboardTab.value = { cwd, url }
+}
+
 /** Replaced whole on each read, so shallow. null until the first answer. */
 export const dashboardList = shallowRef<DashboardSummary[] | null>(null)
 

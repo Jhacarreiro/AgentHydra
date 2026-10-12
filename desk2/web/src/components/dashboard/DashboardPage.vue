@@ -1,13 +1,13 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { ArrowLeft, Copy, ExternalLink, Folder, RotateCw } from '@lucide/vue'
+import { AppWindow, ArrowLeft, Copy, ExternalLink, Folder, RotateCw } from '@lucide/vue'
 import type { Dashboard } from '@shared/dashboards'
 import type { ProjectEntry } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { Tip } from '@/components/ui/tooltip'
 import { getDashboard } from './api'
 import { EXAMPLE_PROMPT, timeAgo, workspaceKey } from './logic'
-import { closeDashboard, refreshDashboards } from './store'
+import { closeDashboard, openDashboardTab, refreshDashboards } from './store'
 
 // The project dashboard, a page in the sliding track (DeskFrame). Its site is framed on the daemon's own origin, and the
 // frame is re-keyed when the newest file changes, so a chat's write shows by itself. One read loop, every 3 seconds,
@@ -98,6 +98,8 @@ function reload(): void {
   void load()
 }
 
+// Its own tab: one in Desk's browser pane, or one in the person's web browser (the host hands a foreign address to it).
+const openInTab = () => props.cwd && dash.value?.url && openDashboardTab(props.cwd, dash.value.url)
 const openOutside = () => dash.value?.url && window.open(dash.value.url, '_blank', 'noopener')
 
 const copied = ref(false)
@@ -113,7 +115,9 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
 
 <template>
   <section class="flex h-full min-w-0 flex-1 flex-col bg-(--bg-page)" data-testid="dashboard-page" :aria-label="`Dashboard for ${title}`">
-    <header class="flex h-10.25 shrink-0 items-center gap-2 pe-3" :style="{ paddingInlineStart: `${padLeft}px` }">
+    <!-- The window's title row when it draws its own (lib/host-window.ts): it drags the window, and keeps clear of its buttons.
+         In a narrow row the Open buttons show only their icons, and their tooltips say which is which. -->
+    <header class="@container title-drag flex h-10.25 shrink-0 items-center gap-2 pe-[calc(0.75rem+var(--caption-w))]" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip label="Back to the chat">
         <button type="button" aria-label="Back to the chat" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="closeDashboard()">
           <ArrowLeft class="size-4" aria-hidden="true" />
@@ -132,11 +136,18 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
           <RotateCw class="size-3.5" aria-hidden="true" />
         </button>
       </Tip>
-      <Tip v-if="hasSite" label="Open in browser">
-        <button type="button" aria-label="Open dashboard in browser" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="openOutside">
-          <ExternalLink class="size-3.5" aria-hidden="true" />
-        </button>
-      </Tip>
+      <template v-if="hasSite">
+        <Tip label="Open in a tab of Desk's browser pane">
+          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-[12px] leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openInTab">
+            <AppWindow class="size-3.5" aria-hidden="true" /><span class="sr-only @2xl:not-sr-only">Open in tab</span>
+          </button>
+        </Tip>
+        <Tip label="Open in your web browser">
+          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-[12px] leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openOutside">
+            <ExternalLink class="size-3.5" aria-hidden="true" /><span class="sr-only @2xl:not-sr-only">Open in browser</span>
+          </button>
+        </Tip>
+      </template>
       <Tip :label="copied ? 'Copied' : 'Copy folder path'">
         <button type="button" aria-label="Copy folder path" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="copyFolder">
           <Copy class="size-3.5" aria-hidden="true" />

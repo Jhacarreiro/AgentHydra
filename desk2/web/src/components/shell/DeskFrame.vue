@@ -25,7 +25,8 @@ const HydraPane = lazyPanel(() => import('@/components/hydra/HydraPane.vue'))
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { useDevServers } from '@/components/servers/store'
-import { closeDashboard, dashboardCwd, dashboardOpen } from '@/components/dashboard/store'
+import { closeDashboard, dashboardCwd, dashboardOpen, dashboardTab } from '@/components/dashboard/store'
+import { browserRequest } from '@/components/servers/browser-request'
 const DashboardPage = lazyPanel(() => import('@/components/dashboard/DashboardPage.vue'))
 import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
@@ -490,6 +491,16 @@ watch(
     pane.value = 'servers'
   }
 )
+// The dashboard page's Open in tab: the page slides back and the pane opens the site in a tab, in the dashboard's
+// folder as the list's request does (the pane's tabs are the chat's, so one stays when the folder changes back).
+watch(dashboardTab, (t) => {
+  if (!t) return
+  closeDashboard()
+  serversCwd.value = t.cwd
+  tasks.value = null
+  pane.value = 'servers'
+  browserRequest.value = { url: t.url }
+})
 watch(
   () => chat.value?.id,
   () => (serversCwd.value = null)
