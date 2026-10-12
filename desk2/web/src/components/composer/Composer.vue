@@ -83,6 +83,8 @@ import PermissionCard from '@/components/transcript/parts/PermissionCard.vue'
 import QuestionCard from '@/components/transcript/parts/QuestionCard.vue'
 import PlanCard from '@/components/transcript/parts/PlanCard.vue'
 import ElicitationCard from '@/components/transcript/parts/ElicitationCard.vue'
+import PdfTile from '@/components/media/PdfTile.vue'
+import { pictureTile } from '@/lib/picture-tile'
 
 const Check = icons.check
 const Plus = icons.add
@@ -99,6 +101,8 @@ interface PendingFile {
   bytes: number
   mediaType: string
   path?: string
+  /** A PDF's bytes, kept to draw its first page. */
+  blob?: Blob
 }
 
 type MenuName = 'plus' | 'dictation' | 'mode' | 'model' | 'effort'
@@ -760,7 +764,10 @@ async function attachFile(file: File) {
   const id = crypto.randomUUID()
   // A pasted file has no name: its type gives the extension Read goes by.
   const name = file.name || `Pasted file${file.type.startsWith('image/') ? `.${file.type.slice(6).replace('jpeg', 'jpg').replace(/\+.*/, '')}` : ''}`
-  files.value = [...files.value, { id, name, bytes: file.size, mediaType: file.type || 'application/octet-stream' }]
+  files.value = [
+    ...files.value,
+    { id, name, bytes: file.size, mediaType: file.type || 'application/octet-stream', blob: file.type === 'application/pdf' ? file : undefined },
+  ]
   try {
     const res = await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', body: file })
     const body = (await res.json().catch(() => ({}))) as { error?: string; path?: string; mediaType?: string }
@@ -859,6 +866,18 @@ function onFilePicked(e: Event) {
 
 function removeImage(id: string) {
   images.value = images.value.filter((i) => i.id !== id)
+}
+
+const PIC_TILE_HEIGHT = 120
+const picSizes = ref<Record<string, { w: number; h: number }>>({})
+function onPicLoad(id: string, e: Event) {
+  const el = e.target as HTMLImageElement
+  picSizes.value = { ...picSizes.value, [id]: { w: el.naturalWidth, h: el.naturalHeight } }
+}
+function picStyle(id: string) {
+  const size = picSizes.value[id]
+  const tile = pictureTile(size?.w ?? 0, size?.h ?? 0, PIC_TILE_HEIGHT)
+  return { width: `${tile.width}px`, height: `${tile.height}px`, objectPosition: tile.objectPosition }
 }
 
 function removeFile(id: string) {
@@ -1266,8 +1285,8 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Image thumbnails -->
-        <!-- Attachments as the real box shows them (real-running-task-and-attachments.png): 120px tiles 6 apart,
-             12 in from the box edge, r8, a 1px #444 ring, the picture contained on the page colour -->
+        <!-- Attachments as the real box shows them (real-running-task-and-attachments.png): 120px tall, 6 apart,
+             12 in from the box edge, r8, a 1px #444 ring; the width follows the picture (lib/picture-tile.ts) -->
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
@@ -1275,7 +1294,9 @@ onBeforeUnmount(() => {
                 <img
                   :src="img.url"
                   :alt="img.name"
-                  class="size-30 rounded-(--radius-8) bg-(--bg-picture) object-contain shadow-(--shadow-picture-light)"
+                  :style="picStyle(img.id)"
+                  class="rounded-(--radius-8) bg-(--bg-picture) object-cover shadow-(--shadow-picture-light)"
+                  @load="onPicLoad(img.id, $event)"
                 />
               </button>
             </Tip>
@@ -1291,12 +1312,16 @@ onBeforeUnmount(() => {
         </div>
 
         <div v-if="files.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
-          <div v-for="f in files" :key="f.id" class="group relative flex items-center gap-2 rounded-(--radius-8) bg-(--bg-picture) px-2.5 py-2 text-[13px] shadow-(--shadow-picture-light)">
-            <span class="max-w-52 truncate text-(--text)">{{ f.name }}</span>
-            <span class="shrink-0 text-(--text-muted)">{{ f.path ? formatBytes(f.bytes) : 'Attaching…' }}</span>
+          <div v-for="f in files" :key="f.id" class="group relative">
+            <PdfTile :source="f.blob" :cache-key="f.id" :height="PIC_TILE_HEIGHT" :name="f.name" :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'">
+              <div class="flex items-center gap-2 rounded-(--radius-8) bg-(--bg-picture) px-2.5 py-2 text-[13px] shadow-(--shadow-picture-light)">
+                <span class="max-w-52 truncate text-(--text)">{{ f.name }}</span>
+                <span class="shrink-0 text-(--text-muted)">{{ f.path ? formatBytes(f.bytes) : 'Attaching…' }}</span>
+              </div>
+            </PdfTile>
             <button
               type="button"
-              class="flex size-5 shrink-0 items-center justify-center rounded-full text-(--text-2) hover:text-(--text)"
+              class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) opacity-0 shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-hover:opacity-100"
               :aria-label="`Remove ${f.name}`"
               @click="removeFile(f.id)"
             >

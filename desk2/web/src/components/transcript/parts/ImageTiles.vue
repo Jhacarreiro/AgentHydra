@@ -9,6 +9,7 @@ import FileCard from './FileCard.vue'
 import HtmlPreview from './HtmlPreview.vue'
 import { aspectOf, galleryLayout } from '../lib/gallery'
 import { htmlSrc, imageSrc, openLightbox, tileKey } from '../lib/media'
+import { clampAspect, picturePosition } from '../../../lib/picture-tile'
 
 const props = defineProps<{ images: ImageRef[]; align?: 'start' | 'end' }>()
 
@@ -20,7 +21,7 @@ const aspects = ref<Record<number, number>>({})
 const pictures = computed(() => props.images.flatMap((img, i) => (imageSrc(img) ? [{ i, src: imageSrc(img)!, alt: img.name ?? '' }] : [])))
 const sizes = computed(() =>
   galleryLayout(
-    pictures.value.map((p) => aspects.value[p.i] ?? aspectOf(0, 0)),
+    pictures.value.map((p) => clampAspect(aspects.value[p.i] ?? aspectOf(0, 0))),
     width.value || 480,
   ),
 )
@@ -66,7 +67,13 @@ onBeforeUnmount(() => observer?.disconnect())
         @keydown="tileKey($event, () => open(imageSrc(img)!, img.name ?? ''))"
         @keyup="tileKey($event, () => {})"
       >
-        <img :src="imageSrc(img)!" :alt="img.name || 'picture'" loading="lazy" @load="onLoad(i, $event)" />
+        <img
+          :src="imageSrc(img)!"
+          :alt="img.name || 'picture'"
+          loading="lazy"
+          :style="{ objectPosition: picturePosition(aspects[i] ?? aspectOf(0, 0)) }"
+          @load="onLoad(i, $event)"
+        />
       </button>
       <HtmlPreview v-else-if="htmlSrc(img)" :src="htmlSrc(img)!" :name="img.name" />
       <FileCard v-else :file="img" />
