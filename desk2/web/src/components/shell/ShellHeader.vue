@@ -13,7 +13,8 @@ import WorkspacePicker from './WorkspacePicker.vue'
 import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
 import { connectorList } from '@/components/connectors/connections-api'
 import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
-import { ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { ListChecks, ListTodo, PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { fourmanAvailable } from '@/components/fourman/store'
 import { openDashboard } from '@/components/dashboard/store'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
 import { headerOpen } from '@/components/session-header/state'
@@ -23,7 +24,7 @@ import { isMuted, toggleMuted } from '@/lib/chat-audio'
 // The title bar inside the pane (h32): session title (click to rename), its menu, the folder pill,
 // Hydra Desk's status cue, and on the right the 26px pane buttons. Hydra Desk 2: an outside session's
 // title bar has one, the session header's fold (components/session-header).
-export type RightPane = 'diff' | 'climayte' | 'servers' | 'connections'
+export type RightPane = 'diff' | 'climayte' | 'servers' | 'connections' | 'todo'
 
 const props = withDefaults(
   defineProps<{
@@ -262,6 +263,11 @@ const PANE_BTN =
       <Tip label="Browser and servers">
         <button type="button" :class="PANE_BTN" aria-label="Browser and servers" :aria-pressed="pane === 'servers'" @click="emit('toggle-pane', 'servers')">
           <component :is="shellGlyphs.browser" class="size-4" />
+        </button>
+      </Tip>
+      <Tip v-if="fourmanAvailable" label="To-do">
+        <button type="button" :class="PANE_BTN" aria-label="To-do" :aria-pressed="pane === 'todo'" @click="emit('toggle-pane', 'todo')">
+          <ListTodo class="size-4" />
         </button>
       </Tip>
       <Tip v-if="connectionsShown" label="Connections">

@@ -97,3 +97,9 @@ export function folderName(cwd: string): string {
   const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
   return parts[parts.length - 1] || cwd
 }
+
+/** The To-do entry points (a group head's button, the header's) exist only while 4MAN is installed and a folder is known. */
+export const todoEntryShown = (on: boolean, folder: string | null | undefined): boolean => on && !!folder
+
+/** A group head's button reads pressed while the open pane shows that group's folder. */
+export const todoPressed = (showing: string | null, folder: string | null | undefined): boolean => !!folder && showing === folder

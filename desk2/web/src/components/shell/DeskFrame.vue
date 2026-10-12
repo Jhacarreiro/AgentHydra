@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
@@ -14,6 +14,7 @@ const ServersPane = lazyPanel(() => import('@/components/servers/ServersPane.vue
 const loadInfoPane = () => import('@/components/servers/info/InfoPane.vue')
 const InfoPane = lazyPanel(loadInfoPane)
 const ConnectionsPane = lazyPanel(() => import('@/components/connectors/ConnectionsPane.vue'))
+const FourmanPane = lazyPanel(() => import('@/components/fourman/FourmanPane.vue'))
 import type { ServerFocus } from '@/components/servers/store'
 import type { DevSelection } from '@/components/servers/info/selection'
 const loadSettingsView = () => import('@/components/panes/SettingsView.vue')
@@ -26,6 +27,7 @@ import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { useDevServers } from '@/components/servers/store'
 import { closeDashboard, dashboardCwd, dashboardOpen, dashboardTab } from '@/components/dashboard/store'
+import { startFourman, todoRequest, todoShowing } from '@/components/fourman/store'
 import { browserRequest } from '@/components/servers/browser-request'
 const DashboardPage = lazyPanel(() => import('@/components/dashboard/DashboardPage.vue'))
 import { setChatLive } from '@/components/servers/background-views'
@@ -507,11 +509,29 @@ watch(dashboardTab, (t) => {
 })
 watch(
   () => chat.value?.id,
-  () => (serversCwd.value = null)
+  () => {
+    serversCwd.value = null
+    todoCwd.value = null
+  }
 )
 watch(pane, (p) => {
   if (p !== 'servers') serversCwd.value = null
+  if (p !== 'todo') todoCwd.value = null
 })
+// The To-do pane shows the folder a group head asked for, else this chat's folder (the header's button). A second request
+// for the folder it shows closes it.
+const todoCwd = ref<string | null>(null)
+const todoDir = computed(() => todoCwd.value ?? chat.value?.cwd ?? null)
+watch(todoRequest, (r) => {
+  if (!r) return
+  if (pane.value === 'todo' && todoDir.value === r.cwd) pane.value = null
+  else {
+    todoCwd.value = r.cwd
+    pane.value = 'todo'
+  }
+})
+watchEffect(() => (todoShowing.value = pane.value === 'todo' ? todoDir.value : null))
+startFourman()
 // The page side of the track (owner, 2026-10-07: the right-hand info pane "kind of ugly ... just be in the center of the
 // page ... like Hydra slides in"): AgentHydra and the Dev servers page are its two layers. Opened from the desk, the
 // track pushes the chat out and the page in; one page opened over the other pushes that one out within the side, the
@@ -568,7 +588,7 @@ const wide = computed(() => pane.value === 'servers' || (pane.value === 'diff' &
 function togglePane(p: RightPane) {
   pane.value = pane.value === p ? null : p
 }
-const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value)))
+const asideOpen = computed(() => !tasks.value && !!pane.value && (pane.value === 'climayte' || !!chat.value || (pane.value === 'servers' && !!serversCwd.value) || (pane.value === 'todo' && !!todoDir.value)))
 // A wide pane splits the stage: the chat keeps the width it was dragged to and the pane takes the rest, so resizing the
 // window resizes the pane and leaves the chat as it is. The width is each chat's own, like whether its pane is open: a
 // chat never dragged opens at the default. The divider on the pane's left edge drags the split, or arrow keys move it;
@@ -1055,7 +1075,7 @@ function moveSidebar(side: SidebarSide) {
             v-if="asideOpen"
             class="relative col-start-2 flex min-h-0 min-w-0 shrink-0 border-s border-border"
             :class="split ? (ownFrame ? 'row-start-2' : 'row-span-2 row-start-1') : 'row-start-2 w-95'"
-            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : 'CliMayte'"
+            :aria-label="pane === 'diff' ? 'Changes' : pane === 'servers' ? 'Servers' : pane === 'connections' ? 'Connections' : pane === 'todo' ? 'To-do' : 'CliMayte'"
           >
             <div
               v-if="split"
@@ -1072,6 +1092,7 @@ function moveSidebar(side: SidebarSide) {
             <ChangesPane v-if="pane === 'diff' && chat" :key="chat.cwd" :cwd="chat.cwd" @close="pane = null" />
             <ServersPane v-else-if="pane === 'servers' && serversDir" :key="chat?.id ?? viewKey" :chat-id="chat?.id ?? viewKey" :cwd="serversDir" :focus="serversFocus" :ai-browser="aiBrowser" :paused="pageOpen" @close="pane = null" />
             <ConnectionsPane v-else-if="pane === 'connections' && chat" :key="chat.id" :chat="chat" />
+            <FourmanPane v-else-if="pane === 'todo' && todoDir" :key="todoDir" :cwd="todoDir" @close="pane = null" />
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
 

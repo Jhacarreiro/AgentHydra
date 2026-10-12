@@ -43,6 +43,7 @@ import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
 import GroupDashboardButton from '@/components/dashboard/GroupDashboardButton.vue'
+import TodoButton from '@/components/fourman/TodoButton.vue'
 import { refreshDashboards } from '@/components/dashboard/store'
 import AutoCategorizeDialog from './AutoCategorizeDialog.vue'
 import {
@@ -1023,6 +1024,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </Tip>
           <span class="flex-1" />
           <GroupDashboardButton :folder="menuFolderOf(group)" :label="group.label" />
+          <TodoButton :folder="menuFolderOf(group)" :label="group.label" />
           <Tip v-if="deskNewFolder(group)" :label="`New session in ${group.label}`">
             <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: deskNewFolder(group)! })">
               <component :is="shellGlyphs.groupNew" class="size-4" />
