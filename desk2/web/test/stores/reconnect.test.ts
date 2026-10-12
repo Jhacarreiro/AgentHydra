@@ -85,7 +85,7 @@ const hello = (chats: ChatSummary[]): ServerEvent => ({
   type: 'hello',
   version: 'test',
   chats,
-  settings: { defaultModel: null, defaultEffort: null, defaultPermissionMode: 'bypassPermissions', defaultAccountId: 'auto', delegateToCliMayte: false, idleCloseMinutes: 30, notifications: true, projectFolders: [], projectRoots: [], hiddenProjects: [], babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true, collapseMode: 'off' },
+  settings: { defaultModel: null, defaultEffort: null, defaultPermissionMode: 'bypassPermissions', defaultAccountId: 'auto', delegateToCliMayte: false, idleCloseMinutes: 30, browserIdleMinutes: 15, notifications: true, projectFolders: [], projectRoots: [], hiddenProjects: [], babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true, collapseMode: 'off' },
 })
 
 async function until(cond: () => boolean): Promise<void> {

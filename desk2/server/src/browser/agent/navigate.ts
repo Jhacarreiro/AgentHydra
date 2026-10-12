@@ -8,6 +8,7 @@ import { basename, join } from 'node:path'
 import { pageTabs } from '../cdp'
 import { ownPage } from '../ledger'
 import { listProfiles, storeRoot } from '../store'
+import { noteUse } from './activity'
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
 import { dialogAnswerer } from './page-dialogs'
@@ -52,20 +53,21 @@ function profileSlug(name: string): string {
   )
 }
 
-export async function profileFolder(name: string, cwd: string | undefined): Promise<string> {
+export async function profileFolder(name: string, cwd: string | undefined, create = true): Promise<string> {
   const slug = profileSlug(name)
   const root = storeRoot()
-  if (!cwd) return ensureDir(join(root, slug))
+  const made = (dir: string): string => (create ? ensureDir(dir) : dir)
+  if (!cwd) return made(join(root, slug))
   const { result, refs } = await listProfiles(cwd)
   const open = refs.find((r) => r.profile.name === slug)
   if (open) return open.dir
-  if (!result.workspace) return ensureDir(join(root, slug))
+  if (!result.workspace) return made(join(root, slug))
   const mine = join(root, 'ws', result.workspace, slug)
   const legacy = join(root, slug)
   const legacyStat = lstatSync(legacy, { throwIfNoEntry: false })
   if (!existsSync(mine) && legacyStat !== undefined && legacyStat.isDirectory() && !legacyStat.isSymbolicLink())
     return legacy
-  return ensureDir(mine)
+  return made(mine)
 }
 
 function ensureDir(dir: string): string {
@@ -87,6 +89,7 @@ export async function resolveBrowser(params: Params, caller: ToolCaller): Promis
   if (attachPort)
     return { key: `attach:${attachPort}`, port: attachPort, browserWs: await browserWsOf(attachPort), dir: null, exe }
   const dir = await profileFolder(stringParam(params.profile) ?? 'default', caller.cwd)
+  noteUse(dir)
   const endpoint = await ensureBrowserEndpoint(dir, { headed: params.headed === true })
   return { key: dir, port: endpoint.port, browserWs: endpoint.browserWsUrl, dir, exe }
 }

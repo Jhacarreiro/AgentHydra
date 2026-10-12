@@ -1,96 +1,104 @@
-// Closes a saved-browser Chrome that only a headless agent launched once nothing has driven it for IDLE_CLOSE_MS. A visible
-// window, a live view in the Browser pane, or a page a live chat is using keeps it open; the next browser call relaunches it.
+// Closes a saved browser's headless Chrome once no tool call has touched its profile for browserIdleMinutes. A call in
+// flight, a login not yet verified, a sign-in window, a live view in the Browser pane or a visible window keeps it open;
+// the next browser call relaunches it, with its logins kept in the profile folder.
 
-import { anyLiveSession, closeBrowser, liveBrowser, pageTabs } from './cdp'
-import { readLedger } from './ownership'
+import { resolve } from 'node:path'
+import { readActivity, type DirActivity } from './agent/activity'
+import { scopedKey } from './agent/handoff'
 import { launchedHeadless } from './agent/session'
-import { makeLiveness, profileFolders, type Liveness } from './tab-sweep'
+import { readSignInWindow } from './agent/sign-in-window'
+import { anyLiveSession, closeBrowser, liveBrowser } from './cdp'
+import { readRegistry } from './profiles-write'
+import { profileFolders } from './tab-sweep'
 import { storeRoot } from './store'
 
-export const IDLE_CLOSE_MS = 10 * 60_000
 export const IDLE_CHECK_MS = 60_000
-
-const BLANK = 'about:blank'
 
 export interface IdleCloseDeps {
   liveBrowser(dir: string): Promise<{ port: number } | null>
-  pages(port: number): Promise<{ id: string; url: string }[]>
-  owners(dir: string): Map<string, { chat: string }>
   headless(dir: string): boolean
   liveView(port: number): boolean
-  liveness: Liveness
+  signInHeld(dir: string): boolean
+  loginPending(dir: string): boolean
+  activity(): Map<string, DirActivity>
   close(dir: string): Promise<boolean>
   log(msg: string): void
 }
 
-/** Returns sweep(dirs): closes the idle headless profiles among dirs and answers the folders closed. The clock is per folder and restarts whenever a check fails. */
-export function makeIdleCloser(deps: IdleCloseDeps, now: () => number = Date.now): (dirs: readonly string[]) => Promise<string[]> {
-  const idleSince = new Map<string, number>()
+/** Returns sweep(dirs, idleMs): closes the idle headless profiles among dirs and answers the folders closed. A folder's idle time starts when it first looks idle or at its last call, whichever is later. */
+export function makeIdleCloser(
+  deps: IdleCloseDeps,
+  now: () => number = Date.now,
+): (dirs: readonly string[], idleMs: number) => Promise<string[]> {
+  const eligibleSince = new Map<string, number>()
 
-  const idle = async (dir: string): Promise<{ port: number } | null> => {
+  const eligible = async (dir: string): Promise<boolean> => {
     const live = await deps.liveBrowser(dir)
-    if (!live || !deps.headless(dir) || deps.liveView(live.port)) return null
-    const owners = deps.owners(dir)
-    const pages = await deps.pages(live.port)
-    const busy = pages.some((p) => p.url !== BLANK && !(owners.has(p.id) && deps.liveness(owners.get(p.id)!.chat) === false))
-    return busy ? null : live
+    return live !== null && deps.headless(dir) && !deps.liveView(live.port) && !deps.signInHeld(dir) && !deps.loginPending(dir)
   }
 
-  return async (dirs) => {
+  return async (dirs, idleMs) => {
+    const activity = deps.activity()
     const closed: string[] = []
     for (const dir of dirs) {
-      if (!(await idle(dir))) {
-        idleSince.delete(dir)
+      const key = resolve(dir)
+      if ((activity.get(key)?.busy ?? 0) > 0 || !(await eligible(dir))) {
+        eligibleSince.delete(key)
         continue
       }
-      const since = idleSince.get(dir) ?? now()
-      idleSince.set(dir, since)
-      if (now() - since < IDLE_CLOSE_MS) continue
-      if (!(await idle(dir))) {
-        idleSince.delete(dir)
-        continue
-      }
+      const since = eligibleSince.get(key) ?? now()
+      eligibleSince.set(key, since)
+      if (now() - Math.max(since, activity.get(key)?.last ?? 0) < idleMs) continue
       if (await deps.close(dir)) {
-        deps.log(`[desk] closed the idle headless browser in ${dir}: no call or live view for ${IDLE_CLOSE_MS / 60_000} minutes`)
+        deps.log(`[desk] closed the idle headless browser in ${dir}: no tool call for ${idleMs / 60_000} minutes`)
         closed.push(dir)
       }
-      idleSince.delete(dir)
+      eligibleSince.delete(key)
     }
     return closed
   }
 }
 
-function profileDeps(liveness: Liveness): IdleCloseDeps {
+function loginPending(root: string, dir: string): boolean {
+  const profiles = readRegistry().profiles
+  const entry = profiles && typeof profiles === 'object' ? (profiles as Record<string, Record<string, unknown>>)[scopedKey(root, dir)] : undefined
+  if (!entry || typeof entry.loginOpenedAt !== 'string') return false
+  if (typeof entry.loginVerifiedAt !== 'string') return true
+  return Date.parse(entry.loginVerifiedAt) < Date.parse(entry.loginOpenedAt)
+}
+
+function profileDeps(home: string): IdleCloseDeps {
   return {
     liveBrowser,
-    pages: async (port) => (await pageTabs(port)).filter((t) => !t.url.startsWith('devtools:')),
-    owners: (dir) => new Map([...readLedger(dir)].map(([id, row]) => [id, { chat: row.chat }])),
     headless: launchedHeadless,
     liveView: anyLiveSession,
-    liveness,
+    signInHeld: (dir) => readSignInWindow(dir) !== null,
+    loginPending: (dir) => loginPending(storeRoot(), dir),
+    activity: () => readActivity(home),
     close: closeBrowser,
     log: (msg) => console.log(msg),
   }
 }
 
-/** One pass over Desk's saved profiles. The closer, and with it each folder's idle clock, lives across passes; only the
- *  chats' liveness is read afresh each time. */
+/** One pass over the saved profiles of this Desk home. The closer, and with it each folder's idle clock, lives across passes. */
 export function makeIdleTick(o: {
-  deskSessions: () => Promise<ReadonlySet<string>>
+  home: string
+  idleMinutes: () => number
   root?: string
-  deps?: (liveness: Liveness) => IdleCloseDeps
+  deps?: (home: string) => IdleCloseDeps
   now?: () => number
 }): () => Promise<string[]> {
-  let liveness: Liveness = () => null
-  const sweep = makeIdleCloser((o.deps ?? profileDeps)((owner) => liveness(owner)), o.now)
-  return async () => {
-    liveness = makeLiveness(await o.deskSessions())
-    return sweep(profileFolders(o.root ?? storeRoot()))
-  }
+  const sweep = makeIdleCloser((o.deps ?? profileDeps)(o.home), o.now)
+  return async () => sweep(profileFolders(o.root ?? storeRoot()), o.idleMinutes() * 60_000)
 }
 
-/** Runs the idle close over Desk's saved profiles every IDLE_CHECK_MS (unref'd). Returns the stop. */
-export function startIdleBrowserClose(o: { deskSessions: () => Promise<ReadonlySet<string>>; root?: string; everyMs?: number }): () => void {
+/** Runs the idle close over the saved profiles every IDLE_CHECK_MS (unref'd). Returns the stop. */
+export function startIdleBrowserClose(o: {
+  home: string
+  idleMinutes: () => number
+  root?: string
+  everyMs?: number
+}): () => void {
   const pass = makeIdleTick(o)
   let running = false
   const tick = async (): Promise<void> => {

@@ -29,6 +29,7 @@ const SETTINGS: DeskSettings = {
   defaultAccountId: 'auto',
   delegateToCliMayte: true,
   idleCloseMinutes: 30,
+  browserIdleMinutes: 15,
   notifications: true,
   projectFolders: [],
   projectRoots: [],

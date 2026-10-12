@@ -513,6 +513,7 @@ export interface DeskSettings {
   defaultAccountId: string // 'auto' or an AccountRef id
   delegateToCliMayte: boolean
   idleCloseMinutes: number // close a live runtime after this long idle (its chat goes 'closed')
+  browserIdleMinutes: number // close a saved browser's headless Chrome after this long with no tool call against it
   notifications: boolean
   /** Folders added to the New screen's project grid, each one a tile (absolute paths). */
   projectFolders: string[]

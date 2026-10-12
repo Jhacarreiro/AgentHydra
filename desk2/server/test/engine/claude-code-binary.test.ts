@@ -249,6 +249,7 @@ describe('a chat without the binary', () => {
     defaultAccountId: 'auto',
     delegateToCliMayte: true,
     idleCloseMinutes: 30,
+    browserIdleMinutes: 15,
     notifications: true,
     projectFolders: [],
     projectRoots: [],

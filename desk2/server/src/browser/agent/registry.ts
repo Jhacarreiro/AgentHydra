@@ -1,6 +1,7 @@
 // The browser tools AgentHydra serves: one ToolDef per tool, with the description and input schema a model sees and
 // the handler that answers it. A new tool is one more entry here; the service lists and calls them from this array.
 
+import { existsSync } from 'node:fs'
 import { pageTabs } from '../cdp'
 import { readLedger } from '../ownership'
 import {
@@ -18,7 +19,9 @@ import type { ToolCaller, ToolName, ToolReply } from './contract'
 import { ToolInputError } from './errors'
 import { EXEC_TOOLS } from './exec'
 import { INPUT_TOOLS } from './input'
-import { navigate } from './navigate'
+import { navigate, profileFolder } from './navigate'
+import { noteUse } from './activity'
+import { ensureBrowserEndpoint } from './session'
 import { HANDOFF_TOOLS } from './handoff'
 import { PAGE_TOOLS } from './page-tools'
 import { READ_TOOLS } from './reads'
@@ -89,17 +92,25 @@ function requireCwd(caller: ToolCaller): string {
 async function profileRefOrPort(
   listing: Listing,
   params: Record<string, unknown>,
+  cwd: string,
 ): Promise<{ port: number; dir: string | null }> {
   const attachPort = numberParam(params, 'attachPort')
   if (attachPort) return { port: attachPort, dir: null }
   const name = stringParam(params, 'profile')
   if (name) {
     const ref = listing.refs.find((r) => r.profile.name === name)
-    if (!ref || ref.port === null)
+    if (ref && ref.port !== null) {
+      noteUse(ref.dir)
+      return { port: ref.port, dir: ref.dir }
+    }
+    const dir = await profileFolder(name, cwd, false)
+    if (!existsSync(dir))
       throw new ToolInputError(
         `profile '${name}' is not open; open it in its own Chrome or pass attachPort`,
       )
-    return { port: ref.port, dir: ref.dir }
+    noteUse(dir)
+    const endpoint = await ensureBrowserEndpoint(dir)
+    return { port: endpoint.port, dir }
   }
   throw new ToolInputError(
     'pass profile (an open saved browser) or attachPort (a Chrome debugging port)',
@@ -333,7 +344,7 @@ export const TOOL_DEFS: ToolDef[] = [
       "List every CDP target the browser knows about - open tabs, pages, workers and extension background targets - each with its type, title, URL, and whether it is attached. Use it to confirm a page's service worker registered, or to see what is there before reading a page. Complements browser_frames, which shows in-page iframe topology rather than the target list.",
     inputSchema: { type: 'object', properties: { ...ATTACH_PORT_PROP, ...PROFILE_PROP } },
     run: async (params, caller) => {
-      const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params)
+      const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params, requireCwd(caller))
       const wsUrl = await cdpVersion(port)
       let res: {
         targetInfos?: { type: string; title?: string; url?: string; attached?: boolean }[]
@@ -377,7 +388,7 @@ export const TOOL_DEFS: ToolDef[] = [
       "List the frame topology of the main page - the main frame plus every cross-origin iframe and popup, each with a text snippet. A debugging aid for 'element not found' when the content sits inside an iframe.",
     inputSchema: { type: 'object', properties: { ...ATTACH_PORT_PROP, ...PROFILE_PROP } },
     run: async (params, caller) => {
-      const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params)
+      const { port } = await profileRefOrPort(await listProfiles(requireCwd(caller)), params, requireCwd(caller))
       const list = (await (
         await fetch(`http://127.0.0.1:${port}/json/list`, { signal: AbortSignal.timeout(2000) })
       ).json()) as {

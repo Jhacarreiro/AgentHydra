@@ -14,6 +14,8 @@ import { callTool, toolInfos } from './tools'
 import type { CallResult, ToolCaller } from './contract'
 import { ToolInputError } from './errors'
 import { runSecret, type SecretRequest } from './secret'
+import { setActivityHome, withCall } from './activity'
+import { closeLaunchedBrowsers } from './session'
 
 export const STAMP = 'browser-agent-1'
 
@@ -91,11 +93,11 @@ interface CallBody {
 
 export interface RunningService {
   file: ServiceFile
-  stop(): void
+  stop(): Promise<void>
 }
 
 /** One request to the service: its health probe is open, every other route needs the token. */
-async function answer(req: Request, token: string, stop: () => void): Promise<Response> {
+async function answer(req: Request, token: string, stop: () => Promise<void>): Promise<Response> {
   const url = new URL(req.url)
   if (req.method === 'GET' && url.pathname === '/health') return json({ ok: true, pid: process.pid, stamp: STAMP, running: true })
   if (!authorized(req, token)) return json({ ok: false, error: 'unauthorized' }, 401)
@@ -103,7 +105,7 @@ async function answer(req: Request, token: string, stop: () => void): Promise<Re
   if (req.method === 'POST' && url.pathname === '/api/call') return callRoute(req)
   if (req.method === 'POST' && url.pathname === '/api/secret') return secretRoute(req)
   if (req.method === 'POST' && url.pathname === '/api/shutdown') {
-    setTimeout(stop, 20)
+    setTimeout(() => void stop(), 20)
     return json({ ok: true })
   }
   return json({ ok: false, error: 'not found' }, 404)
@@ -115,7 +117,8 @@ async function callRoute(req: Request): Promise<Response> {
   if (typeof body.name !== 'string') return json({ ok: false, status: 400, error: 'name is required' } satisfies CallResult, 400)
   const params = typeof body.params === 'object' && body.params !== null ? (body.params as Record<string, unknown>) : {}
   const caller = typeof body.caller === 'object' && body.caller !== null ? (body.caller as ToolCaller) : {}
-  const result = await callTool(body.name, params, caller)
+  const name = body.name
+  const result = await withCall(() => callTool(name, params, caller))
   return json(result, result.ok ? 200 : result.status)
 }
 
@@ -134,11 +137,13 @@ async function secretRoute(req: Request): Promise<Response> {
 /** Serves the tools on a fresh loopback port and writes service.json; the caller owns the lock. */
 export function startService(home: string, onStop: () => void = () => {}): RunningService {
   const token = randomBytes(24).toString('hex')
+  setActivityHome(home)
   let server: ReturnType<typeof Bun.serve> | null = null
-  const stop = (): void => {
+  const stop = async (): Promise<void> => {
     server?.stop(true)
     rmSync(serviceFilePath(home), { force: true })
     rmSync(serviceLockPath(home), { force: true })
+    await closeLaunchedBrowsers()
     onStop()
   }
   server = Bun.serve({
@@ -176,12 +181,13 @@ export async function main(argv: string[] = process.argv.slice(2)): Promise<void
   }
   const deskPid = Number(argValue(argv, '--desk-pid'))
   const running = startService(home, () => process.exit(0))
+  for (const signal of ['SIGINT', 'SIGTERM'] as const) process.on(signal, () => void running.stop())
   // A throwaway home (a test's) stops with the Desk that started it; the real home outlives Desk restarts.
   if (Number.isInteger(deskPid) && deskPid > 0 && isThrowawayHome(home)) {
     const watch = setInterval(() => {
       if (!pidAlive(deskPid)) {
         clearInterval(watch)
-        running.stop()
+        void running.stop()
       }
     }, 30_000)
   }

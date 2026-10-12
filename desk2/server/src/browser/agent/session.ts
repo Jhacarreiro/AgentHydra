@@ -2,10 +2,10 @@
 // detached so it outlives this process (a service or Desk restart re-attaches instead of relaunching). Follows
 // Connections' browser.mjs (startBrowserSession, reconnectToProfile, markLaunch), which it never edits.
 
-import { spawn } from 'node:child_process'
+import { spawn, spawnSync } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { dirname, join, resolve } from 'node:path'
-import { LaunchError, LIVE_CHROME_FLAGS, readPortFile } from '../cdp'
+import { closeBrowser, LaunchError, LIVE_CHROME_FLAGS, readPortFile } from '../cdp'
 import { releaseSignInWindow } from './sign-in-window'
 
 const HOST = '127.0.0.1'
@@ -25,6 +25,33 @@ export interface EnsureOptions {
 }
 
 const inFlight = new Map<string, Promise<BrowserEndpoint>>()
+const launchedHere = new Map<string, number>()
+
+/** Closes every Chrome this service launched, so none outlives it; a Chrome that ignores the close is killed with its tree. */
+export async function closeLaunchedBrowsers(): Promise<void> {
+  for (const [dir, pid] of launchedHere) {
+    if (await closeBrowser(dir)) continue
+    if (pidAlive(pid)) killTree(pid)
+  }
+  launchedHere.clear()
+}
+
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (err) {
+    return (err as NodeJS.ErrnoException).code === 'EPERM'
+  }
+}
+
+function killTree(pid: number): void {
+  if (process.platform === 'win32') {
+    spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' })
+    return
+  }
+  process.kill(pid, 'SIGKILL')
+}
 
 /** One Chrome per folder: concurrent calls for a folder share the one attach or launch. */
 export function ensureBrowserEndpoint(
@@ -91,7 +118,10 @@ async function attachOrLaunch(dir: string, opts: EnsureOptions): Promise<Browser
     if (up) {
       // A launch that Chrome handed to an instance already running on this folder exits at once: attached, not launched.
       const launched = child.exitCode === null
-      if (launched) writeMarker(dir, headless)
+      if (launched) {
+        writeMarker(dir, headless)
+        if (headless) launchedHere.set(dir, child.pid ?? 0)
+      }
       return { ...up, launched, headless }
     }
     // Chrome hands a launch on a folder it already holds to that Chrome and exits; a plain window has no port to answer with.

@@ -17,6 +17,7 @@ const mockStore = {
     defaultAccountId: 'auto',
     delegateToCliMayte: true,
     idleCloseMinutes: 30,
+    browserIdleMinutes: 15,
     notifications: true
   }),
   connected: ref(true),

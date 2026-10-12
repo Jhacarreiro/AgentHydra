@@ -601,7 +601,7 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
 
   const stopClimayte = pollClimayte(ctx, manager)
   const stopSweep = startTabSweep({ deskSessions: () => tabSweepSessions(manager, ctx.deps) })
-  const stopIdleClose = startIdleBrowserClose({ deskSessions: () => tabSweepSessions(manager, ctx.deps) })
+  const stopIdleClose = startIdleBrowserClose({ home: ctx.home, idleMinutes: () => ctx.settings().browserIdleMinutes })
 
   ctx.onStop(async () => {
     stopClimayte()

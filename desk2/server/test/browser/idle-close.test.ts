@@ -1,180 +1,105 @@
-// The idle close of a headless saved-browser Chrome: it closes only after ten quiet minutes, and any live view,
-// visible window, or page a live chat drives resets that clock.
-
 import { describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
-import { tmpdir } from 'node:os'
-import { join } from 'node:path'
-import { IDLE_CLOSE_MS, makeIdleCloser, makeIdleTick, type IdleCloseDeps } from '../../src/browser/idle-close'
-
-interface FakeProfile {
-  port: number
-  headless: boolean
-  view: boolean
-  pages: { id: string; url: string }[]
-  owners: Map<string, { chat: string }>
-  up: boolean
-}
+import { resolve } from 'node:path'
+import type { DirActivity } from '../../src/browser/agent/activity'
+import { makeIdleCloser, type IdleCloseDeps } from '../../src/browser/idle-close'
 
 const MIN = 60_000
+const IDLE = 15 * MIN
+const DIR = resolve('/profiles/example-a')
 
-function setup(liveness: (owner: string) => boolean | null = () => true) {
-  const profiles = new Map<string, FakeProfile>()
+function setup(over: Partial<IdleCloseDeps> = {}) {
+  let clock = 0
+  const activity = new Map<string, DirActivity>()
   const closed: string[] = []
-  const logs: string[] = []
-  let t = 0
-  const add = (dir: string, port: number, over: Partial<FakeProfile> = {}): FakeProfile => {
-    const p: FakeProfile = { port, headless: true, view: false, pages: [{ id: 'p1', url: 'about:blank' }], owners: new Map(), up: true, ...over }
-    profiles.set(dir, p)
-    return p
-  }
-  const byPort = (port: number): FakeProfile | undefined => [...profiles.values()].find((p) => p.port === port)
   const deps: IdleCloseDeps = {
-    liveBrowser: async (dir) => {
-      const p = profiles.get(dir)
-      return p && p.up ? { port: p.port } : null
-    },
-    pages: async (port) => (byPort(port)?.pages ?? []).map((x) => ({ ...x })),
-    owners: (dir) => profiles.get(dir)?.owners ?? new Map(),
-    headless: (dir) => profiles.get(dir)?.headless ?? false,
-    liveView: (port) => byPort(port)?.view ?? false,
-    liveness,
+    liveBrowser: async () => ({ port: 9001 }),
+    headless: () => true,
+    liveView: () => false,
+    signInHeld: () => false,
+    loginPending: () => false,
+    activity: () => activity,
     close: async (dir) => {
-      const p = profiles.get(dir)
-      if (!p) return false
-      p.up = false
       closed.push(dir)
       return true
     },
-    log: (msg) => logs.push(msg),
+    log: () => {},
+    ...over,
   }
-  const sweep = makeIdleCloser(deps, () => t)
-  const at = async (minutes: number, dirs: string[] = [...profiles.keys()]): Promise<string[]> => {
-    t = minutes * MIN
-    return sweep(dirs)
+  const sweep = makeIdleCloser(deps, () => clock)
+  return {
+    closed,
+    activity,
+    sweep: () => sweep([DIR], IDLE),
+    at: (minutes: number) => {
+      clock = minutes * MIN
+    },
   }
-  return { add, at, closed, logs, profiles }
 }
 
-describe('idle close of a headless profile', () => {
-  test('a headless profile with only blank pages is closed after ten quiet minutes, and logged', async () => {
+describe('the idle close of a saved browser', () => {
+  test('closes a headless browser once no tool call has touched it for the idle time', async () => {
     const s = setup()
-    s.add('a', 1)
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(9)).toEqual([])
-    expect(await s.at(10)).toEqual(['a'])
-    expect(s.closed).toEqual(['a'])
-    expect(s.logs.length).toBe(1)
-    expect(s.logs[0]).toContain('a')
-    expect(s.logs[0]).toContain('idle')
-    expect(await s.at(11)).toEqual([])
+    s.at(0)
+    expect(await s.sweep()).toEqual([])
+    s.at(14)
+    expect(await s.sweep()).toEqual([])
+    s.at(15)
+    expect(await s.sweep()).toEqual([DIR])
+    expect(s.closed).toEqual([DIR])
   })
 
-  test('a profile with no pages counts as idle', async () => {
+  test('each tool call restarts the clock from its last time', async () => {
     const s = setup()
-    s.add('empty', 2, { pages: [] })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(10)).toEqual(['empty'])
+    s.activity.set(DIR, { last: 10 * MIN, busy: 0 })
+    s.at(0)
+    await s.sweep()
+    s.at(15)
+    expect(await s.sweep()).toEqual([])
+    s.at(25)
+    expect(await s.sweep()).toEqual([DIR])
   })
 
-  test('a visible window is never closed, however long it sits', async () => {
+  test('a call in flight keeps the browser open however long it runs', async () => {
     const s = setup()
-    s.add('visible', 3, { headless: false })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(120)).toEqual([])
+    s.activity.set(DIR, { last: 0, busy: 1 })
+    s.at(0)
+    await s.sweep()
+    s.at(60)
+    expect(await s.sweep()).toEqual([])
     expect(s.closed).toEqual([])
   })
 
-  test('a profile with no running Chrome is not touched', async () => {
+  test('a browser is closed only after its call answers and the idle time passes again', async () => {
     const s = setup()
-    s.add('down', 4, { up: false })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(30)).toEqual([])
-    expect(s.closed).toEqual([])
-  })
-})
-
-describe('what resets the idle clock', () => {
-  test('a live view in the Browser pane holds the Chrome open and restarts the clock when it ends', async () => {
-    const s = setup()
-    const p = s.add('viewed', 5, { view: true })
-    expect(await s.at(0)).toEqual([])
-    p.view = false
-    expect(await s.at(5)).toEqual([])
-    expect(await s.at(14)).toEqual([])
-    expect(await s.at(15)).toEqual(['viewed'])
+    s.activity.set(DIR, { last: 0, busy: 1 })
+    s.at(0)
+    await s.sweep()
+    s.at(30)
+    s.activity.set(DIR, { last: 30 * MIN, busy: 0 })
+    expect(await s.sweep()).toEqual([])
+    s.at(45)
+    expect(await s.sweep()).toEqual([DIR])
   })
 
-  test("a live chat's non-blank page resets the clock until the page is blank again", async () => {
-    const s = setup()
-    const p = s.add('driven', 6, { pages: [{ id: 'tab', url: 'https://example.com/' }], owners: new Map([['tab', { chat: 'chat-live' }]]) })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(8)).toEqual([])
-    p.pages = [{ id: 'tab', url: 'about:blank' }]
-    expect(await s.at(9)).toEqual([])
-    expect(await s.at(18)).toEqual([])
-    expect(await s.at(19)).toEqual(['driven'])
-  })
-
-  test('a non-blank page with no ledger row is not idle, since its owner is unknown', async () => {
-    const s = setup()
-    s.add('unowned', 7, { pages: [{ id: 'x', url: 'https://example.com/' }] })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(30)).toEqual([])
+  test.each([
+    ['a browser watched live in the Browser pane', { liveView: () => true }],
+    ['a headed window the person opened', { headless: () => false }],
+    ['a sign-in window still open', { signInHeld: () => true }],
+    ['a login not yet verified', { loginPending: () => true }],
+  ])('keeps %s open', async (_name, over) => {
+    const s = setup(over)
+    s.at(0)
+    await s.sweep()
+    s.at(60)
+    expect(await s.sweep()).toEqual([])
     expect(s.closed).toEqual([])
   })
 
-  test('an owner whose liveness cannot be judged (mcp) keeps its page non-idle', async () => {
-    const s = setup(() => null)
-    s.add('mcp', 8, { pages: [{ id: 'm', url: 'https://example.com/' }], owners: new Map([['m', { chat: 'mcp:connections' }]]) })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(30)).toEqual([])
-  })
-})
-
-describe('a dead owner', () => {
-  test("a dead owner's leftover non-blank page counts as idle and the Chrome closes after ten minutes", async () => {
-    const s = setup((owner) => (owner === 'chat-gone' ? false : true))
-    s.add('leftover', 9, { pages: [{ id: 'old', url: 'https://example.com/' }], owners: new Map([['old', { chat: 'chat-gone' }]]) })
-    expect(await s.at(0)).toEqual([])
-    expect(await s.at(10)).toEqual(['leftover'])
-  })
-})
-
-describe('the timer', () => {
-  test("each folder's idle clock lives across passes, so a quiet profile is closed after ten minutes", async () => {
-    const root = mkdtempSync(join(tmpdir(), 'idle-close-'))
-    try {
-      mkdirSync(join(root, 'a'))
-      const closed: string[] = []
-      let t = 0
-      const pass = makeIdleTick({
-        deskSessions: async () => new Set(),
-        root,
-        now: () => t,
-        deps: (liveness) => ({
-          liveBrowser: async () => ({ port: 1 }),
-          pages: async () => [{ id: 'p', url: 'about:blank' }],
-          owners: () => new Map(),
-          headless: () => true,
-          liveView: () => false,
-          liveness,
-          close: async (dir) => {
-            closed.push(dir)
-            return true
-          },
-          log: () => {},
-        }),
-      })
-      for (const m of [0, 1, 5, 9]) {
-        t = m * MIN
-        expect(await pass()).toEqual([])
-      }
-      t = 10 * MIN
-      expect(await pass()).toEqual([join(root, 'a')])
-      expect(closed).toEqual([join(root, 'a')])
-    } finally {
-      if (root) rmSync(root, { recursive: true, force: true })
-    }
+  test('a profile whose Chrome is not running has nothing to close', async () => {
+    const s = setup({ liveBrowser: async () => null })
+    s.at(0)
+    await s.sweep()
+    s.at(60)
+    expect(await s.sweep()).toEqual([])
   })
 })

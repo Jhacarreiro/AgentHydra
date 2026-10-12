@@ -71,7 +71,7 @@ function profileSlug(name: string): string {
   )
 }
 
-function scopedKey(root: string, dir: string): string {
+export function scopedKey(root: string, dir: string): string {
   const inWorkspace = relative(join(root, 'ws'), dir)
   if (inWorkspace && !inWorkspace.startsWith('..') && !isAbsolute(inWorkspace))
     return inWorkspace.split(/[\\/]/).join('/')
