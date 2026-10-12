@@ -54,6 +54,7 @@ import {
   withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
+import { DASHBOARD_TOOLS } from './mcp-dashboards'
 import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
@@ -1839,6 +1840,7 @@ export const TOOLS: McpEngineTool[] = [
     () => TOOLS,
     () => LISTED_TOOLS,
   ),
+  ...DASHBOARD_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:
@@ -2384,6 +2386,8 @@ export const LISTED_TOOLS: ReadonlySet<string> = new Set([
   'hydra_find',
   'hydra_run',
   'desk_chat',
+  'dashboard_read',
+  'dashboard_write',
   'whoami',
   'check_my_usage',
   'usage_budget',

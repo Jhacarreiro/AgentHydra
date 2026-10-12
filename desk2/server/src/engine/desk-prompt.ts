@@ -27,11 +27,14 @@ export const BROWSER = [
   MEDIA,
 ].join(' ')
 
+const DASHBOARD =
+  "This project has a small dashboard the person sees in AgentHydra; keep it current with dashboard_write on the agenthydra MCP (rewrite widgets by id, don't pile up new ones)."
+
 /** The full orchestrator text, used when delegateToCliMayte is on. */
-export const DESK_APPEND = `${FIRST} ${DELEGATE} ${BROWSER}`
+export const DESK_APPEND = `${FIRST} ${DELEGATE} ${BROWSER} ${DASHBOARD}`
 
 /** When delegateToCliMayte is off, DESK_APPEND is its first sentence and the browser paragraph. */
-export const DESK_APPEND_NO_DELEGATE = `${FIRST} ${BROWSER}`
+export const DESK_APPEND_NO_DELEGATE = `${FIRST} ${BROWSER} ${DASHBOARD}`
 
 export function deskAppend(delegate: boolean): string {
   return delegate ? DESK_APPEND : DESK_APPEND_NO_DELEGATE

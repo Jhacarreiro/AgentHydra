@@ -32,6 +32,15 @@ describe('hydra_find', () => {
     )
     expect(rankTools(TOOLS, 'rename my chat', 3, undefined, true)[0]?.name).toBe('desk_chat')
   })
+  test('the dashboard tools are listed, and "dashboard" finds them first', () => {
+    expect(LISTED_TOOLS.has('dashboard_read')).toBe(true)
+    expect(LISTED_TOOLS.has('dashboard_write')).toBe(true)
+    expect(
+      rankTools(TOOLS, 'dashboard', 2)
+        .map((t) => t.name)
+        .sort(),
+    ).toEqual(['dashboard_read', 'dashboard_write'])
+  })
   test('renaming finds desk_chat, restarting finds daemon_restart', () => {
     expect(rankTools(TOOLS, 'rename my chat', 3).map((t) => t.name)).toContain('desk_chat')
     expect(rankTools(TOOLS, 'restart the daemon', 3).map((t) => t.name)).toContain('daemon_restart')

@@ -27,6 +27,10 @@ const SYNONYMS: Record<string, string[]> = {
   title: ['rename', 'name'],
   account: ['instance'],
   instance: ['account'],
+  dashboard: ['board', 'widget', 'panel'],
+  board: ['dashboard', 'widget', 'panel'],
+  widget: ['dashboard', 'panel'],
+  panel: ['dashboard', 'widget'],
   quota: ['usage', 'limit'],
   usage: ['quota', 'limit'],
   conversation: ['chat', 'session'],
@@ -416,6 +420,12 @@ export function withDeskChat(
         ...t,
         run: (a: Record<string, unknown>, signal?: AbortSignal) =>
           run({ ...a, chat: str(a.chat).trim() || id }, signal),
+      }
+    if (t.name === 'dashboard_read' || t.name === 'dashboard_write')
+      return {
+        ...t,
+        run: (a: Record<string, unknown>, signal?: AbortSignal) =>
+          run({ ...a, deskChat: id }, signal),
       }
     // hydra_find ranks the Desk tools first for a Desk chat
     if (t.name === 'hydra_find')
