@@ -1966,6 +1966,13 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
  *  real turn, with a closed chat resumed. 404 or no server there means the chat is not one of its.
  *  Asked on Desk 2's port whether or not Desk 2 sits beside this daemon (desk2.ts): a release exe
  *  runs from its own folder while Desk 2 runs from a checkout, and its chats still need waking. */
+/** The app's native send for a chat Desk 2 does not run (claude-native-send.ts): it starts the chat's turn
+ *  through the running app, and the pipe is tried only when nothing reached the app. Sent as CliMayte. */
+const native: NonNullable<CliMaytePingDeps['native']> = async (o, text) => {
+  const { tryNativeSend } = await import('./claude-native-send')
+  return tryNativeSend(o.home, o.sessionId, text, 'CliMayte')
+}
+
 const desk: NonNullable<CliMaytePingDeps['desk']> = {
   async send(sessionId, text) {
     const url = desk2Url()
@@ -2002,6 +2009,7 @@ function startPing(): void {
     climayteSend: (id, text, opts) => climayteSend(id, text, opts),
     composer,
     desk,
+    native,
     ...pingOverrides,
   })
   // The real daemon only: a test never looks at the owner's jobs or pings a real chat.

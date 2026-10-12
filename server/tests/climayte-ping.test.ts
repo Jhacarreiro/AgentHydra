@@ -176,6 +176,7 @@ function harness(
     peer?: (n: number) => { ok: boolean; reason: string }
     composer?: { eligible: boolean; ok: boolean }
     desk?: { ok: boolean; reason: string; notDesk?: boolean }
+    native?: { ok: boolean; unavailable: boolean; reason?: string }
     send?: (id: string, text: string) => { ok: boolean; message: string }
     start?: number
   } = {},
@@ -187,6 +188,7 @@ function harness(
   const sent: Sent[] = []
   const composerSent: string[] = []
   const deskSent: Sent[] = []
+  const nativeSent: string[] = []
   const toasts: string[] = []
   const workerSends: Array<[string, string]> = []
   const journal: Array<Record<string, unknown>> = []
@@ -238,6 +240,12 @@ function harness(
           },
         }
       : undefined,
+    native: opts.native
+      ? async (_origin, text) => {
+          nativeSent.push(text)
+          return opts.native as { ok: boolean; unavailable: boolean; reason?: string }
+        }
+      : undefined,
     toast: async (n) => {
       toasts.push(`${n.title}\n${n.body}`)
     },
@@ -276,6 +284,7 @@ function harness(
     sent,
     composerSent,
     deskSent,
+    nativeSent,
     toasts,
     workerSends,
     journal,
@@ -716,6 +725,55 @@ describe('the outbox', () => {
     await h.at(30_000)
     expect(h.journal.filter((j) => j.event === 'ping-failed' && j.step === 'desk')).toHaveLength(1)
     expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a chat Desk 2 does not run is settled by the native send, the pipe never touched', async () => {
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: { ok: true, unavailable: false },
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.nativeSent).toHaveLength(1)
+    expect(h.peerCalls()).toBe(0)
+    expect(h.sent).toHaveLength(0)
+    await h.at(3_600_000)
+    expect(h.nativeSent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a native refusal before dispatch (nothing reached the app) falls back to the pipe', async () => {
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: { ok: false, unavailable: true, reason: 'the app is not running' },
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    expect(h.nativeSent).toHaveLength(1)
+    expect(h.peerCalls()).toBe(1)
+    expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a native send the app took and refused is never sent again, nor by the pipe', async () => {
+    const a = running('w-a')
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: { ok: false, unavailable: false, reason: 'archived' },
+    })
+    h.change({ ...a, status: 'failed', error: 'boom' })
+    await h.at(30_000)
+    await h.at(3_600_000)
+    expect(h.nativeSent).toHaveLength(1)
+    expect(h.peerCalls()).toBe(0)
+    expect(h.sent).toHaveLength(0)
+    expect(h.toasts).toHaveLength(1)
     h.ping.stop()
   })
 

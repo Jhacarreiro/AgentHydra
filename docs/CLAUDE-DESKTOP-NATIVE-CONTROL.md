@@ -457,6 +457,13 @@ which types. On 2026-10-09 the babysitter's 44 overnight continues for seven cha
 stopped all ended that way (`no peer pipe`, or `wrote-but-no-transcript-growth`). A send that
 reached the app is never retried another way; a refusal before dispatch falls back to the pipe.
 
+Callers that now use it (2026-10-12): CliMayte's pings and HSwarm job pings to a chat Desk 2 does
+not run (`server/src/climayte.ts` passes `tryNativeSend` as the ping's `native` step, after Desk's
+route and before the peer pipe; `server/src/climayte-ping.ts`). The orchestrator's nudge to an
+outside session posts `/api/external/sessions/:id/message`, which the bridge sends as `peer_only`,
+so it reaches the same native-first route. A native send the app took and refused is journalled and
+surfaced in the chat's next `climayte_status`, never sent again. Nothing here types into the window.
+
 ## Remaining migration work
 
 - Support for reviewed future Claude versions and explicit opt-in for new profiles.

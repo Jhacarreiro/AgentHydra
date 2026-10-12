@@ -19,7 +19,10 @@
 // DELIVERY, in order: a chat Hydra Desk 2 runs gets it from Desk 2 (POST /api/sessions/:id/ping),
 // which resumes a closed chat and starts a turn, or queues behind a running one; the peer pipe only
 // queues a note in an idle chat, so it never woke one (owner, 2026-10-06). Any other chat, or Desk 2
-// unreachable: the chat's own peer pipe (peer-message.ts; it queues behind a running turn).
+// unreachable: the app's native send (claude-native-send.ts, the peer_only path; it starts a turn in
+// an idle chat too, 2026-10-12). Only a refusal before dispatch (no native control, no live app) goes
+// on to the chat's own peer pipe (peer-message.ts; it queues behind a running turn); a send the app
+// took is never sent again another way.
 // A write the pipe accepted is delivered, once, even when the transcript has not grown yet (a busy
 // chat shows it when its turn ends); only a chat with no pipe, or a refused write, is retried every
 // 2 minutes for 2 hours; then, only for a failed or settled group on a desktop chat whose instance
@@ -461,6 +464,13 @@ export interface CliMaytePingDeps {
       text: string,
     ): Promise<{ ok: boolean; reason: string; notDesk?: boolean }>
   }
+  /** The app's native send (tryNativeSend), tried for a chat Desk 2 does not run, before the peer pipe.
+   *  `unavailable`: nothing reached the app, so the pipe may go; false: the app was sent it and refused or
+   *  never answered, so it is never sent again. */
+  native?(
+    origin: ChatOrigin,
+    text: string,
+  ): Promise<{ ok: boolean; unavailable: boolean; reason?: string }>
   /** One OS notification (notify-os sendOsNotification by default). */
   toast?(n: { title: string; body: string }): Promise<unknown>
   /** One line per failed delivery; appended to `<dir>/pings-journal.jsonl` by default. */
@@ -681,6 +691,19 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     return now - box.retry.firstAt >= RETRY_FOR_MS
   }
 
+  // Last resort: the human hears of it, and the caller's next climayte_status shows it.
+  const giveUp = async (box: OriginBox, batch: QueuedPing[], text: string) => {
+    const groups = [...new Set(batch.map((e) => e.group))].join(', ')
+    await toast({
+      title: 'CliMayte: a chat missed its ping',
+      body: `Chat ${originLabel(box.origin)} was not reachable for 2 hours. Ping ${seqRange(batch)}: ${batch.length} update${batch.length === 1 ? '' : 's'} (${groups}). It shows in that chat's next climayte_status.`,
+    }).catch(() => undefined)
+    box.unread = [...box.unread, { at: clock.now(), seqs: seqRange(batch), text }].slice(
+      -UNREAD_MAX,
+    )
+    settle(box, batch)
+  }
+
   const sendChat = async (box: OriginBox, o: ChatOrigin, batch: QueuedPing[], text: string) => {
     // A Desk 2 chat first: its route starts a turn (the peer pipe only queues the note in an idle chat).
     if (deps.desk) {
@@ -689,6 +712,20 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
         .catch((err) => ({ ok: false, reason: String(err), notDesk: false }))
       if (d.ok) return settle(box, batch)
       if (!d.notDesk) fail(box, batch, 'desk', d.reason)
+    }
+    // Any other chat: the app's native send starts its turn. Only a refusal before dispatch goes on to
+    // the pipe; a send the app took is never sent again another way (the runbook's rule).
+    if (deps.native) {
+      const n = await deps.native(o, text).catch((err) => ({
+        ok: false,
+        unavailable: true,
+        reason: String(err),
+      }))
+      if (n.ok) return settle(box, batch)
+      if (!n.unavailable) {
+        fail(box, batch, 'native', n.reason ?? 'the app did not confirm the message')
+        return giveUp(box, batch, text)
+      }
     }
     // Without a transcript nothing can grow, so there is nothing to wait 45 s for.
     const confirmMs = o.transcript ? PEER_CONFIRM_MS : 0
@@ -724,16 +761,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
         fail(box, batch, 'composer', c.reason)
       }
     }
-    // Last resort: the human hears of it, and the caller's next climayte_status shows it.
-    const groups = [...new Set(batch.map((e) => e.group))].join(', ')
-    await toast({
-      title: 'CliMayte: a chat missed its ping',
-      body: `Chat ${originLabel(o)} was not reachable for 2 hours. Ping ${seqRange(batch)}: ${batch.length} update${batch.length === 1 ? '' : 's'} (${groups}). It shows in that chat's next climayte_status.`,
-    }).catch(() => undefined)
-    box.unread = [...box.unread, { at: clock.now(), seqs: seqRange(batch), text }].slice(
-      -UNREAD_MAX,
-    )
-    settle(box, batch)
+    return giveUp(box, batch, text)
   }
 
   const sendWorker = (box: OriginBox, workerId: string, batch: QueuedPing[], text: string) => {
