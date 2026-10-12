@@ -178,6 +178,18 @@ test('a restart whose start threw does not hold off the next ask', async () => {
   expect(started).toHaveLength(1)
 })
 
+test('a restart whose start failed after the answer frees the route at once and logs why', async () => {
+  const failures: ((err: Error) => void)[] = []
+  const { desk, home } = await boot({ stamp: () => ({ newest: 1500, count: 3 }), start: (_argv, failed) => void failures.push(failed) })
+  pidFile(home, 4242)
+  const ask = () => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'agent-a' } })
+  expect((await ask()).status).toBe(202)
+  expect((await ask()).status).toBe(409)
+  failures[0]!(new Error('spawn powershell ENOENT'))
+  expect((await ask()).status).toBe(202)
+  expect(readFileSync(join(home, 'logs', 'restart.log'), 'utf8')).toContain('-> did not start (spawn powershell ENOENT)')
+})
+
 test('an agent or script may not stop the server: shutdown answers 409 and stops nothing', async () => {
   const home = temp('desk-update-home-')
   const engine = temp('desk-update-engine-')

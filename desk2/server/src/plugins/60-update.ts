@@ -33,8 +33,8 @@ export interface UpdateDeps {
   pid: number
   /** The port this server listens on (HYDRA_DESK_PORT, which start.ps1 sets): the restart's stop and start use it. */
   port: number
-  /** Starts argv hidden and outside the server's process tree (stop.ps1 ends that tree). */
-  start(argv: string[]): void
+  /** Starts argv hidden and outside the server's process tree (stop.ps1 ends that tree); `failed` hears a start that did not happen. */
+  start(argv: string[], failed: (err: Error) => void): void
 }
 
 export function codeStamp(dirs: string[] = CODE_DIRS): CodeStamp {
@@ -84,10 +84,13 @@ function realDeps(): UpdateDeps {
     platform: process.platform,
     pid: process.pid,
     port: Number(process.env.HYDRA_DESK_PORT) || 7798,
-    start(argv) {
+    start(argv, failed) {
       const plan = detachedCommand(process.platform, argv)
       const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
-      child.on('error', (err) => console.error('[update] could not start the restart:', err))
+      child.on('error', (err) => {
+        console.error('[update] could not start the restart:', err)
+        failed(err)
+      })
       child.unref()
     },
   }
@@ -134,9 +137,23 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     // The script starts through WMI, outside this process tree, with none of this server's environment: it is told this
     // server's home and port, or it stops and starts the default Desk instead (2026-10-12: a Desk on a spare port did).
     const target = `$env:HYDRA_DESK_HOME = ${quote(ctx.home)}; $env:HYDRA_DESK_PORT = ${quote(String(deps.port))}`
-    deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${target}; & ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`])
-    // Only a restart that started holds off the next ask: a start that threw leaves the route open.
-    restartAcceptedAt = Date.now()
+    const command = ['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${target}; & ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`]
+    // Only a restart that started holds off the next ask: a start that threw, or failed after this answer left, frees
+    // the route at once (and a late failure is logged).
+    const accepted = Date.now()
+    restartAcceptedAt = accepted
+    const release = () => {
+      if (restartAcceptedAt === accepted) restartAcceptedAt = null
+    }
+    try {
+      deps.start(command, (err) => {
+        release()
+        logRestartAsk(ctx.home, `restart asked: ${who} -> did not start (${err.message})`)
+      })
+    } catch (err) {
+      release()
+      throw err
+    }
     return c.json({ ok: true }, 202)
   })
 }

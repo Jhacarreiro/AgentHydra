@@ -978,7 +978,9 @@ An agent may ask the same restart (the owner, 2026-10-12), but only to update: t
 a server still answering was not restarted and takes the next ask). `POST /api/server/shutdown` answers 409 to any
 caller but the window and the launcher (an agent, a script, curl; `server/src/caller.ts`, identified by
 `X-Desk-Caller: window|launcher` and `User-Agent`): stopping stays the owner's. Every ask is logged with its caller
-and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends `X-Desk-Caller: launcher`. A server the launcher did
+and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends `X-Desk-Caller: launcher`. The header is what a
+caller says about itself: with the log it holds cooperating agents to the rule, but it is no lock against a program
+on this machine that lies (like every Desk route, these trust local callers; `localOnly` refuses other sites). A server the launcher did
 not start answers 409 to every restart ask. A server older than a route
 the window calls answers `no route ...`, which the window shows as "Hydra Desk 2's server is older than this
 window: Menu > Restart to update".
