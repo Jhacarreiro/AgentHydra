@@ -8,7 +8,7 @@ import { basename, join } from 'node:path'
 import { pageTabs } from '../cdp'
 import { ownPage } from '../ledger'
 import { listProfiles, storeRoot } from '../store'
-import { noteUse } from './activity'
+import { awaitNotClosing, noteUse } from './activity'
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
 import { dialogAnswerer } from './page-dialogs'
@@ -90,6 +90,7 @@ export async function resolveBrowser(params: Params, caller: ToolCaller): Promis
     return { key: `attach:${attachPort}`, port: attachPort, browserWs: await browserWsOf(attachPort), dir: null, exe }
   const dir = await profileFolder(stringParam(params.profile) ?? 'default', caller.cwd)
   noteUse(dir)
+  await awaitNotClosing(dir)
   const endpoint = await ensureBrowserEndpoint(dir, { headed: params.headed === true })
   return { key: dir, port: endpoint.port, browserWs: endpoint.browserWsUrl, dir, exe }
 }

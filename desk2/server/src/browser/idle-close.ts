@@ -3,7 +3,7 @@
 // the next browser call relaunches it, with its logins kept in the profile folder.
 
 import { resolve } from 'node:path'
-import { readActivity, type DirActivity } from './agent/activity'
+import { clearClosing, markClosing, readActivity, type DirActivity } from './agent/activity'
 import { scopedKey } from './agent/handoff'
 import { launchedHeadless } from './agent/session'
 import { readSignInWindow } from './agent/sign-in-window'
@@ -21,6 +21,8 @@ export interface IdleCloseDeps {
   signInHeld(dir: string): boolean
   loginPending(dir: string): boolean
   activity(): Map<string, DirActivity>
+  markClosing(dir: string): void
+  clearClosing(dir: string): void
   close(dir: string): Promise<boolean>
   log(msg: string): void
 }
@@ -38,6 +40,7 @@ export function makeIdleCloser(
   }
 
   return async (dirs, idleMs) => {
+    const started = now()
     const activity = deps.activity()
     const closed: string[] = []
     for (const dir of dirs) {
@@ -46,14 +49,24 @@ export function makeIdleCloser(
         eligibleSince.delete(key)
         continue
       }
-      const since = eligibleSince.get(key) ?? now()
+      const since = eligibleSince.get(key) ?? started
       eligibleSince.set(key, since)
-      if (now() - Math.max(since, activity.get(key)?.last ?? 0) < idleMs) continue
-      if (await deps.close(dir)) {
-        deps.log(`[desk] closed the idle headless browser in ${dir}: no tool call for ${idleMs / 60_000} minutes`)
-        closed.push(dir)
+      if (started - Math.max(since, activity.get(key)?.last ?? 0) < idleMs) continue
+      deps.markClosing(dir)
+      try {
+        const fresh = deps.activity().get(key)
+        if ((fresh?.busy ?? 0) > 0 || (fresh?.last ?? 0) >= started) {
+          eligibleSince.delete(key)
+          continue
+        }
+        if (await deps.close(dir)) {
+          deps.log(`[desk] closed the idle headless browser in ${dir}: no tool call for ${idleMs / 60_000} minutes`)
+          closed.push(dir)
+        }
+        eligibleSince.delete(key)
+      } finally {
+        deps.clearClosing(dir)
       }
-      eligibleSince.delete(key)
     }
     return closed
   }
@@ -75,6 +88,8 @@ function profileDeps(home: string): IdleCloseDeps {
     signInHeld: (dir) => readSignInWindow(dir) !== null,
     loginPending: (dir) => loginPending(storeRoot(), dir),
     activity: () => readActivity(home),
+    markClosing: (dir) => markClosing(home, dir),
+    clearClosing: (dir) => clearClosing(home, dir),
     close: closeBrowser,
     log: (msg) => console.log(msg),
   }

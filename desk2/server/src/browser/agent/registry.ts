@@ -20,7 +20,7 @@ import { ToolInputError } from './errors'
 import { EXEC_TOOLS } from './exec'
 import { INPUT_TOOLS } from './input'
 import { navigate, profileFolder } from './navigate'
-import { noteUse } from './activity'
+import { awaitNotClosing, noteUse } from './activity'
 import { ensureBrowserEndpoint } from './session'
 import { HANDOFF_TOOLS } from './handoff'
 import { PAGE_TOOLS } from './page-tools'
@@ -101,7 +101,9 @@ async function profileRefOrPort(
     const ref = listing.refs.find((r) => r.profile.name === name)
     if (ref && ref.port !== null) {
       noteUse(ref.dir)
-      return { port: ref.port, dir: ref.dir }
+      await awaitNotClosing(ref.dir)
+      const endpoint = await ensureBrowserEndpoint(ref.dir)
+      return { port: endpoint.port, dir: ref.dir }
     }
     const dir = await profileFolder(name, cwd, false)
     if (!existsSync(dir))
@@ -109,6 +111,7 @@ async function profileRefOrPort(
         `profile '${name}' is not open; open it in its own Chrome or pass attachPort`,
       )
     noteUse(dir)
+    await awaitNotClosing(dir)
     const endpoint = await ensureBrowserEndpoint(dir)
     return { port: endpoint.port, dir }
   }

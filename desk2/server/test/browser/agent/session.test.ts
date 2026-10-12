@@ -52,6 +52,28 @@ describe('browser session endpoint', () => {
     expect(existsSync(join(dir, '.connections-headless'))).toBe(true)
   }, 30_000)
 
+  test('after the Chrome is closed, the next call relaunches it on the same profile folder', async () => {
+    const dir = newFolder()
+    const sentinel = join(dir, 'kept-across-close.txt')
+    writeFileSync(sentinel, 'profile data')
+    const first = await ensureBrowserEndpoint(dir)
+    expect(first.launched).toBe(true)
+    expect(await closeBrowser(dir)).toBe(true)
+    const until = Date.now() + 20_000
+    while (Date.now() < until) {
+      const up = await fetch(`http://127.0.0.1:${first.port}/json/version`, {
+        signal: AbortSignal.timeout(500),
+      }).then((r) => r.ok, () => false)
+      if (!up) break
+      await new Promise((r) => setTimeout(r, 200))
+    }
+    const second = await ensureBrowserEndpoint(dir)
+    expect(second.launched).toBe(true)
+    expect((await versionOf(second.port)).webSocketDebuggerUrl).toBe(second.browserWsUrl)
+    expect(existsSync(sentinel)).toBe(true)
+    expect((await launchArgs(dir, 'chrome', true)).some((a) => a === `--user-data-dir=${dir}`)).toBe(true)
+  }, 60_000)
+
   test('a second call while the Chrome runs attaches to that same instance', async () => {
     const dir = newFolder()
     const first = await ensureBrowserEndpoint(dir)

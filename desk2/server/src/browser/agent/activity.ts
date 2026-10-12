@@ -17,11 +17,15 @@ interface ActivityFile {
 
 const calls = new AsyncLocalStorage<Set<string>>()
 const dirs = new Map<string, DirActivity>()
+const CLOSING_MS = 60_000
+let homeDir: string | null = null
 let filePath: string | null = null
 
 export const activityPath = (home: string): string => join(home, 'browser-agent', 'activity.json')
+const closingPath = (home: string): string => join(home, 'browser-agent', 'closing.json')
 
 export function setActivityHome(home: string): void {
+  homeDir = home
   filePath = activityPath(home)
 }
 
@@ -69,6 +73,46 @@ export function noteUse(dir: string): void {
     row.busy += 1
   }
   flush()
+}
+
+function readClosing(home: string): Record<string, number> {
+  try {
+    return (JSON.parse(readFileSync(closingPath(home), 'utf8')) as { dirs?: Record<string, number> }).dirs ?? {}
+  } catch {
+    return {}
+  }
+}
+
+function writeClosing(home: string, marks: Record<string, number>): void {
+  mkdirSync(join(home, 'browser-agent'), { recursive: true })
+  const tmp = `${closingPath(home)}.tmp`
+  writeFileSync(tmp, JSON.stringify({ dirs: marks }), 'utf8')
+  renameSync(tmp, closingPath(home))
+}
+
+/** Desk marks a folder before it closes that folder's Chrome; a call that starts meanwhile waits for the close. */
+export function markClosing(home: string, dir: string): void {
+  const marks = readClosing(home)
+  marks[resolve(dir)] = Date.now()
+  writeClosing(home, marks)
+}
+
+export function clearClosing(home: string, dir: string): void {
+  const marks = readClosing(home)
+  delete marks[resolve(dir)]
+  writeClosing(home, marks)
+}
+
+/** The service's side of the mark: waits while Desk is closing the folder's Chrome; a mark older than a minute is stale. */
+export async function awaitNotClosing(dir: string): Promise<void> {
+  const home = homeDir
+  if (!home) return
+  const key = resolve(dir)
+  const closing = (): boolean => {
+    const at = readClosing(home)[key]
+    return typeof at === 'number' && Date.now() - at < CLOSING_MS
+  }
+  while (closing()) await new Promise((done) => setTimeout(done, 100))
 }
 
 /** Desk's view: the calls running on a folder count only while the service that wrote them is alive. */

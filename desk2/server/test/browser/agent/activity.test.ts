@@ -2,7 +2,16 @@ import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
-import { activityPath, noteUse, readActivity, setActivityHome, withCall } from '../../../src/browser/agent/activity'
+import {
+  activityPath,
+  awaitNotClosing,
+  clearClosing,
+  markClosing,
+  noteUse,
+  readActivity,
+  setActivityHome,
+  withCall,
+} from '../../../src/browser/agent/activity'
 
 let home = ''
 
@@ -17,6 +26,38 @@ afterEach(() => {
 })
 
 const DIR = resolve(join(tmpdir(), 'example-profile'))
+
+describe('a call that meets Desk closing the same profile', () => {
+  test('a call waits while Desk is closing the browser, then runs once the close is done', async () => {
+    markClosing(home, DIR)
+    let ran = false
+    const call = awaitNotClosing(DIR).then(() => {
+      ran = true
+    })
+    await new Promise((r) => setTimeout(r, 300))
+    expect(ran).toBe(false)
+    clearClosing(home, DIR)
+    await call
+    expect(ran).toBe(true)
+  })
+
+  test('a mark left by a Desk that died does not hold a call for longer than a minute', async () => {
+    mkdirSync(join(home, 'browser-agent'), { recursive: true })
+    writeFileSync(
+      join(home, 'browser-agent', 'closing.json'),
+      JSON.stringify({ dirs: { [DIR]: Date.now() - 120_000 } }),
+    )
+    const timeout = new Promise((r) => setTimeout(() => r('held'), 1000))
+    expect(await Promise.race([awaitNotClosing(DIR).then(() => 'ran'), timeout])).toBe('ran')
+  })
+
+  test('a call on a profile Desk is not closing does not wait', async () => {
+    markClosing(home, DIR)
+    clearClosing(home, DIR)
+    const timeout = new Promise((r) => setTimeout(() => r('held'), 1000))
+    expect(await Promise.race([awaitNotClosing(DIR).then(() => 'ran'), timeout])).toBe('ran')
+  })
+})
 
 describe('the browser tools activity file', () => {
   test('a call counts its profile as busy until it answers, then stamps the time', async () => {
