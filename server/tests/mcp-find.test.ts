@@ -40,6 +40,8 @@ describe('hydra_find', () => {
         .map((t) => t.name)
         .sort(),
     ).toEqual(['dashboard_read', 'dashboard_write'])
+    expect(rankTools(TOOLS, 'project website', 1)[0]?.name).toBe('dashboard_write')
+    expect(rankTools(TOOLS, 'dashboard', 1)[0]?.name).toBe('dashboard_write')
   })
   test('renaming finds desk_chat, restarting finds daemon_restart', () => {
     expect(rankTools(TOOLS, 'rename my chat', 3).map((t) => t.name)).toContain('desk_chat')
@@ -126,8 +128,8 @@ describe('desk_chat', () => {
       },
     ]
     const hydraRun = withDeskChat(fake as never, 'c9')[0]
-    await hydraRun.run({ tool: 'dashboard_write', args: { put: [] } })
-    expect(seen.args).toEqual({ put: [], deskChat: 'c9' })
+    await hydraRun.run({ tool: 'dashboard_write', args: { files: [] } })
+    expect(seen.args).toEqual({ files: [], deskChat: 'c9' })
     await hydraRun.run({ tool: 'desk_chat', args: { title: 'x' } })
     expect(seen.args).toEqual({ title: 'x', chat: 'c9' })
     await hydraRun.run({ tool: 'list_usage' })

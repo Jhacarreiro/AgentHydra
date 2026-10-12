@@ -18,7 +18,7 @@ app.get('/api/dashboards/workspace', async (c) => {
   const cwd = c.req.query('cwd')
   if (!cwd?.trim()) return c.json({ error: 'cwd is required: a folder inside the project' }, 400)
   try {
-    return c.json(await readDashboard(cwd))
+    return c.json(await readDashboard(cwd, c.req.query('path') || undefined))
   } catch (err) {
     return failure(c, err)
   }
@@ -34,7 +34,7 @@ app.post('/api/dashboards/workspace', async (c) => {
   if (typeof body?.cwd !== 'string' || !body.cwd.trim())
     return c.json({ error: 'cwd is required: a folder inside the project' }, 400)
   try {
-    return c.json(await writeDashboard(body.cwd, { by: 'the person', ...body }))
+    return c.json(await writeDashboard(body.cwd, body))
   } catch (err) {
     return failure(c, err)
   }

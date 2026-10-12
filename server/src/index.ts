@@ -69,6 +69,7 @@ import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pair
 import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
+import { serveDashboardSite, setDashboardSelfUrl } from './dashboards'
 import { getSetting, setSetting } from './db'
 import { desk2 } from './desk2'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
@@ -1199,6 +1200,7 @@ function stopBackgroundTimers(): void {
 // port, not the configured one, so a hop off a busy 7787 does not leave the Python side talking
 // to whatever answers there. See orchestratorChildEnv.
 daemonSelfUrl = readInstanceInfo()?.url ?? `http://127.0.0.1:${boundPort}`
+setDashboardSelfUrl(daemonSelfUrl)
 setOrchestratorDaemonUrl(daemonSelfUrl)
 // The MCP tools this daemon serves at /api/mcp reach the store through HTTP, and until now they
 // dialled whatever runtime.json named: with a second daemon holding the pointer, a chat connected
@@ -1664,7 +1666,8 @@ renewBootWatchdog('listen')
 const server = Bun.serve({
   port: boundPort,
   hostname: HOST,
-  fetch: app.fetch,
+  // A dashboard site (Host <id>.localhost) is answered before any middleware or /api route sees the request.
+  fetch: async (req, srv) => (await serveDashboardSite(req)) ?? app.fetch(req, srv),
   idleTimeout: 255,
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.

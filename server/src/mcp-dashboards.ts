@@ -38,111 +38,71 @@ async function folderOf(
   return { cwd, chat }
 }
 
-const WIDGET_ITEM = {
-  type: 'object',
-  properties: {
-    id: {
-      type: 'string',
-      description:
-        'Slug you pick, 1-64 chars: lowercase letters, digits, "-" or "_". Writing the same id replaces that widget.',
-    },
-    kind: { type: 'string', enum: ['stat', 'list', 'note', 'progress', 'chart'] },
-    title: { type: 'string', description: 'Shown on the widget, up to 80 characters.' },
-    order: {
-      type: 'number',
-      description: 'Lower comes first; widgets without one come last, oldest first.',
-    },
-    size: {
-      type: 'string',
-      enum: ['small', 'wide'],
-      description:
-        'small = a third of the row, wide = the full row. Default: small for stat and progress, wide otherwise.',
-    },
-    value: { description: 'stat: the number or text to show (required for stat).' },
-    unit: { type: 'string', description: 'stat: unit shown after the value, e.g. "%" or "open".' },
-    delta: { type: 'string', description: 'stat: change text, e.g. "+3 today".' },
-    tone: {
-      type: 'string',
-      enum: ['good', 'bad', 'warn', 'neutral'],
-      description: 'stat or list item colour.',
-    },
-    caption: { type: 'string', description: 'stat: a line under the value.' },
-    items: {
-      type: 'array',
-      maxItems: 50,
-      description:
-        'list (also for links): required for list. Each {text, detail?, href?, tone?, done?}.',
-      items: {
-        type: 'object',
-        properties: {
-          text: { type: 'string' },
-          detail: { type: 'string' },
-          href: { type: 'string', description: 'An http(s) link or a file path.' },
-          tone: { type: 'string', enum: ['good', 'bad', 'warn', 'neutral'] },
-          done: { type: 'boolean' },
-        },
-        required: ['text'],
-      },
-    },
-    text: {
-      type: 'string',
-      description: 'note: markdown, up to 8000 characters (required for note).',
-    },
-    current: { type: 'number', description: 'progress: the done amount (required with max).' },
-    max: { type: 'number', description: 'progress: the total (required with current).' },
-    series: {
-      type: 'array',
-      maxItems: 4,
-      description: 'chart: required for chart. Each {label?, points: [numbers, up to 200]}.',
-      items: {
-        type: 'object',
-        properties: {
-          label: { type: 'string' },
-          points: { type: 'array', items: { type: 'number' }, maxItems: 200 },
-        },
-        required: ['points'],
-      },
-    },
-    labels: {
-      type: 'array',
-      items: { type: 'string' },
-      description: 'chart: x-axis labels, one per point.',
-    },
-  },
-  required: ['id', 'kind', 'title'],
+const CWD = {
+  type: 'string',
+  description:
+    'Any folder inside the project (the checkout is found from it). Omit it inside a Desk chat.',
 }
 
 export const DASHBOARD_TOOLS: McpEngineTool[] = [
   {
     name: 'dashboard_read',
     description:
-      'READ-ONLY: the small dashboard the person sees for this project in AgentHydra: its widgets (stat, list, note, progress, chart) with their ids, values and who last wrote each. Read it before changing it. `cwd` is any folder inside the project; omitted, it is the folder of the calling Desk chat.',
+      "READ-ONLY: the project's dashboard, a small website the person opens in AgentHydra. Answers `url` (open it with a browser tool to see it), `folder` (a local AI may also edit files there directly), and `entries` (path, bytes, updatedAt). `path` also returns that file's content. With nothing written yet, `files` is 0: start with dashboard_write and an index.html. `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder.",
     inputSchema: S({
-      cwd: {
+      cwd: CWD,
+      path: {
         type: 'string',
-        description:
-          'Any folder inside the project (the checkout is found from it). Omit it inside a Desk chat.',
+        description: 'A file in the site (e.g. index.html) to return the content of.',
       },
     }),
     run: async (a: Record<string, unknown>) => {
       const { cwd } = await folderOf(a)
-      return api(`/api/dashboards/workspace?cwd=${encodeURIComponent(cwd)}`)
+      const path = str(a.path).trim()
+      return api(
+        `/api/dashboards/workspace?cwd=${encodeURIComponent(cwd)}${path ? `&path=${encodeURIComponent(path)}` : ''}`,
+      )
     },
   },
   {
     name: 'dashboard_write',
     description:
-      "MUTATES: the small dashboard the person sees for this project in AgentHydra. Put what is worth a glance there: status, numbers, open items, links, a short note. Keep it current by rewriting widgets by id (the same id replaces that widget) rather than adding new ones. `put` takes widgets: each needs id, kind and title, plus that kind's field: stat -> value (with unit, delta, tone, caption); list -> items (also for links); note -> text (markdown); progress -> current and max; chart -> series (and labels). `remove` takes widget ids; `clear: true` removes all widgets first. `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder. `by` names who writes (up to 60 characters); omitted, it is the calling chat's title.",
+      "MUTATES: the project's dashboard is its own small website the person opens in AgentHydra, and you have full control: write anything (HTML, CSS, JS, charts, images, a data.json your page fetches, or a whole built dist via `from`). index.html is the entry. Applied in order, all-or-nothing: `clear`, `from` (absolute folder to publish), `files` [{path, content, encoding?: utf8|base64}], `edits` [{path, old, new}] (old must occur exactly once; prefer edits to change part of a page another chat also writes), `remove` [paths]. Paths are relative with forward slashes (letters, digits . _ -), up to 8 deep; files up to 5 MB, site up to 50 MB and 1000 files. The answer gives `url` (open it with a browser tool to look at your work) and `folder` (a local AI may also write files there directly). `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder. `by` names who writes (up to 60 characters); omitted, it is the calling chat's title.",
     inputSchema: S({
-      cwd: {
-        type: 'string',
-        description:
-          'Any folder inside the project (the checkout is found from it). Omit it inside a Desk chat.',
-      },
-      put: { type: 'array', items: WIDGET_ITEM, description: 'Widgets to add or replace, by id.' },
-      remove: { type: 'array', items: { type: 'string' }, description: 'Widget ids to delete.' },
-      clear: { type: 'boolean', description: 'true removes every widget first.' },
+      cwd: CWD,
       by: { type: 'string', description: 'Who writes, up to 60 characters.' },
+      clear: { type: 'boolean', description: 'true empties the site first.' },
+      from: {
+        type: 'string',
+        description: 'Absolute folder whose contents replace the whole site (a built dist).',
+      },
+      files: {
+        type: 'array',
+        description: 'Files to create or overwrite.',
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            content: { type: 'string' },
+            encoding: { type: 'string', enum: ['utf8', 'base64'] },
+          },
+          required: ['path', 'content'],
+        },
+      },
+      edits: {
+        type: 'array',
+        description: 'Exact text replacements; old must occur exactly once in the file.',
+        items: {
+          type: 'object',
+          properties: {
+            path: { type: 'string' },
+            old: { type: 'string' },
+            new: { type: 'string' },
+          },
+          required: ['path', 'old', 'new'],
+        },
+      },
+      remove: { type: 'array', items: { type: 'string' }, description: 'File paths to delete.' },
     }),
     run: async (a: Record<string, unknown>) => {
       const { cwd, chat } = await folderOf(a)
@@ -154,10 +114,12 @@ export const DASHBOARD_TOOLS: McpEngineTool[] = [
         headers: JSON_HEADERS,
         body: JSON.stringify({
           cwd,
-          put: a.put,
-          remove: a.remove,
-          clear: a.clear,
           by,
+          clear: a.clear,
+          from: a.from,
+          files: a.files,
+          edits: a.edits,
+          remove: a.remove,
         }),
       })
     },

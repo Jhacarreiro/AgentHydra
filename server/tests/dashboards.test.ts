@@ -1,12 +1,16 @@
 import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   DashboardError,
+  dashboardId,
   listDashboards,
-  MAX_WIDGETS,
+  MAX_SITE_FILES,
   readDashboard,
+  serveDashboardSite,
+  setDashboardSelfUrl,
+  workspaceOf,
   writeDashboard,
 } from '../src/dashboards'
 import { app } from '../src/http-app'
@@ -16,20 +20,10 @@ import { resetDaemonResolutionForTests, useOwnDaemon } from '../src/mcp-client'
 import { withDeskChat } from '../src/mcp-find'
 
 const root = mkdtempSync(join(tmpdir(), 'dashboards-test-'))
-const project = join(root, 'project')
+const project = join(root, 'My Project!')
 const inside = join(project, 'src', 'deep')
-const plain = join(root, 'plain')
 mkdirSync(join(project, '.git'), { recursive: true })
 mkdirSync(inside, { recursive: true })
-mkdirSync(plain, { recursive: true })
-
-const stat = (id: string, value: unknown, extra: Record<string, unknown> = {}) => ({
-  id,
-  kind: 'stat',
-  title: `Stat ${id}`,
-  value,
-  ...extra,
-})
 
 const saved: Record<string, string | undefined> = {}
 function setEnv(key: string, value: string | undefined): void {
@@ -40,15 +34,34 @@ function setEnv(key: string, value: string | undefined): void {
 
 let daemon: ReturnType<typeof Bun.serve>
 let desk: ReturnType<typeof Bun.serve>
+let port = 0
+
+const fresh = (name: string) => {
+  const dir = join(root, name)
+  mkdirSync(join(dir, '.git'), { recursive: true })
+  return dir
+}
+const refused = (p: Promise<unknown>) => expect(p).rejects.toBeInstanceOf(DashboardError)
+const get = (id: string, path: string, init: RequestInit = {}) =>
+  fetch(`http://127.0.0.1:${port}${path}`, {
+    ...init,
+    headers: { host: `${id}.localhost:${port}` },
+  })
 
 beforeAll(() => {
-  daemon = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: app.fetch })
+  daemon = Bun.serve({
+    port: 0,
+    hostname: '127.0.0.1',
+    fetch: async (req, srv) => (await serveDashboardSite(req)) ?? app.fetch(req, srv),
+  })
+  port = daemon.port as number
+  setDashboardSelfUrl(`http://127.0.0.1:${port}`)
   desk = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
     fetch: () => Response.json([{ id: 'chat-1', title: 'Example chat', cwd: inside }]),
   })
-  useOwnDaemon(`http://127.0.0.1:${daemon.port}`)
+  useOwnDaemon(`http://127.0.0.1:${port}`)
   setEnv('HYDRA_DESK_PORT', String(desk.port))
   setEnv('HYDRA_DESK_CHAT_ID', 'chat-1')
 })
@@ -58,185 +71,217 @@ afterAll(() => {
   desk.stop(true)
   resetDaemonResolutionForTests()
   for (const [key, value] of Object.entries(saved)) setEnv(key, value)
-  if (root) rmSync(root, { recursive: true, force: true })
+  rmSync(root, { recursive: true, force: true })
 })
 
-describe('the store keys a dashboard by its checkout', () => {
-  test('a folder inside the project reads and writes the checkout dashboard', async () => {
-    await writeDashboard(project, { put: [stat('open-prs', 3)], by: 'Example owner' })
-    const fromInside = await readDashboard(inside)
-    expect(fromInside.widgets.map((w) => w.id)).toEqual(['open-prs'])
-    expect(fromInside.workspace).toBe((await readDashboard(project)).workspace)
+describe('ids and keying', () => {
+  test('the id is a DNS-safe slug plus 6 hex, stable, and any folder inside the project shares it', async () => {
+    const id = dashboardId(workspaceOf(project))
+    expect(id).toMatch(/^my-project-[0-9a-f]{6}$/)
+    expect(dashboardId(workspaceOf(project))).toBe(id)
+    expect((await readDashboard(inside)).id).toBe(id)
+    expect((await readDashboard(project)).url).toBe(`http://${id}.localhost:${port}/`)
   })
 
-  test('a folder with no checkout is its own workspace', async () => {
-    await writeDashboard(plain, { put: [stat('solo', 1)] })
-    expect((await readDashboard(plain)).widgets).toHaveLength(1)
-    expect((await readDashboard(project)).widgets.map((w) => w.id)).toEqual(['open-prs'])
+  test('an empty name falls back to "project"', () => {
+    expect(dashboardId('/')).toMatch(/^project-[0-9a-f]{6}$/)
   })
 
-  test('a folder that does not exist is refused', async () => {
-    await expect(readDashboard(join(root, 'missing'))).rejects.toBeInstanceOf(DashboardError)
-  })
-
-  test('listDashboards names each workspace that has widgets', async () => {
-    const list = await listDashboards()
-    expect(list.length).toBeGreaterThanOrEqual(2)
-    expect(list.some((d) => d.widgets >= 1)).toBe(true)
+  test('a missing folder is refused', async () => {
+    await refused(readDashboard(join(root, 'missing')))
   })
 })
 
-describe('put, remove, clear and order', () => {
-  const fresh = join(root, 'fresh')
-  mkdirSync(fresh, { recursive: true })
-
-  test('writing the same id replaces that widget', async () => {
-    await writeDashboard(fresh, { put: [stat('a', 1)] })
-    const after = await writeDashboard(fresh, { put: [stat('a', 2)] })
-    expect(after.widgets).toHaveLength(1)
-    expect(after.widgets[0]?.value).toBe(2)
-  })
-
-  test('remove deletes the named widgets', async () => {
-    await writeDashboard(fresh, { put: [stat('b', 1), stat('c', 1)] })
-    const after = await writeDashboard(fresh, { remove: ['b'] })
-    expect(after.widgets.map((w) => w.id).sort()).toEqual(['a', 'c'])
-  })
-
-  test('clear removes every widget before the put lands', async () => {
-    const after = await writeDashboard(fresh, { clear: true, put: [stat('only', 9)] })
-    expect(after.widgets.map((w) => w.id)).toEqual(['only'])
-  })
-
-  test('widgets with an order come first, lowest first, the rest oldest first', async () => {
-    const ordered = join(root, 'ordered')
-    mkdirSync(ordered, { recursive: true })
-    await writeDashboard(ordered, { put: [stat('free', 1)] })
-    await writeDashboard(ordered, {
-      put: [stat('second', 1, { order: 2 }), stat('first', 1, { order: 1 })],
+describe('writing', () => {
+  test('files, edits, remove and clear', async () => {
+    const dir = fresh('w1')
+    await writeDashboard(dir, {
+      by: 'Example owner',
+      files: [
+        { path: 'index.html', content: '<h1>A</h1><p>x</p>' },
+        { path: 'data/d.json', content: '{}' },
+        {
+          path: 'pic.png',
+          content: Buffer.from([1, 2, 0, 3]).toString('base64'),
+          encoding: 'base64',
+        },
+      ],
     })
-    const after = await readDashboard(ordered)
-    expect(after.widgets.map((w) => w.id)).toEqual(['first', 'second', 'free'])
-  })
-
-  test('the default size is small for stat and wide for a list', async () => {
-    const sized = join(root, 'sized')
-    mkdirSync(sized, { recursive: true })
-    const after = await writeDashboard(sized, {
-      put: [stat('n', 1), { id: 'todo', kind: 'list', title: 'Todo', items: [{ text: 'Ship' }] }],
+    let r = await readDashboard(dir)
+    expect(r.entries.map((e) => e.path)).toEqual(['data/d.json', 'index.html', 'pic.png'])
+    expect(r.updatedBy).toBe('Example owner')
+    r = await writeDashboard(dir, {
+      edits: [{ path: 'index.html', old: '<p>x</p>', new: '<p>y</p>' }],
+      remove: ['data/d.json'],
     })
-    expect(after.widgets.find((w) => w.id === 'n')?.size).toBe('small')
-    expect(after.widgets.find((w) => w.id === 'todo')?.size).toBe('wide')
+    expect(r.entries.map((e) => e.path)).toEqual(['index.html', 'pic.png'])
+    expect((await readDashboard(dir, 'index.html')).content).toBe('<h1>A</h1><p>y</p>')
+    expect((await readDashboard(dir, 'pic.png')).encoding).toBe('base64')
+    r = await writeDashboard(dir, { clear: true, files: [{ path: 'a.txt', content: 'a' }] })
+    expect(r.entries.map((e) => e.path)).toEqual(['a.txt'])
   })
-})
 
-describe('refusals', () => {
-  const folder = join(root, 'refusals')
-  mkdirSync(folder, { recursive: true })
-  const refused = [
-    ['a bad id', { put: [stat('Bad Id', 1)] }],
-    ['an unknown kind', { put: [{ id: 'x', kind: 'pie', title: 'X' }] }],
-    ['a stat with no value', { put: [{ id: 'x', kind: 'stat', title: 'X' }] }],
-    ['a list with no items', { put: [{ id: 'x', kind: 'list', title: 'X' }] }],
-    ['a progress with no max', { put: [{ id: 'x', kind: 'progress', title: 'X', current: 1 }] }],
-    [
-      'a javascript link',
-      {
-        put: [
-          {
-            id: 'x',
-            kind: 'list',
-            title: 'X',
-            items: [{ text: 'a', href: 'javascript:alert(1)' }],
-          },
-        ],
-      },
-    ],
-    [
-      'a note over 8000 characters',
-      { put: [{ id: 'x', kind: 'note', title: 'X', text: 'a'.repeat(8001) }] },
-    ],
-    [
-      'a chart with five series',
-      {
-        put: [
-          {
-            id: 'x',
-            kind: 'chart',
-            title: 'X',
-            series: Array.from({ length: 5 }, () => ({ points: [1] })),
-          },
-        ],
-      },
-    ],
-    ['a change that is not an object', 'nope'],
-    ['a remove that is not a list of ids', { remove: 'a' }],
-  ] as const
+  test('a failed edit refuses the whole call and changes nothing', async () => {
+    const dir = fresh('w2')
+    await writeDashboard(dir, { files: [{ path: 'index.html', content: 'aa bb' }] })
+    await expect(
+      writeDashboard(dir, {
+        files: [{ path: 'new.txt', content: 'n' }],
+        edits: [{ path: 'index.html', old: 'a', new: 'c' }],
+      }),
+    ).rejects.toThrow('more than once')
+    await expect(
+      writeDashboard(dir, { edits: [{ path: 'index.html', old: 'zz', new: 'c' }] }),
+    ).rejects.toThrow('not found')
+    const r = await readDashboard(dir)
+    expect(r.entries.map((e) => e.path)).toEqual(['index.html'])
+    expect((await readDashboard(dir, 'index.html')).content).toBe('aa bb')
+  })
 
-  for (const [label, change] of refused) {
+  test('from publishes a folder as the whole site', async () => {
+    const dir = fresh('w3')
+    const dist = join(root, 'dist')
+    mkdirSync(join(dist, 'assets'), { recursive: true })
+    writeFileSync(join(dist, 'index.html'), '<p>dist</p>')
+    writeFileSync(join(dist, 'assets', 'a.js'), '1')
+    await writeDashboard(dir, { files: [{ path: 'old.txt', content: 'o' }] })
+    const r = await writeDashboard(dir, { from: dist })
+    expect(r.entries.map((e) => e.path)).toEqual(['assets/a.js', 'index.html'])
+    await refused(writeDashboard(dir, { from: r.folder }))
+    await refused(writeDashboard(dir, { from: 'relative/dist' }))
+  })
+
+  const bad: [string, string][] = [
+    ['dotdot', '../x.txt'],
+    ['inner dotdot', 'a/../x.txt'],
+    ['absolute', '/x.txt'],
+    ['drive letter', 'C:/x.txt'],
+    ['reserved name', 'docs/con.txt'],
+    ['too deep', 'a/b/c/d/e/f/g/h/i.txt'],
+    ['odd character', 'a b.txt'],
+  ]
+  for (const [label, path] of bad)
     test(`refuses ${label}`, async () => {
-      await expect(writeDashboard(folder, change)).rejects.toBeInstanceOf(DashboardError)
+      await refused(writeDashboard(fresh('w4'), { files: [{ path, content: 'x' }] }))
     })
-  }
 
-  test('a workspace holds at most 40 widgets, and an existing id still replaces', async () => {
-    const full = join(root, 'full')
-    mkdirSync(full, { recursive: true })
-    const forty = Array.from({ length: MAX_WIDGETS }, (_, i) => stat(`w${i + 1}`, i))
-    await writeDashboard(full, { put: forty })
-    await expect(writeDashboard(full, { put: [stat('w41', 0)] })).rejects.toBeInstanceOf(
-      DashboardError,
+  test('size and file-count limits apply to the result of the whole call', async () => {
+    const dir = fresh('w5')
+    await refused(
+      writeDashboard(dir, {
+        files: [{ path: 'big.bin', content: 'x'.repeat(5 * 1024 * 1024 + 1) }],
+      }),
     )
-    const replaced = await writeDashboard(full, { put: [stat('w1', 99)] })
-    expect(replaced.widgets).toHaveLength(MAX_WIDGETS)
-    expect(replaced.widgets.find((w) => w.id === 'w1')?.value).toBe(99)
+    const many = Array.from({ length: MAX_SITE_FILES + 1 }, (_, i) => ({
+      path: `f${i}.txt`,
+      content: '',
+    }))
+    await refused(writeDashboard(dir, { files: many }))
+    expect((await readDashboard(dir)).files).toBe(0)
+  })
+
+  test('updatedAt follows file mtimes, so a direct edit shows', async () => {
+    const dir = fresh('w6')
+    const r = await writeDashboard(dir, { files: [{ path: 'index.html', content: 'a' }] })
+    const when = new Date('2031-01-02T03:04:05.000Z')
+    utimesSync(join(r.folder, 'index.html'), when, when)
+    expect((await readDashboard(dir)).updatedAt).toBe(when.toISOString())
+    expect((await listDashboards()).some((d) => d.id === r.id)).toBe(true)
+  })
+
+  test('two writes at once both land', async () => {
+    const dir = fresh('w7')
+    await Promise.all([
+      writeDashboard(dir, { files: [{ path: 'a.txt', content: 'a' }] }),
+      writeDashboard(dir, { files: [{ path: 'b.txt', content: 'b' }] }),
+    ])
+    expect((await readDashboard(dir)).entries.map((e) => e.path)).toEqual(['a.txt', 'b.txt'])
   })
 })
 
-describe('concurrent writers', () => {
-  test('two writes at once both land', async () => {
-    const shared = join(root, 'shared')
-    mkdirSync(shared, { recursive: true })
-    await Promise.all([
-      writeDashboard(shared, { put: [stat('left', 1)] }),
-      writeDashboard(shared, { put: [stat('right', 2)] }),
-    ])
-    expect((await readDashboard(shared)).widgets.map((w) => w.id).sort()).toEqual(['left', 'right'])
+describe('hosting at <id>.localhost', () => {
+  test('serves index.html at /, nested files by type, with the site headers', async () => {
+    const dir = fresh('h1')
+    const r = await writeDashboard(dir, {
+      files: [
+        { path: 'index.html', content: '<h1>home</h1>' },
+        { path: 'css/s.css', content: 'a{}' },
+        { path: 'sub/index.html', content: 'sub' },
+      ],
+    })
+    const home = await get(r.id, '/')
+    expect(home.status).toBe(200)
+    expect(await home.text()).toBe('<h1>home</h1>')
+    expect(home.headers.get('cache-control')).toBe('no-store')
+    expect(home.headers.get('x-content-type-options')).toBe('nosniff')
+    expect(home.headers.get('x-frame-options')).toBeNull()
+    const css = await get(r.id, '/css/s.css')
+    expect(css.headers.get('content-type')).toContain('text/css')
+    expect(await (await get(r.id, '/sub/')).text()).toBe('sub')
+    writeFileSync(join(r.folder, 'index.html'), 'edited directly')
+    expect(await (await get(r.id, '/')).text()).toBe('edited directly')
+  })
+
+  test('traversal is not served, an unknown id is 404, other methods are 405', async () => {
+    const dir = fresh('h2')
+    const r = await writeDashboard(dir, { files: [{ path: 'index.html', content: 'ok' }] })
+    writeFileSync(join(r.folder, '..', 'secret.txt'), 'SECRET')
+    for (const p of ['/..%2fsecret.txt', '/%2e%2e/secret.txt', '/..%5csecret.txt']) {
+      const t = await get(r.id, p)
+      expect(t.status).toBeGreaterThanOrEqual(400)
+      expect(await t.text()).not.toContain('SECRET')
+    }
+    expect((await get('nothing-abcdef', '/')).status).toBe(404)
+    expect((await get(r.id, '/', { method: 'POST', body: 'x' })).status).toBe(405)
+  })
+
+  test('a workspace with no files, or no index.html, gets the placeholder', async () => {
+    const dir = fresh('h3')
+    const r = await readDashboard(dir)
+    const empty = await get(r.id, '/')
+    expect(empty.status).toBe(200)
+    expect(await empty.text()).toContain('dashboard_write')
+    await writeDashboard(dir, { files: [{ path: 'other.html', content: 'o' }] })
+    expect(await (await get(r.id, '/')).text()).toContain('No dashboard yet')
+  })
+
+  test('/api with a dashboard Host never reaches the API', async () => {
+    const r = await readDashboard(project)
+    const res = await get(r.id, '/api/dashboards')
+    expect(res.status).toBe(404)
+    expect(await res.text()).not.toContain('"dashboards"')
+    const post = await get(r.id, '/api/dashboards/workspace', { method: 'POST', body: '{}' })
+    expect(post.status).toBe(405)
   })
 })
 
 describe('REST routes', () => {
-  test('GET /api/dashboards/workspace answers with the dashboard', async () => {
-    const res = await app.request(`/api/dashboards/workspace?cwd=${encodeURIComponent(inside)}`)
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { widgets: { id: string }[] }
-    expect(body.widgets.map((w) => w.id)).toEqual(['open-prs'])
-  })
+  const api = (path: string, init?: RequestInit) => fetch(`http://127.0.0.1:${port}${path}`, init)
+  const json = { 'content-type': 'application/json' }
 
-  test('GET /api/dashboards/workspace without cwd is a 400', async () => {
-    const res = await app.request('/api/dashboards/workspace')
-    expect(res.status).toBe(400)
-  })
-
-  test('POST /api/dashboards/workspace writes a widget', async () => {
-    const res = await app.request('/api/dashboards/workspace', {
+  test('POST writes, GET reads with a path, a bad write is a 400', async () => {
+    const dir = fresh('r1')
+    const post = await api('/api/dashboards/workspace', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cwd: project, put: [stat('via-rest', 5)], by: 'Example owner' }),
+      headers: json,
+      body: JSON.stringify({ cwd: dir, files: [{ path: 'index.html', content: 'hi' }] }),
     })
-    expect(res.status).toBe(200)
-    const body = (await res.json()) as { widgets: { id: string; updatedBy?: string }[] }
-    expect(body.widgets.find((w) => w.id === 'via-rest')?.updatedBy).toBe('Example owner')
-  })
-
-  test('POST with a refused widget is a 400 with an error message', async () => {
-    const res = await app.request('/api/dashboards/workspace', {
+    expect(post.status).toBe(200)
+    const got = (await (
+      await api(`/api/dashboards/workspace?cwd=${encodeURIComponent(dir)}&path=index.html`)
+    ).json()) as { content: string }
+    expect(got.content).toBe('hi')
+    const bad = await api('/api/dashboards/workspace', {
       method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({ cwd: project, put: [stat('Bad Id', 1)] }),
+      headers: json,
+      body: JSON.stringify({ cwd: dir, files: [{ path: '../x', content: 'x' }] }),
     })
-    expect(res.status).toBe(400)
-    expect(((await res.json()) as { error: string }).error.length).toBeGreaterThan(0)
+    expect(bad.status).toBe(400)
+    expect((await api('/api/dashboards/workspace')).status).toBe(400)
+    const list = (await (await api('/api/dashboards')).json()) as {
+      dashboards: { files: number }[]
+    }
+    expect(list.dashboards.every((d) => d.files > 0)).toBe(true)
   })
 })
 
@@ -246,21 +291,24 @@ describe('the MCP tools', () => {
 
   test('dashboard_write with no cwd writes the calling chat folder, by its title', async () => {
     const answer = (await tool('dashboard_write').run({
-      put: [stat('mcp-widget', 7, { unit: '%' })],
-    })) as { widgets: { id: string; updatedBy?: string }[] }
-    const widget = answer.widgets.find((w) => w.id === 'mcp-widget')
-    expect(widget?.updatedBy).toBe('Example chat')
+      files: [{ path: 'index.html', content: 'mcp' }],
+    })) as { updatedBy: string; url: string; folder: string }
+    expect(answer.updatedBy).toBe('Example chat')
+    expect(answer.url).toContain('.localhost:')
+    expect(readFileSync(join(answer.folder, 'index.html'), 'utf8')).toBe('mcp')
   })
 
   test('dashboard_read with no cwd reads the calling chat folder', async () => {
-    const answer = (await tool('dashboard_read').run({})) as { widgets: { id: string }[] }
-    expect(answer.widgets.map((w) => w.id)).toContain('mcp-widget')
+    const answer = (await tool('dashboard_read').run({ path: 'index.html' })) as {
+      content: string
+    }
+    expect(answer.content).toBe('mcp')
   })
 
   test('dashboard_write refuses a by longer than 60 characters', async () => {
-    await expect(
-      tool('dashboard_write').run({ cwd: project, by: 'x'.repeat(61), put: [stat('x', 1)] }),
-    ).rejects.toThrow('by is over 60 characters')
+    await expect(tool('dashboard_write').run({ cwd: project, by: 'x'.repeat(61) })).rejects.toThrow(
+      'by is over 60 characters',
+    )
   })
 
   test('with no folder and no Desk chat known, the tool says so', async () => {

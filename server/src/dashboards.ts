@@ -1,83 +1,112 @@
-// server/src/dashboards.ts - one small dashboard per project (its checkout), written by any AI through the agenthydra
-// MCP and drawn by AgentHydra's window. One JSON file per workspace under DATA_DIR/dashboards, named by a sha1 of the
-// workspace key; writes to one workspace are serialized in this process so two AIs writing at once keep both widgets.
-import { createHash } from 'node:crypto'
+// server/src/dashboards.ts - a project's dashboard is a small static website its AIs write (any HTML, CSS, JS, images,
+// data files, or a whole built folder). DATA_DIR/dashboards/<id>/site/ holds the files exactly as written and
+// DATA_DIR/dashboards/<id>/meta.json who wrote last through the API. <id> is a DNS-label-safe slug of the project folder
+// plus 6 hex of a sha1 of the workspace key; the daemon serves each site as its own origin <id>.localhost:<port>.
+// Writes to one workspace are serialized in this process and applied all-or-nothing through a staging copy.
+import { createHash, randomBytes } from 'node:crypto'
 import { existsSync, realpathSync } from 'node:fs'
-import { readdir, readFile } from 'node:fs/promises'
-import { basename, dirname, join, resolve } from 'node:path'
-import { DATA_DIR } from './config'
-import { writeJsonTextAtomic } from './core/json-store'
-
-export const WIDGET_KINDS = ['stat', 'list', 'note', 'progress', 'chart'] as const
-export type WidgetKind = (typeof WIDGET_KINDS)[number]
-export type Tone = 'good' | 'bad' | 'warn' | 'neutral'
-export type WidgetSize = 'small' | 'wide'
-
-export interface DashboardItem {
-  text: string
-  detail?: string
-  href?: string
-  tone?: Tone
-  done?: boolean
-}
-
-export interface DashboardSeries {
-  label?: string
-  points: number[]
-}
-
-export interface DashboardWidget {
-  id: string
-  kind: WidgetKind
-  title: string
-  order?: number
-  size?: WidgetSize
-  value?: string | number
-  unit?: string
-  delta?: string
-  tone?: Tone
-  caption?: string
-  items?: DashboardItem[]
-  text?: string
-  current?: number
-  max?: number
-  series?: DashboardSeries[]
-  labels?: string[]
-  updatedAt: string
-  updatedBy: string
-}
-
-export type WidgetInput = Omit<DashboardWidget, 'updatedAt' | 'updatedBy'>
-
-export interface Dashboard {
-  workspace: string
-  name: string
-  widgets: DashboardWidget[]
-  updatedAt: string | null
-}
-
-export interface DashboardSummary {
-  workspace: string
-  name: string
-  widgets: number
-  updatedAt: string
-}
+import {
+  cp,
+  lstat,
+  mkdir,
+  readdir,
+  readFile,
+  realpath,
+  rename,
+  rm,
+  stat,
+  writeFile,
+} from 'node:fs/promises'
+import { basename, dirname, extname, join, resolve, sep } from 'node:path'
+import { DATA_DIR, PORT } from './config'
 
 export class DashboardError extends Error {}
 
-export const MAX_WIDGETS = 40
-export const MAX_WIDGET_BYTES = 32 * 1024
-const MAX_TITLE = 80
-const MAX_ITEMS = 50
-const MAX_NOTE = 8000
-const MAX_SERIES = 4
-const MAX_POINTS = 200
+export const MAX_FILE_BYTES = 5 * 1024 * 1024
+export const MAX_SITE_BYTES = 50 * 1024 * 1024
+export const MAX_SITE_FILES = 1000
+const MAX_DEPTH = 8
 const MAX_BY = 60
 const DEFAULT_BY = 'the person'
-const ID_RE = /^[a-z0-9][a-z0-9_-]{0,63}$/
-const TONES: readonly Tone[] = ['good', 'bad', 'warn', 'neutral']
+const SEGMENT_RE = /^[A-Za-z0-9._-]+$/
+const ID_RE = /^[a-z0-9](?:[a-z0-9-]*[a-z0-9])?-[0-9a-f]{6}$/
+const RESERVED_RE = /^(con|prn|aux|nul|com[1-9]|lpt[1-9])$/i
 
-type Obj = Record<string, unknown>
+export interface DashboardSummary {
+  id: string
+  workspace: string
+  name: string
+  url: string
+  files: number
+  bytes: number
+  updatedAt: string | null
+  updatedBy: string | null
+}
+
+export interface DashboardEntry {
+  path: string
+  bytes: number
+  updatedAt: string
+}
+
+export interface DashboardRead extends DashboardSummary {
+  folder: string
+  entries: DashboardEntry[]
+  path?: string
+  content?: string
+  encoding?: 'utf8' | 'base64'
+}
+
+export interface DashboardFile {
+  path: string
+  content: string
+  encoding?: 'utf8' | 'base64'
+}
+
+export interface DashboardEdit {
+  path: string
+  old: string
+  new: string
+}
+
+export interface DashboardChange {
+  by?: string
+  clear?: boolean
+  from?: string
+  files?: DashboardFile[]
+  edits?: DashboardEdit[]
+  remove?: string[]
+}
+
+interface Meta {
+  workspace: string
+  name: string
+  updatedBy: string
+  updatedAt: string
+}
+
+function fail(message: string): never {
+  throw new DashboardError(message)
+}
+
+const isObj = (v: unknown): v is Record<string, unknown> =>
+  typeof v === 'object' && v !== null && !Array.isArray(v)
+
+const root = () => join(DATA_DIR, 'dashboards')
+
+// The daemon's own address, so a site's url carries the port it is really served on.
+let selfUrl = `http://127.0.0.1:${PORT}`
+export function setDashboardSelfUrl(url: string): void {
+  selfUrl = url
+}
+function selfPort(): string {
+  try {
+    return new URL(selfUrl).port || '80'
+  } catch {
+    return String(PORT)
+  }
+}
+const urlFor = (id: string) => `http://${id}.localhost:${selfPort()}/`
 
 /** The workspace key: the nearest checkout (a folder with .git) up from `folder`, else the folder itself. */
 export function workspaceOf(folder: string): string {
@@ -96,229 +125,137 @@ export function workspaceOf(folder: string): string {
   }
 }
 
-function fileFor(workspace: string): string {
+/** The stable DNS-label-safe id of a workspace. */
+export function dashboardId(workspace: string): string {
   const key = process.platform === 'win32' ? workspace.toLowerCase() : workspace
-  const digest = createHash('sha1').update(key).digest('hex')
-  return join(DATA_DIR, 'dashboards', `${digest}.json`)
+  const hex = createHash('sha1').update(key).digest('hex').slice(0, 6)
+  const slug = basename(workspace)
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '')
+    .slice(0, 40)
+    .replace(/-+$/g, '')
+  return `${slug || 'project'}-${hex}`
 }
 
-function emptyDashboard(workspace: string): Dashboard {
-  return { workspace, name: basename(workspace), widgets: [], updatedAt: null }
-}
+const dirOf = (id: string) => join(root(), id)
+const siteOf = (id: string) => join(dirOf(id), 'site')
 
-function fail(message: string): never {
-  throw new DashboardError(message)
-}
-
-function isObj(v: unknown): v is Obj {
-  return typeof v === 'object' && v !== null && !Array.isArray(v)
-}
-
-function optStr(o: Obj, key: string, where: string, max?: number): string | undefined {
-  const v = o[key]
-  if (v === undefined || v === null) return undefined
-  if (typeof v !== 'string') fail(`${where}: ${key} must be text`)
-  if (max !== undefined && v.length > max) fail(`${where}: ${key} is over ${max} characters`)
-  return v
-}
-
-function optNum(o: Obj, key: string, where: string): number | undefined {
-  const v = o[key]
-  if (v === undefined || v === null) return undefined
-  if (typeof v !== 'number' || !Number.isFinite(v)) fail(`${where}: ${key} must be a finite number`)
-  return v
-}
-
-function optTone(o: Obj, where: string): Tone | undefined {
-  const v = o.tone
-  if (v === undefined || v === null) return undefined
-  if (!TONES.includes(v as Tone)) fail(`${where}: tone must be one of ${TONES.join(', ')}`)
-  return v as Tone
-}
-
-function checkHref(href: string, where: string): string {
-  if (href.trim() === '') fail(`${where}: href is empty`)
-  if (/^https?:\/\//i.test(href)) return href
-  if (/^[a-z][a-z0-9+.-]*:/i.test(href) && !/^[a-z]:[\\/]/i.test(href))
-    fail(`${where}: href must be an http(s) link or a file path`)
-  return href
-}
-
-function checkItem(raw: unknown, where: string): DashboardItem {
-  if (!isObj(raw)) fail(`${where}: each item must be an object`)
-  const text = optStr(raw, 'text', where)
-  if (text === undefined) fail(`${where}: each item needs text`)
-  const out: DashboardItem = { text }
-  const detail = optStr(raw, 'detail', where)
-  if (detail !== undefined) out.detail = detail
-  const href = optStr(raw, 'href', where)
-  if (href !== undefined) out.href = checkHref(href, where)
-  const tone = optTone(raw, where)
-  if (tone !== undefined) out.tone = tone
-  if (raw.done !== undefined && raw.done !== null) {
-    if (typeof raw.done !== 'boolean') fail(`${where}: done must be true or false`)
-    out.done = raw.done
-  }
-  return out
-}
-
-function checkPoints(raw: unknown, where: string): number[] {
-  if (!Array.isArray(raw)) fail(`${where}: points must be a list of numbers`)
-  if (raw.length > MAX_POINTS) fail(`${where}: at most ${MAX_POINTS} points per series`)
-  for (const p of raw)
-    if (typeof p !== 'number' || !Number.isFinite(p))
-      fail(`${where}: points must be finite numbers`)
-  return raw as number[]
-}
-
-/** One widget as the store keeps it, or a DashboardError naming what is wrong. Unknown fields are dropped. */
-export function checkWidget(raw: unknown): WidgetInput {
-  if (!isObj(raw)) fail('each widget must be an object')
-  const id = raw.id
-  if (typeof id !== 'string' || !ID_RE.test(id))
+/** Why a site-relative path is refused, or the normalized path (forward slashes). */
+export function checkPath(raw: unknown, what = 'path'): string {
+  if (typeof raw !== 'string' || !raw.trim()) fail(`${what} must be a non-empty relative path`)
+  const p = raw.replace(/\\/g, '/')
+  if (p.startsWith('/') || /^[A-Za-z]:/.test(p))
     fail(
-      `widget id ${JSON.stringify(id ?? null)} must be 1 to 64 lowercase letters, digits, "-" or "_", starting with a letter or digit`,
+      `${what} ${JSON.stringify(raw)} must be relative to the site (no leading "/" or drive letter)`,
     )
-  const where = `widget "${id}"`
-  const kind = raw.kind
-  if (!WIDGET_KINDS.includes(kind as WidgetKind))
-    fail(
-      `${where}: kind ${JSON.stringify(kind ?? null)} is unknown; kind must be one of ${WIDGET_KINDS.join(', ')}`,
-    )
-  const title = optStr(raw, 'title', where, MAX_TITLE)
-  if (title === undefined || title.trim() === '')
-    fail(`${where}: title is required (up to ${MAX_TITLE} characters)`)
-  const order = optNum(raw, 'order', where)
-  const sizeRaw = raw.size
-  if (sizeRaw !== undefined && sizeRaw !== null && sizeRaw !== 'small' && sizeRaw !== 'wide')
-    fail(`${where}: size must be small or wide`)
-  const size: WidgetSize =
-    (sizeRaw as WidgetSize | undefined) ??
-    (kind === 'stat' || kind === 'progress' ? 'small' : 'wide')
-  const out: WidgetInput = { id, kind: kind as WidgetKind, title, size }
-  if (order !== undefined) out.order = order
-
-  if (kind === 'stat') {
-    const value = raw.value
-    if (value === undefined || value === null) fail(`${where}: a stat needs value`)
-    if (typeof value === 'number') {
-      if (!Number.isFinite(value)) fail(`${where}: value must be a finite number or text`)
-      out.value = value
-    } else if (typeof value === 'string') out.value = value
-    else fail(`${where}: value must be a number or text`)
-    for (const k of ['unit', 'delta', 'caption'] as const) {
-      const v = optStr(raw, k, where)
-      if (v !== undefined) out[k] = v
-    }
-    const tone = optTone(raw, where)
-    if (tone !== undefined) out.tone = tone
-  } else if (kind === 'list') {
-    if (!Array.isArray(raw.items)) fail(`${where}: a list needs items`)
-    if (raw.items.length > MAX_ITEMS) fail(`${where}: at most ${MAX_ITEMS} items`)
-    out.items = raw.items.map((i) => checkItem(i, where))
-  } else if (kind === 'note') {
-    const text = optStr(raw, 'text', where, MAX_NOTE)
-    if (text === undefined)
-      fail(`${where}: a note needs text (markdown, up to ${MAX_NOTE} characters)`)
-    out.text = text
-  } else if (kind === 'progress') {
-    const current = optNum(raw, 'current', where)
-    const max = optNum(raw, 'max', where)
-    if (current === undefined || max === undefined)
-      fail(`${where}: a progress widget needs current and max`)
-    out.current = current
-    out.max = max
-  } else {
-    if (!Array.isArray(raw.series)) fail(`${where}: a chart needs series`)
-    if (raw.series.length > MAX_SERIES) fail(`${where}: at most ${MAX_SERIES} series`)
-    out.series = raw.series.map((s) => {
-      if (!isObj(s)) fail(`${where}: each series must be an object`)
-      const series: DashboardSeries = { points: checkPoints(s.points, where) }
-      const label = optStr(s, 'label', where)
-      if (label !== undefined) series.label = label
-      return series
-    })
-    if (raw.labels !== undefined && raw.labels !== null) {
-      if (!Array.isArray(raw.labels) || raw.labels.some((l) => typeof l !== 'string'))
-        fail(`${where}: labels must be a list of text`)
-      out.labels = raw.labels as string[]
-    }
+  const parts = p.split('/')
+  if (parts.length > MAX_DEPTH)
+    fail(`${what} ${JSON.stringify(raw)} is deeper than ${MAX_DEPTH} folders`)
+  for (const seg of parts) {
+    if (seg === '' || seg === '.' || seg === '..')
+      fail(`${what} ${JSON.stringify(raw)} has an empty, "." or ".." part`)
+    if (!SEGMENT_RE.test(seg))
+      fail(
+        `${what} ${JSON.stringify(raw)}: "${seg}" may only use letters, digits, ".", "_" and "-"`,
+      )
+    if (seg.endsWith('.')) fail(`${what} ${JSON.stringify(raw)}: "${seg}" must not end with "."`)
+    if (RESERVED_RE.test(seg.split('.')[0] ?? ''))
+      fail(`${what} ${JSON.stringify(raw)}: "${seg}" is a name Windows reserves`)
   }
-
-  if (Buffer.byteLength(JSON.stringify(out)) > MAX_WIDGET_BYTES)
-    fail(`${where} is over ${MAX_WIDGET_BYTES / 1024} KB of JSON`)
-  return out
+  return p
 }
 
-export interface DashboardChange {
-  put: WidgetInput[]
-  remove: string[]
-  clear: boolean
-  by: string
+interface Walked {
+  path: string
+  bytes: number
+  mtimeMs: number
 }
 
-/** The body of a write, checked whole: any refusal means nothing is written. */
-export function parseChange(raw: unknown): DashboardChange {
-  if (!isObj(raw)) fail('the body must be an object with cwd, put, remove, clear, by')
-  if (raw.put !== undefined && raw.put !== null && !Array.isArray(raw.put))
-    fail('put must be a list of widgets')
-  const put = ((raw.put as unknown[] | undefined) ?? []).map(checkWidget)
-  if (raw.remove !== undefined && raw.remove !== null && !Array.isArray(raw.remove))
-    fail('remove must be a list of widget ids')
-  const remove = ((raw.remove as unknown[] | undefined) ?? []).map((id) => {
-    if (typeof id !== 'string' || !ID_RE.test(id))
-      fail(`remove: ${JSON.stringify(id ?? null)} is not a widget id`)
-    return id as string
-  })
-  if (raw.clear !== undefined && raw.clear !== null && typeof raw.clear !== 'boolean')
-    fail('clear must be true or false')
-  let by = DEFAULT_BY
-  if (raw.by !== undefined && raw.by !== null) {
-    if (typeof raw.by !== 'string' || raw.by.trim() === '')
-      fail('by must be a name of up to 60 characters')
-    if (raw.by.length > MAX_BY) fail(`by is over ${MAX_BY} characters`)
-    by = raw.by.trim()
-  }
-  return { put, remove, clear: raw.clear === true, by }
-}
-
-function sortWidgets(widgets: DashboardWidget[]): DashboardWidget[] {
-  return [...widgets].sort((a, b) => {
-    const ao = a.order ?? Number.POSITIVE_INFINITY
-    const bo = b.order ?? Number.POSITIVE_INFINITY
-    if (ao !== bo) return ao < bo ? -1 : 1
-    return a.updatedAt < b.updatedAt ? -1 : a.updatedAt > b.updatedAt ? 1 : 0
-  })
-}
-
-function applyChange(current: Dashboard, change: DashboardChange, now: string): Dashboard {
-  let widgets = change.clear ? [] : current.widgets
-  if (change.remove.length) widgets = widgets.filter((w) => !change.remove.includes(w.id))
-  const byId = new Map(widgets.map((w) => [w.id, w]))
-  for (const w of change.put) byId.set(w.id, { ...w, updatedAt: now, updatedBy: change.by })
-  const next = [...byId.values()]
-  if (next.length > MAX_WIDGETS)
-    fail(
-      `a workspace holds at most ${MAX_WIDGETS} widgets; this change would leave ${next.length}. Remove some first.`,
-    )
-  return { ...current, widgets: sortWidgets(next), updatedAt: now }
-}
-
-async function readStored(workspace: string): Promise<Dashboard | null> {
-  let text: string
+/** Every regular file under `dir` (symlinks skipped), sorted by path. */
+async function walk(dir: string, prefix = ''): Promise<Walked[]> {
+  let names: string[]
   try {
-    text = await readFile(fileFor(workspace), 'utf8')
+    names = await readdir(dir)
   } catch (err) {
-    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return null
+    if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw err
   }
-  return JSON.parse(text) as Dashboard
+  const out: Walked[] = []
+  for (const n of names) {
+    const full = join(dir, n)
+    const s = await lstat(full)
+    if (s.isSymbolicLink()) continue
+    if (s.isDirectory()) out.push(...(await walk(full, `${prefix}${n}/`)))
+    else if (s.isFile()) out.push({ path: `${prefix}${n}`, bytes: s.size, mtimeMs: s.mtimeMs })
+  }
+  return out.sort((a, b) => (a.path < b.path ? -1 : a.path > b.path ? 1 : 0))
 }
 
-/** Writes to one workspace run one after another in this process: each reads the file the one before wrote. */
+async function readMeta(id: string): Promise<Meta | null> {
+  try {
+    const m = JSON.parse(await readFile(join(dirOf(id), 'meta.json'), 'utf8')) as Meta
+    return isObj(m) ? m : null
+  } catch {
+    return null
+  }
+}
+
+async function summarize(
+  id: string,
+  workspace: string,
+  files: Walked[],
+): Promise<DashboardSummary> {
+  const meta = await readMeta(id)
+  const newest = files.reduce((m, f) => Math.max(m, f.mtimeMs), 0)
+  return {
+    id,
+    workspace,
+    name: basename(workspace),
+    url: urlFor(id),
+    files: files.length,
+    bytes: files.reduce((n, f) => n + f.bytes, 0),
+    updatedAt: files.length ? new Date(newest).toISOString() : null,
+    updatedBy: meta?.updatedBy ?? null,
+  }
+}
+
+async function fullRead(id: string, workspace: string, path?: string): Promise<DashboardRead> {
+  await mkdir(siteOf(id), { recursive: true })
+  const files = await walk(siteOf(id))
+  const out: DashboardRead = {
+    ...(await summarize(id, workspace, files)),
+    folder: siteOf(id),
+    entries: files.map((f) => ({
+      path: f.path,
+      bytes: f.bytes,
+      updatedAt: new Date(f.mtimeMs).toISOString(),
+    })),
+  }
+  if (path !== undefined) {
+    const rel = checkPath(path)
+    if (!files.some((f) => f.path === rel))
+      fail(
+        `there is no file ${rel} in this dashboard; the files are: ${files.map((f) => f.path).join(', ') || '(none yet)'}`,
+      )
+    const buf = await readFile(join(siteOf(id), ...rel.split('/')))
+    out.path = rel
+    if (buf.includes(0)) {
+      out.encoding = 'base64'
+      out.content = buf.toString('base64')
+    } else out.content = buf.toString('utf8')
+  }
+  return out
+}
+
+export async function readDashboard(folder: string, path?: string): Promise<DashboardRead> {
+  const workspace = workspaceOf(folder)
+  return fullRead(dashboardId(workspace), workspace, path || undefined)
+}
+
+/** Writes to one workspace run one after another in this process. */
 const queues = new Map<string, Promise<unknown>>()
-function serialized<T>(workspace: string, fn: () => Promise<T>): Promise<T> {
-  const key = fileFor(workspace)
+function serialized<T>(key: string, fn: () => Promise<T>): Promise<T> {
   const next = (queues.get(key) ?? Promise.resolve()).catch(() => {}).then(fn)
   const tail = next.catch(() => {})
   queues.set(key, tail)
@@ -328,53 +265,288 @@ function serialized<T>(workspace: string, fn: () => Promise<T>): Promise<T> {
   return next
 }
 
-export async function readDashboard(folder: string): Promise<Dashboard> {
-  const workspace = workspaceOf(folder)
-  return (await readStored(workspace)) ?? emptyDashboard(workspace)
+function parseChange(raw: unknown): DashboardChange & { by: string } {
+  if (!isObj(raw)) fail('the change must be an object')
+  const by = typeof raw.by === 'string' && raw.by.trim() ? raw.by.trim() : DEFAULT_BY
+  if (by.length > MAX_BY) fail(`by is over ${MAX_BY} characters`)
+  const list = (v: unknown, name: string): unknown[] => {
+    if (v === undefined || v === null) return []
+    if (!Array.isArray(v)) fail(`${name} must be a list`)
+    return v
+  }
+  if (raw.from !== undefined && raw.from !== null && typeof raw.from !== 'string')
+    fail('from must be an absolute folder path')
+  const files = list(raw.files, 'files').map((f, i) => {
+    if (!isObj(f) || typeof f.content !== 'string')
+      fail(`files[${i}] needs a path and a string content`)
+    const encoding = f.encoding ?? 'utf8'
+    if (encoding !== 'utf8' && encoding !== 'base64')
+      fail(`files[${i}].encoding must be "utf8" or "base64"`)
+    return {
+      path: checkPath(f.path, `files[${i}].path`),
+      content: f.content,
+      encoding,
+    } as DashboardFile
+  })
+  const edits = list(raw.edits, 'edits').map((e, i) => {
+    if (!isObj(e) || typeof e.old !== 'string' || typeof e.new !== 'string' || !e.old)
+      fail(`edits[${i}] needs a path, a non-empty "old" text and a "new" text`)
+    return { path: checkPath(e.path, `edits[${i}].path`), old: e.old, new: e.new }
+  })
+  const remove = list(raw.remove, 'remove').map((p, i) => checkPath(p, `remove[${i}]`))
+  return {
+    by,
+    clear: raw.clear === true,
+    from: typeof raw.from === 'string' && raw.from.trim() ? raw.from : undefined,
+    files,
+    edits,
+    remove,
+  }
 }
 
-export async function writeDashboard(folder: string, raw: unknown): Promise<Dashboard> {
+/** Copy an outside folder into `dest`, refusing names the site could not hold and anything over the limits. */
+async function copyFrom(src: string, dest: string): Promise<void> {
+  if (!/^([A-Za-z]:[\\/]|\/)/.test(src))
+    fail(`from must be an absolute folder path, got ${JSON.stringify(src)}`)
+  let real: string
+  try {
+    real = await realpath(src)
+    if (!(await stat(real)).isDirectory()) throw new Error('not a folder')
+  } catch {
+    fail(`from is not an existing folder: ${src}`)
+  }
+  const store = await realpath(root()).catch(() => resolve(root()))
+  const lower = (p: string) => (process.platform === 'win32' ? p.toLowerCase() : p)
+  if (lower(real) === lower(store) || lower(real).startsWith(lower(store) + sep))
+    fail('from cannot be inside the dashboards store; point it at the folder you built')
+  const files = await walk(real)
+  for (const f of files) checkPath(f.path, `from file`)
+  checkLimits(files)
+  for (const f of files) {
+    const to = join(dest, ...f.path.split('/'))
+    await mkdir(dirname(to), { recursive: true })
+    await cp(join(real, ...f.path.split('/')), to, { preserveTimestamps: true })
+  }
+}
+
+function checkLimits(files: { path: string; bytes: number }[]): void {
+  if (files.length > MAX_SITE_FILES)
+    fail(
+      `a dashboard holds at most ${MAX_SITE_FILES} files; this change would leave ${files.length}`,
+    )
+  let total = 0
+  for (const f of files) {
+    if (f.bytes > MAX_FILE_BYTES)
+      fail(`${f.path} is ${f.bytes} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
+    total += f.bytes
+  }
+  if (total > MAX_SITE_BYTES)
+    fail(`this change would make the site ${total} bytes; the limit is ${MAX_SITE_BYTES} (50 MB)`)
+}
+
+async function exists(p: string): Promise<boolean> {
+  try {
+    await lstat(p)
+    return true
+  } catch {
+    return false
+  }
+}
+
+export async function writeDashboard(folder: string, raw: unknown): Promise<DashboardRead> {
   const change = parseChange(raw)
   const workspace = workspaceOf(folder)
-  return serialized(workspace, async () => {
-    const current = (await readStored(workspace)) ?? emptyDashboard(workspace)
-    const changed = change.clear || change.remove.length > 0 || change.put.length > 0
-    if (!changed) return current
-    const next = applyChange(current, change, new Date().toISOString())
-    await writeJsonTextAtomic(fileFor(workspace), JSON.stringify(next, null, 2))
-    return next
+  const id = dashboardId(workspace)
+  return serialized(id, async () => {
+    const dir = dirOf(id)
+    const site = siteOf(id)
+    await mkdir(site, { recursive: true })
+    for (const n of await readdir(dir)) {
+      if (n.startsWith('.staging-') || n === 'site.old')
+        await rm(join(dir, n), { recursive: true, force: true })
+    }
+    const staging = join(dir, `.staging-${randomBytes(4).toString('hex')}`)
+    try {
+      await mkdir(staging, { recursive: true })
+      if (change.from) await copyFrom(change.from, staging)
+      else if (!change.clear) await cp(site, staging, { recursive: true, preserveTimestamps: true })
+      const at = (p: string) => join(staging, ...p.split('/'))
+      for (const f of change.files ?? []) {
+        const data = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8')
+        if (data.length > MAX_FILE_BYTES)
+          fail(`${f.path} is ${data.length} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
+        if ((await exists(at(f.path))) && !(await lstat(at(f.path))).isFile())
+          fail(`${f.path} is a folder here; write a file inside it or remove it first`)
+        await mkdir(dirname(at(f.path)), { recursive: true })
+        await writeFile(at(f.path), data)
+      }
+      for (const [i, e] of (change.edits ?? []).entries()) {
+        let text: string
+        try {
+          text = await readFile(at(e.path), 'utf8')
+        } catch {
+          fail(`edits[${i}]: ${e.path} does not exist; create it with files first`)
+        }
+        const first = text.indexOf(e.old)
+        if (first < 0)
+          fail(
+            `edits[${i}]: the "old" text was not found in ${e.path}; read the file again, it may have changed`,
+          )
+        if (text.indexOf(e.old, first + 1) >= 0)
+          fail(
+            `edits[${i}]: the "old" text occurs more than once in ${e.path}; include more surrounding text so it is unique`,
+          )
+        await writeFile(at(e.path), text.slice(0, first) + e.new + text.slice(first + e.old.length))
+      }
+      for (const p of change.remove ?? []) await rm(at(p), { force: true })
+      checkLimits(await walk(staging))
+      await rm(join(dir, 'site.old'), { recursive: true, force: true })
+      await rename(site, join(dir, 'site.old'))
+      await rename(staging, site)
+      await rm(join(dir, 'site.old'), { recursive: true, force: true })
+    } catch (err) {
+      await rm(staging, { recursive: true, force: true })
+      if (!(await exists(site)) && (await exists(join(dir, 'site.old'))))
+        await rename(join(dir, 'site.old'), site)
+      throw err
+    }
+    const meta: Meta = {
+      workspace,
+      name: basename(workspace),
+      updatedBy: change.by,
+      updatedAt: new Date().toISOString(),
+    }
+    await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
+    return fullRead(id, workspace)
   })
 }
 
-/** Every workspace with at least one widget, newest first. A file that does not parse is skipped. */
+/** Every dashboard with at least one file, newest first. Anything in the store that is not an <id> folder is ignored. */
 export async function listDashboards(): Promise<DashboardSummary[]> {
   let names: string[]
   try {
-    names = await readdir(join(DATA_DIR, 'dashboards'))
+    names = await readdir(root())
   } catch (err) {
     if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
     throw err
   }
-  const found = await Promise.all(
-    names
-      .filter((n) => n.endsWith('.json'))
-      .map(async (n) => {
-        try {
-          const d = JSON.parse(await readFile(join(DATA_DIR, 'dashboards', n), 'utf8')) as Dashboard
-          return d.widgets.length && d.updatedAt
-            ? {
-                workspace: d.workspace,
-                name: d.name,
-                widgets: d.widgets.length,
-                updatedAt: d.updatedAt,
-              }
-            : null
-        } catch {
-          return null
-        }
-      }),
-  )
-  return found
-    .filter((s): s is DashboardSummary => s !== null)
-    .sort((a, b) => (a.updatedAt < b.updatedAt ? 1 : a.updatedAt > b.updatedAt ? -1 : 0))
+  const found: DashboardSummary[] = []
+  for (const id of names.filter((n) => ID_RE.test(n))) {
+    const files = await walk(siteOf(id))
+    if (!files.length) continue
+    const meta = await readMeta(id)
+    found.push(await summarize(id, meta?.workspace ?? id, files))
+  }
+  return found.sort((a, b) => ((a.updatedAt ?? '') < (b.updatedAt ?? '') ? 1 : -1))
+}
+
+// --- hosting: <id>.localhost[:port] answers from that dashboard's site/ folder ---
+
+const TYPES: Record<string, string> = {
+  html: 'text/html; charset=utf-8',
+  htm: 'text/html; charset=utf-8',
+  css: 'text/css; charset=utf-8',
+  js: 'text/javascript; charset=utf-8',
+  mjs: 'text/javascript; charset=utf-8',
+  json: 'application/json; charset=utf-8',
+  svg: 'image/svg+xml',
+  png: 'image/png',
+  jpg: 'image/jpeg',
+  jpeg: 'image/jpeg',
+  gif: 'image/gif',
+  webp: 'image/webp',
+  ico: 'image/x-icon',
+  woff: 'font/woff',
+  woff2: 'font/woff2',
+  ttf: 'font/ttf',
+  txt: 'text/plain; charset=utf-8',
+  csv: 'text/csv; charset=utf-8',
+  md: 'text/markdown; charset=utf-8',
+  wasm: 'application/wasm',
+  map: 'application/json; charset=utf-8',
+}
+
+const SITE_HEADERS = {
+  'cache-control': 'no-store',
+  'x-content-type-options': 'nosniff',
+}
+
+const PLACEHOLDER = `<!doctype html><html><head><meta charset="utf-8"><title>No dashboard yet</title>
+<style>body{font:16px system-ui,sans-serif;max-width:34em;margin:15vh auto;padding:0 1em;color:#333}code{background:#eee;padding:.1em .3em;border-radius:3px}</style></head>
+<body><h1>No dashboard yet</h1><p>This project has no dashboard page. Ask a chat in this project to build its dashboard with <code>dashboard_write</code> (an <code>index.html</code> is the entry point).</p></body></html>`
+
+/** The dashboard id a Host header names (`<id>.localhost` with or without a port), or null for any other host. */
+export function dashboardHostId(host: string | null): string | null {
+  if (!host) return null
+  const m = /^([a-z0-9-]+)\.localhost(?::\d+)?$/i.exec(host.trim())
+  return m?.[1] ? m[1].toLowerCase() : null
+}
+
+function text(status: number, body: string, extra: Record<string, string> = {}): Response {
+  return new Response(body, {
+    status,
+    headers: { 'content-type': 'text/plain; charset=utf-8', ...SITE_HEADERS, ...extra },
+  })
+}
+
+/** A Response when the request's Host names a dashboard site (answered here, never reaching /api), else null. */
+export async function serveDashboardSite(req: Request): Promise<Response | null> {
+  const id = dashboardHostId(req.headers.get('host'))
+  if (!id) return null
+  if (req.method !== 'GET' && req.method !== 'HEAD')
+    return text(405, 'a dashboard site only answers GET and HEAD', { allow: 'GET, HEAD' })
+  if (!ID_RE.test(id) || !(await exists(dirOf(id)))) return text(404, 'no such dashboard')
+  const url = new URL(req.url)
+  let segs: string[]
+  try {
+    const decoded = decodeURIComponent(url.pathname)
+    if (decoded.includes('\0') || decoded.includes('\\')) return text(400, 'bad path')
+    segs = decoded.split('/').filter(Boolean)
+  } catch {
+    return text(400, 'bad path')
+  }
+  if (segs.some((s) => s === '.' || s === '..')) return text(404, 'not found')
+  const site = siteOf(id)
+  const isHead = req.method === 'HEAD'
+  const html = (body: string, status = 200) =>
+    new Response(isHead ? null : body, {
+      status,
+      headers: { 'content-type': TYPES.html as string, ...SITE_HEADERS },
+    })
+  let siteReal: string
+  try {
+    siteReal = await realpath(site)
+  } catch {
+    return html(PLACEHOLDER)
+  }
+  let target = join(siteReal, ...segs)
+  let real: string
+  try {
+    real = await realpath(target)
+  } catch {
+    if (segs.length === 0) return html(PLACEHOLDER)
+    return text(404, 'not found')
+  }
+  if (real !== siteReal && !real.startsWith(siteReal + sep)) return text(404, 'not found')
+  const s = await stat(real)
+  if (s.isDirectory()) {
+    if (segs.length && !url.pathname.endsWith('/'))
+      return new Response(null, {
+        status: 301,
+        headers: { location: `${url.pathname}/${url.search}`, ...SITE_HEADERS },
+      })
+    target = join(real, 'index.html')
+    try {
+      real = await realpath(target)
+    } catch {
+      return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
+    }
+    if (!real.startsWith(siteReal + sep)) return text(404, 'not found')
+  }
+  const body = await readFile(real)
+  const type = TYPES[extname(real).slice(1).toLowerCase()] ?? 'application/octet-stream'
+  return new Response(isHead ? null : body, {
+    status: 200,
+    headers: { 'content-type': type, 'content-length': String(body.length), ...SITE_HEADERS },
+  })
 }

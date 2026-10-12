@@ -28,7 +28,7 @@ export const BROWSER = [
 ].join(' ')
 
 const DASHBOARD =
-  "This project has a small dashboard the person sees in AgentHydra; keep it current with dashboard_write on the agenthydra MCP (rewrite widgets by id, don't pile up new ones)."
+  "This project has a dashboard the person opens in AgentHydra: a small website that is yours to design (any HTML, CSS, JS or data); build and keep it current with dashboard_write on the agenthydra MCP."
 
 /** The full orchestrator text, used when delegateToCliMayte is on. */
 export const DESK_APPEND = `${FIRST} ${DELEGATE} ${BROWSER} ${DASHBOARD}`
