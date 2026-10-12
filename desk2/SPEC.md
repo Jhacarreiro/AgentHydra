@@ -968,7 +968,9 @@ drafts are saved as they are typed).
 `web/src/lib/server-update.ts`): `stale` once a `.ts` file under `server/src` or `shared/` was saved after the
 server started or the file count changed, `restartable` when `~/.hydra-desk-2/server.pid` names this server
 (the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
-`POST /api/server/restart` turns into `launcher/restart.ps1`, started hidden outside the server's process tree
+`POST /api/server/restart` turns into `launcher/restart.ps1`, told this server's `HYDRA_DESK_HOME` and
+`HYDRA_DESK_PORT` (it starts through WMI with none of the server's environment, so untold it restarts the default
+Desk), started hidden outside the server's process tree
 (stop.ps1 ends that tree) with its output in `logs/restart-run.log` (`logs/restart.log` holds the server's ask lines only, so a
 locked file cannot fail a stop); the chats run on and the window reconnects.
 An agent may ask the same restart (the owner, 2026-10-12), but only to update: the route answers it 409 while

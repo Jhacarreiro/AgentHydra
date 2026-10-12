@@ -33,7 +33,7 @@ async function boot(over: Partial<UpdateDeps> & { stamp?: () => CodeStamp } = {}
   const plugins = temp('desk-update-plugins-')
   writeFileSync(join(plugins, '60-update.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
   const started: string[][] = []
-  const deps: UpdateDeps = { bootedAt: 1000, stamp: () => ({ newest: 900, count: 3 }), platform: 'win32', pid: 4242, start: (argv) => started.push(argv), ...over }
+  const deps: UpdateDeps = { bootedAt: 1000, stamp: () => ({ newest: 900, count: 3 }), platform: 'win32', pid: 4242, port: 7899, start: (argv) => started.push(argv), ...over }
   const desk: DeskServer = await createServer({ port: 0, home, pluginsDir: plugins, deps: { update: deps } })
   stops.push(() => desk.stop())
   return { desk, home, started }
@@ -73,6 +73,8 @@ test('restart starts launcher/restart.ps1, logging to the data home, only on a s
   expect(log).toContain('refused (not started by the launcher)')
   const command = started[0]!.at(-1)!
   expect(command).toContain(join('launcher', 'restart.ps1'))
+  // The script starts with none of this server's environment: it is told which Desk to restart, never the default one.
+  expect(command).toContain(`$env:HYDRA_DESK_HOME = '${home}'; $env:HYDRA_DESK_PORT = '7899'; & `)
   expect(command).toContain(`-FilePath '${join(home, 'logs', 'restart-run.log')}'`)
   expect(command).not.toContain(`'${join(home, 'logs', 'restart.log')}'`)
 })

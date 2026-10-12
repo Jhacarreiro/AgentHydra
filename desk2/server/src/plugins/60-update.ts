@@ -31,6 +31,8 @@ export interface UpdateDeps {
   stamp(): CodeStamp
   platform: NodeJS.Platform
   pid: number
+  /** The port this server listens on (HYDRA_DESK_PORT, which start.ps1 sets): the restart's stop and start use it. */
+  port: number
   /** Starts argv hidden and outside the server's process tree (stop.ps1 ends that tree). */
   start(argv: string[]): void
 }
@@ -81,6 +83,7 @@ function realDeps(): UpdateDeps {
     stamp: cachedStamp(),
     platform: process.platform,
     pid: process.pid,
+    port: Number(process.env.HYDRA_DESK_PORT) || 7798,
     start(argv) {
       const plan = detachedCommand(process.platform, argv)
       const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
@@ -128,7 +131,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     // The script's output goes to its own file: the server appends its ask lines to restart.log while the script runs.
     const runLog = join(ctx.home, 'logs', 'restart-run.log')
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
-    deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`])
+    // The script starts through WMI, outside this process tree, with none of this server's environment: it is told this
+    // server's home and port, or it stops and starts the default Desk instead (2026-10-12: a Desk on a spare port did).
+    const target = `$env:HYDRA_DESK_HOME = ${quote(ctx.home)}; $env:HYDRA_DESK_PORT = ${quote(String(deps.port))}`
+    deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `${target}; & ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`])
     // Only a restart that started holds off the next ask: a start that threw leaves the route open.
     restartAcceptedAt = Date.now()
     return c.json({ ok: true }, 202)
