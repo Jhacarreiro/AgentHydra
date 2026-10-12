@@ -38,13 +38,14 @@ export function pickedFolder(selected: View, path: string): boolean {
   return selected.kind === 'new' && !!selected.cwd && sameFolder(selected.cwd, path)
 }
 
-export type ProjectAction = 'reveal' | 'newChat' | 'copy' | 'hide' | 'unhide'
+export type ProjectAction = 'reveal' | 'newChat' | 'dashboard' | 'copy' | 'hide' | 'unhide'
 
 /** A project tile's right-click menu, in order: Hide, or Unhide for a hidden one. */
 export function projectActions(hidden: boolean): { action: ProjectAction; label: string }[] {
   return [
     { action: 'reveal', label: 'Open file location' },
     { action: 'newChat', label: 'New chat here' },
+    { action: 'dashboard', label: 'Open dashboard' },
     { action: 'copy', label: 'Copy path' },
     hidden ? { action: 'unhide', label: 'Unhide' } : { action: 'hide', label: 'Hide from Projects' },
   ]
@@ -53,6 +54,7 @@ export function projectActions(hidden: boolean): { action: ProjectAction; label:
 export interface ProjectMenuApi {
   reveal(path: string): Promise<unknown>
   newChat(path: string): void
+  dashboard(path: string): void
   copy(path: string): Promise<unknown>
   hide(path: string): Promise<unknown>
   unhide(path: string): Promise<unknown>
@@ -64,6 +66,9 @@ export function runProjectAction(action: ProjectAction, path: string, api: Proje
       return api.reveal(path)
     case 'newChat':
       api.newChat(path)
+      return Promise.resolve()
+    case 'dashboard':
+      api.dashboard(path)
       return Promise.resolve()
     case 'copy':
       return api.copy(path)

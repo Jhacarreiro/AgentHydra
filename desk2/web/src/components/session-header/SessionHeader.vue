@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ChevronDown, ChevronUp, Coins, Copy, FileText, Hash, MessagesSquare, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
+import { ChevronDown, ChevronUp, Coins, Copy, FileText, Hash, LayoutDashboard, MessagesSquare, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { actionError } from '@/lib/action-error'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
@@ -19,6 +19,8 @@ import {
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { folderLabel } from '@/components/sidebar/logic'
+import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
+import { findDashboard } from '@/components/dashboard/logic'
 import { modelName } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import { useShellSource } from '@/components/shell/source'
@@ -147,6 +149,11 @@ async function openFolder() {
 
 const title = computed(() => row.value?.title || props.session?.title || 'Session')
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
+const dashboardWidgets = computed(() => {
+  const n = cwd.value ? (findDashboard(dashboardList.value, cwd.value)?.widgets ?? 0) : 0
+  return n || ''
+})
+watch(cwd, (c) => c && refreshDashboards(), { immediate: true })
 const shortId = computed(() => props.sessionId.slice(0, 8))
 // Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file),
 // else the prompts in the transcript shown: Desk reads only a long session file's last 8 MB.
@@ -379,6 +386,7 @@ const TONE = {
   account: 'bg-[#8B5CF6]/14 text-[#C4B5FD]',
   accountLink: 'bg-[#8B5CF6]/14 text-[#C4B5FD] hover:bg-[#8B5CF6]/26',
   folder: 'bg-[#F59E0B]/12 text-[#FCD34D] hover:bg-[#F59E0B]/24',
+  dashboard: 'bg-[#EC4899]/12 text-[#F9A8D4] hover:bg-[#EC4899]/24',
   branch: 'bg-[#22C55E]/12 text-[#86EFAC]',
   turns: 'bg-[#0EA5E9]/12 text-[#7DD3FC]',
   usage: 'bg-[#10B981]/12 text-[#6EE7B7]',
@@ -442,6 +450,12 @@ const TONE = {
             <button type="button" :class="[CHIP, TONE.folder]" :aria-label="`Folder ${folderLabel(cwd)}, open it`" @click="openFolder">
               <component :is="newSessionGlyphs.folder" class="size-3.5 shrink-0" />
               <span class="max-w-48 truncate">{{ folderLabel(cwd) }}</span>
+            </button>
+          </Tip>
+          <Tip v-if="cwd" label="Project dashboard">
+            <button type="button" :class="[CHIP, TONE.dashboard]" class="tnum" aria-label="Project dashboard" @click="openDashboard(cwd)">
+              <LayoutDashboard class="size-3.5 shrink-0" aria-hidden="true" />
+              <span v-if="dashboardWidgets">{{ dashboardWidgets }}</span>
             </button>
           </Tip>
           <Tip v-if="row?.git_branch && row.git_branch !== 'HEAD'" label="Git branch">

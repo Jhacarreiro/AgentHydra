@@ -25,6 +25,8 @@ const HydraPane = lazyPanel(() => import('@/components/hydra/HydraPane.vue'))
 import { OPEN_HYDRA_EVENT, hydraOpen, hydraShown } from '@/components/hydra/api'
 import { useCloud } from '@/components/cloud/store'
 import { useDevServers } from '@/components/servers/store'
+import { closeDashboard, dashboardCwd, dashboardOpen } from '@/components/dashboard/store'
+const DashboardPage = lazyPanel(() => import('@/components/dashboard/DashboardPage.vue'))
 import { setChatLive } from '@/components/servers/background-views'
 import { showTasks } from '@/components/sidebar/tasks'
 import { cleanSidebar } from '@/components/sidebar/clean'
@@ -328,6 +330,7 @@ function toggleHydra(open = !hydraOpen.value) {
   hydraOpen.value = open
   if (open) {
     devServers.closePage()
+    closeDashboard()
     cloudForHydra = !cloud.on.value
     cloud.on.value = true
     toggleSidebar(true)
@@ -373,6 +376,7 @@ watch(
   (v, was) => {
     if (v.kind === 'settings' || was?.kind === 'settings') return
     devServers.closePage()
+    closeDashboard()
     if (!hydraOpen.value) return
     if (v.kind === 'external') cloudForHydra = false
     toggleHydra(false)
@@ -498,20 +502,20 @@ watch(pane, (p) => {
 // track pushes the chat out and the page in; one page opened over the other pushes that one out within the side, the
 // same 420ms push. The Dev servers page is mounted while it is open and through its slide out (it polls while mounted),
 // and keeps the last selection while it leaves, so it never empties on its way.
-type Page = 'hydra' | 'dev'
+type Page = 'hydra' | 'dev' | 'dash'
 const devPage = computed(() => devServers.page.value)
-const pageOpen = computed(() => hydraOpen.value || devPage.value)
+const pageOpen = computed(() => hydraOpen.value || devPage.value || dashboardOpen.value)
 const PAGE_SLIDE = 'transition-transform duration-[420ms] ease-[cubic-bezier(0.32,0.72,0,1)] motion-reduce:transition-none'
 const PAGE_MS = 460
-const slotPage = ref<Page>(devPage.value && !hydraOpen.value ? 'dev' : 'hydra')
+const slotPage = ref<Page>(devPage.value && !hydraOpen.value ? 'dev' : dashboardOpen.value && !hydraOpen.value && !devPage.value ? 'dash' : 'hydra')
 const slotLeaving = ref<Page | null>(null)
 let slotTimer: ReturnType<typeof setTimeout> | undefined
-watch([hydraOpen, devPage], ([h, d], [wasH, wasD]) => {
-  const next: Page | null = h && !wasH ? 'hydra' : d && !wasD ? 'dev' : null
+watch([hydraOpen, devPage, dashboardOpen], ([h, d, a], [wasH, wasD, wasA]) => {
+  const next: Page | null = h && !wasH ? 'hydra' : d && !wasD ? 'dev' : a && !wasA ? 'dash' : null
   if (!next || next === slotPage.value) return
   clearTimeout(slotTimer)
   // Only a page on screen is pushed out; with the desk on screen the new one is simply there when the track slides.
-  slotLeaving.value = wasH || wasD ? slotPage.value : null
+  slotLeaving.value = wasH || wasD || wasA ? slotPage.value : null
   slotPage.value = next
   if (slotLeaving.value) slotTimer = setTimeout(() => (slotLeaving.value = null), PAGE_MS)
 })
@@ -519,7 +523,19 @@ const layerAt = (p: Page) => (p === slotPage.value ? 'translateX(0)' : p === slo
 const layerSlides = (p: Page) => !!slotLeaving.value && (p === slotPage.value || p === slotLeaving.value)
 watch(devPage, (open) => {
   if (open && hydraOpen.value) toggleHydra(false)
+  if (open) closeDashboard()
   if (!props.demo) rememberScreen({ dev: open || undefined })
+})
+watch(dashboardOpen, (open) => {
+  if (open && hydraOpen.value) toggleHydra(false)
+  if (open) devServers.closePage()
+})
+const dashMounted = ref(dashboardOpen.value)
+let dashTimer: ReturnType<typeof setTimeout> | undefined
+watch(dashboardOpen, (open) => {
+  clearTimeout(dashTimer)
+  if (open) dashMounted.value = true
+  else dashTimer = setTimeout(() => (dashMounted.value = dashboardOpen.value), PAGE_MS)
 })
 const devMounted = ref(devPage.value)
 let devTimer: ReturnType<typeof setTimeout> | undefined
@@ -1022,6 +1038,9 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
           </div>
           <div class="absolute inset-0 flex" :class="layerSlides('dev') && PAGE_SLIDE" :style="{ transform: layerAt('dev') }" :inert="slotPage !== 'dev'" :aria-hidden="slotPage !== 'dev' || undefined" data-testid="dev-page">
             <InfoPane v-if="devMounted" :sel="devShown" :active="devPage" :pad-left="titlePad" @close="devServers.closePage()" />
+          </div>
+          <div class="absolute inset-0 flex" :class="layerSlides('dash') && PAGE_SLIDE" :style="{ transform: layerAt('dash') }" :inert="slotPage !== 'dash'" :aria-hidden="slotPage !== 'dash' || undefined" data-testid="dashboard-page-layer">
+            <DashboardPage v-if="dashMounted" :cwd="dashboardCwd" :active="dashboardOpen" :pad-left="titlePad" />
           </div>
         </div>
       </div>

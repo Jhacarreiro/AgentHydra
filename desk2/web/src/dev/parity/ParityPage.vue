@@ -7,6 +7,8 @@ import { COMPOSER_API, OPEN_DIFF_EVENT } from '@/components/composer/api'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { PANE_API } from '@/components/panes/api'
 import { waitForNextPaint } from '@/lib/wait-for-next-paint'
+import type { Dashboard } from '@shared/dashboards'
+import { openDashboard } from '@/components/dashboard/store'
 import { PARITY_SCENES, sceneComposerApi, scenePaneApi, sceneSource, type MenuName } from './scenes'
 import { actionError } from '@/lib/action-error'
 import { applyHeadlessAudio } from '@/lib/chat-audio'
@@ -68,6 +70,20 @@ const settle = async () => {
   await frames(2)
 }
 
+// The dashboard page reads through /ah/api/dashboards; no daemon runs under the parity page, so its reads answer here.
+function stubDashboardReads(dash: Dashboard): void {
+  const real = window.fetch.bind(window)
+  const stub = (input: RequestInfo | URL, init?: RequestInit) => {
+    const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
+    if (!url.includes('/ah/api/dashboards')) return real(input, init)
+    const body = url.includes('/workspace')
+      ? dash
+      : { dashboards: [{ workspace: dash.workspace, name: dash.name, widgets: dash.widgets.length, updatedAt: dash.updatedAt }] }
+    return Promise.resolve(new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }))
+  }
+  window.fetch = Object.assign(stub, { preconnect: real.preconnect })
+}
+
 async function setUp(): Promise<{ hover: { x: number; y: number } | null }> {
   if (!scene) throw new Error(`unknown parity scene '${name}'; known: ${Object.keys(PARITY_SCENES).join(', ')}`)
   if (scene.alert) actionError.value = scene.alert
@@ -90,6 +106,13 @@ async function setUp(): Promise<{ hover: { x: number; y: number } | null }> {
   if (scene.openTasks) {
     openBackgroundTasks()
     await waitFor('section[aria-label="Background tasks"]')
+    await settle()
+  }
+  if (scene.dashboard) {
+    const dash = scene.dashboard()
+    stubDashboardReads(dash)
+    openDashboard(dash.workspace)
+    await waitFor('[data-testid="dashboard-page"]')
     await settle()
   }
   const open = query.get('open') as MenuName | null

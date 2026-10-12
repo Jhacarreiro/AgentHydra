@@ -62,8 +62,8 @@ describe('projectActions', () => {
   it('offers Hide for a shown project and Unhide for a hidden one, after the same three actions', () => {
     const shown = projectActions(false)
     const hidden = projectActions(true)
-    expect(shown.map((a) => a.action)).toEqual(['reveal', 'newChat', 'copy', 'hide'])
-    expect(hidden.map((a) => a.action)).toEqual(['reveal', 'newChat', 'copy', 'unhide'])
-    expect(hidden[3]?.label).toBe('Unhide')
+    expect(shown.map((a) => a.action)).toEqual(['reveal', 'newChat', 'dashboard', 'copy', 'hide'])
+    expect(hidden.map((a) => a.action)).toEqual(['reveal', 'newChat', 'dashboard', 'copy', 'unhide'])
+    expect(hidden[4]?.label).toBe('Unhide')
   })
 })

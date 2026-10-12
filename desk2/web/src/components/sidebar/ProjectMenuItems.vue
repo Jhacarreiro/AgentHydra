@@ -6,6 +6,7 @@ import { computed, onMounted, ref } from 'vue'
 import type { ProjectStats } from '@shared/protocol'
 import { ContextMenuItem } from '@/components/ui/context-menu'
 import { useShellSource } from '@/components/shell/source'
+import { openDashboard } from '@/components/dashboard/store'
 import { HIDE_TITLE } from './logic'
 import { MENU_ITEM, MENU_SEPARATOR } from './menuClasses'
 import { categorizing, fetchStats, isScratch, statsLines } from './projectStats'
@@ -49,6 +50,9 @@ function categorize(): void {
   </template>
   <ContextMenuItem :class="MENU_ITEM" @select="openFolder">
     <span class="flex-1">Open project folder</span>
+  </ContextMenuItem>
+  <ContextMenuItem :class="MENU_ITEM" @select="openDashboard(folder)">
+    <span class="flex-1">Open dashboard</span>
   </ContextMenuItem>
   <ContextMenuItem :class="MENU_ITEM" @select="emit('toggle')">
     <span class="flex-1">{{ collapsed ? 'Expand' : 'Collapse' }}</span>

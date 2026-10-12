@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Each project gets a dashboard that its chats fill in.** A dashboard holds stat, list, note, progress and chart
+  widgets that a chat writes with `dashboard_write` and reads with `dashboard_read` on the agenthydra MCP. Open it
+  from a chat's header, a project's tile on the home screen, or the project's menu in the sidebar; a project with no
+  dashboard yet shows the prompt to copy.
 - **Agents see a short tool list and can still reach everything.** AgentHydra lists the 28 tools agents actually
   use instead of all 108; `hydra_find` searches every tool in plain words and `hydra_run` runs any of them, the way
   the Connections MCP works. A chat that loads every listed tool now carries about 15,000 tokens of them instead of 35,000.

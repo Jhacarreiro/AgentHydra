@@ -597,6 +597,13 @@ sidebar on the left stays put, and only the pane on the right changes.
 The server side is two read-only routes over AgentHydra's: `GET /api/cloud/sessions` (the same scope
 parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 
+**A project dashboard** is a page per project that the chats fill in. It holds stat, list, note, progress
+and chart widgets. A chat writes them with `dashboard_write` and reads them with `dashboard_read` on the agenthydra MCP,
+and the daemon keeps them per folder. The page opens from the chat header's dashboard button, a project tile's
+"Open dashboard", or the sidebar project menu, and slides in beside the chat like Hydra and Dev servers do; a project
+with no dashboard shows the prompt to copy. Its widgets are cards in a grid that narrows with the window, and it
+polls only while it is on screen.
+
 </details>
 
 ## Planned next

@@ -8,6 +8,7 @@ function recorder(): { api: ProjectMenuApi; calls: string[] } {
   const api: ProjectMenuApi = {
     reveal: async (path) => void calls.push(`reveal ${path}`),
     newChat: (path) => void calls.push(`newChat ${path}`),
+    dashboard: (path) => void calls.push(`dashboard ${path}`),
     copy: async (path) => void calls.push(`copy ${path}`),
     hide: async (path) => void calls.push(`hide ${path}`),
     unhide: async (path) => void calls.push(`unhide ${path}`),
@@ -16,8 +17,8 @@ function recorder(): { api: ProjectMenuApi; calls: string[] } {
 }
 
 describe('project tile menu', () => {
-  test('lists the four actions in the order the owner asked for', () => {
-    expect(projectActions(false).map((a) => a.label)).toEqual(['Open file location', 'New chat here', 'Copy path', 'Hide from Projects'])
+  test('lists the actions in order, Open dashboard after New chat here', () => {
+    expect(projectActions(false).map((a) => a.label)).toEqual(['Open file location', 'New chat here', 'Open dashboard', 'Copy path', 'Hide from Projects'])
   })
 
   test('each action runs its own call with the tile path', async () => {
@@ -26,6 +27,7 @@ describe('project tile menu', () => {
     expect(calls).toEqual([
       'reveal C:/Users/me/Desktop/Project/app',
       'newChat C:/Users/me/Desktop/Project/app',
+      'dashboard C:/Users/me/Desktop/Project/app',
       'copy C:/Users/me/Desktop/Project/app',
       'hide C:/Users/me/Desktop/Project/app',
     ])

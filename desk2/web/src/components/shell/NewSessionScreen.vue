@@ -1,7 +1,9 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
-import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare } from '@lucide/vue'
+import { EyeOff, Folder, FolderPlus, LayoutDashboard, ListFilter, MessagesSquare } from '@lucide/vue'
+import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
+import { findDashboard } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -63,7 +65,9 @@ function load(): void {
     })
 }
 onMounted(load)
+onMounted(refreshDashboards)
 watch(showHiddenProjects, load)
+const hasDashboard = (path: string) => !!findDashboard(dashboardList.value, path)
 
 const hiddenCount = computed(() => choices.value.hidden.length)
 const listed = computed(() => filterProjects(shownProjects(answer.value?.projects ?? [], showHiddenProjects.value), query.value))
@@ -109,6 +113,7 @@ const picked = (p: ProjectEntry) => pickedFolder(src.selected.value, p.path)
 const menuApi: ProjectMenuApi = {
   reveal: (path) => src.revealFolder(path),
   newChat: (path) => src.select({ kind: 'new', cwd: path }),
+  dashboard: (path) => openDashboard(path),
   copy: (path) => navigator.clipboard.writeText(path),
   hide: async (path) => {
     await src.changeProjectChoice?.('hidden', path, true)
@@ -159,7 +164,8 @@ const DETAILS_HOVER = 'pointer-events-none absolute inset-x-0 top-full z-20 mt-1
 const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2'
 // The project's open chats, at the end of its name (owner, 2026-10-08: "a little badge on them, with how many active
 // chats or, I guess, unarchived chats exist for each"); those projects come first.
-const OPEN_CHATS = 'ms-auto flex shrink-0 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] font-semibold leading-4 tabular-nums text-text-2'
+const DASH_GLYPH = 'flex shrink-0 items-center rounded-(--radius-5) px-1 text-text-muted hover:bg-fill-hover hover:text-text'
+const OPEN_CHATS ='ms-auto flex shrink-0 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] font-semibold leading-4 tabular-nums text-text-2'
 const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 </script>
 
@@ -248,6 +254,11 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                       <Tip v-if="p.openChats" :label="openChatsLabel(p.openChats)">
                         <span :class="OPEN_CHATS" :aria-label="openChatsLabel(p.openChats)">
                           <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
+                        </span>
+                      </Tip>
+                      <Tip v-if="hasDashboard(p.path)" label="Open dashboard">
+                        <span role="button" tabindex="0" aria-label="Open dashboard" :class="DASH_GLYPH" @click.stop.prevent="openDashboard(p.path)" @keydown.enter.stop.prevent="openDashboard(p.path)">
+                          <LayoutDashboard class="size-3" aria-hidden="true" />
                         </span>
                       </Tip>
                     </span>

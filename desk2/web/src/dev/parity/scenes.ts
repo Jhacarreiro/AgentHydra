@@ -1,6 +1,7 @@
 // The parity page's scenes: which fixture state each '#/parity/<scene>' renders. The scene list with the
 // reference images, crops and viewports is docs/reference/real/scenes.json; its routes point here.
 import { ref } from 'vue'
+import type { Dashboard } from '@shared/dashboards'
 import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import type { HeadlessAudioState } from '@shared/headless-audio'
@@ -11,6 +12,7 @@ import type { ComposerApi } from '@/components/composer/api'
 import type { PaneApi } from '@/components/panes/api'
 import { SIDEBAR_MIN } from '@/components/sidebar/width'
 import { PARITY_NOW } from './clock'
+import { dashboardFixture, emptyDashboardFixture } from './dashboard'
 import { backgroundTaskWorkers } from './tasks'
 import { markdownSceneItems } from './markdown'
 import {
@@ -55,6 +57,8 @@ export interface ParityScene {
   history?: View[]
   /** A failed action's message, shown in the title bar (the app's action-error ref). */
   alert?: string
+  /** Opens the project dashboard page over the chat; its reads answer with this dashboard. */
+  dashboard?: () => Dashboard
   /** The sidebar starts hidden, so the title bar spans the window. */
   sidebarHidden?: boolean
   /** The width the sidebar was dragged to (the page sets its saved width; default SIDEBAR_DEFAULT). */
@@ -100,6 +104,8 @@ const headlessAudio: ParityScene = {
 }
 
 export const PARITY_SCENES: Record<string, ParityScene> = {
+  dashboard: { ...whole, dashboard: dashboardFixture },
+  'dashboard-empty': { ...whole, dashboard: emptyDashboardFixture },
   window: { layout: 'frame', chats: windowChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT, history: [{ kind: 'chat', id: 'avg' }] },
   'sidebar-user': { layout: 'frame', chats: sidebarUserChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT },
   'headless-audio': headlessAudio,
