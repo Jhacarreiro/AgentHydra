@@ -223,7 +223,7 @@ interface Entry {
   lastAsk?: string
   /** The folder the chat's worker was last started or sent into; a different chat.cwd is a move to pass on. */
   workerCwd?: string
-  /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile (memory only, never in the Desk file). */
+  /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile; kept with the chat record, never in the Desk's items file. */
   sent?: UserItem[]
   /** The ledger id of the chat's latest failure: a move to another account marks it recovered. */
   lastFailure?: string
@@ -276,7 +276,7 @@ interface ResolvedAccount {
 }
 
 /** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown }
+type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown; sent?: unknown }
 
 export class ChatManager {
   readonly store: ChatStore
@@ -774,8 +774,10 @@ export class ChatManager {
     let queued = busy(chat)
     // The message shows at once: the worker's JSONL has it only once its CLI runs and the poll reads it.
     const ts = this.now()
-    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued ? { queued } : {}) }
+    // A worker not started yet holds the message too: it shows as queued until the worker's own copy arrives.
+    const standIn: UserItem = { kind: 'user', id: `desk-sent:${ts}:${randomUUID()}`, ts, text: said, ...(shown ? { images: shown } : {}), ...(queued || chat.waiting ? { queued: true } : {}) }
     ;(e.sent ??= []).push(standIn)
+    this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
     const sentAt = this.now()
     let sent: { urgent: boolean; stoppedFor: boolean }
@@ -924,6 +926,7 @@ export class ChatManager {
     if (i < 0) return
     const { queued: _q, ...sent } = standIn!
     e.sent![i] = sent
+    this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: sent })
   }
 
@@ -1995,12 +1998,13 @@ export class ChatManager {
 
   private stored(): ChatSummary[] {
     return [...this.chats.values()].map((e) => {
-      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions && e.workerCwd === undefined) return e.chat
+      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions && e.workerCwd === undefined && !e.sent?.length) return e.chat
       const record: StoredRecord = { ...e.chat }
       if (e.forkAt) record.forkAt = e.forkAt
       if (e.ranIn !== undefined) record.ranIn = e.ranIn
       if (e.pastSessions) record.pastSessions = e.pastSessions
       if (e.workerCwd !== undefined) record.workerCwd = e.workerCwd
+      if (e.sent?.length) record.sent = e.sent
       return record
     })
   }
@@ -2027,6 +2031,7 @@ export class ChatManager {
   /** A CliMayte chat's sent message stops standing in: its worker's copy arrived, or the send failed. */
   private dropStandIn(e: Entry, item: UserItem): void {
     e.sent = e.sent?.filter((s) => s !== item)
+    this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.removed', chatId: e.chat.id, itemId: item.id })
   }
 
@@ -2143,9 +2148,9 @@ export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity' | '
 } {
   switch (w.status) {
     case 'queued': {
-      // In line, no account picked yet: the chat is waiting, not booting. A hold time, when AgentHydra gives one, is when.
+      // In line, not started yet: the chat is waiting, not booting. A hold time, when AgentHydra gives one, is when.
       const until = typeof w.notBefore === 'number' && w.notBefore > 0 ? w.notBefore : null
-      return { status: 'starting', activity: 'Queued', waiting: { reason: 'In line for an account.', until } }
+      return { status: 'starting', activity: 'Queued', waiting: { reason: plainReason(w.error) || 'In line for an account.', until } }
     }
     case 'waiting': {
       const reason = plainReason(w.error) || 'Waiting for an account.'
@@ -2190,7 +2195,7 @@ const UNDO_NOT_FOUND = 'Could not find this message in its session file, so ther
 
 /** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
 function entryOf(stored: StoredRecord): Entry {
-  const { forkAt, ranIn, pastSessions, workerCwd, ...chat } = stored
+  const { forkAt, ranIn, pastSessions, workerCwd, sent, ...chat } = stored
   return {
     chat,
     runtime: null,
@@ -2199,6 +2204,7 @@ function entryOf(stored: StoredRecord): Entry {
     ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
     pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
     workerCwd: typeof workerCwd === 'string' ? workerCwd : undefined,
+    sent: Array.isArray(sent) && sent.length ? (sent as UserItem[]) : undefined,
   }
 }
 

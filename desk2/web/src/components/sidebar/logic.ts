@@ -544,9 +544,11 @@ export function isQuiet(glyph: StatusGlyph | undefined, selected: boolean): bool
 /** A CliMayte chat whose worker waits for an account: it is not launching, whatever its status says. */
 export const isWaitingForAccount = (chat: Pick<ChatSummary, 'status'> & { waiting?: ChatSummary['waiting'] }): boolean => chat.status === 'starting' && !!chat.waiting
 
-/** 'Waiting for an account, starts about 12:00': the time only when AgentHydra gave one still ahead. */
+/** 'Waiting for an account, starts about 12:00': the time only when AgentHydra gave one still ahead. The line names the
+ *  CliMayte reason's kind: the machine's processor or memory is not an account. */
 export function waitingLine(wait: NonNullable<ChatSummary['waiting']>, now: number = Date.now()): string {
-  return wait.until !== null && wait.until > now ? `Waiting for an account, starts about ${resetClock(wait.until, now)}` : 'Waiting for an account'
+  const what = wait.reason.startsWith('Waiting for CPU') ? 'Waiting for processor power' : wait.reason.startsWith('Waiting for memory') ? 'Waiting for free memory' : 'Waiting for an account'
+  return wait.until !== null && wait.until > now ? `${what}, starts about ${resetClock(wait.until, now)}` : what
 }
 
 export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { waiting?: ChatSummary['waiting']; climayteActive?: number; backgroundActive?: number }): StatusGlyph {

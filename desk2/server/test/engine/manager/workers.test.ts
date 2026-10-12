@@ -124,14 +124,14 @@ test('an open chat is served from the Desk file without reading any account fold
   const m = newManager(home, b)
   const chat = await m.create({ cwd: home, prompt: 'hi' })
   while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
-  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 2, text: 'one' }]
+  b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 1, text: 'hi' }, { kind: 'assistant_text', id: 'a-1', ts: 2, text: 'one' }]
   await m.syncWorkers(chat.id)
   await m.closeAll()
 
   // A restarted server: the chat opens from its file; the scan is not called until the background refresh.
   const b2 = fakeBridge()
   const m2 = newManager(home, b2)
-  expect(m2.listItems(chat.id).map((i) => i.id)).toEqual(['a-1'])
+  expect(m2.listItems(chat.id).map((i) => i.id)).toEqual(['u-1', 'a-1'])
   expect(b2.state.workerReads).toBe(0)
 })
 
@@ -271,6 +271,51 @@ test('a waiting or queued worker gives the chat a plain wait: the reason, no add
   Object.assign(b.state.rows[0]!, { status: 'running' })
   await m.syncWorkers(chat.id)
   expect(m.get(chat.id)).toMatchObject({ status: 'working', waiting: null })
+})
+
+test('a worker held for CPU or memory says so: its reason is carried through, queued or waiting', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+
+  const cpu = 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%. Nothing running is stopped.'
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: cpu })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'starting', waiting: { reason: cpu, until: null } })
+
+  const memory = 'Waiting for memory: 14.3 GB of the 115.9 GB commit limit left; it starts when 20 GB is free.'
+  Object.assign(b.state.rows[0]!, { status: 'waiting', error: memory })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id)).toMatchObject({ status: 'starting', waiting: { reason: memory, until: null } })
+})
+
+test('a message sent while its worker is held has a queued stand-in that survives a restart, until the worker has it', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.' })
+  await m.syncWorkers(chat.id)
+  await m.send(chat.id, 'and add the totals row')
+  expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'and add the totals row')).toMatchObject({ queued: true })
+
+  await new Promise((r) => setTimeout(r, 50))
+  const restarted = newManager(home, b)
+  expect(restarted.listItems(chat.id).filter((i) => i.kind === 'user' && i.text === 'and add the totals row')).toMatchObject([{ queued: true }])
+
+  b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-held', ts: Date.now(), text: 'and add the totals row' }]
+  await restarted.syncWorkers(chat.id)
+  const users = restarted.listItems(chat.id).filter((i) => i.kind === 'user' && i.text === 'and add the totals row')
+  expect(users).toHaveLength(1)
+  expect(users[0]).toMatchObject({ id: 'u-held' })
+  expect(users[0]).not.toHaveProperty('queued')
 })
 
 test("a person's plain send to a running worker goes now; the queue's own dispatch and a failed deliver-now stay held", async () => {

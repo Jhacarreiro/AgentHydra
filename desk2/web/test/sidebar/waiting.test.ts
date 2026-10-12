@@ -15,6 +15,13 @@ test('a waiting chat with no time, or one already past, gives no time', () => {
   expect(waitingLine({ reason: 'x', until: NOON - 1000 }, NOON)).toBe('Waiting for an account')
 })
 
+test('a chat held for CPU or memory says so, not that it waits for an account', () => {
+  expect(waitingLine({ reason: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.', until: null }, NOON)).toBe('Waiting for processor power')
+  expect(waitingLine({ reason: 'Waiting for memory: 14.3 GB of the 115.9 GB commit limit left; it starts when 20 GB is free.', until: at(12, 40) }, NOON)).toBe('Waiting for free memory, starts about 12:40')
+  expect(waitingLine({ reason: 'Waiting for an account nobody else is using: #35 (other sessions running).', until: null }, NOON)).toBe('Waiting for an account')
+  expect(waitingLine({ reason: 'In line for an account.', until: null }, NOON)).toBe('Waiting for an account')
+})
+
 test('the sidebar dot says Waiting for a waiting chat and Starting for a launching one', () => {
   expect(statusGlyph({ status: 'starting', unread: false, waiting: { reason: 'x', until: null } }).label).toBe('Waiting')
   expect(statusGlyph({ status: 'starting', unread: false }).label).toBe('Starting')
