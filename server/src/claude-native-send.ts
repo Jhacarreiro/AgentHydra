@@ -5,10 +5,19 @@
 // the babysitter's continues all came back "no peer pipe" overnight (44 of them, 2026-10-09). The
 // app's own peer-message delivery (what one chat's SendMessage calls to reach another) starts the
 // chat's engine itself; the native send makes that call, as a message from another session.
+//
+// A busy chat is not handed to the app at all: the app's queue drops such a message unrun
+// (claude-native-send-hold.ts), so sendOrHold journals it and sends it once the chat is idle.
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
+import { createNativeSendHold, type HoldSendResult } from './claude-native-send-hold'
 import {
   getClaudeNativeProfileConfig,
   normalizeClaudeNativeProfile,
 } from './claude-native-settings'
+import { transcriptFile } from './climayte-core'
+import { DATA_DIR } from './config'
 import { connectClaudeInspector } from './core/claude-native/inspector-client'
 import { nativeProgram } from './core/claude-native/native-program'
 import { scanClaudeProcesses } from './core/process'
@@ -19,8 +28,11 @@ export interface NativeSendOutcome {
    *  sending): the caller may try another route. False once the send was made: never resend it. */
   unavailable: boolean
   /** The app's receipt: delivered (a turn started on it), queued (it runs when the chat is free), or
-   *  sent (in the app's hands, no answer within the program's 35s wait). */
-  delivery?: 'delivered' | 'queued' | 'sent' | null
+   *  sent (in the app's hands, no answer within the program's 35s wait). `held` comes only from
+   *  sendOrHold: the chat was busy, so AgentHydra journals the message and sends it once it is idle. */
+  delivery?: 'delivered' | 'queued' | 'sent' | 'held' | null
+  /** The chat was busy and nothing was sent to the app; unavailable is true, so the caller may hold it. */
+  busy?: boolean
   reason?: string
 }
 
@@ -28,23 +40,27 @@ export interface NativeSendOutcome {
  *  (Desk's bridge gives the whole route 50s). */
 const SEND_CALL_TIMEOUT_MS = 60_000
 
-export async function tryNativeSend(
+/** Runs one inspector expression against the profile's running app; `unavailable` says nothing ran. */
+async function withAppClient<T>(
   profileDir: string,
-  cliSessionId: string,
-  text: string,
-  fromName: string,
-): Promise<NativeSendOutcome> {
-  const unavailable = (reason: string) => ({ ok: false, unavailable: true, reason })
+  run: (app: {
+    pid: number
+    evaluate: (expression: string) => Promise<Record<string, any>>
+  }) => Promise<T>,
+): Promise<{ ok: true; value: T } | { ok: false; reason: string }> {
   const config = getClaudeNativeProfileConfig(profileDir)
-  if (!config) return unavailable('native control is not configured for this profile')
+  if (!config) return { ok: false, reason: 'native control is not configured for this profile' }
   const profile = normalizeClaudeNativeProfile(profileDir)
   const scan = await scanClaudeProcesses({ fresh: true })
-  if (!scan.ok) return unavailable(`could not read the Claude processes: ${scan.reason}`)
+  if (!scan.ok) return { ok: false, reason: `could not read the Claude processes: ${scan.reason}` }
   const owners = scan.processes.filter(
     (p) => p.isMain && p.dir && normalizeClaudeNativeProfile(p.dir) === profile,
   )
   if (owners.length !== 1)
-    return unavailable(owners.length ? 'several main processes match' : 'the app is not running')
+    return {
+      ok: false,
+      reason: owners.length ? 'several main processes match' : 'the app is not running',
+    }
   let client: Awaited<ReturnType<typeof connectClaudeInspector>> | undefined
   try {
     client = await connectClaudeInspector({
@@ -55,24 +71,40 @@ export async function tryNativeSend(
       callTimeoutMs: SEND_CALL_TIMEOUT_MS,
     })
   } catch (error) {
-    return unavailable(error instanceof Error ? error.message : String(error))
+    return { ok: false, reason: error instanceof Error ? error.message : String(error) }
   }
   try {
-    const result = await client.evaluate<Record<string, any>>(
-      nativeProgram({
-        action: 'send',
-        pid: owners[0].pid,
-        profileDir: profile,
-        cliSessionId,
-        text,
-        fromName,
-      }),
-    )
+    const value = await run({
+      pid: owners[0].pid,
+      evaluate: (expression) => client!.evaluate<Record<string, any>>(expression),
+    })
+    return { ok: true, value }
+  } finally {
+    client.close()
+  }
+}
+
+export async function tryNativeSend(
+  profileDir: string,
+  cliSessionId: string,
+  text: string,
+  fromName: string,
+): Promise<NativeSendOutcome> {
+  const profile = normalizeClaudeNativeProfile(profileDir)
+  const connected = await withAppClient(profileDir, ({ pid, evaluate }) =>
+    evaluate(
+      nativeProgram({ action: 'send', pid, profileDir: profile, cliSessionId, text, fromName }),
+    ),
+  )
+  if (!connected.ok) return { ok: false, unavailable: true, reason: connected.reason }
+  try {
+    const result = connected.value
     if (result?.ok === true && (result.verified === true || result.delivery === 'sent'))
       return { ok: true, unavailable: false, delivery: result.delivery ?? null }
     return {
       ok: false,
       unavailable: result?.dispatch === 'not-sent',
+      busy: result?.busy === true,
       delivery: result?.delivery ?? null,
       reason: String(result?.reason ?? 'the app did not confirm the message'),
     }
@@ -83,7 +115,76 @@ export async function tryNativeSend(
       unavailable: false,
       reason: error instanceof Error ? error.message : String(error),
     }
-  } finally {
-    client.close()
   }
+}
+
+/** Whether the chat is idle by the app's own state: `unavailable` when the app cannot be asked. */
+export async function probeChatIdle(
+  profileDir: string,
+  cliSessionId: string,
+): Promise<'idle' | 'busy' | 'unavailable'> {
+  const probed = await withAppClient(profileDir, ({ pid, evaluate }) =>
+    evaluate(nativeProgram({ action: 'inspect', pid, profileDir, cliSessionId } as any)),
+  )
+  if (!probed.ok) return 'unavailable'
+  const session = (probed.value.sessions ?? []).find((s: any) => s?.cliSessionId === cliSessionId)
+  if (!session) return 'unavailable'
+  return session.busy === true ? 'busy' : 'idle'
+}
+
+/** Whether the message's ref is in the chat's transcript, looked for on the profile and then on the
+ *  default Claude config (where the desktop chats' transcripts are written). */
+export function transcriptHasRef(profileDir: string, cliSessionId: string, ref: string): boolean {
+  const candidates = [profileDir, join(homedir(), '.claude')]
+  for (const dir of candidates) {
+    const file = transcriptFile(dir, cliSessionId)
+    if (!file) continue
+    try {
+      if (readFileSync(file, 'utf8').includes(ref)) return true
+    } catch {
+      // An unreadable copy in one place does not mean the message is absent: try the next.
+    }
+  }
+  return false
+}
+
+let productionHold: ReturnType<typeof createNativeSendHold> | undefined
+
+function holdFor(): ReturnType<typeof createNativeSendHold> {
+  productionHold ??= createNativeSendHold({
+    journalPath: join(DATA_DIR, 'claude-native', 'held-sends.json'),
+    send: async (req): Promise<HoldSendResult> => {
+      const r = await tryNativeSend(req.profileDir, req.cliSessionId, req.text, req.fromName)
+      return {
+        ok: r.ok,
+        unavailable: r.unavailable,
+        busy: r.busy,
+        delivery: r.delivery,
+        reason: r.reason,
+      }
+    },
+    transcriptHas: (req, ref) => transcriptHasRef(req.profileDir, req.cliSessionId, ref),
+    isIdle: async (req) => (await probeChatIdle(req.profileDir, req.cliSessionId)) === 'idle',
+  })
+  return productionHold
+}
+
+/** At daemon start: a journal that a stopped daemon left with held or unconfirmed sends is picked up
+ *  now, so they go out once their chats are idle, not on the next busy send. */
+export function resumeHeldNativeSends(): void {
+  holdFor()
+}
+
+/** The native send for a caller that must reach the chat. A busy chat is journalled and sent once it
+ *  is idle (claude-native-send-hold.ts); the app is never handed a message for a busy chat. */
+export async function sendOrHold(
+  profileDir: string,
+  cliSessionId: string,
+  text: string,
+  fromName: string,
+): Promise<NativeSendOutcome> {
+  const result = await tryNativeSend(profileDir, cliSessionId, text, fromName)
+  if (!result.busy) return result
+  holdFor().hold({ profileDir, cliSessionId, text, fromName })
+  return { ok: true, unavailable: false, delivery: 'held' }
 }

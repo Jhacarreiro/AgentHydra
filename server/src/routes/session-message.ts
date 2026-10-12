@@ -86,12 +86,12 @@ app.post('/api/sessions/:id/message', async (c) => {
   // is not set up, or nothing reached the app, the pipe is tried as before.
   let nativeWhy = ''
   if (body.peer_only === true) {
-    const { tryNativeSend } = await import('../claude-native-send')
+    const { sendOrHold } = await import('../claude-native-send')
     const fromName =
       typeof body.from === 'string' && body.from.trim()
         ? body.from.trim().slice(0, 80)
         : 'AgentHydra'
-    const native = await tryNativeSend(inst.dir, sessionId, text, fromName)
+    const native = await sendOrHold(inst.dir, sessionId, text, fromName)
     if (native.ok)
       return c.json({
         ok: true,
@@ -100,14 +100,17 @@ app.post('/api/sessions/:id/message', async (c) => {
         // takes anything else as a failed delivery.
         delivered: true,
         confirmed: native.delivery === 'delivered',
-        queued: native.delivery === 'queued',
+        queued: native.delivery === 'queued' || native.delivery === 'held',
+        held: native.delivery === 'held',
         typed: false,
         detail:
-          native.delivery === 'queued'
-            ? "sent through the app's own peer delivery; the chat runs it when it is free"
-            : native.delivery === 'delivered'
-              ? "sent through the app's own peer delivery; the chat started a turn on it"
-              : "sent through the app's own peer delivery; the app had not confirmed a turn start within 35s",
+          native.delivery === 'held'
+            ? 'the chat is busy: AgentHydra holds the message and sends it once the chat is idle'
+            : native.delivery === 'queued'
+              ? "sent through the app's own peer delivery; the chat runs it when it is free"
+              : native.delivery === 'delivered'
+                ? "sent through the app's own peer delivery; the chat started a turn on it"
+                : "sent through the app's own peer delivery; the app had not confirmed a turn start within 35s",
       })
     if (!native.unavailable)
       // The send was made and the app did not take it: never also try another route.

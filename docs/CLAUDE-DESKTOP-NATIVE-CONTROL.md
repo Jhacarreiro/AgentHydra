@@ -443,26 +443,61 @@ The app's `sendMessage` treats only an origin-less or `human` message as the per
 message never counts as the person, and the app keeps its own refusals. The program also refuses
 before sending a chat that is archived or `stoppedUntilPersonSends`. When the chat has no engine,
 the app's delivery retries once "through the cold-start path" and starts one itself, so nothing is
-typed into the window. The answer is the app's receipt: `delivered` (a turn started), `queued`
-(it runs when the chat is free) or, past a 35 s wait inside the program (the inspector's call
-limit is 60 s, and Desk's bridge gives the whole route 50 s), `sent`. The route answers
-`delivered: true` for all three, the way the pipe's queued note does, with `confirmed` and `queued`
-saying which.
+typed into the window. The answer is the app's receipt. `delivered` (a turn started) is the only answer that counts as done.
+`queued` and `sent` do not: the app took the message into a busy chat's deferred sends, and it can
+lose it. On 2026-10-12 one native send into a mid-turn chat went through this sequence in the app's
+own log (`logs/main.log` of the profile; ids are placeholders, local time UTC-5):
 
-`server/src/claude-native-send.ts` (`tryNativeSend`) runs it. `POST /api/sessions/:id/message`
-uses it first for a `peer_only` caller, the ones that must never type (Desk's bridge, so the
-babysitter and the orchestrator): before, the only routes were the peer pipe, which exists only
-while an engine is live and whose note waits unread in an idle engine's queue, and the composer,
-which types. On 2026-10-09 the babysitter's 44 overnight continues for seven chats a usage limit
-stopped all ended that way (`no peer pipe`, or `wrote-but-no-transcript-growth`). A send that
-reached the app is never retried another way; a refusal before dispatch falls back to the pipe.
+```
+17:13:42  Sending message to session local_<x>                      the send arrives mid-turn: answered queued
+17:15:14  [Stop hook] Query completed for session local_<x>          the turn ends
+17:15:14  [LocalSessionManager] drained 1 deferred send(s) for local_<x>
+17:16:44  CLI undelivered input <msgid> for local_<x> without running it -- settled (hold=true cycle=true next=false)
+17:16:44  [warn] peer input <msgid> ... drew no acknowledgement from the CLI in 90018ms -- settled as undelivered
+```
 
-Callers that now use it (2026-10-12): CliMayte's pings and HSwarm job pings to a chat Desk 2 does
-not run (`server/src/climayte.ts` passes `tryNativeSend` as the ping's `native` step, after Desk's
-route and before the peer pipe; `server/src/climayte-ping.ts`). The orchestrator's nudge to an
-outside session posts `/api/external/sessions/:id/message`, which the bridge sends as `peer_only`,
-so it reaches the same native-first route. A native send the app took and refused is journalled and
-surfaced in the chat's next `climayte_status`, never sent again. Nothing here types into the window.
+So the app drains a deferred send at the query's end, writes it to an engine that never runs it, and
+settles it undelivered after 90 s, silently. The receipt stays `queued` for the sender. The program
+therefore never sends a message to a chat with work in flight: `nativeChatBusy` (native-program.ts)
+covers a running or starting query, a losable turn, held input, a pending cycle, a next cycle and a
+pending turn result, and a busy send answers `dispatch: 'not-sent', busy: true`, with nothing sent.
+
+`server/src/claude-native-send.ts` (`tryNativeSend`) runs the send. `sendOrHold` is what callers use:
+a busy chat is journalled in `DATA_DIR/claude-native/held-sends.json` by
+`server/src/claude-native-send-hold.ts` and sent once the chat is idle (the app's own
+`inspect` answer, `probeChatIdle`). Each held message's text ends with a unique ref, `(ref <id>)`.
+The journal's states:
+
+- `held`: waiting for the chat to be idle. Sent when it is; the answer `delivered` makes it `delivered`.
+- `sending`: written before the app is called. A daemon stopped here restarts it as `unconfirmed`.
+
+Each attempt first claims `DATA_DIR/claude-native/claims/<id>.<n>.lock` with an exclusive create, so
+two daemons sharing the journal (self-update overlaps the old and new process) never send the same
+attempt twice. A busy answer releases its claim, since nothing reached the app. A claim left by a
+process that died before `sending` was written blocks that message: it stays `held` and needs a manual
+check; it is never sent blind. At daemon start `resumeHeldNativeSends()` (`index.ts`) loads the
+journal, so messages held by an earlier daemon go out once their chats are idle.
+- `unconfirmed`: the app answered `queued`, `sent`, or nothing. After the 120 s settle window and once
+  the chat is idle, the transcript decides: the ref present means `delivered`; absent means one more
+  send. A second absence is `not-arrived`, and it is not sent again.
+- `expired`: held 24 hours without the chat going idle. Never sent.
+
+A `queued` answer is never repeated while the transcript is unchecked, and a send the app took is never
+sent from `held`. `POST /api/sessions/:id/message` uses `sendOrHold` first for a `peer_only` caller, the
+ones that must never type (Desk's bridge, so the babysitter and the orchestrator): before, the only
+routes were the peer pipe, which exists only while an engine is live and whose note waits unread in an
+idle engine's queue, and the composer, which types. On 2026-10-09 the babysitter's 44 overnight
+continues for seven chats a usage limit stopped all ended that way (`no peer pipe`, or
+`wrote-but-no-transcript-growth`). A refusal before dispatch falls back to the pipe as before. The route
+answers `held: true` with `queued: true` for a held message, and `delivered` stays false until the
+transcript or the app's `delivered` confirms it.
+
+Callers that use it: CliMayte's pings and HSwarm job pings to a chat Desk 2 does not run
+(`server/src/climayte.ts` passes `sendOrHold` as the ping's `native` step, after Desk's route and before
+the peer pipe; `server/src/climayte-ping.ts`). The orchestrator's nudge to an outside session posts
+`/api/external/sessions/:id/message`, which the bridge sends as `peer_only`, so it reaches the same
+native-first route. A native send the app took and refused is journalled and surfaced in the chat's
+next `climayte_status`, never sent again. Nothing here types into the window.
 
 ## Remaining migration work
 

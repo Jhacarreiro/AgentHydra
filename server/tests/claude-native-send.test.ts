@@ -24,6 +24,7 @@ function desktop(session: Record<string, unknown>, reply: { delivery: string; re
     getSessionList: async () => [],
     archiveCascadeClosureOf: () => [],
     losableWorkKind: () => null,
+    startingSessionIds: new Set<string>(),
     archiveSession: async () => {},
     hasPendingUserInput: () => false,
     localLineageIds: () => [],

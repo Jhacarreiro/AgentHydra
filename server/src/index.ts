@@ -25,6 +25,7 @@ import { disarmBootWatchdog, renewBootWatchdog } from './boot-watchdog'
 import { startBoxDoctorWatch } from './box-doctor'
 import { startIdleSweep, stopIdleSweep } from './claude-native-idle'
 import { startClaudeNativePrewarm, stopClaudeNativePrewarm } from './claude-native-prewarm'
+import { resumeHeldNativeSends } from './claude-native-send'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { preloadDone } from './climayte-core'
@@ -1551,6 +1552,10 @@ startClaudeNativePrewarm()
 // its ~260 MB engine back after claudeNativeIdleMinutes, default 10) and stops the prewarmed
 // terminals nobody used. See claude-native-idle.ts.
 startIdleSweep()
+
+// Native sends held while their chat was busy, journalled by an earlier daemon: resume them here.
+// See claude-native-send-hold.ts.
+resumeHeldNativeSends()
 
 // --- CliMayte (see server/src/climayte.ts, docs/CLIMAYTE.md) ----------------------------------------------
 // Watches the CLI workers a person delegated, and moves one to another account at a usage limit.

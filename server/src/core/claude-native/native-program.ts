@@ -262,6 +262,24 @@ function nativeLineageIds(manager: any): (session: any) => string[] {
   nativeRefuse('native method unavailable: localLineageIds')
 }
 
+/**
+ * Whether a chat has work in flight by the app's own state: a query running or starting, a losable
+ * turn, input held for it, or a cycle or turn result still pending. A message sent into such a chat
+ * is answered `queued` and can be dropped unrun (2026-10-12: the app drained it at the query's end
+ * and settled it undelivered after 90s), so the send refuses it and the caller holds it.
+ */
+function nativeChatBusy(manager: any, session: any): boolean {
+  return (
+    session.isRunning === true ||
+    session.pendingCycle != null ||
+    session.nextCycleUuid != null ||
+    session.awaitingTurnResultSince != null ||
+    nativeStartingIds(manager).has(session.sessionId) ||
+    manager.losableWorkKind(session.sessionId) != null ||
+    nativePendingInput(manager)(session)
+  )
+}
+
 function nativeSnapshot(manager: any, session: any): any {
   return JSON.parse(
     JSON.stringify({
@@ -291,6 +309,7 @@ function nativeSnapshot(manager: any, session: any): any {
       worktreePath: session.worktreePath ?? null,
       backend: session.backend?.kind ?? null,
       lastActivityAt: session.lastActivityAt ?? null,
+      busy: nativeChatBusy(manager, session),
     }),
   )
 }
@@ -1108,6 +1127,21 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
   if (session.isArchived === true) nativeRefuse('the chat is archived')
   if (session.stoppedUntilPersonSends)
     nativeRefuse('the chat was stopped until a person sends; it waits for them')
+  // A busy chat is never handed to the app's own queue: that queue drops a message when the chat's
+  // engine is torn down and never reports it (claude-native-send-hold.ts). The caller holds it and
+  // sends it once the chat is idle. Nothing was sent, so dispatch is 'not-sent'.
+  if (nativeChatBusy(manager, session))
+    return {
+      ok: false,
+      verified: false,
+      dispatch: 'not-sent',
+      action: 'send',
+      sessionId: session.sessionId,
+      delivery: null,
+      busy: true,
+      reason: 'the chat is busy: a turn or input is in progress',
+      identity: nativeIdentity(env, found, null),
+    }
   const attr = (value: string) =>
     value.replace(/&/g, '&amp;').replace(/"/g, '&quot;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   const body = String(request.text).replace(
@@ -1212,6 +1246,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeFindManager,
     nativeCheckIdentity,
     nativeStartingIds,
+    nativeChatBusy,
     nativePendingInput,
     nativeLineageIds,
     nativeSnapshot,
