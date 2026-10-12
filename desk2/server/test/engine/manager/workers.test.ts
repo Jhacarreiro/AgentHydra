@@ -352,13 +352,18 @@ test('a worker that fails with a held message says it was not delivered, and the
   Object.assign(b.state.rows[0]!, { status: 'queued', error: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.' })
   await m.syncWorkers(chat.id)
   await m.send(chat.id, 'and add the totals row')
+  await m.send(chat.id, 'then sort it by date')
   expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'and add the totals row')).toMatchObject({ queued: true })
 
   Object.assign(b.state.rows[0]!, { status: 'failed', error: 'The worker failed.' })
   await m.syncWorkers(chat.id)
   const items = m.listItems(chat.id)
-  expect(items.some((i) => i.kind === 'user' && i.text === 'and add the totals row')).toBe(false)
-  expect(items.some((i) => i.kind === 'system' && i.text.includes('Not delivered') && i.text.includes('and add the totals row'))).toBe(true)
+  expect(items.some((i) => i.kind === 'user' && (i.text === 'and add the totals row' || i.text === 'then sort it by date'))).toBe(false)
+  // Each held message has its own line, even when both go in the same millisecond.
+  const lines = items.filter((i) => i.kind === 'system' && i.text.startsWith('Not delivered'))
+  expect(lines.map((i) => i.kind === 'system' && i.text.includes('totals row'))).toContain(true)
+  expect(lines.map((i) => i.kind === 'system' && i.text.includes('sort it by date'))).toContain(true)
+  expect(new Set(lines.map((i) => i.id)).size).toBe(lines.length)
 })
 
 test('a cancelled worker keeps its held message queued', async () => {

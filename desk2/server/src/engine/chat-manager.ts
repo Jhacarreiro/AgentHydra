@@ -2054,7 +2054,7 @@ export class ChatManager {
   private undelivered(e: Entry): void {
     for (const item of e.sent?.filter((s) => s.queued) ?? []) {
       this.dropStandIn(e, item)
-      this.systemLine(e.chat.id, 'undelivered', 'warn', `Not delivered, send it again: "${item.text.slice(0, 80)}"`)
+      this.systemLine(e.chat.id, `undelivered:${item.id}`, 'warn',`Not delivered, send it again: "${item.text.slice(0, 80)}"`)
     }
   }
 
