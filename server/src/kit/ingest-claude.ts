@@ -38,6 +38,7 @@ import {
 } from '../core/account-holders'
 import { collectChatsAsync, lineageIdsOf } from '../core/chat-store-scan'
 import { listCliInstances } from '../core/cli-instances'
+import { type Folder, walkFolderTree } from '../core/folder-tree'
 import { fsSlot } from '../core/fs-slots'
 import { intern } from '../core/intern'
 import { POINTER_DIR } from '../instance'
@@ -347,36 +348,32 @@ interface Candidate {
   rootDir: string
 }
 
-/** One folder as last listed: its mtime, its subfolders and the transcripts in it that are ours. */
-interface DirNode {
-  mtimeMs: number
-  dirs: string[]
-  files: {
-    path: string
-    session: string
-    agent: 'main' | 'subagent'
-    agentId: string | null
-  }[]
+/** A transcript of ours in the shared folder tree. */
+interface TreeFile {
+  path: string
+  session: string
+  agent: 'main' | 'subagent'
+  agentId: string | null
 }
 
 /**
- * What a store's sweeps remember between passes: every folder's listing and every cursor. Walking 12k
- * folders and loading 63k cursors costs seconds, so a warm pass reuses both; a folder is listed again
- * only when its mtime moved (a file created or removed in it; on Windows a file that merely grows does
- * not move it, which is why recently written files are stat'd every pass and every file every Nth).
+ * What a store's sweeps remember between passes: every cursor. Loading 63k cursors costs seconds, so a
+ * warm pass reuses them. The folder listings are the shared tree's (core/folder-tree.ts), which lists a
+ * folder again only when its mtime moved (a file created or removed in it; on Windows a file that merely
+ * grows does not move it, which is why recently written files are stat'd every pass and every file every
+ * Nth).
  */
 interface SweepMemory {
   epoch: number
   cursors: Map<string, IngestCursor>
   loaded: Set<string>
-  trees: Map<string, Map<string, DirNode>>
 }
 const memories = new WeakMap<KitStore, SweepMemory>()
 
 function memoryOf(store: KitStore): SweepMemory {
   let m = memories.get(store)
   if (!m || m.epoch !== store.cursorEpoch) {
-    m = { epoch: store.cursorEpoch, cursors: new Map(), loaded: new Set(), trees: new Map() }
+    m = { epoch: store.cursorEpoch, cursors: new Map(), loaded: new Set() }
     memories.set(store, m)
   }
   return m
@@ -402,68 +399,29 @@ async function loadCursors(store: KitStore, mem: SweepMemory, dir: string): Prom
   mem.loaded.add(dir)
 }
 
-async function pool<T>(items: readonly T[], fn: (item: T) => Promise<void>): Promise<void> {
-  let next = 0
-  await Promise.all(
-    Array.from({ length: Math.min(STAT_WORKERS, items.length) }, async () => {
-      while (next < items.length) await fn(items[next++] as T)
-    }),
-  )
-}
+/** Each folder's transcripts, worked out once per listing of it: the tree hands back the same folder
+ *  object while its mtime holds. */
+const folderFiles = new WeakMap<Folder, TreeFile[]>()
 
-/**
- * The folder tree under `root`, level by level. A folder whose mtime is what the previous listing saw is
- * not listed again unless `relist` is set. The mtime is read BEFORE the listing, so a file created while
- * it runs moves the mtime past the one saved and is caught by the next pass.
- */
-async function walkRoot(
-  root: string,
-  old: Map<string, DirNode> | undefined,
-  relist: boolean,
-): Promise<Map<string, DirNode>> {
-  const tree = new Map<string, DirNode>()
-  for (let level = [root]; level.length > 0; ) {
-    const next: string[] = []
-    await pool(level, async (dir) => {
-      const node = await dirNode(root, dir, old, relist)
-      if (!node) return
-      tree.set(dir, node)
-      for (const d of node.dirs) next.push(d)
-    })
-    level = next
-  }
-  return tree
-}
-
-/** One folder's node: the previous listing while its mtime holds (and no `relist`), else a new one; null when it is gone. */
-async function dirNode(
-  root: string,
-  dir: string,
-  old: Map<string, DirNode> | undefined,
-  relist: boolean,
-): Promise<DirNode | null> {
-  const st = await fsSlot(() => stat(dir)).catch(() => null)
-  if (!st) return null
-  const mtimeMs = Math.floor(st.mtimeMs)
-  const node = old?.get(dir)
-  if (node && !relist && node.mtimeMs === mtimeMs) return node
-  let entries: import('node:fs').Dirent[]
-  try {
-    entries = await fsSlot(() => readdir(dir, { withFileTypes: true }))
-  } catch {
-    return null
-  }
-  const fresh: DirNode = { mtimeMs, dirs: [], files: [] }
-  for (const e of entries) {
-    const p = join(dir, e.name)
-    if (e.isDirectory()) fresh.dirs.push(p)
-    else if (e.name.endsWith('.jsonl')) {
-      const c = classify(root, p)
-      // One copy of the path and the session id for every sweep that holds them (core/intern.ts).
-      if (c) fresh.files.push({ path: intern(p), ...c, session: intern(c.session) })
+/** Every transcript of ours under `root`, from the shared folder tree; `relist` lists every folder again. */
+async function rootFiles(root: string, relist: boolean): Promise<TreeFile[]> {
+  const out: TreeFile[] = []
+  for (const [dir, folder] of await walkFolderTree(root, { relist })) {
+    let files = folderFiles.get(folder)
+    if (!files) {
+      files = []
+      for (const name of folder.files) {
+        if (!name.endsWith('.jsonl')) continue
+        const p = join(dir, name)
+        const c = classify(root, p)
+        // One copy of the path and the session id for every sweep that holds them (core/intern.ts).
+        if (c) files.push({ path: intern(p), ...c, session: intern(c.session) })
+      }
+      folderFiles.set(folder, files)
     }
+    for (const f of files) out.push(f)
   }
-  return fresh
+  return out
 }
 
 /**
@@ -511,11 +469,10 @@ async function liveSessionIds(roots: readonly ClaudeRoot[]): Promise<string[]> {
   const ids = new Set<string>()
   for (const r of roots) {
     const known = new Map<string, boolean>()
-    for (const node of (await walkRoot(r.dir, undefined, true)).values())
-      for (const f of node.files) {
-        if (!known.has(f.session)) known.set(f.session, r.owner(f.session) !== null)
-        if (known.get(f.session)) ids.add(f.session)
-      }
+    for (const f of await rootFiles(r.dir, true)) {
+      if (!known.has(f.session)) known.set(f.session, r.owner(f.session) !== null)
+      if (known.get(f.session)) ids.add(f.session)
+    }
     await yieldLoop()
   }
   return [...ids].sort()
@@ -770,11 +727,9 @@ async function candidates(
   let seen = 0
   for (const root of roots) {
     await loadCursors(store, mem, root.dir)
-    // The first pass over a root, and every full pass, lists every folder again.
-    const tree = await walkRoot(root.dir, mem.trees.get(root.dir), o.fullPass)
-    mem.trees.set(root.dir, tree)
+    // A full pass lists every folder again.
     const owners = new Map<string, ClaudeFileOwner | null>()
-    for (const f of [...tree.values()].flatMap((node) => node.files)) {
+    for (const f of await rootFiles(root.dir, o.fullPass)) {
       if (++seen % 2000 === 0) await yieldLoop()
       if (!owners.has(f.session)) owners.set(f.session, root.owner(f.session))
       const owner = owners.get(f.session)

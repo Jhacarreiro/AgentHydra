@@ -1,7 +1,5 @@
-import type { Dirent } from 'node:fs'
 import { closeSync, openSync, readFileSync, readSync, statSync } from 'node:fs'
 import {
-  readdir as readdirAsync,
   readFile as readFileAsync,
   rename as renameAsync,
   rm as rmAsync,
@@ -13,6 +11,7 @@ import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
+import { walkFolderTree } from './core/folder-tree'
 import { fsSlot } from './core/fs-slots'
 import { intern } from './core/intern'
 import { timeSlice } from './core/loop-yield'
@@ -585,47 +584,24 @@ async function scanRootGlobAsync(pattern: string, cwd: string): Promise<string[]
   return out
 }
 
-/** One directory of {@link scanRootAsync}'s level walk: subdirectories go to `next`, matching
- *  files to `out`. A directory that cannot be read is skipped. */
-async function scanDirAsync(
-  cwd: string,
-  rel: string,
-  matches: (rel: string, name: string) => boolean,
-  next: string[],
-  out: string[],
-): Promise<void> {
-  let entries: Dirent[]
-  try {
-    entries = await fsSlot(() => readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true }))
-  } catch {
-    return
-  }
-  for (const e of entries) {
-    const child = rel ? `${rel}/${e.name}` : e.name
-    if (e.isDirectory()) next.push(child)
-    else if (e.isFile() && matches(child, e.name)) out.push(child)
-  }
-}
-
 /** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
  *
  *  A single Bun glob scan held the loop ~270 ms on a 60,000-file Claude store, and scanning one
- *  folder at a time still did on a folder of 28,000 subagent files. So a `**` pattern is walked
- *  here a level at a time with pooled readdirs, which are real I/O and a turn of the loop apiece.
- *  A pattern that does not start with `**` is scanned whole, as before. */
+ *  folder at a time still did on a folder of 28,000 subagent files. So a `**` pattern is matched
+ *  over the shared folder tree (core/folder-tree.ts), which is walked a level at a time with pooled
+ *  calls and lists again only the folders whose mtime moved; the kit's Claude ingest reads the same
+ *  tree. A pattern that does not start with `**` is scanned whole, as before. */
 async function scanRootAsync(pattern: string, cwd: string): Promise<string[]> {
   if (!pattern.startsWith('**/')) return scanRootGlobAsync(pattern, cwd)
   const out: string[] = []
   const matches = nameMatcher(pattern)
-  let level: string[] = ['']
-  while (level.length) {
-    const next: string[] = []
-    await mapPool(level, SCAN_READDIR_WIDTH, (rel) => scanDirAsync(cwd, rel, matches, next, out))
-    level = next
-  }
+  for (const folder of (await walkFolderTree(cwd)).values())
+    for (const name of folder.files) {
+      const rel = folder.rel ? `${folder.rel}/${name}` : name
+      if (matches(rel, name)) out.push(rel)
+    }
   return out
 }
-const SCAN_READDIR_WIDTH = 4
 
 /**
  * Every JSONL under a Claude store, not just the top level.
