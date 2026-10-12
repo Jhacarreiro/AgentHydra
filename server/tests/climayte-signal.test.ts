@@ -3,7 +3,7 @@
 // itself before the CLI starts. The runner tests start the runner this platform uses (runnerArgv):
 // misc/climayte-runner.exe on Windows, this app in runner mode elsewhere.
 import { afterEach, describe, expect, test } from 'bun:test'
-import { mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { runnerArgv } from '../src/climayte-runner'
@@ -12,9 +12,20 @@ import {
   RUN_IF_PRESENT,
   SIGNAL_HOOK_TIMEOUT_S,
   serveSignal,
-  signalReminder,
   workerHooks,
 } from '../src/climayte-signal'
+
+const SH =
+  process.platform === 'win32'
+    ? join(
+        Bun.spawnSync(['git', '--exec-path']).stdout.toString().trim(),
+        '..',
+        '..',
+        '..',
+        'bin',
+        'sh.exe',
+      )
+    : '/bin/sh'
 
 const dirs: string[] = []
 const tmp = (): string => {
@@ -31,17 +42,42 @@ const SIGNAL = JSON.stringify({
 })
 
 describe('workerHooks', () => {
-  test('without the runner, the signal is the same `cat` command as before, on every tool call', () => {
+  test('without the runner, the signal command prints the note and removes it, on every tool call', () => {
     const hooks = workerHooks({ signalFile: 'C:/x/signals/w-1.json', claims: null })
     expect(hooks).toEqual({
       PostToolUse: [
         {
           matcher: '*',
-          hooks: [{ type: 'command', command: "cat 'C:/x/signals/w-1.json' 2>/dev/null || true" }],
+          hooks: [
+            {
+              type: 'command',
+              command:
+                "cat 'C:/x/signals/w-1.json' 2>/dev/null && rm -f 'C:/x/signals/w-1.json' || true",
+            },
+          ],
         },
       ],
     })
   })
+
+  test.skipIf(!SH || !existsSync(SH))(
+    'the shell form prints a note once: the file is gone after the first call',
+    () => {
+      const file = join(tmp(), 'w-7.json')
+      writeFileSync(file, SIGNAL)
+      const cmd = (
+        workerHooks({ signalFile: file, claims: null }).PostToolUse[0]!.hooks[0] as {
+          command: string
+        }
+      ).command
+      const first = Bun.spawnSync([SH!, '-c', cmd], { stdout: 'pipe', stderr: 'pipe' })
+      expect(first.exitCode).toBe(0)
+      expect(first.stdout.toString()).toBe(SIGNAL)
+      const second = Bun.spawnSync([SH!, '-c', cmd], { stdout: 'pipe', stderr: 'pipe' })
+      expect(second.exitCode).toBe(0)
+      expect(second.stdout.toString()).toBe('')
+    },
+  )
 
   test('edit_claims runs in exec form: python itself, no shell launcher in front of it', () => {
     const hooks = workerHooks({
@@ -133,23 +169,6 @@ describe('workerHooks', () => {
   }, 30_000)
 })
 
-describe('signalReminder', () => {
-  test('names the handoff file of the whole note it shortens', () => {
-    const whole = JSON.stringify({
-      hookSpecificOutput: {
-        hookEventName: 'PostToolUse',
-        additionalContext:
-          'AgentHydra: x. Otherwise write the handoff NOW, before anything else, with the Write tool to C:/Users/me/h/w-1-0.md, for the session that continues this task; then stop.',
-      },
-    })
-    const short = JSON.parse(signalReminder(whole)) as {
-      hookSpecificOutput: { additionalContext: string }
-    }
-    expect(short.hookSpecificOutput.additionalContext).toContain('C:/Users/me/h/w-1-0.md')
-    expect(short.hookSpecificOutput.additionalContext.length).toBeLessThan(200)
-  })
-})
-
 describe('serveSignal', () => {
   const post = (port: number) =>
     fetch(`http://127.0.0.1:${port}/signal`, {
@@ -157,7 +176,7 @@ describe('serveSignal', () => {
       body: JSON.stringify({ hook_event_name: 'PostToolUse', tool_name: 'Bash' }),
     })
 
-  test('answers an empty object until the daemon writes the signal, then the signal itself', async () => {
+  test('answers an empty object until the daemon writes the signal, then serves it once', async () => {
     const file = join(tmp(), 'w-1.json')
     const s = serveSignal(file)
     expect(s).not.toBeNull()
@@ -170,23 +189,55 @@ describe('serveSignal', () => {
       writeFileSync(file, SIGNAL)
       res = await post(s!.port)
       expect(await res.text()).toBe(SIGNAL)
-      // Every later call still answers, but as a one-line reminder: each copy stays in the worker's
-      // history, and the whole note was 1.3k characters re-sent after every tool call.
-      const again = (await (await post(s!.port)).json()) as {
-        hookSpecificOutput: { additionalContext: string }
-      }
-      expect(again.hookSpecificOutput.additionalContext).toContain('AgentHydra (reminder)')
-      // A new note is whole again.
-      const next = JSON.stringify({
-        hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'STOP NOW' },
-      })
-      writeFileSync(file, next)
-      expect(await (await post(s!.port)).text()).toBe(next)
-
-      rmSync(file)
+      expect(existsSync(file)).toBe(false)
+      expect(await (await post(s!.port)).json()).toEqual({})
       expect(await (await post(s!.port)).json()).toEqual({})
     } finally {
       s!.stop()
+    }
+  })
+
+  test('a note whose handoff was already written is not served, and is removed', async () => {
+    const dir = tmp()
+    const file = join(dir, 'w-8.json')
+    const handoff = join(dir, 'w-8-0.md')
+    const note = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: `AgentHydra: wind down. Write the handoff with the Write tool to ${handoff}, for the session that continues this task.`,
+      },
+    })
+    writeFileSync(file, note)
+    writeFileSync(handoff, '# handoff')
+    const s = serveSignal(file)!
+    try {
+      expect(await (await post(s.port)).json()).toEqual({})
+      expect(existsSync(file)).toBe(false)
+    } finally {
+      s.stop()
+    }
+  })
+
+  test('a re-asked note reaches the next attempt once, even with an older handoff on disk', async () => {
+    const dir = tmp()
+    const file = join(dir, 'w-9.json')
+    const handoff = join(dir, 'w-9-0.md')
+    const note = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: `AgentHydra: wind down. Write the handoff with the Write tool to ${handoff}, for the session that continues this task.`,
+      },
+    })
+    writeFileSync(handoff, '# older handoff')
+    const past = new Date(Date.now() - 60_000)
+    utimesSync(handoff, past, past)
+    writeFileSync(file, note)
+    const s = serveSignal(file)!
+    try {
+      expect(await (await post(s.port)).text()).toBe(note)
+      expect(await (await post(s.port)).json()).toEqual({})
+    } finally {
+      s.stop()
     }
   })
 

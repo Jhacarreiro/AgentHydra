@@ -17,7 +17,7 @@
 //
 // Imports nothing of the daemon's: the runner process loads this too.
 
-import { readFileSync, writeFileSync } from 'node:fs'
+import { readFileSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { Hono } from 'hono'
 import { createLoopbackGuard } from './loopback-guard.mjs'
 
@@ -119,7 +119,12 @@ export function workerHooks(opts: {
     PostToolUse: [
       {
         matcher: '*',
-        hooks: [{ type: 'command', command: `cat '${opts.signalFile}' 2>/dev/null || true` }],
+        hooks: [
+          {
+            type: 'command',
+            command: `cat '${opts.signalFile}' 2>/dev/null && rm -f '${opts.signalFile}' || true`,
+          },
+        ],
       },
     ],
   }
@@ -136,31 +141,46 @@ async function fromSubagent(req: { text: () => Promise<string> }): Promise<boole
   }
 }
 
-/** A loopback server that answers every request with the signal file's JSON, or `{}` when there is
- *  none (or it is half written: the daemon writes it in one call, but a read can still land inside
- *  it). Read afresh each time, so every call sees the signal from the moment it is written to the
- *  moment the file is removed, as the PostToolUse `cat` does. A tool call inside one of the worker's
- *  sub-agents always gets `{}`: the handoff is the worker's to write, and a sub-agent told to write
- *  it quits mid-task and overwrites the worker's own (2026-10-04). Null when no port could be
- *  bound. */
+/** Written at or after the note (the same second's slack as climayte-core's handoffWritten). */
+function handoffWritten(path: string, noteAt: number): boolean {
+  try {
+    return statSync(path).mtimeMs >= noteAt - 1_000
+  } catch {
+    return false
+  }
+}
+
+/** The handoff path a wind-down note asks for, or null when it asks for none. */
+export function signalHandoff(signal: string): string | null {
+  const full = (JSON.parse(signal) as { hookSpecificOutput?: { additionalContext?: string } })
+    .hookSpecificOutput?.additionalContext
+  if (typeof full !== 'string') return null
+  return /with the Write tool to (.+?), for the session/.exec(full)?.[1] ?? null
+}
+
+/** A loopback server that answers each request with the signal file's JSON, or `{}` when there is
+ *  none. The note is served once: the file is removed as it goes out, so the next tool call finds
+ *  nothing. It is also not served when the handoff it asks for already exists (written after the
+ *  note: a stale file from an earlier run with the same name does not count). A half-written file
+ *  answers `{}` and stays. A tool call inside one of the worker's sub-agents always gets `{}` and
+ *  leaves the note in place: the handoff is the worker's to write, and a sub-agent told to write it
+ *  quits mid-task and overwrites the worker's own (2026-10-04). Null when no port could be bound. */
 export function serveSignal(signalFile: string): { port: number; stop: () => void } | null {
   try {
     // The CLI's http hook is not a browser and sends no Origin, so it passes; a web page on any
     // local port carries an Origin that is on no list (empty allowlist) and is refused (AH-11).
     const app = new Hono()
     app.use('*', createLoopbackGuard({ allowedOrigins: () => [] }))
-    // The note is read after EVERY tool call until the worker stops, and each copy stays in its
-    // history: 1.3k characters, 8,067 times in one week (2026-10-11). It goes out whole once, then as
-    // a one-line reminder; a new or changed note goes out whole again.
-    let sent = ''
     app.all('*', async (c) => {
       let body = '{}'
       if (!(await fromSubagent(c.req))) {
         try {
           const text = readFileSync(signalFile, 'utf8')
+          const at = statSync(signalFile).mtimeMs
           JSON.parse(text)
-          body = text === sent ? signalReminder(text) : text
-          sent = text
+          rmSync(signalFile, { force: true })
+          const handoff = signalHandoff(text)
+          if (!handoff || !handoffWritten(handoff, at)) body = text
         } catch {
           // No signal yet, or not whole: nothing to say.
         }
@@ -172,20 +192,6 @@ export function serveSignal(signalFile: string): { port: number; stop: () => voi
   } catch {
     return null
   }
-}
-
-/** The short form of a signal already shown whole: the same ask in one line, naming the handoff file. */
-export function signalReminder(signal: string): string {
-  const full = (JSON.parse(signal) as { hookSpecificOutput?: { additionalContext?: string } })
-    .hookSpecificOutput?.additionalContext
-  if (typeof full !== 'string') return signal
-  const path = /with the Write tool to (.+?), for the session/.exec(full)?.[1]
-  const line = path
-    ? `AgentHydra (reminder): the handoff asked above is still due: write it to ${path}, or finish if two or three calls end the task.`
-    : 'AgentHydra (reminder): the request above still stands.'
-  return JSON.stringify({
-    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: line },
-  })
 }
 
 /** Rewrite the worker's settings so its PostToolUse hook is an http hook at the runner's port.
