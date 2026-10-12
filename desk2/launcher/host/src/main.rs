@@ -286,6 +286,7 @@ mod win {
     #[link(name = "dwmapi")]
     extern "system" {
         fn DwmSetWindowAttribute(h: Hwnd, attr: u32, v: *const c_void, size: u32) -> i32;
+        fn DwmGetWindowAttribute(h: Hwnd, attr: u32, v: *mut c_void, size: u32) -> i32;
     }
     #[link(name = "kernel32")]
     extern "system" {
@@ -355,6 +356,46 @@ mod win {
     pub fn set_outer_rect(h: isize, r: &Rect) {
         // SWP_NOZORDER | SWP_NOACTIVATE
         unsafe { SetWindowPos(h, 0, r.left, r.top, r.w(), r.h(), 0x0004 | 0x0010) };
+    }
+
+    /// Moves the window to `r` and puts it in (HWND_TOPMOST) or out of (HWND_NOTOPMOST) the topmost band.
+    pub fn set_outer_rect_topmost(h: isize, r: &Rect, topmost: bool) {
+        let after: isize = if topmost { -1 } else { -2 };
+        // SWP_NOACTIVATE
+        unsafe { SetWindowPos(h, after, r.left, r.top, r.w(), r.h(), 0x0010) };
+    }
+
+    /// The window's outer rect and its visible frame (DWMWA_EXTENDED_FRAME_BOUNDS, without the invisible sizing borders).
+    pub fn frame_rects(h: isize) -> Option<(Rect, Rect)> {
+        unsafe {
+            let mut outer = RECT::default();
+            if GetWindowRect(h, &mut outer) == 0 {
+                return None;
+            }
+            let mut visible = RECT::default();
+            let size = std::mem::size_of::<RECT>() as u32;
+            if DwmGetWindowAttribute(h, 9, &mut visible as *mut RECT as *mut c_void, size) != 0 {
+                return None;
+            }
+            Some((rect(outer), rect(visible)))
+        }
+    }
+
+    /// The work area (the monitor's rectangle less the taskbar) of the monitor the window is on.
+    pub fn work_area(h: isize) -> Option<Rect> {
+        unsafe {
+            let mon = MonitorFromWindow(h, 2);
+            let mut i = MONITORINFO {
+                size: std::mem::size_of::<MONITORINFO>() as u32,
+                monitor: RECT::default(),
+                work: RECT::default(),
+                flags: 0,
+            };
+            if GetMonitorInfoW(mon, &mut i) == 0 {
+                return None;
+            }
+            Some(rect(i.work))
+        }
     }
 
     /// (on-screen rect, floating rect, maximized); None while minimized.
@@ -867,6 +908,10 @@ enum WindowCmd {
     /// Where the page's three window buttons are, in client pixels, or None while it shows none: the caption sink
     /// goes over them (win::caption_sink).
     Buttons(Option<Rect>),
+    /// Shrink to a strip of `width` pixels on the right edge of the work area, topmost (clamped to 160..=1200).
+    Collapse { width: i32 },
+    /// Back to the placement remembered when the window collapsed.
+    Expand,
 }
 
 /// The edges the page starts a resize drag from (the top ones: the page draws those).
@@ -886,6 +931,7 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
         edge: Option<String>,
         /// left, top, width, height
         rect: Option<[i32; 4]>,
+        width: Option<i64>,
     }
     let m: Msg = serde_json::from_str(text).ok()?;
     if m.op != "window" {
@@ -897,6 +943,10 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
         "maximize" => WindowCmd::Maximize,
         "close" => WindowCmd::Close,
         "drag" => WindowCmd::Drag,
+        "collapse" => WindowCmd::Collapse {
+            width: m.width?.clamp(160, 1200) as i32,
+        },
+        "expand" => WindowCmd::Expand,
         // Three buttons are a few hundred pixels at most; anything else is not the page's buttons.
         "buttons" => WindowCmd::Buttons(match m.rect {
             None => None,
@@ -920,9 +970,50 @@ fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
     })
 }
 
-/// The script that tells the window's page its frame (the caption is gone) and whether it is maximized.
-fn window_event_script(frame: bool, maximized: bool) -> String {
-    format!("window.dispatchEvent(new CustomEvent('agenthydra:window',{{detail:{{frame:{frame},maximized:{maximized}}}}}))")
+/// The script that tells the window's page its frame (the caption is gone), whether it is maximized and whether it is collapsed.
+fn window_event_script(frame: bool, maximized: bool, collapsed: bool) -> String {
+    format!("window.dispatchEvent(new CustomEvent('agenthydra:window',{{detail:{{frame:{frame},maximized:{maximized},collapsed:{collapsed}}}}}))")
+}
+
+/// The script that tells the main page the window was activated or deactivated.
+fn focus_event_script(focused: bool) -> String {
+    format!("window.dispatchEvent(new CustomEvent('agenthydra:focus',{{detail:{{focused:{focused}}}}}))")
+}
+
+/// Each invisible sizing border: the gap between the window's outer rect and its visible frame.
+#[derive(Clone, Copy, Debug, PartialEq)]
+struct Borders {
+    left: i32,
+    top: i32,
+    right: i32,
+    bottom: i32,
+}
+
+fn invisible_borders(outer: Rect, visible: Rect) -> Borders {
+    Borders {
+        left: visible.left - outer.left,
+        top: visible.top - outer.top,
+        right: outer.right - visible.right,
+        bottom: outer.bottom - visible.bottom,
+    }
+}
+
+/// The outer rect that puts `visible_w` pixels of the frame flush with the work area's right, top and bottom edges.
+fn strip_rect(work: Rect, visible_w: i32, b: Borders) -> Rect {
+    Rect {
+        left: work.right - visible_w - b.left,
+        top: work.top - b.top,
+        right: work.right + b.right,
+        bottom: work.bottom + b.bottom,
+    }
+}
+
+/// The placement to return to when the window expands, and what the saved file keeps while it is collapsed.
+#[derive(Clone, Copy, Debug)]
+struct Collapsed {
+    outer: Rect,
+    normal: Rect,
+    maximized: bool,
 }
 
 /// The script that tells the window's page which of its window buttons the pointer is over and which is pressed (the
@@ -1446,6 +1537,7 @@ fn run(
         regions,
         caption_gone: false,
         maximized: zoomed,
+        collapsed: None,
         sink: None,
         sink_tried: false,
         caption: (None, None),
@@ -1570,10 +1662,14 @@ fn start_smoke_deadline() {
     });
 }
 
-fn save_placement(state_file: &Path, window: &tao::window::Window) {
+fn save_placement(state_file: &Path, window: &tao::window::Window, collapsed: Option<&Collapsed>) {
     use tao::platform::windows::WindowExtWindows;
 
-    if let Some((outer, normal, max)) = win::read_placement(window.hwnd()) {
+    let placement = match collapsed {
+        Some(c) => Some((c.outer, c.normal, c.maximized)),
+        None => win::read_placement(window.hwnd()),
+    };
+    if let Some((outer, normal, max)) = placement {
         save_atomic(
             state_file,
             &Saved {
@@ -1610,6 +1706,8 @@ struct Host {
     caption_gone: bool,
     /// The main window's maximized state, as the page was last told it.
     maximized: bool,
+    /// The placement to return to while the window is collapsed to its strip.
+    collapsed: Option<Collapsed>,
     /// The see-through window over the page's window buttons (win::caption_sink), once the page has placed them.
     sink: Option<isize>,
     /// The sink was asked for once: Windows refused it, or it is there.
@@ -1646,8 +1744,20 @@ impl Host {
                 event: WindowEvent::CloseRequested,
                 ..
             } => self.close(flow),
+            Event::WindowEvent {
+                event: WindowEvent::Focused(focused),
+                ..
+            } => self.focus_changed(focused),
             Event::NewEvents(_) | Event::MainEventsCleared => self.save_if_due(),
             _ => {}
+        }
+    }
+
+    fn focus_changed(&self, focused: bool) {
+        if !self.side {
+            let _ = self
+                .webview
+                .evaluate_script(&focus_event_script(focused));
         }
     }
 
@@ -1656,7 +1766,7 @@ impl Host {
         use tao::event_loop::ControlFlow;
 
         if !self.smoke && !self.side {
-            save_placement(&self.state_file, &self.window);
+            save_placement(&self.state_file, &self.window, self.collapsed.as_ref());
         }
         // Gone from the screen at once: the exit then tears down the main WebView2 and one per
         // browser pane, which held the window up visibly for as long as that took.
@@ -1676,7 +1786,52 @@ impl Host {
     fn send_window_state(&self) {
         let _ = self
             .webview
-            .evaluate_script(&window_event_script(self.caption_gone, self.maximized));
+            .evaluate_script(&window_event_script(
+                self.caption_gone,
+                self.maximized,
+                self.collapsed.is_some(),
+            ));
+    }
+
+    /// Shrinks the window to a strip on the right of its work area, remembering the placement it had (once: a
+    /// second collapse only moves the strip to the new width).
+    fn collapse(&mut self, width: i32) {
+        if self.minimized || self.window.is_minimized() {
+            return;
+        }
+        if self.collapsed.is_none() {
+            let Some((outer, normal, maximized)) = win::read_placement(self.hwnd) else {
+                return;
+            };
+            if maximized {
+                self.window.set_maximized(false);
+            }
+            self.collapsed = Some(Collapsed {
+                outer,
+                normal,
+                maximized,
+            });
+        }
+        let (Some(work), Some((outer, visible))) = (win::work_area(self.hwnd), win::frame_rects(self.hwnd))
+        else {
+            return;
+        };
+        let strip = strip_rect(work, width, invisible_borders(outer, visible));
+        win::set_outer_rect_topmost(self.hwnd, &strip, true);
+        self.maximized = self.window.is_maximized();
+        self.send_window_state();
+    }
+
+    fn expand(&mut self) {
+        let Some(c) = self.collapsed.take() else {
+            return;
+        };
+        win::set_outer_rect_topmost(self.hwnd, &c.normal, false);
+        if c.maximized {
+            self.window.set_maximized(true);
+        }
+        self.maximized = self.window.is_maximized();
+        self.send_window_state();
     }
 
     fn window_cmd(&mut self, cmd: WindowCmd, flow: &mut tao::event_loop::ControlFlow) {
@@ -1684,6 +1839,8 @@ impl Host {
 
         match cmd {
             WindowCmd::Ready => self.ready(),
+            WindowCmd::Collapse { width } => self.collapse(width),
+            WindowCmd::Expand => self.expand(),
             WindowCmd::Minimize => self.window.set_minimized(true),
             WindowCmd::Maximize => self.window.set_maximized(!self.window.is_maximized()),
             WindowCmd::Close => self.close(flow),
@@ -1819,7 +1976,7 @@ impl Host {
         if let Some(t) = self.dirty {
             if Instant::now() >= t {
                 self.dirty = None;
-                save_placement(&self.state_file, &self.window);
+                save_placement(&self.state_file, &self.window, self.collapsed.as_ref());
             }
         }
     }
@@ -2131,6 +2288,72 @@ mod tests {
     }
 
     #[test]
+    fn collapsed_strip_sits_flush_right_with_invisible_borders_outside_the_work_area() {
+        let work = Rect {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1040,
+        };
+        let outer = Rect {
+            left: 100,
+            top: 80,
+            right: 1100,
+            bottom: 700,
+        };
+        let visible = Rect {
+            left: 108,
+            top: 80,
+            right: 1092,
+            bottom: 692,
+        };
+        let b = invisible_borders(outer, visible);
+        assert_eq!(
+            b,
+            Borders {
+                left: 8,
+                top: 0,
+                right: 8,
+                bottom: 8
+            }
+        );
+        let strip = strip_rect(work, 320, b);
+        assert_eq!(
+            strip,
+            Rect {
+                left: 1592,
+                top: 0,
+                right: 1928,
+                bottom: 1048
+            }
+        );
+        // The visible part of the strip is `width` wide and ends at the work area's right, top and bottom.
+        assert_eq!(strip.right - b.right - (strip.left + b.left), 320);
+        assert_eq!(strip.right - b.right, work.right);
+        assert_eq!(strip.top + b.top, work.top);
+        assert_eq!(strip.bottom - b.bottom, work.bottom);
+        let no_border = strip_rect(
+            work,
+            200,
+            Borders {
+                left: 0,
+                top: 0,
+                right: 0,
+                bottom: 0,
+            },
+        );
+        assert_eq!(
+            no_border,
+            Rect {
+                left: 1720,
+                top: 0,
+                right: 1920,
+                bottom: 1040
+            }
+        );
+    }
+
+    #[test]
     fn window_messages_parse_and_unknown_ones_are_ignored() {
         let op = |action: &str| format!(r#"{{"op":"window","action":"{action}"}}"#);
         assert_eq!(parse_window_cmd(&op("ready")), Some(WindowCmd::Ready));
@@ -2138,6 +2361,28 @@ mod tests {
         assert_eq!(parse_window_cmd(&op("maximize")), Some(WindowCmd::Maximize));
         assert_eq!(parse_window_cmd(&op("close")), Some(WindowCmd::Close));
         assert_eq!(parse_window_cmd(&op("drag")), Some(WindowCmd::Drag));
+        assert_eq!(parse_window_cmd(&op("expand")), Some(WindowCmd::Expand));
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"collapse","width":320}"#),
+            Some(WindowCmd::Collapse { width: 320 })
+        );
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"collapse","width":50}"#),
+            Some(WindowCmd::Collapse { width: 160 })
+        );
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"collapse","width":5000}"#),
+            Some(WindowCmd::Collapse { width: 1200 })
+        );
+        assert_eq!(parse_window_cmd(&op("collapse")), None);
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"collapse","width":"320"}"#),
+            None
+        );
+        assert_eq!(
+            parse_window_cmd(r#"{"op":"window","action":"collapse","width":320.5}"#),
+            None
+        );
         // Where the page's buttons are (left, top, width, height), none to hide the sink; nothing a few buttons cannot be.
         let at = Rect {
             left: 900,
@@ -2187,8 +2432,12 @@ mod tests {
     #[test]
     fn window_state_reaches_the_page_as_a_window_event() {
         assert_eq!(
-            window_event_script(true, false),
-            "window.dispatchEvent(new CustomEvent('agenthydra:window',{detail:{frame:true,maximized:false}}))"
+            window_event_script(true, false, false),
+            "window.dispatchEvent(new CustomEvent('agenthydra:window',{detail:{frame:true,maximized:false,collapsed:false}}))"
+        );
+        assert_eq!(
+            focus_event_script(false),
+            "window.dispatchEvent(new CustomEvent('agenthydra:focus',{detail:{focused:false}}))"
         );
         // The caption sink's pointer, which the page draws as its buttons' hover and press (host-window.ts).
         assert_eq!(
