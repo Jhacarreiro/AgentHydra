@@ -498,11 +498,7 @@ onBeforeUnmount(() => {
               <div class="min-w-50 flex-1">
                 <div class="text-[13px] leading-5 text-text">{{ r.label }}</div>
                 <div class="mt-0.5 text-[13px] leading-4.75 text-text-muted">
-                  {{ r.id === 'notifications' && notifyNote ? notifyNote : r.description }}
-                </div>
-                <div v-if="r.id === 'collapseMode'" class="mt-1.5 flex flex-col gap-1 text-[13px] leading-4.75 text-text-muted">
-                  <div v-for="m in COLLAPSE_MODES" :key="m"><span class="text-text-2">{{ COLLAPSE_MODE_LABELS[m].label }}:</span> {{ COLLAPSE_MODE_LABELS[m].sentence }}</div>
-                  <div>It works in the AgentHydra window, not in a browser tab.</div>
+                  {{ r.id === 'notifications' && notifyNote ? notifyNote : r.id === 'collapseMode' ? COLLAPSE_MODE_LABELS[local?.collapseMode ?? 'off'].sentence : r.description }}
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>

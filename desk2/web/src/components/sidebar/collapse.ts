@@ -8,14 +8,14 @@ export type CollapseAction = 'collapse' | 'expand' | 'wait' | 'nothing'
 export const COLLAPSE_MODES: readonly CollapseMode[] = ['off', 'button', 'auto']
 
 export const COLLAPSE_MODE_LABELS: Record<CollapseMode, { label: string; sentence: string }> = {
-  off: { label: 'Off', sentence: 'The window stays where you put it.' },
+  off: { label: 'Off', sentence: 'Shrink AgentHydra to just your chats, on the right edge of the screen.' },
   button: {
     label: 'Button',
-    sentence: 'A button in the sidebar folds the AgentHydra window to the right edge of the screen, showing only your chats.'
+    sentence: 'A button beside search shrinks AgentHydra to just your chats, on the right edge of the screen.'
   },
   auto: {
     label: 'Automatic',
-    sentence: 'Whenever AgentHydra is out of focus, it folds to the right edge of the screen, showing only your chats, and a click on one brings it back.'
+    sentence: 'Switch to another app and AgentHydra shrinks to just your chats, on the right edge of the screen.'
   }
 }
 
