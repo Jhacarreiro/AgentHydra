@@ -7,7 +7,7 @@ import SettingsView from '@/components/panes/SettingsView.vue'
 import AccountsList from '@/components/accounts/AccountsList.vue'
 import AccountsPopover from '@/components/accounts/AccountsPopover.vue'
 import { PANE_API, type PaneApi } from '@/components/panes/api'
-import { accountFixtures, settingsFixtures } from '../fixtures'
+import { accountFixtures, archaingelFixtures, settingsFixtures } from '../fixtures'
 
 // Fixture answers for every call the panes make, so the gallery needs no server.
 const REPO = 'C:/Users/me/Desktop/Project/Agent Hydra/desk'
@@ -75,7 +75,8 @@ const fixtureApi: PaneApi = {
   health: async () => ({ ok: true, version: '0.1.0' }),
   bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
   babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
-  archaingel: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, agents: [], error: null }),
+  archaingel: async () => archaingelFixtures,
+  archaingelRun: async () => archaingelFixtures,
   orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
   getSettings: async () => ({ ...settingsFixtures, defaultModel: 'claude-opus-5-5' }),
   putSettings: async (patch) => ({ ...settingsFixtures, ...patch }),

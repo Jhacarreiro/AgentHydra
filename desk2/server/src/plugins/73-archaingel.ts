@@ -268,6 +268,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: ArchAIngelOp
       reason: j.reason,
       headline: s.reading?.headline ?? null,
       totals: s.reading?.totals ?? null,
+      settings: s.reading?.settings ?? null,
       lastTickAt: lastEndOf(s.reading, mem),
       nextTickAt: s.reading?.nextTickAt ?? null,
       running: mem.running ? { ...mem.running } : null,

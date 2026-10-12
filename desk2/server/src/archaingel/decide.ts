@@ -15,6 +15,7 @@ export interface Reading {
   off: boolean
   headline: string | null
   totals: Record<string, number> | null
+  settings: Record<string, string | number | boolean> | null
 }
 
 /** One agent as the last look saw it: its entry, and what its status read (or why that failed). */
@@ -72,7 +73,20 @@ export function parseReading(stdout: string): Reading {
     off: o.off === true,
     headline: headline || null,
     totals: o.totals ? Object.fromEntries(totals) : null,
+    settings: settingsOf(o.settings),
   }
+}
+
+/** The status's `settings`: scalar values only, at most 12 entries, names cut to 40 and strings to 120. Null when not an object. */
+function settingsOf(v: unknown): Record<string, string | number | boolean> | null {
+  if (!v || typeof v !== 'object' || Array.isArray(v)) return null
+  const kept: [string, string | number | boolean][] = []
+  for (const [k, x] of Object.entries(v as Record<string, unknown>)) {
+    if (kept.length === 12) break
+    if (typeof x === 'string') kept.push([k.slice(0, 40), x.slice(0, 120)])
+    else if ((typeof x === 'number' && Number.isFinite(x)) || typeof x === 'boolean') kept.push([k.slice(0, 40), x])
+  }
+  return Object.fromEntries(kept)
 }
 
 /** When the agent's last tick ended, ms: its own record, or its status's last_tick_at when that is later; null when none. */

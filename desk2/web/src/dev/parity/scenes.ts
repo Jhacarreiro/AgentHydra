@@ -5,7 +5,7 @@ import type { Dashboard } from '@shared/dashboards'
 import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import type { HeadlessAudioState } from '@shared/headless-audio'
-import { cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
+import { archaingelFixtures, cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
 import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import type { ComposerApi } from '@/components/composer/api'
@@ -277,7 +277,8 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     health: async () => ({ ok: true, version: '0.1.0' }),
     bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
     babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
-    archaingel: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, agents: [], error: null }),
+    archaingel: async () => archaingelFixtures,
+    archaingelRun: async () => archaingelFixtures,
     orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),

@@ -7,9 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Settings has a Managers page.** It holds the babysitter, the orchestrator and ArchAIngel, which moved there from General. Each standing agent shows its own settings and a Run now button.
 - **ArchAIngel runs your standing agents on their own pace, hidden.** A third watcher beside the babysitter: an agent
   you register runs whenever it says it is due, using what AgentHydra already has (its CLI and free accounts), and no
-  keys leave this PC. Settings > General > Standing agents shows each agent's state, last run and next run.
+  keys leave this PC. Settings > Managers shows each agent's state, last run and next run.
 - **Each project's dashboard is its own website, which its chats write.** A chat builds it with `dashboard_write` on
   the agenthydra MCP: any HTML, CSS, JavaScript or data, served at the project's own local address and framed live in
   the dashboard page, which reloads when a file changes. Open it from a chat's header, a project's tile on the home

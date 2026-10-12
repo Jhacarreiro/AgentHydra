@@ -7,6 +7,7 @@ import type { ArchAIngelStatus } from '@shared/archaingel'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
+import ArchAIngelAgentCard from './ArchAIngelAgentCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
@@ -237,29 +238,6 @@ const babysitterNote = computed(() => {
     : 'Nothing is stopped by a limit.'
   const last = s.acts.find((a) => a.did === 'resumed')
   return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
-})
-
-/** A span of time as the page says it: 'under a minute', '12 min', '2 h', '3 d'. */
-function spanOf(ms: number): string {
-  const m = Math.max(0, Math.round(ms / 60_000))
-  if (m < 1) return 'under a minute'
-  if (m < 60) return `${m} min`
-  if (m < 24 * 60) return `${Math.round(m / 60)} h`
-  return `${Math.round(m / (24 * 60))} d`
-}
-
-/** Under the ArchAIngel row: one line per standing agent, what it reports, when it last ran and when it runs next. */
-const archaingelLines = computed<string[]>(() => {
-  const s = archaingel.value
-  if (!s) return []
-  if (!s.agents.length) return ['no agents registered']
-  return s.agents.map((a) => {
-    const last = a.runs[0]
-    const lastPart = last ? `last run ${spanOf(Date.now() - last.endedAt)} ago (${last.outcome})` : 'never run'
-    const nextPart =
-      a.state === 'running' ? 'running now' : a.nextTickAt === null || a.nextTickAt <= Date.now() ? 'due now' : `next in ${spanOf(a.nextTickAt - Date.now())}`
-    return [`${a.name}: ${a.headline ?? (a.state === 'broken' ? `broken, ${a.reason}` : a.state)}`, lastPart, nextPart].join(' · ')
-  })
 })
 
 async function loadBridge() {
@@ -520,8 +498,11 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
-                <template v-if="r.id === 'archaingel'">
-                  <div v-for="(line, i) in archaingelLines" :key="i" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ line }}</div>
+                <template v-if="r.id === 'archaingel' && archaingel">
+                  <ArchAIngelAgentCard v-for="a in archaingel.agents" :key="a.id" :agent="a" :enabled="archaingel.enabled" @ran="loadArchAIngel" />
+                  <div v-if="!archaingel.agents.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
+                    No agents yet: an agent registers with a file in archaingel/agents in AgentHydra's folder.
+                  </div>
                 </template>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>

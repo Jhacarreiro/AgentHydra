@@ -2,7 +2,7 @@
 // CLI, CliMayte or Codex session AgentHydra knows) active in the last `?days=` days (3 by default) with the one move
 // the orchestrator would make next and why; `?ask=1` also asks the CreAitor, when this machine has it, what the owner
 // would answer each one that waits on a question. Phase A, shadow: that is all it does. Phase B, armed: the
-// `orchestrator` setting (Settings > General, beside the babysitter's switch; or POST the same path { armed }), off by
+// `orchestrator` setting (Settings > Managers, beside the babysitter's switch; or POST the same path { armed }), off by
 // default and kept until it is turned off (owner, 2026-10-09: "I may not always want the foreman on ... but sometimes I
 // might want it on"). Armed, it looks every TICK_MS, and a model judges each chat that needs it (orchestrator/judge.ts):
 // every running chat due a peek, and every Desk chat an error stopped. The model's verdict decides; its message goes

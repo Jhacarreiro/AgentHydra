@@ -7,7 +7,7 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'managers' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 // Ids a saved or linked section used before a rename. CliMayte is part of HSwarm (owner, 2026-10-10).
 export const LEGACY_SECTION: Record<string, SettingsSection> = { climayte: 'hswarm' }
@@ -20,6 +20,7 @@ export function sectionFor(id: string): SettingsSection | null {
 
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
+  { id: 'managers', label: 'Managers', caption: 'Settings' },
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
   { id: 'hswarm', label: 'HSwarm', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
@@ -141,39 +142,6 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Close idle chats after',
     description: "An idle chat's process stops; your next message resumes it."
   },
-  // Two watchers side by side (owner, 2026-10-09: "two toggles ... integrated into the same area ... easy to turn on").
-  {
-    id: 'babysitter',
-    section: 'general',
-    group: 'Watching chats',
-    label: 'Babysitter',
-    description:
-      'When a usage limit stops a chat (here or in Claude Desktop), continue it once the limit resets. It checks every 5 minutes; no model is asked.'
-  },
-  {
-    id: 'orchestrator',
-    section: 'general',
-    group: 'Watching chats',
-    label: 'Orchestrator',
-    description:
-      'A foreman for running chats: every 10 minutes a model peeks in and judges whether it is moving; it nudges one that is going nowhere. It also continues a chat an error stopped. What it judged and did: Diagnostics > Orchestrator.'
-  },
-  {
-    id: 'orchestratorModel',
-    section: 'general',
-    group: 'Watching chats',
-    label: 'Orchestrator model',
-    description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
-  },
-  // A third watcher beside the babysitter (shared/archaingel.ts): the standing agents run on this PC, through AgentHydra's own CLI and accounts.
-  {
-    id: 'archaingel',
-    section: 'general',
-    group: 'Standing agents',
-    label: 'ArchAIngel',
-    description:
-      'Runs your standing agents on their own pace, hidden, using what AgentHydra already has (its CLI and free accounts, HSwarm). An agent registers with a file in archaingel/agents in AgentHydra\'s folder. No keys leave this PC.'
-  },
   {
     id: 'ahTooltips',
     section: 'general',
@@ -188,6 +156,39 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Privacy mode',
     description:
       'For screenshots and screen-shares: masks account addresses, handles and profile names on the AgentHydra pages. Copy still copies the real address.'
+  },
+  // Two watchers side by side (owner, 2026-10-09: "two toggles ... integrated into the same area ... easy to turn on").
+  {
+    id: 'babysitter',
+    section: 'managers',
+    group: 'Watching chats',
+    label: 'Babysitter',
+    description:
+      'When a usage limit stops a chat (here or in Claude Desktop), continue it once the limit resets. It checks every 5 minutes; no model is asked.'
+  },
+  {
+    id: 'orchestrator',
+    section: 'managers',
+    group: 'Watching chats',
+    label: 'Orchestrator',
+    description:
+      'A foreman for running chats: every 10 minutes a model peeks in and judges whether it is moving; it nudges one that is going nowhere. It also continues a chat an error stopped. What it judged and did: Diagnostics > Orchestrator.'
+  },
+  {
+    id: 'orchestratorModel',
+    section: 'managers',
+    group: 'Watching chats',
+    label: 'Orchestrator model',
+    description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
+  },
+  // A third watcher beside the babysitter (shared/archaingel.ts): the standing agents run on this PC, through AgentHydra's own CLI and accounts.
+  {
+    id: 'archaingel',
+    section: 'managers',
+    group: 'Standing agents',
+    label: 'ArchAIngel',
+    description:
+      'Runs your standing agents on their own pace, hidden, using what AgentHydra already has (its CLI and free accounts, HSwarm). An agent registers with a file in archaingel/agents in AgentHydra\'s folder. No keys leave this PC.'
   },
   {
     id: 'ahAlerts',

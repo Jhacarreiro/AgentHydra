@@ -4,7 +4,7 @@
 // babysitter: it runs the user's standing agents (long-lived improvement agents that live on this PC as a command), each
 // on its own pace, hidden, and shows what they did. ArchAIngel asks no model itself: an agent's own command does the
 // work through what AgentHydra already has. The server keeps it (server/src/plugins/73-archaingel.ts, deciding in
-// server/src/archaingel/); GET /api/archaingel answers what it saw last, Settings > Standing agents draws it, and
+// server/src/archaingel/); GET /api/archaingel answers what it saw last, Settings > Managers draws it, and
 // AgentHydra's MCP tool `archaingel` reads the same answer. Plain types only.
 //
 // THE AGENT CONTRACT. An agent registers with one file: <desk home>/archaingel/agents/<id>.json (the desk home is
@@ -27,6 +27,7 @@
 //   off           true = never tick it (optional)
 //   headline      one line for the page, cut to 160 characters (optional)
 //   totals        an object of name -> number, shown as counts (optional)
+//   settings      an object of name -> string | number | boolean, shown read-only; the agent owns them (optional)
 // A status command that fails, times out or prints no object makes the agent 'broken' with the reason. Nothing is
 // ticked on a guess.
 //
@@ -82,6 +83,8 @@ export interface ArchAIngelAgent {
   /** From its status: one line, cut to 160 characters. */
   headline: string | null
   totals: Record<string, number> | null
+  /** From its status: at most 12 entries, names cut to 40 and string values to 120 characters; ArchAIngel never reads them. */
+  settings: Record<string, string | number | boolean> | null
   /** When its last tick ended, ms, or null when none is known. */
   lastTickAt: number | null
   /** When its status says it is next due, ms, or null (due now). */

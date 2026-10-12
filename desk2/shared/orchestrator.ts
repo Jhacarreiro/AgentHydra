@@ -1,7 +1,7 @@
 // The orchestrator's plan: for each open chat, the one move the orchestrator would make next and why, and, when
 // asked, what the CreAitor says the owner would answer. The server computes it (server/src/orchestrator/plan.ts,
 // GET /api/diagnostics/orchestrator); Settings > Diagnostics > Orchestrator draws it. Phase A, shadow: the plan is
-// only what it WOULD do. Phase B, armed by the owner (Settings > General > Orchestrator, the `orchestrator` setting, or
+// only what it WOULD do. Phase B, armed by the owner (Settings > Managers > Orchestrator, the `orchestrator` setting, or
 // POST the same path { armed }): it also continues a Desk chat an error stopped (server/src/orchestrator/act.ts), and its
 // foreman peeks at running chats and sends a note to one that keeps failing the same step or hangs on a call
 // (server/src/orchestrator/foreman.ts); a chat a usage limit stopped is the babysitter's (shared/babysitter.ts).

@@ -104,7 +104,7 @@ async function settle(app: Hono, done: (s: ArchAIngelStatus) => boolean): Promis
 const agent = (id: string, next: string | null, last: number | null = null, fields: Partial<Memory> = {}): { seen: Seen; mem: Memory } => ({
   seen: {
     entry: { id, manifest: { id, name: 'Example Agent', tick: ['x'], status: ['y'], timeoutMinutes: 120 }, broken: null },
-    reading: { nextTickAt: next === null ? null : Date.parse(next), lastTickAt: null, off: false, headline: null, totals: null },
+    reading: { nextTickAt: next === null ? null : Date.parse(next), lastTickAt: null, off: false, headline: null, totals: null, settings: null },
     readError: null,
   },
   mem: { ...emptyMemory(), runs: last === null ? [] : [{ startedAt: last - MIN, endedAt: last, outcome: 'ok', exitCode: 0, lastLine: '' }], ...fields },
@@ -164,6 +164,17 @@ describe('judging (archaingel/decide.ts)', () => {
     expect(() => parseReading('not json')).toThrow('no JSON object')
     expect(() => parseReading(JSON.stringify({ next_tick_at: 'soon' }))).toThrow('"next_tick_at" must be an ISO time or null')
     expect(() => parseReading(JSON.stringify({ off: 'yes' }))).toThrow('"off" must be true or false')
+  })
+
+  test('settings: scalars kept, other values dropped, at most 12 entries, names cut to 40 and strings to 120, a non-object is null', () => {
+    const many = Object.fromEntries(Array.from({ length: 14 }, (_, i) => [`k${i}`, i]))
+    const kept = parseReading(JSON.stringify({ settings: { mode: 'example', on: true, n: 3, list: [1], nested: { a: 1 }, nothing: null, ...many } }))
+    expect(kept.settings).toEqual({ mode: 'example', on: true, n: 3, k0: 0, k1: 1, k2: 2, k3: 3, k4: 4, k5: 5, k6: 6, k7: 7, k8: 8 })
+    const cut = parseReading(JSON.stringify({ settings: { ['x'.repeat(60)]: 'y'.repeat(200) } }))
+    expect(cut.settings).toEqual({ ['x'.repeat(40)]: 'y'.repeat(120) })
+    expect(parseReading(JSON.stringify({})).settings).toBeNull()
+    expect(parseReading(JSON.stringify({ settings: ['a'] })).settings).toBeNull()
+    expect(parseReading(JSON.stringify({ settings: 'a' })).settings).toBeNull()
   })
 })
 

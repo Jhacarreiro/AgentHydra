@@ -7,6 +7,7 @@ import type {
   DeskSettings,
   ChatStatus
 } from '@shared/protocol'
+import type { ArchAIngelStatus } from '@shared/archaingel'
 
 const now = Date.now()
 
@@ -592,4 +593,27 @@ export const settingsFixtures: DeskSettings = {
   projectRoots: [],
   hiddenProjects: [],
   babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true
+}
+
+export const archaingelFixtures: ArchAIngelStatus = {
+  enabled: true,
+  everyMs: 300_000,
+  checkedAt: now,
+  nextCheckAt: now + 300_000,
+  error: null,
+  agents: [
+    {
+      id: 'example-agent',
+      name: 'Example Agent',
+      state: 'idle',
+      reason: 'next due later',
+      headline: 'Checked 3 items, 1 needs a look',
+      totals: { items: 3, flagged: 1 },
+      settings: { mode: 'example', every: '2 h', dryRun: false, limit: 12 },
+      lastTickAt: now - 3_600_000,
+      nextTickAt: now + 3_600_000,
+      running: null,
+      runs: [{ startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: 0, lastLine: 'sortie done: 3 items checked' }]
+    }
+  ]
 }

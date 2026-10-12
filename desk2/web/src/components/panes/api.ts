@@ -25,6 +25,8 @@ export interface PaneApi {
   babysitter(): Promise<BabysitterStatus>
   /** GET /api/archaingel: the standing agents the last look read and what each last ran (plugins/73-archaingel.ts). */
   archaingel(): Promise<ArchAIngelStatus>
+  /** POST /api/archaingel { run: id }: ticks one standing agent now, or answers why it cannot (409, 404). */
+  archaingelRun(id: string): Promise<ArchAIngelStatus>
   /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
   orchestratorModel(): Promise<OrchestratorModelStatus>
   getSettings(): Promise<DeskSettings>
@@ -72,6 +74,12 @@ export const httpPaneApi: PaneApi = {
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
   archaingel: () => json('/archaingel'),
+  archaingelRun: (id) =>
+    json('/archaingel', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ run: id })
+    }),
   orchestratorModel: () => json('/orchestrator/model'),
   getSettings: () => json('/settings'),
   putSettings: (patch) =>

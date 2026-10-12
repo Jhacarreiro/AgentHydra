@@ -214,6 +214,7 @@ import { Activity, BellRing, CloudDownload, Info, Monitor, Server } from '@lucid
 
 export const settingsIcons = {
   general: Settings,
+  managers: Eye,
   alerts: BellRing,
   hswarm: Bot,
   connections: Plug,

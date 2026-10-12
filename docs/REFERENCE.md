@@ -139,7 +139,7 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 moment of the stop.
 
 **ArchAIngel** is the babysitter's third sibling (Desk 2's `plugins/73-archaingel.ts`, contract and page text in
-`desk2/shared/archaingel.ts`, Settings > General > Standing agents). It runs the user's standing agents, long-lived
+`desk2/shared/archaingel.ts`, Settings > Managers). It runs the user's standing agents, long-lived
 improvement agents that live on this PC as a command, each on its own pace and hidden, and shows what they did. ArchAIngel
 asks no model itself; an agent's own command works through what AgentHydra already has (its CLI, its free accounts,
 HSwarm), so no API key leaves the PC. An agent registers with one file, `<desk home>/archaingel/agents/<id>.json`

@@ -8,7 +8,7 @@ import { relativeTime } from '@/components/sidebar/search'
 import { Tip } from '@/components/ui/tooltip'
 
 // Orchestrator: each open chat's next move as the orchestrator sees it, and on request what the CreAitor says the
-// owner would answer. Shadow until the owner arms it (here or Settings > General > Orchestrator); armed, a model judges
+// owner would answer. Shadow until the owner arms it (here or Settings > Managers > Orchestrator); armed, a model judges
 // each running chat due a peek and each Desk chat an error stopped (server/src/orchestrator/judge.ts), sends the message
 // it writes when the hard limits allow (plugins/70-orchestrator.ts), and lists what it did. Nothing else here sends.
 const api = usePaneApi()
