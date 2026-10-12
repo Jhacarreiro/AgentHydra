@@ -250,6 +250,8 @@ function readFrom(path: string, from: number, size: number): Buffer {
 export interface JsonlReaderOptions {
   /** How much of a file's end a first read takes. */
   tailBytes: number
+  /** A first read that leaves out the file's start also answers the first user record in its first `headBytes`, the session's opening prompt. */
+  headBytes?: number
   /** Source bytes of records kept per file between reads. Below `tailBytes` the reader is windowed (see createJsonlReader). */
   keepBytes: number
   /** A windowed reader may keep this much to hold the launch of a tool or task still running. */
@@ -356,6 +358,15 @@ export interface JsonlReader {
 /** Lines parsed between two slices of an async read: about a few milliseconds of JSON.parse. */
 const LINES_PER_SLICE = 100
 
+/** The first user record that ends before `before` in `head`, as its items: a session's opening prompt. */
+function openingItems(head: Buffer, before: number, cwd?: string | null): TranscriptItem[] {
+  for (let s = 0, nl = head.indexOf(10); nl >= 0 && nl < before; s = nl + 1, nl = head.indexOf(10, s)) {
+    const rec = parseJsonl(head.subarray(s, nl).toString('utf8'))[0] as { type?: unknown } | undefined
+    if (rec?.type === 'user') return historyToItems([rec], { cwd: cwd ?? null })
+  }
+  return []
+}
+
 export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
   const memo = new Map<string, Memo>()
   let memoBytes = 0
@@ -431,9 +442,11 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       if (buf) from = m.offset
       else m = undefined
     }
+    let head: Buffer | null = null
     if (!buf) {
       from = Math.max(0, st.size - o.tailBytes)
       buf = (yield { op: 'read', path, from, to: st.size }) as Buffer
+      if (o.headBytes && from > 0) head = (yield { op: 'read', path, from: 0, to: Math.min(o.headBytes, st.size) }) as Buffer
     }
     const prevTail = m?.tail ?? Buffer.alloc(0)
     let start = 0
@@ -464,12 +477,13 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       else while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) dropBefore(fresh, 1)
     }
     yield
-    const answer = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
+    const opening = head ? openingItems(head, from, cwd) : []
+    const answer = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
     fresh.items = answer
     if (windowed) {
       const dropped = trimWindow(fresh, answer, o.keepBytes, pinCap)
       // A first read dropped most of the tail: what is kept answers for the window alone, not the whole tail again.
-      if (dropped > o.keepBytes) fresh.items = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
+      if (dropped > o.keepBytes) fresh.items = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
     }
     memo.delete(path)
     memo.set(path, fresh)
@@ -595,6 +609,7 @@ export async function sessionJsonlOlder(path: string, before: number, cwd?: stri
  */
 export const workerJsonlItems = createJsonlReader({
   tailBytes: TAIL_BYTES,
+  headBytes: 512 * 1024,
   keepBytes: 1024 * 1024,
   pinBytes: 4 * 1024 * 1024,
   maxFiles: 128,

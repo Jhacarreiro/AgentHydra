@@ -202,6 +202,21 @@ describe('outside session .jsonl', () => {
     expect(sessionJsonlItems(f)).toHaveLength(401)
   })
 
+  test('a session that grew past the tail still answers its opening prompt, from a fresh reader too', async () => {
+    // Owner, 2026-10-12: a CliMayte chat's continuation is the session's first user row; once the session grew past
+    // the tail, a fresh read never reached it and its stand-in stayed queued.
+    const pad = 'p'.repeat(300)
+    const replies = Array.from({ length: 200 }, (_, n) =>
+      JSON.stringify({ type: 'assistant', uuid: `a${n}`, timestamp: at(n), message: { id: `msg_${n}`, role: 'assistant', content: [{ type: 'text', text: `reply ${n} ${pad}` }] } }),
+    ).join('\n')
+    const f = join(temp(), 'opening.jsonl')
+    writeFileSync(f, `${userRec(0, 'Example Owner asks about the gauge')}\n${replies}\n`)
+    const options = { tailBytes: 4096, keepBytes: 1024, headBytes: 1024, maxFiles: 4, maxBytes: Infinity, settledFiles: 8, settledBytes: 1024 * 1024 }
+    const userTexts = (items: TranscriptItem[]) => items.flatMap((i) => (i.kind === 'user' ? [i.text] : []))
+    expect(userTexts(createJsonlReader(options)(f))).toEqual(['Example Owner asks about the gauge'])
+    expect(userTexts(await createJsonlReader(options).readAsync(f))).toEqual(['Example Owner asks about the gauge'])
+  })
+
   test('a session longer than the tail reads back whole: the tail and what is before its start, each item once', async () => {
     // Owner, 2026-10-11: a 56 MB session showed only its last 8 MiB, none of his messages ("It just stops").
     // Each reply is three records of one API message, so a start that fell inside one would name its blocks differently.
