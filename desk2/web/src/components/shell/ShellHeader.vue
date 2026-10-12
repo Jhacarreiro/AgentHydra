@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, ref, watch } from 'vue'
+import { computed, nextTick, ref } from 'vue'
 import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol'
 import { icons, settingsIcons, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -13,9 +13,9 @@ import WorkspacePicker from './WorkspacePicker.vue'
 import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
 import { connectorList } from '@/components/connectors/connections-api'
 import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
-import { LayoutDashboard, ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
-import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { hasSite } from '@/components/dashboard/logic'
+import { ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
+import { openDashboard } from '@/components/dashboard/store'
+import { DashboardGlyph } from '@/components/dashboard/glyph'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
 import { isMuted, toggleMuted } from '@/lib/chat-audio'
@@ -130,12 +130,6 @@ function onMenuClosed(e: Event) {
 const connectionsShown = computed(() => showConnectionsChip(connectorList.value))
 const logoFailed = ref(false)
 const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
-const dashboardHasSite = computed(() => (props.chat ? hasSite(dashboardList.value, props.chat.cwd) : false))
-watch(
-  () => props.chat?.cwd,
-  (cwd) => cwd && refreshDashboards(),
-  { immediate: true }
-)
 
 // The running-tasks count on Background tasks: gray, not the accent (owner, 2026-10-08: "an annoying blue icon, make it
 // grey"); a solid gray so the icon under its corner does not show through.
@@ -143,9 +137,7 @@ const COUNT_BADGE =
   'tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))] px-0.75 text-[10px] font-medium leading-none text-text'
 
 const DASHBOARD_BTN =
-  'relative ms-0.5 flex size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent @max-[498px]:hidden'
-const SITE_DOT =
-  'absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))]'
+  'ms-0.5 flex size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent @max-[498px]:hidden'
 
 const PANE_BTN =
   'flex size-[26px] items-center justify-center rounded-[var(--radius-6)] text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text aria-pressed:bg-fill-selected aria-pressed:text-text aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-fill-hover aria-expanded:text-text'
@@ -208,8 +200,7 @@ const PANE_BTN =
       <WorkspacePicker :chat="chat" />
       <Tip v-if="chat" label="Project dashboard">
         <button type="button" data-fit="dashboard" :class="DASHBOARD_BTN" aria-label="Project dashboard" @click="openDashboard(chat.cwd)">
-          <LayoutDashboard class="size-3.5" aria-hidden="true" />
-          <span v-if="dashboardHasSite" :class="SITE_DOT" aria-hidden="true" />
+          <DashboardGlyph class="size-3.5" aria-hidden="true" />
         </button>
       </Tip>
 

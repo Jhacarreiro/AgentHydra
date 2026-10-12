@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
-import { EyeOff, Folder, FolderPlus, LayoutDashboard, ListFilter, MessagesSquare } from '@lucide/vue'
+import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare } from '@lucide/vue'
+import { DashboardGlyph } from '@/components/dashboard/glyph'
 import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
 import { hasSite } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
@@ -245,7 +246,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
               </Tip>
               <Tip v-if="hasDashboard(p.path)" label="Open dashboard">
                 <span role="button" tabindex="0" aria-label="Open dashboard" :class="DASH_GLYPH" @click.stop.prevent="openDashboard(p.path)" @keydown.enter.stop.prevent="openDashboard(p.path)">
-                  <LayoutDashboard class="size-3" aria-hidden="true" />
+                  <DashboardGlyph class="size-3" aria-hidden="true" />
                 </span>
               </Tip>
             </span>

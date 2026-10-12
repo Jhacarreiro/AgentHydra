@@ -1,11 +1,12 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { AppWindow, ArrowLeft, Copy, ExternalLink, Folder, RotateCw } from '@lucide/vue'
+import { AppWindow, ArrowLeft, Copy, ExternalLink, RotateCw } from '@lucide/vue'
 import type { Dashboard } from '@shared/dashboards'
 import type { ProjectEntry } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { Tip } from '@/components/ui/tooltip'
 import { getDashboard } from './api'
+import { DashboardGlyph } from './glyph'
 import { EXAMPLE_PROMPT, timeAgo, workspaceKey } from './logic'
 import { closeDashboard, openDashboardTab, refreshDashboards } from './store'
 
@@ -123,9 +124,8 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
           <ArrowLeft class="size-4" aria-hidden="true" />
         </button>
       </Tip>
-      <img v-if="project?.icon" :src="project.icon" alt="" class="size-6 shrink-0 rounded-(--radius-6)" />
-      <span v-else class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted">
-        <Folder class="size-3.5" aria-hidden="true" />
+      <span class="flex size-6 shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-2">
+        <DashboardGlyph class="size-3.5" aria-hidden="true" />
       </span>
       <div class="flex min-w-0 flex-1 items-baseline gap-2">
         <h2 class="truncate text-[15px] leading-5 font-semibold text-text">{{ title }}</h2>

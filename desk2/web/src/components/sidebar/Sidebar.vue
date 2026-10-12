@@ -26,7 +26,7 @@ import { useClock } from '@/lib/clock'
 import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useFirstInterestSet } from '@/lib/first-interest'
-import { createReusableTemplate } from '@vueuse/core'
+import { createReusableTemplate, useEventListener } from '@vueuse/core'
 import { ChevronRight, EyeOff } from '@lucide/vue'
 import { usePaneApi } from '@/components/panes/api'
 import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
@@ -41,6 +41,8 @@ import { CHROME_OPEN, SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth } from './widt
 import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
+import GroupDashboardButton from '@/components/dashboard/GroupDashboardButton.vue'
+import { refreshDashboards } from '@/components/dashboard/store'
 import AutoCategorizeDialog from './AutoCategorizeDialog.vue'
 import {
   addRemoteToDeskGroups,
@@ -419,6 +421,14 @@ const groupIcons = computed(() => new Map(groupList.value.map((g) => [g.key, ico
 const projectFolderOf = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.path ?? null
 /** What a desk group's menu describes: its project's folder, else its own, else the folder its newest chat works in. */
 const menuFolderOf = (g: ChatGroup) => projectFolderOf(g) ?? deskNewFolder(g)
+// A group head's dashboard button (both lists' GroupDashboardButton) reads the one dashboards list: read now, when the
+// window comes back and when another chat is picked, so a site a chat just wrote gets its button without a reload.
+void refreshDashboards()
+useEventListener(window, 'focus', () => void refreshDashboards())
+watch(
+  () => src.selected.value,
+  () => void refreshDashboards()
+)
 // A row the plain list shows that the order lacks joins it at the top, so it keeps the place it appeared in, and
 // so does one only the cloud list had shown (recordDeskOrder); any other saved one never moves; a row that just
 // turned orange goes to the top of its group. An added row joins as a new row does.
@@ -939,6 +949,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             </button>
           </Tip>
           <span class="flex-1" />
+          <GroupDashboardButton :folder="menuFolderOf(group)" :label="group.label" />
           <Tip v-if="deskNewFolder(group)" :label="`New session in ${group.label}`">
             <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: deskNewFolder(group)! })">
               <component :is="shellGlyphs.groupNew" class="size-4" />
