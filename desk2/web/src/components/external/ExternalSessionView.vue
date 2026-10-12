@@ -34,7 +34,18 @@ const src = useShellSource()
 const desk = useDesk()
 const api = usePaneApi()
 // Replaced whole on each read, never edited in place: a shallow ref keeps a big transcript out of deep proxies.
-const items = shallowRef<TranscriptItem[]>([])
+// A long session comes in two parts (owner, 2026-10-11: a 56 MB session showed only its last 8 MiB, "It just stops"):
+// `recent`, the newest part, which the polls read again, and `older`, what its file holds before that, read once
+// behind it for each place the recent part begins (`olderFor`).
+const recent = shallowRef<TranscriptItem[]>([])
+const older = shallowRef<TranscriptItem[]>([])
+let olderFor = 0
+let olderAsked = 0
+const items = computed(() => {
+  if (!older.value.length) return recent.value
+  const mine = new Set(recent.value.map((i) => i.id))
+  return [...older.value.filter((i) => !mine.has(i.id)), ...recent.value]
+})
 const loading = ref(true)
 const error = ref<string | null>(null)
 let pollInterval: ReturnType<typeof setInterval> | null = null
@@ -140,9 +151,10 @@ async function loadItems(quiet = false) {
     if (!quiet) loading.value = true
     error.value = null
     const from = performance.now()
-    const next = await api.externalItems(props.sessionId, session.value?.cwd)
-    if (quiet && sameItems(items.value, next)) return
-    items.value = next
+    const { items: next, olderBefore } = await api.externalItems(props.sessionId, session.value?.cwd)
+    void loadOlder(props.sessionId, olderBefore)
+    if (quiet && sameItems(recent.value, next)) return
+    recent.value = next
     // The open as the window draws it (polls are not opens).
     if (!quiet) reportAtPaint('open_to_paint', from, props.sessionId)
   } catch (err) {
@@ -152,12 +164,41 @@ async function loadItems(quiet = false) {
   }
 }
 
+/** What the session's file holds before its recent part, read once for each place that part begins; 0: there is none. */
+async function loadOlder(id: string, before: number) {
+  if (!before) {
+    if (olderFor) older.value = []
+    olderFor = 0
+    return
+  }
+  if (before === olderFor || before === olderAsked) return
+  olderAsked = before
+  try {
+    const got = await api.externalOlder(id, before, session.value?.cwd)
+    if (id !== props.sessionId || olderAsked !== before) return
+    older.value = got
+    olderFor = before
+  } catch {
+    // Asked again at the next read: a poll, or the session opened again.
+  } finally {
+    if (olderAsked === before) olderAsked = 0
+  }
+}
+
 function stopPolling() {
   if (pollInterval) clearInterval(pollInterval)
   pollInterval = null
 }
 
-watch(() => props.sessionId, () => loadItems(), { immediate: true })
+watch(
+  () => props.sessionId,
+  () => {
+    older.value = []
+    olderFor = olderAsked = 0
+    void loadItems()
+  },
+  { immediate: true }
+)
 // Where a session no signed-in CLI instance holds lands (the stand-in's account, the line over its
 // composer), again when Settings' default changes or the accounts arrive: the named default is only
 // found among them, and a holder's sign-in shows there.

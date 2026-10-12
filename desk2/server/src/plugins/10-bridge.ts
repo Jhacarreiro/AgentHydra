@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import type { CloudList, DesktopMessageRequest, DesktopMessageResult, ExternalBranchRequest, ExternalBranchResult } from '@shared/protocol'
+import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -156,10 +156,21 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   // The window sends the session's cwd, so its folder is looked in first. The open is timed: where its time went goes to timings.jsonl.
   app.get('/api/external/sessions/:id/items', (c) =>
     guarded(c, b, async () => {
-      const open = { find: 0, daemon: 0, parse: 0, cold: false }
+      const open: Parameters<Bridge['externalItems']>[2] = { find: 0, daemon: 0, parse: 0, cold: false }
       const from = Date.now()
       const items = await b.externalItems(c.req.param('id'), c.req.query('cwd') || null, open)
       timings.span({ stage: 'external_open', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length, find: open.find, daemon: open.daemon, parse: open.parse, searched: open.cold })
+      if (open.older) c.header(OLDER_BEFORE_HEADER, String(open.older))
+      return c.json(items)
+    }),
+  )
+  app.get('/api/external/sessions/:id/older', (c) =>
+    guarded(c, b, async () => {
+      const before = Number(c.req.query('before'))
+      if (!Number.isSafeInteger(before) || before < 0) return c.json({ error: 'before must be the byte offset the items header gave' }, 400)
+      const from = Date.now()
+      const items = await b.externalOlder(c.req.param('id'), before, c.req.query('cwd') || null)
+      timings.span({ stage: 'external_older', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length })
       return c.json(items)
     }),
   )

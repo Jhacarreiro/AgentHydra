@@ -392,7 +392,8 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/queue/:id/retry` | `QueueItem` (`failed` -> `waiting`; 409 otherwise, or when its chat was deleted) |
 | `POST /api/queue/chats/:chatId/resume` | `QueueState` (releases that chat's hold) |
 | `GET /api/external/sessions` | `ExternalSession[]` |
-| `GET /api/external/sessions/:id/items` | `TranscriptItem[]` (converted from AgentHydra's transcript) |
+| `GET /api/external/sessions/:id/items` | `TranscriptItem[]` (converted from AgentHydra's transcript). A Claude Code session's file is read from its last 8 MiB, begun at a clean cut (the start of an API message whose tools all answered); `x-older-before: <byte>` then says where in the file these items begin. A session still going keeps that start until it holds twice the tail |
+| `GET /api/external/sessions/:id/older?before=<byte>` | `TranscriptItem[]`: what the session's file holds before that byte, the whole file read through so a tool launched before the cut is settled, less every item the items route answers. The window reads it once per start, behind the items, and shows it above them; the import of an outside session takes both |
 | `POST /api/external/sessions/:id/branch` (ExternalBranchRequest) | `ExternalBranchResult`: AgentHydra (`POST /api/sessions/:id/branch`) copies the Claude Code session up to the reply `uuid` (an item's `branchFrom`) into a new session, titled "<title> (branch)"; no uuid 400, AgentHydra's refusal keeps its status |
 | `GET /api/search?q=&limit=` | `SearchHit[]`: AgentHydra's transcript search (`GET /api/sessions/search`, its `search_sessions` tool), each hit joined with its session row for title and time (`bridge/search.ts`). q 2+ chars (else 400), limit 25 by default, at most 50; AgentHydra down 503, any other failure 502 with the reason |
 | `GET /api/climayte/workers?all=1` | `CliMayteWorker[]` (active + the last 20 finished; all with the flag) |
@@ -890,6 +891,7 @@ Every stage (`TIMING_STAGES`):
 | `open_to_paint` | a chat opened -> its history fetched and painted | window |
 | `chat_open` | `GET /api/chats/:id/items` from request to items served (`n` = items) | server |
 | `external_open` | `GET /api/external/sessions/:id/items` from request to items served (`n` = items; `find`, `daemon`, `parse` = ms finding its file, waiting on AgentHydra's tail, parsing; `searched` = its file was looked for) | server |
+| `external_older` | `GET /api/external/sessions/:id/older` from request to items served (`n` = items; about 300 ms for a 56 MB session's first read, then kept) | server |
 | `process_start` | the SDK process started -> its first message | server |
 | `hook` | one hook, `hook_started` -> `hook_response`; `name` is `Event:script.mjs` when the hook's output names its file, else the SDK's `hook_name` (`SessionStart:startup`) | server, SDK messages |
 | `session_start_hooks` | the SessionStart group: first hook started -> last ended (they run in parallel), `name` = startup / resume | server, SDK messages |
