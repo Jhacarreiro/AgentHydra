@@ -42,7 +42,9 @@
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
 
-/** How a run ended: ok, busy (exit 75), failed, timed-out (killed past its timeout), or interrupted (AgentHydra stopped mid-run). */
+/** How a run ended: ok, busy (exit 75), failed (a failing exit, or its runner never started), timed-out (killed past its
+ *  timeout), or interrupted (it ended without saying how: its runner was killed or the PC restarted, or Desk stopped while it
+ *  was starting a prompt run's chat). A Desk restart alone leaves a command run going, and the next Desk goes on watching it. */
 export type RoutineOutcome = 'ok' | 'busy' | 'failed' | 'timed-out' | 'interrupted'
 
 /**

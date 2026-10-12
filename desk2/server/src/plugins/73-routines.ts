@@ -3,12 +3,13 @@
 // discard (the window only), and turns the manager on or off with `enabled` (the window only). A look reads each routine's
 // file, runs each status command, reads each Windows task in one call, judges (routines/decide.ts) and starts the runs that
 // fell due. Its memory (each routine's last 30 runs, the one running, the newest slot it ran for, paused) is
-// <home>/routines.json, so a restart keeps a prompt run it had not seen end and never starts a slot twice. A proposal
-// (routines/proposed) is listed and never run. No model is asked here: a prompt routine is a Desk chat that runs its prompt.
+// <home>/routines.json, so a restart goes on watching a run it had not seen end (a command run's runner, routines/runner.ts,
+// and a prompt run's chat both outlive Desk) and never starts a slot twice. A proposal (routines/proposed) is listed and
+// never run. No model is asked here: a prompt routine is a Desk chat that runs its prompt.
 
-import { spawn, type ChildProcess } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
-import { join } from 'node:path'
+import { spawn } from 'node:child_process'
+import { existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
+import { join, resolve } from 'node:path'
 import type { Hono } from 'hono'
 import {
   ROUTINES_EVERY_MS,
@@ -27,8 +28,11 @@ import type { AhWorker, StartWorker } from '../bridge/client'
 import { isActiveWorkerStatus } from '../bridge/climayte'
 import { callerKind } from '../caller'
 import { chatAddOns } from '../engine/desk-prompt'
+import { detachedCommand, killHostTree, pidAlive, recordedPidOwner } from '../host/launch'
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
 import { kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
+import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
+import { readJson, RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunResult, type RunSpec } from '../routines/runner'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
 import { renameOver, writeFlushed } from '../write-flushed'
 
@@ -44,12 +48,11 @@ const RUNS_KEPT = 30
 const LOG_MAX_BYTES = 2 * 1024 * 1024
 /** The exit code a busy routine answers with: its own lock is held by another run. */
 const BUSY_EXIT = 75
-/** Output kept to find a run's last line, and from a status command. */
-const TAIL_CHARS = 4096
-const STDOUT_CHARS = 1024 * 1024
-const LINE_CHARS = 300
-/** After SIGTERM, a process that has not ended gets SIGKILL this long later (not on Windows, where taskkill ends the tree). */
-const GRACE_MS = 5_000
+/** A command run's runner has this long to say it runs (<id>.run.json) before the run counts as not started: twice a chat
+ *  host's start, as a powershell asking WMI on a PC at full load can take tens of seconds. */
+const RUNNER_START_MS = 60_000
+/** A runner still going this long past its run's timeout (it ends the command itself at the timeout) is ended here. */
+const RUNNER_GRACE_MS = 2 * 60_000
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
 const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose'] as const
 const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard']
@@ -95,15 +98,6 @@ const liveWorkers: RoutineWorkers = {
 
 const liveTasks: RoutineTasks = { read: readTasks, run: runTaskNow, setEnabled: setTaskEnabled }
 
-/** One run of a command: how it ended. */
-interface Ran {
-  code: number | null
-  timedOut: boolean
-  error: string | null
-  stdout: string
-}
-
-const message = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 const pad = (n: number): string => String(n).padStart(2, '0')
 /** A local time, YYYY-MM-DD HH:mm. */
 const localStamp = (ms: number): string => {
@@ -114,7 +108,7 @@ const localStamp = (ms: number): string => {
 const groupStamp = (ms: number): string => localStamp(ms).replace(/[-: ]/g, '')
 
 /** <home>/routines.json, or empty memory when it is missing or damaged (a forgotten run only means a routine counts from zero). */
-function load(file: string, now: number): Record<string, Memory> {
+function load(file: string): Record<string, Memory> {
   let saved: { routines?: unknown } | null = null
   try {
     saved = JSON.parse(readFileSync(file, 'utf8'))
@@ -127,26 +121,33 @@ function load(file: string, now: number): Record<string, Memory> {
   // its memory, and the whole list failed.
   const memory: Record<string, Memory> = Object.create(null)
   return Object.assign(memory, Object.fromEntries(
-    Object.entries(routines).map(([id, m]) => {
+    // Only routine ids: a run's files are named by its id, so a key that is not one never names a path.
+    Object.entries(routines).filter(([id]) => ROUTINE_ID.test(id)).map(([id, m]) => {
       const mem: Memory = {
         runs: Array.isArray(m?.runs) ? m.runs.slice(0, RUNS_KEPT) : [],
         running: null,
         lastSlot: typeof m?.lastSlot === 'number' ? m.lastSlot : null,
         paused: m?.paused === true,
       }
-      // A command run still marked running when AgentHydra started again is gone: it is closed as interrupted. A prompt run
-      // keeps its chat, which runs on, so the manager goes on watching it.
+      // A run still marked running when AgentHydra started again goes on: a prompt run's chat runs on, and a command run's
+      // runner is outside Desk's process tree. The first look reads whether it ended meanwhile.
       if (m?.running && Number.isFinite(m.running.startedAt)) {
         const workerId = typeof m.running.workerId === 'string' ? m.running.workerId : null
-        if (workerId) mem.running = { startedAt: m.running.startedAt, pid: null, workerId, sessionId: null }
-        else {
-          mem.runs.unshift({ startedAt: m.running.startedAt, endedAt: now, outcome: 'interrupted', exitCode: null, lastLine: 'AgentHydra restarted', workerId: null, sessionId: null })
-          mem.runs.splice(RUNS_KEPT)
-        }
+        const pid = typeof m.running.pid === 'number' ? m.running.pid : null
+        mem.running = { startedAt: m.running.startedAt, pid: workerId ? null : pid, workerId, sessionId: null }
       }
       return [id, mem]
     }),
   ))
+}
+
+/** How long ago a file was last written, ms; null when it is not there. */
+function ageMs(file: string): number | null {
+  try {
+    return Date.now() - statSync(file).mtimeMs
+  } catch {
+    return null
+  }
 }
 
 /** A routine or proposal file, whole or not at all: a crash mid-write leaves the file as it was, never half of one. */
@@ -156,78 +157,11 @@ function writeWhole(file: string, body: unknown): void {
   renameOver(tmp, file)
 }
 
-/** The last non-empty line of some output, cut to LINE_CHARS. */
-function lastLineOf(text: string): string {
-  const lines = text
-    .split(/\r?\n/)
-    .map((l) => l.trim())
-    .filter(Boolean)
-  return (lines.at(-1) ?? '').slice(0, LINE_CHARS)
-}
-
-function outcomeOf(r: Ran): RoutineOutcome {
+function outcomeOf(r: Pick<RunResult, 'code' | 'timedOut' | 'error'>): RoutineOutcome {
   if (r.timedOut) return 'timed-out'
   if (r.error === null && r.code === 0) return 'ok'
   if (r.error === null && r.code === BUSY_EXIT) return 'busy'
   return 'failed'
-}
-
-/** Ends a process and what it started: taskkill's tree on Windows, else SIGTERM and then SIGKILL. */
-function killTree(child: ChildProcess): void {
-  if (child.pid === undefined) return
-  if (process.platform === 'win32') {
-    const k = spawn('taskkill', ['/PID', String(child.pid), '/T', '/F'], { windowsHide: true, shell: false, stdio: 'ignore' })
-    k.on('error', () => child.kill())
-    return
-  }
-  child.kill('SIGTERM')
-  const t = setTimeout(() => child.kill('SIGKILL'), GRACE_MS)
-  ;(t as { unref?: () => void }).unref?.()
-}
-
-/** Runs an argv hidden, with no shell, until it ends or fails to start. `onStart` gets the child as it starts; `onOutput`
- *  sees each chunk of stdout and stderr; a run past `timeoutMs` is killed and reported as timed out. */
-function run(
-  argv: string[],
-  o: { cwd?: string; timeoutMs: number; onStart?: (child: ChildProcess) => void; onOutput?: (text: string) => void },
-): Promise<Ran> {
-  return new Promise((resolve) => {
-    let stdout = ''
-    let timedOut = false
-    let done = false
-    let timer: ReturnType<typeof setTimeout> | undefined
-    const finish = (r: { code: number | null; error: string | null }): void => {
-      if (done) return
-      done = true
-      clearTimeout(timer)
-      resolve({ ...r, timedOut, stdout })
-    }
-    let child: ChildProcess
-    try {
-      child = spawn(argv[0], argv.slice(1), {
-        cwd: o.cwd,
-        windowsHide: true,
-        shell: false,
-        stdio: ['ignore', 'pipe', 'pipe'],
-        env: { ...process.env, PYTHONIOENCODING: 'utf-8' },
-      })
-    } catch (err) {
-      resolve({ code: null, timedOut: false, error: message(err), stdout: '' })
-      return
-    }
-    o.onStart?.(child)
-    timer = setTimeout(() => {
-      timedOut = true
-      killTree(child)
-    }, o.timeoutMs)
-    child.stdout?.setEncoding('utf8').on('data', (text: string) => {
-      if (stdout.length < STDOUT_CHARS) stdout += text
-      o.onOutput?.(text)
-    })
-    child.stderr?.setEncoding('utf8').on('data', (text: string) => o.onOutput?.(text))
-    child.on('error', (err) => finish({ code: null, error: err.message }))
-    child.on('close', (code) => finish({ code, error: null }))
-  })
 }
 
 /** A routine's file body, as written: the contract without its id (the file name) and without `why`. */
@@ -238,9 +172,11 @@ function contractOf(def: RoutineDefinition | RoutineProposal): Record<string, un
 }
 
 export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOptions = {}): void {
-  const routinesDir = join(ctx.home, 'routines')
+  // Absolute: the runner WMI starts sits in system32, and reads these paths from there.
+  const routinesDir = resolve(ctx.home, 'routines')
   const proposedDir = join(routinesDir, 'proposed')
   const logsDir = join(routinesDir, 'logs')
+  const runsDir = join(routinesDir, 'runs')
   const file = join(ctx.home, 'routines.json')
   const writer = new AsyncFile(file)
   const timeoutScale = opts.timeoutScale ?? 1
@@ -248,7 +184,10 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const platform = opts.platform ?? process.platform
   const workers = opts.workers ?? liveWorkers
   const tasks = opts.tasks ?? liveTasks
-  const memory = load(file, clock())
+  const memory = load(file)
+  /** The prompt runs this Desk is starting (`<id>@<startedAt>`): their chat id is not known yet. */
+  const startingPrompts = new Set<string>()
+  let settling: Promise<void> | null = null
   let seen: Seen[] = []
   let proposals: RoutineProposal[] = []
   let checkedAt: number | null = null
@@ -273,7 +212,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   async function readStatus(def: RoutineDefinition): Promise<{ reading: Reading | null; readError: string | null }> {
     if (!def.status) return { reading: null, readError: null }
     const unread = (readError: string): { reading: null; readError: string } => ({ reading: null, readError })
-    const r = await run(def.status, { cwd: def.cwd, timeoutMs: STATUS_MS })
+    const r = await runArgv(def.status, { cwd: def.cwd, timeoutMs: STATUS_MS })
     if (r.timedOut) return unread('the status command timed out after 60 seconds')
     if (r.error !== null) return unread(`the status command could not start: ${r.error}`)
     if (r.code !== 0) return unread(`the status command exited ${r.code ?? 'without a code'}`)
@@ -292,43 +231,158 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     save()
   }
 
-  /** Starts a command run, hidden: its output goes to its log; when it ends, the run is kept and a status command is read again. */
+  /** Starts a command run: its runner (routines/runner.ts), hidden and outside Desk's process tree, runs it, writes its log
+   *  and says how it ended; settleCommands reads that. */
   function startCommand(def: RoutineDefinition, mem: Memory, startedAt: number): void {
     mkdirSync(logsDir, { recursive: true })
+    mkdirSync(runsDir, { recursive: true })
     const log = join(logsDir, `${def.id}.log`)
     try {
       if (statSync(log).size > LOG_MAX_BYTES) renameSync(log, `${log}.1`)
     } catch {
       // No log yet.
     }
-    const out = createWriteStream(log, { flags: 'a' })
-    out.write(`\n--- ${new Date(startedAt).toISOString()} ---\n`)
-    let tail = ''
-    void run(def.run ?? [], {
-      cwd: def.cwd,
+    const paths = runPaths(runsDir, def.id)
+    const spec: RunSpec = {
+      id: def.id,
+      startedAt,
+      launchedAt: startedAt + (Date.now() - clock()),
+      argv: def.run ?? [],
+      // A runner WMI starts sits in system32: the folder is resolved here, against Desk's own, as the run had it before.
+      cwd: resolve(process.cwd(), def.cwd ?? '.'),
+      env: { ...process.env, PYTHONIOENCODING: 'utf-8' } as Record<string, string>,
       timeoutMs: (def.timeoutMinutes ?? TIMEOUT_DEFAULT) * 60_000 * timeoutScale,
-      onStart: (child) => {
-        mem.running = { startedAt, pid: child.pid ?? null, workerId: null, sessionId: null }
-        save()
-      },
-      onOutput: (text) => {
-        out.write(text)
-        tail = (tail + text).slice(-TAIL_CHARS)
-      },
-    }).then(async (r) => {
-      // The log is on disk before the run is recorded, so a run the page shows has its output.
-      await new Promise<void>((done) => out.end(() => done()))
-      finishRun(mem, { startedAt, endedAt: clock(), outcome: outcomeOf(r), exitCode: r.code, lastLine: lastLineOf(tail) || (r.error ?? ''), workerId: null, sessionId: null })
-      if (def.status) {
-        const fresh = await readStatus(def)
-        seen = seen.map((s) => (s.entry.id === def.id ? { ...s, ...fresh } : s))
+      log,
+    }
+    try {
+      for (const f of [paths.spec, paths.taken, paths.run, paths.result]) rmSync(f, { force: true })
+      writeJson(paths.spec, spec)
+      const plan = detachedCommand(process.platform, [process.execPath, RUNNER_ENTRY, '--spec', paths.spec])
+      // The powershell is a console program (hidden); it exits once WMI has started the runner.
+      const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
+      child.on('error', () => {}) // a failed start shows as no runner file in time
+      child.unref()
+    } catch (err) {
+      rmSync(paths.spec, { force: true })
+      finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: `its runner could not start: ${message(err)}`.slice(0, LINE_CHARS), workerId: null, sessionId: null })
+    }
+  }
+
+  /** The runs a look cannot watch from outside, read from their runners' files (routines/runner.ts): a command run whose
+   *  runner wrote how it ended is recorded; one whose runner is gone without a word, interrupted; one past its timeout that
+   *  its runner did not end is ended here; one whose runner never came for its spec, not started. A prompt run that never
+   *  got its chat (Desk stopped as it started one) is interrupted. One reading at a time, so no run is recorded twice; a
+   *  run is recorded, and on disk, before its files go. */
+  function settleCommands(): Promise<void> {
+    settling ??= (async () => {
+      for (const [id, mem] of Object.entries(memory)) {
+        const running = mem.running
+        if (!running || running.workerId) continue
+        const key = `${id}@${running.startedAt}`
+        const def = seen.find((s) => s.entry.id === id)?.entry.def
+        const t = clock()
+        if (def?.prompt !== undefined) {
+          if (!startingPrompts.has(key))
+            finishRun(mem, { startedAt: running.startedAt, endedAt: t, outcome: 'interrupted', exitCode: null, lastLine: 'AgentHydra restarted before its chat started', workerId: null, sessionId: null })
+          continue
+        }
+        const paths = runPaths(runsDir, id)
+        const record = (r: Pick<RoutineRun, 'endedAt' | 'outcome' | 'lastLine'> & { exitCode?: number | null }): void => {
+          finishRun(mem, { startedAt: running.startedAt, exitCode: null, workerId: null, sessionId: null, ...r })
+          if (def?.status) refreshStatus(def)
+          try {
+            writer.flushSync()
+          } catch {
+            return // Not on disk yet: a later save lands the record, and the routine's next start clears its files.
+          }
+          for (const f of [paths.spec, paths.taken, paths.run, paths.result]) {
+            try {
+              rmSync(f, { force: true })
+            } catch {
+              // Held for a moment (an indexer): the routine's next start clears it.
+            }
+          }
+        }
+        /** Records the run when its runner wrote how it ended. */
+        const ended = (): boolean => {
+          const result = readJson<RunResult>(paths.result)
+          if (result?.startedAt !== running.startedAt) return false
+          record({ endedAt: running.startedAt + result.durationMs, outcome: outcomeOf(result), exitCode: result.code, lastLine: result.lastLine })
+          return true
+        }
+        if (ended()) continue
+        const runner = readJson<RunFile>(paths.run)
+        if (runner?.startedAt === running.startedAt) {
+          if (running.pid !== runner.pid) {
+            running.pid = runner.pid
+            save()
+          }
+          if (pidAlive(runner.pid) && (await recordedPidOwner(runner.pid, runner.pidStartedAt)) !== 'foreign') {
+            const minutes = def?.timeoutMinutes ?? TIMEOUT_DEFAULT
+            if (t - running.startedAt < minutes * 60_000 * timeoutScale + RUNNER_GRACE_MS) continue
+            // Its runner ends the command at the timeout; one still going hangs. A pid not proven to be it is left alone,
+            // and the run stays running: closing it would let a second run start beside the first.
+            if (!(await killHostTree(runner.pid, runner.pidStartedAt))) continue
+            if (process.platform !== 'win32' && runner.commandPid !== null) {
+              try {
+                process.kill(-runner.commandPid, 'SIGKILL')
+              } catch {
+                // Its group has ended.
+              }
+            }
+            if (!ended()) record({ endedAt: t, outcome: 'timed-out', lastLine: `timed out after ${minutes} minutes; its runner did not end it, so Desk did` })
+            continue
+          }
+          // Gone. Its result may have landed after the read above.
+          if (!ended()) record({ endedAt: t, outcome: 'interrupted', lastLine: 'its runner ended without saying how the run ended' })
+          continue
+        }
+        // No runner file. A spec taken: the runner is saying it runs (a moment), or it died there.
+        const takenAge = ageMs(paths.taken)
+        if (takenAge !== null) {
+          if (takenAge < RUNNER_START_MS) continue
+          if (!ended()) record({ endedAt: t, outcome: 'interrupted', lastLine: 'its runner stopped as it started' })
+          continue
+        }
+        // A spec waiting: the runner has not come yet. Past the start window Desk takes it back, so a runner that comes late
+        // finds nothing to run.
+        const specAge = ageMs(paths.spec)
+        if (specAge !== null) {
+          if (specAge < RUNNER_START_MS) continue
+          try {
+            renameSync(paths.spec, `${paths.spec}.cancelled`)
+          } catch {
+            continue // The runner took it just now.
+          }
+          try {
+            rmSync(`${paths.spec}.cancelled`, { force: true })
+          } catch {
+            // Held for a moment: the routine's next start clears its files.
+          }
+          record({ endedAt: t, outcome: 'failed', lastLine: `its runner did not start within ${RUNNER_START_MS / 1000} seconds` })
+          continue
+        }
+        // Nothing at all, or the spec gone since the read above: a run from a Desk before runners, or one whose runner
+        // has just taken its spec.
+        if (existsSync(paths.taken) || existsSync(paths.run) || ended()) continue
+        record({ endedAt: t, outcome: 'interrupted', lastLine: 'AgentHydra restarted' })
       }
+    })().finally(() => (settling = null))
+    return settling
+  }
+
+  /** Reads a routine's status again after its run ended, in the background, so the page shows what the run left. */
+  function refreshStatus(def: RoutineDefinition): void {
+    void readStatus(def).then((fresh) => {
+      seen = seen.map((s) => (s.entry.id === def.id ? { ...s, ...fresh } : s))
     })
   }
 
   /** Starts a prompt run: a Desk chat, its prompt led by a short header that says whose routine it is and who asked for it. */
   async function startPrompt(def: RoutineDefinition, mem: Memory, startedAt: number): Promise<void> {
     const header = `This is the routine "${def.name}" run by AgentHydra's routine manager at ${localStamp(startedAt)}; asked for by ${def.askedBy}. Do exactly what it says; never create, change, pause or schedule any routine or scheduled task.`
+    const key = `${def.id}@${startedAt}`
+    startingPrompts.add(key)
     try {
       const w = await workers.start({
         prompt: `${header}\n\n${def.prompt ?? ''}`,
@@ -341,11 +395,15 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       save()
     } catch (err) {
       finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: message(err).slice(0, LINE_CHARS), workerId: null, sessionId: null })
+    } finally {
+      startingPrompts.delete(key)
     }
   }
 
-  /** Starts one run of a routine now. The run is marked running before anything waits, so no second run starts meanwhile. */
-  function startRun(def: RoutineDefinition, mem: Memory, slot: number | null, t: number): void {
+  /** Starts one run of a routine now. The run is marked running before anything waits, so no second run starts meanwhile.
+   *  It starts at the clock's now, not at its look's: the status commands a look reads first can take a minute. */
+  function startRun(def: RoutineDefinition, mem: Memory, slot: number | null): void {
+    const t = clock()
     mem.running = { startedAt: t, pid: null, workerId: null, sessionId: null }
     if (slot !== null) mem.lastSlot = slot
     save()
@@ -429,6 +487,8 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         const read = await readAll()
         seen = read.seen
         proposals = read.proposals
+        // After the read, so each run is settled against its routine's own file.
+        await settleCommands()
         lastError = null
         checkedAt = t
         for (const s of seen) {
@@ -436,7 +496,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
           recordTaskRun(s, mem)
           const j = judge(s, mem, t, enabled(), false)
           if (j.skipSlot !== null) mem.lastSlot = j.skipSlot
-          if (j.start && s.entry.def) startRun(s.entry.def, mem, j.slot, t)
+          if (j.start && s.entry.def) startRun(s.entry.def, mem, j.slot)
         }
         save()
       } catch (err) {
@@ -505,16 +565,23 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     return { enabled: enabled(), everyMs: ROUTINES_EVERY_MS, checkedAt, nextCheckAt, routines: seen.map((s) => routineView(s, t)), proposals, error: lastError }
   }
 
-  ctx.onStop(() => {
+  ctx.onStop(async () => {
     stopping = true
     clearTimeout(timer)
     timer = undefined
-    // A running run is not killed: a prompt run's chat runs on, and a command's own lock stops a second one.
+    // A running run is not killed: a prompt run's chat runs on, and a command run's runner is outside Desk's tree.
     writer.flushSync()
+    // A write already under way finishes, so it leaves no temp file behind.
+    await writer.quiet()
   })
 
   app.get('/api/routines', async (c) => {
     if (checkedAt === null || c.req.query('fresh') === '1') await look()
+    else
+      await settleCommands().catch((err) => {
+        lastError = `reading the runs failed: ${message(err)}`
+        console.error('[routines] reading the runs failed:', err)
+      })
     return c.json(status())
   })
 
@@ -561,7 +628,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       }
       const j = judge(s, mem, t, enabled(), true)
       if (!j.start || !def) return c.json({ error: `"${id}" is ${j.state}: ${j.reason}` }, 409)
-      startRun(def, mem, null, t)
+      startRun(def, mem, null)
       return c.json(status())
     }
 

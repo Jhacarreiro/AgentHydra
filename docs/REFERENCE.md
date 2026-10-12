@@ -165,9 +165,11 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   no names, no `@daily`, no seconds field); `status` (argv, which prints one JSON status object within 60 s and paces itself:
   `next_tick_at`, `last_tick_at`, `off`, `headline`, `totals`, `settings`); or `windowsTask` (the full path of a Task Scheduler
   task, e.g. `"\\Example nightly job"`; Windows runs it, the manager shows it and can run, pause and resume it; Windows only).
-- WHAT, for `schedule` and `status` routines, exactly one of: `run` (argv, run hidden with no shell: exit 0 is `ok`, 75 is
-  `busy`, any other exit is `failed`, past the timeout the tree is killed and recorded `timed-out`; the output goes to the log
-  and its last line is kept), or `prompt` (an AI run: a Desk chat is started the way a new chat starts, titled
+- WHAT, for `schedule` and `status` routines, exactly one of: `run` (argv, run hidden with no shell by a runner outside
+  Desk's process tree, so a Desk restart leaves the run going and the next Desk goes on watching it: exit 0 is `ok`, 75 is
+  `busy`, any other exit is `failed`, past the timeout the tree is killed and recorded `timed-out`, a runner that has not
+  started within 60 s is `failed` (Desk takes its spec back, so it never runs late), a run whose runner ended without a word
+  is `interrupted`; the output goes to the log and its last line is kept), or `prompt` (an AI run: a Desk chat is started the way a new chat starts, titled
   `Routine: <name>`, in group `routine-<id>-<YYYYMMDDHHmm>`, in `cwd`, which a prompt needs). A `windowsTask` routine has
   neither. The old field `tick` is refused: `run` replaces it.
 - `cwd` is required for `prompt`, optional otherwise. `timeoutMinutes` is 5 to 360, 120 by default. `until` (`YYYY-MM-DD`)
@@ -185,7 +187,10 @@ next run); its paused state is Windows' Disabled state. Run now starts an idle o
 (409).
 
 Data: the memory is `<desk home>/routines.json` (each routine's last 30 runs, its running run, its last slot and paused);
-the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB); proposals wait in
+the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB); a command run's files are in
+`<desk home>/routines/runs/`: `<id>.spec.json` (what to run, with Desk's environment; the runner deletes it once it runs),
+`<id>.run.json` (the runner's pid) and `<id>.result.json` (how it ended), which Desk deletes once it has recorded the run;
+proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
 Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the

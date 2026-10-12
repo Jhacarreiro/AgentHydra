@@ -13,7 +13,7 @@ import { checkDefinition, untilEndOf, type Entry } from '../../src/routines/mani
 import { emptyMemory, judge, MIN_GAP_MS, MISSED_MS, type Memory, type Reading, type Seen } from '../../src/routines/decide'
 import { parseTaskReadings, readTasks, type TaskReading } from '../../src/routines/wintask'
 import { loadSettings, settingsPath } from '../../src/settings'
-import plugin, { type RoutinesOptions, type RoutineTasks } from '../../src/plugins/73-routines'
+import plugin, { type RoutinesOptions, type RoutineTasks, type RoutineWorkers } from '../../src/plugins/73-routines'
 
 const MIN = 60_000
 const HOUR = 60 * MIN
@@ -271,7 +271,8 @@ afterEach(async () => {
   else process.env.HYDRA_DESK_HOME = prevHome
 })
 
-// The fake command: `tick` counts a line in its file and exits 0, `busy` exits 75.
+// The fake command: `tick` counts a line in its file and exits 0, `wait` exits 0 once <file>.go exists (or a minute passes),
+// `busy` exits 75.
 const COMMAND = `const fs = require('node:fs')
 const [mode, file] = process.argv.slice(2)
 if (mode === 'tick') {
@@ -279,8 +280,17 @@ if (mode === 'tick') {
   console.log('first line of the run')
   console.log('done: 3 items checked')
   process.exit(0)
-}
-process.exit(75)
+} else if (mode === 'wait') {
+  const until = Date.now() + 60_000
+  const poll = () => {
+    if (fs.existsSync(file + '.go') || Date.now() > until) {
+      console.log('done after the restart')
+      process.exit(0)
+    }
+    setTimeout(poll, 50)
+  }
+  poll()
+} else process.exit(75)
 `
 
 interface Desk {
@@ -295,11 +305,14 @@ interface Desk {
   /** The clock the plugin reads: set it to move time on. */
   clock: { now: number }
   tasks: { read: string[][]; run: string[]; setEnabled: [string, boolean][] }
+  /** Stops this Desk, as a restart does. */
+  stop(): Promise<void>
 }
 
-function desk(opts: Partial<RoutinesOptions> = {}): Desk {
-  const home = mkdtempSync(join(tmpdir(), 'desk-routines-'))
-  temps.push(home)
+/** A Desk over a temp home, or over `home` again: the Desk that starts after a restart. */
+function desk(opts: Partial<RoutinesOptions> = {}, again?: string): Desk {
+  const home = again ?? mkdtempSync(join(tmpdir(), 'desk-routines-'))
+  if (!again) temps.push(home)
   process.env.HYDRA_DESK_HOME = home
   const dir = join(home, 'routines')
   mkdirSync(dir, { recursive: true })
@@ -308,11 +321,15 @@ function desk(opts: Partial<RoutinesOptions> = {}): Desk {
   const count = join(home, 'ticks.txt')
   const settings: Record<string, unknown> = { routines: true }
   const app = new Hono()
+  const own: (() => void | Promise<void>)[] = []
   const ctx = {
     home,
     settings: () => settings as unknown as DeskSettings,
     updateSettings: (patch: Partial<DeskSettings>) => Object.assign(settings, patch),
-    onStop: (fn: () => void | Promise<void>) => stops.push(fn),
+    onStop: (fn: () => void | Promise<void>) => {
+      own.push(fn)
+      stops.push(fn)
+    },
     deps: {},
   } as unknown as ServerContext
   const clock = { now: at(2026, 10, 12, 9, 0) + 30_000 }
@@ -339,6 +356,12 @@ function desk(opts: Partial<RoutinesOptions> = {}): Desk {
     routine: (id, body) => writeFileSync(join(dir, `${id}.json`), JSON.stringify(body)),
     clock,
     tasks,
+    stop: async () => {
+      for (const fn of own.splice(0)) {
+        stops.splice(stops.indexOf(fn), 1)
+        await fn()
+      }
+    },
   }
 }
 
@@ -388,6 +411,45 @@ describe('the plugin', () => {
     expect(ticks(d.count)).toBe(2)
     // Two real process starts: on a busy PC each takes seconds, past the 5 s default (it timed out at 6.6 and 8.2 s).
   }, 30_000)
+
+  // Regression (2026-10-12): on Windows a process Desk starts dies with Desk, and the next Desk closed a command run it found
+  // marked running as interrupted; another chat's restart killed an Archangel tick 16 minutes in. A run now has its own
+  // runner outside Desk's process tree, and the Desk after a restart goes on watching it.
+  test('a command run outlives a Desk restart: the next Desk goes on watching it and records how it ended', async () => {
+    const a = desk()
+    a.routine('example-long', { name: 'Example long', askedBy, schedule: '0 9 * * *', run: a.argv('wait'), timeoutMinutes: 5 })
+    await get(a.app, true)
+    expect((await post(a.app, { run: 'example-long' })).status).toBe(200)
+    // Its runner is up: it named its pid.
+    const up = await settle(a.app, (s) => typeof s.routines[0].running?.pid === 'number')
+    expect(up.routines[0].state).toBe('running')
+    await a.stop()
+
+    const b = desk({}, a.home)
+    const after = await get(b.app, true)
+    expect(after.routines[0]).toMatchObject({ state: 'running', runs: [] })
+    writeFileSync(`${a.count}.go`, '')
+    const ended = await settle(b.app, (s) => s.routines[0].runs.length === 1)
+    expect(ended.routines[0].runs[0]).toMatchObject({ outcome: 'ok', exitCode: 0, lastLine: 'done after the restart' })
+    expect(ended.routines[0].running).toBeNull()
+  }, 60_000)
+
+  // A prompt run is marked running before its chat starts. When Desk stops in that moment, no chat id was kept: nothing
+  // would ever watch it, so the routine read "running" for good (a review of the runner change, 2026-10-12).
+  test('a prompt run whose chat had not started when Desk stopped is closed, and the routine runs again', async () => {
+    const stuck: RoutineWorkers = { start: () => new Promise(() => {}), read: async () => null, cancel: async () => {} }
+    const a = desk({ workers: stuck })
+    a.routine('example-prompt', { name: 'Example prompt', askedBy, schedule: '0 9 * * *', prompt: 'Example task', cwd: a.home, timeoutMinutes: 5 })
+    await get(a.app, true)
+    expect((await post(a.app, { run: 'example-prompt' })).status).toBe(200)
+    await a.stop()
+
+    const b = desk({ workers: stuck }, a.home)
+    const after = await get(b.app, true)
+    expect(after.routines[0].running).toBeNull()
+    expect(after.routines[0].runs[0]).toMatchObject({ outcome: 'interrupted', lastLine: 'AgentHydra restarted before its chat started' })
+    expect((await post(b.app, { run: 'example-prompt' })).status).toBe(200)
+  })
 
   // Regression (2026-10-12): the memory was a plain object, so a routine named "constructor" (a valid id) took Object's
   // own function as its memory and every read of the list failed.
