@@ -5,7 +5,8 @@
 import { computed, ref } from 'vue'
 import type { ImageRef } from '@shared/protocol'
 import FileCard from './FileCard.vue'
-import { imageSrc, openLightbox, tileKey } from '../lib/media'
+import AttachmentTile from '../../media/AttachmentTile.vue'
+import { formatSize, imageSrc, openLightbox, tileKey } from '../lib/media'
 import { attachmentTile } from '../../../lib/picture-tile'
 
 const props = defineProps<{ images: ImageRef[] }>()
@@ -33,12 +34,13 @@ function open(src: string, alt: string) {
 <template>
   <div class="flex w-full flex-wrap justify-end gap-1.5" data-testid="image-gallery">
     <template v-for="(img, i) in images" :key="i">
-      <button
+      <AttachmentTile
         v-if="imageSrc(img)"
-        type="button"
-        class="block cursor-zoom-in overflow-hidden rounded-(--radius-8) bg-(--bg-picture) shadow-(--shadow-picture-light)"
-        :data-reveal-path="img.path"
-        :style="{ width: `${tile(i).size}px`, height: `${tile(i).size}px` }"
+        as="button"
+        class="cursor-zoom-in"
+        :name="img.name || 'picture'"
+        :size="formatSize(img.bytes)"
+        :reveal-path="img.path"
         :aria-label="`Open ${img.name || 'picture'}`"
         @click="open(imageSrc(img)!, img.name ?? '')"
         @keydown="tileKey($event, () => open(imageSrc(img)!, img.name ?? ''))"
@@ -52,7 +54,7 @@ function open(src: string, alt: string) {
           :style="{ objectPosition: tile(i).objectPosition }"
           @load="onLoad(i, $event)"
         />
-      </button>
+      </AttachmentTile>
       <FileCard v-else :file="img" />
     </template>
   </div>

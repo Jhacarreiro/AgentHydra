@@ -1,10 +1,10 @@
 <script setup lang="ts">
-// A PDF as its first page in a square tile, the page filling it from the top, with a PDF badge and the name and
-// size on a bar at the foot. Until the page is rendered, or when it cannot be (encrypted, broken, too slow), the slot
-// shows: the file chip or card the PDF had before.
+// A PDF as its first page in an attachment tile, the page filling it from the top. Until the page is rendered, or when it
+// cannot be (encrypted, broken, too slow), the slot shows: the file tile the PDF had before.
 import { ref, watch } from 'vue'
 import { pdfFirstPageThumb } from '../../lib/pdf-thumb'
 import { renderPdfFirstPage } from '../../lib/pdf-render'
+import AttachmentTile from './AttachmentTile.vue'
 
 const props = defineProps<{
   source: string | Blob | null | undefined
@@ -32,19 +32,8 @@ watch(
 </script>
 
 <template>
-  <div
-    v-if="thumb"
-    class="relative shrink-0 overflow-hidden rounded-(--radius-8) bg-(--bg-picture) shadow-(--shadow-picture-light)"
-    :style="{ width: `${height}px`, height: `${height}px` }"
-    :data-reveal-path="revealPath"
-    data-testid="pdf-tile"
-  >
+  <AttachmentTile v-if="thumb" :name="name" :size="sizeLabel" :reveal-path="revealPath" data-testid="pdf-tile">
     <img :src="thumb" alt="" draggable="false" class="block size-full object-cover object-top" />
-    <span class="absolute left-1.5 top-1.5 rounded-sm bg-black/60 px-1 text-[10px] leading-4 font-semibold text-white">PDF</span>
-    <span class="absolute inset-x-0 bottom-0 flex min-w-0 flex-col bg-black/70 px-1.5 py-1 text-white">
-      <span class="truncate text-[11px] leading-4">{{ name }}</span>
-      <span class="text-[10px] leading-3.5 text-white/75 tabular-nums">{{ sizeLabel }}</span>
-    </span>
-  </div>
+  </AttachmentTile>
   <slot v-else />
 </template>

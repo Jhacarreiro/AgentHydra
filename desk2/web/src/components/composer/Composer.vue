@@ -84,6 +84,7 @@ import QuestionCard from '@/components/transcript/parts/QuestionCard.vue'
 import PlanCard from '@/components/transcript/parts/PlanCard.vue'
 import ElicitationCard from '@/components/transcript/parts/ElicitationCard.vue'
 import PdfTile from '@/components/media/PdfTile.vue'
+import AttachmentTile from '@/components/media/AttachmentTile.vue'
 import { ATTACHMENT_TILE, attachmentTile } from '@/lib/picture-tile'
 
 const Check = icons.check
@@ -875,8 +876,7 @@ function onPicLoad(id: string, e: Event) {
 }
 function picStyle(id: string) {
   const size = picSizes.value[id]
-  const tile = attachmentTile(size?.w ?? 0, size?.h ?? 0)
-  return { width: `${tile.size}px`, height: `${tile.size}px`, objectPosition: tile.objectPosition }
+  return { objectPosition: attachmentTile(size?.w ?? 0, size?.h ?? 0).objectPosition }
 }
 
 function removeFile(id: string) {
@@ -1284,20 +1284,13 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Image thumbnails -->
-        <!-- Attachments as the real box shows them (real-running-task-and-attachments.png): 120px squares, 6 apart,
-             12 in from the box edge, r8, a 1px #444 ring; the picture fills its square (lib/picture-tile.ts) -->
+        <!-- Attachments as the real box shows them: 120px tiles, 6 apart, 12 in from the box edge (components/media/AttachmentTile.vue) -->
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
-              <button type="button" class="block cursor-zoom-in" :aria-label="`Open ${img.name}`" @click="openAttachment(img)">
-                <img
-                  :src="img.url"
-                  :alt="img.name"
-                  :style="picStyle(img.id)"
-                  class="rounded-(--radius-8) bg-(--bg-picture) object-cover shadow-(--shadow-picture-light)"
-                  @load="onPicLoad(img.id, $event)"
-                />
-              </button>
+              <AttachmentTile as="button" class="cursor-zoom-in" :name="img.name" :aria-label="`Open ${img.name}`" @click="openAttachment(img)">
+                <img :src="img.url" :alt="img.name" class="block size-full object-cover" :style="picStyle(img.id)" @load="onPicLoad(img.id, $event)" />
+              </AttachmentTile>
             </Tip>
             <button
               type="button"
@@ -1313,10 +1306,7 @@ onBeforeUnmount(() => {
         <div v-if="files.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="f in files" :key="f.id" class="group relative">
             <PdfTile :source="f.blob" :cache-key="f.id" :height="ATTACHMENT_TILE" :name="f.name" :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'">
-              <div class="flex items-center gap-2 rounded-(--radius-8) bg-(--bg-picture) px-2.5 py-2 text-[13px] shadow-(--shadow-picture-light)">
-                <span class="max-w-52 truncate text-(--text)">{{ f.name }}</span>
-                <span class="shrink-0 text-(--text-muted)">{{ f.path ? formatBytes(f.bytes) : 'Attaching…' }}</span>
-              </div>
+              <AttachmentTile :name="f.name" :size="f.path ? formatBytes(f.bytes) : 'Attaching…'" />
             </PdfTile>
             <button
               type="button"
