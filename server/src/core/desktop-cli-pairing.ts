@@ -35,7 +35,7 @@
 import { existsSync, readdirSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import { getSetting, setSetting } from '../db'
-import { cliAccountUuid } from './account-tokens'
+import { cliAccountUuid } from './account-holders'
 import {
   type CliInstance,
   createCliInstance,

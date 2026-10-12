@@ -3,7 +3,7 @@
 // Desk estimates them from characters, at about 4 a token as server/src/analytics.ts does: a message's input is the
 // text it sent plus the thread it continues (the model reads the whole conversation again), its output the reply.
 // Only counts are kept, never text. The windows are cut the way the CLI and desktop tables cut theirs
-// (server/src/core/account-tokens.ts windowStartMs): at the account's own reset when its reading has one, else rolling.
+// (server/src/kit/query.ts resolveWindow): at the account's own reset when its reading has one, else rolling.
 import type { FreeTokenParts, FreeTokens, FreeUsage } from '@shared/free-instances'
 
 export const CHARS_PER_TOKEN = 4
@@ -28,7 +28,7 @@ export function addTokens(ledger: TokenLedger | undefined, entry: TokenEntry): T
 }
 
 /** Where a window starts: its reset minus its span while the reset is ahead; the reset itself for a span after a reset
- *  no reading has followed yet; else the last span (account-tokens.ts windowStartMs). */
+ *  no reading has followed yet; else the last span (kit/query.ts resolveWindow). */
 export function windowStart(resetsAt: string | null | undefined, spanMs: number, now: number): number {
   const end = Date.parse(resetsAt ?? '')
   if (!Number.isFinite(end)) return now - spanMs

@@ -20,7 +20,7 @@ export default {
   poolCounted: 'Accounts counted: {n}, weighted by plan size (a Max 5x counts as five Pros).',
   poolLeftOut: 'Left out: {signedOut} signed out, {unread} with no usage reading.',
   colConfigDir: 'Config dir',
-  // The Tokens column: what an account has run, from its own transcripts (account-tokens.ts).
+  // The Tokens column: what an account has run, from its own transcripts (kit/account-windows.ts).
   colTokens: 'Tokens (this PC)',
   tokensLabel: '{total} tokens',
   // A CliMayte worker from the other PC running on this account now: its tokens are not in the figure.

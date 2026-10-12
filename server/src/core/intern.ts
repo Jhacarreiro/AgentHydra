@@ -1,8 +1,8 @@
 // server/src/core/intern.ts - one copy of a string that several long-lived maps hold.
 //
-// ⛔ WHY (2026-10-12). Four sweeps keep every transcript path they walk, each its own copy: the
+// ⛔ WHY (2026-10-12). Several sweeps kept every transcript path they walk, each its own copy: the
 // transcript index's stat cache (transcript.ts), the kit sweep's folder tree and its cursors
-// (kit/ingest-claude.ts) and the account-token cache (core/account-tokens.ts). A replay of the
+// (kit/ingest-claude.ts) and the account-token cache (since deleted: nothing read it). A replay of the
 // daemon's boot held 300,127 path strings for 64,927 subagent transcripts (51.6 MB of the heap) and
 // 93,923 session ids for 20,855. Each of them now stores the string intern() hands back, so they
 // share one.

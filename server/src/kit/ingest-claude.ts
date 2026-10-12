@@ -6,15 +6,14 @@
 //    with no `seen` map, so each line yields that request's complete usage; the store's INSERT OR REPLACE
 //    on `claude:<message id>` is what dedupes the several lines Claude Code writes per reply (last write
 //    wins, exactly as the `seen` map's "output grew" rule ends up).
-//  * ACCOUNT is the one account-tokens.ts credits. A CLI instance: the holder of its config dir at the
-//    message's own time (account-holders.json, holderAt). A desktop chat: the account folder its chat
+//  * ACCOUNT: a CLI instance's is the holder of its config dir at the message's own time
+//    (core/account-holders.ts: account-holders.json, holderAt). A desktop chat: the account folder its chat
 //    record sits in, whatever the time. Anything else in the shared store (a plain `claude` run on the
 //    default login): the account signed in to the default dir now (no history is kept for it).
-//    account-tokens counts none of that last group, so the parity check reports it apart.
 //  * INSTANCE `cli:<id>`, `desktop:<profile dir name>` or `default`. SOURCE `climayte` when the session
 //    is an attempt of CliMayte's (corch/workers.json, corch/done/*.json), else `desktop` / `cli`.
 //    `agent` is `subagent` for `<session>/subagents/*.jsonl`, whose session is the parent's.
-//  * CURSOR rules (same as account-tokens): a file that only grew is read from the saved offset, a
+//  * CURSOR rules: a file that only grew is read from the saved offset, a
 //    shrunk one from 0, an unfinished last line waits (the offset stops at the last newline).
 //    A rewrite that keeps or grows the size is not noticed; transcripts are append-only.
 //  * THE 35-DAY WINDOW. A call older than the raw window goes straight to usage_hour and the session
@@ -22,8 +21,7 @@
 //    Re-reading a file from 0 (a shrink) skips those calls: their ids are in settled_claim.
 //  * A session moved between config dirs (a CliMayte handoff copies the transcript) has the same message
 //    ids in both. Files go OLDEST first and the first to claim an id keeps it (raw calls by their
-//    usage_event row, old calls by settled_claim), so the account that ran the call is the one credited;
-//    account-tokens, counting per file, credits the copy's account too.
+//    usage_event row, old calls by settled_claim), so the account that ran the call is the one credited.
 //  * GENTLE. The first sweep reads tens of GB. Files go oldest first, in READ_CHUNK pieces, each piece
 //    followed by a yield to the event loop; the read rate is capped (maxBytesPerSec) and the store is
 //    committed every FLUSH_BYTES, so a restart continues at the last commit.
@@ -37,9 +35,10 @@ import {
   noteHolder,
   readHolders,
   writeHolders,
-} from '../core/account-tokens'
+} from '../core/account-holders'
 import { collectChatsAsync, lineageIdsOf } from '../core/chat-store-scan'
 import { listCliInstances } from '../core/cli-instances'
+import { fsSlot } from '../core/fs-slots'
 import { intern } from '../core/intern'
 import { POINTER_DIR } from '../instance'
 import { pricesAsOf, priceTokens, promptSize } from '../pricing'
@@ -182,7 +181,7 @@ export async function discoverClaudeRoots(): Promise<ClaudeRoot[]> {
   if (holdersChanged) writeHolders(holders)
 
   // The shared store: desktop chats write here. A chat record names the profile and the account (the
-  // folder it is filed in); the newest non-archived record wins, as in account-tokens.
+  // folder it is filed in); the newest non-archived record wins.
   const chats = new Map<string, { rank: string; owner: ClaudeFileOwner }>()
   let seen = 0
   for (const c of await collectChatsAsync()) {
@@ -443,14 +442,14 @@ async function dirNode(
   old: Map<string, DirNode> | undefined,
   relist: boolean,
 ): Promise<DirNode | null> {
-  const st = await stat(dir).catch(() => null)
+  const st = await fsSlot(() => stat(dir)).catch(() => null)
   if (!st) return null
   const mtimeMs = Math.floor(st.mtimeMs)
   const node = old?.get(dir)
   if (node && !relist && node.mtimeMs === mtimeMs) return node
   let entries: import('node:fs').Dirent[]
   try {
-    entries = await readdir(dir, { withFileTypes: true })
+    entries = await fsSlot(() => readdir(dir, { withFileTypes: true }))
   } catch {
     return null
   }
@@ -801,7 +800,7 @@ async function statAll(todo: Candidate[]): Promise<Map<string, { size: number; m
     Array.from({ length: STAT_WORKERS }, async () => {
       for (; next < todo.length; ) {
         const c = todo[next++] as Candidate
-        const st = await stat(c.path).catch(() => null)
+        const st = await fsSlot(() => stat(c.path)).catch(() => null)
         if (st) stats.set(c.path, { size: st.size, mtimeMs: Math.floor(st.mtimeMs) })
       }
     }),

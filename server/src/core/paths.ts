@@ -85,15 +85,10 @@ export function knownAccountsFile(): string {
   return path.join(appDataDir(), 'known-accounts.json')
 }
 
-/** Which account each CLI instance held, and since when (core/account-tokens.ts). Account uuids
+/** Which account each CLI instance held, and since when (core/account-holders.ts). Account uuids
  *  only, never a token. */
 export function accountHoldersFile(): string {
   return path.join(appDataDir(), 'account-holders.json')
-}
-
-/** What core/account-tokens.ts has read of each transcript, so a restart does not read them again. */
-export function accountTokensCacheFile(): string {
-  return path.join(appDataDir(), 'account-tokens-cache.json')
 }
 
 /** Per-instance UI metadata (display label + icon + color), keyed by normalized dir. Pure

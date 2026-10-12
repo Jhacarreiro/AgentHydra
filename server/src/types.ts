@@ -1419,7 +1419,7 @@ export interface UsageCheckResult {
 
 // --- CLI instances (Feature A) ----------------------------------------------
 
-/** Tokens in one span, the four kinds kept apart (core/account-tokens.ts). */
+/** Tokens in one span, the four kinds kept apart (kit/account-windows.ts). */
 export interface TokenParts {
   input: number
   output: number
@@ -1492,7 +1492,7 @@ export interface CliInstance {
   /** When this login was last used on this PC (ms): its newest prompt or keepalive nudge. Set by GET
    *  /api/cli-instances only; null when neither is known. */
   lastActiveAt?: number | null
-  /** What the account signed in here now has run on this PC (core/account-tokens.ts). Set by GET
+  /** What the account signed in here now has run on this PC (kit/account-windows.ts). Set by GET
    *  /api/cli-instances only; null when signed out, and until the first sweep after a daemon start. */
   tokens?: AccountTokens | null
   /** Workers CliMayte runs on this account from the other PC right now (climayte-remote.ts). Their tokens

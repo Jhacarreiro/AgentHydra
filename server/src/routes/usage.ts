@@ -3,7 +3,7 @@ import { join } from 'node:path'
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
 import { remoteActiveCounts } from '../climayte-remote'
-import { cliAccountUuid } from '../core/account-tokens'
+import { cliAccountUuid } from '../core/account-holders'
 import {
   associateCliInstance,
   createCliInstance,
