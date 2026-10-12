@@ -20,25 +20,25 @@ describe('SERVER_INSTRUCTIONS', () => {
     expect(res.result?.instructions).toBe(SERVER_INSTRUCTIONS)
   })
 
-  test('tells an agent to check its own quota WITHOUT being asked', () => {
+  test('tells an agent to check its own quota without being asked', () => {
     expect(SERVER_INSTRUCTIONS).toContain('check_my_usage {}')
-    expect(SERVER_INSTRUCTIONS.toLowerCase()).toContain('unprompted')
+    expect(SERVER_INSTRUCTIONS.toLowerCase()).toContain('without being asked')
   })
 
   const RULES: [string, string[]][] = [
     [
       'names the expensive failure: write state to a file before being cut off',
-      ['shouldOffload', 'WRITE YOUR CONTEXT, FINDINGS AND NEXT STEPS TO A FILE'],
+      ['shouldOffload', 'write your context, findings and next steps to a file'],
     ],
     [
       'gates a fan-out on projected cost, since a launched fan-out cannot be recalled',
-      ['CURRENT + PROJECTED', 'cannot be recalled'],
+      ['current and projected cost', 'cannot be recalled'],
     ],
     ['warns that Pro binds on the 5-hour window, not the weekly one', ['Pro', '5-hour']],
-    ['refuses to let an unread check pass as headroom', ["'unknown'", 'plenty left']],
+    ['refuses to let an unread check pass as headroom', ["'unknown'", 'is not headroom']],
     [
       'bans unattributed percentages and makes the human the final authority on identity',
-      ['NEVER QUOTE AN UNATTRIBUTED PERCENTAGE', 'OVERRULES'],
+      ['Always name the account', 'overrules'],
     ],
   ]
   test.each(RULES)('%s', (_rule, phrases) => {

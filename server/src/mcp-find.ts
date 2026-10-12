@@ -206,11 +206,10 @@ export function findTools(
       callerChat: 'deskChat',
       listed: true,
       description:
-        "FIND ANY AGENTHYDRA TOOL: say what you want in plain words ('move this chat to another workspace', 'rename this " +
-        "chat', 'which account has quota left', 'read an old session', 'restart the daemon') and get the matching tools, " +
-        'best first, each with a one-line summary, whether it MUTATES, its required parameters, and `call`: how it is ' +
-        'called (a listed tool by its own name, an unlisted one through hydra_run). Search here before deciding a thing ' +
-        'cannot be done or reaching for a workaround.',
+        "Searches every AgentHydra tool by what you want done, in plain words, such as 'rename this chat', 'which account " +
+        "has quota left' or 'restart the daemon'. Returns the best matches, each with a one-line summary, its required " +
+        'parameters, whether it is in your tool list, and `call`, the exact call to make. Search here before concluding ' +
+        'that something cannot be done.',
       inputSchema: S(
         {
           query: { type: 'string', description: 'What you want done, in plain words.' },
@@ -253,7 +252,7 @@ export function findTools(
           query,
           tools: found.map((f) => ({ ...f, call: callOf(f.name, f.listed) })),
           note: found.length
-            ? "Each tool's `call` is how it is called. hydra_find { tool } gives its full schema."
+            ? 'A tool with listed: true is already in your tool list: call it by its name. Any other tool runs through hydra_run { tool, args }. hydra_find { tool } gives its full schema.'
             : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, session, server).',
         }
       },
@@ -262,9 +261,9 @@ export function findTools(
       name: 'hydra_run',
       listed: true,
       description:
-        "MUTATES (when the tool it runs does): runs one of AgentHydra's unlisted tools by name: hydra_run { tool, args }. " +
-        'Only the most used tools are in your tool list; the rest (orchestrator, free_chat, instances, incidents, ' +
-        'daemon_restart...) are reached here. hydra_find finds a tool and its arguments. The answer is what the tool answers.',
+        'Runs an AgentHydra tool that is not in your tool list, by name: hydra_run { tool, args }. It changes state only ' +
+        'when the tool it runs does. Your list holds the most used tools; the rest (orchestrator, free_chat, instances, ' +
+        'incidents, daemon_restart and so on) are reached here. Find a tool and its arguments with hydra_find. The result is what the tool returns.',
       inputSchema: S(
         {
           tool: { type: 'string', description: 'The tool name, as hydra_find gives it.' },
