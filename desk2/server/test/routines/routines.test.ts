@@ -11,7 +11,7 @@ import type { ServerContext } from '../../src/context'
 import { nextSlot, parseCron, previousSlot } from '../../src/routines/cron'
 import { checkDefinition, untilEndOf, type Entry } from '../../src/routines/manifest'
 import { emptyMemory, judge, MIN_GAP_MS, MISSED_MS, type Memory, type Reading, type Seen } from '../../src/routines/decide'
-import { parseTaskReadings, type TaskReading } from '../../src/routines/wintask'
+import { parseTaskReadings, readTasks, type TaskReading } from '../../src/routines/wintask'
 import { loadSettings, settingsPath } from '../../src/settings'
 import plugin, { type RoutinesOptions, type RoutineTasks } from '../../src/plugins/73-routines'
 
@@ -228,6 +228,15 @@ describe('Windows tasks (routines/wintask.ts)', () => {
   test('a reply that is not JSON is an error, not an empty list', () => {
     expect(() => parseTaskReadings('Access denied', ['\\Example'])).toThrow()
   })
+
+  // The real read on Windows PowerShell 5.1, which writes a parsed JSON list as one object: @(ConvertFrom-Json ...) once
+  // made every path one item, the script exited 1, and every windowsTask routine read as broken while the canned tests
+  // above passed. Tasks that do not exist: no real task is touched.
+  test.skipIf(process.platform !== 'win32')('the read script answers one reading per path; a missing task is not found', async () => {
+    const paths = ['\\Example missing task one', '\\Example missing task two']
+    const rows = await readTasks(paths)
+    expect(rows.map((r) => [r.path, r.found])).toEqual([[paths[0], false], [paths[1], false]])
+  }, 60_000)
 })
 
 // ---------- the plugin ----------
@@ -357,7 +366,8 @@ describe('the plugin', () => {
     expect(res.status).toBe(200)
     await settle(d.app, (s) => s.routines[0].runs.length === 2)
     expect(ticks(d.count)).toBe(2)
-  })
+    // Two real process starts: on a busy PC each takes seconds, past the 5 s default (it timed out at 6.6 and 8.2 s).
+  }, 30_000)
 
   test('a paused routine is refused a run now (409) and never starts on its own', async () => {
     const d = desk()

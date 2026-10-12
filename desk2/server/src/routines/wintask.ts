@@ -25,8 +25,12 @@ export const TASK_NEVER_RAN = 267011
 /** Reads every task named in ROUTINES_TASK_PATHS (a JSON list of full paths) in one go, printing one JSON list. */
 export const TASK_READ_SCRIPT = `
 $ErrorActionPreference = 'Stop'
-$paths = @(ConvertFrom-Json $env:ROUTINES_TASK_PATHS)
-$out = foreach ($p in $paths) {
+# "Preparing modules for first use" goes to stderr as CLIXML and buried the real error.
+$ProgressPreference = 'SilentlyContinue'
+# Windows PowerShell 5.1 writes a parsed JSON list as ONE object, so @(ConvertFrom-Json ...) made a list holding the
+# list and $p was every path at once. Assigned first, it is the list itself.
+$paths = ConvertFrom-Json $env:ROUTINES_TASK_PATHS
+$out = foreach ($p in @($paths)) {
   $i = $p.LastIndexOf('\\')
   $folder = $p.Substring(0, $i + 1)
   $name = $p.Substring($i + 1)
