@@ -183,6 +183,15 @@ describe('useDesk store', () => {
     expect(desk.itemsByChat.value.get('chat-1')).toEqual([expect.objectContaining({ id: 'item-1', text: 'Hello' })])
   })
 
+  it('puts a user message the worker read late where its time says, not at the end', async () => {
+    const desk = useDesk()
+    await desk.init()
+    const at = (id: string, ts: number, kind: 'user' | 'assistant_text') => ({ id, ts, kind, text: id }) as TranscriptItem
+    desk.itemsByChat.value.set('chat-1', [at('a', 10, 'user'), at('b', 20, 'assistant_text'), at('c', 30, 'user')])
+    MockWebSocket.last!.simulateMessage({ type: 'item.upsert', chatId: 'chat-1', item: at('late', 15, 'user') })
+    expect(desk.itemsByChat.value.get('chat-1')!.map((i) => i.id)).toEqual(['a', 'late', 'b', 'c'])
+  })
+
   it('appends text on delta event', async () => {
     const desk = useDesk()
     await desk.init()

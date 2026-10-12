@@ -342,8 +342,14 @@ function personTurn(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): U
 function continuedChatTurns(raw: UserItem, c: NonNullable<ReturnType<typeof continuationOf>> & { said: string }, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
   const lead = personTurn({ ...raw, text: c.said }, media)
   const line: SystemItem = { kind: 'system', id: `${raw.id}:continued`, ts: raw.ts, parentToolUseId: raw.parentToolUseId, level: 'info', text: c.line }
-  const { images: _i, ...bare } = raw
-  const listed = c.messages ? [personTurn({ ...bare, id: `${raw.id}:listed`, text: c.messages }, media)] : []
+  const { images: _i, queued: _q, ...bare } = raw
+  const listed = c.messages
+    ? (carriedEntries(c.messages) ?? [c.messages]).map((e, i): UserItem | NoteItem => {
+        const id = `${raw.id}:carried:${i}`
+        if (typeof e !== 'string') return { ...bare, id, kind: 'note', from: e.from, text: e.text }
+        return personTurn({ ...bare, id, text: e }, media)
+      })
+    : []
   return [lead, line, ...listed]
 }
 

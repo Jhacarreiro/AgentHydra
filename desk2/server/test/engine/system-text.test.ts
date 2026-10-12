@@ -451,8 +451,23 @@ describe("a handoff's continuation prompt", () => {
     expect(userTurns(user(chat(['why did it stop?'])), null)).toEqual([
       { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
       { kind: 'system', id: 'u9:continued', ts: 7, parentToolUseId: null, level: 'info', text: 'Continued in a fresh session: the conversation had grown long.' },
-      { kind: 'user', id: 'u9:listed', ts: 7, text: 'why did it stop?', parentToolUseId: null },
+      { kind: 'user', id: 'u9:carried:0', ts: 7, text: 'why did it stop?', parentToolUseId: null },
     ])
+  })
+
+  test("a chat's carried list splits like a handoff's: each ping a note, the owner's message a bubble, ids by position, never :listed", () => {
+    const chat = continued({ messages: [PING, 'why did it stop?'] }).replace(
+      'Do not redo steps it reports finished.',
+      "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+    )
+    const out = userTurns(user(chat), null)
+    expect(out.map((i) => [i.kind, i.id])).toEqual([
+      ['user', 'u9'],
+      ['system', 'u9:continued'],
+      ['note', 'u9:carried:0'],
+      ['user', 'u9:carried:1'],
+    ])
+    expect(out[3]).toMatchObject({ text: 'why did it stop?' })
   })
 
   test("a non-chat continuation hides the repeated task as before", () => {

@@ -422,6 +422,12 @@ function onItemUpsert(event: EventOf<'item.upsert'>) {
     if (pending >= 0) {
       replaceItem(items, pending, event.item)
       indexes.delete(event.chatId)
+    } else if (event.item.kind === 'user' && items.length && event.item.ts < items[items.length - 1]!.ts) {
+      // A message the worker read late keeps its own time: it goes where a reload (the server sorts by ts) would put it.
+      let at = items.length
+      while (at > 0 && items[at - 1]!.ts > event.item.ts) at--
+      items.splice(at, 0, event.item)
+      indexes.delete(event.chatId)
     } else appendItem(event.chatId, items, event.item)
   }
   // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.

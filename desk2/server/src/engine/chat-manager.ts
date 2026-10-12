@@ -423,7 +423,18 @@ export class ChatManager {
 
   /** A CliMayte chat's whole transcript from its Desk file (chats/<id>.jsonl), oldest first, without touching any account folder. */
   private deskItems(e: Entry): TranscriptItem[] {
-    const items = this.store.loadItems(e.chat.id).sort((a, b) => a.ts - b.ts)
+    let items = this.store.loadItems(e.chat.id)
+    if (!e.emitted) {
+      // A one-bubble `:listed` item an earlier reader saved for a handoff's carried list: the list is split by id now.
+      const stale = items.filter((i) => i.id.endsWith(':listed'))
+      if (stale.length) {
+        const gone = new Set(stale.map((i) => i.id))
+        this.store.keepItems(e.chat.id, new Set(items.filter((i) => !gone.has(i.id)).map((i) => i.id)))
+        for (const id of gone) this.emitEvent({ type: 'item.removed', chatId: e.chat.id, itemId: id })
+        items = items.filter((i) => !gone.has(i.id))
+      }
+    }
+    items.sort((a, b) => a.ts - b.ts)
     if (!e.emitted) {
       e.emitted = new Map()
       e.workerSeen = undefined
