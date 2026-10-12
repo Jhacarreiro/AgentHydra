@@ -40,7 +40,7 @@ import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
-import { CAPTION_W, appFocused, collapseWindow, collapsed, expandWindow, ownFrame, startOwnFrame } from '@/lib/host-window'
+import { CAPTION_W, appFocused, collapseWindow, collapsed, expandWindow, inHost, ownFrame, startOwnFrame } from '@/lib/host-window'
 import { chatAction, focusAction, modeAction } from '@/components/sidebar/collapse'
 import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
@@ -946,7 +946,7 @@ function moveSidebar(side: SidebarSide) {
           :width="sidebarWidth"
           :side="sidebarSide"
           :accounts-open="props.accountsOpen"
-          :collapsible="collapseMode === 'button'"
+          :collapsible="collapseMode !== 'off' && inHost()"
           :fill="collapsed"
           @collapse="collapseNow"
           @expand="expandWindow"
