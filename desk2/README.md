@@ -260,6 +260,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   view, as Find brings a match (TranscriptView's `revealStep`, which ExternalSessionView calls through a ref; the
   rows carry `data-step`). It shows only while the words are the step's own, and on an outside session only when
   the transcript shows that step (Display can hide tools or thinking).
+- **A long outside session reads back whole** (owner, 2026-10-11, on a 56 MB Claude Desktop chat that showed none of
+  his messages: "it won't let me scroll up to, like, the top. It just stops"). An outside session's own file is read
+  from its last 8 MiB, begun at a clean cut so those items carry the ids a whole-file read gives them; the window shows
+  that part at once, then reads everything before it once, right behind (`GET /api/external/sessions/:id/older`, from
+  where the items' `x-older-before` header says they begin), and shows the two joined (`external/ExternalSessionView.vue`).
+  Polls read only the newest part, so they stay as small as before. Scrolled up when the older part lands, the row at
+  the top of the view stays where it is (TranscriptView, found again by an item it holds). Continuing an outside
+  session here copies its whole history into the chat it becomes (`server/src/bridge/session-jsonl.ts`
+  `sessionJsonlOlder`, the bridge's `externalHistory`).
 - **Arrows through the messages you sent** (owner, 2026-10-09). At a chat's top right, an up arrow glides to the
   previous message the person sent, one per click, and a down arrow to the next; past the last one it goes back to
   the latest. They are the transcript's only scroll buttons: the bottom-right jump button is gone (owner,
