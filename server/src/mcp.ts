@@ -2344,10 +2344,9 @@ add_queue_item and launch_terminal_session are REFUSED.
 ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS:
 fan_out_delete {group}. move_chat moves a chat to another ACCOUNT.
 
-ONLY THE MOST USED TOOLS ARE LISTED, and a listed tool (climayte_run, climayte_status...) is
-called by its own name. hydra_find {query} searches every AgentHydra tool in plain words;
-hydra_run {tool, args} runs one that is NOT in your tool list (orchestrator, free_chat,
-instances, incidents, daemon_restart). Search there before you decide a thing cannot be done. A Hydra Desk chat moves
+ONLY THE MOST USED TOOLS ARE LISTED. hydra_find {query} searches every AgentHydra tool in plain
+words; hydra_run {tool, args} runs the unlisted ones (orchestrator, free_chat, instances, incidents,
+daemon_restart). Search there before you decide a thing cannot be done. A Hydra Desk chat moves
 to another folder (its workspace) or renames itself with desk_chat {cwd, title}.
 
 DEV SERVERS: never start one from the shell; dev_servers {action:"start", cwd} reuses the

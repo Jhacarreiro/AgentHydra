@@ -83,7 +83,7 @@ describe('hydra_run', () => {
       .catch((e: Error) => e.message)) as string
     expect(found).toContain('pass cwd')
   })
-  test('a listed tool still runs through it, and its answer says to call it by its own name', async () => {
+  test('answers exactly what the tool answers, listed or not', async () => {
     const fake = [
       { name: 'fake_listed', description: '', inputSchema: {}, run: async () => ({ ok: 1 }) },
       { name: 'fake_unlisted', description: '', inputSchema: {}, run: async () => ({ ok: 2 }) },
@@ -92,9 +92,7 @@ describe('hydra_run', () => {
       () => fake as never,
       () => new Set(['fake_listed']),
     ).find((t) => t.name === 'hydra_run')!.run
-    const listed = (await run({ tool: 'fake_listed' })) as Record<string, unknown>
-    expect(listed.ok).toBe(1)
-    expect(String(listed.hydraRun)).toContain('call it by its own name')
+    expect(await run({ tool: 'fake_listed' })).toEqual({ ok: 1 })
     expect(await run({ tool: 'fake_unlisted' })).toEqual({ ok: 2 })
   })
   test('an unknown tool points at hydra_find', async () => {
