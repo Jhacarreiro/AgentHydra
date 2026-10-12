@@ -19,6 +19,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A Desk chat can move itself to another project, rename itself and read its own history through tools.**
   `desk_chat` changes the chat's folder and its name, `desk_transcript` reads its whole record, and `daemon_restart`
   restarts the service, each in place of a raw web call an agent had to be told about.
+- **A long Desk chat starts a fresh session by itself past 200,000 tokens.** Your next message to it begins a new
+  session from a summary of the chat's whole record, on the same account, so each later reply stops re-reading the
+  full history. Nothing is lost: the chat keeps every message, and the new session can read any of it.
 
 - **CliMayte keeps working when the PC is busy.** On a loaded PC its tasks could fail "stopped three times in a
   row" and its checks "never started" without a CLI ever running, and starting or watching a run could hang for

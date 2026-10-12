@@ -69,7 +69,7 @@ const LIMIT = "You've hit your session limit · resets 9:10pm"
 const limitHit = (): SDKMessage[] => [said(LIMIT, 'rate_limit'), failed(LIMIT)]
 
 /** A session on #126 (signed in as far as AgentHydra's list says), with #61 healthy and #70 signed out. */
-async function setup(o: { sessionLine?: string; handoffTokens?: number } = {}) {
+async function setup(o: { sessionLine?: string; handoffTokens?: number; freshTokens?: number } = {}) {
   const home = temp('desk-fo-home-')
   const cwd = temp('desk-fo-cwd-')
   process.env.HYDRA_DESK_HOME = home
@@ -87,7 +87,7 @@ async function setup(o: { sessionLine?: string; handoffTokens?: number } = {}) {
     return [a, c, b]
   }
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [join(a.configDir!, 'projects'), join(b.configDir!, 'projects')] }).bridge, listAccounts }
-  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', handoffTokens: o.handoffTokens, deskUrl: () => 'http://127.0.0.1:7798' })
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', handoffTokens: o.handoffTokens, freshTokens: o.freshTokens ?? Number.POSITIVE_INFINITY, deskUrl: () => 'http://127.0.0.1:7798' })
   managers.push(m)
   const chat = await m.importSession({ sessionId: SID, cwd, title: 'Outside', configDir: a.configDir })
   return { m, q, a, b, chat, hold }
@@ -257,6 +257,32 @@ test('a session under the size cap is still copied and resumed', async () => {
   expect(q.last().options.resume).toBe(SID)
   await waitFor(() => userTexts(q.last()).length === 1)
   expect(userTexts(q.last())[0]).toContain('carry on')
+})
+
+test('a message to an idle chat whose session grew past the fresh line starts a fresh session from the handoff, on the same account', async () => {
+  const usage = { input_tokens: 5, cache_creation_input_tokens: 1000, cache_read_input_tokens: 200_000, output_tokens: 300 }
+  const { m, q, a, chat } = await setup({ freshTokens: 200_000, sessionLine: `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage } })}\n` })
+  await m.send(chat.id, 'now add the win bar')
+  await waitFor(() => q.all.length === 1)
+  expect(q.last().options.resume).toBeUndefined()
+  expect(q.last().options.env).toMatchObject({ CLAUDE_CONFIG_DIR: a.configDir })
+  await waitFor(() => userTexts(q.last()).length === 1)
+  const first = q.last().sent[0]!.message.content
+  const text = typeof first === 'string' ? first : JSON.stringify(first)
+  for (const want of ['grown to about 201k tokens', 'same account', 'desk_transcript', `session_id ${SID}`, "The owner's message to answer now", 'now add the win bar']) expect(text).toContain(want)
+  expect(text).not.toContain('moved to another account')
+  expect(m.get(chat.id).account.id).toBe(a.id)
+  expect(m.get(chat.id).sessionId).toBeNull()
+  expect(m.sessionIds()).toContain(SID)
+  expect(systemTexts(m.listItems(chat.id)).some((s) => s.startsWith('The session had grown to about 201k tokens, so this message starts a fresh session'))).toBe(true)
+})
+
+test('a session under the fresh line is resumed as it is', async () => {
+  const usage = { input_tokens: 5, cache_read_input_tokens: 150_000, output_tokens: 300 }
+  const { m, q, chat } = await setup({ freshTokens: 200_000, sessionLine: `${JSON.stringify({ type: 'assistant', message: { role: 'assistant', usage } })}\n` })
+  await m.send(chat.id, 'carry on')
+  await waitFor(() => q.all.length === 1)
+  expect(q.last().options.resume).toBe(SID)
 })
 
 test("pickHealthy skips signed-out, tried, unread and at-the-line accounts (85%, or the owner's cap) and prefers the owner's priority, then the least used", () => {

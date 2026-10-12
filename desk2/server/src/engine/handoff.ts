@@ -11,6 +11,11 @@ import { readTail } from '../bridge/session-jsonl'
 
 /** Above this many tokens of context a move starts a fresh session from a handoff (HYDRA_DESK_HANDOFF_TOKENS overrides). */
 export const HANDOFF_TOKENS = 150_000
+/** Above this many tokens the next message starts a fresh session from a handoff on the same account, as a CliMayte
+ *  worker does (owner, 2026-10-11): every call past it re-reads the whole history. HYDRA_DESK_FRESH_TOKENS overrides. */
+export const FRESH_TOKENS = 200_000
+/** HandoffInput.why for a session left because it grew past FRESH_TOKENS, not because of a move. */
+export const GROWN = 'grown'
 /** The handoff's hard cap, in characters (about 4k tokens). */
 export const MAX_HANDOFF_CHARS = 16_000
 
@@ -116,6 +121,9 @@ function finishedTurns(items: TranscriptItem[], inTail: Set<string>, max: number
 
 function introSection(h: HandoffInput): string {
   const rest = 'Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.'
+  if (h.why === GROWN) {
+    return `This chat's session had grown to about ${Math.round((h.tokens ?? 0) / 1000)}k tokens, so Hydra Desk continues it in a fresh session on the same account: instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. Answer the owner's message at the end; the sections before it are what you knew. ${rest.replace('Continue exactly where it left off; ', '')}`
+  }
   if (h.tokens === null) {
     return `The session this chat was in could not be reopened on this machine, so this is a fresh session: instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. ${rest}`
   }

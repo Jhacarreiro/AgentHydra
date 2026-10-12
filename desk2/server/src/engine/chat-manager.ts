@@ -63,7 +63,7 @@ import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
-import { buildHandoff, CONTINUE_TEXT, HANDOFF_TOKENS, sessionTokens } from './handoff'
+import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
@@ -75,6 +75,9 @@ export interface ChatManagerOptions {
   /** A move to another account starts a fresh session from a condensed handoff above this many tokens of
    *  session (SPEC "Account failover"). Default HYDRA_DESK_HANDOFF_TOKENS, else HANDOFF_TOKENS. */
   handoffTokens?: number
+  /** A message to an idle chat whose session has grown past this many tokens starts a fresh session from a condensed
+   *  handoff on the same account. Default HYDRA_DESK_FRESH_TOKENS, else FRESH_TOKENS. */
+  freshTokens?: number
   /** Hydra Desk's own address, which a handoff names for the full transcript and each chat's move line. */
   deskUrl?: () => string
   emit(event: ServerEvent): void
@@ -292,6 +295,7 @@ export class ChatManager {
   private readonly onChatEnd: ((sessions: string[]) => void) | undefined
   private readonly claudeHome: string | undefined
   private readonly handoffTokens: number
+  private readonly freshTokens: number
   private readonly deskUrl: () => string
   private readonly queryImpl: QueryImpl
   private readonly env?: Record<string, string | undefined>
@@ -326,6 +330,7 @@ export class ChatManager {
     this.onChatEnd = o.onChatEnd
     this.claudeHome = o.claudeHome
     this.handoffTokens = o.handoffTokens ?? (Number(process.env.HYDRA_DESK_HANDOFF_TOKENS) || HANDOFF_TOKENS)
+    this.freshTokens = o.freshTokens ?? (Number(process.env.HYDRA_DESK_FRESH_TOKENS) || FRESH_TOKENS)
     this.deskUrl = o.deskUrl ?? (() => `http://127.0.0.1:${Number(process.env.HYDRA_DESK_PORT) || 7798}`)
     // A host outlives the server; with no server it ends after the idle-close minutes once its chat is not working.
     this.queryImpl = o.queryImpl ?? chatQueryImpl({ home: o.home, orphanMinutes: () => o.settings().idleCloseMinutes })
@@ -703,6 +708,14 @@ export class ChatManager {
     }
     // What the SDK is sent, when it is more than the owner's own words (a takeover's handoff around them).
     let sdk: QueuedInput | null = null
+    // A session grown past freshTokens is not re-read by every later call: an idle chat's message starts a fresh
+    // session from the condensed handoff of its full record, on the same account (owner, 2026-10-11).
+    // Awaited only when it applies: a new chat's first send starts its process at once.
+    const grown = busy(e.chat) ? null : this.bigSession(e, this.freshTokens)
+    if (grown) {
+      sdk = await this.freshFrom(e, grown, { text, images })
+      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+    }
     if (!e.runtime?.running) {
       // A cold start is a new process: the tasks the last one started ended with it.
       if (this.endTasks(e)) this.changed(e.chat)
@@ -710,7 +723,7 @@ export class ChatManager {
       const cannot = seeding ? await seeding : null
       if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
       // A session that cannot be reopened here is taken over by a fresh one, not refused (takeOver).
-      if (cannot) sdk = this.takeOver(e, cannot, { text, images })
+      if (cannot && !sdk) sdk = this.takeOver(e, cannot, { text, images })
     }
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
     e.moved = undefined // a new message starts its own tries
@@ -727,6 +740,8 @@ export class ChatManager {
   async warm(id: string): Promise<{ started: boolean }> {
     const e = this.entry(id)
     if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived || e.moving) return { started: false }
+    // Its next message starts a fresh session (freshIfGrown): resuming the old one now would be thrown away.
+    if (this.bigSession(e, this.freshTokens)) return { started: false }
     if (await this.seedResume(e)) return { started: false }
     if (this.chats.get(id) !== e || e.runtime?.running || e.moving) return { started: false }
     if (this.endTasks(e)) this.changed(e.chat)
@@ -1818,14 +1833,28 @@ export class ChatManager {
     rt.replay(out)
   }
 
-  /** The session the chat leaves and its size, when it is too big to copy and resume on another account; else null. */
-  private bigSession(e: Entry): { sessionId: string; tokens: number } | null {
+  /** The session the chat leaves and its size, when it is past `limit` (by default too big to copy and resume on
+   *  another account); else null. */
+  private bigSession(e: Entry, limit = this.handoffTokens): { sessionId: string; tokens: number } | null {
     const sessionId = e.chat.sessionId
     if (!sessionId) return null
     const ranIn = ranInOf(e)
     const file = findSessionJsonl(sessionId, [...(ranIn === undefined ? [] : [this.root(ranIn)]), ...this.bridge.sessionRoots()], e.chat.cwd)
     const tokens = file ? sessionTokens(file) : null
-    return tokens !== null && tokens > this.handoffTokens ? { sessionId, tokens } : null
+    return tokens !== null && tokens > limit ? { sessionId, tokens } : null
+  }
+
+  /**
+   * An idle chat whose session has grown past freshTokens (bigSession): its process (if any) is closed and the
+   * message becomes the first of a fresh session, the condensed handoff of the chat's record with the message at its
+   * end (handoffSend). The chat keeps its whole record and the old session joins pastSessions.
+   */
+  private async freshFrom(e: Entry, grown: { sessionId: string; tokens: number }, send: QueuedInput): Promise<QueuedInput> {
+    await e.runtime?.close()
+    const out = this.handoffSend(e, grown, GROWN, [send])
+    this.systemLine(e.chat.id, 'fresh', 'info', `The session had grown to about ${Math.round(grown.tokens / 1000)}k tokens, so this message starts a fresh session from a condensed handoff of the chat. This chat keeps the whole record.`)
+    this.changed(e.chat)
+    return out
   }
 
   /**
@@ -1850,7 +1879,7 @@ export class ChatManager {
     chat.forkedFrom = null
     e.forkAt = undefined
     const images = sends.flatMap((s) => s.images ?? [])
-    const heading = left.tokens === null ? "The owner's message to answer now" : "The owner's messages the old session had not answered yet"
+    const heading = left.tokens === null || why === GROWN ? "The owner's message to answer now" : "The owner's messages the old session had not answered yet"
     const pending = sends.length ? `\n\n## ${heading}\n${sends.map((s) => s.text).join('\n\n')}` : ''
     return images.length ? { text: text + pending, images } : { text: text + pending }
   }
