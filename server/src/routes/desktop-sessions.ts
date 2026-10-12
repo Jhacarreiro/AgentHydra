@@ -157,7 +157,6 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
   // 7e1fa278: daemon title "Your market still looks like ..." vs desktop meta "Logos for
   // Connections products"). Read the on-disk record the same way /migrate does, so either
   // name restated exactly is accepted here too.
-  const imported = await getSession(sessionId, 'claude')
   const sourceRendered = findDesktopChatMeta(sessionId)
   let recordTitle: string | null = null
   try {
@@ -171,6 +170,16 @@ app.post('/api/sessions/:id/import-desktop', async (c) => {
   } catch {
     // an unreadable source record just means no second name to check against
   }
+  // The session list's title is a full transcript read, ~7.5s on a cold cache (measured
+  // 2026-10-12), and only the confirm door reads it. So it is read only when that door can need
+  // it: a supplied title never looks at it, and a confirmation that restates the record's own
+  // real name is accepted by resolveRequiredTitle with the same result whatever the list says.
+  const titleSupplied = typeof body.title === 'string' && body.title.trim() !== ''
+  const confirm = typeof body.confirm_title === 'string' ? body.confirm_title.trim() : ''
+  const confirmedByRecord =
+    !!confirm && recordTitle?.trim() === confirm && !isGenericChatTitle(confirm)
+  const imported =
+    !titleSupplied && confirm && !confirmedByRecord ? await getSession(sessionId, 'claude') : null
   const titled = resolveRequiredTitle({
     title: body.title,
     confirmTitle: body.confirm_title,

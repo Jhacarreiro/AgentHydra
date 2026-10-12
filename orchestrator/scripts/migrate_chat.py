@@ -103,7 +103,9 @@ flipped, and the payload's `permissionMode` is what the disk said LAST, never wh
 
 from __future__ import annotations
 
+import contextlib
 import json
+import os
 import re
 import shlex
 import time
@@ -1094,14 +1096,40 @@ def _migrate_import_error(err: "hydralib.DaemonError", session_id: str) -> _Migr
     )
 
 
+def _native_only_target(target: dict) -> bool:
+    """True when the target profile is `native-only` in the daemon's settings. Such an import is
+    the app's own call over its debugger and can never fall back to the deep link, so no window
+    is touched and the placement guard has nothing to keep. A `prefer-native` profile keeps the
+    guard: its import may still take the deep link, which does reshow the window. An unreadable
+    settings route keeps the guard too."""
+    try:
+        settings = hydralib.api_get("/api/claude-native/settings")
+    except hydralib.DaemonError:
+        return False
+    if not isinstance(settings, dict):
+        return False
+    want = os.path.normcase(os.path.normpath(str(target.get("dir") or "")))
+    for key, cfg in settings.items():
+        if isinstance(cfg, dict) and os.path.normcase(os.path.normpath(str(key))) == want:
+            return cfg.get("mode") == "native-only"
+    return False
+
+
 def _post_import_or_raise(session_id: str, target: dict, body: dict) -> dict:
     """POST the import and translate a daemon failure into the right refusal (see
     _migrate_import_error). Runs under the target app's own window-placement guard, since the
-    daemon's resume deeplink can foreground and reshow the target window mid-call."""
+    daemon's resume deeplink can foreground and reshow the target window mid-call - unless the
+    target is native-only, where no window is touched and the guard's capture and restore cost
+    about 3.5s a chat for nothing (2026-10-12 measurement)."""
     from lib import windowlib
 
+    guard = (
+        contextlib.nullcontext()
+        if _native_only_target(target)
+        else windowlib.keep_placement(target.get("dir") or target.get("name"))
+    )
     try:
-        with windowlib.keep_placement(target.get("dir") or target.get("name")):
+        with guard:
             result = hydralib.api_post(f"/api/sessions/{session_id}/import-desktop", body)
     except hydralib.DaemonError as err:
         raise _migrate_import_error(err, session_id) from err

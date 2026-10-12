@@ -984,12 +984,18 @@ async function importSessionToDesktopUnclaimed(opts: {
       return { ok: false, reason: err instanceof Error ? err.message : 'spawn-failed' }
     }
   }
+  // A native landing's record reaches disk within about a second of the app's reply (measured
+  // 2026-10-12), so the stamp's wait polls every 100 ms there; the deep link's slower landing keeps
+  // the 500 ms poll. The wait itself stays: the app writes its record lazily, and a title is only
+  // durable once it is on that file.
   const titled = await stampImportedChat(
     opts.instanceDir,
     opts.sessionId,
     opts.title,
     undefined,
-    undefined,
+    native.ok
+      ? (ms: number) => new Promise<void>((r) => setTimeout(r, Math.min(ms, 100)))
+      : undefined,
     opts.carried,
   )
   // Nothing landed where the app looks: put the set-aside records back, so the chat is exactly
