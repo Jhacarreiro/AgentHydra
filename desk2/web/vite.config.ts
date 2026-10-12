@@ -17,7 +17,7 @@ export default defineConfig({
     // Parallel workers pass their own `--port <n> --strictPort` (SPEC "Parallel workers and ports").
     port: 4798,
     // The build's dist folders sit under this root; a watcher on them blocks the swap that renames them.
-    watch: { ignored: ['**/dist/**', '**/dist.*/**'] },
+    watch: { ignored: ['**/dist/**', '**/dist.*/**', '**/test/**'] },
     proxy: {
       '/api': { target: server },
       '/ws': { target: server, ws: true },
