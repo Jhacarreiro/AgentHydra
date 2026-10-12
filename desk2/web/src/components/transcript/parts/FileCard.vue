@@ -29,7 +29,7 @@ function open() {
   >
     <div class="tx-file-card" :data-reveal-path="file.path">
       <span class="tx-file-badge">{{ fileBadge(file) }}</span>
-      <span class="mt-auto flex min-w-0 flex-col items-start">
+      <span class="mt-auto flex w-full min-w-0 flex-col items-start">
         <span class="w-full truncate text-start text-[13px] leading-4.5 text-text">{{ file.name || 'file' }}</span>
         <span class="text-[12px] leading-4 text-text-2 tabular-nums">{{ formatSize(file.bytes) }}</span>
       </span>
@@ -45,7 +45,7 @@ function open() {
     @click="open"
   >
     <span class="tx-file-badge">{{ fileBadge(file) }}</span>
-    <span class="mt-auto flex min-w-0 flex-col items-start">
+    <span class="mt-auto flex w-full min-w-0 flex-col items-start">
       <span class="w-full truncate text-start text-[13px] leading-4.5 text-text">{{ file.name || 'file' }}</span>
       <span class="text-[12px] leading-4 text-text-2 tabular-nums">{{ formatSize(file.bytes) }}</span>
     </span>
