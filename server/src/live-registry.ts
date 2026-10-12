@@ -10,6 +10,7 @@
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { access, readdir, readFile } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fsSlot } from './core/fs-slots'
 
 export interface LiveSession {
   pid: number
@@ -252,7 +253,7 @@ export async function readRegistrationsAsync(claudeHome: string): Promise<Regist
   const regs = await Promise.all(
     files.map(async (f) => {
       try {
-        return registrationOf(await readFile(join(dir, f), 'utf8'))
+        return registrationOf(await fsSlot(() => readFile(join(dir, f), 'utf8')))
       } catch {
         // One unreadable registry entry must not hide the others.
         return null

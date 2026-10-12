@@ -34,6 +34,7 @@ import { type Dirent, existsSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { fsSlot } from './core/fs-slots'
 import type { AgentPresence, SessionSource } from './types'
 
 export type { AgentPresence }
@@ -888,7 +889,7 @@ async function walkCount(
   // A file that vanished between readdir and stat contributes its count and no date.
   const mtimes = await Promise.all(
     files.map((p) =>
-      stat(p).then(
+      fsSlot(() => stat(p)).then(
         (s) => s.mtimeMs,
         () => null,
       ),

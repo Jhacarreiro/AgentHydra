@@ -10,6 +10,7 @@ import { HANDOFFS, HOOKS, isActive, PROMPTS, ROOT, SEALED, SIGNALS, workers } fr
 import type { CliMayteWorker } from './climayte-lib'
 import { readRunnerExit, readRunnerPids } from './climayte-runner'
 import { runnerIdentity } from './climayte-stops'
+import { fsSlot } from './core/fs-slots'
 import { mapPool } from './core/map-pool'
 import { isPidAlive } from './core/process'
 
@@ -34,7 +35,7 @@ export async function findPackedLogs(): Promise<void> {
   const logs = [...workers.values()].flatMap((w) => w.attempts.map((a) => a.log))
   await mapPool(logs, 32, async (log) => {
     try {
-      await statAsync(log)
+      await fsSlot(() => statAsync(log))
     } catch {
       doneLogs.add(log)
     }

@@ -31,6 +31,7 @@ import { basename, join } from 'node:path'
 import { REMOTE_CHATS_DIR } from '../config'
 import { collectChats, collectChatsAsync } from './chat-store-scan'
 import type { ChatLocal, LocalChat, RetireOutcome } from './desktop-chat-types'
+import { fsSlot } from './fs-slots'
 import { mapPool } from './map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
 
@@ -256,7 +257,7 @@ export function createChatLocal(opts: ChatLocalOpts = {}): ChatLocal {
     const path = fileIn(dir, project, sessionId)
     if (!path) return null
     try {
-      return (await statAsync(path)).size
+      return (await fsSlot(() => statAsync(path))).size
     } catch {
       return null
     }

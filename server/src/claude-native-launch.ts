@@ -17,6 +17,7 @@ import { createServer } from 'node:net'
 import { basename, dirname, isAbsolute, join, relative, resolve, sep } from 'node:path'
 import type { ClaudeNativeProfileConfig } from './claude-native-settings'
 import { DATA_DIR } from './config'
+import { fsSlot } from './core/fs-slots'
 import {
   INFO_EXECUTABLE_PATH,
   nativeProcessInfo,
@@ -165,12 +166,12 @@ async function inventory(
 ): Promise<InventoryEntry[]> {
   await regularDirectory(join(root, prefix))
   if (onDirectory) await onDirectory(prefix)
-  const items = await readdir(join(root, prefix), { withFileTypes: true })
+  const items = await fsSlot(() => readdir(join(root, prefix), { withFileTypes: true }))
   const found = await Promise.all(
     items.map(async (item): Promise<InventoryEntry[]> => {
       const name = prefix ? `${prefix}/${item.name}` : item.name
       const path = childPath(root, name)
-      const info = await lstat(path)
+      const info = await fsSlot(() => lstat(path))
       if (info.isSymbolicLink())
         throw Error(`Claude copy refuses symbolic links or junctions: ${path}`)
       if (info.isDirectory()) return inventory(root, name, onDirectory)
@@ -412,7 +413,7 @@ async function verifyCopy(
   // started: many files at once, the largest first so claude.exe does not finish alone at the end.
   const largestFirst = [...manifest.files].sort((a, b) => b.size - a.size)
   await forEachLimited(largestFirst, HASH_CONCURRENCY, async (expected) => {
-    const actual = await digest(childPath(target, expected.path))
+    const actual = await fsSlot(() => digest(childPath(target, expected.path)))
     if (actual.sha256 !== expected.sha256 || actual.size !== expected.size) {
       throw Error(`Managed Claude copy changed: ${expected.path}`)
     }
@@ -538,10 +539,10 @@ async function buildCopy(
     const path = files[index]!
     const source = childPath(sourceDir, path)
     const destination = childPath(staging, path)
-    await mkdir(dirname(destination), { recursive: true })
-    const before = await digest(source)
-    await copyFile(source, destination, constants.COPYFILE_EXCL)
-    const after = await digest(destination)
+    await fsSlot(() => mkdir(dirname(destination), { recursive: true }))
+    const before = await fsSlot(() => digest(source))
+    await fsSlot(() => copyFile(source, destination, constants.COPYFILE_EXCL))
+    const after = await fsSlot(() => digest(destination))
     if (before.sha256 !== after.sha256 || before.size !== after.size) {
       throw Error(`Claude source changed while copying: ${path}`)
     }

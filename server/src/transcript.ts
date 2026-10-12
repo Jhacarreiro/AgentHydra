@@ -13,6 +13,7 @@ import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
+import { fsSlot } from './core/fs-slots'
 import { intern } from './core/intern'
 import { timeSlice } from './core/loop-yield'
 import { mapPool } from './core/map-pool'
@@ -595,7 +596,7 @@ async function scanDirAsync(
 ): Promise<void> {
   let entries: Dirent[]
   try {
-    entries = await readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true })
+    entries = await fsSlot(() => readdirAsync(rel ? join(cwd, rel) : cwd, { withFileTypes: true }))
   } catch {
     return
   }
@@ -1399,7 +1400,7 @@ async function buildClaudeRecordsAsync(
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
         return { rel, mtimeMs: known.mtimeMs, size: known.size }
       try {
-        const st = await statAsync(path)
+        const st = await fsSlot(() => statAsync(path))
         claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
         return { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
@@ -1456,7 +1457,7 @@ async function buildCodexRecordsAsync(files: TranscriptFile[]): Promise<void> {
     const records = await mapPool(rels, INDEX_SCAN_WIDTH, async (rel) => {
       const path = join(store.root, rel)
       try {
-        const st = await statAsync(path)
+        const st = await fsSlot(() => statAsync(path))
         const identity = await readCodexRolloutIdentityAsync(path, codexFallbackId(rel))
         // Same rule as the sync builder.
         if (identity.isSubagent) return null

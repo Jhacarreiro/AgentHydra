@@ -14,6 +14,7 @@ import { readdirSync, statSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import path from 'node:path'
 import { identityForAccount } from './accounts'
+import { fsSlot } from './fs-slots'
 import { allInstanceNumbers, instanceRef, parseInstanceRef } from './instance-numbers'
 import { readLoginState, readLoginUuid } from './login-state'
 import { normalizePath } from './paths'
@@ -164,7 +165,7 @@ async function newestRecord(accountDir: string): Promise<number> {
     }
     const times = await Promise.all(
       names.map((name) =>
-        stat(path.join(orgDir, name)).then(
+        fsSlot(() => stat(path.join(orgDir, name))).then(
           (s) => s.mtimeMs,
           () => 0,
         ),

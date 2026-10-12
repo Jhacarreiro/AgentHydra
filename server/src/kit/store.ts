@@ -333,6 +333,16 @@ export class KitStore {
     this.db.close()
   }
 
+  /**
+   * Give the page cache back between sweeps. The 64 MB cache pays inside one query, which re-reads its
+   * pages, not across a minute of idle: measured 2026-10-12 on a 1.18 GB store, releasing it freed 80 MB of
+   * private memory (306 -> 226 MB), the next sweep took 3.2 s against 3.6 s kept, and a 7-day query right
+   * after it took 46 ms (the OS still holds the file).
+   */
+  releaseCache(): void {
+    this.db.exec('pragma shrink_memory')
+  }
+
   private ckptWorker: Worker | null = null
   private ckptBusy = false
   private ckptAt = 0

@@ -12,6 +12,7 @@
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fsSlot } from './fs-slots'
 import { readLoginUuid } from './login-state'
 import { mapPool } from './map-pool'
 import { defaultClaudeUserDataDir, instancesRoot } from './paths'
@@ -250,13 +251,13 @@ async function scanStoreFullAsync(
   const recs = await mapPool(rels, STAT_WIDTH, async (rel): Promise<CachedRecord | null> => {
     try {
       const path = join(dir, rel)
-      const st = await stat(path)
+      const st = await fsSlot(() => stat(path))
       const rec = previous?.get(rel)
       if (rec && unchangedSince(rec.stamp, st)) return rec
       const readAt = Date.now()
       return {
         stamp: stampOf(st, readAt),
-        fields: recordFields(path, rel, await readFile(path, 'utf8'), st.mtimeMs),
+        fields: recordFields(path, rel, await fsSlot(() => readFile(path, 'utf8')), st.mtimeMs),
       }
     } catch {
       return null // same skip as the sync scan: deleted mid-scan or half-written

@@ -40,6 +40,7 @@ import { readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { CONFIG_DIR } from './config'
+import { fsSlot } from './core/fs-slots'
 import { mapPool } from './core/map-pool'
 
 /** How much of a transcript's head to read looking for the continuation marker. */
@@ -257,7 +258,7 @@ async function resolveOne(entry: ContinuationLink): Promise<Resolution> {
     async (name) => {
       const path = join(dir, name)
       try {
-        const st = await stat(path)
+        const st = await fsSlot(() => stat(path))
         return {
           path,
           id: name.replace(/\.jsonl$/i, ''),

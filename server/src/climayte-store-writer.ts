@@ -14,6 +14,7 @@
 // exit awaits flushCliMayteStore (index.ts).
 
 import { rm } from 'node:fs/promises'
+import { fsSlot } from './core/fs-slots'
 import { writeJsonTextAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
 
@@ -130,7 +131,7 @@ async function write({ files, store }: Round): Promise<void> {
  *  could otherwise land after the retry's newer text for the same file. */
 async function settleAll<T>(items: T[], fn: (item: T) => Promise<unknown>): Promise<void> {
   const failures = await mapPool(items, WIDTH, (item) =>
-    fn(item).then(
+    fsSlot(() => fn(item)).then(
       () => null,
       (err: unknown) => ({ err }),
     ),

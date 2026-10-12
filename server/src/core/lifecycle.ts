@@ -18,6 +18,7 @@ import { readdir, rm, stat } from 'node:fs/promises'
 import { basename } from 'node:path'
 import { ensureClaudeNativeProfileConfig } from '../claude-native-settings'
 import { linkCliInstanceToDesktop, listCliInstances } from './cli-instances'
+import { fsSlot } from './fs-slots'
 import { deleteInstanceLaunch } from './instance-launches'
 import { deleteInstanceMeta } from './instance-meta'
 import { isDefaultClaudeDir, openInstance } from './instances'
@@ -163,7 +164,7 @@ async function dirSizeBytes(dir: string): Promise<number> {
     // Skip individual unreadable entries — best-effort only.
     const stats = await Promise.all(
       entries.map((name) =>
-        stat(`${current}/${name}`).then(
+        fsSlot(() => stat(`${current}/${name}`)).then(
           (st) => ({ name, st }),
           () => null,
         ),
