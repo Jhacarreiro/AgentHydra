@@ -193,13 +193,25 @@ export class McpStdioClient {
    *  questions are read-only, so reaching for one is itself a finding. */
   async callTool(name: string, args: Record<string, unknown> = {}): Promise<unknown> {
     this.calls.push(name)
-    const tool = this.tools.find((t) => t.name === name)
+    let tool = this.tools.find((t) => t.name === name)
+    // An unlisted tool is reached as an agent reaches it: hydra_find { tool } describes it, hydra_run runs it.
+    const viaRun = !tool && this.tools.some((t) => t.name === 'hydra_run')
+    if (viaRun) {
+      const found = await this.request('tools/call', {
+        name: 'hydra_find',
+        arguments: { tool: name },
+      })
+      const text = found.result?.content?.[0]?.text ?? ''
+      if (!found.result?.isError) tool = JSON.parse(text) as typeof tool
+    }
     if (!tool) throw new Error(`the server lists no tool named ${name}`)
     if (tool.description?.startsWith('MUTATES:')) {
       this.refusedMutations.push(`tool ${name}`)
       throw new Error(`${name} mutates state; eval questions are read-only`)
     }
-    const res = await this.request('tools/call', { name, arguments: args })
+    const res = viaRun
+      ? await this.request('tools/call', { name: 'hydra_run', arguments: { tool: name, args } })
+      : await this.request('tools/call', { name, arguments: args })
     const text = res.result?.content?.[0]?.text ?? ''
     if (res.result?.isError) throw new Error(`${name} failed: ${text}`)
     return JSON.parse(text) as unknown

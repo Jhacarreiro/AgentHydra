@@ -2295,34 +2295,26 @@ CHECK YOUR OWN QUOTA BEFORE HEAVY WORK, unprompted: check_my_usage {} (~300ms, n
   hand what is left to climayte_run.
 - advice.safeToFanOut false -> shrink or postpone. Gate on CURRENT + PROJECTED cost: a fan-out
   cannot be recalled.
-- usage_budget {} gives exhaustsBeforeReset: branch on that, not a bare percentage. Weekly is
-  the binding cap; on Pro the 5-hour window binds first.
-- severity 'unknown' or a failed read is NOT plenty left. Never fan out on one.
+- usage_budget {} gives exhaustsBeforeReset: branch on that. Weekly binds; on Pro the 5-hour
+  window binds first. severity 'unknown' or a failed read is NOT plenty left.
 
-NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance; say so when identity.warning is set.
-A human who tells you your instance number OVERRULES the detection.
-
-list_usage {} surveys every account (\`deepseek\` = HSwarm's balance). Mechanical, checkable work
-goes to HSwarm (hswarm_run). Mutating tools say MUTATES:; never /login for a human.
+NEVER QUOTE AN UNATTRIBUTED PERCENTAGE: name the instance. A human who tells you your instance
+number OVERRULES the detection. list_usage {} surveys every account. Mutating tools say MUTATES:.
 
 CLIMAYTE IS THE CLAUDE-QUALITY TIER: climayte_run {tasks:[{prompt, cwd}]} runs self-contained
-work on his CLI accounts while they sit idle; it never takes one a person or session is using.
-
-THE ORCHESTRATOR IS INSIDE THIS SERVER (orchestrator_menu/run/loop/switch, through hydra_run); it
-acts only with the tray icon up: orchestrator_switch {action:"armed"} first. No icon needed for move_chat {chat,
-from, to}, or fan_out {tasks:[{cwd, prompt}]} (VISIBLE desktop chats on OTHER accounts, never
-one a person is in); fan_out_status {} reads verdicts, fan_out_send {group, text} steers.
-add_queue_item and launch_terminal_session are REFUSED (no chat nobody can see).
-ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS: fan_out_delete {group}, or
-hydra_run orchestrator_run delete_chat <chat>. Free web accounts: hydra_run free_chat {tasks}
-
-DEV SERVERS: never start one from the shell (vite, npm/bun run dev):
-dev_servers {action:"start", cwd} reuses the running copy, whoever started it, or starts it.
+work on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens VISIBLE chats on OTHER
+accounts; fan_out_status reads them, fan_out_send steers.
+add_queue_item and launch_terminal_session are REFUSED.
+ANY PROBE CHAT YOU CREATE MUST BE DELETED AFTERWARDS:
+fan_out_delete {group}. move_chat moves a chat to another ACCOUNT.
 
 ONLY THE MOST USED TOOLS ARE LISTED. hydra_find {query} searches every AgentHydra tool in plain
-words; hydra_run {tool, args} runs any of them (the orchestrator, free_chat, instance and incident
-tools, daemon_restart...). Search there before you decide a thing cannot be done.
-A Hydra Desk chat moves to another folder (its workspace) or renames itself with desk_chat {cwd, title}.`
+words; hydra_run {tool, args} runs any of them (orchestrator, free_chat, instances, incidents,
+daemon_restart). Search there before you decide a thing cannot be done. A Hydra Desk chat moves
+to another folder (its workspace) or renames itself with desk_chat {cwd, title}.
+
+DEV SERVERS: never start one from the shell; dev_servers {action:"start", cwd} reuses the
+running copy or starts it.`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
