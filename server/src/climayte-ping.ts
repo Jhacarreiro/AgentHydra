@@ -122,6 +122,7 @@ export type PingKind =
   | 'group-done' // every worker of this origin in that group has ended
   | 'limited-moved' // information only: hit a 5-hour or weekly limit, resumed on another account
   | 'stuck' // information only: waiting longer than STUCK_AFTER_MS
+  | 'swarm-job' // an HSwarm job that outlived the call that started it has finished (swarm-job-ping.ts)
 
 const INFO_KINDS: ReadonlySet<PingKind> = new Set(['limited-moved', 'stuck'])
 /** Results the chat can read on its next look: held while the same origin still has live workers. */
@@ -344,7 +345,10 @@ export function pingMessage(
     ...events.slice(0, MAX_BULLETS).map((e) => `• ${e.line}`),
   ]
   if (n > MAX_BULLETS) lines.push(`+${n - MAX_BULLETS} more`)
-  const groups = [...new Set(events.map((e) => e.group))]
+  // An HSwarm job's line stands alone: it has no group, no verdict to give.
+  const jobsOnly = events.every((e) => e.kind === 'swarm-job')
+  if (jobsOnly) return lines.join('\n')
+  const groups = [...new Set(events.filter((e) => e.kind !== 'swarm-job').map((e) => e.group))]
   for (const g of groups) {
     const ws = workers.filter((w) => w.group === g)
     const count = (...s: CliMayteStatus[]) => ws.filter((w) => s.includes(w.status)).length
@@ -466,6 +470,9 @@ export interface CliMaytePingDeps {
 export interface CliMaytePing {
   /** Diff one worker now (what the change feed calls). */
   observe(w: PingWorker): void
+  /** Queue events that are not a worker's (an HSwarm job's) for a chat; true when one was new. A key
+   *  sent before, or pending, is not queued again; nothing is queued while `ping-off` exists. */
+  emit(origin: CliMayteOrigin, events: PingEvent[]): boolean
   /** Send every pending batch now, ignoring the windows; resolves when the sends settle. */
   flushNow(): Promise<void>
   /** Resolves once no send is in flight. */
@@ -619,6 +626,16 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       box.urgentAt ??= now
     save()
     arm()
+  }
+
+  const emit = (origin: CliMayteOrigin, events: PingEvent[]): boolean => {
+    if (stopped || pingOff() || !events.length) return false
+    const box = boxFor(origin)
+    if (!enqueue(box, events)) return false
+    if (noLive(origin)) box.urgentAt ??= clock.now()
+    save()
+    arm()
+    return true
   }
 
   /** When this box's batch is due, or null when it has none. */
@@ -854,6 +871,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
 
   return {
     observe,
+    emit,
     idle,
     async flushNow() {
       if (!pingOff()) for (const box of Object.values(ledger.origins)) flush(box)

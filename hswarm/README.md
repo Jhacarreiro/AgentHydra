@@ -200,6 +200,10 @@ process's one `jobs.manager()`. It imports no MCP SDK and no pydantic. Measured 
 interpreter costs 63 MB and 661 modules importing it, against 101 MB and 998 modules for
 `from hswarm.mcp_server import hswarm_decide`.
 
+## Jobs ping their chat
+
+A `wait: false` job (or a `wait_s` that ran out) pings the chat that started it when it finishes, through AgentHydra: one line with the job id, state, counts, cost and `hswarm_results('<id>')`. There is no need to poll `hswarm_status` or build a watcher. A job whose result came back inside the call never pings.
+
 ## One tool with CliMayte
 
 Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default

@@ -34,6 +34,7 @@ class Job:
     caller: dict = field(default_factory=dict)  # who submitted it: caller.detect() at submit time
     created: str = field(default_factory=now_iso)
     finished: str = ""
+    returned_at: int = 0  # epoch ms the starting call returned while the job still ran (mcp_server.hswarm_run); 0: never did
     state: str = "running"  # running | done | cancelled
     savings: dict = field(default_factory=dict)  # utilization.compact(): the Claude cost this job displaced, set when it finishes
     error: str = ""  # the one job-wide reason its tasks failed, when there is one (jobs.no_credit_left)
@@ -198,6 +199,7 @@ class Job:
             # 2026-09-23, unbounded, because the job-level stamp only lived under "summary".
             "state": self.state,
             "finished": self.finished,
+            "returned_at": self.returned_at,
             "summary": summary or self.summary(),
             "caller": dict(self.caller),
             "runner": dict(self.runner),

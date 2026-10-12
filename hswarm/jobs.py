@@ -1175,7 +1175,7 @@ class JobManager:
         tasks, summary, saved_keys = _saved_tasks(doc, folder), doc.get("summary") or {}, doc.get("task_keys") or {}
         job = Job(id=job_id, tasks=tasks, concurrency=dict(doc.get("concurrency") or {}), label=summary.get("label") or "",
                   budget_usd=summary.get("budget_usd"), caller=dict(doc.get("caller") or {}), created=summary.get("created") or now_iso(),
-                  resumed_from=summary.get("resumed_from") or "", task_keys={t.id: saved_keys.get(t.id) or task_key(t) for t in tasks},
+                  resumed_from=summary.get("resumed_from") or "", returned_at=int(doc.get("returned_at") or 0), task_keys={t.id: saved_keys.get(t.id) or task_key(t) for t in tasks},
                   task_models={t.id: t.model for t in tasks}, runner=self.runner())
         done = _journaled(folder)
         job.results.update({t.id: done[t.id] for t in tasks if t.id in done})

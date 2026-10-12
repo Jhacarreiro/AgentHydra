@@ -16,6 +16,7 @@ import functools
 import inspect
 import json
 import os
+import time
 import traceback
 from importlib.resources import files
 from pathlib import Path
@@ -209,6 +210,11 @@ async def hswarm_run(
     outlook = dispatch.route_outlook(parsed, manager()._gates)
     if wait:
         await manager().wait(job.id, min(wait_s, RUN_WAIT_MAX_S))
+    if job.state == "running":
+        # The call hands back a still-running job: stamp that fact in job.json, so the AgentHydra daemon pings the
+        # chat when it finishes (a job whose result came back inside the call never pings).
+        job.returned_at = int(time.time() * 1000)
+        await asyncio.to_thread(job.save, manager().status(job))
     payload = job_payload(job, max_answer_chars, include_pending=True)
     if outlook:
         payload["route_outlook"] = outlook

@@ -39,6 +39,7 @@ import {
   renameSync,
   rmSync,
 } from 'node:fs'
+import { homedir } from 'node:os'
 import { join } from 'node:path'
 import {
   CHECK_RELAUNCHES,
@@ -201,6 +202,7 @@ import { cliAuthStatus } from './core/cli-quick-add'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { POINTER_DIR } from './instance'
+import { type SwarmJobPing, startSwarmJobPing } from './swarm-job-ping'
 
 export {
   setCliMayteAccountsProvider,
@@ -1988,6 +1990,8 @@ const desk: NonNullable<CliMaytePingDeps['desk']> = {
   },
 }
 
+let swarmPing: SwarmJobPing | null = null
+
 function startPing(): void {
   if (ping) return
   mkdirSync(PING_DIR, { recursive: true })
@@ -2000,10 +2004,21 @@ function startPing(): void {
     desk,
     ...pingOverrides,
   })
+  // The real daemon only: a test never looks at the owner's jobs or pings a real chat.
+  if (!pingOverrides && process.env.NODE_ENV !== 'test') {
+    const outbox = ping
+    swarmPing = startSwarmJobPing({
+      jobsDir: join(process.env.HSWARM_HOME || join(homedir(), '.hswarm'), 'jobs'),
+      emit: (o, events) => outbox.emit(o, events),
+      off: () => existsSync(PING_OFF),
+    })
+  }
 }
 
 /** Stop the ping outbox (daemon shutdown). Pending pings stay in pings.json for the next start. */
 export function stopCliMaytePing(): void {
+  swarmPing?.stop()
+  swarmPing = null
   ping?.stop()
   ping = null
 }
