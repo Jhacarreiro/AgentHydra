@@ -236,6 +236,25 @@ export async function apiOrLocal(
 }
 
 // JSON Schema helper (the engine advertises each tool's `inputSchema` verbatim in tools/list).
+/**
+ * One AgentHydra MCP tool. ADDING A TOOL (docs/MCP-TOOLS.md): write it in the module of its family, as an entry of that
+ * module's HydraTool[] array (SESSION_TOOLS, FAN_OUT_TOOLS, ...), which mcp.ts spreads into TOOLS. That is the only
+ * place to touch: its flags below say how it is offered, and every list (the listing, the calling-chat binding, the
+ * refusals) is derived from them. tests/mcp-tools-shape.test.ts checks each tool's name, text and flags.
+ * - `description`: start with MUTATES: when it changes anything, READ-ONLY: when it is worth saying; first sentence
+ *   says what it does (hydra_find shows it as the summary).
+ * - `listed`: true only for a tool agents call often; every other tool is reached with hydra_find / hydra_run.
+ *   The listed set has a size budget (the shape test), because every listed schema rides in every chat.
+ * - `callerChat`: the tool acts on the calling Hydra Desk chat by default: 'chat' fills its `chat` argument,
+ *   'deskChat' its `deskChat` argument (mcp-find.ts withDeskChat), also when reached through hydra_run.
+ * - `refuses`: the tool refuses every call (kept only so an old caller gets the refusal); never listed.
+ */
+export interface HydraTool extends McpEngineTool {
+  listed?: boolean
+  callerChat?: 'chat' | 'deskChat'
+  refuses?: boolean
+}
+
 export const S = (properties: Record<string, unknown> = {}, required: string[] = []) => ({
   type: 'object' as const,
   properties,

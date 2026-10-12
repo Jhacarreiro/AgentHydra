@@ -12,7 +12,7 @@ import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { desk2Present, desk2Url } from './desk2'
-import { MCP_WAIT_MAX_MS, S, str } from './mcp-client'
+import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 type Provider = 'claude' | 'chatgpt'
@@ -715,7 +715,7 @@ async function freeStatus() {
   }
 }
 
-export const FREE_TOOLS: McpEngineTool[] = [
+export const FREE_TOOLS: HydraTool[] = [
   {
     name: 'free_status',
     description:

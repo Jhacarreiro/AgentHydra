@@ -109,6 +109,7 @@ describe('desk_chat', () => {
         name: 'desk_chat',
         description: '',
         inputSchema: {},
+        callerChat: 'chat',
         run: async (a: Record<string, unknown>) => (seen = a),
       },
     ]
@@ -126,6 +127,16 @@ describe('desk_chat', () => {
         inputSchema: {},
         run: async (a: Record<string, unknown>) => (seen = a),
       },
+      // the tools it runs, with the flag that binds them (only their flags matter here)
+      { name: 'desk_chat', description: '', inputSchema: {}, callerChat: 'chat', run: () => null },
+      {
+        name: 'dashboard_write',
+        description: '',
+        inputSchema: {},
+        callerChat: 'deskChat',
+        run: () => null,
+      },
+      { name: 'list_usage', description: '', inputSchema: {}, run: () => null },
     ]
     const hydraRun = withDeskChat(fake as never, 'c9')[0]
     await hydraRun.run({ tool: 'dashboard_write', args: { files: [] } })

@@ -3,7 +3,7 @@
 // (Desk, desk2/server/src/devservers), so this file keeps no state: it calls Desk's /dw/api on 127.0.0.1 with no
 // Origin header (Desk's own-page rule lets a local client that sends none through) and answers in a few lines
 // of text a model can act on. Desk starts its dev-servers service itself on the first ask.
-import { S, str } from './mcp-client'
+import { type HydraTool, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 // The parts of desk2/shared/devwebui.ts this reads. Not imported: a release build may carry no desk2/.
@@ -339,9 +339,10 @@ export async function devServers(a: Record<string, unknown>): Promise<string> {
   }
 }
 
-export const DEV_SERVERS_TOOLS: McpEngineTool[] = [
+export const DEV_SERVERS_TOOLS: HydraTool[] = [
   {
     name: 'dev_servers',
+    listed: true,
     description:
       "MUTATES: (start, stop, restart, scan, add_project) one shared copy of each project's dev servers (vite, next, `bun run dev`...). AgentHydra 2.0 runs them for every session on this PC. `start` returns the address of the copy already running, whoever started it, or starts it; call it BEFORE starting a dev server from the shell, never start one yourself (a second copy fights the first for its port). `list` shows the folder's servers (all: every project's, plus other localhost dev servers), `stop` ends one, `logs` returns its last output, `restart` restarts one, `errors` lists recorded errors (server: one). `scan` (preset quick|deep, roots) searches the disk for projects, `found` lists what it found, `add_project` adds path (default cwd; a folder with no .devwebui answers a proposal, accept: true writes it). Needs AgentHydra 2.0 open.",
     inputSchema: S(

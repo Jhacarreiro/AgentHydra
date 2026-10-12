@@ -12,7 +12,7 @@
 //
 // daemon_restart is the tool for the restart the daemon's "running older code" note asks for (POST /api/daemon/restart).
 import { statSync } from 'node:fs'
-import { api, JSON_HEADERS, S, str } from './mcp-client'
+import { api, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 /** Words an agent says, mapped to the words the tool texts use. */
@@ -193,12 +193,14 @@ export function deskChatPatch(a: Record<string, unknown>): { cwd?: string; title
 const NOT_RUNNABLE = new Set(['hydra_run', 'hydra_find'])
 
 export function findTools(
-  getTools: () => McpEngineTool[],
+  getTools: () => HydraTool[],
   getListed: () => ReadonlySet<string>,
-): McpEngineTool[] {
+): HydraTool[] {
   return [
     {
       name: 'hydra_find',
+      callerChat: 'deskChat',
+      listed: true,
       description:
         "FIND ANY AGENTHYDRA TOOL: say what you want in plain words ('move this chat to another workspace', 'rename this " +
         "chat', 'which account has quota left', 'read an old session', 'restart the daemon') and get the matching tools, " +
@@ -256,6 +258,7 @@ export function findTools(
     },
     {
       name: 'hydra_run',
+      listed: true,
       description:
         'MUTATES (when the tool it runs does): run ANY AgentHydra tool by name, listed or not: hydra_run { tool, args }. ' +
         'Find the tool and its arguments with hydra_find first. The answer is exactly what the tool itself answers.',
@@ -284,6 +287,8 @@ export function findTools(
     },
     {
       name: 'desk_chat',
+      callerChat: 'chat',
+      listed: true,
       description:
         'MUTATES: move this chat (a Hydra Desk chat) to another folder or workspace, and/or rename it. `cwd` moves it, ' +
         'which is how its WORKSPACE changes: the sidebar group, the project it works in, and the workspace-scoped tools ' +
@@ -337,6 +342,7 @@ export function findTools(
     },
     {
       name: 'desk_transcript',
+      callerChat: 'chat',
       description:
         'READ-ONLY: the whole record of a Hydra Desk chat as Desk keeps it (messages, tool calls and results, oldest first), ' +
         'for a detail a handoff left out. `chat` defaults to THIS chat; name another by Desk id, session id or title fragment. ' +
@@ -407,35 +413,21 @@ export function findTools(
 /** The header Desk puts on each chat's agenthydra MCP connection: that chat's Desk id. */
 export const DESK_CHAT_HEADER = 'x-hydra-desk-chat'
 
-/** The tools that default to the calling Desk chat. */
-const DESK_CHAT_BOUND = new Set([
-  'desk_chat',
-  'desk_transcript',
-  'dashboard_read',
-  'dashboard_write',
-  'hydra_find',
-])
-
-/** A tool's arguments with the calling Desk chat filled in, for the tools that default to it; any other tool's as given. */
+/** A tool's arguments with the calling Desk chat filled in, as its own `callerChat` flag says; any other tool's as given. */
 function bindDeskChat(
-  name: string,
+  tool: HydraTool | undefined,
   a: Record<string, unknown>,
   id: string,
 ): Record<string, unknown> {
-  if (name === 'desk_chat' || name === 'desk_transcript')
-    return { ...a, chat: str(a.chat).trim() || id }
-  // hydra_find ranks the Desk tools first for a Desk chat
-  if (DESK_CHAT_BOUND.has(name)) return { ...a, deskChat: id }
+  if (tool?.callerChat === 'chat') return { ...a, chat: str(a.chat).trim() || id }
+  if (tool?.callerChat === 'deskChat') return { ...a, deskChat: id }
   return a
 }
 
-/** `tools` with desk_chat, desk_transcript and the dashboard tools defaulting to the calling Desk chat (the HTTP transport knows it
+/** `tools` with every `callerChat` tool (desk_chat, desk_transcript, the dashboard tools...) defaulting to the calling Desk chat (the HTTP transport knows it
  *  from DESK_CHAT_HEADER; stdio from HYDRA_DESK_CHAT_ID), also when reached through hydra_run, which runs the bare tool (a chat
  *  whose list was fixed before a tool was added reaches it only that way). Every other tool is the same object. */
-export function withDeskChat(
-  tools: McpEngineTool[],
-  chatId: string | null | undefined,
-): McpEngineTool[] {
+export function withDeskChat(tools: HydraTool[], chatId: string | null | undefined): HydraTool[] {
   const id = chatId?.trim()
   if (!id) return tools
   return tools.map((t) => {
@@ -448,14 +440,25 @@ export function withDeskChat(
             a.args && typeof a.args === 'object' && !Array.isArray(a.args)
               ? (a.args as Record<string, unknown>)
               : {}
-          return run({ ...a, args: bindDeskChat(str(a.tool).trim(), args, id) }, signal)
+          const named = str(a.tool).trim()
+          return run(
+            {
+              ...a,
+              args: bindDeskChat(
+                tools.find((x) => x.name === named),
+                args,
+                id,
+              ),
+            },
+            signal,
+          )
         },
       }
-    if (!DESK_CHAT_BOUND.has(t.name)) return t
+    if (!t.callerChat) return t
     return {
       ...t,
       run: (a: Record<string, unknown>, signal?: AbortSignal) =>
-        run(bindDeskChat(t.name, a, id), signal),
+        run(bindDeskChat(t, a, id), signal),
     }
   })
 }

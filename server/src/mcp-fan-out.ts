@@ -10,6 +10,7 @@ import {
   api,
   busyRefusal,
   detachedAnswer,
+  type HydraTool,
   type RunMode,
   resolveRef,
   runScript,
@@ -204,7 +205,7 @@ async function runFanOut(
   }
 }
 
-export const FAN_OUT_TOOLS: McpEngineTool[] = [
+export const FAN_OUT_TOOLS: HydraTool[] = [
   // --- fan-out: one task list -> N visible chats on N accounts -------------------------
   // The owner's ask (2026-09-04): "if I start a single chat and tell it to do something that
   // involves checking or linting six or seven planes, can it orchestrate those chats into other
@@ -213,6 +214,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   // exactly the way move_chat wraps migrate_chat: every rail lives in the script.
   {
     name: 'fan_out',
+    listed: true,
     description:
       "MUTATES: DISSEMINATE one task list into N VISIBLE Claude Desktop chats, ONE ACCOUNT EACH, and track them as a group — the path for \"lint/check these seven planes in parallel on other accounts\" (owner ask, 2026-09-04). Each task is {cwd, prompt, title?}. Accounts are ranked by REAL room (the fill ceiling minus the account's peak across 5-hour/weekly/binding; an unknown or stale reading is never room), OPEN desktop instances first, one task per account by default (`per_account` raises the cap; spread, never dump). The calling chat's own account is EXCLUDED by default (`exclude_self: false` to allow it). Each chat is spawned through the app's own claude://code/new deeplink into a RUNNING app — trust pre-written, composer submitted, bypass set at birth — so it is a real chat in a sidebar, never headless; spawns run ONE AT A TIME (~30-90 s each) because two lanes driving two windows at once is how text lands in the wrong pane, so budget minutes, not seconds. Closed instances are used only with `open_closed: true` (opening an app is the last resort). A task whose exact prompt already runs somewhere in the fleet is refused as a duplicate (`force` is a PERSON's word to insist); tasks in the SAME call may share a prompt on purpose. A task no account can take is reported UNASSIGNED, never dropped. SPAWN TREE CAP: every fan-out, a brand-new one included, belongs to a tree of at most 12 chats by default (`max_nodes`), so tasks past that come back UNASSIGNED even with room left; a member fanning out again is found by its own session and can only narrow its group's envelope (accounts, per_account, closed apps, quota ceiling, depth). Returns the group id plus one member per task (instance, sessionId, state: spawned / spawned-unconfirmed / refused / unassigned, why). DELIVERY IS PROVEN, NOT ASSUMED: every prompt carries a short task receipt (token, repo, task id, expected artifact) the chat is asked to echo first; after the last spawn fan_out waits `receipt_secs` for every echo, nudges a chat that never started ONCE, and never types into a chat whose first turn lacks its token (`receipt: false` opts out). ⛔ SPAWNING RUNS IN THE DAEMON, NOT ON THIS CONNECTION: a real fan-out (~30-90s per chat, sequential) is always DETACHED automatically past 50s declared, which is every real one - you get the group id and an operationId AT ONCE, and the daemon keeps spawning every chat regardless of whether this call's own connection is abandoned (a lost client can no longer cancel work mid-spawn). Poll fan_out_status { group } for each member's progress; pass `background: false` only for a one-or-two-chat call you know your transport can hold open. Then fan_out_status reads them and fan_out_send steers them. Each member's first prompt ends with a [fan-out beacon] line naming its group and index and asking it to call report_progress, so fan_out_status also shows each member's own phase, next step and blocked-on-user flag. `dry_run: true` returns the plan and spawns nothing, and always blocks (it only ranks and plans). This is a person's act and does not need the tray icon. WRONG TOOL when every Claude account is at/above 90% weekly (check list_usage first): mechanical, checkable batch work belongs on HSwarm instead (hswarm_run) rather than queued behind N account resets; fan_out remains right for work that needs a real Claude Desktop chat. A PROBE OR DRILL FAN-OUT MUST BE DELETED AFTERWARDS (owner rule, 2026-09-04: a ping or account-identification chat is never left in the account): fan_out_delete {group}.",
     inputSchema: S(
@@ -510,6 +512,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'fan_out_status',
+    listed: true,
     description:
       "READ-ONLY: where every chat of a fan_out group stands — per member: instance, sessionId, the gate's verdict as one word (working / idle / stalled / finished / crashed, or the spawn state for a member that never got a session), how long it has been quiet, its cause, and its LAST WORDS (the last assistant text, capped) so a manager chat can read seven results without seven tail_session calls. Each member also carries its latest self-reported `beacon` (report_progress: mode, task, cumulative summary, next step, review paths, confidence, blocked-on-user); members blocked on a person are listed FIRST, named in `blockedOnUser`, and make the verdict partial. `group` is the id or name from fan_out (a unique id prefix works); omitted = the most recent group. Also lists the follow-ups already sent to the group. A member in a failure the recovery table knows (delivery-failed, account-at-cap, chat-stalled) carries `recovery`: the recipe's one automatic step, attempts used of its max, and the escalation that follows; `recoveries` is the group's recovery ledger - every attempt and escalation fan_out_recover made, with why. Each member also carries `receipt`: whether the chat echoed the task receipt its prompt carried (delivered / no-echo / wrong-task / never-started / wrong-chat / pending) and whether its one re-delivery was spent.",
     inputSchema: S({
@@ -609,6 +612,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'fan_out_send',
+    listed: true,
     description:
       "MUTATES: deliver ONE follow-up message into every chat of a fan_out group (or just the `only` session ids) — the steering half of managing a fan-out. THE PEER PIPE IS NOT USED: a spawned chat nobody has clicked never drains peer messages (measured 2026-09-04), so each member's IDLE engine is stopped first (a working or stuck one refuses and that member is skipped with the reason) and the daemon's message route then types the text into the app's OWN composer, which boots the chat and is verified from the transcript. A member whose app has not yet written its sidebar record cannot be reached this way and says so. A HELD chat is skipped and named; `force` is a PERSON's word past a hold. Deliveries are sequential and each waits for the chat to move, so budget ~1-3 minutes per member; past 45s the call answers with an operationId to poll (orchestrator_operation) while delivery carries on. Returns per-member delivered / route / detail / engine; the group record keeps every send.",
     inputSchema: S(
@@ -678,6 +682,7 @@ export const FAN_OUT_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'fan_out_delete',
+    listed: true,
     description:
       "MUTATES: DELETE every chat of a fan_out group from the account it lives in — the cleanup a probe or drill fan-out owes (owner rule, 2026-09-04: \"all ping requests or account identification requests must be deleted after they are created and not left in the account\"). Per member, delete_chat.py: an IDLE engine is stopped first (a working or stuck one refuses and that member is reported), an undo copy of the meta record(s) and transcript is taken into orchestrator/state/trash/<sessionId>/, then the running app's OWN Delete control is driven (row menu Delete + the app's confirm button, both by label), then the record and the transcript are removed everywhere, and the result is VERIFIED (dossier empty, transcript gone) — anything left is named, never claimed. A HELD chat is skipped; `force` is a PERSON's word past a hold. `orchestrator_run delete_chat --undo <sessionId>` restores one from its undo copy.",
     inputSchema: S(

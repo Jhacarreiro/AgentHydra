@@ -40,6 +40,7 @@ import {
   busyRefusal,
   CLIMAYTE_MAX_WAIT_S,
   detachedAnswer,
+  type HydraTool,
   handleFrom,
   INSTANCE_PARAM,
   JSON_HEADERS,
@@ -322,7 +323,7 @@ async function climayteStatusRead(
   )
 }
 
-export const TOOLS: McpEngineTool[] = [
+export const TOOLS: HydraTool[] = [
   // --- sessions (read-only), analytics, queue, incidents, live agent status: mcp-session-tools.ts
   ...SESSION_TOOLS,
 
@@ -382,6 +383,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'whoami',
+    listed: true,
     description:
       "WHICH INSTANCE AM I? Identifies the instance THIS process is actually running as — permanent number, kind, account email, plan and raw rate-limit tier — and shows its WORKING. It does NOT just read one env var: a Claude Desktop session sets no CLAUDE_CONFIG_DIR, so identification walks CODEX_HOME → CLAUDE_CONFIG_DIR → CLAUDE_CODE_EXECPATH → the instance folder holding this session's own claude-code-sessions file → the parent `claude.exe` process and the Electron host's --user-data-dir. Read `confidence`: 'exact' means a signal named the credential store and you may quote the number; 'assumed' means it fell back to the default ~/.claude login by ELIMINATION and must be hedged. `clues` is the literal proof, `ruledOut` says what was checked and came up empty. OVER HTTP (how this server is normally registered) the tools run inside the DAEMON, so \"this process\" would be the daemon and never you: the answer is resolved from the process that opened the connection instead - its own command line is the instance dir - and `ruledOut` says so outright when that is what happened. TWO THINGS THAT LOOK AUTHORITATIVE AND LIE, so never identify yourself from them: your transcript's location (a Desktop-instance session still writes to the DEFAULT ~/.claude/projects) and ~/.claude.json's oauthAccount email (the machine's default login, not the credential this session bills to). If a human tells you an instance number, THAT beats all of this.",
     inputSchema: S({
@@ -469,6 +471,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'check_my_usage',
+    listed: true,
     description:
       'Self-check: read YOUR OWN remaining Claude quota, right now, in ~300ms. Returns the session (5h) %, the weekly all-models % (the BINDING cap), an `advice` verdict with `shouldOffload` / `safeToFanOut` flags, and `identity` — WHICH numbered instance you are, on WHAT plan/tier, and HOW that was established, so you can report "instance #11 (Pro) is at 82% weekly" instead of an unattributed percentage. `dollars` carries the last usage_budget calibration re-priced to this reading: `weekly.dollarsLeft` / `session.dollarsLeft` are about how many list-price dollars of Claude Code work fit before that cap (null until usage_budget has calibrated; read `dollars.caveat`). It identifies itself the same way whoami does (env → session file → parent process), so it reports the right account for a Claude DESKTOP session too, not just a CLI instance that sets CLAUDE_CONFIG_DIR. CALL THIS when you are doing long or heavy work: if `shouldOffload` is true you are close to being cut off mid-task, and you should WRITE YOUR WORKING CONTEXT, FINDINGS, AND NEXT STEPS TO A FILE BEFORE CONTINUING, so the work survives. Also call it before a big multi-agent fan-out — and gate on CURRENT + PROJECTED cost, because a fan-out cannot be recalled once launched while solo work can be stopped at any tool call. If `identity.warning` is present, the percentages are real but WHOSE they are is not settled: say so rather than quoting a bare number.',
     inputSchema: S(),
@@ -520,6 +523,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'list_usage',
+    listed: true,
     description:
       "Survey the quota of EVERY managed instance (desktop + CLI) in one call, each with its permanent instance `num` and its `advice` verdict, plus the DeepSeek account balance HSwarm spends from (`deepseek`) beside them. Use this to answer 'which of my accounts has headroom?' before routing heavy work, or to find the account that is about to hit its weekly cap — then refer to the winner by its number. When every account is saturated, the mechanical/checkable work belongs on HSwarm (`hswarm_run`), not queued behind a Claude account's reset. Checks are concurrent and cost no quota. The Free web accounts are not in it: free_status.",
     inputSchema: S(),
@@ -555,6 +559,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'usage_budget',
+    listed: true,
     description:
       "QUANTIFY the quota: turn a vague '98% used' into numbers you can actually plan with. Returns (a) `forecast` — the burn rate in %/HOUR, the hours of headroom left at that rate, and `exhaustsBeforeReset`, THE field that decides things: if false, the cap will NOT bite before it resets and you can work freely no matter how alarming the % looks; if true, you have `headroomHours` before you are cut off. And (b) `budget` — an estimated TOKEN headroom, derived by measuring (tokens counted from your Claude Code transcripts) / (percent burned), because Anthropic publishes no token or dollar quota. And (c) `budget.dollars` - each quota window (weekly and 5-hour) calibrated into list-price dollars: `capacityUsd` is what 100% is worth and `dollarsLeft` what is left, fitted by a Theil-Sen median over past windows keyed by their reset time, with windows that hit a cap or moved on usage this machine never recorded left out (`censored` counts them). Compare `dollarsLeft` with a batch's expected cost before a fan-out. ALWAYS read `budget.caveat` and `budget.confidence`: the token figure only counts Claude Code on THIS machine, so if the account is also used from the desktop app or elsewhere it is an OPTIMISTIC UPPER BOUND. Use this before committing to a long task or a big fan-out. CALL IT WITH NO ARGUMENTS to budget YOURSELF — it identifies which instance this process is (same detection as whoami, so a Claude Desktop session works too) and returns an `identity` block naming the account it measured. Pass `instance` (its permanent number — the only form that works for Desktop, CLI and Codex alike, and it echoes back which account answered) to budget a different one; `dir` and `account` remain for the older desktop/dispatch paths. Add `configDir` to count a specific CLI config dir's transcripts.",
     inputSchema: S({
@@ -663,6 +668,7 @@ export const TOOLS: McpEngineTool[] = [
   // --- CLI instances (Feature A) ------------------------------------------------
   {
     name: 'list_cli_instances',
+    listed: true,
     description:
       'List CLI instances (a CLAUDE_CONFIG_DIR per account, logged in once) with their permanent instance `num`, login state, associated account, and last usage snapshot.',
     inputSchema: S(),
@@ -773,6 +779,7 @@ export const TOOLS: McpEngineTool[] = [
   // running CliMayte in its own process would relaunch them as dead and could not cancel them.
   {
     name: 'climayte_run',
+    listed: true,
     description:
       "MUTATES: CLIMAYTE A TASK. When the owner tells a chat to climayte a task or fully delegate it, and for any work that needs Claude quality HSwarm could not deliver, the chat keeps only the orchestration (split, dispatch, read results, check them) and the real work goes here. AgentHydra chooses the account: new work goes around an account a person is using (its desktop app used in the last ten minutes) or another Claude session runs on, the calling chat's own included. Each task {prompt, cwd, title?, model?, effort?} runs as a Claude Code CLI worker on one of the OWNER'S CLI ACCOUNTS, spread by headroom; a worker MOVES TO ANOTHER ACCOUNT BY ITSELF when its account hits a usage limit, and every worker is visible and steerable in AgentHydra's CliMayte view (in Hydra Desk 2: the CliMayte page of the HSwarm tab, and under its chat in the sidebar). HSwarm also sends tool-using tasks here by itself when AgentHydra's cost model says the subscription is the better buy (docs/COST-MODEL.md); call climayte_run directly for work you want a Claude worker for whatever the cost. EACH TASK MUST BE SELF-CONTAINED: the worker sees NOTHING of this chat, so the prompt must name its folder, say what \"done\" means, and say what proof to report. `group` ties the tasks of one orchestration together (generated when omitted); `accounts` restricts to these CLI instances (numbers or ids); `per_account` 1..4 (default 2 per Pro window) is how many concurrent workers of THIS GROUP an account takes (other groups count separately); it is a preference: when no account within it takes a task, the task goes to an account with room past it, unless `per_account_strict: true` makes it a hard cap. An account runs 4 workers per Pro window across all groups, at most 8, and only as many as its projected 5-hour usage holds under the 85% stop line; top-level `model` and `effort` are the default for every task that does not set its own (an unknown value is refused). SIZE: each task is sized before it starts against the plans of its accounts (a Max 5x window holds 4.75 Pro windows, a Max 20x 19): a task expected to use more than half of the biggest window it may use starts NOTHING in this dispatch and comes back `split needed` with the number of pieces (send them as self-contained tasks, or `size: whole` to run it as it is); a task that fits a fresh window but not what any account has left WAITS for room (status waiting) while smaller tasks start. Returns the group and, per worker, its id, title, status, account and `size` (expected % of a Pro window and its basis, the biggest window, the most room any account has now); then climayte_status {group, wait_seconds} waits for results.",
     inputSchema: S(
@@ -984,6 +991,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_manage',
+    listed: true,
     description:
       "MUTATES: hand a big job to a CliMayte MANAGER (the CLIManager): you write the plan to a file and give the task list; the manager dispatches the workers, waits, has the daemon judge each one by command (its check, its commits on the branch, its diff inside the brief's paths), re-dispatches, and wakes you ONCE with a short report. Choose it from about 5 workers or several rounds (`after` orders them); small jobs (under 3 tasks is refused) use climayte_run. Each task: { key, prompt, kind, title?, check?, paths (globs the diff may touch; [] = must not commit), after? (keys that must pass first) }; no task may be kind `manage`. `verify` is the command you run on the merged result. The answer carries `wave`, `managerId` and `waiter`: run that waiter command (it waits on the manager alone), read its report, run `verify`, then call climayte_wave_verify. A wave's passes stay provisional and out of the scorecard until you verify it.",
     inputSchema: S(
@@ -1083,6 +1091,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_status',
+    listed: true,
     description: `Read CliMayte workers (status, account, lastActivity, result/error, moves, cost). \`id\` answers that ONE worker's full detail, with \`events\` (its last 60 event lines on every account: read these to see why it failed). Otherwise a list, newest first, without prompts and with the last 3 attempts: scoped by \`group\` (all of its workers), else every active worker plus the ${RECENT_FINISHED} most recently finished (\`limit\` changes that number; \`active: true\` lists only queued/running/waiting ones). With \`wait_seconds\` (1..${CLIMAYTE_MAX_WAIT_S}) it WAITS up to that long for the next status change in scope and then answers; call it again to keep waiting. Use that instead of polling. Longer waits are cut to ${CLIMAYTE_MAX_WAIT_S}: an MCP client drops a call held about 60 s (measured 2026-09-30: 55 s answered, 110 s and 300 s timed out with nothing returned). The story of a run (dispatches, accounts picked and why, moves, retries, finishes) is climayte_log. \`report: true\` answers the REPORT VIEW instead: one compact row per worker with its status, \`judged\` (a verdict already covers its newest work), its newest \`verdict\` and who gave it (\`by\`: check, orchestrator, owner), \`usedPct\` of a Pro 5-hour window, \`attempts\` and how each ended, and \`report\` (the recap its first turn ends with, else that turn from the top, cut to \`chars\`). Read finished work with it, several workers in one call (\`ids\`), then judge them with one climayte_verdict { ids }. A worker with a \`question\` is waiting for an answer, not finished: answer it with climayte_send from the task context, and ask the owner only when it needs a decision only he can make.`,
     inputSchema: S({
       group: { type: 'string' },
@@ -1140,6 +1149,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_log',
+    listed: true,
     description:
       "Read CliMayte's orchestration journal: one line per state change of every worker (dispatched; launched on which account and why it was picked: its session/week % and how many workers it already ran; limit hit and when the wall ends; moved; handoff requested/written/resumed; follow-up queued/delivered; retries; done with cost and turns; failed with the error's first line; cancelled; interrupted by a restart). Scope by `group` or `id`; `since` (ISO time or epoch ms) for only newer lines; `limit` (default 100) for the newest that many. Newest last, one readable line each, e.g. `23:41:07 w-1234abcd 'Fix events rows' launched on #84 (session 12%, week 0%, 0 active)`.",
     inputSchema: S({
@@ -1161,6 +1171,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_send',
+    listed: true,
     description:
       'MUTATES: send a follow-up message to a CliMayte worker, as the next turn in the SAME session. To a finished, failed or stopped worker it starts at once. To a RUNNING worker it is HELD UNTIL THE WHOLE CURRENT TASK ENDS (a running CLI session takes no input mid-run; that can be many minutes), unless `urgent: true`: then the running work is stopped cleanly (cost recorded, transcript kept) and the same session continues at once with this message first, followed by anything queued before it. Use urgent for steering that cannot wait (stop, change course, fix what you broke). `model` / `effort` switch the worker for this turn and every later one, in the same session (e.g. escalate a struggling worker from sonnet/medium to opus/xhigh in one call). Like the task, the message must be self-contained: the worker sees nothing of this chat. THIS IS ALSO HOW YOU ANSWER THE QUESTION OF A WORKER: a worker that is blocked on a decision asks with climayte_ask, you are pinged with its question and id (it shows as `question` in climayte_status), and your `text` here is the answer: the same session resumes with it and the question clears. Answer it yourself from the task context; ask the owner only when it needs a decision only he can make.',
     inputSchema: S(
@@ -1205,6 +1216,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_verdict',
+    listed: true,
     description:
       "MUTATES: judge a FINISHED CliMayte worker's result after you checked its proof: `verdict` pass or fail. Verdicts feed climayte_scorecard, which picks the setting for model `auto`. A fail needs `severity` (0 not the model's: check or brief at fault, not scored; 1 slip: a small fix; 2 rework: a real part wrong; 3 failed: unusable) and `note` (what was wrong, self-contained: the worker gets it; at most 8,000 characters, a longer one is refused, never cut) and sends the task back to the SAME session one rung up the ladder (Haiku 5.5 medium, high, Sonnet low, medium, high, then Opus medium, high, xhigh, max); a fail on Haiku goes at least to the setting its kind would run without Haiku. The answer names that `next` setting. A fail on a cheap setting usually means the task was too big: often the better move is `retry: false` and the task split into smaller parts sent on auto. `retry: false` records the fail without sending it back. `kind` tags a task dispatched without one. `ids` gives several workers the same verdict in one call (a batch you checked together); each id answers on its own.",
     inputSchema: S(
@@ -1253,6 +1265,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_priority',
+    listed: true,
     description:
       "MUTATES: change a CliMayte worker's priority (whole number; climayte_run's default is 0). Queued and waiting work starts highest first, then oldest first, so a raised task takes the next free account slot ahead of the rest; a running worker is not stopped. The journal records the change.",
     inputSchema: S({ id: { type: 'string' }, priority: { type: 'number' } }, ['id', 'priority']),
@@ -1284,6 +1297,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'climayte_cancel',
+    listed: true,
     description:
       'MUTATES: stop a CliMayte worker (`id`) or every worker of a `group`. Messages queued for it are kept (`keptMessages` counts them) and delivered, in order, when it is continued with climayte_send.',
     inputSchema: S({ id: { type: 'string' }, group: { type: 'string' } }),
@@ -1420,6 +1434,7 @@ export const TOOLS: McpEngineTool[] = [
 
   {
     name: 'launch_terminal_session',
+    refuses: true,
     description:
       '⛔ REFUSED ON EVERY CALL on this machine: terminal launches were removed (owner law, 2026-08-31 - a visible console is a window nobody asked for, a hidden one is a headless chat, and there is no setting). The tool stays so a caller gets the reason instead of a missing name. To START new work on another account use `fan_out` (N visible desktop chats, one per account, tracked as a group) or `orchestrator_run spawn_chat` (one chat). To CONTINUE a chat, deliver into it: `fan_out_send`, or `orchestrator_run cli_send` / `stage_reply` + `courier`.',
     inputSchema: S(
@@ -1477,6 +1492,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'move_chat',
+    listed: true,
     description:
       'MUTATES: MOVE ONE CHAT BETWEEN ACCOUNTS IN ONE CALL — the path for "move the X chat from Martin to here" (owner, 2026-09-04: by hand this took a dozen round trips and minutes; now it is this call). `chat` is a title fragment — matched FUZZILY, so case, punctuation and a misspelling still find it ("arkitecht cleanup" finds "Arkitekt cleanup") — or a session id. `from` (optional) is the account it lives on — instance number, name, label or email — and scopes the search, so a title two accounts share is not ambiguous. `to` defaults to "here" (the instance THIS process runs as, resolved like whoami; refused unless that identity is exact); "best" picks the running desktop instance with the most real headroom (tier × remaining weekly %, from the usage survey, never the source); or name any instance by number/name/label/email. It runs the orchestrator\'s migrate_chat with EVERY rail it has — hold, breaker, live-writer refusal, verified landing, source row settled so the old account no longer shows it — plus --now: a chat whose turn is finished and whose transcript shows NO background job outstanding moves after 15s of quiet instead of the standing 300s (an outstanding job, a working or stuck engine still wait or refuse). `wait_secs` (default 330, max 360) is how long the MOVE waits, in the daemon, for a chat that is idle but not yet quiet enough. THE CALL WAITS AT MOST 45s FOR THE VERDICT: a move still waiting or working then answers with `operationId` and a `poll` line, and `orchestrator_operation {id}` hands back migrate_chat\'s JSON report on stdout once it lands (read `landed` and `collateral` there). Calling move_chat again with the same arguments returns that SAME operation, never a second move. THE CHAT KEEPS ITS EFFORT: the source\'s own effort + ultracode are carried and pushed into a running target app; read `effortCarried` ({from, to, verified, via}). EVERY LANDING IS STAMPED bypassPermissions + ultracode, and then ADJUDICATED, because a disk read is not the mode the chat opens with: the app holds each chat\'s mode in MEMORY and only re-reads its store at its own process boot. Read `bypassVerdict`, never `permissionMode` (which is only what the disk said last). `app-confirmed` = the target app\'s own permission picker was driven and agreed; `adopted-at-boot` = the target app is closed, so it will read this stamp at its next boot; both are real. `disk-only` = NOT a guarantee, the chat may open on a prompting mode, and `bypassRemedy` is the exact command that fixes it. `bypassStamped` is true only for the two earned verdicts. `force` is a PERSON\'S word — pass it only when the human asked for this move (it overrides a hold or a superseded lineage; a live writer is never overridden). `dry_run` resolves the chat, the target, the hold and the engine\'s idleness and reports the plan without moving anything. Read `report`; `landed` is the verdict. ⛔ READ `collateral`: a move now reads every chat record on the machine before and after itself, and any chat OUTSIDE the move that went archived while it ran is named there, with `ok` false and the report saying which account to unarchive it from (a bystander was archived this way on 2026-09-16 and nothing reported it). `targetNote` CONFIRMS the resolved account by NAME AND EMAIL ("to = instance #12 (pap3r rotate2 · Max 20×) — someone@example.com") — a stale identity signal has landed chats on the wrong account before (2026-09-07); when `to`/"here" is not obviously right, call this with `dry_run: true` FIRST and read `targetNote` before the real move. A just-landed chat does not process peer messages until the user first interacts with it. Another FOLDER or workspace is not this tool: desk_chat for a Hydra Desk chat, move_chat_folder for a Claude Desktop one.',
     inputSchema: S(
@@ -2022,6 +2038,7 @@ export const TOOLS: McpEngineTool[] = [
   },
   {
     name: 'orchestrator_operation',
+    listed: true,
     description:
       "READ THE VERDICT OF A RUN WHOSE CALL YOU LOST - poll one orchestrator operation by id, or list the recent ones. A RUN'S FULL RESULT IS KEPT FOR AN HOUR BY THE DAEMON PROCESS THAT RAN IT, so a call that died on YOUR transport timeout is not lost work and need not be guessed at or re-run: the script kept going, finished, and its stdout/exit code/verdict are still here. Read them instead of re-firing the act. ⛔ THE ONE CASE WHERE THEY ARE NOT: these records live in memory, so a daemon RESTART loses them - and the run may have finished, or died with the daemon that ran it. A miss says which case it is (`reason`: 'daemon-restarted' vs 'unknown-id') and names when this daemon started; on 'daemon-restarted' do NOT re-fire the act, read the toolbox's own ledger for what it did and check the effect. For a move, `migrate_reconcile` lists chats left half-moved and `migrate_reconcile --finish <id>` settles each. `id` polls one (`operationId` comes back from every orchestrator_run, INCLUDING the 409-busy refusal that names the run already in flight); omit it to list recent operations, which is how you find the id when the call that would have told you it never returned. `status` is 'running' or 'done'/'failed'; a running one can be polled again. Read-only - it starts nothing and stops nothing: `orchestrator_cancel {id}` is what stops a run that is still going.",
     inputSchema: S({
@@ -2372,48 +2389,18 @@ export function withRenamedTools<T extends { name: string }>(
 
 /** Tools that refuse every call. Never listed, so no agent spends a turn on one; still answered by
  *  name, so a caller that names one gets the refusal. */
-export const REFUSING_TOOLS: ReadonlySet<string> = new Set([
-  'add_queue_item',
-  'launch_terminal_session',
-])
+export const REFUSING_TOOLS: ReadonlySet<string> = new Set(
+  TOOLS.filter((t) => t.refuses).map((t) => t.name),
+)
 
-/** The tools listed directly; every other one is reached with hydra_find / hydra_run (mcp-find.ts) and
- *  still answered by name. Owner, 2026-10-11: keep the tool list small, the Connections way. Picked from
- *  the agenthydra calls in every transcript on this PC that day (105 tools, 35k tokens of schemas; these
- *  carry over 95% of the calls), plus what this server's instructions and the Desk prompt and handoff
- *  name. AGENTHYDRA_MCP_ALL_TOOLS=1 lists everything. */
-export const LISTED_TOOLS: ReadonlySet<string> = new Set([
-  'hydra_find',
-  'hydra_run',
-  'desk_chat',
-  'dashboard_read',
-  'dashboard_write',
-  'whoami',
-  'check_my_usage',
-  'usage_budget',
-  'list_usage',
-  'list_cli_instances',
-  'climayte_run',
-  'climayte_status',
-  'climayte_verdict',
-  'climayte_send',
-  'climayte_cancel',
-  'climayte_log',
-  'climayte_priority',
-  'climayte_manage',
-  'fan_out',
-  'fan_out_status',
-  'fan_out_send',
-  'fan_out_delete',
-  'move_chat',
-  'orchestrator_operation',
-  'list_chats',
-  'search_sessions',
-  'history_search',
-  'history_read',
-  'tail_session',
-  'dev_servers',
-])
+/** The tools listed directly: each says `listed: true` on its own definition (HydraTool, mcp-client.ts). Every other
+ *  one is reached with hydra_find / hydra_run (mcp-find.ts) and still answered by name. Owner, 2026-10-11: keep the
+ *  tool list small, the Connections way; the first set was picked from the agenthydra calls in every transcript on
+ *  this PC that day (105 tools, 35k tokens of schemas; the listed ones carried over 95% of the calls).
+ *  AGENTHYDRA_MCP_ALL_TOOLS=1 lists everything. */
+export const LISTED_TOOLS: ReadonlySet<string> = new Set(
+  TOOLS.filter((t) => t.listed).map((t) => t.name),
+)
 
 /** Every tool the listing leaves out: the refusing ones always, and the unlisted rest unless asked for all. */
 export const UNLISTED_TOOLS: ReadonlySet<string> = new Set([

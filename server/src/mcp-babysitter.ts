@@ -3,7 +3,7 @@
 // desk2/server/src/plugins/72-babysitter.ts), so this file keeps no state: it reads Desk's /api/babysitter, which
 // answers from its last look (a few local reads every five minutes, no model), and turns its times into ISO.
 import { desk2Present, desk2Url } from './desk2'
-import { S } from './mcp-client'
+import { type HydraTool, S } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 // The parts of desk2/shared/babysitter.ts this reads. Not imported: a release build may carry no desk2/.
@@ -103,7 +103,7 @@ async function babysitter(args: { fresh?: boolean; enabled?: boolean }): Promise
   }
 }
 
-export const BABYSITTER_TOOLS: McpEngineTool[] = [
+export const BABYSITTER_TOOLS: HydraTool[] = [
   {
     name: 'babysitter',
     description:

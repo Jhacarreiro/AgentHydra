@@ -1,6 +1,6 @@
 // server/src/mcp-dashboards.ts - dashboard_read and dashboard_write: the small dashboard a person sees for a project in
 // AgentHydra. Both call the daemon's /api/dashboards routes; the folder defaults to the calling Desk chat's, as desk_chat's does.
-import { api, JSON_HEADERS, S, str } from './mcp-client'
+import { api, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -44,9 +44,11 @@ const CWD = {
     'Any folder inside the project (the checkout is found from it). Omit it inside a Desk chat.',
 }
 
-export const DASHBOARD_TOOLS: McpEngineTool[] = [
+export const DASHBOARD_TOOLS: HydraTool[] = [
   {
     name: 'dashboard_read',
+    callerChat: 'deskChat',
+    listed: true,
     description:
       "READ-ONLY: the project's dashboard, a small website the person opens in AgentHydra. Answers `url` (open it with a browser tool to see it), `folder` (a local AI may also edit files there directly), and `entries` (path, bytes, updatedAt). `path` also returns that file's content. With nothing written yet, `files` is 0: start with dashboard_write and an index.html. `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder.",
     inputSchema: S({
@@ -66,6 +68,8 @@ export const DASHBOARD_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'dashboard_write',
+    callerChat: 'deskChat',
+    listed: true,
     description:
       "MUTATES: the project's dashboard is its own small website the person opens in AgentHydra, and you have full control: write anything (HTML, CSS, JS, charts, images, a data.json your page fetches, or a whole built dist via `from`). index.html is the entry. Applied in order, all-or-nothing: `clear`, `from` (absolute folder to publish), `files` [{path, content, encoding?: utf8|base64}], `edits` [{path, old, new}] (old must occur exactly once; prefer edits to change part of a page another chat also writes), `remove` [paths]. Paths are relative with forward slashes (letters, digits . _ -), up to 8 deep; files up to 5 MB, site up to 50 MB and 1000 files. The answer gives `url` (open it with a browser tool to look at your work) and `folder` (a local AI may also write files there directly). `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder. `by` names who writes (up to 60 characters); omitted, it is the calling chat's title.",
     inputSchema: S({

@@ -1,7 +1,7 @@
 // server/src/mcp-session-tools.ts - the MCP tools for sessions, analytics, the queue, incidents
 // and live agent status, split out of mcp.ts. Each is a thin proxy over an /api/* route; mcp.ts
 // spreads SESSION_TOOLS at the head of TOOLS, so the tool order is unchanged.
-import { api, JSON_HEADERS, normalizeInstanceRef, qs, S, str } from './mcp-client'
+import { api, type HydraTool, JSON_HEADERS, normalizeInstanceRef, qs, S, str } from './mcp-client'
 import { ownTranscript } from './mcp-self'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -14,7 +14,7 @@ export function labelSpendAccounts(spend: unknown, accounts: unknown): unknown {
   return { ...s, byAccount: s.byAccount.map((b) => ({ ...b, label: names[b.key]?.label ?? null })) }
 }
 
-export const SESSION_TOOLS: McpEngineTool[] = [
+export const SESSION_TOOLS: HydraTool[] = [
   // --- sessions (read-only) ---------------------------------------------------
   {
     name: 'list_sessions',
@@ -189,6 +189,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'search_sessions',
+    listed: true,
     description:
       // The completeness caveat is the load-bearing sentence. An agent that reads an empty result
       // as "this text is nowhere on the machine" will confidently rebuild work that already exists,
@@ -267,6 +268,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'list_chats',
+    listed: true,
     description:
       // The tool that did not exist on 2026-09-06, when "what chats does this account hold?" cost
       // five round trips, blew a token cap, and produced a wrong number off a hand-read of the
@@ -329,6 +331,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'tail_session',
+    listed: true,
     description:
       'Tail a session transcript: the most recent turns. `limit` is applied AFTER the filters, so ' +
       'humanOnly=true gives you the last N things a PERSON said rather than N mixed turns — that is ' +
@@ -394,6 +397,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   // What compaction dropped, readable again by the session that lost it (compaction-history.ts).
   {
     name: 'history_search',
+    listed: true,
     description:
       'RECOVER A DETAIL YOUR OWN SESSION LOST TO COMPACTION: a path, an error line, the exact ' +
       "words the person used. Searches YOUR session's transcript (the calling Claude Code " +
@@ -442,6 +446,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'history_read',
+    listed: true,
     description:
       'Read ONE source that history_search found, exactly, in pages of 4,000 characters: pass ' +
       'its `sourceId` and an `offset` (0, the offset on the hit, or `nextOffset` from the last ' +
@@ -648,6 +653,7 @@ export const SESSION_TOOLS: McpEngineTool[] = [
   },
   {
     name: 'add_queue_item',
+    refuses: true,
     description:
       '⛔ REFUSED ON EVERY CALL on this machine (HTTP 409): a queued run is a `claude -p` process nobody can see, and the no-headless law (owner, 2026-08-27, restated 2026-08-31: "there is no setting for this") is a literal `false` in headless-policy.ts. The queue remains as history and UI. To start visible work on other accounts use `fan_out`; to continue a chat, `fan_out_send` or the orchestrator courier. If it ever accepts: title, cwd, and prompt are required; session_id is required when resuming an existing session (new_chat=false).',
     inputSchema: S(

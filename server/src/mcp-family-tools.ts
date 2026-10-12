@@ -2,10 +2,10 @@
 // (hydra-family.ts): which members exist and are up, and which project a folder belongs to.
 // mcp.ts spreads FAMILY_TOOLS into TOOLS. Both are read-only and answer without the daemon.
 import { familyAnswer, projectContext } from './hydra-family'
-import { daemonBase, S, str } from './mcp-client'
+import { daemonBase, type HydraTool, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
-export const FAMILY_TOOLS: McpEngineTool[] = [
+export const FAMILY_TOOLS: HydraTool[] = [
   {
     name: 'hydra_family',
     description:
