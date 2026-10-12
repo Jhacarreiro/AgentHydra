@@ -65,16 +65,17 @@ metrics:
     gate: exact
   # An agent that calls a tool it already has listed through hydra_run loses the caller binding: on 2026-10-11 the
   # workers one chat dispatched that way were saved with no link to it, so the chat showed none running. Share of
-  # the last 7 days' hydra_run calls whose tool is one the server lists directly; later description passes should
-  # move it down.
+  # the last 7 days' hydra_run calls whose tool is one the server lists directly. A field metric over a window of
+  # past transcripts, not a build output: it moves only after the AgentHydra daemon restarts on new descriptions,
+  # so compare a window before and after a restart, not two commits.
   - id: mcp.hydra_run.listed_share
     kind: count
     better: lower
     unit: share
     measure: "python scripts/rsi/mcp-hydra-run-listed.py"
     pick: 'json:$.listed_share'
-    gate: band
-    repeat: 3
+    gate: exact
+    repeat: 1
   # Every CliMayte worker carries this brief on every turn of its session.
   - id: climayte.worker_brief_chars
     kind: size
