@@ -4,15 +4,16 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { nextTick, ref } from 'vue'
 import { leaveUnlessFiltered, rowLeave } from '../../src/lib/row-leave'
+import { saveGlobals } from '../save-globals'
 
 const g = globalThis as Record<string, unknown>
-let saved: Record<string, unknown>
+let restoreGlobals: () => void
 beforeEach(() => {
-  saved = { document: g.document, matchMedia: g.matchMedia }
+  restoreGlobals = saveGlobals('document', 'matchMedia')
   g.document = { visibilityState: 'visible' }
   g.matchMedia = () => ({ matches: false })
 })
-afterEach(() => Object.assign(g, saved))
+afterEach(() => restoreGlobals())
 
 /** A row whose animations start and never finish, as in a window hidden halfway through. */
 function row() {

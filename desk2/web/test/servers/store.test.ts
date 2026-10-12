@@ -1,5 +1,6 @@
 import { afterAll, beforeAll, describe, expect, it } from 'bun:test'
 import { useDevServers } from '../../src/components/servers/store'
+import { saveGlobals } from '../save-globals'
 
 // The views read one client: it asks once for all of them, never starts the service by hand (Desk does, for the first
 // list read, once), leaves a service stopped from Settings stopped (a poll's read never starts it), sends one action
@@ -14,7 +15,7 @@ let gate: Promise<void> | null = null
 /** List reads still to miss while the service runs (a busy PC: Desk's 2 s wait for the service ran out). */
 let missReads = 0
 const realFetch = globalThis.fetch
-const realDocument = (globalThis as { document?: unknown }).document
+const restoreDocument = saveGlobals('document')
 const json = (body: unknown) => new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } })
 
 beforeAll(() => {
@@ -52,7 +53,7 @@ beforeAll(() => {
 })
 afterAll(() => {
   globalThis.fetch = realFetch
-  ;(globalThis as { document?: unknown }).document = realDocument
+  restoreDocument()
 })
 const settle = () => new Promise((r) => setTimeout(r, 30))
 const count = (url: string) => calls.get(url) ?? 0

@@ -90,6 +90,9 @@ between server/ and web/.
   keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left
   `process.env.ProgramFiles` undefined for every later file, and under Bun on Windows `rmSync('')` empties the working
   folder. On 2026-10-10 the two together emptied `desk2/` mid-suite: a cleanup checks its temp path is set first.
+  A test that swaps a global (`fetch`, `WebSocket`, a DOM stand-in) saves the real one first and puts it back in an
+  `afterAll` or `afterEach`: on 2026-10-12 a store test's stubs, left behind, failed 286 tests in later files. The
+  preload names the file that leaves one swapped (the next file's first test fails with it) and puts it back.
 - A Desk on any home but `~/.hydra-desk-2` (a test's, an e2e script's, a probe's) is a throwaway: it never joins
   Login sync and sets up no Free runtime (`server/src/real-home.ts`, 2026-10-07: before, one pulled every Free login
   into %TEMP%). Never gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.

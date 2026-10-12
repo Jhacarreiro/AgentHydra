@@ -27,8 +27,15 @@ const mockDomGlobals = () => {
 const unmockDomGlobals = () => {
   for (const name of mockedGlobals.splice(0)) delete (global as any)[name]
 }
-import { ref } from 'vue'
+import { nextTick, ref } from 'vue'
 import { useDesk } from '@/stores/desk'
+import { saveGlobals } from './save-globals'
+
+// fetch, WebSocket and Notification are swapped before each test below, and put back once the describe ends, after
+// the store stops the watchers its init() started: left behind, every later file's fetch got this file's audio reply,
+// no WebSocket ever opened, and the store's once-a-minute watchers threw on the missing document (2026-10-12: 286 of
+// 2426 tests failed in a full desk2 run, chat routes, the bridge and every headless Chrome test among them).
+const restoreGlobals = saveGlobals('fetch', 'WebSocket', 'Notification')
 import type { ServerEvent, ChatSummary, TranscriptItem } from '@shared/protocol'
 
 // Mock WebSocket
@@ -77,7 +84,12 @@ describe('useDesk store', () => {
   let mockWs: MockWebSocket | null = null
 
   beforeAll(mockDomGlobals)
-  afterAll(unmockDomGlobals)
+  afterAll(async () => {
+    useDesk().disconnect()
+    await nextTick() // the closed socket retitles the window: let that run while the stand-in document is here
+    unmockDomGlobals()
+    restoreGlobals()
+  })
 
   beforeEach(() => {
     // Mock global fetch and WebSocket

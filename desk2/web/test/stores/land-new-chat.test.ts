@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { ChatSummary, ServerEvent } from '@shared/protocol'
 import { groupChats } from '../../src/components/sidebar/logic'
+import { saveGlobals } from '../save-globals'
 
 // A chat started from the New session screen is listed and opened the moment the POST answers,
 // whether or not the socket's chat.upsert came first. The store runs on a fake socket and fetch.
@@ -36,6 +37,7 @@ function summary(id: string, over: Partial<ChatSummary> = {}): ChatSummary {
 
 let socket: { onmessage: ((e: { data: string }) => void) | null } | null = null
 let nextCreated: ChatSummary = summary('none')
+const restoreGlobals = saveGlobals('document', 'window', 'location', 'Notification', 'WebSocket', 'fetch')
 const g = globalThis as Record<string, unknown>
 g.document ??= { title: 'Hydra Desk', hidden: false, createElement: () => ({}) } // vue's runtime-dom makes a template element on load
 g.window ??= { location: { protocol: 'http:', host: 'localhost:7801' }, addEventListener() {}, dispatchEvent() {}, focus() {} }
@@ -62,6 +64,11 @@ const { useDesk } = await import('../../src/stores/desk')
 const desk = useDesk()
 desk.disconnect()
 await desk.init()
+// What init() started stops, and the real globals come back, before the next file runs.
+afterAll(() => {
+  desk.disconnect()
+  restoreGlobals()
+})
 const push = (e: ServerEvent) => socket?.onmessage?.({ data: JSON.stringify(e) })
 const ids = (prefix: string) => desk.chats.value.filter((c) => c.id.startsWith(prefix)).map((c) => c.id)
 

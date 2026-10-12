@@ -1,6 +1,7 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { ChatSummary, ServerEvent, TranscriptItem } from '@shared/protocol'
 import { wantsDesktopNotice } from '../../src/stores/notify'
+import { saveGlobals } from '../save-globals'
 
 // A socket reconnect (hello) clears the items cache: the chat open in the window is fetched again, so its
 // history and a docked request come back without switching chats. The store runs on a fake socket and fetch.
@@ -43,6 +44,7 @@ const OPEN: TranscriptItem[] = [
 
 let socket: { onmessage: ((e: { data: string }) => void) | null } | null = null
 const fetched: string[] = []
+const restoreGlobals = saveGlobals('document', 'window', 'location', 'Notification', 'WebSocket', 'fetch')
 const g = globalThis as Record<string, unknown>
 g.document ??= { title: 'Hydra Desk', hidden: false, createElement: () => ({}) } // vue's runtime-dom makes a template element on load
 g.window ??= { location: { protocol: 'http:', host: 'localhost:7801' }, addEventListener() {}, dispatchEvent() {}, focus() {} }
@@ -80,6 +82,11 @@ const { useDesk, RELOAD_WAITS_MS } = await import('../../src/stores/desk')
 const desk = useDesk()
 desk.disconnect()
 await desk.init()
+// What init() started stops, and the real globals come back, before the next file runs.
+afterAll(() => {
+  desk.disconnect()
+  restoreGlobals()
+})
 const push = (e: ServerEvent) => socket?.onmessage?.({ data: JSON.stringify(e) })
 const hello = (chats: ChatSummary[]): ServerEvent => ({
   type: 'hello',

@@ -1,7 +1,8 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { AccountInfo, ExternalSession, ServerEvent, TranscriptItem } from '@shared/protocol'
 import { externalChat, externalChatId, isExternalChatId, resumable, sessionOfChatId, whereLabel } from '../../src/components/external/logic'
 import { draftImages } from '../../src/components/composer/draft-images'
+import { saveGlobals } from '../save-globals'
 
 const session = (over: Partial<ExternalSession> = {}): ExternalSession => ({
   id: 's1',
@@ -78,6 +79,7 @@ describe('the stand-in chat of a resumable outside session', () => {
 // The store, on a fake socket and fetch.
 const calls: { path: string; method: string; body: unknown }[] = []
 let socket: { onmessage: ((e: { data: string }) => void) | null } | null = null
+const restoreGlobals = saveGlobals('document', 'window', 'location', 'Notification', 'WebSocket', 'fetch')
 const g = globalThis as Record<string, unknown>
 g.document ??= { title: 'Hydra Desk', hidden: false, createElement: () => ({}) } // vue's runtime-dom makes a <template> when it loads
 g.window ??= { location: { protocol: 'http:', host: 'localhost:7801' }, addEventListener() {}, dispatchEvent() {}, focus() {} }
@@ -119,6 +121,11 @@ const { useDesk } = await import('../../src/stores/desk')
 const desk = useDesk()
 desk.disconnect()
 await desk.init()
+// What init() started stops, and the real globals come back, before the next file runs.
+afterAll(() => {
+  desk.disconnect()
+  restoreGlobals()
+})
 const push = (e: ServerEvent) => socket?.onmessage?.({ data: JSON.stringify(e) })
 
 describe('the first message imports the session and resumes it', () => {

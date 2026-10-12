@@ -1,5 +1,5 @@
 // Test preload for every desk2 suite (desk2/bunfig.toml): no test can remove the folder the suite runs in, or
-// replace process.env (see the end of this file).
+// replace process.env, and a file that leaves a global swapped is named by the next file (see the end of this file).
 //
 // Why (2026-10-10): under Bun 1.4.3 on Windows, rmSync('', { recursive: true, force: true }) empties the WORKING
 // folder and then throws EBUSY on the folder itself (Node throws ENOENT). A browser test whose beforeAll stopped
@@ -11,7 +11,7 @@
 // replaced by modules made of the patched objects: Bun gives a named import of a builtin its own binding, which no
 // patch of the object reaches (the root suite's tests/real-home-guard.ts measured it).
 
-import { mock } from 'bun:test'
+import { afterAll, beforeEach, mock } from 'bun:test'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
 import path from 'node:path'
@@ -64,3 +64,60 @@ for (const id of ['node:fs/promises', 'fs/promises']) mock.module(id, fspModule)
 // it holds Bun's upper-cased keys, so process.env.ProgramFiles read undefined for every later file. On 2026-10-10
 // that is how findChrome found no Chrome mid-suite, and the browser test that then stopped early emptied desk2/.
 Object.defineProperty(process, 'env', { value: process.env, writable: false, configurable: false, enumerable: true })
+
+// A file that swaps a global (fetch, WebSocket, a DOM stand-in) puts it back before it ends: every file runs in this one
+// process, so a swap left behind is every later file's. On 2026-10-12 web/test/stores.desk.test.ts left its fetch and
+// WebSocket stubs in place, and 286 of 2426 tests in later files failed, each of them green alone: their fetch got
+// that file's audio reply and no WebSocket (the headless Chrome tests' CDP among them) ever opened.
+// A preload's beforeAll and afterAll run once per run, not per file, and a file's own beforeAll runs before the first
+// beforeEach here, so the check sits where Bun resolves the next test file: after the last file's afterAll, before the
+// next one loads. A guarded global that differs from the one this preload saw is put back there and named by the
+// first test of the next file, which fails with the leaking file's name; the rest of the run goes on unharmed.
+const GUARDED_GLOBALS = [
+  'fetch', 'WebSocket', 'EventSource', 'Notification', 'window', 'document', 'navigator', 'location', 'localStorage',
+  'sessionStorage', 'setTimeout', 'clearTimeout', 'setInterval', 'clearInterval', 'queueMicrotask', 'Date', 'Response',
+  'Request', 'Headers', 'URL', 'AbortController', 'console',
+]
+const realGlobals = new Map(GUARDED_GLOBALS.map((name) => [name, Object.getOwnPropertyDescriptor(globalThis, name)]))
+const sameDescriptor = (a?: PropertyDescriptor, b?: PropertyDescriptor) =>
+  a === b || (!!a && !!b && a.value === b.value && a.get === b.get && a.set === b.set)
+
+/** Puts back every guarded global that differs from the preload's; returns their names. */
+function putBackGlobals(): string[] {
+  const changed: string[] = []
+  for (const [name, real] of realGlobals) {
+    if (sameDescriptor(Object.getOwnPropertyDescriptor(globalThis, name), real)) continue
+    changed.push(name)
+    if (real) Object.defineProperty(globalThis, name, real)
+    else delete (globalThis as Record<string, unknown>)[name]
+  }
+  return changed
+}
+
+const leakMessage = (file: string, changed: string[]) =>
+  `${path.relative(process.cwd(), file)} left globalThis.${changed.join(', globalThis.')} swapped when it ended (put ` +
+  'back by the preload): restore it in that file, in an afterAll or afterEach, or every later file in the run gets it'
+
+let currentFile = ''
+let leak: string | null = null
+Bun.plugin({
+  name: 'desk2-test-file-boundary',
+  setup(build) {
+    build.onResolve({ filter: /\.(test|spec)\.[cm]?[jt]sx?$/ }, (args) => {
+      const changed = putBackGlobals()
+      if (changed.length && currentFile) leak = leakMessage(currentFile, changed)
+      currentFile = args.path
+      return undefined
+    })
+  },
+})
+beforeEach(() => {
+  if (leak === null) return
+  const message = leak
+  leak = null
+  throw new Error(message)
+})
+afterAll(() => {
+  const changed = putBackGlobals()
+  if (changed.length) throw new Error(leakMessage(currentFile, changed))
+})

@@ -1,6 +1,7 @@
-import { afterEach, beforeAll, describe, expect, it } from 'bun:test'
+import { afterAll, afterEach, beforeAll, describe, expect, it } from 'bun:test'
 import { BROWSER_PROFILES, OPEN_BROWSER_EVENT, type BrowserProfiles } from '@shared/browser'
 import { browserOpen, browserProfiles } from '../../src/components/servers/api'
+import { saveGlobals } from '../save-globals'
 import { clipboardAction, fitFrame, formatAgo, isPasteKey, keyMessage, liveSocketUrl, mapPoint, mouseButton, normalizeAddress, profileRows, resolveRequest } from '../../src/components/servers/logic'
 
 const NOW = Date.parse('2020-10-06T12:00:00Z')
@@ -62,10 +63,12 @@ describe('the card request', () => {
 describe('OPEN_BROWSER_EVENT', () => {
   const target = new EventTarget()
   let mod: typeof import('../../src/components/servers/browser-request')
+  const restoreWindow = saveGlobals('window')
   beforeAll(async () => {
     ;(globalThis as { window?: unknown }).window = target
     mod = await import('../../src/components/servers/browser-request')
   })
+  afterAll(restoreWindow)
   const fire = (detail: unknown) => target.dispatchEvent(new CustomEvent(OPEN_BROWSER_EVENT, { detail }))
 
   it('keeps a request fired before the pane mounted, and hands it over once', () => {

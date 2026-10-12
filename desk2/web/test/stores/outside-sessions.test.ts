@@ -1,5 +1,6 @@
-import { describe, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import type { ExternalSession, SearchHit, ServerEvent } from '@shared/protocol'
+import { saveGlobals } from '../save-globals'
 
 // An outside session older than the list's 24 hours (a search hit) is fetched on its own, and a newer
 // search cancels the one in flight. The store runs on a fake socket; each test sets its own fetch.
@@ -34,6 +35,7 @@ const hit = (sessionId: string): SearchHit => ({
 })
 
 let socket: { onmessage: ((e: { data: string }) => void) | null } | null = null
+const restoreGlobals = saveGlobals('document', 'window', 'location', 'Notification', 'WebSocket', 'fetch')
 const g = globalThis as Record<string, unknown>
 g.document ??= { title: 'Hydra Desk', hidden: false, createElement: () => ({}) } // vue's runtime-dom makes a template element on load
 g.window ??= { location: { protocol: 'http:', host: 'localhost:7801' }, addEventListener() {}, dispatchEvent() {}, focus() {} }
@@ -57,6 +59,11 @@ const { useDesk } = await import('../../src/stores/desk')
 const desk = useDesk()
 desk.disconnect()
 await desk.init()
+// What init() started stops, and the real globals come back, before the next file runs.
+afterAll(() => {
+  desk.disconnect()
+  restoreGlobals()
+})
 const push = (e: ServerEvent) => socket?.onmessage?.({ data: JSON.stringify(e) })
 const listed = (prefix: string) => desk.external.value.filter((s) => s.id.startsWith(prefix))
 

@@ -88,6 +88,8 @@ let ws: WebSocket | null = null
 let wsReconnectDelay = 1000
 const maxReconnectDelay = 30000
 let wsReconnectTimeout: ReturnType<typeof setTimeout> | null = null
+/** What stops the watchers init() started (stale bundle, server update, AgentHydra release); disconnect() runs them. */
+const stopWatchers: (() => void)[] = []
 
 /**
  * The server's one worker list, split by PC. This PC's (`workers`) feed every count, panel, card and Stop
@@ -1007,9 +1009,7 @@ export function useDesk() {
         Notification.requestPermission()
       }
       connectWebSocket()
-      watchBundle()
-      watchServerUpdate()
-      watchRelease()
+      stopWatchers.push(watchBundle(), watchServerUpdate(), watchRelease())
     },
 
     select(
@@ -1459,6 +1459,7 @@ export function useDesk() {
       if (wsReconnectTimeout) {
         clearTimeout(wsReconnectTimeout)
       }
+      for (const stop of stopWatchers.splice(0)) stop()
     }
   }
 }
