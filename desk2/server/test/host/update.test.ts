@@ -53,7 +53,7 @@ test('stale once a file of the server is newer than its start, or one was added 
   expect((await read()).stale).toBe(true)
 })
 
-test('restart starts launcher/restart.ps1, logging to the data home, only for the window on a server the launcher started', async () => {
+test('restart starts launcher/restart.ps1, logging to the data home, only on a server the launcher started', async () => {
   const { desk, home, started } = await boot()
   const restart = (headers: Record<string, string> = {}) => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers })
   const windowAsk = { 'X-Desk-Caller': 'window', 'X-Desk-Chat': 'chat-1', 'User-Agent': 'Desk2Window/1' }
@@ -127,14 +127,49 @@ test('a plain shutdown is answered while a chat host that never answers is still
   expect(Date.now() - began).toBeLessThan(2_000)
 })
 
-test('an agent or script asking for a restart is refused with the owner message, and its ask is logged', async () => {
-  const { desk, home, started } = await boot()
+test("an agent's restart is refused while the server runs the code on disk and accepted once that code changed, each ask logged", async () => {
+  let stamp: CodeStamp = { newest: 900, count: 3 }
+  const { desk, home, started } = await boot({ stamp: () => stamp })
   pidFile(home, 4242)
-  const res = await fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'curl/8.4' } })
-  expect(res.status).toBe(409)
-  expect((await res.json()).error).toContain("the owner's")
+  const agentAsk = () => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'curl/8.4', 'X-Desk-Chat': 'chat-7' } })
+  const refused = await agentAsk()
+  expect(refused.status).toBe(409)
+  expect((await refused.json()).error).toContain('nothing to restart onto')
   expect(started).toEqual([])
-  expect(readFileSync(join(home, 'logs', 'restart.log'), 'utf8')).toContain('restart asked: caller=other chat=none user-agent="curl/8.4" -> refused (not the window)')
+
+  stamp = { newest: 1500, count: 3 }
+  expect((await agentAsk()).status).toBe(202)
+  expect(started).toHaveLength(1)
+  expect(started[0]!.at(-1)!).toContain(join('launcher', 'restart.ps1'))
+  const log = readFileSync(join(home, 'logs', 'restart.log'), 'utf8')
+  expect(log).toContain('restart asked: caller=other chat=chat-7 user-agent="curl/8.4" -> refused (nothing to update)')
+  expect(log).toContain('restart asked: caller=other chat=chat-7 user-agent="curl/8.4" -> accepted')
+})
+
+test('one restart at a time: once one is accepted, the next ask is refused, the window\'s too', async () => {
+  const { desk, home, started } = await boot({ stamp: () => ({ newest: 1500, count: 3 }) })
+  pidFile(home, 4242)
+  const ask = (headers: Record<string, string>) => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers })
+  expect((await ask({ 'User-Agent': 'agent-a' })).status).toBe(202)
+  const second = await ask({ 'User-Agent': 'agent-b' })
+  expect(second.status).toBe(409)
+  expect((await second.json()).error).toContain('already under way')
+  expect((await ask({ 'X-Desk-Caller': 'window' })).status).toBe(409)
+  expect(started).toHaveLength(1)
+})
+
+test('an agent or script may not stop the server: shutdown answers 409 and stops nothing', async () => {
+  const home = temp('desk-update-home-')
+  const engine = temp('desk-update-engine-')
+  writeFileSync(join(engine, '20-engine.ts'), `export { default } from ${JSON.stringify(pathToFileURL(ENGINE_PLUGIN).href)}\n`)
+  let shutdowns = 0
+  const desk = await createServer({ port: 0, home, pluginsDir: engine, deps: { shutdown: () => void shutdowns++ } })
+  stops.push(() => desk.stop())
+  const res = await fetch(`${desk.url}/api/server/shutdown`, { method: 'POST', headers: { 'User-Agent': 'curl/8.4', 'Content-Type': 'application/json' }, body: '{}' })
+  expect(res.status).toBe(409)
+  expect((await res.json()).error).toContain("Stopping this server is the owner's")
+  await new Promise((r) => setTimeout(r, 100))
+  expect(shutdowns).toBe(0)
 })
 
 test('not restartable off Windows: the launcher scripts are PowerShell', async () => {

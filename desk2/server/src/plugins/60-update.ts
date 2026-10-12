@@ -1,14 +1,15 @@
 // Restart to update (SPEC "Launcher"): the window learns when the server's own code changed on disk after
 // it started, and its Menu restarts the server onto that code with launcher/restart.ps1, the chats running
 // on. 2026-10-05: Send now, Fork and the servers pane each "did not work" for the owner only because the
-// server still ran the code from before they landed, and nothing in the window said so.
+// server still ran the code from before they landed, and nothing in the window said so. 2026-10-12, the owner: the
+// same restart is an agent's to run too, so an agent asks it once its server code changed on disk (only then).
 
 import { spawn } from 'node:child_process'
 import { existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Hono } from 'hono'
 import type { ServerUpdate } from '@shared/protocol'
-import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_RESTART } from '../caller'
+import { callerKind, describeCaller, logRestartAsk, NOTHING_TO_UPDATE, RESTART_UNDER_WAY } from '../caller'
 import type { ServerContext } from '../context'
 import { detachedCommand } from '../host/launch'
 
@@ -62,6 +63,8 @@ export function startedByLauncher(home: string, pid: number): boolean {
 }
 
 const STAMP_TTL_MS = 30_000
+/** A server still answering this long after it accepted a restart was not restarted: it takes the next ask. */
+const RESTART_GRACE_MS = 120_000
 
 /** codeStamp, walked at most once per STAMP_TTL_MS: the window asks every minute and on each hello. */
 function cachedStamp(): () => CodeStamp {
@@ -95,25 +98,33 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     atBoot ??= deps.stamp()
   }, 0)
   const restartable = () => deps.platform === 'win32' && startedByLauncher(ctx.home, deps.pid)
-
-  app.get('/api/server/update', (c) => {
+  const stale = (): boolean => {
     const boot = (atBoot ??= deps.stamp())
     const now = deps.stamp()
     // A file saved after the start may or may not be what the server loaded: it counts as new.
-    const stale = now.newest > deps.bootedAt || now.count !== boot.count
-    return c.json({ stale, restartable: restartable() } satisfies ServerUpdate)
-  })
+    return now.newest > deps.bootedAt || now.count !== boot.count
+  }
+  /** When this server accepted a restart: until it is gone (or the grace runs out) one restart at a time. */
+  let restartAcceptedAt: number | null = null
+
+  app.get('/api/server/update', (c) => c.json({ stale: stale(), restartable: restartable() } satisfies ServerUpdate))
 
   app.post('/api/server/restart', (c) => {
     const who = describeCaller(c.req.raw.headers)
-    if (callerKind(c.req.raw.headers) !== 'window') {
-      logRestartAsk(ctx.home, `restart asked: ${who} -> refused (not the window)`)
-      return c.json({ error: OWNER_ONLY_RESTART }, 409)
-    }
     if (!restartable()) {
       logRestartAsk(ctx.home, `restart asked: ${who} -> refused (not started by the launcher)`)
-      return c.json({ error: "This server was not started by AgentHydra's window launcher, so the window cannot restart it. Leave it to the owner." }, 409)
+      return c.json({ error: "This server was not started by AgentHydra's window launcher, so nothing would bring it back. Leave it to the owner." }, 409)
     }
+    if (restartAcceptedAt !== null && Date.now() - restartAcceptedAt < RESTART_GRACE_MS) {
+      logRestartAsk(ctx.home, `restart asked: ${who} -> refused (a restart is under way)`)
+      return c.json({ error: RESTART_UNDER_WAY }, 409)
+    }
+    // The window may restart at any time; an agent or a script only to put new server code live.
+    if (callerKind(c.req.raw.headers) !== 'window' && !stale()) {
+      logRestartAsk(ctx.home, `restart asked: ${who} -> refused (nothing to update)`)
+      return c.json({ error: NOTHING_TO_UPDATE }, 409)
+    }
+    restartAcceptedAt = Date.now()
     logRestartAsk(ctx.home, `restart asked: ${who} -> accepted`)
     // The script's output goes to its own file: the server appends its ask lines to restart.log while the script runs.
     const runLog = join(ctx.home, 'logs', 'restart-run.log')

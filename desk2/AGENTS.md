@@ -97,10 +97,12 @@ between server/ and web/.
   `.credentials.json` stay out of logs and output.
 - Never open a visible console window: detached processes use `Start-Process -WindowStyle Hidden` with
   logs to files.
-- Never restart or stop the live server. Do not curl `/api/server/restart` or `/api/server/shutdown`, and do not run
-  `launcher/restart.ps1` or `launcher/stop.ps1` against it. The server refuses those asks from anything but the window
-  (409, logged with the caller in `~/.hydra-desk-2/logs/restart.log`). The owner restarts it from the window's
-  Menu > Restart to update. Test a restart on your own copy on a spare port with its own home folder. The one
-  exception is the owner asking a chat in his own words to restart it (2026-10-09: "can you do it please"): run
-  `launcher/restart.ps1` hidden (`Start-Process -WindowStyle Hidden`), its output appended to
-  `~/.hydra-desk-2/logs/restart-run.log`, without `-Chats`, and check `/api/server/update` reads `stale: false`.
+- Restarting the live server to update is yours; stopping it never is (the owner, 2026-10-12: Menu > Restart to
+  update "you definitely should be allowed to do that"). Once server code you landed is in the checkout it runs from
+  (`deskRoot` in `~/.hydra-desk-2/server.pid`) and `GET /api/server/update` reads `stale: true`, ask
+  `POST /api/server/restart`: it runs `launcher/restart.ps1` without `-Chats`, the chats run on in their hosts and
+  the window reconnects; then check `/api/server/update` reads `stale: false`. The server refuses an agent's restart
+  while it already runs the code on disk, and any ask while a restart is under way. Never curl
+  `/api/server/shutdown`, never run `launcher/stop.ps1` or `restart.ps1 -Chats` against it, and never send
+  `X-Desk-Caller: window` yourself; every ask is logged with its caller in `~/.hydra-desk-2/logs/restart.log`.
+  Test a change to the restart itself on your own copy on a spare port with its own home folder.

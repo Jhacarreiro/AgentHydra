@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Agents can restart AgentHydra to update.** The Menu's Restart to update, which keeps every chat running, can
+  now be asked by an agent too, but only when the server's code changed on disk, and only one restart at a time.
+  Stopping the server stays yours alone.
 - **The background service starts lighter.** Finished CliMayte tasks keep their long text compressed in memory until
   something reads it, file paths that several caches share are held once, and helper threads that sit idle close
   themselves.

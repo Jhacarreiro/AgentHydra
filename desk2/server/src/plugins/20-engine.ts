@@ -12,7 +12,7 @@ import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type { Context, Hono } from 'hono'
 import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
-import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_RESTART } from '../caller'
+import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_STOP } from '../caller'
 import { bridge } from '../bridge'
 import { findSessionJsonl } from '../bridge/session-jsonl'
 import { closeChatTabs, startTabSweep } from '../browser/tab-sweep'
@@ -539,7 +539,7 @@ function shutdownRoute(app: Hono, ctx: ServerContext, manager: ChatManager, host
   app.post('/api/server/shutdown', (c) => {
     const refused = callerKind(c.req.raw.headers) === 'other'
     logRestartAsk(ctx.home, `shutdown asked: ${describeCaller(c.req.raw.headers)} -> ${refused ? 'refused' : 'accepted'}`)
-    if (refused) return c.json({ error: OWNER_ONLY_RESTART }, 409)
+    if (refused) return c.json({ error: OWNER_ONLY_STOP }, 409)
     return answer(c, async () => {
       const chats = ((await c.req.json().catch(() => null)) as { chats?: unknown } | null)?.chats === true
       if (chats) {

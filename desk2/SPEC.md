@@ -971,10 +971,13 @@ server started or the file count changed, `restartable` when `~/.hydra-desk-2/se
 `POST /api/server/restart` turns into `launcher/restart.ps1`, started hidden outside the server's process tree
 (stop.ps1 ends that tree) with its output in `logs/restart-run.log` (`logs/restart.log` holds the server's ask lines only, so a
 locked file cannot fail a stop); the chats run on and the window reconnects.
-Only the window may ask: the route and `POST /api/server/shutdown` answer 409 to any other caller (an agent, a
-script, curl; `server/src/caller.ts`, identified by `X-Desk-Caller: window|launcher` and `User-Agent`), with the
-owner's message, and log every ask with its caller and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends
-`X-Desk-Caller: launcher`. A server the launcher did not start answers 409 to the window too. A server older than a route
+An agent may ask the same restart (the owner, 2026-10-12), but only to update: the route answers it 409 while
+`stale` is false. Any caller is refused while a restart this server accepted is under way (two minutes, after which
+a server still answering was not restarted and takes the next ask). `POST /api/server/shutdown` answers 409 to any
+caller but the window and the launcher (an agent, a script, curl; `server/src/caller.ts`, identified by
+`X-Desk-Caller: window|launcher` and `User-Agent`): stopping stays the owner's. Every ask is logged with its caller
+and chat (`X-Desk-Chat`) to `logs/restart.log`. stop.ps1 sends `X-Desk-Caller: launcher`. A server the launcher did
+not start answers 409 to every restart ask. A server older than a route
 the window calls answers `no route ...`, which the window shows as "Hydra Desk 2's server is older than this
 window: Menu > Restart to update".
 
