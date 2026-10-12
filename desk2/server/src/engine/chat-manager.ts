@@ -1460,6 +1460,8 @@ export class ChatManager {
     if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
     e.readAccount = w.accountId
     const newReply = this.syncWorkerItems(e, items)
+    if (next.status === 'error') this.undelivered(e)
+    else if (next.waiting) this.markQueued(e)
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
     // A finished worker's process is gone, and every background task it started with it.
     if (!e.workerLive) this.endTasks(e)
@@ -2033,6 +2035,27 @@ export class ChatManager {
     e.sent = e.sent?.filter((s) => s !== item)
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.removed', chatId: e.chat.id, itemId: item.id })
+  }
+
+  /** Messages held behind a wait are queued until their worker's copy arrives. */
+  private markQueued(e: Entry): void {
+    if (!e.sent?.some((s) => !s.queued)) return
+    const marked = new Set<string>()
+    e.sent = e.sent.map((s) => {
+      if (s.queued) return s
+      marked.add(s.id)
+      return { ...s, queued: true }
+    })
+    this.store.saveChats(this.stored())
+    for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item })
+  }
+
+  /** A failed worker never reached the messages still held for it: they are dropped and the chat says so. */
+  private undelivered(e: Entry): void {
+    for (const item of e.sent?.filter((s) => s.queued) ?? []) {
+      this.dropStandIn(e, item)
+      this.systemLine(e.chat.id, 'undelivered', 'warn', `Not delivered, send it again: "${item.text.slice(0, 80)}"`)
+    }
   }
 
   private systemLine(chatId: string, kind: string, level: 'info' | 'warn', text: string): void {

@@ -172,7 +172,8 @@ paragraphs` },
   await m.syncWorkers(chat.id)
   expect(m.listItems(chat.id).map((i) => i.id)).toEqual(['u-1', 'u-2'])
   const removed = events.filter((e) => e.type === 'item.removed').map((e) => e.type === 'item.removed' && e.itemId)
-  expect(removed).toEqual(events.filter((e) => e.type === 'item.upsert' && e.item.id.startsWith('desk-sent:')).map((e) => e.type === 'item.upsert' && e.item.id))
+  const standIns = new Set(events.flatMap((e) => (e.type === 'item.upsert' && e.item.id.startsWith('desk-sent:') ? [e.item.id] : [])))
+  expect(removed.sort()).toEqual([...standIns].sort())
 })
 
 test('Send now on a queued message has CliMayte deliver that one now, and its bubble is no longer queued', async () => {
@@ -316,6 +317,65 @@ test('a message sent while its worker is held has a queued stand-in that survive
   expect(users).toHaveLength(1)
   expect(users[0]).toMatchObject({ id: 'u-held' })
   expect(users[0]).not.toHaveProperty('queued')
+})
+
+test('a first message held behind a wait is queued until its worker has it', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.' })
+  await m.syncWorkers(chat.id)
+  expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'hi')).toMatchObject({ queued: true })
+
+  b.state.rows[0]!.status = 'running'
+  b.state.rows[0]!.error = null
+  b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-first', ts: Date.now(), text: 'hi' }]
+  await m.syncWorkers(chat.id)
+  const users = m.listItems(chat.id).filter((i) => i.kind === 'user' && i.text === 'hi')
+  expect(users).toHaveLength(1)
+  expect(users[0]).toMatchObject({ id: 'u-first' })
+  expect(users[0]).not.toHaveProperty('queued')
+})
+
+test('a worker that fails with a held message says it was not delivered, and the queued bubble goes', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.' })
+  await m.syncWorkers(chat.id)
+  await m.send(chat.id, 'and add the totals row')
+  expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'and add the totals row')).toMatchObject({ queued: true })
+
+  Object.assign(b.state.rows[0]!, { status: 'failed', error: 'The worker failed.' })
+  await m.syncWorkers(chat.id)
+  const items = m.listItems(chat.id)
+  expect(items.some((i) => i.kind === 'user' && i.text === 'and add the totals row')).toBe(false)
+  expect(items.some((i) => i.kind === 'system' && i.text.includes('Not delivered') && i.text.includes('and add the totals row'))).toBe(true)
+})
+
+test('a cancelled worker keeps its held message queued', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'queued', error: 'Waiting for CPU: 99% busy over the last 30 s with 14 workers running; it starts when the machine drops under 85%.' })
+  await m.syncWorkers(chat.id)
+  await m.send(chat.id, 'and add the totals row')
+
+  Object.assign(b.state.rows[0]!, { status: 'cancelled', error: null })
+  await m.syncWorkers(chat.id)
+  expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'and add the totals row')).toMatchObject({ queued: true })
 })
 
 test("a person's plain send to a running worker goes now; the queue's own dispatch and a failed deliver-now stay held", async () => {
