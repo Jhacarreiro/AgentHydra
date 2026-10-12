@@ -328,6 +328,11 @@ export function hasLiveSession(port: number, scope = ''): boolean {
   return sessionsOf(port, scope).length > 0
 }
 
+/** Whether the Browser pane shows a page of this Chrome live, for any chat. */
+export function anyLiveSession(port: number): boolean {
+  return (liveSessions.get(port)?.size ?? 0) > 0
+}
+
 /** The newest live frame with its size, for a viewer that joins between frames. */
 export function liveFrameSized(port: number, scope = ''): TappedFrame | null {
   let newest: { at: number; f: TappedFrame } | null = null

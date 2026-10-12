@@ -15,6 +15,7 @@ import type { ServerContext } from '../context'
 import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_STOP } from '../caller'
 import { bridge } from '../bridge'
 import { findSessionJsonl } from '../bridge/session-jsonl'
+import { startIdleBrowserClose } from '../browser/idle-close'
 import { closeChatTabs, startTabSweep } from '../browser/tab-sweep'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
@@ -600,10 +601,12 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
 
   const stopClimayte = pollClimayte(ctx, manager)
   const stopSweep = startTabSweep({ deskSessions: () => tabSweepSessions(manager, ctx.deps) })
+  const stopIdleClose = startIdleBrowserClose({ deskSessions: () => tabSweepSessions(manager, ctx.deps) })
 
   ctx.onStop(async () => {
     stopClimayte()
     stopSweep()
+    stopIdleClose()
     await hosts
     await manager.closeAll()
     queue.flushSync()
