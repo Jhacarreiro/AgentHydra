@@ -21,6 +21,10 @@ describe('every tool', () => {
       expect(t.description.trim().length, t.name).toBeGreaterThan(20)
     }
   })
+  test('shows no unfilled template placeholder', () => {
+    // A \${...} escaped inside a template literal reaches the agent as the literal text.
+    for (const t of TOOLS) expect(t.description, t.name).not.toContain('${')
+  })
   test('has an object input schema', () => {
     for (const t of TOOLS) expect((t.inputSchema as { type?: string }).type, t.name).toBe('object')
   })

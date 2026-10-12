@@ -1092,7 +1092,7 @@ export const TOOLS: HydraTool[] = [
   {
     name: 'climayte_status',
     listed: true,
-    description: `Reads CliMayte workers: status, account, last activity, result or error, moves and cost. Scope it with group (all of that group's workers) or id (one worker, with its last 60 event lines, which show why it failed). Unscoped, it lists the active workers plus the \${RECENT_FINISHED} most recent finished ones. Use wait_seconds (1 to \${CLIMAYTE_MAX_WAIT_S}) to wait for the next status change instead of polling, and call again to keep waiting. Longer waits are cut: an MCP client drops a call held about 60 seconds. report: true gives one compact row per worker with its report, for judging. A worker with a question is waiting for your answer: reply with climayte_send. The story of a run is in climayte_log. Read-only.`,
+    description: `Reads CliMayte workers: status, account, last activity, result or error, moves and cost. Scope it with group (all of that group's workers) or id (one worker, with its last 60 event lines, which show why it failed). Unscoped, it lists the active workers plus the ${RECENT_FINISHED} most recent finished ones. Use wait_seconds (1 to ${CLIMAYTE_MAX_WAIT_S}) to wait for the next status change instead of polling, and call again to keep waiting. Longer waits are cut: an MCP client drops a call held about 60 seconds. report: true gives one compact row per worker with its report, for judging. A worker with a question is waiting for your answer: reply with climayte_send. The story of a run is in climayte_log. Read-only.`,
     inputSchema: S({
       group: { type: 'string' },
       id: { type: 'string' },
