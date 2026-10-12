@@ -1,12 +1,18 @@
 // When CliMayte asks a session to hand off for its conversation's size (climayte-lib.ts).
 import { describe, expect, test } from 'bun:test'
+import { mkdtempSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
 import {
   contextTokens,
   continuationPrompt,
   notConverging,
   pickAccount,
+  transcriptHandoff,
   windDownAt,
+  windDownMessage,
 } from '../src/climayte-lib'
+import { withStops } from '../src/climayte-stops'
 
 describe('continuationPrompt', () => {
   const args = ['the task', 'the handoff', 'h.md', ['t.jsonl'], []] as [
@@ -125,5 +131,95 @@ describe('a handoff on conversation size', () => {
     expect(pickAccount(after({ reason: 'context' }), accounts, {}, new Map(), 2, now)?.id).toBe('a')
     // A handoff for the account's usage still starts the next session somewhere else.
     expect(pickAccount(after({}), accounts, {}, new Map(), 2, now)?.id).toBe('b')
+  })
+})
+
+describe('a chat worker winds down silently', () => {
+  const ask = (chat: boolean) =>
+    windDownMessage({ reason: 'context', tokens: 210_000 }, 'h.md', chat)
+
+  test('the chat ask never tells the owner the handoff is written', () => {
+    const text = ask(true)
+    expect(text).toContain('Do not mention the handoff')
+    expect(text).not.toContain('end your turn with one line saying the handoff is written')
+  })
+
+  test('a non-chat ask keeps its one-line report', () => {
+    expect(ask(false)).toContain('end your turn with one line saying the handoff is written')
+  })
+
+  test('a chat whose handoff was written ends done, not handoff', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
+    const path = join(dir, 'h.md')
+    const at = Date.now()
+    writeFileSync(path, 'handoff')
+    const attempt = { windDown: { at, pct: null, path, reason: 'context' } } as any
+    const verdict = { outcome: 'done', notice: null } as any
+    expect(withStops(attempt, verdict, true).outcome).toBe('done')
+    expect(withStops(attempt, verdict, false).outcome).toBe('handoff')
+  })
+})
+
+describe('the continuation wording Desk 2 parses', () => {
+  test('a continuation still says it continues from the handoff', () => {
+    const text = continuationPrompt('the task', 'the handoff', 'h.md', [], [], {
+      sameAccount: true,
+      why: 'context',
+    })
+    expect(text).toMatch(
+      /An earlier session already worked on this task on this account and handed off because its conversation had grown large\. Continue from its handoff below/,
+    )
+  })
+})
+
+describe('a handoff the daemon writes from the transcript', () => {
+  const line = (ev: unknown) => JSON.stringify(ev)
+  const transcript = [
+    line({ type: 'user', message: { content: 'Owner: first ask about the sample page' } }),
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Reply one.' }] } }),
+    line({
+      type: 'assistant',
+      parent_tool_use_id: 'x',
+      message: { content: [{ type: 'text', text: 'sub-agent noise' }] },
+    }),
+    line({ type: 'user', message: { content: 'second ask about the cart' } }),
+    line({ type: 'assistant', message: { content: [{ type: 'text', text: 'Reply two.' }] } }),
+  ].join('\n')
+
+  test('keeps the owner messages and the agent replies, newest last, without sub-agent text', () => {
+    const out = transcriptHandoff(transcript)
+    expect(out).toContain('Owner: first ask about the sample page')
+    expect(out).toContain('Agent: Reply one.')
+    expect(out).toContain('Owner: second ask about the cart')
+    expect(out).toContain('Agent: Reply two.')
+    expect(out).not.toContain('sub-agent noise')
+    expect(out.indexOf('Reply one.')).toBeLessThan(out.indexOf('second ask'))
+  })
+
+  test('stays within the cap', () => {
+    const big = line({ type: 'user', message: { content: 'x'.repeat(3_000) } })
+    const out = transcriptHandoff([big, big, big].join('\n'), 4_000)
+    expect(out.length).toBeLessThanOrEqual(4_000)
+  })
+
+  test('an empty transcript says so', () => {
+    expect(transcriptHandoff('')).toBe('(The transcript held no messages to carry over.)')
+  })
+})
+
+describe('the w-984f4bed sequence (invented text)', () => {
+  test('a chat turn that hit the size line, wrote its handoff silently, and ends done', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
+    const path = join(dir, 'w-984f4bed-4-wind.md')
+    const at = Date.now()
+    // The session was asked to wind down during a short turn and wrote the handoff in that turn.
+    writeFileSync(path, 'Done: sample page layout. Next: the cart total.')
+    const attempt = { windDown: { at, pct: null, path, reason: 'context' } } as any
+    const verdict = { outcome: 'done', notice: null, reply: 'Here is the sample page.' } as any
+    const out = withStops(attempt, verdict, true)
+    expect(out.outcome).toBe('done')
+    expect(windDownMessage({ reason: 'context', tokens: 210_000 }, path, true)).not.toContain(
+      'one line saying the handoff',
+    )
   })
 })

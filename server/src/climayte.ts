@@ -58,6 +58,7 @@ import {
 import {
   acctLabel,
   changed,
+  handoffWritten,
   isActive,
   journal,
   LOGS,
@@ -108,7 +109,6 @@ import {
   classifyAttempt,
   climaytePriority,
   contextTokens,
-  IDENTITY_WALL,
   RUNNER_NEVER_STARTED_NOTICE,
 } from './climayte-lib'
 import {
@@ -936,7 +936,11 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     const hadRunnerPid =
       !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
     const stderr = tailText(at.errLog, 4_000)
-    const read = withStops(at, classifyAttempt(events, stderr, at.started === true))
+    const read = withStops(
+      at,
+      classifyAttempt(events, stderr, at.started === true),
+      w.chat === true,
+    )
     end = { v: read, stderr, hadRunnerPid }
     if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
       lookAtInstall(w, at, events, end)
@@ -958,6 +962,10 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   at.notice = v.notice
   at.endedAt = now
   at.context = contextTokens(events)
+  // A chat's handoff, written in a turn that ended on its own, is the note its next message starts
+  // from (a fresh session answering that message, not an immediate continuation).
+  if (w.chat === true && v.outcome === 'done' && at.windDown && handoffWritten(at.windDown))
+    w.handoffNote = at.windDown.path
   const spent = charge(w, at)
   w.turns += v.turns
   keepResults(w, at, v)

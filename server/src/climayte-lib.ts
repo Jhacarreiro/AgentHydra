@@ -910,11 +910,58 @@ function windDownCause(why: WindDownWhy): string {
  *  session that has the whole context writes the handoff, while its own cache is warm; the next
  *  account then starts a small fresh session from it instead of re-reading the whole conversation
  *  (a move re-reads it all uncached: 219k tokens cost $1.77 on one live move, 2026-09-30). */
-export function windDownMessage(why: WindDownWhy, path: string): string {
+export function windDownMessage(why: WindDownWhy, path: string, chat = false): string {
+  // A chat's owner reads every reply, and the handoff is AgentHydra's bookkeeping: the reply never
+  // mentions it, and the turn goes on with the owner's request.
+  if (chat)
+    return `AgentHydra: ${windDownCause(why)}. This is bookkeeping for AgentHydra, not something to tell the owner: write the handoff now, silently, with the Write tool to ${path}, for the session that continues this task. Do not mention the handoff, the file or this note in anything you say. Then carry on with the owner's request and end your turn with your normal reply. The handoff holds, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results.`
   // The handoff comes FIRST: the hard stop at 90% is a few points away, about 30 seconds of heavy
   // work, and a session stopped before its note is written moves by re-reading everything cold
   // (stress review, 2026-10-02). A task two or three calls from done finishes instead.
   return `AgentHydra: ${windDownCause(why)}. If you can finish the whole task in two or three more tool calls, do that and give your final report instead of a handoff. Otherwise write the handoff NOW, before anything else, with the Write tool to ${path}, for the session that continues this task; then finish or safely stop the step you are on, start nothing new, and update the handoff if that changed anything. The next session sees only the original task, your handoff and your transcript, so include, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message, subject and body verbatim, and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results. After writing the handoff, end your turn with one line saying the handoff is written.`
+}
+
+/** A handoff the daemon writes from a session's transcript (JSON lines) when the session passed
+ *  CONTEXT_HANDOFF_TOKENS and never wrote one: its newest owner messages and the agent's final reply
+ *  to each, newest kept, `cap` characters in all. */
+export function transcriptHandoff(jsonl: string, cap = 4_000): string {
+  const turns: string[] = []
+  let reply: string | null = null
+  const flush = (): void => {
+    if (reply !== null) turns.push(`Agent: ${reply}`)
+    reply = null
+  }
+  for (const line of jsonl.split('\n')) {
+    if (!line.trim()) continue
+    let ev: any
+    try {
+      ev = JSON.parse(line)
+    } catch {
+      continue
+    }
+    if (ev?.parent_tool_use_id) continue
+    if (ev?.type === 'user' && typeof ev.message?.content === 'string') {
+      flush()
+      turns.push(`Owner: ${ev.message.content.slice(0, 1_500)}`)
+    } else if (ev?.type === 'assistant') {
+      const text = (ev.message?.content ?? [])
+        .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
+        .map((b: any) => b.text)
+        .join('\n')
+        .trim()
+      if (text) reply = text.slice(0, 1_500)
+    }
+  }
+  flush()
+  const kept: string[] = []
+  let size = 0
+  for (let i = turns.length - 1; i >= 0; i--) {
+    const t = turns[i]!
+    if (size + t.length > cap) break
+    kept.unshift(t)
+    size += t.length
+  }
+  return kept.length ? kept.join('\n\n') : '(The transcript held no messages to carry over.)'
 }
 
 /** The first prompt of the session that continues a task from a handoff. `transcripts`: the earlier

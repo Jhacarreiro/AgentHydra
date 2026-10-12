@@ -18,7 +18,9 @@ import {
   acctLabel,
   changed,
   claudeCommand,
+  HANDOFFS,
   HOOKS,
+  handoffWritten,
   hasTranscript,
   journal,
   LOGS,
@@ -42,6 +44,7 @@ import { firstLine } from './climayte-journal'
 import {
   type CliMayteAccount,
   type CliMayteWorker,
+  CONTEXT_HANDOFF_TOKENS,
   continuationPrompt,
   copySessionTranscript,
   HANDOFF_PROMPT,
@@ -51,12 +54,14 @@ import {
   PAUSED_PROMPT,
   scrubbedEnv,
   TRANSIENT_PROMPT,
+  transcriptHandoff,
   WORKER_BRIEF,
 } from './climayte-lib'
 import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
 import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
+import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
@@ -142,16 +147,63 @@ function sessionPlan(
   w: CliMayteWorker,
   last: CliMayteWorker['attempts'][number] | undefined,
   moving: boolean,
+  accounts: CliMayteAccount[],
+  n: number,
 ): Pick<LaunchPlan, 'note' | 'wake' | 'fresh' | 'oldSession' | 'sessionId'> {
   const wake = managerWake(w, last, moving)
-  const note = wake
-    ? undefined
-    : (w.handoffNote ?? (last?.outcome === 'handoff' ? last.windDown?.path : undefined))
+  const note = wake ? undefined : handoffNoteOf(w, last, accounts, n)
   const fresh = wake || !!note
   const oldSession = w.sessionId
   const sessionId = fresh || !w.sessionId ? crypto.randomUUID() : w.sessionId
   if (!fresh) w.sessionId = sessionId
   return { note, wake, fresh, oldSession, sessionId }
+}
+
+/** The handoff a fresh session starts from, or undefined. A session that passed CONTEXT_HANDOFF_TOKENS
+ *  and finished its turn without a handoff is not resumed for a follow-up: a short turn may never
+ *  see the wind-down ask, so the daemon writes the handoff from the transcript (daemonHandoff). */
+function handoffNoteOf(
+  w: CliMayteWorker,
+  last: CliMayteWorker['attempts'][number] | undefined,
+  accounts: CliMayteAccount[],
+  n: number,
+): string | undefined {
+  if (w.handoffNote) return w.handoffNote
+  if (last?.outcome === 'handoff') return last.windDown?.path
+  if (last?.outcome !== 'done' || (last.context ?? 0) < CONTEXT_HANDOFF_TOKENS) return undefined
+  if (last.windDown && handoffWritten(last.windDown)) return last.windDown.path
+  return daemonHandoff(w, last, accounts, n) ?? undefined
+}
+
+/** The handoff the daemon writes for a session that never wrote one: its transcript's newest
+ *  messages and replies (transcriptHandoff). Null when no copy of the transcript can be read. */
+function daemonHandoff(
+  w: CliMayteWorker,
+  last: CliMayteWorker['attempts'][number],
+  accounts: CliMayteAccount[],
+  n: number,
+): string | null {
+  const sessionId = last.sessionId ?? w.sessionId
+  if (!sessionId) return null
+  let file: string | null = null
+  for (const c of transcriptCandidates(w, accounts)) {
+    file = transcriptFile(c.configDir, sessionId)
+    if (file) break
+  }
+  if (!file) return null
+  let excerpt: string
+  try {
+    excerpt = transcriptHandoff(readFileSync(file, 'utf8'))
+  } catch {
+    return null
+  }
+  mkdirSync(HANDOFFS, { recursive: true })
+  const path = slashed(join(HANDOFFS, `${w.id}-${n}-daemon.md`))
+  writeFileSync(
+    path,
+    `AgentHydra wrote this handoff from the session's transcript (${slashed(file)}). The session had grown to about ${Math.round((last.context ?? 0) / 1000)}k tokens and finished its turn without writing a handoff. Its newest messages and replies:\n\n${excerpt}\n`,
+  )
+  return path
 }
 
 /** Moving accounts: carry the transcript over so `--resume` finds it there, from whichever account
@@ -264,6 +316,7 @@ function handoffText(
   oldSession: CliMayteWorker['sessionId'],
   accounts: CliMayteAccount[],
   acct: CliMayteAccount,
+  n: number,
 ): string {
   let handoff = ''
   try {
@@ -272,16 +325,19 @@ function handoffText(
     handoff = '(The handoff file could not be read; use the earlier transcript.)'
   }
   const asked = last.windDown
+  // A chat's task is the owner's message it answers now, not the chat's first message again.
+  const chat = w.chat === true
   return continuationPrompt(
-    w.prompt,
+    chat ? (w.pending[0] ?? prevPromptOf(w, n)) : w.prompt,
     handoff,
     note,
     chainTranscripts(w, oldSession, accounts),
-    w.pending,
+    chat ? w.pending.slice(1) : w.pending,
     {
       sameAccount: acct.id === last.account.id,
-      why: asked?.reason ?? (asked?.pct === null ? 'request' : 'usage'),
-      chat: w.chat === true,
+      // A daemon-written handoff has no ask behind it: the session was past its size line.
+      why: asked ? (asked.reason ?? (asked.pct === null ? 'request' : 'usage')) : 'context',
+      chat,
     },
   )
 }
@@ -326,7 +382,7 @@ function launchText(
   const { last, note } = p
   if (!last) return w.prompt
   if (p.wake) return managerText(w, accounts, acct)
-  if (note) return handoffText(w, last, note, p.oldSession, accounts, acct)
+  if (note) return handoffText(w, last, note, p.oldSession, accounts, acct, p.n)
   if (p.delivers) return followUpText(w, p)
   return goOnText(w, last, p) ?? w.prompt
 }
@@ -827,7 +883,7 @@ export function launch(
   const n = w.attempts.length
   const last = w.attempts[n - 1]
   const fromId = w.accountId !== acct.id ? w.accountId : null
-  const session = sessionPlan(w, last, !!fromId)
+  const session = sessionPlan(w, last, !!fromId, accounts, n)
   const { fresh, sessionId } = session
   let copied: boolean | undefined
   if (fromId && !fresh) {
@@ -851,6 +907,10 @@ export function launch(
     ...deliveryPlan(w, last, fresh),
   }
   const text = launchText(w, plan, accounts, acct)
+  // The wind-down is asked once per session: an attempt that ended before its handoff was written
+  // carries the ask forward, so the next attempt's first tool call still reaches the session.
+  const inherited =
+    !fresh && last?.windDown && !handoffWritten(last.windDown) ? last.windDown : undefined
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })
@@ -879,6 +939,8 @@ export function launch(
     daemonPid: process.pid,
     runner,
     requested: { model: w.model, effort: w.effort },
+    ...(inherited ? { windDown: inherited } : {}),
   })
+  if (inherited && last) reaskWindDown(w, inherited, last.context ?? null)
   noteLaunch(w, acct, plan, activeOnAccount)
 }

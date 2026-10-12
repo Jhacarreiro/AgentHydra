@@ -22,6 +22,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **A long Desk chat starts a fresh session by itself past 200,000 tokens.** Your next message to it begins a new
   session from a summary of the chat's whole record, on the same account, so each later reply stops re-reading the
   full history. Nothing is lost: the chat keeps every message, and the new session can read any of it.
+- **CliMayte's context handoffs happen out of sight in chats.** A chat that grows large writes its handoff without
+  telling you in the reply, and your next message starts from that handoff. A session that went past its size limit
+  without writing one is handed off from its transcript, so a follow-up no longer resumes a bloated session.
 
 - **CliMayte keeps working when the PC is busy.** On a loaded PC its tasks could fail "stopped three times in a
   row" and its checks "never started" without a CLI ever running, and starting or watching a run could hang for

@@ -40,6 +40,7 @@ import {
   type CliMayteLiveUsage,
   type CliMayteWalls,
   type CliMayteWorker,
+  CONTEXT_HANDOFF_TOKENS,
   ceilingNotice,
   type classifyAttempt,
   contextTokens,
@@ -563,7 +564,7 @@ export function signalWindDown(
     JSON.stringify({
       hookSpecificOutput: {
         hookEventName: 'PostToolUse',
-        additionalContext: windDownMessage(why, path),
+        additionalContext: windDownMessage(why, path, w.chat === true),
       },
     }),
   )
@@ -581,6 +582,32 @@ export function signalWindDown(
         : undefined,
   })
   changed(w)
+}
+
+/** A wind-down asked on an earlier attempt of the same session, carried onto a resumed one: the
+ *  resumed session has not seen the ask (its signal was consumed or never sent), so it is sent
+ *  again for its next tool call. `tokens`: the conversation's size, for the message. */
+export function reaskWindDown(
+  w: CliMayteWorker,
+  windDown: NonNullable<Attempt['windDown']>,
+  tokens: number | null,
+): void {
+  const why: WindDownWhy =
+    windDown.reason === 'context'
+      ? { reason: 'context', tokens: tokens ?? CONTEXT_HANDOFF_TOKENS }
+      : windDown.pct !== null
+        ? { reason: 'usage', pct: windDown.pct, week: false }
+        : { reason: 'request' }
+  mkdirSync(SIGNALS, { recursive: true })
+  writeFileSync(
+    signalPath(w.id),
+    JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: windDownMessage(why, windDown.path, w.chat === true),
+      },
+    }),
+  )
 }
 
 /** What poll noted from the read: the init mark and the model on the attempt, its 5-hour peak,
@@ -781,6 +808,7 @@ function ceilingVerdict(
 export function withStops(
   at: CliMayteWorker['attempts'][number],
   verdict: ReturnType<typeof classifyAttempt>,
+  chat: boolean,
 ): ReturnType<typeof classifyAttempt> {
   let v = verdict
   // Stopped to spare paid extra usage: a limit, whatever the killed process left behind. A turn
@@ -796,8 +824,9 @@ export function withStops(
     }
   if (at.ceiling && v.outcome !== 'done') v = ceilingVerdict(at, at.ceiling, v)
   // Asked to wind down: a handoff written after the signal means the task goes on in a fresh
-  // session elsewhere; none means the session reported the whole task complete instead.
-  if (at.windDown && v.outcome === 'done' && handoffWritten(at.windDown))
+  // session elsewhere; none means the session reported the whole task complete instead. A chat
+  // keeps 'done': its handoff is the note for the owner's next message (climayte.ts finish).
+  if (at.windDown && v.outcome === 'done' && !chat && handoffWritten(at.windDown))
     v = {
       ...v,
       outcome: 'handoff',
