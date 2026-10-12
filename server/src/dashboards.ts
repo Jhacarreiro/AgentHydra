@@ -282,12 +282,16 @@ function parseChange(raw: unknown): DashboardChange & { by: string } {
     const encoding = f.encoding ?? 'utf8'
     if (encoding !== 'utf8' && encoding !== 'base64')
       fail(`files[${i}].encoding must be "utf8" or "base64"`)
-    return {
-      path: checkPath(f.path, `files[${i}].path`),
-      content: f.content,
-      encoding,
-    } as DashboardFile
+    const path = checkPath(f.path, `files[${i}].path`)
+    const bytes = Buffer.byteLength(f.content, encoding === 'base64' ? 'base64' : 'utf8')
+    if (bytes > MAX_FILE_BYTES)
+      fail(`${path} is ${bytes} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
+    return { path, content: f.content, encoding } as DashboardFile
   })
+  // A call that could never fit is refused here, before its files are written to a staging copy.
+  const distinct = new Set(files.map((f) => f.path)).size
+  if (distinct > MAX_SITE_FILES)
+    fail(`a dashboard holds at most ${MAX_SITE_FILES} files; this change writes ${distinct}`)
   const edits = list(raw.edits, 'edits').map((e, i) => {
     if (!isObj(e) || typeof e.old !== 'string' || typeof e.new !== 'string' || !e.old)
       fail(`edits[${i}] needs a path, a non-empty "old" text and a "new" text`)
