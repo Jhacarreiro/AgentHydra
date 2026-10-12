@@ -19,6 +19,7 @@ import type { DraftImage } from '@/components/composer/draft-images'
 import ChangeProjectMenu from '@/components/composer/ChangeProjectMenu.vue'
 import { movedChat } from '@/components/composer/change-project'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
+import { useOpenedOnce } from '@/composables/useOpenedOnce'
 import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
@@ -59,6 +60,8 @@ const undoLabel = computed(() =>
 /** What an undo here takes out, or null when the chat's items are not known (then Undo goes straight through). */
 const undoTakes = computed(() => (undoAt.value && ctx.items ? undoCount(ctx.items.value, undoAt.value) : null))
 const askUndo = ref(false)
+// The undo dialog mounts the first time it is asked for, not with every reply's actions.
+const { mounted: undoMounted, shown: undoShown } = useOpenedOnce(askUndo)
 const undoTime = computed(() => {
   const at = ctx.items?.value.find((it) => it.id === undoAt.value)?.ts
   return at === undefined ? '' : new Date(at).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
@@ -248,7 +251,7 @@ async function branch() {
         <component :is="RotateCcw" class="size-4" :class="undoState === 'failed' && 'text-danger-text'" />
       </button>
     </Tip>
-    <Dialog :open="askUndo" @update:open="(o: boolean) => !o && (askUndo = false)">
+    <Dialog v-if="undoMounted" :open="undoShown" @update:open="(o: boolean) => !o && (askUndo = false)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
         <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
         <DialogDescription class="text-[13px] leading-4.75 text-text-2">

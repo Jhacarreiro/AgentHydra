@@ -25,6 +25,8 @@ import { useSwarmJobs } from '@/lib/swarm-jobs'
 import { useClock } from '@/lib/clock'
 import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra } from '@/components/hydra/api'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { useFirstInterestSet } from '@/lib/first-interest'
+import { createReusableTemplate } from '@vueuse/core'
 import { ChevronRight, EyeOff } from '@lucide/vue'
 import { usePaneApi } from '@/components/panes/api'
 import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
@@ -217,6 +219,9 @@ const hydraModel = computed(() => hydraShown.value?.model ?? null)
 
 // Groups hidden with their header's right-click (hidden.ts), out of the list unless the Filter menu's Show hidden.
 const hiddenGroups = useHiddenGroups()
+// A group's header menu mounts on the first hover, focus or press on it (lib/first-interest.ts).
+const groupMenus = useFirstInterestSet()
+const [DefineGroupHead, ReuseGroupHead] = createReusableTemplate<{ group: ChatGroup }>()
 
 // The Project Hydra projects the New screen loaded (its icon goes left of a group's heading). Read from the cache that screen
 // keeps, so the list never waits for it and nothing polls: read at start (asked once when nothing is cached yet), and again
@@ -914,41 +919,45 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </CloudList>
 
         <template v-else>
+        <DefineGroupHead v-slot="{ group }">
+          <Tip :label="group.cwd ?? ''" align="start">
+            <button
+              type="button"
+              class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2"
+              :aria-expanded="!collapsed.has(group.key)"
+              @click="toggleGroup(group.key)"
+            >
+              <img v-if="groupIcons.get(group.key)" :src="groupIcons.get(group.key)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
+              <span class="truncate">{{ group.label }}</span>
+              <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
+              <component
+                :is="shellGlyphs.groupChevron"
+                class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
+                :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
+              />
+              <RunningBadge v-if="foldedRunning.get(group.key)" class="ms-1" :tasks="foldedRunning.get(group.key)!.tasks" :jobs="foldedRunning.get(group.key)!.jobs" :chats="foldedRunning.get(group.key)!.chats" />
+            </button>
+          </Tip>
+          <span class="flex-1" />
+          <Tip v-if="deskNewFolder(group)" :label="`New session in ${group.label}`">
+            <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: deskNewFolder(group)! })">
+              <component :is="shellGlyphs.groupNew" class="size-4" />
+            </button>
+          </Tip>
+        </DefineGroupHead>
         <!-- A folder whose last row went away fades and folds shut like the row (row-leave.ts). -->
         <TransitionGroup :css="false" @leave="rowLeave">
         <!-- Compact sidebar (compact.ts): no group headers, so no heading to right-click, open or add to; the chats stay in their groups. -->
         <section v-for="group in drawnList" :key="group.key" :aria-label="group.label" :class="compactSidebar && group.hidden && 'opacity-60'">
           <!-- A group's right-click menu (ProjectMenuItems for a project folder's) can hide it (hidden.ts); Show hidden in the Filter menu brings it back, dimmed, with Unhide. -->
-          <ContextMenu v-if="!compactSidebar">
+          <span v-if="!compactSidebar" class="block" v-on="groupMenus.listeners(group.key)">
+          <ContextMenu v-if="groupMenus.seen(group.key)">
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
             class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
             :class="group.hidden && 'opacity-60'"
           >
-            <Tip :label="group.cwd ?? ''" align="start">
-              <button
-                type="button"
-                class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2"
-                :aria-expanded="!collapsed.has(group.key)"
-                @click="toggleGroup(group.key)"
-              >
-                <img v-if="groupIcons.get(group.key)" :src="groupIcons.get(group.key)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
-                <span class="truncate">{{ group.label }}</span>
-                <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
-                <component
-                  :is="shellGlyphs.groupChevron"
-                  class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
-                  :class="collapsed.has(group.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
-                />
-                <RunningBadge v-if="foldedRunning.get(group.key)" class="ms-1" :tasks="foldedRunning.get(group.key)!.tasks" :jobs="foldedRunning.get(group.key)!.jobs" :chats="foldedRunning.get(group.key)!.chats" />
-              </button>
-            </Tip>
-            <span class="flex-1" />
-            <Tip v-if="deskNewFolder(group)" :label="`New session in ${group.label}`">
-              <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${group.label}`" @click="src.select({ kind: 'new', cwd: deskNewFolder(group)! })">
-                <component :is="shellGlyphs.groupNew" class="size-4" />
-              </button>
-            </Tip>
+            <ReuseGroupHead :group="group" />
           </header>
           </ContextMenuTrigger>
           <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
@@ -967,6 +976,14 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             </ContextMenuItem>
           </ContextMenuContent>
           </ContextMenu>
+          <header
+            v-else
+            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
+            :class="group.hidden && 'opacity-60'"
+          >
+            <ReuseGroupHead :group="group" />
+          </header>
+          </span>
           <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. -->
           <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
             <div

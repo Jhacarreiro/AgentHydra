@@ -6,6 +6,8 @@ import { openDashboard, dashboardList, refreshDashboards } from '@/components/da
 import { hasSite } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
+import { useFirstInterestSet } from '@/lib/first-interest'
+import { createReusableTemplate } from '@vueuse/core'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
@@ -109,6 +111,10 @@ function open(p: ProjectEntry): void {
   src.select({ kind: 'new', cwd: p.path })
 }
 const picked = (p: ProjectEntry) => pickedFolder(src.selected.value, p.path)
+// A tile's context menu mounts on the first hover, focus or press on it (lib/first-interest.ts); the bare tile until then.
+const tileMenus = useFirstInterestSet()
+const [DefineTile, ReuseTile] = createReusableTemplate<{ p: ProjectEntry }>()
+const tileClass = (p: ProjectEntry) => [TILE, picked(p) ? TILE_PICKED : TILE_BG, p.hidden ? 'opacity-60' : '', showProjectDetails.value ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']
 
 const menuApi: ProjectMenuApi = {
   reveal: (path) => src.revealFolder(path),
@@ -221,6 +227,34 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
             </span>
           </Tip>
         </div>
+        <DefineTile v-slot="{ p }">
+          <Tip :label="p.path">
+            <span class="flex w-full min-w-0 items-center gap-2">
+              <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
+              <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
+                <Folder :class="folderSize" aria-hidden="true" />
+              </span>
+              <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
+              <Tip v-if="p.hidden" label="Hidden from Projects">
+                <span class="inline-flex shrink-0 text-text-muted"><EyeOff class="size-3" aria-hidden="true" /></span>
+              </Tip>
+              <Tip v-if="p.openChats" :label="openChatsLabel(p.openChats)">
+                <span :class="OPEN_CHATS" :aria-label="openChatsLabel(p.openChats)">
+                  <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
+                </span>
+              </Tip>
+              <Tip v-if="hasDashboard(p.path)" label="Open dashboard">
+                <span role="button" tabindex="0" aria-label="Open dashboard" :class="DASH_GLYPH" @click.stop.prevent="openDashboard(p.path)" @keydown.enter.stop.prevent="openDashboard(p.path)">
+                  <LayoutDashboard class="size-3" aria-hidden="true" />
+                </span>
+              </Tip>
+            </span>
+          </Tip>
+          <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
+            <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
+            <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
+          </span>
+        </DefineTile>
         <p v-if="actionProblem" role="alert" class="mt-3 text-[12px] leading-4 text-danger">{{ actionProblem }}</p>
         <p v-if="problem && !answer" class="mt-4 text-[12px] leading-4 text-text-muted">Could not load your projects: {{ problem }}</p>
         <p v-else-if="!answer && loading" class="mt-4 text-[12px] leading-4 text-text-muted">Loading your projects…</p>
@@ -237,36 +271,11 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
           move-class="transition-transform duration-[220ms] ease-(--ease-snap) motion-reduce:transition-none"
           @before-leave="pinLeaving"
         >
-          <div v-for="p in shown" :key="p.path" class="min-w-0">
-            <ContextMenu>
+          <div v-for="p in shown" :key="p.path" class="min-w-0" v-on="tileMenus.listeners(p.path)">
+            <ContextMenu v-if="tileMenus.seen(p.path)">
               <ContextMenuTrigger as-child>
-                <button type="button" :aria-pressed="picked(p)" :class="[TILE, picked(p) ? TILE_PICKED : TILE_BG, p.hidden ? 'opacity-60' : '', showProjectDetails ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']" @click="open(p)">
-                  <Tip :label="p.path">
-                    <span class="flex w-full min-w-0 items-center gap-2">
-                      <img v-if="p.icon" :src="p.icon" alt="" :class="[iconSize, 'shrink-0 rounded-(--radius-6)']" />
-                      <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
-                        <Folder :class="folderSize" aria-hidden="true" />
-                      </span>
-                      <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
-                      <Tip v-if="p.hidden" label="Hidden from Projects">
-                        <span class="inline-flex shrink-0 text-text-muted"><EyeOff class="size-3" aria-hidden="true" /></span>
-                      </Tip>
-                      <Tip v-if="p.openChats" :label="openChatsLabel(p.openChats)">
-                        <span :class="OPEN_CHATS" :aria-label="openChatsLabel(p.openChats)">
-                          <MessagesSquare class="size-3" aria-hidden="true" />{{ p.openChats }}
-                        </span>
-                      </Tip>
-                      <Tip v-if="hasDashboard(p.path)" label="Open dashboard">
-                        <span role="button" tabindex="0" aria-label="Open dashboard" :class="DASH_GLYPH" @click.stop.prevent="openDashboard(p.path)" @keydown.enter.stop.prevent="openDashboard(p.path)">
-                          <LayoutDashboard class="size-3" aria-hidden="true" />
-                        </span>
-                      </Tip>
-                    </span>
-                  </Tip>
-                  <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
-                    <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
-                    <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
-                  </span>
+                <button type="button" :aria-pressed="picked(p)" :class="tileClass(p)" @click="open(p)">
+                  <ReuseTile :p="p" />
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
@@ -275,6 +284,9 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                 </ContextMenuItem>
               </ContextMenuContent>
             </ContextMenu>
+            <button v-else type="button" :aria-pressed="picked(p)" :class="tileClass(p)" @click="open(p)">
+              <ReuseTile :p="p" />
+            </button>
           </div>
         </TransitionGroup>
         <button v-if="overflow" type="button" :aria-expanded="expanded" class="mt-3 h-7 rounded-(--radius-8) bg-fill-5 px-3 text-[12px] leading-4 text-text-2 hover:bg-fill-hover" @click="expanded = !expanded">{{ moreLabel }}</button>

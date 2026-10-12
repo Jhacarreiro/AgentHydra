@@ -11,6 +11,7 @@ import { ref } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
+import { useOpenedOnce } from '@/composables/useOpenedOnce'
 import { pii, piiName } from '@/composables/usePrivacy'
 import { type CMLoginHistory, type CMLoginHistoryEntry, getInstanceLoginHistory } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
@@ -32,6 +33,15 @@ async function load(open: boolean) {
     failed.value = true
   }
 }
+
+// The popover mounts on its first open, not with the row: every account row carries one, and most are never opened.
+const open = ref(false)
+const { mounted, shown } = useOpenedOnce(open)
+function setOpen(value: boolean) {
+  open.value = value
+  void load(value)
+}
+const triggerClass = 'inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring'
 
 /** The address when this machine ever identified the account; its short id when it never did. */
 function who(e: CMLoginHistoryEntry): string {
@@ -67,11 +77,11 @@ function isLastSignedIn(index: number): boolean {
     :description="$t('instances.loginHistoryHint')"
   >
     <span class="inline-flex">
-      <Popover @update:open="load">
+      <Popover v-if="mounted" :open="shown" @update:open="setOpen">
         <PopoverTrigger as-child>
           <button
             type="button"
-            class="inline-flex size-5 shrink-0 items-center justify-center rounded text-muted-foreground hover:bg-accent hover:text-foreground focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
+            :class="triggerClass"
             :aria-label="$t('instances.loginHistoryTitle', { num })"
           >
             <History class="size-3.5" />
@@ -131,6 +141,15 @@ function isLastSignedIn(index: number): boolean {
           </div>
         </PopoverContent>
       </Popover>
+      <button
+        v-else
+        type="button"
+        :class="triggerClass"
+        :aria-label="$t('instances.loginHistoryTitle', { num })"
+        @click="setOpen(true)"
+      >
+        <History class="size-3.5" />
+      </button>
     </span>
   </IconTooltip>
 </template>

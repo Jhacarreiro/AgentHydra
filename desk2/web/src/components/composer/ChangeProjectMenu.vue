@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, inject, ref, watch } from 'vue'
 import { icons } from '@/lib/icons'
+import { useFirstInterest } from '@/lib/first-interest'
 import {
   DropdownMenu,
   DropdownMenuContent,
@@ -22,6 +23,8 @@ const props = defineProps<{ current: string | null; header: string }>()
 const emit = defineEmits<{ choose: [cwd: string] }>()
 const open = defineModel<boolean>('open', { default: false })
 const api = inject(COMPOSER_API, httpComposerApi)
+// The menu mounts on the first hover, focus or press on its trigger (lib/first-interest.ts): a row of replies carries one each.
+const { seen, listeners } = useFirstInterest({ replay: true })
 
 /** Rows the menu shows, as the folder menu. */
 const SHOWN = 10
@@ -55,7 +58,7 @@ async function other() {
 </script>
 
 <template>
-  <DropdownMenu v-model:open="open">
+  <DropdownMenu v-if="seen" v-model:open="open">
     <DropdownMenuTrigger as-child>
       <slot />
     </DropdownMenuTrigger>
@@ -79,4 +82,5 @@ async function other() {
       <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-(--danger-text)">{{ error }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
+  <span v-else class="contents" v-on="listeners"><slot /></span>
 </template>

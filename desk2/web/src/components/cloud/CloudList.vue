@@ -63,6 +63,9 @@ const emit = defineEmits<{ 'new-session': [cwd: string]; open: [row: CloudSessio
 const cloud = useCloud()
 // A row nobody touched draws its content only; its context menu mounts on the first hover or focus and stays (lib/first-interest.ts).
 const rowMenus = useFirstInterestSet()
+// A group's header menu mounts on the first hover, focus or press on it, as a row's does.
+const groupMenus = useFirstInterestSet()
+const [DefineGroupHead, ReuseGroupHead] = createReusableTemplate<{ g: CloudGroup }>()
 const [DefineRowBody, ReuseRowBody] = createReusableTemplate<{ r: CloudGroup['rows'][number] }>()
 const shownGroups = computed(() => props.groups ?? cloud.groups.value)
 // Compact sidebar (compact.ts): no headers, the chats in one list, each with its group's icon in a ring. Search results keep their header.
@@ -213,6 +216,27 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
             <slot name="sub-badges" :id="r.id" />
             <RowAge v-if="!cleanSidebar" class="pe-1" :at="r.lastActivityAt" />
     </DefineRowBody>
+    <DefineGroupHead v-slot="{ g }">
+      <Tip :label="g.cwd ?? ''" align="start">
+        <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
+          <img v-if="props.iconOf?.(g)" :src="props.iconOf(g)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
+          <span class="truncate">{{ g.label }}</span>
+          <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
+          <component
+            :is="shellGlyphs.groupChevron"
+            class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
+            :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
+          />
+          <RunningBadge v-if="foldedRunning.get(g.key)" class="ms-1" :tasks="foldedRunning.get(g.key)!.tasks" :jobs="foldedRunning.get(g.key)!.jobs" :chats="foldedRunning.get(g.key)!.chats" />
+        </button>
+      </Tip>
+      <span class="flex-1" />
+      <Tip v-if="newFolderOf(g)" :label="`New session in ${g.label}`">
+        <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', newFolderOf(g)!)">
+          <component :is="shellGlyphs.groupNew" class="size-4" />
+        </button>
+      </Tip>
+    </DefineGroupHead>
     <header v-if="shownGroups.length === 0" class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
     </header>
@@ -232,28 +256,11 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
 
     <TransitionGroup :css="false" @leave="rowLeave">
     <section v-for="g in shownGroups" :key="g.key" :aria-label="g.label" :class="compactOf(g) && g.hidden && 'opacity-60'">
-      <ContextMenu v-if="!compactOf(g)">
+      <span v-if="!compactOf(g)" class="block" v-on="groupMenus.listeners(g.key)">
+      <ContextMenu v-if="groupMenus.seen(g.key)">
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
       <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
-        <Tip :label="g.cwd ?? ''" align="start">
-          <button type="button" class="flex min-w-0 items-center gap-0.5 rounded-sm hover:text-text-2" :aria-expanded="!collapsed.has(g.key)" @click="toggleGroup(g.key)">
-            <img v-if="props.iconOf?.(g)" :src="props.iconOf(g)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
-            <span class="truncate">{{ g.label }}</span>
-            <EyeOff v-if="g.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
-            <component
-              :is="shellGlyphs.groupChevron"
-              class="size-3 shrink-0 transition-transform duration-(--dur-fast) group-hover/head:opacity-100"
-              :class="collapsed.has(g.key) ? 'opacity-100' : 'rotate-90 opacity-0'"
-            />
-            <RunningBadge v-if="foldedRunning.get(g.key)" class="ms-1" :tasks="foldedRunning.get(g.key)!.tasks" :jobs="foldedRunning.get(g.key)!.jobs" :chats="foldedRunning.get(g.key)!.chats" />
-          </button>
-        </Tip>
-        <span class="flex-1" />
-        <Tip v-if="newFolderOf(g)" :label="`New session in ${g.label}`">
-          <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', newFolderOf(g)!)">
-            <component :is="shellGlyphs.groupNew" class="size-4" />
-          </button>
-        </Tip>
+        <ReuseGroupHead :g="g" />
       </header>
       </ContextMenuTrigger>
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
@@ -272,6 +279,10 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
         </ContextMenuItem>
       </ContextMenuContent>
       </ContextMenu>
+      <header v-else class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
+        <ReuseGroupHead :g="g" />
+      </header>
+      </span>
       <TransitionGroup v-if="compactOf(g) || !collapsed.has(g.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
         <div
           v-for="r in g.rows"
