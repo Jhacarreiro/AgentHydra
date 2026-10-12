@@ -73,15 +73,31 @@ function profileDeps(liveness: Liveness): IdleCloseDeps {
   }
 }
 
+/** One pass over Desk's saved profiles. The closer, and with it each folder's idle clock, lives across passes; only the
+ *  chats' liveness is read afresh each time. */
+export function makeIdleTick(o: {
+  deskSessions: () => Promise<ReadonlySet<string>>
+  root?: string
+  deps?: (liveness: Liveness) => IdleCloseDeps
+  now?: () => number
+}): () => Promise<string[]> {
+  let liveness: Liveness = () => null
+  const sweep = makeIdleCloser((o.deps ?? profileDeps)((owner) => liveness(owner)), o.now)
+  return async () => {
+    liveness = makeLiveness(await o.deskSessions())
+    return sweep(profileFolders(o.root ?? storeRoot()))
+  }
+}
+
 /** Runs the idle close over Desk's saved profiles every IDLE_CHECK_MS (unref'd). Returns the stop. */
 export function startIdleBrowserClose(o: { deskSessions: () => Promise<ReadonlySet<string>>; root?: string; everyMs?: number }): () => void {
+  const pass = makeIdleTick(o)
   let running = false
   const tick = async (): Promise<void> => {
     if (running) return
     running = true
     try {
-      const sweep = makeIdleCloser(profileDeps(makeLiveness(await o.deskSessions())))
-      await sweep(profileFolders(o.root ?? storeRoot()))
+      await pass()
     } catch (err) {
       console.error('[desk] the idle browser close failed:', err)
     } finally {

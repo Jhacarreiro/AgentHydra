@@ -2,7 +2,10 @@
 // visible window, or page a live chat drives resets that clock.
 
 import { describe, expect, test } from 'bun:test'
-import { IDLE_CLOSE_MS, makeIdleCloser, type IdleCloseDeps } from '../../src/browser/idle-close'
+import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { tmpdir } from 'node:os'
+import { join } from 'node:path'
+import { IDLE_CLOSE_MS, makeIdleCloser, makeIdleTick, type IdleCloseDeps } from '../../src/browser/idle-close'
 
 interface FakeProfile {
   port: number
@@ -135,5 +138,43 @@ describe('a dead owner', () => {
     s.add('leftover', 9, { pages: [{ id: 'old', url: 'https://example.com/' }], owners: new Map([['old', { chat: 'chat-gone' }]]) })
     expect(await s.at(0)).toEqual([])
     expect(await s.at(10)).toEqual(['leftover'])
+  })
+})
+
+describe('the timer', () => {
+  test("each folder's idle clock lives across passes, so a quiet profile is closed after ten minutes", async () => {
+    const root = mkdtempSync(join(tmpdir(), 'idle-close-'))
+    try {
+      mkdirSync(join(root, 'a'))
+      const closed: string[] = []
+      let t = 0
+      const pass = makeIdleTick({
+        deskSessions: async () => new Set(),
+        root,
+        now: () => t,
+        deps: (liveness) => ({
+          liveBrowser: async () => ({ port: 1 }),
+          pages: async () => [{ id: 'p', url: 'about:blank' }],
+          owners: () => new Map(),
+          headless: () => true,
+          liveView: () => false,
+          liveness,
+          close: async (dir) => {
+            closed.push(dir)
+            return true
+          },
+          log: () => {},
+        }),
+      })
+      for (const m of [0, 1, 5, 9]) {
+        t = m * MIN
+        expect(await pass()).toEqual([])
+      }
+      t = 10 * MIN
+      expect(await pass()).toEqual([join(root, 'a')])
+      expect(closed).toEqual([join(root, 'a')])
+    } finally {
+      if (root) rmSync(root, { recursive: true, force: true })
+    }
   })
 })
