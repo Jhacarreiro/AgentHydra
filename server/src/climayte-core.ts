@@ -23,7 +23,7 @@ import {
   stat as statAsync,
 } from 'node:fs/promises'
 import { join } from 'node:path'
-import { zstdCompressSync, zstdDecompressSync } from 'node:zlib'
+import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
 import { type EtaReview, etaFullOfEvent, reviewOfEvent } from './climayte-eta'
 import {
@@ -172,6 +172,92 @@ const filed = new Set<string>()
 const dirty = new Set<string>()
 
 export const workers = new Map<string, CliMayteWorker>()
+
+// FINISHED WORK KEEPS ITS LONG TEXT PACKED (2026-10-12). Every worker under done/ stayed in memory as
+// parsed text: 11,109 workers (141 MB of files) held 238 MB of the daemon's ~1 GB start, its largest
+// single cause, measured by replaying boot step by step against a copy of the store. Four fields are
+// 78% of that text, so a filed, unchanged finished worker keeps them as one zstd frame behind
+// accessors. Reading any of them (a spread, JSON.stringify and every caller included) puts all four
+// back as plain fields first, so readers and writers see exactly what they always saw; packColdWorkers
+// packs a worker again once it has been left alone for COLD_AFTER_MS.
+const PACKED_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+type PackedField = (typeof PACKED_FIELDS)[number]
+const packedFields = new WeakMap<CliMayteWorker, Uint8Array>()
+/** When a worker's fields were last unpacked: it stays plain while something is reading it. */
+const unpackedAt = new WeakMap<CliMayteWorker, number>()
+const COLD_AFTER_MS = 5 * 60_000
+/** The most a tick spends packing, so a pass after a full-list read never holds a request up. */
+const PACK_SLICE_MS = 8
+/** Level 1: 64 us a worker against level 3's 115, for 3% more bytes (3,000 real workers, 2026-10-12). */
+const PACK_LEVEL = { params: { [zlibConstants.ZSTD_c_compressionLevel]: 1 } }
+
+function unpackWorker(w: CliMayteWorker): void {
+  const blob = packedFields.get(w)
+  if (!blob) return
+  const vals = JSON.parse(zstdDecompressSync(blob).toString('utf8')) as Record<string, unknown>
+  packedFields.delete(w)
+  unpackedAt.set(w, Date.now())
+  for (const k of PACKED_FIELDS)
+    if (Object.getOwnPropertyDescriptor(w, k)?.get)
+      Object.defineProperty(w, k, {
+        value: vals[k],
+        writable: true,
+        enumerable: true,
+        configurable: true,
+      })
+}
+
+/** One getter and setter per field, shared by every packed worker (`this` is the worker). */
+const packedAccessors = Object.fromEntries(
+  PACKED_FIELDS.map((k) => [
+    k,
+    {
+      get(this: CliMayteWorker) {
+        unpackWorker(this)
+        return this[k]
+      },
+      set(this: CliMayteWorker, v: unknown) {
+        unpackWorker(this)
+        ;(this as unknown as Record<PackedField, unknown>)[k] = v
+      },
+      enumerable: true,
+      configurable: true,
+    },
+  ]),
+) as Record<PackedField, PropertyDescriptor>
+
+/** Pack a finished worker whose file under done/ is current. Redefining a field keeps its place in
+ *  the key order, so the worker serializes byte for byte as before. */
+function packWorker(w: CliMayteWorker): void {
+  if (!filed.has(w.id) || dirty.has(w.id)) return
+  packRead(w)
+}
+
+/** Pack a finished worker as it is read from its done/ file (which it then matches). */
+function packRead(w: CliMayteWorker): void {
+  if (packedFields.has(w) || !isFinished(w)) return
+  const keys = PACKED_FIELDS.filter((k) => Object.hasOwn(w, k))
+  if (!keys.length) return
+  const vals: Partial<Record<PackedField, unknown>> = {}
+  for (const k of keys) vals[k] = w[k]
+  packedFields.set(w, zstdCompressSync(Buffer.from(JSON.stringify(vals)), PACK_LEVEL))
+  for (const k of keys) Object.defineProperty(w, k, packedAccessors[k])
+}
+
+/** Pack the finished workers nothing has changed or read for COLD_AFTER_MS, within PACK_SLICE_MS (the
+ *  tick). The packed count. */
+export function packColdWorkers(now = Date.now()): number {
+  const t0 = performance.now()
+  let n = 0
+  for (const w of workers.values()) {
+    if (packedFields.has(w) || !isFinished(w)) continue
+    if (now - Math.max(w.updatedAt ?? 0, unpackedAt.get(w) ?? 0) < COLD_AFTER_MS) continue
+    packWorker(w)
+    if (packedFields.has(w)) n++
+    if (performance.now() - t0 > PACK_SLICE_MS) break
+  }
+  return n
+}
 
 export let perAccount: Record<string, number> = {}
 
@@ -565,6 +651,8 @@ let donePending = false
 function doneWorker(name: string, text: string): CliMayteWorker {
   const w = JSON.parse(text) as CliMayteWorker
   if (name !== `${w?.id}.json` || !Array.isArray(w.attempts)) throw new Error('not a worker')
+  // Packed as it is read, so a boot never holds every finished worker's text at once.
+  packRead(w)
   return w
 }
 

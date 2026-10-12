@@ -49,6 +49,7 @@ import type { AccountTokens, TokenParts, UsageSnapshot } from '../types'
 import { parseUsageLine } from '../usage-tokens'
 import { collectChatsAsync, lineageIdsOf } from './chat-store-scan'
 import { listCliInstances } from './cli-instances'
+import { intern } from './intern'
 import { accountHoldersFile, accountTokensCacheFile, appDataDir } from './paths'
 
 const REFRESH_AFTER_MS = 60_000
@@ -443,7 +444,7 @@ async function settle(
   if (prefix) fold(entry, prefix.recent, horizon, holder)
   fold(entry, rows.slice(0, settled), horizon, holder)
   entry.tail = rows.slice(settled)
-  files.set(path, entry)
+  files.set(intern(path), entry)
   cacheDirty = true
   return entry
 }
@@ -468,7 +469,7 @@ async function loadCache(): Promise<void> {
         const line = lines[n] as string
         if (!line) continue
         const [kind, path, e] = JSON.parse(line)
-        ;(kind === 'c' ? cliFiles : desktopFiles).set(path, e as FileEntry)
+        ;(kind === 'c' ? cliFiles : desktopFiles).set(intern(path), e as FileEntry)
         if (n % 64 === 0 && performance.now() - t0 > SLICE_BUDGET_MS) {
           await new Promise<void>((r) => setImmediate(r))
           t0 = performance.now()

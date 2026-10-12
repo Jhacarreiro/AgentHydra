@@ -162,6 +162,41 @@ interface Child {
 }
 const children = new Map<number, Child>()
 
+// ⛔ A LANE'S WORKER STOPS WHEN IT HAS BEEN IDLE A MINUTE (2026-10-12). Each lane kept its worker for
+// the daemon's whole life, though most run a capture a few times an hour: an idle Bun worker holds
+// about 6.5 MB here (8 measured), and a new one starts in a few ms. A worker still owing a reply
+// (`owed`: its asker may have been answered timedOut already) or watching a child is never stopped.
+let IDLE_STOP_MS = 60_000
+
+/** Tests: an idle stop short enough to reach in a test run; called with nothing, the production one. */
+export function setSpawnWorkerIdleStopForTests(ms = 60_000): void {
+  IDLE_STOP_MS = ms
+}
+/** Captures a worker was sent and has not answered yet, by id: their lane. */
+const owed = new Map<number, string>()
+const idleTimers = new Map<string, ReturnType<typeof setTimeout>>()
+
+function laneBusy(lane: string): boolean {
+  for (const l of owed.values()) if (l === lane) return true
+  for (const c of children.values()) if (c.lane === lane) return true
+  return false
+}
+
+/** Stop `lane`'s worker IDLE_STOP_MS from now unless it is given work before then. */
+function stopWhenIdle(lane: string): void {
+  if (laneBusy(lane)) return
+  clearTimeout(idleTimers.get(lane))
+  const timer = setTimeout(() => {
+    idleTimers.delete(lane)
+    const w = workers.get(lane)
+    if (!w || laneBusy(lane)) return
+    workers.delete(lane)
+    w.terminate()
+  }, IDLE_STOP_MS)
+  ;(timer as { unref?(): void }).unref?.()
+  idleTimers.set(lane, timer)
+}
+
 type WorkerReply =
   | { id: number; result: WorkerCapture }
   | { id: number; pid: number | undefined }
@@ -177,6 +212,7 @@ function settle(id: number): Pending | undefined {
 }
 
 function failLane(lane: string, err: Error): void {
+  for (const [id, l] of owed) if (l === lane) owed.delete(id)
   for (const [id, p] of pending) if (p.lane === lane) settle(id)?.reject(err)
   // A child it started may still run, but nothing watches it now: its exit is unknown (null).
   for (const [id, c] of children)
@@ -188,6 +224,8 @@ function failLane(lane: string, err: Error): void {
 }
 
 function ensureWorker(lane: string): Worker {
+  clearTimeout(idleTimers.get(lane))
+  idleTimers.delete(lane)
   const live = workers.get(lane)
   if (live) return live
   const w = new Worker(URL.createObjectURL(new Blob([WORKER_SOURCE], { type: 'text/javascript' })))
@@ -197,7 +235,9 @@ function ensureWorker(lane: string): Worker {
   w.onmessage = (e: MessageEvent<WorkerReply>) => {
     const d = e.data
     if ('result' in d) {
+      owed.delete(d.id)
       settle(d.id)?.resolve(d.result)
+      stopWhenIdle(lane)
       return
     }
     const c = children.get(d.id)
@@ -207,6 +247,7 @@ function ensureWorker(lane: string): Worker {
       children.delete(d.id)
       if ('failed' in d) c.failed(new StartFailed(d.failed))
       else c.ended(d.exit)
+      stopWhenIdle(lane)
     }
   }
   w.onerror = (e) => {
@@ -249,9 +290,11 @@ export function captureInWorker(
     )
     ;(guard as { unref?(): void }).unref?.()
     pending.set(id, { lane, resolve, reject, guard })
+    owed.set(id, lane)
     try {
       w.postMessage({ id, cmd, opts: { ...rest, askedAt: Date.now() } })
     } catch (err) {
+      owed.delete(id)
       settle(id)
       reject(err instanceof Error ? err : new Error(String(err)))
     }

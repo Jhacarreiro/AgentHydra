@@ -3,6 +3,7 @@ import { closeSync, existsSync, mkdtempSync, openSync, readFileSync, rmSync } fr
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { spawnCaptured, startProcess } from '../src/core/process.ts'
+import { setSpawnWorkerIdleStopForTests } from '../src/core/spawn-worker.ts'
 
 // spawnCaptured runs on a worker thread so Bun.spawn's 100-280 ms hold never lands on the daemon's
 // loop; the contract the callers rely on must survive the hop.
@@ -84,3 +85,30 @@ test('startProcess: a started child reports its pid, its exit code and its log, 
     rmSync(dir, { recursive: true, force: true })
   }
 }, 20_000)
+
+// A lane's worker stops once idle, but never while it watches a child: a stopped watcher would leave
+// the hswarm server's exit unreported for good. And a lane whose worker stopped still runs captures.
+test('an idle lane stops its worker, never one watching a child, and still runs captures after', async () => {
+  setSpawnWorkerIdleStopForTests(50)
+  try {
+    const lane = 'spawn-worker-idle'
+    const echo = [process.execPath, '-e', 'console.log("ok")']
+    const child = await startProcess(
+      [process.execPath, '-e', 'setTimeout(() => process.exit(7), 1500)'],
+      { lane },
+    )
+    // A capture that ends on the lane while the child runs is when an idle stop is weighed.
+    expect((await spawnCaptured(echo, { lane, timeoutMs: 8_000 })).stdout).toBe('ok\n')
+    const exit = await Promise.race([child.exited, Bun.sleep(10_000).then(() => 'unreported')])
+    expect(exit).toBe(7)
+    await Bun.sleep(300)
+    expect(await spawnCaptured(echo, { lane, timeoutMs: 8_000 })).toEqual({
+      code: 0,
+      stdout: 'ok\n',
+      stderr: '',
+      timedOut: false,
+    })
+  } finally {
+    setSpawnWorkerIdleStopForTests()
+  }
+}, 40_000)

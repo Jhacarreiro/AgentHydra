@@ -13,6 +13,7 @@ import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
 import { dshInstanceStores } from './core/dsh-instances'
+import { intern } from './core/intern'
 import { timeSlice } from './core/loop-yield'
 import { mapPool } from './core/map-pool'
 import { listDshSessions, readDshSession } from './dsh-sessions'
@@ -1204,7 +1205,8 @@ function finishIndex(
     // join the files a total must read. Safe to ADD here, unlike Codex's rollouts, because every
     // record carries its own request id and the usage parser charges a request once.
     if (file.source === 'claude')
-      for (const p of claudeChildren?.get(file.session_id) ?? []) if (p !== file.path) rest.push(p)
+      for (const p of claudeChildren?.get(file.session_id) ?? [])
+        if (p !== file.path) rest.push(intern(p)) // the stat cache's copy (core/intern.ts)
     const withSiblings = rest.length ? { ...file, siblingPaths: rest } : file
     // Computed once per sweep, not on demand: every row gets a stable public identity whether or
     // not a caller ever asks for it, so a session found through the plain list is immediately
@@ -1398,7 +1400,7 @@ async function buildClaudeRecordsAsync(
         return { rel, mtimeMs: known.mtimeMs, size: known.size }
       try {
         const st = await statAsync(path)
-        claudeStatCache.set(path, { mtimeMs: st.mtimeMs, size: st.size })
+        claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
         return { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         claudeStatCache.delete(path)

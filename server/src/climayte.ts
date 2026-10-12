@@ -66,6 +66,7 @@ import {
   liveByAccount,
   load,
   notify,
+  packColdWorkers,
   packedPath,
   packLog,
   perAccount,
@@ -656,6 +657,7 @@ async function tick(): Promise<void> {
     processBatchWakes(now)
     // Last, so packing never stands between a running worker and its overage stop.
     packOldLogs(now)
+    packColdWorkers(now)
   } finally {
     ticking = false
     schedule()

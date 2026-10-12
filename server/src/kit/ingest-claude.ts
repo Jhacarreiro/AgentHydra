@@ -40,6 +40,7 @@ import {
 } from '../core/account-tokens'
 import { collectChatsAsync, lineageIdsOf } from '../core/chat-store-scan'
 import { listCliInstances } from '../core/cli-instances'
+import { intern } from '../core/intern'
 import { POINTER_DIR } from '../instance'
 import { pricesAsOf, priceTokens, promptSize } from '../pricing'
 import { hswarmAccountId } from '../routes/hswarm'
@@ -391,7 +392,10 @@ async function loadCursors(store: KitStore, mem: SweepMemory, dir: string): Prom
   const hi = `${dir}￿`
   for (let lo = dir; ; ) {
     const rows = page.all({ $lo: lo, $hi: hi }) as IngestCursor[]
-    for (const r of rows) mem.cursors.set(r.path, r)
+    for (const r of rows) {
+      r.path = intern(r.path)
+      mem.cursors.set(r.path, r)
+    }
     if (rows.length < 300) break
     lo = (rows[rows.length - 1] as IngestCursor).path
     await yieldLoop()
@@ -456,7 +460,8 @@ async function dirNode(
     if (e.isDirectory()) fresh.dirs.push(p)
     else if (e.name.endsWith('.jsonl')) {
       const c = classify(root, p)
-      if (c) fresh.files.push({ path: p, ...c })
+      // One copy of the path and the session id for every sweep that holds them (core/intern.ts).
+      if (c) fresh.files.push({ path: intern(p), ...c, session: intern(c.session) })
     }
   }
   return fresh

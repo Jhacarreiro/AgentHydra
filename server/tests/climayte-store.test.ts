@@ -243,6 +243,74 @@ test('a load while done/ is still being read takes the work in flight now and ev
   expect(booted).toBe(5)
 }, 60_000)
 
+test('a finished worker held packed reads, takes a write and saves back exactly as its file had it', async () => {
+  const { home, corch } = install('packed')
+  mkdirSync(join(corch, 'done'), { recursive: true })
+  const prompt = 'A brief — with a dash outside Latin-1.\n'.repeat(200)
+  const reports = [{ at: 5, message: 'the first turn', results: ['zero'] }]
+  const done = worker('w-packed', 'done', home, {
+    prompt,
+    result: 'one\n\ntwo',
+    results: ['one', 'two'],
+    reports,
+  })
+  const file = join(corch, 'done', 'w-packed.json')
+  writeFileSync(file, JSON.stringify(done, null, 2))
+
+  const core = pathToFileURL(resolve(import.meta.dir, '../src/climayte-core.ts')).href
+  const writer = pathToFileURL(resolve(import.meta.dir, '../src/climayte-store-writer.ts')).href
+  const seen = (await start(
+    home,
+    `const core = await import(${JSON.stringify(core)})
+     const writer = await import(${JSON.stringify(writer)})
+     const { readFileSync } = await import('node:fs')
+     const packed = (w) => typeof Object.getOwnPropertyDescriptor(w, 'prompt')?.get === 'function'
+     await core.preloadDone()
+     c.climayteRunningCount()
+     const w = core.workers.get('w-packed')
+     const loadedPacked = packed(w)
+     const read = { prompt: w.prompt, result: w.result, results: w.results, reports: w.reports }
+     // Left alone past the wait it is packed again; a change to another field saves it whole.
+     core.packColdWorkers(Date.now() + 3_600_000)
+     const repacked = packed(w)
+     w.error = 'judged'
+     core.changed(w)
+     await writer.flushCliMayteStore()
+     const afterChange = readFileSync(args, 'utf8')
+     // A write to a packed field holds.
+     core.packColdWorkers(Date.now() + 7_200_000)
+     const packedBeforeWrite = packed(w)
+     w.results = [...w.results, 'three']
+     core.changed(w)
+     await writer.flushCliMayteStore()
+     return { loadedPacked, read, repacked, afterChange, packedBeforeWrite, afterWrite: readFileSync(args, 'utf8') }`,
+    file,
+  )) as {
+    loadedPacked: boolean
+    read: Record<string, unknown>
+    repacked: boolean
+    afterChange: string
+    packedBeforeWrite: boolean
+    afterWrite: string
+  }
+  expect([seen.loadedPacked, seen.repacked, seen.packedBeforeWrite]).toEqual([true, true, true])
+  expect(seen.read).toEqual({
+    prompt,
+    result: done.result,
+    results: done.results,
+    reports,
+  })
+  // Byte for byte what an unpacked worker writes: every field, in the file's own key order.
+  const changedAt = JSON.parse(seen.afterChange).updatedAt
+  expect(seen.afterChange).toBe(
+    JSON.stringify({ ...done, error: 'judged', updatedAt: changedAt }, null, 2),
+  )
+  const written = JSON.parse(seen.afterWrite)
+  expect(written.results).toEqual(['one', 'two', 'three'])
+  expect(Object.keys(written)).toEqual(Object.keys(done))
+  expect(written.prompt).toBe(prompt)
+}, 60_000)
+
 test('a store write the disk refuses holds neither the caller nor the thread, keeps the worker in workers.json, and goes with the next save', async () => {
   const { home, corch } = install('refused')
   writeFileSync(

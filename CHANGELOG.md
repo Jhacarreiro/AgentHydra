@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The background service starts lighter.** Finished CliMayte tasks keep their long text compressed in memory until
+  something reads it, file paths that several caches share are held once, and helper threads that sit idle close
+  themselves.
 - **Settings has a Managers page.** It holds the babysitter, the orchestrator and ArchAIngel, which moved there from General. Each standing agent shows its own settings and a Run now button.
 - **ArchAIngel runs your standing agents on their own pace, hidden.** A third watcher beside the babysitter: an agent
   you register runs whenever it says it is due, using what AgentHydra already has (its CLI and free accounts), and no
