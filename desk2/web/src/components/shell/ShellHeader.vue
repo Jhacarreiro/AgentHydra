@@ -4,11 +4,12 @@ import type { AccountInfo, ChatSummary, ExternalSession } from '@shared/protocol
 import { icons, settingsIcons, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
-import { chatRow, elapsedLabel, folderLabel, glyphDotClass, resetClock, rowMenu, statusGlyph, type RowMenuItem } from '@/components/sidebar/logic'
+import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, statusGlyph, type RowMenuItem } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
+import WorkspacePicker from './WorkspacePicker.vue'
 import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
 import { connectorList } from '@/components/connectors/connections-api'
 import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
@@ -191,11 +192,7 @@ const PANE_BTN =
           </template>
         </DropdownMenuContent>
       </DropdownMenu>
-      <Tip :label="chat.cwd">
-        <span data-fit="folder" class="ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2">
-          <span class="truncate">{{ folderLabel(chat.cwd) }}</span>
-        </span>
-      </Tip>
+      <WorkspacePicker :chat="chat" />
 
       <!-- Hydra Desk extras -->
       <span v-if="cue" data-fit="status" class="ms-1 flex h-5 shrink-0 items-center gap-1.5 text-[12px] leading-4 @max-[286px]:ms-0" :class="cue.tone" role="status" :aria-label="cue.text">
