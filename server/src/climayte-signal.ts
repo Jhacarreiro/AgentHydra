@@ -149,13 +149,18 @@ export function serveSignal(signalFile: string): { port: number; stop: () => voi
     // local port carries an Origin that is on no list (empty allowlist) and is refused (AH-11).
     const app = new Hono()
     app.use('*', createLoopbackGuard({ allowedOrigins: () => [] }))
+    // The note is read after EVERY tool call until the worker stops, and each copy stays in its
+    // history: 1.3k characters, 8,067 times in one week (2026-10-11). It goes out whole once, then as
+    // a one-line reminder; a new or changed note goes out whole again.
+    let sent = ''
     app.all('*', async (c) => {
       let body = '{}'
       if (!(await fromSubagent(c.req))) {
         try {
           const text = readFileSync(signalFile, 'utf8')
           JSON.parse(text)
-          body = text
+          body = text === sent ? signalReminder(text) : text
+          sent = text
         } catch {
           // No signal yet, or not whole: nothing to say.
         }
@@ -167,6 +172,20 @@ export function serveSignal(signalFile: string): { port: number; stop: () => voi
   } catch {
     return null
   }
+}
+
+/** The short form of a signal already shown whole: the same ask in one line, naming the handoff file. */
+export function signalReminder(signal: string): string {
+  const full = (JSON.parse(signal) as { hookSpecificOutput?: { additionalContext?: string } })
+    .hookSpecificOutput?.additionalContext
+  if (typeof full !== 'string') return signal
+  const path = /with the Write tool to (.+?), for the session/.exec(full)?.[1]
+  const line = path
+    ? `AgentHydra (reminder): the handoff asked above is still due: write it to ${path}, or finish if two or three calls end the task.`
+    : 'AgentHydra (reminder): the request above still stands.'
+  return JSON.stringify({
+    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: line },
+  })
 }
 
 /** Rewrite the worker's settings so its PostToolUse hook is an http hook at the runner's port.

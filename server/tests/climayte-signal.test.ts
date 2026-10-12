@@ -12,6 +12,7 @@ import {
   RUN_IF_PRESENT,
   SIGNAL_HOOK_TIMEOUT_S,
   serveSignal,
+  signalReminder,
   workerHooks,
 } from '../src/climayte-signal'
 
@@ -132,6 +133,23 @@ describe('workerHooks', () => {
   }, 30_000)
 })
 
+describe('signalReminder', () => {
+  test('names the handoff file of the whole note it shortens', () => {
+    const whole = JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext:
+          'AgentHydra: x. Otherwise write the handoff NOW, before anything else, with the Write tool to C:/Users/me/h/w-1-0.md, for the session that continues this task; then stop.',
+      },
+    })
+    const short = JSON.parse(signalReminder(whole)) as {
+      hookSpecificOutput: { additionalContext: string }
+    }
+    expect(short.hookSpecificOutput.additionalContext).toContain('C:/Users/me/h/w-1-0.md')
+    expect(short.hookSpecificOutput.additionalContext.length).toBeLessThan(200)
+  })
+})
+
 describe('serveSignal', () => {
   const post = (port: number) =>
     fetch(`http://127.0.0.1:${port}/signal`, {
@@ -152,8 +170,18 @@ describe('serveSignal', () => {
       writeFileSync(file, SIGNAL)
       res = await post(s!.port)
       expect(await res.text()).toBe(SIGNAL)
-      // Shown on every later call too, the way the `cat` it replaces did, until the file is removed.
-      expect(await (await post(s!.port)).text()).toBe(SIGNAL)
+      // Every later call still answers, but as a one-line reminder: each copy stays in the worker's
+      // history, and the whole note was 1.3k characters re-sent after every tool call.
+      const again = (await (await post(s!.port)).json()) as {
+        hookSpecificOutput: { additionalContext: string }
+      }
+      expect(again.hookSpecificOutput.additionalContext).toContain('AgentHydra (reminder)')
+      // A new note is whole again.
+      const next = JSON.stringify({
+        hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: 'STOP NOW' },
+      })
+      writeFileSync(file, next)
+      expect(await (await post(s!.port)).text()).toBe(next)
 
       rmSync(file)
       expect(await (await post(s!.port)).json()).toEqual({})
