@@ -76,7 +76,7 @@ import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
 import { Info } from '@lucide/vue'
-import { ANNOTATED_EVENT, openLightbox, type Annotated } from '@/components/transcript/lib/media'
+import { ANNOTATED_EVENT, openViewerAt, tileKey, viewerKindOf, type Annotated, type ViewerPicture } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
 import PermissionCard from '@/components/transcript/parts/PermissionCard.vue'
@@ -102,7 +102,7 @@ interface PendingFile {
   bytes: number
   mediaType: string
   path?: string
-  /** A PDF's bytes, kept to draw its first page. */
+  /** The file's bytes, kept to show it in the viewer and to draw a PDF's first page. */
   blob?: Blob
 }
 
@@ -592,12 +592,23 @@ function onAnnotated(ev: Event) {
   const pic: PendingImage = { id: crypto.randomUUID(), name: copy.name, mediaType: copy.mediaType, dataBase64: dataUrlToBase64(copy.dataUrl), url: copy.dataUrl }
   images.value = at >= 0 ? [...images.value.slice(0, at + 1), pic, ...images.value.slice(at + 1)] : [...images.value, pic]
 }
-function openAttachment(img: PendingImage) {
-  openLightbox(
-    img.url,
-    img.name,
-    images.value.map((i) => ({ src: i.url, alt: i.name, attachId: i.id })),
-  )
+// The tray's pictures then files, as one group the viewer steps through; a file's object URL lives until the viewer closes.
+function trayFileItem(f: PendingFile): ViewerPicture {
+  const kind = viewerKindOf(f.mediaType, f.name)
+  const reveal = f.path ? { path: f.path } : undefined
+  if (kind === 'file' || !f.blob) return { src: '', alt: f.name, kind: 'file', mediaType: f.mediaType, bytes: f.bytes, reveal }
+  const src = URL.createObjectURL(f.blob)
+  return { src, alt: f.name, kind, mediaType: f.mediaType, bytes: f.bytes, reveal, revoke: () => URL.revokeObjectURL(src) }
+}
+function openTray(entry: PendingImage | PendingFile) {
+  const pics = images.value
+  const docs = files.value
+  const items: ViewerPicture[] = [
+    ...pics.map((i): ViewerPicture => ({ src: i.url, alt: i.name, attachId: i.id, kind: 'picture' })),
+    ...docs.map(trayFileItem),
+  ]
+  const at = pics.includes(entry as PendingImage) ? pics.indexOf(entry as PendingImage) : pics.length + docs.indexOf(entry as PendingFile)
+  openViewerAt(items, at)
 }
 
 // Undo took a message of this chat's out: it comes back in above what is typed, its pictures before those attached.
@@ -767,7 +778,7 @@ async function attachFile(file: File) {
   const name = file.name || `Pasted file${file.type.startsWith('image/') ? `.${file.type.slice(6).replace('jpeg', 'jpg').replace(/\+.*/, '')}` : ''}`
   files.value = [
     ...files.value,
-    { id, name, bytes: file.size, mediaType: file.type || 'application/octet-stream', blob: file.type === 'application/pdf' ? file : undefined },
+    { id, name, bytes: file.size, mediaType: file.type || 'application/octet-stream', blob: file },
   ]
   try {
     const res = await fetch(`/api/attachments?name=${encodeURIComponent(name)}`, { method: 'POST', body: file })
@@ -1288,7 +1299,15 @@ onBeforeUnmount(() => {
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
-              <AttachmentTile as="button" class="cursor-zoom-in" :name="img.name" :aria-label="`Open ${img.name}`" @click="openAttachment(img)">
+              <AttachmentTile
+                as="button"
+                class="cursor-zoom-in"
+                :name="img.name"
+                :aria-label="`Open ${img.name}`"
+                @click="openTray(img)"
+                @keydown="tileKey($event, () => openTray(img))"
+                @keyup="tileKey($event, () => {})"
+              >
                 <img :src="img.url" :alt="img.name" class="block size-full object-cover" :style="picStyle(img.id)" @load="onPicLoad(img.id, $event)" />
               </AttachmentTile>
             </Tip>
@@ -1305,9 +1324,19 @@ onBeforeUnmount(() => {
 
         <div v-if="files.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="f in files" :key="f.id" class="group relative">
-            <PdfTile :source="f.blob" :cache-key="f.id" :height="ATTACHMENT_TILE" :name="f.name" :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'">
-              <AttachmentTile :name="f.name" :size="f.path ? formatBytes(f.bytes) : 'Attaching…'" />
-            </PdfTile>
+            <PdfTile
+              as="button"
+              class="cursor-zoom-in"
+              :source="f.mediaType === 'application/pdf' ? f.blob : null"
+              :cache-key="f.id"
+              :height="ATTACHMENT_TILE"
+              :name="f.name"
+              :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'"
+              :aria-label="`Open ${f.name}`"
+              @click="openTray(f)"
+              @keydown="tileKey($event, () => openTray(f))"
+              @keyup="tileKey($event, () => {})"
+            />
             <button
               type="button"
               class="absolute -right-1.5 -top-1.5 flex size-5 items-center justify-center rounded-full bg-(--bg-popover) text-(--text-2) opacity-0 shadow-(--shadow-menu-ringed) transition-opacity duration-150 hover:text-(--text) focus-visible:opacity-100 group-hover:opacity-100"

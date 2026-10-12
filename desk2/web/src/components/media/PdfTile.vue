@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // A PDF as its first page in an attachment tile, the page filling it from the top. Until the page is rendered, or when it
-// cannot be (encrypted, broken, too slow), the slot shows: the file tile the PDF had before.
+// cannot be (encrypted, broken, too slow), the tile is the plain file tile. Listeners and attributes fall through to it.
 import { ref, watch } from 'vue'
 import { pdfFirstPageThumb } from '../../lib/pdf-thumb'
 import { renderPdfFirstPage } from '../../lib/pdf-render'
@@ -13,6 +13,7 @@ const props = defineProps<{
   name: string
   sizeLabel: string
   revealPath?: string
+  as?: 'button' | 'div'
 }>()
 
 const thumb = ref<string | null>(null)
@@ -32,8 +33,7 @@ watch(
 </script>
 
 <template>
-  <AttachmentTile v-if="thumb" :name="name" :size="sizeLabel" :reveal-path="revealPath" data-testid="pdf-tile">
-    <img :src="thumb" alt="" draggable="false" class="block size-full object-cover object-top" />
+  <AttachmentTile :name="name" :size="sizeLabel" :reveal-path="revealPath" :as="as" :data-testid="thumb ? 'pdf-tile' : undefined">
+    <img v-if="thumb" :src="thumb" alt="" draggable="false" class="block size-full object-cover object-top" />
   </AttachmentTile>
-  <slot v-else />
 </template>

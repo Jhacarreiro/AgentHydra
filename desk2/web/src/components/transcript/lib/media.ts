@@ -45,11 +45,49 @@ export function formatSize(bytes: number | undefined): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)}MB`
 }
 
+/** What the viewer shows an item as: a picture (the default), a video, a PDF, an html page, text, or only a file card. */
+export type ViewerKind = 'picture' | 'video' | 'pdf' | 'html' | 'text' | 'file'
+
 export interface ViewerPicture {
   src: string
   alt: string
   /** A picture attached in the box and not yet sent: its id there, so an annotated copy lands right after it. */
   attachId?: string
+  kind?: ViewerKind
+  mediaType?: string
+  bytes?: number
+  /** Where the file is, for "Show in folder": its path on disk, or its cache url. */
+  reveal?: { path?: string; media?: string }
+  /** Frees the object URL behind the item; run when the viewer closes or another group replaces this one. */
+  revoke?: () => void
+}
+
+const TEXT_NAME = /\.(txt|md|markdown|json|csv|tsv|log|xml|ya?ml|js|jsx|ts|tsx|py|css|sh|ps1|ini|toml|sql)$/i
+
+/** The viewer kind of a file, by its media type and, for text, its name. */
+export function viewerKindOf(mediaType: string, name = ''): ViewerKind {
+  if (mediaType.startsWith('image/')) return 'picture'
+  if (mediaType.startsWith('video/')) return 'video'
+  if (mediaType === 'application/pdf') return 'pdf'
+  if (mediaType === 'text/html') return 'html'
+  if (mediaType.startsWith('text/') || /\/(json|xml|csv|x-yaml|javascript|x-sh)$/.test(mediaType) || TEXT_NAME.test(name)) return 'text'
+  return 'file'
+}
+
+/** An attachment as a viewer item; a kind whose bytes are not reachable falls back to a file card. */
+export function viewerItemFor(img: ImageRef): ViewerPicture {
+  const alt = img.name ?? ''
+  const kind = viewerKindOf(img.mediaType, img.name)
+  const url = img.url?.startsWith('/api/media/') ? img.url : null
+  const src = kind === 'picture' ? imageSrc(img) : kind === 'file' ? null : url
+  return {
+    src: src ?? '',
+    alt,
+    kind: src ? kind : 'file',
+    mediaType: img.mediaType,
+    bytes: img.bytes,
+    reveal: img.path ? { path: img.path } : url ? { media: url } : undefined,
+  }
 }
 
 /** The viewer saved an annotated copy: the window event, whose detail is an Annotated. */
@@ -76,11 +114,23 @@ export const lightbox = ref<{ items: ViewerPicture[]; index: number } | null>(nu
  */
 export function openLightbox(src: string, alt = '', group?: ViewerPicture[]): void {
   const at = group ? group.findIndex((p) => p.src === src) : -1
-  lightbox.value = at >= 0 ? { items: group!, index: at } : { items: [{ src, alt }], index: 0 }
+  openViewerAt(at >= 0 ? group! : [{ src, alt }], Math.max(at, 0))
+}
+
+/** Open the viewer on the item at `index` of `items`, releasing the group it replaces. */
+export function openViewerAt(items: ViewerPicture[], index: number): void {
+  releaseItems(lightbox.value?.items)
+  lightbox.value = { items, index }
 }
 
 export function closeLightbox(): void {
+  const lb = lightbox.value
   lightbox.value = null
+  releaseItems(lb?.items)
+}
+
+function releaseItems(items: ViewerPicture[] | undefined): void {
+  for (const item of items ?? []) item.revoke?.()
 }
 
 /** Show the previous or next picture of the message; stops at both ends. */

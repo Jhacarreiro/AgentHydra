@@ -193,7 +193,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="absolute inset-0 flex flex-col" data-testid="annotator">
-    <div class="flex shrink-0 items-center justify-center px-4 pt-3">
+    <div class="flex shrink-0 items-center justify-center ps-4 pe-[calc(1rem+var(--caption-w))] pt-3">
       <div class="tx-annotate-bar" role="toolbar" aria-label="Annotate">
         <Tip v-for="t in ANNOTATE_TOOLS" :key="t.tool" :label="`${t.label} (${t.key})`">
           <button

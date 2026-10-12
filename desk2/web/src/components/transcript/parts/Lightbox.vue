@@ -7,7 +7,8 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronLeft, ChevronRight, Pencil, X } from '@lucide/vue'
 import { canAnnotate } from '../lib/annotate'
-import { ANNOTATED_EVENT, closeLightbox, lightbox, stepLightbox, type Annotated } from '../lib/media'
+import { useDesk } from '@/stores/desk'
+import { ANNOTATED_EVENT, closeLightbox, formatSize, lightbox, stepLightbox, type Annotated } from '../lib/media'
 import {
   FIT_VIEW,
   clampPan,
@@ -24,8 +25,12 @@ import {
 import { Tip } from '@/components/ui/tooltip'
 import Annotator from './Annotator.vue'
 
+const desk = useDesk()
+const dialog = ref<HTMLElement | null>(null)
 const stage = ref<HTMLElement | null>(null)
 const view = ref<ViewState>(FIT_VIEW)
+const textView = ref<{ src: string; body: string; cut: boolean; failed: boolean } | null>(null)
+const TEXT_CAP = 512 * 1024
 const natural = ref({ w: 0, h: 0 })
 const area = ref({ w: 0, h: 0 })
 const dragging = ref(false)
@@ -33,7 +38,15 @@ const annotating = ref(false)
 const annotator = ref<InstanceType<typeof Annotator> | null>(null)
 
 const current = computed(() => (lightbox.value ? lightbox.value.items[lightbox.value.index] : null))
+const kind = computed(() => current.value?.kind ?? 'picture')
 const count = computed(() => lightbox.value?.items.length ?? 0)
+const textShown = computed(() => {
+  const t = textView.value
+  if (!t || t.src !== current.value?.src) return 'Loading…'
+  if (t.failed) return 'This file could not be read.'
+  return t.cut ? `${t.body}\n\n… shown up to 512 KB` : t.body
+})
+const fileLine = computed(() => [current.value?.mediaType, formatSize(current.value?.bytes)].filter(Boolean).join(' · '))
 const index = computed(() => lightbox.value?.index ?? 0)
 // The room the picture may fill: the window less the bar at the top and the one at the bottom.
 const geometry = computed<Geometry>(() => ({ iw: natural.value.w, ih: natural.value.h, cw: Math.max(1, area.value.w - 48), ch: Math.max(1, area.value.h - 112) }))
@@ -44,11 +57,26 @@ const imgStyle = computed(() => {
   return { width: `${g.iw * scale}px`, height: `${g.ih * scale}px`, transform: `translate(${view.value.panX}px, ${view.value.panY}px)` }
 })
 const percent = computed(() => (natural.value.w ? zoomPercent(view.value, geometry.value) : 0))
-const annotatable = computed(() => !!current.value && canAnnotate(current.value.src))
+const annotatable = computed(() => kind.value === 'picture' && !!current.value && canAnnotate(current.value.src))
 
 function startAnnotating() {
   if (annotatable.value) annotating.value = true
 }
+function reveal() {
+  const r = current.value?.reveal
+  if (r) void desk.revealFile(r)
+}
+watch(
+  () => (kind.value === 'text' ? current.value?.src : undefined),
+  async (src) => {
+    if (!src) return
+    const body = await fetch(src)
+      .then((r) => r.text())
+      .catch(() => null)
+    if (current.value?.src !== src) return
+    textView.value = body === null ? { src, body: '', cut: false, failed: true } : { src, body: body.slice(0, TEXT_CAP), cut: body.length > TEXT_CAP, failed: false }
+  },
+)
 // The annotated copy goes to the box: right after the original when it is an attachment there, else onto the box on screen.
 function onAnnotated(copy: { dataUrl: string; mediaType: string; name: string }) {
   const detail: Annotated = { ...copy, ...(current.value?.attachId ? { afterId: current.value.attachId } : {}) }
@@ -73,6 +101,7 @@ watch(
     view.value = FIT_VIEW
     natural.value = { w: 0, h: 0 }
     annotating.value = false
+    textView.value = null
   },
 )
 
@@ -178,7 +207,7 @@ async function opened() {
   view.value = FIT_VIEW
   window.addEventListener('keydown', onKey, true)
   await nextTick()
-  stage.value?.focus()
+  ;(stage.value ?? dialog.value)?.focus()
   measure()
   if (stage.value && typeof ResizeObserver !== 'undefined') {
     observer = new ResizeObserver(measure)
@@ -216,10 +245,11 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-150">
-      <div v-if="lightbox && current" class="fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)]" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
+      <div v-if="lightbox && current" ref="dialog" tabindex="-1" class="fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)] outline-none" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
         <Annotator v-if="annotating" ref="annotator" :src="current.src" :name="current.alt" @cancel="annotating = false" @save="onAnnotated" />
         <template v-else>
           <div
+            v-if="kind === 'picture'"
             ref="stage"
             tabindex="-1"
             class="absolute inset-0 flex items-center justify-center overflow-hidden outline-none"
@@ -242,7 +272,18 @@ onBeforeUnmount(() => {
               @dblclick="onDblClick"
             />
           </div>
-          <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 px-4 py-3 text-[13px] text-text-muted">
+          <div v-else class="absolute inset-x-6 bottom-14 top-14 flex items-center justify-center" data-testid="viewer-body">
+            <video v-if="kind === 'video'" :key="current.src" :src="current.src" controls class="max-h-full max-w-full rounded-lg" />
+            <iframe v-else-if="kind === 'pdf'" :src="current.src" :title="current.alt" class="size-full rounded-lg bg-white" />
+            <iframe v-else-if="kind === 'html'" :src="current.src" :title="current.alt" sandbox="" class="size-full rounded-lg bg-white" />
+            <pre v-else-if="kind === 'text'" class="size-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[#161618] p-4 font-mono text-[12px] leading-relaxed text-text" data-testid="viewer-text">{{ textShown }}</pre>
+            <div v-else class="flex flex-col items-center gap-3 rounded-lg bg-[#202022] px-8 py-6 text-center" data-testid="viewer-file">
+              <p class="text-[15px] font-medium text-text">{{ current.alt || 'file' }}</p>
+              <p class="text-[12px] text-text-muted">{{ fileLine }}</p>
+              <button v-if="current.reveal" type="button" class="tx-action w-auto px-3" data-testid="viewer-reveal" @click.stop="reveal">Show in folder</button>
+            </div>
+          </div>
+          <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 ps-4 pe-[calc(1rem+var(--caption-w))] py-3 text-[13px] text-text-muted">
             <span class="truncate" data-testid="viewer-title">{{ current.alt }}</span>
             <span class="flex shrink-0 items-center gap-1">
               <Tip v-if="annotatable" label="Annotate: draw, highlight, circle (A)">

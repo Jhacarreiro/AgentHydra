@@ -8,7 +8,7 @@ import type { ImageRef } from '@shared/protocol'
 import FileCard from './FileCard.vue'
 import HtmlPreview from './HtmlPreview.vue'
 import { aspectOf, galleryLayout } from '../lib/gallery'
-import { htmlSrc, imageSrc, openLightbox, tileKey } from '../lib/media'
+import { htmlSrc, imageSrc, openViewerAt, tileKey, viewerItemFor } from '../lib/media'
 
 const props = defineProps<{ images: ImageRef[] }>()
 
@@ -30,12 +30,9 @@ function onLoad(i: number, e: Event) {
   const el = e.target as HTMLImageElement
   aspects.value = { ...aspects.value, [i]: aspectOf(el.naturalWidth, el.naturalHeight) }
 }
-function open(src: string, alt: string) {
-  openLightbox(
-    src,
-    alt,
-    pictures.value.map((p) => ({ src: p.src, alt: p.alt })),
-  )
+const items = computed(() => props.images.map(viewerItemFor))
+function open(i: number) {
+  openViewerAt(items.value, i)
 }
 
 let observer: ResizeObserver | null = null
@@ -62,14 +59,14 @@ onBeforeUnmount(() => observer?.disconnect())
         :data-reveal-path="img.path"
         :style="sizeOf.get(i) ? { width: `${sizeOf.get(i)!.width}px`, height: `${sizeOf.get(i)!.height}px` } : undefined"
         :aria-label="`Open ${img.name || 'picture'}`"
-        @click="open(imageSrc(img)!, img.name ?? '')"
-        @keydown="tileKey($event, () => open(imageSrc(img)!, img.name ?? ''))"
+        @click="open(i)"
+        @keydown="tileKey($event, () => open(i))"
         @keyup="tileKey($event, () => {})"
       >
         <img :src="imageSrc(img)!" :alt="img.name || 'picture'" loading="lazy" @load="onLoad(i, $event)" />
       </button>
       <HtmlPreview v-else-if="htmlSrc(img)" :src="htmlSrc(img)!" :name="img.name" />
-      <FileCard v-else :file="img" />
+      <FileCard v-else :file="img" @open="open(i)" />
     </template>
   </div>
 </template>

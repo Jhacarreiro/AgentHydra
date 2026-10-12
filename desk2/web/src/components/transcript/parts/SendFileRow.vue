@@ -3,10 +3,10 @@
 // picture inline (at most 360 high, r5, 1px ring, zoom on click) and a video playing in place, the caption
 // as prose, then a file card per file. Until the result lands the files are not known; the caption shows alone.
 import { computed } from 'vue'
-import type { TranscriptItem } from '@shared/protocol'
+import type { ImageRef, TranscriptItem } from '@shared/protocol'
 import { Tip } from '@/components/ui/tooltip'
 import { useTranscript } from '../context'
-import { imageSrc, openLightbox, tileKey, videoSrc } from '../lib/media'
+import { imageSrc, openViewerAt, tileKey, videoSrc, viewerItemFor } from '../lib/media'
 import FileCard from './FileCard.vue'
 import MarkdownBlock from './MarkdownBlock.vue'
 
@@ -19,8 +19,11 @@ const files = computed(() => props.item.result?.images ?? [])
 const caption = computed(() => (typeof props.item.input.caption === 'string' ? props.item.input.caption : ''))
 const render = computed(() => props.item.input.display !== 'attach')
 const pictures = computed(() => (render.value ? files.value.filter((f) => imageSrc(f)) : []))
-const group = computed(() => pictures.value.map((f) => ({ src: imageSrc(f)!, alt: f.name ?? '' })))
 const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc(f)) : []))
+const viewerItems = computed(() => files.value.map(viewerItemFor))
+function openAt(f: ImageRef) {
+  openViewerAt(viewerItems.value, files.value.indexOf(f))
+}
 </script>
 
 <template>
@@ -32,8 +35,8 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
       class="tx-inline-picture"
       :data-reveal-path="f.path"
       :aria-label="`Open ${f.name || 'picture'}`"
-      @click="openLightbox(imageSrc(f)!, f.name ?? '', group)"
-      @keydown="tileKey($event, () => openLightbox(imageSrc(f)!, f.name ?? '', group))"
+      @click="openAt(f)"
+      @keydown="tileKey($event, () => openAt(f))"
       @keyup="tileKey($event, () => {})"
     >
       <img :src="imageSrc(f)!" :alt="f.name || 'picture'" loading="lazy" />
@@ -54,7 +57,7 @@ const videos = computed(() => (render.value ? files.value.filter((f) => videoSrc
     </Tip>
     <MarkdownBlock v-if="caption" :text="caption" />
     <div v-if="files.length" class="flex flex-wrap gap-2 ps-0">
-      <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" />
+      <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" @open="openAt(f)" />
     </div>
     <div v-else-if="item.status === 'running'" class="px-1 text-[14px] leading-5 text-text-muted"><span :class="shimmer && 'tx-shimmer'">Sending a file</span></div>
     <div v-else-if="item.result?.isError" class="px-1 text-[14px] leading-5 text-danger-text">{{ item.result.text || 'The file could not be sent' }}</div>
