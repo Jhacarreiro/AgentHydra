@@ -7,7 +7,7 @@
 // (routines/proposed) is listed and never run. No model is asked here: a prompt routine is a Desk chat that runs its prompt.
 
 import { spawn, type ChildProcess } from 'node:child_process'
-import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync, writeFileSync } from 'node:fs'
+import { createWriteStream, existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Hono } from 'hono'
 import {
@@ -30,6 +30,7 @@ import { chatAddOns } from '../engine/desk-prompt'
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
 import { kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
+import { renameOver, writeFlushed } from '../write-flushed'
 
 /** The first look after a start waits for the rest of Desk to come up. */
 const FIRST_LOOK_MS = 60_000
@@ -122,7 +123,10 @@ function load(file: string, now: number): Record<string, Memory> {
     if (code !== 'ENOENT' && code !== 'ENOTDIR') console.error('[routines] routines.json did not load; starting with no memory:', err)
   }
   const routines = saved?.routines && typeof saved.routines === 'object' && !Array.isArray(saved.routines) ? (saved.routines as Record<string, Partial<Memory>>) : {}
-  return Object.fromEntries(
+  // Keyed by routine id with no prototype: a plain object handed a routine named "constructor" Object's own function as
+  // its memory, and the whole list failed.
+  const memory: Record<string, Memory> = Object.create(null)
+  return Object.assign(memory, Object.fromEntries(
     Object.entries(routines).map(([id, m]) => {
       const mem: Memory = {
         runs: Array.isArray(m?.runs) ? m.runs.slice(0, RUNS_KEPT) : [],
@@ -142,7 +146,14 @@ function load(file: string, now: number): Record<string, Memory> {
       }
       return [id, mem]
     }),
-  )
+  ))
+}
+
+/** A routine or proposal file, whole or not at all: a crash mid-write leaves the file as it was, never half of one. */
+function writeWhole(file: string, body: unknown): void {
+  const tmp = `${file}.${process.pid}.tmp`
+  writeFlushed(tmp, `${JSON.stringify(body, null, 2)}\n`)
+  renameOver(tmp, file)
 }
 
 /** The last non-empty line of some output, cut to LINE_CHARS. */
@@ -586,7 +597,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       if (existsSync(join(routinesDir, `${pid}.json`)) || existsSync(join(proposedDir, `${pid}.json`)))
         return c.json({ error: `"${pid}" already exists as a routine or a proposal` }, 409)
       mkdirSync(proposedDir, { recursive: true })
-      writeFileSync(join(proposedDir, `${pid}.json`), `${JSON.stringify(contractOf(proposal), null, 2)}\n`)
+      writeWhole(join(proposedDir, `${pid}.json`), contractOf(proposal))
       await look()
       return c.json(status())
     }
@@ -608,7 +619,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     }
     const body2 = contractOf(approved)
     delete body2.why
-    writeFileSync(join(routinesDir, `${id}.json`), `${JSON.stringify(body2, null, 2)}\n`)
+    writeWhole(join(routinesDir, `${id}.json`), body2)
     rmSync(proposal, { force: true })
     await look()
     return c.json(status())

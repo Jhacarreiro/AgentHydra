@@ -389,6 +389,16 @@ describe('the plugin', () => {
     // Two real process starts: on a busy PC each takes seconds, past the 5 s default (it timed out at 6.6 and 8.2 s).
   }, 30_000)
 
+  // Regression (2026-10-12): the memory was a plain object, so a routine named "constructor" (a valid id) took Object's
+  // own function as its memory and every read of the list failed.
+  test('a routine whose id names an Object property lists like any other', async () => {
+    const d = desk()
+    d.routine('constructor', { name: 'Example constructor', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5 })
+    const res = await d.app.request('/api/routines?fresh=1')
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as RoutinesStatus).routines[0]).toMatchObject({ id: 'constructor', state: 'idle' })
+  })
+
   test('a paused routine is refused a run now (409) and never starts on its own', async () => {
     const d = desk()
     d.routine('example-paused', { name: 'Example paused', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
