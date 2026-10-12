@@ -6,7 +6,7 @@ import { isAbsolute } from 'node:path'
 import { fourmanBoard, fourmanStatus } from '../fourman'
 import { app } from '../http-app'
 
-app.get('/api/fourman', (c) => c.json(fourmanStatus()))
+app.get('/api/fourman', async (c) => c.json(await fourmanStatus()))
 
 app.get('/api/fourman/board', async (c) => {
   const cwd = c.req.query('cwd')?.trim()

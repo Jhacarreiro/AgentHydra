@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -9,7 +9,15 @@ import {
   workspaceOf,
   writeDashboard,
 } from '../src/dashboards'
-import { findEngine, fourmanBoard, fourmanStatus, runEngine } from '../src/fourman'
+import {
+  clearFourmanCaches,
+  findEngine,
+  fourmanBoard,
+  fourmanStatus,
+  parseTodoChecklist,
+  runEngine,
+  setFourmanDeps,
+} from '../src/fourman'
 import { app } from '../src/http-app'
 import '../src/routes/fourman'
 
@@ -49,6 +57,15 @@ const savedEnv = {
 beforeAll(() => {
   process.env.AGENTHYDRA_FOURMAN = engine
   process.env.FAKE_4MAN_LOG = logPath
+  setFourmanDeps({
+    env: process.env,
+    home: join(scratch, 'fake-home'),
+    portOwner: async () => null,
+  })
+})
+
+beforeEach(() => {
+  clearFourmanCaches()
 })
 
 afterAll(() => {
@@ -60,12 +77,12 @@ afterAll(() => {
 })
 
 describe('discovery', () => {
-  test('no engine means not installed', () => {
+  test('no engine means not installed', async () => {
     const emptyHome = join(scratch, 'empty-home')
     mkdirSync(emptyHome, { recursive: true })
     expect(findEngine({}, emptyHome)).toBeNull()
     process.env.AGENTHYDRA_FOURMAN = join(scratch, 'missing', '4man.mjs')
-    const status = fourmanStatus()
+    const status = await fourmanStatus()
     process.env.AGENTHYDRA_FOURMAN = engine
     expect(status.available).toBe(false)
     expect(status.notes.available).toBe(false)
@@ -203,5 +220,199 @@ describe('dashboard origin', () => {
     for (const change of refused) {
       await expect(writeDashboard(workspace, change)).rejects.toBeInstanceOf(DashboardError)
     }
+  })
+})
+
+function closedPort(): number {
+  const probe = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('') })
+  const port = probe.port as number
+  probe.stop(true)
+  return port
+}
+
+function writeClaudeConfig(home: string, entry: Record<string, unknown>): void {
+  mkdirSync(home, { recursive: true })
+  writeFileSync(
+    join(home, '.claude.json'),
+    JSON.stringify({ mcpServers: { 'connections-local': entry } }),
+  )
+}
+
+describe('discovery through the local MCP port', () => {
+  const checkout = join(scratch, 'Checkout')
+  const found = join(checkout, 'tools', '4man', '4man.mjs')
+  const home = join(scratch, 'port-home')
+  mkdirSync(join(checkout, 'tools', '4man'), { recursive: true })
+  writeFileSync(found, '')
+
+  test('the process on the port names its checkout and the engine is found', async () => {
+    const port = closedPort()
+    writeClaudeConfig(home, { type: 'http', url: `http://127.0.0.1:${port}/mcp` })
+    const asked: number[] = []
+    setFourmanDeps({
+      env: {},
+      home,
+      portOwner: async (p) => {
+        asked.push(p)
+        return `node "${join(checkout, 'services', 'studio', 'local-mcp', 'loader.mjs')}" --http --port ${p}`
+      },
+    })
+    const status = await fourmanStatus()
+    expect(status.available).toBe(true)
+    expect(status.engine).toBe(found)
+    await fourmanStatus()
+    expect(asked).toEqual([port])
+  })
+
+  test('a non-loopback MCP url is never probed', async () => {
+    writeClaudeConfig(home, { type: 'http', url: 'https://example.com/mcp' })
+    let asked = 0
+    setFourmanDeps({
+      env: {},
+      home,
+      portOwner: async () => {
+        asked++
+        return null
+      },
+    })
+    const status = await fourmanStatus()
+    expect(status.available).toBe(false)
+    expect(asked).toBe(0)
+  })
+
+  test('a port owner that is not a local-mcp script gives no engine', async () => {
+    const port = closedPort()
+    writeClaudeConfig(home, { type: 'http', url: `http://127.0.0.1:${port}/mcp` })
+    setFourmanDeps({
+      env: {},
+      home,
+      portOwner: async () => `node C:/Example/other-server.mjs --port ${port}`,
+    })
+    expect((await fourmanStatus()).available).toBe(false)
+  })
+})
+
+describe('notes through the Connections local MCP', () => {
+  const home = join(scratch, 'notes-home')
+  const helper = join(scratch, 'headers-helper.mjs')
+  const failingHelper = join(scratch, 'headers-failing.mjs')
+  const token = 'invented-token-7f3a'
+  const checklist = [
+    '[ ] Renew example certificate - due 2026-10-20 #ops [pinned]  [id:11111111-1111-4111-8111-111111111111]',
+    '[x] Sign example form - due 2026-10-01  [id:22222222-2222-4222-8222-222222222222]',
+    '[ ] Call the example vendor #phone #billing  [id:33333333-3333-4333-8333-333333333333]',
+    '',
+    '(3 of 3 to-dos)',
+  ].join('\n')
+  let requests = 0
+  let server: ReturnType<typeof Bun.serve>
+
+  beforeAll(() => {
+    writeFileSync(
+      helper,
+      `process.stdout.write(JSON.stringify({ authorization: 'Bearer ${token}' }))\n`,
+    )
+    writeFileSync(failingHelper, `process.stdout.write('Bearer ${token}'); process.exit(1)\n`)
+    server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      async fetch(req) {
+        if (req.headers.get('authorization') !== `Bearer ${token}`)
+          return new Response('no', { status: 401 })
+        const msg = (await req.json()) as { id?: number; method: string }
+        if (msg.method === 'notifications/initialized') return new Response(null, { status: 202 })
+        if (msg.method === 'initialize') {
+          return Response.json(
+            {
+              jsonrpc: '2.0',
+              id: msg.id,
+              result: { protocolVersion: '2025-03-26', capabilities: {} },
+            },
+            { headers: { 'mcp-session-id': 'session-1' } },
+          )
+        }
+        if (req.headers.get('mcp-session-id') !== 'session-1')
+          return new Response('no session', { status: 400 })
+        requests++
+        const payload = {
+          jsonrpc: '2.0',
+          id: msg.id,
+          result: { content: [{ type: 'text', text: checklist }] },
+        }
+        return new Response(`event: message\ndata: ${JSON.stringify(payload)}\n\n`, {
+          headers: { 'content-type': 'text/event-stream' },
+        })
+      },
+    })
+  })
+
+  afterAll(() => {
+    server.stop(true)
+  })
+
+  beforeEach(() => {
+    requests = 0
+  })
+
+  test('the checklist is parsed, cached for a minute and read with the helper headers', async () => {
+    writeClaudeConfig(home, {
+      type: 'http',
+      url: `http://127.0.0.1:${server.port}/mcp`,
+      headersHelper: `node "${helper}"`,
+    })
+    setFourmanDeps({ env: {}, home, portOwner: async () => null })
+    const status = await fourmanStatus()
+    expect(status.notes.available).toBe(true)
+    const board = await fourmanBoard({ all: true })
+    expect(board.notes).toEqual([
+      {
+        id: '11111111-1111-4111-8111-111111111111',
+        title: 'Renew example certificate',
+        due: '2026-10-20',
+        done: false,
+        labels: ['ops'],
+      },
+      {
+        id: '22222222-2222-4222-8222-222222222222',
+        title: 'Sign example form',
+        due: '2026-10-01',
+        done: true,
+      },
+      {
+        id: '33333333-3333-4333-8333-333333333333',
+        title: 'Call the example vendor',
+        done: false,
+        labels: ['phone', 'billing'],
+      },
+    ])
+    expect(requests).toBe(1)
+    expect(JSON.stringify({ status, board })).not.toContain(token)
+  })
+
+  test('a failing helper retries once without headers and the answer leaks nothing', async () => {
+    writeClaudeConfig(home, {
+      type: 'http',
+      url: `http://127.0.0.1:${server.port}/mcp`,
+      headersHelper: `node "${failingHelper}"`,
+    })
+    setFourmanDeps({ env: {}, home, portOwner: async () => null })
+    const status = await fourmanStatus()
+    expect(status.notes.available).toBe(false)
+    expect(status.notes.why).toBeDefined()
+    expect(JSON.stringify(status)).not.toContain(token)
+    expect(requests).toBe(0)
+  })
+
+  test('a server that is down gives notes.available false', async () => {
+    writeClaudeConfig(home, { type: 'http', url: `http://127.0.0.1:${closedPort()}/mcp` })
+    setFourmanDeps({ env: {}, home, portOwner: async () => null })
+    const status = await fourmanStatus()
+    expect(status.notes.available).toBe(false)
+    expect(status.notes.why).toBeDefined()
+  })
+
+  test('an empty filter is an empty checklist, and text that is no checklist is refused', () => {
+    expect(parseTodoChecklist('(no to-dos match)')).toEqual([])
+    expect(parseTodoChecklist('something else entirely')).toBeNull()
   })
 })
