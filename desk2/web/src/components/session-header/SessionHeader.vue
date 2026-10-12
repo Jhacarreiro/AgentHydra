@@ -20,7 +20,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { folderLabel } from '@/components/sidebar/logic'
 import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { findDashboard } from '@/components/dashboard/logic'
+import { hasSite } from '@/components/dashboard/logic'
 import { modelName } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import { useShellSource } from '@/components/shell/source'
@@ -149,10 +149,7 @@ async function openFolder() {
 
 const title = computed(() => row.value?.title || props.session?.title || 'Session')
 const cwd = computed(() => row.value?.cwd || props.session?.cwd || null)
-const dashboardWidgets = computed(() => {
-  const n = cwd.value ? (findDashboard(dashboardList.value, cwd.value)?.widgets ?? 0) : 0
-  return n || ''
-})
+const dashboardHasSite = computed(() => (cwd.value ? hasSite(dashboardList.value, cwd.value) : false))
 watch(cwd, (c) => c && refreshDashboards(), { immediate: true })
 const shortId = computed(() => props.sessionId.slice(0, 8))
 // Turns over the whole session as AgentHydra counts them (its tokens and cost are over the same file),
@@ -455,7 +452,7 @@ const TONE = {
           <Tip v-if="cwd" label="Project dashboard">
             <button type="button" :class="[CHIP, TONE.dashboard]" class="tnum" aria-label="Project dashboard" @click="openDashboard(cwd)">
               <LayoutDashboard class="size-3.5 shrink-0" aria-hidden="true" />
-              <span v-if="dashboardWidgets">{{ dashboardWidgets }}</span>
+              <span v-if="dashboardHasSite" class="size-1.5 rounded-full bg-current" aria-hidden="true" />
             </button>
           </Tip>
           <Tip v-if="row?.git_branch && row.git_branch !== 'HEAD'" label="Git branch">

@@ -3,7 +3,7 @@ import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { EyeOff, Folder, FolderPlus, LayoutDashboard, ListFilter, MessagesSquare } from '@lucide/vue'
 import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { findDashboard } from '@/components/dashboard/logic'
+import { hasSite } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
@@ -67,7 +67,7 @@ function load(): void {
 onMounted(load)
 onMounted(refreshDashboards)
 watch(showHiddenProjects, load)
-const hasDashboard = (path: string) => !!findDashboard(dashboardList.value, path)
+const hasDashboard = (path: string) => hasSite(dashboardList.value, path)
 
 const hiddenCount = computed(() => choices.value.hidden.length)
 const listed = computed(() => filterProjects(shownProjects(answer.value?.projects ?? [], showHiddenProjects.value), query.value))

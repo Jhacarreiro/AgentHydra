@@ -76,9 +76,7 @@ function stubDashboardReads(dash: Dashboard): void {
   const stub = (input: RequestInfo | URL, init?: RequestInit) => {
     const url = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url
     if (!url.includes('/ah/api/dashboards')) return real(input, init)
-    const body = url.includes('/workspace')
-      ? dash
-      : { dashboards: [{ workspace: dash.workspace, name: dash.name, widgets: dash.widgets.length, updatedAt: dash.updatedAt }] }
+    const body = url.includes('/workspace') ? dash : { dashboards: [dash] }
     return Promise.resolve(new Response(JSON.stringify(body), { headers: { 'content-type': 'application/json' } }))
   }
   window.fetch = Object.assign(stub, { preconnect: real.preconnect })

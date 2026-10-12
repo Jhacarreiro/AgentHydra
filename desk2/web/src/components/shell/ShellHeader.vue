@@ -15,7 +15,7 @@ import { connectorList } from '@/components/connectors/connections-api'
 import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
 import { LayoutDashboard, ListChecks, PanelTopClose, PanelTopOpen } from '@lucide/vue'
 import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { findDashboard } from '@/components/dashboard/logic'
+import { hasSite } from '@/components/dashboard/logic'
 import { headerOpen } from '@/components/session-header/state'
 import { useClock } from '@/lib/clock'
 import { isMuted, toggleMuted } from '@/lib/chat-audio'
@@ -130,7 +130,7 @@ function onMenuClosed(e: Event) {
 const connectionsShown = computed(() => showConnectionsChip(connectorList.value))
 const logoFailed = ref(false)
 const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
-const dashboardWidgets = computed(() => (props.chat ? findDashboard(dashboardList.value, props.chat.cwd)?.widgets ?? 0 : 0))
+const dashboardHasSite = computed(() => (props.chat ? hasSite(dashboardList.value, props.chat.cwd) : false))
 watch(
   () => props.chat?.cwd,
   (cwd) => cwd && refreshDashboards(),
@@ -144,6 +144,8 @@ const COUNT_BADGE =
 
 const DASHBOARD_BTN =
   'relative ms-0.5 flex size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent @max-[498px]:hidden'
+const SITE_DOT =
+  'absolute -right-0.5 -top-0.5 size-1.5 rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))]'
 
 const PANE_BTN =
   'flex size-[26px] items-center justify-center rounded-[var(--radius-6)] text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text aria-pressed:bg-fill-selected aria-pressed:text-text aria-disabled:cursor-default aria-disabled:hover:bg-transparent aria-expanded:bg-fill-hover aria-expanded:text-text'
@@ -207,7 +209,7 @@ const PANE_BTN =
       <Tip v-if="chat" label="Project dashboard">
         <button type="button" data-fit="dashboard" :class="DASHBOARD_BTN" aria-label="Project dashboard" @click="openDashboard(chat.cwd)">
           <LayoutDashboard class="size-3.5" aria-hidden="true" />
-          <span v-if="dashboardWidgets" :class="COUNT_BADGE">{{ dashboardWidgets }}</span>
+          <span v-if="dashboardHasSite" :class="SITE_DOT" aria-hidden="true" />
         </button>
       </Tip>
 

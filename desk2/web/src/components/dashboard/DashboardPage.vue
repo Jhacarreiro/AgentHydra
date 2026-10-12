@@ -1,36 +1,37 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
-import { ArrowLeft, Copy, Folder } from '@lucide/vue'
-import { useElementSize } from '@vueuse/core'
+import { ArrowLeft, Copy, ExternalLink, Folder, RotateCw } from '@lucide/vue'
 import type { Dashboard } from '@shared/dashboards'
 import type { ProjectEntry } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { Tip } from '@/components/ui/tooltip'
-import DashboardCard from './DashboardCard.vue'
-import { getDashboard, writeDashboard } from './api'
-import { cardSpan, EXAMPLE_PROMPT, gridColumns, isWebLink, removeBody, timeAgo, widgetSize, workspaceKey } from './logic'
+import { getDashboard } from './api'
+import { EXAMPLE_PROMPT, timeAgo, workspaceKey } from './logic'
 import { closeDashboard, refreshDashboards } from './store'
 
-// The project dashboard, a page in the sliding track (DeskFrame). It re-reads every 5 seconds while it is on screen, one
-// loop, stopped when it closes; the scroll position stays, since the element is not remounted between reads.
+// The project dashboard, a page in the sliding track (DeskFrame). Its site is framed on the daemon's own origin, and the
+// frame is re-keyed when the newest file changes, so a chat's write shows by itself. One read loop, every 3 seconds,
+// only while the page is on screen.
 const props = defineProps<{ cwd: string | null; active: boolean; padLeft: number }>()
 const src = useShellSource()
-const POLL_MS = 5000
+const POLL_MS = 3000
 
 const dash = shallowRef<Dashboard | null>(null)
 const project = shallowRef<ProjectEntry | null>(null)
 const problem = ref<string | null>(null)
 const loaded = ref(false)
 const now = ref(Date.now())
-const content = ref<HTMLElement | null>(null)
-const { width } = useElementSize(content)
-const columns = computed(() => gridColumns(width.value || 960))
-const gridStyle = computed(() => ({ gridTemplateColumns: `repeat(${columns.value}, minmax(0, 1fr))` }))
+const reloads = ref(0)
 const folderName = computed(() => (props.cwd ?? '').replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? '')
 const title = computed(() => dash.value?.name || project.value?.name || folderName.value)
-const path = computed(() => props.cwd ?? '')
-const updated = computed(() => timeAgo(dash.value?.updatedAt, now.value))
-const cards = computed(() => (dash.value?.widgets ?? []).map((w) => ({ widget: w, span: cardSpan(widgetSize(w), columns.value) })))
+const hasSite = computed(() => (dash.value?.files ?? 0) > 0)
+const frameKey = computed(() => `${dash.value?.updatedAt ?? ''}#${reloads.value}`)
+const updated = computed(() => {
+  const ago = timeAgo(dash.value?.updatedAt, now.value)
+  if (!ago) return ''
+  const by = dash.value?.updatedBy
+  return by ? `Updated ${ago} by ${by}` : `Updated ${ago}`
+})
 
 let timer: ReturnType<typeof setInterval> | undefined
 let seq = 0
@@ -92,38 +93,27 @@ watch(
 )
 onBeforeUnmount(stop)
 
-async function remove(id: string): Promise<void> {
-  if (!props.cwd) return
-  try {
-    dash.value = await writeDashboard(removeBody(props.cwd, id))
-    problem.value = null
-  } catch (err) {
-    problem.value = err instanceof Error ? err.message : String(err)
-  }
+function reload(): void {
+  reloads.value++
+  void load()
 }
 
-function link(href: string): void {
-  if (isWebLink(href)) {
-    window.open(href.trim(), '_blank', 'noopener')
-    return
-  }
-  src.revealFolder(href).catch((err: unknown) => {
-    problem.value = err instanceof Error ? err.message : String(err)
-  })
-}
+const openOutside = () => dash.value?.url && window.open(dash.value.url, '_blank', 'noopener')
 
 const copied = ref(false)
-function copyPrompt(): void {
-  void navigator.clipboard.writeText(EXAMPLE_PROMPT).then(() => {
+function copyText(text: string): void {
+  void navigator.clipboard.writeText(text).then(() => {
     copied.value = true
     setTimeout(() => (copied.value = false), 1400)
   })
 }
+const copyFolder = () => copyText(dash.value?.folder || props.cwd || '')
+const copyPrompt = () => copyText(EXAMPLE_PROMPT)
 </script>
 
 <template>
   <section class="flex h-full min-w-0 flex-1 flex-col bg-(--bg-page)" data-testid="dashboard-page" :aria-label="`Dashboard for ${title}`">
-    <header class="flex h-10.25 shrink-0 items-center gap-3 pe-4" :style="{ paddingInlineStart: `${padLeft}px` }">
+    <header class="flex h-10.25 shrink-0 items-center gap-2 pe-3" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip label="Back to the chat">
         <button type="button" aria-label="Back to the chat" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="closeDashboard()">
           <ArrowLeft class="size-4" aria-hidden="true" />
@@ -135,31 +125,48 @@ function copyPrompt(): void {
       </span>
       <div class="flex min-w-0 flex-1 items-baseline gap-2">
         <h2 class="truncate text-[15px] leading-5 font-semibold text-text">{{ title }}</h2>
-        <span class="min-w-0 truncate text-[11px] leading-4 text-text-muted" :title="path">{{ path }}</span>
-        <span v-if="updated" class="shrink-0 text-[11px] leading-4 text-text-muted">updated {{ updated }}</span>
+        <span v-if="updated" class="min-w-0 truncate text-[11px] leading-4 text-text-muted">{{ updated }}</span>
       </div>
+      <Tip label="Reload">
+        <button type="button" aria-label="Reload dashboard" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="reload">
+          <RotateCw class="size-3.5" aria-hidden="true" />
+        </button>
+      </Tip>
+      <Tip v-if="hasSite" label="Open in browser">
+        <button type="button" aria-label="Open dashboard in browser" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="openOutside">
+          <ExternalLink class="size-3.5" aria-hidden="true" />
+        </button>
+      </Tip>
+      <Tip :label="copied ? 'Copied' : 'Copy folder path'">
+        <button type="button" aria-label="Copy folder path" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="copyFolder">
+          <Copy class="size-3.5" aria-hidden="true" />
+        </button>
+      </Tip>
     </header>
 
-    <div class="min-h-0 flex-1 overflow-y-auto">
-      <div ref="content" class="mx-auto flex w-full max-w-240 flex-col gap-4 px-6 pb-10 pt-4">
-        <p v-if="problem" role="alert" class="text-[12px] leading-4 text-text-muted">
-          Could not reach AgentHydra: <span class="text-danger">{{ problem }}</span>
-        </p>
+    <p v-if="problem" role="alert" class="shrink-0 px-6 pb-2 text-[12px] leading-4 text-text-muted">
+      Could not reach AgentHydra: <span class="text-danger">{{ problem }}</span>
+    </p>
 
-        <div v-if="cards.length" class="grid gap-3" :style="gridStyle">
-          <DashboardCard v-for="c in cards" :key="c.widget.id" :widget="c.widget" :span="c.span" :now="now" @remove="remove" @link="link" />
-        </div>
+    <iframe
+      v-if="dash && hasSite"
+      :key="frameKey"
+      :src="dash.url"
+      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
+      :title="`${title} dashboard`"
+      class="min-h-0 w-full flex-1 border-0 bg-white"
+    />
 
-        <div v-else-if="loaded" class="mt-16 flex flex-col items-center gap-3 text-center">
-          <h3 class="text-[15px] leading-5 font-semibold text-text">No dashboard yet</h3>
-          <p class="max-w-md text-[13px] leading-5 text-text-muted">Ask any chat in this project to put something here. It writes with dashboard_write on the agenthydra MCP.</p>
-          <div class="flex items-center gap-2 rounded-(--radius-8) bg-fill-5 py-1.5 ps-3 pe-1.5">
-            <code class="text-[12px] leading-4 text-text-2">{{ EXAMPLE_PROMPT }}</code>
-            <button type="button" class="flex h-6 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-2 text-[12px] leading-4 text-text-2 hover:text-text" @click="copyPrompt">
-              <Copy class="size-3" aria-hidden="true" />{{ copied ? 'Copied' : 'Copy' }}
-            </button>
-          </div>
-        </div>
+    <div v-else-if="loaded && !problem" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
+      <h3 class="text-[15px] leading-5 font-semibold text-text">No dashboard yet</h3>
+      <p class="max-w-md text-[13px] leading-5 text-text-muted">
+        This project has no dashboard yet. A chat in it builds one: a page of any HTML, CSS, JavaScript or data, with whatever it wants on it. It writes the page with dashboard_write on the agenthydra MCP.
+      </p>
+      <div class="flex items-center gap-2 rounded-(--radius-8) bg-fill-5 py-1.5 ps-3 pe-1.5">
+        <code class="text-[12px] leading-4 text-text-2">{{ EXAMPLE_PROMPT }}</code>
+        <button type="button" class="flex h-6 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-2 text-[12px] leading-4 text-text-2 hover:text-text" @click="copyPrompt">
+          <Copy class="size-3" aria-hidden="true" />{{ copied ? 'Copied' : 'Copy' }}
+        </button>
       </div>
     </div>
   </section>
