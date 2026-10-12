@@ -368,13 +368,15 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   }
 
   /** A Windows task's last run, recorded once when it is newer than the newest one kept. Still running, or never ran: nothing. */
-  function recordTaskRun(s: Seen, mem: Memory, t: number): void {
+  function recordTaskRun(s: Seen, mem: Memory): void {
     const task = s.task
     if (!task?.found || task.lastRunAt === null || task.lastTaskResult === null) return
     if (task.lastTaskResult === TASK_RUNNING || task.lastTaskResult === TASK_NEVER_RAN) return
     if (mem.runs[0] && task.lastRunAt <= mem.runs[0].startedAt) return
     const code = task.lastTaskResult
-    mem.runs.unshift({ startedAt: task.lastRunAt, endedAt: t, outcome: code === 0 ? 'ok' : 'failed', exitCode: code, lastLine: `Windows task result ${code}`, workerId: null, sessionId: null })
+    // Windows says when a task started and never when it ended, so its start stands for both. The time of this look
+    // is no run time: after a restart every task read as run minutes ago (2026-10-12: a 03:00 run read "21 min ago").
+    mem.runs.unshift({ startedAt: task.lastRunAt, endedAt: task.lastRunAt, outcome: code === 0 ? 'ok' : 'failed', exitCode: code, lastLine: `Windows task result ${code}`, workerId: null, sessionId: null })
     mem.runs.splice(RUNS_KEPT)
     save()
   }
@@ -420,7 +422,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         checkedAt = t
         for (const s of seen) {
           const mem = memOf(s.entry, t)
-          recordTaskRun(s, mem, t)
+          recordTaskRun(s, mem)
           const j = judge(s, mem, t, enabled(), false)
           if (j.skipSlot !== null) mem.lastSlot = j.skipSlot
           if (j.start && s.entry.def) startRun(s.entry.def, mem, j.slot, t)

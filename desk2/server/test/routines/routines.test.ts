@@ -463,6 +463,20 @@ describe('the plugin', () => {
     expect((await post(d.app, { run: 'example-task' })).status).toBe(200)
     expect(d.tasks.run).toEqual(['\\Example nightly job'])
 
+    // A run is recorded at the time Windows ran it, never at the time of the look (a 03:00 run read "21 min ago").
+    const ran = at(2026, 10, 12, 3, 0)
+    const nightly = desk({
+      tasks: {
+        read: async (paths) => paths.map((path) => ({ path, found: true, state: 'Ready', lastRunAt: ran, lastTaskResult: 1, nextRunAt: at(2026, 10, 13, 3, 0) })),
+        run: async () => {},
+        setEnabled: async () => {},
+      },
+    })
+    nightly.routine('example-task', { name: 'Example task', askedBy, windowsTask: '\\Example nightly job' })
+    const read = (await get(nightly.app, true)).routines[0]
+    expect(read.runs[0]).toMatchObject({ startedAt: ran, endedAt: ran, outcome: 'failed', exitCode: 1 })
+    expect(read.lastRunAt).toBe(ran)
+
     const elsewhere = desk({ platform: 'linux' })
     elsewhere.routine('example-task', { name: 'Example task', askedBy, windowsTask: '\\Example nightly job' })
     const off = await get(elsewhere.app, true)
