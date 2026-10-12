@@ -118,5 +118,7 @@ export default defineConfig({
     // PORT env wins so parallel dev instances (e.g. two chat sessions) can coexist
     port: Number(process.env.PORT) || 5173,
     strictPort: false,
+    // The build's dist folders sit under this root; a watcher on them blocks the swap that renames them.
+    watch: { ignored: ['**/dist/**', '**/dist.*/**'] },
   },
 })
