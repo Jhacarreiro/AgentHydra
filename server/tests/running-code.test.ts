@@ -162,7 +162,8 @@ test('the message names both commits, and there is none when nothing is stale', 
   const message = restartNeededMessage({ bootCommit: A, diskCommit: B, restartNeeded: true })
   expect(message).toContain(A.slice(0, 7))
   expect(message).toContain(B.slice(0, 7))
-  expect(message).toContain('/api/daemon/restart')
+  expect(message).toContain('app header')
+  expect(message).not.toContain('daemon_restart')
   expect(restartNeededMessage({ bootCommit: A, diskCommit: A, restartNeeded: false })).toBeNull()
 })
 

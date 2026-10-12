@@ -66,7 +66,7 @@ import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
 import { reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
-import { createRunningCodeProbe, restartNeededMessage } from './core/running-code'
+import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
 import { serveDashboardSite, setDashboardSelfUrl } from './dashboards'
@@ -135,7 +135,8 @@ import {
   mcpRegistrationStatus,
   setMcpRegisterEnabled,
 } from './mcp-register'
-import { handleRpc as handleMcpRpc, type McpEngineTool } from './mcp-stdio.mjs'
+import { mcpWithRestartNote } from './mcp-restart-note'
+import { handleRpc as handleMcpRpc } from './mcp-stdio.mjs'
 import { startMonitor } from './monitor'
 import { startRetireOnCloseSweep } from './move-retire-on-close'
 import { sendOsNotification } from './notify-os'
@@ -285,21 +286,6 @@ let daemonSelfUrl = `http://127.0.0.1:${PORT}`
  *  can change it. */
 const runningCode = createRunningCodeProbe({ root: APP_ROOT, compiled: IS_RELEASE })
 
-/** Every MCP tool result says so when this daemon is older than its checkout: an agent whose new
- *  tool or route "does not exist" is otherwise told nothing about why. */
-function withRestartWarning(tools: McpEngineTool[]): McpEngineTool[] {
-  return tools.map((t) => ({
-    ...t,
-    run: async (args: Record<string, unknown>, signal?: AbortSignal) => {
-      const value = await t.run(args, signal)
-      const warning = restartNeededMessage(runningCode.status())
-      return warning && value && typeof value === 'object' && !Array.isArray(value)
-        ? { daemonRestartNeeded: warning, ...(value as Record<string, unknown>) }
-        : value
-    },
-  }))
-}
-
 /** Keeps Claude Code's MCP entry pointing at THIS daemon: at boot, on the settings toggle, and
  *  once a minute while registration is on (see createMcpReasserter for why once is not enough). */
 const mcpReasserter = createMcpReasserter({ daemonUrl: () => daemonSelfUrl })
@@ -409,7 +395,7 @@ app.post('/api/mcp', async (c) => {
     // Old tool names (a chat's list is fixed at its start) answer as the renamed tools (mcp.ts).
     tools: mcpWithRenamedTools(
       mcpWithUnlistedTools(
-        withRestartWarning(
+        mcpWithRestartNote(
           mcpWithCallBudget(
             mcpWithDaemonWarning(
               mcpWithOutputShaping(
@@ -420,6 +406,7 @@ app.post('/api/mcp', async (c) => {
               ),
             ),
           ),
+          () => runningCode.status(),
         ),
         MCP_UNLISTED_TOOLS,
       ),
