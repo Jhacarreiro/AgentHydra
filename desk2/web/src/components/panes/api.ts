@@ -11,7 +11,7 @@ import {
   type TranscriptItem
 } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
-import type { ArchAIngelStatus } from '@shared/archaingel'
+import type { RoutinesRequest, RoutinesStatus } from '@shared/routines'
 import type { OrchestratorModelStatus } from '@shared/orchestrator'
 import type { FreeSettings } from '@shared/free-instances'
 
@@ -23,10 +23,10 @@ export interface PaneApi {
   bridgeStatus(): Promise<{ up: boolean; url: string }>
   /** GET /api/babysitter: the chats a usage limit stopped and what the babysitter did (plugins/72-babysitter.ts). */
   babysitter(): Promise<BabysitterStatus>
-  /** GET /api/archaingel: the standing agents the last look read and what each last ran (plugins/73-archaingel.ts). */
-  archaingel(): Promise<ArchAIngelStatus>
-  /** POST /api/archaingel { run: id }: ticks one standing agent now, or answers why it cannot (409, 404). */
-  archaingelRun(id: string): Promise<ArchAIngelStatus>
+  /** GET /api/routines: the routines the last look read, and the proposals waiting for the owner (plugins/73-routines.ts). */
+  routines(): Promise<RoutinesStatus>
+  /** POST /api/routines: one action (run, pause, resume, approve, discard) or the switch; answers the whole status, or why not (409, 404, 403). */
+  routinesAct(body: RoutinesRequest): Promise<RoutinesStatus>
   /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
   orchestratorModel(): Promise<OrchestratorModelStatus>
   getSettings(): Promise<DeskSettings>
@@ -73,12 +73,12 @@ export const httpPaneApi: PaneApi = {
   health: () => json('/health'),
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
-  archaingel: () => json('/archaingel'),
-  archaingelRun: (id) =>
-    json('/archaingel', {
+  routines: () => json('/routines'),
+  routinesAct: (body) =>
+    json('/routines', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ run: id })
+      body: JSON.stringify(body)
     }),
   orchestratorModel: () => json('/orchestrator/model'),
   getSettings: () => json('/settings'),

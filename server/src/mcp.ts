@@ -32,7 +32,6 @@
 import { RECENT_FINISHED } from './climayte-lib'
 import { VERSION } from './config'
 import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
-import { ARCHAINGEL_TOOLS } from './mcp-archaingel'
 import { BABYSITTER_TOOLS } from './mcp-babysitter'
 import {
   AUTO_DETACH_MS,
@@ -62,6 +61,7 @@ import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
 import { withOutputShaping } from './mcp-output'
+import { ROUTINES_TOOLS } from './mcp-routines'
 import {
   CALLER_AWARE_TOOLS,
   CALLER_PID_ARG,
@@ -1859,7 +1859,7 @@ export const TOOLS: HydraTool[] = [
   ...FAN_OUT_TOOLS,
   ...FREE_TOOLS,
   ...BABYSITTER_TOOLS,
-  ...ARCHAINGEL_TOOLS,
+  ...ROUTINES_TOOLS,
   ...DEV_SERVERS_TOOLS,
   ...FAMILY_TOOLS,
   ...findTools(

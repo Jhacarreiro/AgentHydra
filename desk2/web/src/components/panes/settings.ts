@@ -44,7 +44,7 @@ export type SettingsRowId =
   | 'babysitter'
   | 'orchestrator'
   | 'orchestratorModel'
-  | 'archaingel'
+  | 'routines'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -189,14 +189,14 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     label: 'Orchestrator model',
     description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
   },
-  // A third watcher beside the babysitter (shared/archaingel.ts): the standing agents run on this PC, through AgentHydra's own CLI and accounts.
+  // The routine manager (shared/routines.ts): the routines run on this PC on their schedule, through AgentHydra's own CLI and accounts.
   {
-    id: 'archaingel',
+    id: 'routines',
     section: 'managers',
-    group: 'Standing agents',
-    label: 'ArchAIngel',
+    group: 'Routines',
+    label: 'Routines',
     description:
-      'Runs your standing agents on their own pace, hidden, using what AgentHydra already has (its CLI and free accounts, HSwarm). An agent registers with a file in archaingel/agents in AgentHydra\'s folder. No keys leave this PC.'
+      'A routine is a command, an AI prompt that runs as a chat you can open, or a Windows scheduled task. Each one says who asked for it. An AI can only propose a routine, and it runs once you approve it here. No keys leave this PC.'
   },
   {
     id: 'ahAlerts',

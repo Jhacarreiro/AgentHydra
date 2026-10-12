@@ -18,10 +18,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   idle close themselves. It no longer reads every transcript at start for a token count nothing showed any more, it
   gives the analytics store's cache and checkpoint thread back after each minute's sweep, and it reads files a few at
   a time, so it stops piling up file-reading threads it never released.
-- **Settings has a Managers page.** It holds the babysitter, the orchestrator and ArchAIngel, which moved there from General. Each standing agent shows its own settings and a Run now button.
-- **ArchAIngel runs your standing agents on their own pace, hidden.** A third watcher beside the babysitter: an agent
-  you register runs whenever it says it is due, using what AgentHydra already has (its CLI and free accounts), and no
-  keys leave this PC. Settings > Managers shows each agent's state, last run and next run.
+- **Routines replace ArchAIngel: standing jobs on a schedule, and each one says who asked for it.** Settings > Managers
+  lists every routine with its state, last run and next run. A routine is a command, an AI prompt that runs as a chat you
+  can open, or a Windows scheduled task, and it runs on this PC through what AgentHydra already has, with no keys leaving it.
+- **An AI can only propose a routine, and nothing it proposes runs until you approve it.** Proposals wait under "Waiting for
+  your yes" on the same page, with why they are wanted, when they run and what they do, and you can approve or discard each one.
 - **Each project's dashboard is its own website, which its chats write.** A chat builds it with `dashboard_write` on
   the agenthydra MCP: any HTML, CSS, JavaScript or data, served at the project's own local address and framed live in
   the dashboard page, which reloads when a file changes. Open it from a chat's header, a project's tile on the home

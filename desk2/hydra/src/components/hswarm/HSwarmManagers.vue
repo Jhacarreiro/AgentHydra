@@ -29,10 +29,10 @@ const rows = computed(() => {
       line: m.orchestrator ? (m.orchestrator.mode === 'armed' ? t('hswarm.v.managers.orchestrator.armed') : t('hswarm.v.managers.orchestrator.shadow')) : '',
     },
     {
-      id: 'archaingel',
-      title: t('hswarm.v.managers.archaingel.title'),
-      dot: managerDot(m.archaingel?.enabled, false),
-      line: m.archaingel ? `${m.archaingel.agents.length} ${t('hswarm.v.managers.archaingel.agents').toLowerCase()}` : '',
+      id: 'routines',
+      title: t('hswarm.v.managers.routines.title'),
+      dot: managerDot(m.routines?.enabled, false),
+      line: m.routines ? `${m.routines.routines.length} ${t('hswarm.v.managers.routines.routines').toLowerCase()}` : '',
     },
   ]
 })

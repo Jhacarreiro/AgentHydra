@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The HSwarm tab: ZSwarm's console layout (owner, 2026-10-03: keep "its original Z Swarm layout with the
-// left-handed sidebar"). A tree on the left (Overview, Savings, CliMayte, Managers > Babysitter, Orchestrator, ArchAIngel > its
+// left-handed sidebar"). A tree on the left (Overview, Savings, CliMayte, Managers > Babysitter, Orchestrator, Routines > its
 // agents, Providers > each provider > its models, All models,
 // Routing & roles, Clients > each client, Jobs (HSwarm jobs, CliMayte workers and waves), Help) picks what the right
 // pane shows; each page is its own component in ./hswarm/, CliMayte's is CliMayteView.vue. Below 900px the tree
@@ -52,7 +52,7 @@ import { hswarmNodeAsk } from '@/lib/app-view'
 import { lazyView } from '@/lib/lazy-view'
 import { deskSwarmAsk, deskWorkerAsk, EMBEDDED, useDeskSidebar } from '@/lib/desk-embed'
 import { useHswarmApi } from '@/lib/hswarm-api'
-import { agentDot, managerDot } from '@/lib/managers'
+import { managerDot, routineDot } from '@/lib/managers'
 import { reconcileList } from '@/lib/reconcile'
 import HSwarmClients from './hswarm/HSwarmClients.vue'
 import HSwarmCostRouting from './hswarm/HSwarmCostRouting.vue'
@@ -66,8 +66,8 @@ import HSwarmTools from './hswarm/HSwarmTools.vue'
 import HSwarmManagers from './hswarm/HSwarmManagers.vue'
 import HSwarmBabysitter from './hswarm/HSwarmBabysitter.vue'
 import HSwarmOrchestrator from './hswarm/HSwarmOrchestrator.vue'
-import HSwarmArchAIngel from './hswarm/HSwarmArchAIngel.vue'
-import HSwarmArchAIngelAgent from './hswarm/HSwarmArchAIngelAgent.vue'
+import HSwarmRoutines from './hswarm/HSwarmRoutines.vue'
+import HSwarmRoutine from './hswarm/HSwarmRoutine.vue'
 
 // CliMayte's page loads the first time its node is opened (its task detail is most of it); a pane left
 // open across a Desk update that asks for the old chunk takes lazyView's stale-pane path.
@@ -197,12 +197,12 @@ const hasKeys = computed(() => !!state.value?.providers?.some((p: any) => p.keys
 const climayteActive = climayteRunning
 
 // The Managers node (owner, 2026-10-12: "the managers in general should" have a tab in HSwarm): Babysitter, Orchestrator
-// and ArchAIngel, whose kids are its standing agents, each with its state dot. Desk keeps them, so the node is the
+// and Routines, whose kids are its routines, each with its state dot. Desk keeps them, so the node is the
 // same whether or not HSwarm runs (standalone, Desk's routes do not answer: the node stays, its pages say so).
 function managersNode(): TreeNode {
   const bs = managers.babysitter
   const orc = managers.orchestrator
-  const ah = managers.archaingel
+  const rt = managers.routines
   return {
     id: 'managers',
     label: t('hswarm.v.managers.title'),
@@ -221,15 +221,15 @@ function managersNode(): TreeNode {
         dotTitle: orc ? (orc.mode === 'armed' ? t('hswarm.v.managers.orchestrator.armed') : t('hswarm.v.managers.orchestrator.shadow')) : undefined,
       },
       {
-        id: 'managers/archaingel',
-        label: t('hswarm.v.managers.archaingel.title'),
-        dot: managerDot(ah?.enabled, !!ah?.error),
-        dotTitle: ah ? (ah.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')) : undefined,
-        kids: (ah?.agents ?? []).map((g) => ({
-          id: `managers/archaingel/${enc(g.id)}`,
-          label: g.name,
-          dot: agentDot(g.state),
-          dotTitle: t(`hswarm.v.managers.state.${g.state}`),
+        id: 'managers/routines',
+        label: t('hswarm.v.managers.routines.title'),
+        dot: managerDot(rt?.enabled, !!rt?.error),
+        dotTitle: rt ? (rt.enabled ? t('hswarm.v.managers.on') : t('hswarm.v.managers.off')) : undefined,
+        kids: (rt?.routines ?? []).map((r) => ({
+          id: `managers/routines/${enc(r.id)}`,
+          label: r.name,
+          dot: routineDot(r.state),
+          dotTitle: t(`hswarm.v.managers.state.${r.state}`),
         })),
       },
     ],
@@ -420,11 +420,11 @@ const page = computed(() => {
     case 'climayte':
       return { component: CliMayteView, props: {} }
     case 'managers':
-      // The Managers node's pages: Desk's managers, read-only. The Run now button and the work list are the agent page's.
+      // The Managers node's pages: Desk's managers, read-only. The Run now button and the work list are the routine page's.
       if (a === 'babysitter') return { component: HSwarmBabysitter, props: { managers } }
       if (a === 'orchestrator') return { component: HSwarmOrchestrator, props: { managers } }
-      if (a === 'archaingel' && b) return { component: HSwarmArchAIngelAgent, props: { agent: b, managers, state: state.value } }
-      if (a === 'archaingel') return { component: HSwarmArchAIngel, props: { managers } }
+      if (a === 'routines' && b) return { component: HSwarmRoutine, props: { routine: b, managers, state: state.value } }
+      if (a === 'routines') return { component: HSwarmRoutines, props: { managers } }
       return { component: HSwarmManagers, props: { managers } }
     case 'help':
       return { component: HSwarmTools, props: {} }

@@ -1,8 +1,8 @@
 // The managers' state, read from Desk's server: GET /api/babysitter, GET /api/diagnostics/orchestrator (the
-// orchestrator's plan) and GET /api/archaingel. One poll at the CliMayte node's cadence (WARM_MS), and only while
+// orchestrator's plan) and GET /api/routines. One poll at the CliMayte node's cadence (WARM_MS), and only while
 // the Managers node or one of its pages is on screen (`shown`). A 404 means this window runs without Desk, where
 // these routes do not answer: `available` is false and nothing errors.
-import type { ArchAIngelRequest, ArchAIngelStatus } from '@desk/shared/archaingel'
+import type { RoutinesRequest, RoutinesStatus } from '@desk/shared/routines'
 import type { BabysitterStatus } from '@desk/shared/babysitter'
 import type { OrchestratorPlan } from '@desk/shared/orchestrator'
 import { onBeforeUnmount, reactive, shallowRef, watch } from 'vue'
@@ -12,11 +12,11 @@ import { WARM_MS } from '@/lib/warm-data'
 export function useManagers(shown: { readonly value: boolean }) {
   const babysitter = shallowRef<BabysitterStatus | null>(null)
   const orchestrator = shallowRef<OrchestratorPlan | null>(null)
-  const archaingel = shallowRef<ArchAIngelStatus | null>(null)
+  const routines = shallowRef<RoutinesStatus | null>(null)
   // null until the first read; false when Desk's routes do not answer (the window runs without Desk).
   const available = shallowRef<boolean | null>(null)
   const error = shallowRef<string | null>(null)
-  // The agent whose Run now is in flight, so its button waits for the answer.
+  // The routine whose action is in flight, so its button waits for the answer.
   const busy = shallowRef<string | null>(null)
   let timer: number | undefined
 
@@ -30,33 +30,33 @@ export function useManagers(shown: { readonly value: boolean }) {
 
   async function refresh(): Promise<void> {
     try {
-      const [b, o, a] = await Promise.all([
+      const [b, o, r] = await Promise.all([
         read<BabysitterStatus>('/api/babysitter'),
         read<OrchestratorPlan>('/api/diagnostics/orchestrator'),
-        read<ArchAIngelStatus>('/api/archaingel'),
+        read<RoutinesStatus>('/api/routines'),
       ])
-      available.value = b !== null && a !== null
+      available.value = b !== null && r !== null
       babysitter.value = b
       orchestrator.value = o
-      archaingel.value = a
+      routines.value = r
       error.value = null
     } catch (err) {
       error.value = err instanceof Error ? err.message : String(err)
     }
   }
 
-  // Ticks one standing agent now (POST /api/archaingel {run}); the answer is the whole status again.
-  async function runAgent(id: string): Promise<void> {
+  // One action on one routine (POST /api/routines); the answer is the whole status again.
+  async function act(body: RoutinesRequest, id: string): Promise<void> {
     busy.value = id
     try {
-      const res = await fetch(`${API_BASE}/api/archaingel`, {
+      const res = await fetch(`${API_BASE}/api/routines`, {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ run: id } satisfies ArchAIngelRequest),
+        body: JSON.stringify(body),
       })
-      const body = await res.json().catch(() => null)
-      if (!res.ok) throw new Error((body as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`)
-      archaingel.value = body as ArchAIngelStatus
+      const answer = await res.json().catch(() => null)
+      if (!res.ok) throw new Error((answer as { error?: string } | null)?.error ?? `${res.status} ${res.statusText}`)
+      routines.value = answer as RoutinesStatus
     } finally {
       busy.value = null
     }
@@ -80,7 +80,7 @@ export function useManagers(shown: { readonly value: boolean }) {
   )
   onBeforeUnmount(stop)
 
-  return reactive({ babysitter, orchestrator, archaingel, available, error, busy, refresh, runAgent })
+  return reactive({ babysitter, orchestrator, routines, available, error, busy, refresh, act })
 }
 
 export type Managers = ReturnType<typeof useManagers>

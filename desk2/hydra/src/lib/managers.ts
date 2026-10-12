@@ -1,18 +1,18 @@
-// The managers' pure helpers (HSwarm's Managers node): the state dots, and which of the work an agent started
-// it is. A standing agent's work is found by its name: a CliMayte worker whose group begins `<id>-`, an HSwarm
+// The managers' pure helpers (HSwarm's Managers node): the state dots, and which of the work a routine started
+// it is. A routine's work is found by its id: a CliMayte worker whose group begins `routine-<id>-`, an HSwarm
 // job whose label begins `<id>`.
 
-import type { ArchAIngelOutcome, ArchAIngelState } from '@desk/shared/archaingel'
+import type { RoutineOutcome, RoutineState } from '@desk/shared/routines'
 
 /** The dot a node or a row shows, as the tree draws it (HSwarmView's DOT_CLASS). */
 export type ManagerDot = 'ok' | 'warn' | 'off' | 'run' | 'bad'
 
-/** A standing agent's state as its dot: running pulses, due waits, broken is red. */
-export function agentDot(state: ArchAIngelState): ManagerDot {
+/** A routine's state as its dot: running pulses, due and waiting are amber, paused, off and ended are grey, broken is red. */
+export function routineDot(state: RoutineState): ManagerDot {
   if (state === 'running') return 'run'
-  if (state === 'due') return 'warn'
+  if (state === 'due' || state === 'waiting') return 'warn'
   if (state === 'idle') return 'ok'
-  if (state === 'off') return 'off'
+  if (state === 'paused' || state === 'off' || state === 'ended') return 'off'
   return 'bad'
 }
 
@@ -23,18 +23,18 @@ export function managerDot(on: boolean | undefined, failed: boolean): ManagerDot
   return on ? 'ok' : 'off'
 }
 
-/** Whether a CliMayte worker in this group is an agent's work: the group starts `<id>-`. */
-export function workerOfAgent(group: string, id: string): boolean {
-  return group.startsWith(`${id}-`)
+/** Whether a CliMayte worker in this group is a routine's work: the group starts `routine-<id>-`. */
+export function workerOfRoutine(group: string, id: string): boolean {
+  return group.startsWith(`routine-${id}-`)
 }
 
-/** Whether an HSwarm job with this label is an agent's work: the label starts with the agent's id. */
-export function jobOfAgent(label: string | null | undefined, id: string): boolean {
+/** Whether an HSwarm job with this label is a routine's work: the label starts with the routine's id. */
+export function jobOfRoutine(label: string | null | undefined, id: string): boolean {
   return (label ?? '').startsWith(id)
 }
 
-/** A tick that can still be run again: an agent that is not off, broken or already running. */
-export function canRunAgent(state: ArchAIngelState, busy: boolean): boolean {
+/** A run that can be started now: a routine that is idle or due (not paused, ended, off, broken or already running). */
+export function canRunRoutine(state: RoutineState, busy: boolean): boolean {
   return !busy && (state === 'idle' || state === 'due')
 }
 
@@ -48,7 +48,7 @@ export const MANAGER_DOT_CLASS: Record<ManagerDot, string> = {
 }
 
 /** The outcome's tone class: a failure is red, a busy look is muted. */
-export function outcomeTone(outcome: ArchAIngelOutcome): string {
+export function outcomeTone(outcome: RoutineOutcome): string {
   if (outcome === 'ok') return 'text-success'
   if (outcome === 'busy') return 'text-muted-foreground'
   return 'text-destructive'

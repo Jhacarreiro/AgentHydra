@@ -152,7 +152,7 @@ describe('useDesk store', () => {
         projectFolders: [],
         projectRoots: [],
         hiddenProjects: [],
-        babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true, collapseMode: 'off'
+        babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off'
       }
     }
 

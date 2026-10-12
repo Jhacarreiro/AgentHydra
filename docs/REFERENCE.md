@@ -138,27 +138,72 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 `limit_stop` carries `resets_at` for it: the notice's "resets 11:40pm (America/Chicago)" read against the
 moment of the stop.
 
-**ArchAIngel** is the babysitter's third sibling (Desk 2's `plugins/73-archaingel.ts`, contract and page text in
-`desk2/shared/archaingel.ts`, Settings > Managers). It runs the user's standing agents, long-lived
-improvement agents that live on this PC as a command, each on its own pace and hidden, and shows what they did. ArchAIngel
-asks no model itself; an agent's own command works through what AgentHydra already has (its CLI, its free accounts,
-HSwarm), so no API key leaves the PC. An agent registers with one file, `<desk home>/archaingel/agents/<id>.json`
-(`~/.hydra-desk-2` on the live install), whose id is the file name and matches `^[a-z0-9][a-z0-9-]{0,39}$`:
-`{"name", "tick": [argv], "status": [argv], "cwd"?, "timeoutMinutes"?}` (argv run with no shell, the timeout 5 to 360
-minutes, 120 by default). A file that fails these checks is listed `broken` with its reason and never run.
+**Routines** is the babysitter's third sibling (Desk 2's `plugins/73-routines.ts`, logic in
+`desk2/server/src/routines/`, contract in `desk2/shared/routines.ts`, Settings > Managers > Routines). A routine is one
+standing job on this PC, on a schedule: a command, an AI prompt that runs as a chat you can open, or a Windows scheduled
+task. Routines run on the PC through AgentHydra's own CLI and accounts; the manager asks no model itself. The owner's
+rule for them: a routine runs only for something the owner asked for in the owner's own words, and an AI can only propose one.
 
-The status command prints one JSON object on stdout within 60 s: `next_tick_at` (ISO or null = due now), `last_tick_at`,
-and optional `off`, `headline` (cut to 160 characters) and `totals`. A status that fails, times out or prints no object makes
-the agent `broken`; nothing is ticked on a guess. The tick command runs one sortie: exit 0 is `ok`, 75 is `busy` (its own lock
-is held), any other exit is `failed`, and past its timeout it is killed and recorded `timed-out`. Its output goes to
-`<desk home>/archaingel/logs/<id>.log` (moved to `.log.1` past 2 MB). A look runs every 5 minutes (the first 60 s after start),
-reads each status, and starts a tick when ArchAIngel is on, the agent is not off or running, it is due, and 15 minutes have
-passed since its last tick ended. Its memory (each agent's last 30 runs) is `<desk home>/archaingel.json`; a run still marked
-running at a restart is closed as `interrupted`. `GET /api/archaingel` answers the last look (`?fresh=1` looks first);
-`POST /api/archaingel` takes `{ enabled?, run? }`, where `run` ticks one agent now and refuses an off, broken or running one.
+One file per routine, `<desk home>/routines/<id>.json`, the id is the file name and matches `^[a-z0-9][a-z0-9-]{0,39}$`:
 
-The `archaingel` MCP tool (`server/src/mcp-archaingel.ts`) reads the same answer: each agent's state and reason, headline,
-counts, last five runs and next due time. `enabled` and `run` MUTATE.
+```json
+{
+  "name": "Example routine",
+  "askedBy": "Example Owner, 2026-10-12: \"check the inbox every weekday morning\"",
+  "schedule": "57 8,12 * * 1-5",
+  "prompt": "Check the replies ...",
+  "cwd": "C:/Users/me/project",
+  "timeoutMinutes": 60,
+  "until": "2026-10-23"
+}
+```
+
+- `name` and `askedBy` are required. `askedBy` is who asked, in their words, with the date (at most 500 characters); a file
+  without it is `broken`.
+- WHEN, exactly one of: `schedule` (a 5-field cron expression in local time: `*`, numbers, `a-b`, lists, `*/n` and `a-b/n`,
+  day-of-week 0-7 with 0 and 7 Sunday, and when both day-of-month and day-of-week are restricted either one matching counts;
+  no names, no `@daily`, no seconds field); `status` (argv, which prints one JSON status object within 60 s and paces itself:
+  `next_tick_at`, `last_tick_at`, `off`, `headline`, `totals`, `settings`); or `windowsTask` (the full path of a Task Scheduler
+  task, e.g. `"\\Example nightly job"`; Windows runs it, the manager shows it and can run, pause and resume it; Windows only).
+- WHAT, for `schedule` and `status` routines, exactly one of: `run` (argv, run hidden with no shell: exit 0 is `ok`, 75 is
+  `busy`, any other exit is `failed`, past the timeout the tree is killed and recorded `timed-out`; the output goes to the log
+  and its last line is kept), or `prompt` (an AI run: a Desk chat is started the way a new chat starts, titled
+  `Routine: <name>`, in group `routine-<id>-<YYYYMMDDHHmm>`, in `cwd`, which a prompt needs). A `windowsTask` routine has
+  neither. The old field `tick` is refused: `run` replaces it.
+- `cwd` is required for `prompt`, optional otherwise. `timeoutMinutes` is 5 to 360, 120 by default. `until` (`YYYY-MM-DD`)
+  makes the routine `ended` after that local day: it never runs but stays listed.
+
+States: `idle`, `due`, `running`, `paused` (the owner paused it), `off` (its status says off), `ended` (past `until`),
+`broken` (with its reason) and `waiting` (a proposal waiting for the owner's yes, listed under "Waiting for your yes").
+
+Schedule semantics: the memory keeps each schedule routine's last slot. The first time a routine is seen it starts from now,
+so a slot already past never runs. A look runs the newest slot at or before now, once, when it is later than the last slot
+run, is at most 12 hours old, the manager is on, and the routine is not paused, ended or running; a slot missed by more than
+12 hours is skipped. A look runs every 5 minutes, or sooner for the earliest upcoming slot. A `status` routine waits 15 minutes
+after its last run ends. A Windows task routine is read in one hidden PowerShell call per look (state, last run, last result,
+next run); its paused state is Windows' Disabled state. Run now starts an idle or due routine at once, and refuses a paused one
+(409).
+
+Data: the memory is `<desk home>/routines.json` (each routine's last 30 runs, its running run, its last slot and paused);
+the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB); proposals wait in
+`<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
+
+Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the
+owner's click, `X-Desk-Caller: window`) may resume, approve, discard, switch the manager (`enabled`), or edit a routine; an
+agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. A proposal is a routine's
+contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
+runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
+into `routines/<id>.json` without `why`, discard deletes it.
+
+`GET /api/routines` answers the last look (`?fresh=1` looks first): `enabled`, `everyMs`, `checkedAt`, `nextCheckAt`, each
+routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `headline`, `totals`, `settings`, last run,
+`nextRunAt`, the run going on, and its last 30 runs, plus `proposals` and `error`. `POST /api/routines` takes one action per call:
+`{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard }` (an id; `resume`, `approve` and
+`discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
+
+The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`fresh`) and takes `run`, `pause` and `propose`,
+each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
+a routine rather than add one, and to prefer a temporary background task it manages itself.
 
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the

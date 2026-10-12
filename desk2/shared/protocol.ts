@@ -527,8 +527,8 @@ export interface DeskSettings {
   orchestrator: boolean
   /** The model the orchestrator's judge asks: an alias (opus, sonnet, haiku: the newest of each) or a full model id (shared/orchestrator.ts). */
   orchestratorModel: string
-  /** ArchAIngel runs the standing agents registered in <home>/archaingel/agents on their own pace (shared/archaingel.ts). */
-  archaingel: boolean
+  /** Routines runs the routines in <home>/routines on their schedule, or by their status (shared/routines.ts). */
+  routines: boolean
   /** The window folds to the screen's right edge, showing only the chats (web/src/components/sidebar/collapse.ts). Off by default. */
   collapseMode: CollapseMode
 }

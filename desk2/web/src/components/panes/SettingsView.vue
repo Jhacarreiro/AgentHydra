@@ -3,11 +3,12 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
-import type { ArchAIngelStatus } from '@shared/archaingel'
+import type { RoutinesStatus } from '@shared/routines'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
-import ArchAIngelAgentCard from './ArchAIngelAgentCard.vue'
+import RoutineCard from './RoutineCard.vue'
+import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
@@ -66,7 +67,7 @@ const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
-const archaingel = shallowRef<ArchAIngelStatus | null>(null)
+const routines = shallowRef<RoutinesStatus | null>(null)
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -178,11 +179,11 @@ async function loadBabysitter() {
   }
 }
 
-async function loadArchAIngel() {
+async function loadRoutines() {
   try {
-    archaingel.value = await api.archaingel()
+    routines.value = await api.routines()
   } catch {
-    archaingel.value = null
+    routines.value = null
   }
 }
 
@@ -332,13 +333,13 @@ function onBabysitterVisibility() {
 }
 
 // The standing agents' status is read the same way, when its row comes on screen and when the window is shown again.
-const showsArchAIngel = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'archaingel')))
-watch(showsArchAIngel, (on) => {
-  if (on) void loadArchAIngel()
+const showsRoutines = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'routines')))
+watch(showsRoutines, (on) => {
+  if (on) void loadRoutines()
 }, { immediate: true })
-document.addEventListener('visibilitychange', onArchAIngelVisibility)
-function onArchAIngelVisibility() {
-  if (showsArchAIngel.value && !document.hidden) void loadArchAIngel()
+document.addEventListener('visibilitychange', onRoutinesVisibility)
+function onRoutinesVisibility() {
+  if (showsRoutines.value && !document.hidden) void loadRoutines()
 }
 
 // The orchestrator model's resolved id is read when its row comes on screen.
@@ -420,7 +421,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('visibilitychange', onBabysitterVisibility)
-  document.removeEventListener('visibilitychange', onArchAIngelVisibility)
+  document.removeEventListener('visibilitychange', onRoutinesVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
@@ -503,11 +504,15 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
-                <template v-if="r.id === 'archaingel' && archaingel">
-                  <ArchAIngelAgentCard v-for="a in archaingel.agents" :key="a.id" :agent="a" :enabled="archaingel.enabled" @ran="loadArchAIngel" />
-                  <div v-if="!archaingel.agents.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
-                    No agents yet: an agent registers with a file in archaingel/agents in AgentHydra's folder.
+                <template v-if="r.id === 'routines' && routines">
+                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
+                  <div v-if="!routines.routines.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
+                    No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                   </div>
+                  <template v-if="routines.proposals.length">
+                    <h4 class="mt-3 text-[12px] leading-4.5 text-text-2">Waiting for your yes</h4>
+                    <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
+                  </template>
                 </template>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
@@ -624,10 +629,10 @@ onBeforeUnmount(() => {
                 />
 
                 <PaneSwitch
-                  v-else-if="r.id === 'archaingel'"
-                  label="ArchAIngel"
-                  :model-value="local.archaingel"
-                  @update:model-value="(v: boolean) => save({ archaingel: v })"
+                  v-else-if="r.id === 'routines'"
+                  label="Routines"
+                  :model-value="local.routines"
+                  @update:model-value="(v: boolean) => save({ routines: v })"
                 />
 
                 <PaneSwitch

@@ -7,7 +7,7 @@ import type {
   DeskSettings,
   ChatStatus
 } from '@shared/protocol'
-import type { ArchAIngelStatus } from '@shared/archaingel'
+import type { RoutinesStatus } from '@shared/routines'
 
 const now = Date.now()
 
@@ -593,28 +593,93 @@ export const settingsFixtures: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true, collapseMode: 'off'
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off'
 }
 
-export const archaingelFixtures: ArchAIngelStatus = {
+export const routinesFixtures: RoutinesStatus = {
   enabled: true,
   everyMs: 300_000,
   checkedAt: now,
   nextCheckAt: now + 300_000,
   error: null,
-  agents: [
+  routines: [
     {
-      id: 'example-agent',
-      name: 'Example Agent',
+      id: 'example-schedule',
+      name: 'Example morning check',
+      kind: 'schedule',
       state: 'idle',
       reason: 'next due later',
+      askedBy: 'Example Owner, 2026-10-12: "check the example inbox every weekday morning"',
+      schedule: '57 8,12 * * 1-5',
+      windowsTask: null,
+      what: 'prompt',
+      cwd: 'C:/Users/me/project',
+      timeoutMinutes: 60,
+      until: '2026-10-23',
+      paused: false,
+      headline: null,
+      totals: null,
+      settings: null,
+      lastRunAt: now - 3_600_000,
+      nextRunAt: now + 3_600_000,
+      running: null,
+      runs: [{ startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: null, lastLine: 'Checked 3 messages, 1 needs a reply', workerId: 'example-worker', sessionId: 'example-session' }]
+    },
+    {
+      id: 'example-status',
+      name: 'Example paced check',
+      kind: 'status',
+      state: 'idle',
+      reason: 'next due later',
+      askedBy: 'Example Owner, 2026-10-11: "keep the example queue moving"',
+      schedule: null,
+      windowsTask: null,
+      what: 'run',
+      cwd: 'C:/Users/me/tools',
+      timeoutMinutes: 120,
+      until: null,
+      paused: false,
       headline: 'Checked 3 items, 1 needs a look',
       totals: { items: 3, flagged: 1 },
       settings: { mode: 'example', every: '2 h', dryRun: false, limit: 12 },
-      lastTickAt: now - 3_600_000,
-      nextTickAt: now + 3_600_000,
+      lastRunAt: now - 3_600_000,
+      nextRunAt: now + 3_600_000,
       running: null,
-      runs: [{ startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: 0, lastLine: 'sortie done: 3 items checked' }]
+      runs: [{ startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: 0, lastLine: 'sortie done: 3 items checked', workerId: null, sessionId: null }]
+    },
+    {
+      id: 'example-task',
+      name: 'Example nightly job',
+      kind: 'windowsTask',
+      state: 'paused',
+      reason: 'the Windows task is disabled: paused',
+      askedBy: 'Example Owner, 2026-10-10: "run the example job at night"',
+      schedule: null,
+      windowsTask: '\\Example nightly job',
+      what: null,
+      cwd: null,
+      timeoutMinutes: null,
+      until: null,
+      paused: true,
+      headline: null,
+      totals: null,
+      settings: null,
+      lastRunAt: now - 86_400_000,
+      nextRunAt: null,
+      running: null,
+      runs: []
+    }
+  ],
+  proposals: [
+    {
+      id: 'example-proposal',
+      name: 'Example weekly summary',
+      askedBy: 'Example Owner, 2026-10-12: "summarise the example notes every Friday"',
+      why: 'It repeats every Friday at the same time, so a schedule fits better than a background task you run yourself.',
+      schedule: '0 17 * * 5',
+      prompt: 'Summarise the notes changed this week into one page.',
+      cwd: 'C:/Users/me/notes',
+      timeoutMinutes: 30
     }
   ]
 }
