@@ -234,6 +234,10 @@ export type TranscriptItem =
 
 export const MAX_TOOL_RESULT_CHARS = 20_000
 
+/** `GET /api/external/sessions/:id/items` answers a long session's newest part; this header says where in its file
+ *  that part begins, and `GET /api/external/sessions/:id/older?before=<it>` answers what is before it. */
+export const OLDER_BEFORE_HEADER = 'x-older-before'
+
 /** How the muted line a CliMayte handoff's continuation prompt is shown as starts (server engine/system-text.ts). */
 export const CONTINUED_LINE = 'Continued in a fresh session'
 
@@ -520,6 +524,8 @@ export interface DeskSettings {
   orchestrator: boolean
   /** The model the orchestrator's judge asks: an alias (opus, sonnet, haiku: the newest of each) or a full model id (shared/orchestrator.ts). */
   orchestratorModel: string
+  /** ArchAIngel runs the standing agents registered in <home>/archaingel/agents on their own pace (shared/archaingel.ts). */
+  archaingel: boolean
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)

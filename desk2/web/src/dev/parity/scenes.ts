@@ -277,12 +277,14 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     health: async () => ({ ok: true, version: '0.1.0' }),
     bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
     babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
+    archaingel: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, agents: [], error: null }),
     orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),
     accounts: async () => sceneAccounts(scene),
     pickAccount: async () => scenePick(scene),
-    externalItems: async () => scene.items(),
+    externalItems: async () => ({ items: scene.items(), olderBefore: 0 }),
+    externalOlder: async () => [],
     diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
     agentHydra: async () => {
       throw new Error('AgentHydra is not running')

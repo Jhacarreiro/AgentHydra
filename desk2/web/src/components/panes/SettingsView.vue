@@ -3,6 +3,7 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch 
 import { Check } from '@lucide/vue'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import type { ArchAIngelStatus } from '@shared/archaingel'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
@@ -62,6 +63,7 @@ const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
+const archaingel = shallowRef<ArchAIngelStatus | null>(null)
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -173,6 +175,14 @@ async function loadBabysitter() {
   }
 }
 
+async function loadArchAIngel() {
+  try {
+    archaingel.value = await api.archaingel()
+  } catch {
+    archaingel.value = null
+  }
+}
+
 async function loadOrchestratorModel() {
   try {
     orchestratorModel.value = await api.orchestratorModel()
@@ -227,6 +237,29 @@ const babysitterNote = computed(() => {
     : 'Nothing is stopped by a limit.'
   const last = s.acts.find((a) => a.did === 'resumed')
   return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
+})
+
+/** A span of time as the page says it: 'under a minute', '12 min', '2 h', '3 d'. */
+function spanOf(ms: number): string {
+  const m = Math.max(0, Math.round(ms / 60_000))
+  if (m < 1) return 'under a minute'
+  if (m < 60) return `${m} min`
+  if (m < 24 * 60) return `${Math.round(m / 60)} h`
+  return `${Math.round(m / (24 * 60))} d`
+}
+
+/** Under the ArchAIngel row: one line per standing agent, what it reports, when it last ran and when it runs next. */
+const archaingelLines = computed<string[]>(() => {
+  const s = archaingel.value
+  if (!s) return []
+  if (!s.agents.length) return ['no agents registered']
+  return s.agents.map((a) => {
+    const last = a.runs[0]
+    const lastPart = last ? `last run ${spanOf(Date.now() - last.endedAt)} ago (${last.outcome})` : 'never run'
+    const nextPart =
+      a.state === 'running' ? 'running now' : a.nextTickAt === null || a.nextTickAt <= Date.now() ? 'due now' : `next in ${spanOf(a.nextTickAt - Date.now())}`
+    return [`${a.name}: ${a.headline ?? (a.state === 'broken' ? `broken, ${a.reason}` : a.state)}`, lastPart, nextPart].join(' · ')
+  })
 })
 
 async function loadBridge() {
@@ -315,6 +348,16 @@ function onBabysitterVisibility() {
   if (showsBabysitter.value && !document.hidden) void loadBabysitter()
 }
 
+// The standing agents' status is read the same way, when its row comes on screen and when the window is shown again.
+const showsArchAIngel = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'archaingel')))
+watch(showsArchAIngel, (on) => {
+  if (on) void loadArchAIngel()
+}, { immediate: true })
+document.addEventListener('visibilitychange', onArchAIngelVisibility)
+function onArchAIngelVisibility() {
+  if (showsArchAIngel.value && !document.hidden) void loadArchAIngel()
+}
+
 // The orchestrator model's resolved id is read when its row comes on screen.
 const showsOrchestratorModel = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'orchestratorModel')))
 watch(showsOrchestratorModel, (on) => {
@@ -394,6 +437,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('visibilitychange', onBabysitterVisibility)
+  document.removeEventListener('visibilitychange', onArchAIngelVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
   if (savedTimer) clearTimeout(savedTimer)
@@ -476,6 +520,9 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
+                <template v-if="r.id === 'archaingel'">
+                  <div v-for="(line, i) in archaingelLines" :key="i" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ line }}</div>
+                </template>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
@@ -568,6 +615,13 @@ onBeforeUnmount(() => {
                   label="Babysitter"
                   :model-value="local.babysitter"
                   @update:model-value="(v: boolean) => save({ babysitter: v })"
+                />
+
+                <PaneSwitch
+                  v-else-if="r.id === 'archaingel'"
+                  label="ArchAIngel"
+                  :model-value="local.archaingel"
+                  @update:model-value="(v: boolean) => save({ archaingel: v })"
                 />
 
                 <PaneSwitch

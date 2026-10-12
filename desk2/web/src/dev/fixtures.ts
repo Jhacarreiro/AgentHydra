@@ -591,5 +591,5 @@ export const settingsFixtures: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus'
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true
 }

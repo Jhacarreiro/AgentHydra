@@ -138,6 +138,28 @@ milliseconds; `fresh: true` looks first. `enabled` (MUTATES) turns it on or off.
 `limit_stop` carries `resets_at` for it: the notice's "resets 11:40pm (America/Chicago)" read against the
 moment of the stop.
 
+**ArchAIngel** is the babysitter's third sibling (Desk 2's `plugins/73-archaingel.ts`, contract and page text in
+`desk2/shared/archaingel.ts`, Settings > General > Standing agents). It runs the user's standing agents, long-lived
+improvement agents that live on this PC as a command, each on its own pace and hidden, and shows what they did. ArchAIngel
+asks no model itself; an agent's own command works through what AgentHydra already has (its CLI, its free accounts,
+HSwarm), so no API key leaves the PC. An agent registers with one file, `<desk home>/archaingel/agents/<id>.json`
+(`~/.hydra-desk-2` on the live install), whose id is the file name and matches `^[a-z0-9][a-z0-9-]{0,39}$`:
+`{"name", "tick": [argv], "status": [argv], "cwd"?, "timeoutMinutes"?}` (argv run with no shell, the timeout 5 to 360
+minutes, 120 by default). A file that fails these checks is listed `broken` with its reason and never run.
+
+The status command prints one JSON object on stdout within 60 s: `next_tick_at` (ISO or null = due now), `last_tick_at`,
+and optional `off`, `headline` (cut to 160 characters) and `totals`. A status that fails, times out or prints no object makes
+the agent `broken`; nothing is ticked on a guess. The tick command runs one sortie: exit 0 is `ok`, 75 is `busy` (its own lock
+is held), any other exit is `failed`, and past its timeout it is killed and recorded `timed-out`. Its output goes to
+`<desk home>/archaingel/logs/<id>.log` (moved to `.log.1` past 2 MB). A look runs every 5 minutes (the first 60 s after start),
+reads each status, and starts a tick when ArchAIngel is on, the agent is not off or running, it is due, and 15 minutes have
+passed since its last tick ended. Its memory (each agent's last 30 runs) is `<desk home>/archaingel.json`; a run still marked
+running at a restart is closed as `interrupted`. `GET /api/archaingel` answers the last look (`?fresh=1` looks first);
+`POST /api/archaingel` takes `{ enabled?, run? }`, where `run` ticks one agent now and refuses an off, broken or running one.
+
+The `archaingel` MCP tool (`server/src/mcp-archaingel.ts`) reads the same answer: each agent's state and reason, headline,
+counts, last five runs and next due time. `enabled` and `run` MUTATE.
+
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
 rest; a Pi session shows its active branch, and each branch left behind with /tree lists as a

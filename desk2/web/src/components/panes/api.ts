@@ -1,15 +1,17 @@
 // The REST calls the panes and the accounts popover make. Components read them through
 // usePaneApi(), so the gallery can provide fixture answers (provide(PANE_API, ...)) without a server.
 import { inject, type InjectionKey } from 'vue'
-import type {
-  AccountInfo,
-  AccountRef,
-  DeskSettings,
-  GitStatus,
-  ModelChoice,
-  TranscriptItem
+import {
+  type AccountInfo,
+  type AccountRef,
+  type DeskSettings,
+  type GitStatus,
+  type ModelChoice,
+  OLDER_BEFORE_HEADER,
+  type TranscriptItem
 } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import type { ArchAIngelStatus } from '@shared/archaingel'
 import type { OrchestratorModelStatus } from '@shared/orchestrator'
 import type { FreeSettings } from '@shared/free-instances'
 
@@ -21,13 +23,18 @@ export interface PaneApi {
   bridgeStatus(): Promise<{ up: boolean; url: string }>
   /** GET /api/babysitter: the chats a usage limit stopped and what the babysitter did (plugins/72-babysitter.ts). */
   babysitter(): Promise<BabysitterStatus>
+  /** GET /api/archaingel: the standing agents the last look read and what each last ran (plugins/73-archaingel.ts). */
+  archaingel(): Promise<ArchAIngelStatus>
   /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
   orchestratorModel(): Promise<OrchestratorModelStatus>
   getSettings(): Promise<DeskSettings>
   putSettings(patch: Partial<DeskSettings>): Promise<DeskSettings>
   accounts(): Promise<AccountInfo[]>
   pickAccount(): Promise<AccountRef>
-  externalItems(sessionId: string, cwd?: string | null): Promise<TranscriptItem[]>
+  /** An outside session's items; `olderBefore`, when not 0, is where in its file they begin: externalOlder answers the rest. */
+  externalItems(sessionId: string, cwd?: string | null): Promise<{ items: TranscriptItem[]; olderBefore: number }>
+  /** What an outside session's file holds before byte `before` (a long session's items are only its newest part). */
+  externalOlder(sessionId: string, before: number, cwd?: string | null): Promise<TranscriptItem[]>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
    *  POST of it (the orchestrator's Arm). */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
@@ -39,8 +46,9 @@ export interface PaneApi {
   patchFreeSettings(patch: Partial<FreeSettings>): Promise<FreeSettings>
 }
 
-async function json<T>(path: string, init?: RequestInit, base = '/api'): Promise<T> {
+async function json<T>(path: string, init?: RequestInit, base = '/api', seen?: (res: Response) => void): Promise<T> {
   const res = await fetch(base + path, init)
+  seen?.(res)
   const text = await res.text()
   let body: unknown = null
   try {
@@ -63,6 +71,7 @@ export const httpPaneApi: PaneApi = {
   health: () => json('/health'),
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
+  archaingel: () => json('/archaingel'),
   orchestratorModel: () => json('/orchestrator/model'),
   getSettings: () => json('/settings'),
   putSettings: (patch) =>
@@ -74,7 +83,18 @@ export const httpPaneApi: PaneApi = {
   accounts: () => json('/accounts'),
   pickAccount: () => json('/accounts/pick'),
   // The cwd names the session's project folder, so the server looks there first.
-  externalItems: (sessionId, cwd) => json(`/external/sessions/${encodeURIComponent(sessionId)}/items${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
+  externalItems: async (sessionId, cwd) => {
+    let olderBefore = 0
+    const items = await json<TranscriptItem[]>(
+      `/external/sessions/${encodeURIComponent(sessionId)}/items${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`,
+      undefined,
+      '/api',
+      (res) => (olderBefore = Number(res.headers.get(OLDER_BEFORE_HEADER)) || 0)
+    )
+    return { items, olderBefore }
+  },
+  externalOlder: (sessionId, before, cwd) =>
+    json(`/external/sessions/${encodeURIComponent(sessionId)}/older?before=${before}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`),
   diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))

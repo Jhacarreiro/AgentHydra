@@ -75,6 +75,7 @@ const fixtureApi: PaneApi = {
   health: async () => ({ ok: true, version: '0.1.0' }),
   bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
   babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
+  archaingel: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, agents: [], error: null }),
   orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
   getSettings: async () => ({ ...settingsFixtures, defaultModel: 'claude-opus-5-5' }),
   putSettings: async (patch) => ({ ...settingsFixtures, ...patch }),
@@ -96,7 +97,8 @@ const fixtureApi: PaneApi = {
     }
   ],
   pickAccount: async () => accountFixtures[1],
-  externalItems: async () => [],
+  externalItems: async () => ({ items: [], olderBefore: 0 }),
+  externalOlder: async () => [],
   diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
   agentHydra: async () => {
     throw new Error('AgentHydra is not running')

@@ -32,6 +32,7 @@
 import { RECENT_FINISHED } from './climayte-lib'
 import { VERSION } from './config'
 import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
+import { ARCHAINGEL_TOOLS } from './mcp-archaingel'
 import { BABYSITTER_TOOLS } from './mcp-babysitter'
 import {
   AUTO_DETACH_MS,
@@ -1850,6 +1851,7 @@ export const TOOLS: HydraTool[] = [
   ...FAN_OUT_TOOLS,
   ...FREE_TOOLS,
   ...BABYSITTER_TOOLS,
+  ...ARCHAINGEL_TOOLS,
   ...DEV_SERVERS_TOOLS,
   ...FAMILY_TOOLS,
   ...findTools(

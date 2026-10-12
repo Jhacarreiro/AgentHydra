@@ -20,6 +20,7 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   babysitter: true,
   orchestrator: false,
   orchestratorModel: 'opus',
+  archaingel: true,
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -40,6 +41,7 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   babysitter: [(v) => typeof v === 'boolean', 'true or false'],
   orchestrator: [(v) => typeof v === 'boolean', 'true or false'],
   orchestratorModel: [isOrchestratorModel, "'opus', 'sonnet', 'haiku' or a full model id such as claude-opus-5-5"],
+  archaingel: [(v) => typeof v === 'boolean', 'true or false'],
 }
 
 function isPathList(v: unknown): boolean {

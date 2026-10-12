@@ -7,12 +7,18 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **ArchAIngel runs your standing agents on their own pace, hidden.** A third watcher beside the babysitter: an agent
+  you register runs whenever it says it is due, using what AgentHydra already has (its CLI and free accounts), and no
+  keys leave this PC. Settings > General > Standing agents shows each agent's state, last run and next run.
 - **Each project's dashboard is its own website, which its chats write.** A chat builds it with `dashboard_write` on
   the agenthydra MCP: any HTML, CSS, JavaScript or data, served at the project's own local address and framed live in
   the dashboard page, which reloads when a file changes. Open it from a chat's header, a project's tile on the home
   screen, or the project's menu in the sidebar; a project with no site yet shows the prompt to copy.
 - **Switch a chat's project from its title bar.** The project pill opens a picker that moves the chat to another
   project's folder.
+- **A long outside chat scrolls back to its first message.** A Claude Desktop or terminal chat opened in AgentHydra
+  showed only the last 8 MB of its history, so a long one stopped partway up and hid your earlier messages. It still
+  opens on its newest part as fast, then loads everything older right behind it; continuing it here keeps all of it too.
 - **Agents see a short tool list and can still reach everything.** AgentHydra lists the 28 tools agents actually
   use instead of all 108; `hydra_find` searches every tool in plain words and `hydra_run` runs any of them, the way
   the Connections MCP works. A chat that loads every listed tool now carries about 15,000 tokens of them instead of 35,000.

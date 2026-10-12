@@ -42,6 +42,7 @@ export type SettingsRowId =
   | 'babysitter'
   | 'orchestrator'
   | 'orchestratorModel'
+  | 'archaingel'
   | 'ahTooltips'
   | 'ahPrivacy'
   | 'ahAlerts'
@@ -163,6 +164,15 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Watching chats',
     label: 'Orchestrator model',
     description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
+  },
+  // A third watcher beside the babysitter (shared/archaingel.ts): the standing agents run on this PC, through AgentHydra's own CLI and accounts.
+  {
+    id: 'archaingel',
+    section: 'general',
+    group: 'Standing agents',
+    label: 'ArchAIngel',
+    description:
+      'Runs your standing agents on their own pace, hidden, using what AgentHydra already has (its CLI and free accounts, HSwarm). An agent registers with a file in archaingel/agents in AgentHydra\'s folder. No keys leave this PC.'
   },
   {
     id: 'ahTooltips',
