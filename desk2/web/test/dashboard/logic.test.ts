@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { DashboardSummary } from '@shared/dashboards'
-import { findDashboard, hasSite, timeAgo, workspaceKey } from '@/components/dashboard/logic'
+import { findDashboard, hasSite, showingDashboard, timeAgo, workspaceKey } from '@/components/dashboard/logic'
 
 const NOW = Date.parse('2026-10-11T12:00:00Z')
 
@@ -52,5 +52,14 @@ describe('timeAgo', () => {
   it('is empty for no time or one that does not parse', () => {
     expect(timeAgo(null, NOW)).toBe('')
     expect(timeAgo('not a time', NOW)).toBe('')
+  })
+})
+
+describe('showingDashboard', () => {
+  it('is true only while the page is open on that folder, so a second click on its button closes it', () => {
+    expect(showingDashboard(true, 'C:/Users/me/Projects/atlas', 'c:\\Users\\me\\Projects\\atlas\\')).toBe(true)
+    expect(showingDashboard(false, 'C:/Users/me/Projects/atlas', 'C:/Users/me/Projects/atlas')).toBe(false)
+    expect(showingDashboard(true, 'C:/Users/me/Projects/other', 'C:/Users/me/Projects/atlas')).toBe(false)
+    expect(showingDashboard(true, null, 'C:/Users/me/Projects/atlas')).toBe(false)
   })
 })

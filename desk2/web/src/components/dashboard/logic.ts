@@ -17,6 +17,11 @@ export function hasSite(list: DashboardSummary[] | null, path: string): boolean 
   return (findDashboard(list, path)?.files ?? 0) > 0
 }
 
+/** The dashboard page is open on this folder: its group head's button then closes the page instead of opening it. */
+export function showingDashboard(open: boolean, openCwd: string | null, path: string): boolean {
+  return open && openCwd !== null && workspaceKey(openCwd) === workspaceKey(path)
+}
+
 /** "just now", "3m ago", "2h ago", "5d ago"; empty for a time that does not parse. */
 export function timeAgo(iso: string | null | undefined, now: number): string {
   if (!iso) return ''
