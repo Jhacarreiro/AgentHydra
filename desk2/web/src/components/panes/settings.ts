@@ -40,6 +40,7 @@ export type SettingsRowId =
   | 'permission'
   | 'notifications'
   | 'idle'
+  | 'collapseMode'
   | 'babysitter'
   | 'orchestrator'
   | 'orchestratorModel'
@@ -141,6 +142,13 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Behaviour',
     label: 'Close idle chats after',
     description: "An idle chat's process stops; your next message resumes it."
+  },
+  {
+    id: 'collapseMode',
+    section: 'general',
+    group: 'Behaviour',
+    label: 'Collapse mode',
+    description: 'Folds the AgentHydra window to the right edge of the screen, showing only your chats. Off unless turned on here.'
   },
   {
     id: 'ahTooltips',

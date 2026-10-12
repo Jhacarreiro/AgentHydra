@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { DeskSettings, Effort, PermissionMode } from '@shared/protocol'
+import type { CollapseMode, DeskSettings, Effort, PermissionMode } from '@shared/protocol'
 import { isOrchestratorModel } from '@shared/orchestrator'
 import { AsyncFile } from './async-file'
 
@@ -21,10 +21,12 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   orchestrator: false,
   orchestratorModel: 'opus',
   archaingel: true,
+  collapseMode: 'off',
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+const COLLAPSE_MODES: readonly CollapseMode[] = ['off', 'button', 'auto']
 
 type Check = (v: unknown) => boolean
 const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
@@ -42,6 +44,7 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   orchestrator: [(v) => typeof v === 'boolean', 'true or false'],
   orchestratorModel: [isOrchestratorModel, "'opus', 'sonnet', 'haiku' or a full model id such as claude-opus-5-5"],
   archaingel: [(v) => typeof v === 'boolean', 'true or false'],
+  collapseMode: [(v) => COLLAPSE_MODES.includes(v as CollapseMode), `one of ${COLLAPSE_MODES.join(', ')}`],
 }
 
 function isPathList(v: unknown): boolean {

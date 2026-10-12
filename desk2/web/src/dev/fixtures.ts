@@ -592,7 +592,7 @@ export const settingsFixtures: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus', archaingel: true, collapseMode: 'off'
 }
 
 export const archaingelFixtures: ArchAIngelStatus = {

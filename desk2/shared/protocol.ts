@@ -16,6 +16,8 @@ export type ChatStatus =
   | 'closed' // no live runtime (app restarted, or closed after idling); sending a message resumes it
 
 export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermissions'
+/** Off, a button that folds the window to the screen's edge, or folding by itself while the window is out of focus. */
+export type CollapseMode = 'off' | 'button' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
 /** Which Claude login a chat runs under. configDir null = the machine's default ~/.claude login. */
@@ -526,6 +528,8 @@ export interface DeskSettings {
   orchestratorModel: string
   /** ArchAIngel runs the standing agents registered in <home>/archaingel/agents on their own pace (shared/archaingel.ts). */
   archaingel: boolean
+  /** The window folds to the screen's right edge, showing only the chats (web/src/components/sidebar/collapse.ts). Off by default. */
+  collapseMode: CollapseMode
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)

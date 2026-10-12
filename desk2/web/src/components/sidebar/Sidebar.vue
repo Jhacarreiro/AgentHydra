@@ -27,7 +27,7 @@ import { ahUpdateDot, hydraOpen, hydraShown, openSwarmInHydra, openWorkerInHydra
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useFirstInterestSet } from '@/lib/first-interest'
 import { createReusableTemplate, useEventListener } from '@vueuse/core'
-import { ChevronRight, EyeOff } from '@lucide/vue'
+import { ChevronRight, EyeOff, PanelRightClose, PanelRightOpen } from '@lucide/vue'
 import { usePaneApi } from '@/components/panes/api'
 import { applyWaitingRelease, releaseApplying, releaseApplyError, releaseWaiting } from '@/lib/ah-release'
 import { clickUpdate, footerUpdate, updateClicking } from '@/lib/desk-update-row'
@@ -134,12 +134,13 @@ import { leaveUnlessFiltered } from '@/lib/row-leave'
 // real app's Projects, Artifacts, Customize and More rows are left out on purpose), then Pinned and one
 // group per folder holding our chats and the sessions running elsewhere, and a 44px footer with the
 // profile (account) control and the Settings gear.
-const props = withDefaults(defineProps<{ width?: number; side?: SidebarSide; /** Gallery: open the account popup at once. */ accountsOpen?: boolean }>(), {
-  width: 288,
-  side: 'left',
-  accountsOpen: false
-})
-const emit = defineEmits<{ resize: [width: number]; side: [side: SidebarSide]; 'side-preview': [side: SidebarSide | null] }>()
+// Collapse mode (collapse.ts): `collapsible` shows the button that folds the window; `fill` is the folded view, the
+// sidebar filling the whole window, with its own expand button and no grip or resize handle.
+const props = withDefaults(
+  defineProps<{ width?: number; side?: SidebarSide; /** Gallery: open the account popup at once. */ accountsOpen?: boolean; collapsible?: boolean; fill?: boolean }>(),
+  { width: 288, side: 'left', accountsOpen: false, collapsible: false, fill: false }
+)
+const emit = defineEmits<{ resize: [width: number]; side: [side: SidebarSide]; 'side-preview': [side: SidebarSide | null]; collapse: []; expand: [] }>()
 
 // Dragged from 200 to 420 (width.ts); the chrome bar over its top keeps the 294 its buttons need and reaches past a
 // narrower sidebar.
@@ -916,7 +917,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
     aria-label="Sidebar"
     class="relative flex h-full shrink-0 flex-col bg-bg-sidebar pt-9"
     :class="side === 'right' ? 'border-s border-border' : 'border-e border-border'"
-    :style="{ width: `${width}px` }"
+    :style="fill ? undefined : { width: `${width}px` }"
   >
     <!-- The shade along its inner edge, just inside the line, as Claude Desktop's sidebar has (owner, 2026-10-08: "kind
          of a inner shadow. That has a little bit of a spread"; then "a little too dark", so 20% black, not 30). Over the
@@ -944,11 +945,21 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </button>
           <!-- The Search and Filter buttons (SidebarTools.vue) sit beside New, over the desk list and the cloud list alike. -->
           <SidebarTools v-if="!hydraModel && !devServers.on.value" :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
+          <Tip v-if="fill" label="Expand AgentHydra">
+            <button type="button" :class="HEADER_BTN" aria-label="Expand AgentHydra" @click="emit('expand')">
+              <component :is="PanelRightOpen" class="size-4" />
+            </button>
+          </Tip>
+          <Tip v-else-if="collapsible" label="Collapse to the edge of the screen">
+            <button type="button" :class="HEADER_BTN" aria-label="Collapse to the edge of the screen" @click="emit('collapse')">
+              <component :is="PanelRightClose" class="size-4" />
+            </button>
+          </Tip>
         </div>
       </nav>
 
       <!-- The grip sits in the gap under New: its negative margins keep the list where it was, and it stacks over the list's empty top padding. -->
-      <Tip label="Drag to move the sidebar to the other side">
+      <Tip v-if="!fill" label="Drag to move the sidebar to the other side">
         <div
           role="separator"
           aria-orientation="horizontal"
@@ -1217,6 +1228,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
     <!-- Below the chrome bar while the bar reaches past a narrow sidebar, so it never takes its buttons' clicks. -->
     <div
+      v-if="!fill"
       role="separator"
       aria-orientation="vertical"
       aria-label="Resize sidebar"

@@ -40,7 +40,8 @@ import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
-import { CAPTION_W, ownFrame, startOwnFrame } from '@/lib/host-window'
+import { CAPTION_W, appFocused, collapseWindow, collapsed, expandWindow, ownFrame, startOwnFrame } from '@/lib/host-window'
+import { chatAction, focusAction, modeAction } from '@/components/sidebar/collapse'
 import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import WhatsNewDialog from './WhatsNewDialog.vue'
@@ -218,7 +219,7 @@ const sidebar = ref<InstanceType<typeof Sidebar> | null>(null)
 // show-sidebar toggle, a 6px strip at the window's left edge or the flyout itself. Zones are marked
 // data-peek-zone: 'open' opens it, 'keep' (the chrome bar over its top) only keeps it open. A menu
 // opened from the flyout lives in a portal and counts as part of it.
-const flyout = computed(() => !sidebarOpen.value && !sliding.value)
+const flyout = computed(() => !collapsed.value && !sidebarOpen.value && !sliding.value)
 const peekOpen = ref(false)
 // The flyout animates only once the pointer has used it, so collapsing does not slide it past again.
 const peekLive = ref(false)
@@ -804,10 +805,21 @@ onMounted(() => {
   window.addEventListener('focus', markOpenRead)
   document.addEventListener('visibilitychange', onVisibility)
   window.addEventListener('pagehide', saveWidth)
+  window.addEventListener('pointerdown', holdPointer)
+  window.addEventListener('pointerup', releasePointer)
+  window.addEventListener('pointercancel', releasePointer)
+  window.addEventListener('blur', releasePointer)
 })
+function holdPointer() {
+  pointerHeld.value = true
+}
 onBeforeUnmount(() => {
   saveWidth()
   window.removeEventListener('pagehide', saveWidth)
+  window.removeEventListener('pointerdown', holdPointer)
+  window.removeEventListener('pointerup', releasePointer)
+  window.removeEventListener('pointercancel', releasePointer)
+  window.removeEventListener('blur', releasePointer)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
@@ -825,6 +837,36 @@ onBeforeUnmount(() => {
   clearTimeout(devTimer)
   peek.dispose()
 })
+
+// Collapse mode (collapse.ts): a focus change or a chat click moves the window; a pointer still down holds it until release.
+const collapseMode = computed(() => src.settings.value?.collapseMode ?? 'off')
+const pointerHeld = ref(false)
+const focusWaiting = ref(false)
+function applyFocus() {
+  const act = focusAction({ mode: collapseMode.value, collapsed: collapsed.value, focused: appFocused.value, busy: pointerHeld.value })
+  focusWaiting.value = act === 'wait'
+  if (act === 'collapse') collapseWindow(sidebarWidth.value)
+  else if (act === 'expand') expandWindow()
+}
+function releasePointer() {
+  pointerHeld.value = false
+}
+watch(appFocused, applyFocus)
+watch(pointerHeld, (held) => {
+  if (!held && focusWaiting.value) applyFocus()
+})
+watch(collapseMode, (mode) => {
+  if (modeAction({ mode, collapsed: collapsed.value }) === 'expand') expandWindow()
+})
+watch(
+  () => src.selected.value,
+  (v) => {
+    if (v.kind === 'chat' && chatAction({ mode: collapseMode.value, collapsed: collapsed.value }) === 'expand') expandWindow()
+  }
+)
+function collapseNow() {
+  collapseWindow(sidebarWidth.value)
+}
 
 // With the sidebar hidden the title bar starts after the chrome bar's buttons (Dev servers, the last, ends at 286: the bar's
 // CHROME_COLLAPSED 290 less its 4px padding); open, after the sidebar, or after the bar where it reaches past a sidebar narrower
@@ -845,9 +887,10 @@ function moveSidebar(side: SidebarSide) {
   <!-- DOM order is the tab order: chrome bar, sidebar, then the pane (title bar first); the grid places them. -->
   <div
     class="relative grid size-full grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text"
-    :class="sidebarSide === 'right' ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-[auto_minmax(0,1fr)]'"
+    :class="collapsed ? 'grid-cols-[minmax(0,1fr)]' : sidebarSide === 'right' ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-[auto_minmax(0,1fr)]'"
   >
     <ChromeBar
+      v-show="!collapsed"
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
       :side="sidebarSide"
@@ -876,9 +919,9 @@ function moveSidebar(side: SidebarSide) {
     <!-- Sliding, it lies over the stage at its full width and moves by transform (slideX); at rest it is the grid's first column. -->
     <div
       class="h-full overflow-hidden"
-      :class="slideX ? [sidebarSide === 'right' ? 'absolute right-0 top-0 z-10' : 'absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
-      :style="slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
-      :inert="!sidebarOpen && !peekOpen"
+      :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? [sidebarSide === 'right' ? 'absolute right-0 top-0 z-10' : 'absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
+      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
+      :inert="!collapsed && !sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
     >
       <!-- Collapsed, this is the hover flyout: positioned on the window (not the 0-wide slot), under the chrome bar (z-21), below dialogs. -->
@@ -903,6 +946,10 @@ function moveSidebar(side: SidebarSide) {
           :width="sidebarWidth"
           :side="sidebarSide"
           :accounts-open="props.accountsOpen"
+          :collapsible="collapseMode === 'button'"
+          :fill="collapsed"
+          @collapse="collapseNow"
+          @expand="expandWindow"
           @resize="resizeSidebar"
           @side="moveSidebar"
           @side-preview="(side: SidebarSide | null) => (sideDrop = side)"
@@ -922,6 +969,7 @@ function moveSidebar(side: SidebarSide) {
       data-testid="sidebar-drop"
     />
     <div
+      v-show="!collapsed"
       ref="stageEl"
       class="relative row-span-2 row-start-1 min-w-0 overflow-hidden"
       :class="[sidebarSide === 'right' ? 'col-start-1' : 'col-start-2', slideX && ['will-change-transform', slide?.at === 'to' && SLIDE_EASE]]"
@@ -1102,6 +1150,6 @@ function moveSidebar(side: SidebarSide) {
     </Dialog>
 
     <WhatsNewDialog />
-    <WindowControls v-if="ownFrame" />
+    <WindowControls v-if="ownFrame && !collapsed" />
   </div>
 </template>

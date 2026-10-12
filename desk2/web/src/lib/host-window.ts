@@ -21,6 +21,10 @@ export const CAPTION_W = 138
 export const ownFrame = ref(false)
 /** The window is maximized (Restore shows in place of Maximize, and the top edge does not resize). */
 export const maximized = ref(false)
+/** The window is folded to the screen's right edge, showing only the sidebar (collapse.ts). */
+export const collapsed = ref(false)
+/** AgentHydra is the app in front (the host's agenthydra:focus, sent on change only). */
+export const appFocused = ref(true)
 
 export type CaptionButton = 'minimize' | 'maximize' | 'close'
 /** The window button under the pointer and the one held down, as the host says: over the buttons the pointer is the
@@ -41,6 +45,13 @@ export const resizeFrom = (edge: 'n' | 'ne' | 'nw') => send('resize', { edge })
 /** Starts the window's move, as a press on Windows' caption does; the button must still be down. For a title bar the
  *  page's drag regions cannot cover (the AgentHydra pane's frame: WebView2 takes them from the top document only). */
 export const dragWindow = () => send('drag')
+/** Folds the window to the screen's right edge, `cssWidth` (the page's pixels) wide; the host keeps where it was for expandWindow. */
+export function collapseWindow(cssWidth: number): void {
+  send('collapse', { width: Math.round(cssWidth * window.devicePixelRatio) })
+}
+export const expandWindow = () => send('expand')
+/** The AgentHydra host is present (the window is the native one, not a browser tab). */
+export const inHost = (): boolean => !!host().agentHydraHost?.frame && !!host().ipc
 /** Tells the host where the window's buttons are (`r`, the page's pixels; null while there are none), so its caption
  *  sink goes over exactly them and nowhere else. The host works in the screen's pixels. */
 export function placeButtons(r: { left: number; top: number; width: number; height: number } | null): void {
@@ -59,10 +70,14 @@ export function startOwnFrame(): void {
   const h = host()
   if (started || !h.agentHydraHost?.frame || !h.ipc) return
   started = true
+  window.addEventListener('agenthydra:focus', (e) => {
+    appFocused.value = (e as CustomEvent<{ focused?: boolean }>).detail?.focused === true
+  })
   window.addEventListener('agenthydra:window', (e) => {
-    const d = (e as CustomEvent<{ frame?: boolean; maximized?: boolean }>).detail
+    const d = (e as CustomEvent<{ frame?: boolean; maximized?: boolean; collapsed?: boolean }>).detail
     ownFrame.value = d?.frame === true
     maximized.value = d?.maximized === true
+    collapsed.value = d?.collapsed === true
     document.documentElement.classList.toggle(OWN_FRAME_CLASS, ownFrame.value)
     document.documentElement.style.setProperty('--caption-w', `${ownFrame.value ? CAPTION_W : 0}px`)
   })

@@ -11,6 +11,7 @@ import ArchAIngelAgentCard from './ArchAIngelAgentCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
+import { COLLAPSE_MODES, COLLAPSE_MODE_LABELS } from '@/components/sidebar/collapse'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { settingsIcons } from '@/lib/icons'
 import { usePaneApi } from './api'
@@ -249,6 +250,9 @@ async function loadBridge() {
 }
 
 // Segmented control: arrows move the choice, as in a radio group.
+function onCollapseKey(e: KeyboardEvent) {
+  onSegmentKey(e, COLLAPSE_MODES.indexOf(local.value?.collapseMode ?? 'off'), COLLAPSE_MODES.length, (i) => save({ collapseMode: COLLAPSE_MODES[i]! }))
+}
 function onSegmentKey(e: KeyboardEvent, current: number, count: number, pick: (i: number) => void) {
   const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
   if (!step) return
@@ -496,6 +500,10 @@ onBeforeUnmount(() => {
                 <div class="mt-0.5 text-[13px] leading-4.75 text-text-muted">
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.description }}
                 </div>
+                <div v-if="r.id === 'collapseMode'" class="mt-1.5 flex flex-col gap-1 text-[13px] leading-4.75 text-text-muted">
+                  <div v-for="m in COLLAPSE_MODES" :key="m"><span class="text-text-2">{{ COLLAPSE_MODE_LABELS[m].label }}:</span> {{ COLLAPSE_MODE_LABELS[m].sentence }}</div>
+                  <div>It works in the AgentHydra window, not in a browser tab.</div>
+                </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
                 <template v-if="r.id === 'archaingel' && archaingel">
@@ -557,6 +565,27 @@ onBeforeUnmount(() => {
                     @click="save({ defaultEffort: e.value })"
                   >
                     {{ e.label }}
+                  </button>
+                </div>
+
+                <div
+                  v-else-if="r.id === 'collapseMode'"
+                  role="radiogroup"
+                  aria-label="Collapse mode"
+                  :class="SEGMENTS"
+                  @keydown="onCollapseKey"
+                >
+                  <button
+                    v-for="(m, i) in COLLAPSE_MODES"
+                    :key="m"
+                    type="button"
+                    role="radio"
+                    :aria-checked="local.collapseMode === m"
+                    :tabindex="local.collapseMode === m ? 0 : -1"
+                    :class="SEGMENT"
+                    @click="save({ collapseMode: COLLAPSE_MODES[i]! })"
+                  >
+                    {{ COLLAPSE_MODE_LABELS[m].label }}
                   </button>
                 </div>
 
