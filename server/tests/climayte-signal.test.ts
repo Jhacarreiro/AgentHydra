@@ -77,6 +77,8 @@ describe('workerHooks', () => {
       expect(second.exitCode).toBe(0)
       expect(second.stdout.toString()).toBe('')
     },
+    // Two Git-bash launches: tens of ms idle, seconds each on a loaded Windows box.
+    30_000,
   )
 
   test('edit_claims runs in exec form: python itself, no shell launcher in front of it', () => {

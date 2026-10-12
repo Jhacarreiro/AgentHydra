@@ -47,4 +47,6 @@ test('a session started on an account after the pool read it counts once the tic
   // The tick's next read, a pool interval on.
   await refreshPoolSessions(now + 3_000)
   expect(others()).toBe(1)
-})
+  // A real child process and two process-table reads: well under a second idle, but a box at ~90%
+  // CPU stretches each (2026-10-11), and bun's 5 s default is the machine's number, not the test's.
+}, 30_000)
