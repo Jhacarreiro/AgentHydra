@@ -92,11 +92,12 @@ async function sweepOnce(store: KitStore): Promise<string> {
     const s = await ingestLegacy(store, (await import('../db')).db, { pc })
     return s.skipped ? 'legacy done' : `legacy sessions=${s.sessions} written=${s.written}`
   })
-  // The pages this sweep pulled in are not what the next query reads; a minute of idle holds none of them.
+  // The pages this sweep pulled in are not what the next query reads, and the checkpoint worker has nothing
+  // to do until the next long write; a minute of idle holds neither.
   try {
-    store.releaseCache()
+    store.idle()
   } catch (err) {
-    parts.push(`release FAILED: ${err instanceof Error ? err.message : String(err)}`)
+    parts.push(`idle FAILED: ${err instanceof Error ? err.message : String(err)}`)
   }
   return `[kit] sweep ${parts.join(' | ')} ms=${Math.round(performance.now() - t0)}`
 }

@@ -16,8 +16,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The background service starts lighter and stays lighter.** Finished CliMayte tasks keep their long text compressed
   in memory until something reads it, file paths that several caches share are held once, and helper threads that sit
   idle close themselves. It no longer reads every transcript at start for a token count nothing showed any more, it
-  gives the analytics store's cache back after each minute's sweep, and it reads files a few at a time, so it stops
-  piling up file-reading threads it never released.
+  gives the analytics store's cache and checkpoint thread back after each minute's sweep, and it reads files a few at
+  a time, so it stops piling up file-reading threads it never released.
 - **Settings has a Managers page.** It holds the babysitter, the orchestrator and ArchAIngel, which moved there from General. Each standing agent shows its own settings and a Run now button.
 - **ArchAIngel runs your standing agents on their own pace, hidden.** A third watcher beside the babysitter: an agent
   you register runs whenever it says it is due, using what AgentHydra already has (its CLI and free accounts), and no

@@ -375,7 +375,7 @@ describe('settled calls, the raw cut and the hour rollup', () => {
     expect(sum.u).toBeCloseTo(1250 * 0.2)
   })
 
-  test('a long sliced write waits for the WAL to restart instead of growing it for ever', async () => {
+  test('a long sliced write waits for the WAL to restart instead of growing it for ever, also after the store went idle', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'kit-wal-'))
     const path = join(dir, 'kit.db')
     const s = new KitStore(path, { now: T0 })
@@ -384,7 +384,13 @@ describe('settled calls, the raw cut and the hour rollup', () => {
       s.walLimitBytes = 1_000_000
       await s.upsertEventsAsync([{ id: 'warm', ts: T0, source: 'cli' }])
       let peak = 0
+      let pausesAtIdle = 0
       for (let b = 0; b < 40; b++) {
+        // the end of a sweep: the checkpoint worker stops, and the next long write must start another
+        if (b === 20) {
+          s.idle()
+          pausesAtIdle = s.walPauses
+        }
         await s.upsertEventsAsync(
           Array.from({ length: 1500 }, (_, i) => ({
             id: `w${b}-${i}`,
@@ -398,7 +404,8 @@ describe('settled calls, the raw cut and the hour rollup', () => {
         peak = Math.max(peak, statSync(`${path}-wal`).size)
       }
       // 60,000 rows with their indexes are 60 MB of WAL when it is never restarted
-      expect(s.walPauses).toBeGreaterThan(0)
+      expect(pausesAtIdle).toBeGreaterThan(0)
+      expect(s.walPauses).toBeGreaterThan(pausesAtIdle)
       expect(peak).toBeLessThan(20_000_000)
     } finally {
       s.close()

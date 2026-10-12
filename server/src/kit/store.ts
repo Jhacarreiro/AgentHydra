@@ -334,16 +334,38 @@ export class KitStore {
   }
 
   /**
-   * Give the page cache back between sweeps. The 64 MB cache pays inside one query, which re-reads its
-   * pages, not across a minute of idle: measured 2026-10-12 on a 1.18 GB store, releasing it freed 80 MB of
-   * private memory (306 -> 226 MB), the next sweep took 3.2 s against 3.6 s kept, and a 7-day query right
-   * after it took 46 ms (the OS still holds the file).
+   * The sweep is over: give back what only long work uses. The 64 MB page cache pays inside one query, which
+   * re-reads its pages, not across a minute of idle: measured 2026-10-12 on a 1.18 GB store, releasing it
+   * freed 80 MB of private memory (306 -> 226 MB), the next sweep took 3.2 s against 3.6 s kept, and a 7-day
+   * query right after it took 46 ms (the OS still holds the file). The checkpoint worker stops too: idle
+   * after one checkpoint it held 26.4-26.9 MB of private memory and a thread (three runs, 2026-10-12), and
+   * the next long write starts another within ckptEveryMs.
    */
-  releaseCache(): void {
+  idle(): void {
     this.db.exec('pragma shrink_memory')
+    this.parkCheckpointWorker()
+  }
+
+  /**
+   * Stops the checkpoint worker between runs of long work; one still checkpointing stops when it reports.
+   * The writer's own automatic checkpoint is back on for the small writes in between, as before the first
+   * long write, and the next checkpointSoon starts a worker and switches it off again.
+   */
+  private parkCheckpointWorker(): void {
+    if (!this.ckptWorker) return
+    if (this.ckptBusy || this.walPausing) {
+      this.ckptParkWhenDone = true
+      return
+    }
+    this.ckptParkWhenDone = false
+    this.ckptWorker.terminate()
+    this.ckptWorker = null
+    this.db.exec('pragma wal_autocheckpoint = 1000')
   }
 
   private ckptWorker: Worker | null = null
+  /** idle() came while a checkpoint ran: the worker stops when it reports, unless long work starts again first. */
+  private ckptParkWhenDone = false
   private ckptBusy = false
   private ckptAt = 0
   private ckptOff = false
@@ -373,6 +395,7 @@ export class KitStore {
    * that long work gives back to the loop; costs nothing between checkpoints.
    */
   checkpointSoon(): void {
+    this.ckptParkWhenDone = false
     if (this.path === ':memory:' || this.ckptOff || this.ckptBusy) return
     const now = Date.now()
     if (now - this.ckptAt < this.ckptEveryMs) return
@@ -395,6 +418,7 @@ export class KitStore {
             this.walDone = e.data.done ?? 0
           }
           for (const w of this.ckptWaiters.splice(0)) w()
+          if (this.ckptParkWhenDone) this.parkCheckpointWorker()
         }
         this.ckptWorker.onerror = () => this.stopCheckpointWorker()
         this.ckptWorker.unref()

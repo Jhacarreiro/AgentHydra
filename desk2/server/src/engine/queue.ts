@@ -625,16 +625,20 @@ export class QueueManager {
     })
   }
 
-  /** The bytes again: the SDK input skips a picture without dataBase64. */
+  /**
+   * The bytes again: the SDK input skips a picture without dataBase64. One read at a time: Bun starts an I/O
+   * thread for every read in flight and keeps it for the life of the server (about 6.6 MB each, measured
+   * 2026-10-12), and a message may carry any number of pictures.
+   */
   private async readBack(images: ImageRef[] | undefined): Promise<ImageRef[] | undefined> {
     if (!images) return undefined
-    return Promise.all(
-      images.map(async (img) => {
-        const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
-        if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
-        return { ...img, dataBase64: (await readFile(hit.path)).toString('base64') }
-      }),
-    )
+    const out: ImageRef[] = []
+    for (const img of images) {
+      const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
+      if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
+      out.push({ ...img, dataBase64: (await readFile(hit.path)).toString('base64') })
+    }
+    return out
   }
 
   // queue.json
