@@ -97,7 +97,13 @@ describe('browser_status and the live tools', () => {
 
   test('targets and frames refuse to guess a browser', async () => {
     expect(await callTool('browser_targets', {}, { cwd })).toMatchObject({ ok: false, status: 400 })
-    expect(await callTool('browser_frames', { profile: 'example-shop' }, { cwd })).toMatchObject({ ok: false, status: 400 })
+    // A saved profile that is not open now relaunches on the next call (the idle close, c15cc2d6; its real-Chrome test
+    // is in session.test.ts), so the refusal is for a name with no saved browser behind it.
+    expect(await callTool('browser_frames', { profile: 'no-such-profile' }, { cwd })).toMatchObject({
+      ok: false,
+      status: 400,
+      error: expect.stringContaining("profile 'no-such-profile' is not open"),
+    })
   })
 
   test('a tab belongs to this chat when the ledger names the session of the caller, whatever its chat id is', () => {
