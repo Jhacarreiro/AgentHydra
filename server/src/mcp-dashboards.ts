@@ -50,7 +50,7 @@ export const DASHBOARD_TOOLS: HydraTool[] = [
     callerChat: 'deskChat',
     listed: true,
     description:
-      "READ-ONLY: the project's dashboard, a small website the person opens in AgentHydra. Answers `url` (open it with a browser tool to see it), `folder` (a local AI may also edit files there directly), and `entries` (path, bytes, updatedAt). `path` also returns that file's content. With nothing written yet, `files` is 0: start with dashboard_write and an index.html. `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder.",
+      "Reads the project's dashboard, a small website the owner opens in AgentHydra. It returns url (open it with a browser tool to see it), folder (where a local AI may edit files directly), and entries (path, bytes, updatedAt). Pass path to also get that file's content. With nothing written yet, files is 0: start with dashboard_write and an index.html. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. Read-only.",
     inputSchema: S({
       cwd: CWD,
       path: {
@@ -71,7 +71,7 @@ export const DASHBOARD_TOOLS: HydraTool[] = [
     callerChat: 'deskChat',
     listed: true,
     description:
-      "MUTATES: the project's dashboard is its own small website the person opens in AgentHydra, and you have full control: write anything (HTML, CSS, JS, charts, images, a data.json your page fetches, or a whole built dist via `from`). index.html is the entry. Applied in order, all-or-nothing: `clear`, `from` (absolute folder to publish), `files` [{path, content, encoding?: utf8|base64}], `edits` [{path, old, new}] (old must occur exactly once; prefer edits to change part of a page another chat also writes), `remove` [paths]. Paths are relative with forward slashes (letters, digits . _ -), up to 8 deep; files up to 5 MB, site up to 50 MB and 1000 files. The answer gives `url` (open it with a browser tool to look at your work) and `folder` (a local AI may also write files there directly). `cwd` is any folder inside the project; omitted, it is the calling Desk chat's folder. `by` names who writes (up to 60 characters); omitted, it is the calling chat's title.",
+      "MUTATES: writes the project's dashboard, a small website the owner opens in AgentHydra, which you control fully. Write anything: HTML and CSS, JavaScript, charts, images, a data.json the page fetches, or a whole built dist folder via from. index.html is the entry. Operations apply in order and all-or-nothing: clear; from (an absolute folder to publish); files [{path, content, encoding utf8 or base64}]; edits [{path, old, new}], where old must occur exactly once (prefer edits when another chat also writes the page); and remove (paths). Paths are relative, with forward slashes, letters, digits, dot, underscore and dash, up to 8 deep. A file may be 5 MB, a site 50 MB and 1000 files. The answer gives url (open it with a browser tool to check your work) and folder. cwd is any folder inside the project; omitted, it is the calling Desk chat's folder. The optional by argument names who writes, up to 60 characters; omitted, it is the calling chat's title.",
     inputSchema: S({
       cwd: CWD,
       by: { type: 'string', description: 'Who writes, up to 60 characters.' },

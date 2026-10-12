@@ -346,9 +346,7 @@ export function findTools(
       name: 'desk_transcript',
       callerChat: 'chat',
       description:
-        'READ-ONLY: the whole record of a Hydra Desk chat as Desk keeps it (messages, tool calls and results, oldest first), ' +
-        'for a detail a handoff left out. `chat` defaults to THIS chat; name another by Desk id, session id or title fragment. ' +
-        '`last` keeps only the newest N items.',
+        'Reads the whole record of a Hydra Desk chat as Desk keeps it: messages, tool calls and results, oldest first. Use it for a detail a handoff left out. chat defaults to this chat; name another by Desk id, session id or title fragment. last keeps only the newest N items. Read-only.',
       inputSchema: S({
         chat: {
           type: 'string',

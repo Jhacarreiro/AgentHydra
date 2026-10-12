@@ -25,6 +25,29 @@ describe('every tool', () => {
     // A \${...} escaped inside a template literal reaches the agent as the literal text.
     for (const t of TOOLS) expect(t.description, t.name).not.toContain('${')
   })
+  test('writes no run of two upper-case words outside the known acronyms', () => {
+    const acronyms = new Set([
+      'MUTATES',
+      'JSON',
+      'HTTP',
+      'MCP',
+      'CLI',
+      'API',
+      'URL',
+      'PID',
+      'ISO',
+      'SDK',
+    ])
+    const shouting = (d: string) => {
+      const words = d.match(/[A-Za-z0-9_]+/g) ?? []
+      return words.some((w, i) => {
+        const next = words[i + 1]
+        const caps = (x: string) => /^[A-Z][A-Z0-9_]+$/.test(x) && !acronyms.has(x)
+        return next !== undefined && caps(w) && caps(next)
+      })
+    }
+    expect(TOOLS.filter((t) => shouting(t.description)).map((t) => t.name)).toEqual([])
+  })
   test('has an object input schema', () => {
     for (const t of TOOLS) expect((t.inputSchema as { type?: string }).type, t.name).toBe('object')
   })
