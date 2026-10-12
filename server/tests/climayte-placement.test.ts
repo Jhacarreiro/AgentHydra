@@ -580,6 +580,100 @@ describe('a task waits while running workers peg the CPU, and starts once it is 
   }, 60_000)
 })
 
+describe('a chat starts on a busy machine, and an ordinary task waits there', () => {
+  // 2026-10-12: 12-19 background workers held the PC at 98-100% CPU, and the owner's chat waited 8.5 minutes.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-chat-cpu-'))
+  const cwd = join(root, 'work')
+  const acctDir = join(root, 'acct')
+  for (const d of [cwd, acctDir]) mkdirSync(d, { recursive: true })
+  writeFileSync(join(acctDir, 'fake-slow'), '')
+  const groups: string[] = []
+
+  afterAll(async () => {
+    for (const group of groups) climayteCancel({ group })
+    await killsLanded()
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    setCliMayteCpuReader(null)
+    resetCpuRing()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('a chat launches while the CPU is at 100%; an ordinary queued task stays held', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    resetCpuRing()
+    let total = 0
+    let ticks = 0
+    setCliMayteCpuReader(() => {
+      total += 3_000
+      return { idle: 0, total }
+    })
+    setCliMayteAccountsProvider(() => {
+      ticks++
+      return [
+        {
+          id: 'cpu-chat',
+          num: 63,
+          name: 'chat',
+          configDir: acctDir,
+          sessionPct: 5,
+          weekPct: 5,
+          planFactor: 20,
+          readAt: Date.now(),
+        },
+      ]
+    })
+    const until = async (ok: () => boolean, ms = 20_000) => {
+      const deadline = Date.now() + ms
+      while (!ok() && Date.now() < deadline) await Bun.sleep(100)
+    }
+    const aTick = async () => {
+      const seen = ticks
+      await until(() => ticks >= seen + 2)
+    }
+    const run = (tasks: Array<{ title: string; chat?: boolean }>) => {
+      const r = climayteRun({
+        model: 'sonnet',
+        effort: 'medium',
+        ownerWords: 'the chat CPU gate under test',
+        perAccount: 4,
+        tasks: tasks.map((t) => ({
+          prompt: `run slowly: ${t.title}`,
+          cwd,
+          title: t.title,
+          chat: t.chat,
+        })),
+      })
+      groups.push(r.group)
+      return r.workers.map((w) => w.id as string)
+    }
+    const status = (id: string) => climayteList({ id })[0]
+    startCliMayte()
+    const four = run([
+      { title: 'slow 1' },
+      { title: 'slow 2' },
+      { title: 'slow 3' },
+      { title: 'slow 4' },
+    ])
+    await until(() => four.every((id) => status(id)?.status === 'running'))
+    expect(four.map((id) => status(id)?.status)).toEqual([
+      'running',
+      'running',
+      'running',
+      'running',
+    ])
+    await Bun.sleep(3_000)
+    await aTick()
+    const [chat] = run([{ title: 'the owner chat', chat: true }])
+    const [ordinary] = run([{ title: 'the ordinary task' }])
+    await until(() => status(chat as string)?.status === 'running')
+    await aTick()
+    expect(status(chat as string)?.status).toBe('running')
+    expect(status(ordinary as string)?.status).toBe('queued')
+    expect(status(ordinary as string)?.error).toContain('Waiting for CPU: 100% busy')
+  }, 60_000)
+})
+
 describe('a reading over 10 minutes old is read again before a task starts there', () => {
   // 2026-10-03: #116 read 69% about 21 minutes earlier and #152 24% 70 minutes earlier; each took a
   // task in the second it became due, before any re-read began, and was found at 110% and 101%.

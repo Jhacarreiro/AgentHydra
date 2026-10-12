@@ -516,10 +516,10 @@ function holdForCpu(w: CliMayteWorker, short: string): void {
 /** startOn will start the task on `acct` this tick rather than hold it (no reading due there, and
  *  the machine has the memory and the CPU): a journal line about the start is written only then, not
  *  on every tick it is held. */
-const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
+const goesNow = (s: TickState, w: CliMayteWorker, acct: CliMayteAccount): boolean =>
   !readingPending(acct, s.now) &&
   !memoryShort(s.memory, s.growing) &&
-  !cpuShort(s.cpu, s.cpuRunning)
+  (w.chat === true || !cpuShort(s.cpu, s.cpuRunning))
 
 /** Test seam: what the scheduler asks before launching (null: the real guard, which only judges the
  *  real launcher). */
@@ -610,7 +610,7 @@ function startOn(
     holdForMemory(w, short)
     return
   }
-  const busy = cpuShort(s.cpu, s.cpuRunning)
+  const busy = w.chat ? null : cpuShort(s.cpu, s.cpuRunning)
   if (busy) {
     holdForCpu(w, busy)
     return
@@ -834,7 +834,7 @@ export function scheduleWorker(s: TickState, w: CliMayteWorker): void {
   // (4) Nothing comes soon: start short where the most room is, if there is enough to work in.
   const roomy = (spill.length ? spill : ranked).find((a) => roomOn(s, a) >= MIN_START_ROOM_PCT)
   if (roomy) {
-    if (goesNow(s, roomy))
+    if (goesNow(s, w, roomy))
       journal(w, 'start-short', {
         account: acctLabel(roomy),
         notice: `expected to use about ${Math.round(expected)}% of a Pro 5-hour window, about ${Math.round(roomOn(s, roomy))}% left there; it hands off at the ${sessionStopPct(roomy)}% line and goes on where there is room`,
