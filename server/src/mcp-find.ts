@@ -192,6 +192,10 @@ export function deskChatPatch(a: Record<string, unknown>): { cwd?: string; title
 /** Tools that are never run through hydra_run: itself, and the search. */
 const NOT_RUNNABLE = new Set(['hydra_run', 'hydra_find'])
 
+/** How an agent calls a tool: a listed one by its own name, any other through hydra_run. */
+const callOf = (name: string, listed: boolean): string =>
+  listed ? `${name} { ... }` : `hydra_run { tool: "${name}", args: { ... } }`
+
 export function findTools(
   getTools: () => HydraTool[],
   getListed: () => ReadonlySet<string>,
@@ -204,9 +208,10 @@ export function findTools(
       description:
         "FIND ANY AGENTHYDRA TOOL: say what you want in plain words ('move this chat to another workspace', 'rename this " +
         "chat', 'which account has quota left', 'read an old session', 'restart the daemon') and get the matching tools, " +
-        'best first, each with a one-line summary, whether it MUTATES, its required parameters, and whether it is listed. ' +
-        'Only the most used tools are listed directly; every other one runs through hydra_run { tool, args }. Search here ' +
-        'before deciding a thing cannot be done or reaching for a workaround.',
+        'best first, each with a one-line summary, whether it MUTATES, its required parameters, and `call`: how to call it. ' +
+        'A listed tool is in your tool list: call it by its own name (climayte_run, climayte_status, check_my_usage). ' +
+        'Only a tool that is not listed goes through hydra_run { tool, args }. Search here before deciding a thing ' +
+        'cannot be done or reaching for a workaround.',
       inputSchema: S(
         {
           query: { type: 'string', description: 'What you want done, in plain words.' },
@@ -231,9 +236,7 @@ export function findTools(
             listed: listed.has(t.name),
             description: t.description,
             inputSchema: t.inputSchema,
-            call: listed.has(t.name)
-              ? `${t.name} { ... }`
-              : `hydra_run { tool: "${t.name}", args: { ... } }`,
+            call: callOf(t.name, listed.has(t.name)),
           }
         }
         const query = str(a.query).trim()
@@ -249,9 +252,9 @@ export function findTools(
         )
         return {
           query,
-          tools: found,
+          tools: found.map((f) => ({ ...f, call: callOf(f.name, f.listed) })),
           note: found.length
-            ? 'A listed tool is called by its own name; any other one with hydra_run { tool, args }. hydra_find { tool } gives its full schema.'
+            ? 'Call each tool as its `call` says: a listed tool by its own name (it is in your tool list), only an unlisted one with hydra_run. hydra_find { tool } gives its full schema.'
             : 'Nothing matched: try other words (what it acts on: chat, account, folder, quota, session, server).',
         }
       },
@@ -260,8 +263,9 @@ export function findTools(
       name: 'hydra_run',
       listed: true,
       description:
-        'MUTATES (when the tool it runs does): run ANY AgentHydra tool by name, listed or not: hydra_run { tool, args }. ' +
-        'Find the tool and its arguments with hydra_find first. The answer is exactly what the tool itself answers.',
+        'MUTATES (when the tool it runs does): runs an AgentHydra tool that is NOT in your tool list: hydra_run { tool, args }. ' +
+        'If your tool list has the tool (climayte_run, climayte_status, check_my_usage...), call it by its own name ' +
+        'instead. hydra_find gives a tool, its arguments and its `call`. The answer is what the tool itself answers.',
       inputSchema: S(
         {
           tool: { type: 'string', description: 'The tool name, as hydra_find gives it.' },
@@ -282,7 +286,17 @@ export function findTools(
           a.args && typeof a.args === 'object' && !Array.isArray(a.args)
             ? (a.args as Record<string, unknown>)
             : {}
-        return (t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown)(args, signal)
+        const out = await (t.run as (x: Record<string, unknown>, s?: AbortSignal) => unknown)(
+          args,
+          signal,
+        )
+        // A listed tool run through here still runs; its answer says how to call it next time.
+        if (!getListed().has(name) || !out || typeof out !== 'object' || Array.isArray(out))
+          return out
+        return {
+          ...out,
+          hydraRun: `${name} is in your tool list: call it by its own name, not through hydra_run.`,
+        }
       },
     },
     {

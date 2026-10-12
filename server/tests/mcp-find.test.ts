@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import { LISTED_TOOLS, TOOLS, UNLISTED_TOOLS, withUnlistedTools } from '../src/mcp'
-import { deskChatPatch, pickDeskChat, rankTools, withDeskChat } from '../src/mcp-find'
+import { deskChatPatch, findTools, pickDeskChat, rankTools, withDeskChat } from '../src/mcp-find'
 
 const tool = (name: string) => {
   const t = TOOLS.find((x) => x.name === name)!
@@ -60,6 +60,16 @@ describe('hydra_find', () => {
     expect(out.listed).toBe(false)
     expect(out.call).toContain('hydra_run')
   })
+  // 2026-10-11: a chat whose list still had climayte_run dispatched through hydra_run instead.
+  test('each row says how to call it: a listed tool by its own name, an unlisted one through hydra_run', async () => {
+    const out = (await tool('hydra_find').run({
+      query: 'climayte run orchestrator switch',
+      limit: 20,
+    })) as { tools: { name: string; call: string }[] }
+    const call = (n: string) => out.tools.find((t) => t.name === n)?.call
+    expect(call('climayte_run')).toBe('climayte_run { ... }')
+    expect(call('orchestrator_switch')).toContain('hydra_run')
+  })
 })
 
 describe('hydra_run', () => {
@@ -72,6 +82,20 @@ describe('hydra_run', () => {
       .run({ tool: 'desk_chat', args: {} })
       .catch((e: Error) => e.message)) as string
     expect(found).toContain('pass cwd')
+  })
+  test('a listed tool still runs through it, and its answer says to call it by its own name', async () => {
+    const fake = [
+      { name: 'fake_listed', description: '', inputSchema: {}, run: async () => ({ ok: 1 }) },
+      { name: 'fake_unlisted', description: '', inputSchema: {}, run: async () => ({ ok: 2 }) },
+    ]
+    const run = findTools(
+      () => fake as never,
+      () => new Set(['fake_listed']),
+    ).find((t) => t.name === 'hydra_run')!.run
+    const listed = (await run({ tool: 'fake_listed' })) as Record<string, unknown>
+    expect(listed.ok).toBe(1)
+    expect(String(listed.hydraRun)).toContain('call it by its own name')
+    expect(await run({ tool: 'fake_unlisted' })).toEqual({ ok: 2 })
   })
   test('an unknown tool points at hydra_find', async () => {
     const msg = await tool('hydra_run')
