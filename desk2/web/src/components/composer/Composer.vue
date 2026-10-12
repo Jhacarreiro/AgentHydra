@@ -84,7 +84,7 @@ import QuestionCard from '@/components/transcript/parts/QuestionCard.vue'
 import PlanCard from '@/components/transcript/parts/PlanCard.vue'
 import ElicitationCard from '@/components/transcript/parts/ElicitationCard.vue'
 import PdfTile from '@/components/media/PdfTile.vue'
-import { pictureTile } from '@/lib/picture-tile'
+import { ATTACHMENT_TILE, attachmentTile } from '@/lib/picture-tile'
 
 const Check = icons.check
 const Plus = icons.add
@@ -868,7 +868,6 @@ function removeImage(id: string) {
   images.value = images.value.filter((i) => i.id !== id)
 }
 
-const PIC_TILE_HEIGHT = 120
 const picSizes = ref<Record<string, { w: number; h: number }>>({})
 function onPicLoad(id: string, e: Event) {
   const el = e.target as HTMLImageElement
@@ -876,8 +875,8 @@ function onPicLoad(id: string, e: Event) {
 }
 function picStyle(id: string) {
   const size = picSizes.value[id]
-  const tile = pictureTile(size?.w ?? 0, size?.h ?? 0, PIC_TILE_HEIGHT)
-  return { width: `${tile.width}px`, height: `${tile.height}px`, objectPosition: tile.objectPosition }
+  const tile = attachmentTile(size?.w ?? 0, size?.h ?? 0)
+  return { width: `${tile.size}px`, height: `${tile.size}px`, objectPosition: tile.objectPosition }
 }
 
 function removeFile(id: string) {
@@ -1285,8 +1284,8 @@ onBeforeUnmount(() => {
         </div>
 
         <!-- Image thumbnails -->
-        <!-- Attachments as the real box shows them (real-running-task-and-attachments.png): 120px tall, 6 apart,
-             12 in from the box edge, r8, a 1px #444 ring; the width follows the picture (lib/picture-tile.ts) -->
+        <!-- Attachments as the real box shows them (real-running-task-and-attachments.png): 120px squares, 6 apart,
+             12 in from the box edge, r8, a 1px #444 ring; the picture fills its square (lib/picture-tile.ts) -->
         <div v-if="images.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="img in images" :key="img.id" class="group relative">
             <Tip :label="img.name" side="top">
@@ -1313,7 +1312,7 @@ onBeforeUnmount(() => {
 
         <div v-if="files.length" class="flex flex-wrap gap-1.5 px-1 pb-2 pt-1">
           <div v-for="f in files" :key="f.id" class="group relative">
-            <PdfTile :source="f.blob" :cache-key="f.id" :height="PIC_TILE_HEIGHT" :name="f.name" :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'">
+            <PdfTile :source="f.blob" :cache-key="f.id" :height="ATTACHMENT_TILE" :name="f.name" :size-label="f.path ? formatBytes(f.bytes) : 'Attaching…'">
               <div class="flex items-center gap-2 rounded-(--radius-8) bg-(--bg-picture) px-2.5 py-2 text-[13px] shadow-(--shadow-picture-light)">
                 <span class="max-w-52 truncate text-(--text)">{{ f.name }}</span>
                 <span class="shrink-0 text-(--text-muted)">{{ f.path ? formatBytes(f.bytes) : 'Attaching…' }}</span>

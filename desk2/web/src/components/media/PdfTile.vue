@@ -1,8 +1,8 @@
 <script setup lang="ts">
-// A PDF as its first page, a portrait tile as tall as the picture tiles beside it, with a PDF badge and the name and
+// A PDF as its first page in a square tile, the page filling it from the top, with a PDF badge and the name and
 // size on a bar at the foot. Until the page is rendered, or when it cannot be (encrypted, broken, too slow), the slot
 // shows: the file chip or card the PDF had before.
-import { computed, ref, watch } from 'vue'
+import { ref, watch } from 'vue'
 import { pdfFirstPageThumb } from '../../lib/pdf-thumb'
 import { renderPdfFirstPage } from '../../lib/pdf-render'
 
@@ -16,7 +16,6 @@ const props = defineProps<{
 }>()
 
 const thumb = ref<string | null>(null)
-const width = computed(() => Math.round(props.height / Math.SQRT2))
 
 let latest = 0
 watch(
@@ -36,7 +35,7 @@ watch(
   <div
     v-if="thumb"
     class="relative shrink-0 overflow-hidden rounded-(--radius-8) bg-(--bg-picture) shadow-(--shadow-picture-light)"
-    :style="{ width: `${width}px`, height: `${height}px` }"
+    :style="{ width: `${height}px`, height: `${height}px` }"
     :data-reveal-path="revealPath"
     data-testid="pdf-tile"
   >

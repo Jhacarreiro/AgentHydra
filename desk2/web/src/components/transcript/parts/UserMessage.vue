@@ -58,7 +58,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import MessageActions from './MessageActions.vue'
-import ImageTiles from './ImageTiles.vue'
+import UserAttachments from './UserAttachments.vue'
 
 const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean; sendFailed?: string }>()
 // Only a message that just arrived animates in; one scrolled back into view does not.
@@ -155,7 +155,7 @@ watch(() => props.text, () => nextTick(fit))
 
 <template>
   <div ref="row" class="group/message-row ms-auto flex flex-col items-end gap-1">
-    <ImageTiles v-if="images?.length" :images="images" align="end" class="max-w-[85%]" :class="queued && 'opacity-60'" />
+    <UserAttachments v-if="images?.length" :images="images" class="max-w-[85%]" :class="queued && 'opacity-60'" />
     <div
       v-if="text || !images?.length"
       class="tx-bubble"
