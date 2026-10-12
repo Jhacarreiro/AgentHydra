@@ -140,12 +140,18 @@ export function judge(seen: Seen, mem: Memory, now: number, enabled: boolean, ma
 function judgeSchedule(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {
   const slots = slotsOf(seen.entry, now)
   const next = slots?.next ?? null
-  if (manual) return { state: 'due', reason: 'run now', start: true, slot: null, skipSlot: null, nextRunAt: next }
   const newest = slots?.newest ?? null
-  if (newest === null || mem.lastSlot === null || newest <= mem.lastSlot) return idle(next ? `next due ${new Date(next).toISOString()}` : 'no slot ahead', next)
-  if (now - newest > MISSED_MS) return { ...idle(`slot ${new Date(newest).toISOString()} was missed by more than 12 hours: skipped`, next, 'idle'), skipSlot: newest }
+  // A run now while a slot is due is that slot's run: the next look must not run the slot again.
+  const due = newest !== null && mem.lastSlot !== null && newest > mem.lastSlot ? newest : null
+  if (manual) return { state: 'due', reason: 'run now', start: true, slot: due, skipSlot: null, nextRunAt: next }
+  const waiting = idle(next ? `next due ${new Date(next).toISOString()}` : 'no slot ahead', next)
+  // No slot remembered (first seen broken, or it had another kind): this look is the baseline, so the next slot runs. Left
+  // null, `newest > null` never holds and the routine read "next due" at every look without ever running.
+  if (mem.lastSlot === null) return { ...waiting, skipSlot: newest ?? now }
+  if (due === null) return waiting
+  if (now - due > MISSED_MS) return { ...idle(`slot ${new Date(due).toISOString()} was missed by more than 12 hours: skipped`, next, 'idle'), skipSlot: due }
   if (!enabled) return { state: 'due', reason: 'due; the routine manager is off, so it waits', start: false, slot: null, skipSlot: null, nextRunAt: next }
-  return { state: 'due', reason: 'due; running now', start: true, slot: newest, skipSlot: null, nextRunAt: next }
+  return { state: 'due', reason: 'due; running now', start: true, slot: due, skipSlot: null, nextRunAt: next }
 }
 
 function judgeStatus(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {

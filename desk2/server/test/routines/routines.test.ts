@@ -147,6 +147,26 @@ describe('judging (routines/decide.ts)', () => {
     expect(again.start).toBe(false)
   })
 
+  // Regression (2026-10-12): memory made while the file was broken (or of another kind) had no slot, and `newest > null`
+  // never held, so the routine read "next due" at every look and never ran. One look later it runs from its next slot.
+  test('a schedule with no slot remembered takes this look as its baseline and runs at its next slot', () => {
+    const mem = memWith({ lastSlot: null })
+    const first = judge(seenOf(sched), mem, NOW, true, false)
+    expect(first.start).toBe(false)
+    if (first.skipSlot !== null) mem.lastSlot = first.skipSlot
+    expect(judge(seenOf(sched), mem, at(2026, 10, 13, 9, 1), true, false)).toMatchObject({ start: true, slot: at(2026, 10, 13, 9, 0) })
+  })
+
+  // Regression (2026-10-12): a run now while a slot was due left the slot due, so the next look ran it a second time.
+  test('a run now while a slot is due is that slot: the next look does not run it again', () => {
+    const slot = at(2026, 10, 12, 9, 0)
+    const mem = memWith({ lastSlot: at(2026, 10, 11, 9, 0) })
+    const manual = judge(seenOf(sched), mem, NOW, false, true)
+    expect(manual).toMatchObject({ start: true, slot })
+    if (manual.slot !== null) mem.lastSlot = manual.slot
+    expect(judge(seenOf(sched), mem, NOW + 5 * MIN, true, false).start).toBe(false)
+  })
+
   test('a slot missed by more than 12 hours is skipped, not run late', () => {
     const slot = at(2026, 10, 11, 9, 0)
     const late = judge(seenOf(sched), memWith({ lastSlot: at(2026, 10, 10, 9, 0) }), at(2026, 10, 11, 9, 0) + MISSED_MS + MIN, true, false)

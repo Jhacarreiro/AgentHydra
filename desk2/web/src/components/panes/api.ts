@@ -74,10 +74,11 @@ export const httpPaneApi: PaneApi = {
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
   routines: () => json('/routines'),
+  // The window's mark: resume, approve, discard and the switch are the owner's, and the server knows the window by it.
   routinesAct: (body) =>
     json('/routines', {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
+      headers: { 'Content-Type': 'application/json', 'X-Desk-Caller': 'window' },
       body: JSON.stringify(body)
     }),
   orchestratorModel: () => json('/orchestrator/model'),

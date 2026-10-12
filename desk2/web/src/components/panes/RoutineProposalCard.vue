@@ -23,7 +23,8 @@ const when = computed(() => {
 })
 const what = computed(() => {
   const p = props.proposal
-  if (p.prompt !== undefined) return `An AI prompt in ${p.cwd ?? 'its folder'}: ${p.prompt.slice(0, 200)}`
+  // The prompt itself is shown whole below: the owner approves what runs, never its first 200 characters.
+  if (p.prompt !== undefined) return `An AI prompt in ${p.cwd ?? 'its folder'}:`
   if (p.run !== undefined) return `A command: ${p.run.join(' ')}`
   if (p.status !== undefined) return `A status command: ${p.status.join(' ')}`
   return 'Windows runs it'
@@ -59,6 +60,10 @@ async function act(body: { approve: string } | { discard: string }) {
     <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-2">Why: {{ proposal.why }}</div>
     <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">When: {{ when }}<template v-if="proposal.until"> · until {{ proposal.until }}</template></div>
     <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">What: {{ what }}</div>
+    <div
+      v-if="proposal.prompt !== undefined"
+      class="mt-1 max-h-48 overflow-y-auto whitespace-pre-wrap wrap-break-word ps-2 text-[12px] leading-4.5 text-text-2 shadow-[inset_2px_0_0_var(--border)]"
+    >{{ proposal.prompt }}</div>
     <div class="mt-0.5 truncate text-[12px] leading-4.5 text-text-muted" :title="proposal.askedBy">asked for by {{ proposal.askedBy }}</div>
     <div v-if="error" role="alert" class="mt-1.5 wrap-break-word text-[12px] leading-4.5 text-danger-text">{{ error }}</div>
   </div>
