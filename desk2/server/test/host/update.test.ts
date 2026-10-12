@@ -158,6 +158,24 @@ test('one restart at a time: once one is accepted, the next ask is refused, the 
   expect(started).toHaveLength(1)
 })
 
+test('a restart whose start threw does not hold off the next ask', async () => {
+  let fail = true
+  const started: string[][] = []
+  const { desk, home } = await boot({
+    stamp: () => ({ newest: 1500, count: 3 }),
+    start: (argv) => {
+      if (fail) throw new Error('spawn failed')
+      started.push(argv)
+    },
+  })
+  pidFile(home, 4242)
+  const ask = () => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'agent-a' } })
+  expect((await ask()).status).toBe(500)
+  fail = false
+  expect((await ask()).status).toBe(202)
+  expect(started).toHaveLength(1)
+})
+
 test('an agent or script may not stop the server: shutdown answers 409 and stops nothing', async () => {
   const home = temp('desk-update-home-')
   const engine = temp('desk-update-engine-')

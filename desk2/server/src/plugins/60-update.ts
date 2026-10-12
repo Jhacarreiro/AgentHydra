@@ -124,12 +124,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       logRestartAsk(ctx.home, `restart asked: ${who} -> refused (nothing to update)`)
       return c.json({ error: NOTHING_TO_UPDATE }, 409)
     }
-    restartAcceptedAt = Date.now()
     logRestartAsk(ctx.home, `restart asked: ${who} -> accepted`)
     // The script's output goes to its own file: the server appends its ask lines to restart.log while the script runs.
     const runLog = join(ctx.home, 'logs', 'restart-run.log')
     const quote = (s: string) => `'${s.replace(/'/g, "''")}'`
     deps.start(['powershell', '-NoProfile', '-ExecutionPolicy', 'Bypass', '-Command', `& ${quote(RESTART_SCRIPT)} *>&1 | Out-File -Append -Encoding utf8 -FilePath ${quote(runLog)}`])
+    // Only a restart that started holds off the next ask: a start that threw leaves the route open.
+    restartAcceptedAt = Date.now()
     return c.json({ ok: true }, 202)
   })
 }
