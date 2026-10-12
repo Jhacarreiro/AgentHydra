@@ -356,7 +356,7 @@ export function withNamedFiles<T extends UserItem>(item: T, media: Pick<MediaCac
   const images: ImageRef[] = [...(item.images ?? [])]
   const text = item.text.replace(NAMED_LINE, (line, kind: string, path: string) => {
     const ref = media.fileRef(path.trim())
-    if (!ref || (kind === 'Image' && !ref.url)) return line
+    if (!ref || (kind === 'Image' && (!ref.url || !/^(image|video)\//.test(ref.mediaType)))) return line
     const key = ref.url ?? ref.path
     if (!images.some((i) => (i.url ?? i.path) === key)) images.push(ref)
     return ''

@@ -371,7 +371,7 @@ describe('notes and picture lines', () => {
     writeFileSync(pdf, '%PDF-1.4 test')
     const turn = userTurn(user(`read this\n[File: source: ${pdf}]\n[Image: source: ${pdf}]`), media) as Extract<TranscriptItem, { kind: 'user' }>
     expect(turn.text).toBe(`read this\n[Image: source: ${pdf}]`)
-    expect(turn.images).toEqual([{ mediaType: 'application/pdf', name: 'spec.pdf', bytes: 13, path: pdf }])
+    expect(turn.images).toEqual([{ mediaType: 'application/pdf', name: 'spec.pdf', bytes: 13, path: pdf, url: expect.stringMatching(/^\/api\/media\/[0-9a-f]+\.pdf$/) }])
   })
 
   test('history and the tail show a ping as a note and the person\'s message as theirs', () => {
