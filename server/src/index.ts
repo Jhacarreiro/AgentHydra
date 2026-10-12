@@ -868,6 +868,7 @@ await import('./routes/climayte')
 await import('./routes/hswarm')
 await import('./routes/routing')
 await import('./routes/dashboards')
+await import('./routes/fourman')
 
 // --- full-shutdown sentinel (web-UI "Shut down") -----------------------------
 // A marker file the PowerShell tray host polls (misc/Tray-Host.ps1 watch timer) so a user "Shut
