@@ -19,7 +19,7 @@ afterAll(() => {
 })
 
 const HTML = Buffer.from('<!doctype html><html><body><img src="https://example.com/logo.png"></body></html>')
-const HTML_ID_RE = /^\/api\/media\/[0-9a-f]{64}\.html$/
+const HTML_ID_RE = /^\/api\/media\/[0-9a-f]{64}\.html\?v=2$/
 
 describe('html previews', () => {
   test('a local .html or .htm file is cached as text/html, served by its content, and capped', () => {
@@ -46,7 +46,7 @@ describe('html previews', () => {
     writeFileSync(file, HTML)
     const media = createMediaCache(join(temp('reply-media'), 'media'))
     const out = rewriteLocalImages(`![campaign](${file.replaceAll('\\', '/')})`, new Set(), media)
-    expect(out).toMatch(/^!\[campaign\]\(\/api\/media\/[0-9a-f]{64}\.html\)$/)
+    expect(out).toMatch(/^!\[campaign\]\(\/api\/media\/[0-9a-f]{64}\.html\?v=2\)$/)
   })
 
   test('GET serves html as text/html with a sandbox CSP that still lets remote images load', async () => {
@@ -66,5 +66,26 @@ describe('html previews', () => {
     expect(csp).not.toContain('allow-same-origin')
     expect(csp).toMatch(/img-src[^;]*https:/)
     expect(new TextDecoder().decode(await res.arrayBuffer())).toContain('https://example.com/logo.png')
+  })
+
+  test('GET puts the preview scrollbar after the doctype (never before it: quirks mode) and is asked again each time', async () => {
+    const home = temp('scroll')
+    const app = new Hono()
+    plugin(app, { home } as ServerContext)
+    const root = temp('scroll-file')
+    const pages = [
+      ['<!doctype html><html><body>a</body></html>', '<!doctype html><style>'],
+      ['<!-- sent by example.test -->\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"><html><body>b</body></html>', '<!-- sent by example.test -->\n<!DOCTYPE html PUBLIC "-//W3C//DTD XHTML 1.0 Strict//EN"><style>'],
+      ['<table><tr><td>c</td></tr></table>', '<style>'],
+    ] as const
+    for (const [i, [page, start]] of pages.entries()) {
+      writeFileSync(join(root, `p${i}.html`), page)
+      const res = await app.request(mediaCache(home)!.preview(join(root, `p${i}.html`))!.url!)
+      const body = await res.text()
+      expect(body.startsWith(start)).toBe(true)
+      expect(body).toContain('::-webkit-scrollbar-thumb')
+      expect(body.endsWith(page.slice(start.length - '<style>'.length))).toBe(true)
+      expect(res.headers.get('cache-control')).toBe('no-cache')
+    }
   })
 })

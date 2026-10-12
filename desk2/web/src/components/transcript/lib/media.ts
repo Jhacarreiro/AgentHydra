@@ -1,5 +1,5 @@
 // Pictures and files in the transcript: where an ImageRef loads from, what its file card says, the
-// one lightbox every picture opens in. Pure apart from the shared lightbox ref.
+// one lightbox every picture opens in, the html preview's buttons. Pure apart from the shared lightbox ref and those buttons.
 import { ref } from 'vue'
 import type { ImageRef } from '@shared/protocol'
 
@@ -97,4 +97,27 @@ export function tileKey(e: { key: string; type: string; preventDefault(): void }
   if (e.key !== ' ' && e.key !== 'Spacebar') return
   e.preventDefault()
   if (e.type === 'keydown') open()
+}
+
+/**
+ * A click in an html preview's bar (lib/markdown.ts htmlPreviewMarkup): Desktop or Phone sets the frame's width, Expand
+ * makes it taller and back. The card keeps the state as its own classes. True when the click was one of its buttons.
+ */
+export function htmlPreviewClick(target: Element): boolean {
+  const card = target.closest('.html-preview')
+  if (!card) return false
+  const view = target.closest<HTMLElement>('[data-html-view]')
+  if (view) {
+    const phone = view.dataset.htmlView === 'phone'
+    card.classList.toggle('is-phone', phone)
+    for (const b of card.querySelectorAll<HTMLElement>('[data-html-view]')) b.setAttribute('aria-pressed', String(b.dataset.htmlView === (phone ? 'phone' : 'desktop')))
+    return true
+  }
+  const expand = target.closest<HTMLElement>('[data-html-expand]')
+  if (!expand) return false
+  const big = card.classList.toggle('is-big')
+  expand.setAttribute('aria-expanded', String(big))
+  expand.setAttribute('aria-label', big ? 'Smaller' : 'Expand')
+  expand.title = big ? 'Smaller' : 'Expand'
+  return true
 }

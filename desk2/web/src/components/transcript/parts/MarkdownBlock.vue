@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { markdown, shikiReady } from '../lib/highlight'
-import { openLightbox, tileKey } from '../lib/media'
+import { htmlPreviewClick, openLightbox, tileKey } from '../lib/media'
 
 const props = defineProps<{ text: string; streaming?: boolean }>()
 
@@ -72,17 +72,9 @@ function onClick(e: MouseEvent) {
     more.textContent = open ? 'Show less' : 'Show more'
     return
   }
-  const phone = target.closest<HTMLElement>('[data-html-phone]')
-  if (phone) return togglePreview(phone, 'is-phone', 'aria-pressed')
-  const expand = target.closest<HTMLElement>('[data-html-expand]')
-  if (expand) return togglePreview(expand, 'is-big', 'aria-expanded')
+  if (htmlPreviewClick(target)) return
   const zoom = target.closest<HTMLElement>('[data-zoom]')
   if (zoom) openZoom(zoom)
-}
-function togglePreview(btn: HTMLElement, cls: string, attr: string) {
-  const on = btn.closest('.html-preview')?.classList.toggle(cls) ?? false
-  btn.setAttribute(attr, String(on))
-  if (attr === 'aria-expanded') btn.textContent = on ? 'Smaller' : 'Expand'
 }
 // A picture opens the viewer with the block's other pictures, so Left/Right step through them.
 function openZoom(zoom: HTMLElement) {

@@ -108,6 +108,11 @@ export function sniffVideo(b: Uint8Array): 'mp4' | 'webm' | null {
   return null
 }
 
+/** On every html preview's url. The window kept a page a year under its plain url (cache-control immutable, before
+ *  plugins/35-media.ts drew the page's scrollbar), so a page served the new way is asked for under a new one. Minted
+ *  here, by the server that serves it that way: a window built ahead of the server's restart never asks the old one. */
+const PREVIEW_REV = '?v=2'
+
 export interface MediaCache {
   dir: string
   /** Stores picture bytes; null when they are not a picture or are over the cap. */
@@ -233,7 +238,7 @@ export function createMediaCache(dir: string): MediaCache {
           writeFlushed(tmp, bytes)
           renameOver(tmp, file)
         }
-        return { mediaType: 'text/html', url: MEDIA_ROUTE + id, bytes: bytes.length, name: basename(path) }
+        return { mediaType: 'text/html', url: MEDIA_ROUTE + id + PREVIEW_REV, bytes: bytes.length, name: basename(path) }
       } catch {
         return null
       }

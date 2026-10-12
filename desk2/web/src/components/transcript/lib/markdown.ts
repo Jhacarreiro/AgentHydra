@@ -12,9 +12,10 @@ export function escapeHtml(s: string): string {
 /** A code block longer than this many lines is capped with "Show more", like a long user message. */
 export const CODE_CAP_LINES = 24
 
-/** Pictures and videos the server serves from its cache; the only image targets the window loads. */
+/** Pictures, videos and html pages the server serves from its cache (a page's url carries its serving's ?v=); the only
+ *  image targets the window loads. */
 export const MEDIA_PREFIX = '/api/media/'
-const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm|html)$/
+const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm|html)(?:\?v=\d+)?$/
 
 // lucide Copy, Check and File (stroke 1.5), inline because markdown-it emits a string, not components.
 const svg = (body: string, size = 14) =>
@@ -22,6 +23,28 @@ const svg = (body: string, size = 14) =>
 const COPY_ICON = svg('<rect width="14" height="14" x="8" y="8" rx="2" ry="2"/><path d="M4 16c-1.1 0-2-.9-2-2V4c0-1.1.9-2 2-2h10c1.1 0 2 .9 2 2"/>')
 const CHECK_ICON = svg('<path d="M20 6 9 17l-5-5"/>')
 const FILE_ICON = svg('<path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/>')
+// lucide FileCode, Monitor, Smartphone, Maximize2 and Minimize2, for the html preview's bar.
+const PAGE_ICON = svg('<path d="M10 12.5 8 15l2 2.5"/><path d="m14 12.5 2 2.5-2 2.5"/><path d="M14 2v4a2 2 0 0 0 2 2h4"/><path d="M15 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V7Z"/>')
+const DESKTOP_ICON = svg('<rect width="20" height="14" x="2" y="3" rx="2"/><path d="M8 21h8"/><path d="M12 17v4"/>')
+const PHONE_ICON = svg('<rect width="14" height="20" x="5" y="2" rx="2" ry="2"/><path d="M12 18h.01"/>')
+const GROW_ICON = svg('<path d="M15 3h6v6"/><path d="M9 21H3v-6"/><path d="m21 3-7 7"/><path d="m3 21 7-7"/>')
+const SHRINK_ICON = svg('<path d="M4 14h6v6"/><path d="M20 10h-6V4"/><path d="m14 10 7-7"/><path d="m3 21 7-7"/>')
+
+/** An html file's live preview card: its name, Desktop and Phone width, Expand, and the page in a sandboxed frame (no
+ *  script, no forms, no popups). Spans, so it can sit in a paragraph; MarkdownBlock and HtmlPreview both draw it, and
+ *  lib/media.ts htmlPreviewClick works its buttons. */
+export function htmlPreviewMarkup(src: string, name: string): string {
+  const label = escapeHtml(name || 'Preview')
+  const view = (v: string, on: boolean, tip: string, icon: string) =>
+    `<button type="button" class="html-preview-btn" data-html-view="${v}" aria-pressed="${on}" aria-label="${tip}" title="${tip}">${icon}</button>`
+  return (
+    `<span class="html-preview" data-html-preview><span class="html-preview-bar">${PAGE_ICON}<span class="html-preview-name" title="${label}">${label}</span>` +
+    `<span class="html-preview-views" role="group" aria-label="Width">${view('desktop', true, 'Desktop width', DESKTOP_ICON)}${view('phone', false, 'Phone width', PHONE_ICON)}</span>` +
+    `<button type="button" class="html-preview-btn" data-html-expand aria-expanded="false" aria-label="Expand" title="Expand">` +
+    `<span class="html-preview-grow">${GROW_ICON}</span><span class="html-preview-shrink">${SHRINK_ICON}</span></button></span>` +
+    `<span class="html-preview-stage"><iframe class="html-preview-frame" src="${escapeHtml(src)}" sandbox="" title="${label}" loading="lazy"></iframe></span></span>`
+  )
+}
 
 /** Marks each line of a diff block (+ added, - removed, @@ hunk) on shiki's or the plain block's line spans. */
 export function markDiffLines(html: string, code: string): string {
@@ -90,10 +113,7 @@ export function createMarkdown(getHighlight: () => Highlight | null = () => null
     const src = t.attrGet('src') ?? ''
     const alt = t.content || fileName(src)
     const kind = MEDIA_ID.exec(src)?.[1]
-    if (kind === 'html') {
-      const label = escapeHtml(alt || 'Preview')
-      return `<span class="html-preview" data-html-preview><span class="html-preview-bar"><span class="html-preview-name">${label}</span><button type="button" class="html-preview-btn" data-html-phone aria-pressed="false">Phone</button><button type="button" class="html-preview-btn" data-html-expand aria-expanded="false">Expand</button></span><iframe class="html-preview-frame" src="${escapeHtml(src)}" sandbox="" title="${label}" loading="lazy"></iframe></span>`
-    }
+    if (kind === 'html') return htmlPreviewMarkup(src, alt)
     if (kind === 'mp4' || kind === 'webm') {
       return `<video class="md-video" src="${escapeHtml(src)}" aria-label="${escapeHtml(alt)}" title="${escapeHtml(alt)}" controls autoplay muted loop playsinline preload="metadata"></video>`
     }
