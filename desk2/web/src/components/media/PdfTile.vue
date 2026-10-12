@@ -12,6 +12,7 @@ const props = defineProps<{
   height: number
   name: string
   sizeLabel: string
+  revealPath?: string
 }>()
 
 const thumb = ref<string | null>(null)
@@ -36,6 +37,7 @@ watch(
     v-if="thumb"
     class="relative shrink-0 overflow-hidden rounded-(--radius-8) bg-(--bg-picture) shadow-(--shadow-picture-light)"
     :style="{ width: `${width}px`, height: `${height}px` }"
+    :data-reveal-path="revealPath"
     data-testid="pdf-tile"
   >
     <img :src="thumb" alt="" draggable="false" class="block size-full object-cover object-top" />

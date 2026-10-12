@@ -18,13 +18,15 @@ export const MAX_MEDIA_BYTES = 10 * 1024 * 1024
 export const MAX_GIF_BYTES = 30 * 1024 * 1024
 /** Videos (screen recordings, test runs) are copied in, never read whole: they may be far bigger. */
 export const MAX_VIDEO_BYTES = 200 * 1024 * 1024
+/** A PDF is copied in like a video, so a transcript shows its first page; a bigger one is a file card. */
+export const MAX_PDF_BYTES = 50 * 1024 * 1024
 /** An html preview is a page a reply shows live: capped like a picture, read whole. */
 export const MAX_HTML_BYTES = 5 * 1024 * 1024
 /** How many picture files fileRef remembers. */
 const KNOWN_MAX = 2000
 export const MEDIA_ROUTE = '/api/media/'
 
-type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm' | 'html'
+type Ext = 'png' | 'jpg' | 'gif' | 'webp' | 'mp4' | 'webm' | 'html' | 'pdf'
 
 const CONTENT_TYPE: Record<Ext, string> = {
   png: 'image/png',
@@ -34,8 +36,9 @@ const CONTENT_TYPE: Record<Ext, string> = {
   mp4: 'video/mp4',
   webm: 'video/webm',
   html: 'text/html; charset=utf-8',
+  pdf: 'application/pdf',
 }
-const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp|mp4|webm|html)$/
+const ID = /^([0-9a-f]{64})\.(png|jpg|gif|webp|mp4|webm|html|pdf)$/
 /** An html file a reply shows as a preview (.htm too). */
 export const HTML_FILE = /\.html?$/i
 
@@ -43,6 +46,8 @@ export const HTML_FILE = /\.html?$/i
 export const VIDEO = /\.(mp4|m4v|mov|webm)$/i
 /** File extensions read into the cache; svg and everything else only ever get a file card. */
 export const RENDERABLE = /\.(png|jpe?g|gif|webp|mp4|m4v|mov|webm)$/i
+/** A PDF copied into the cache the way a video is, so a transcript shows its first page. */
+export const PDF = /\.pdf$/i
 
 /** What a file card says a non-picture is (name and size come from the file). */
 const CARD_TYPE: Record<string, string> = {
@@ -71,6 +76,10 @@ const CARD_TYPE: Record<string, string> = {
   tar: 'application/x-tar',
   gz: 'application/gzip',
   rar: 'application/vnd.rar',
+}
+
+export function sniffPdf(b: Uint8Array): boolean {
+  return String.fromCharCode(...b.subarray(0, 5)) === '%PDF-'
 }
 
 /** The media type a file card gives a file by its name: the known type, else an image type for a picture, else octet-stream. */
@@ -135,12 +144,7 @@ export function createMediaCache(dir: string): MediaCache {
     return ref
   }
 
-  /**
-   * A video file, copied in by the filesystem. Its id hashes where it is and which version (path, size,
-   * mtime) instead of every byte, so a long recording costs one stat and 64 bytes read each time a
-   * transcript names it; a changed file is a new version and a new copy, so an id still means one set of bytes.
-   */
-  const putVideo = (path: string, size: number, mtimeMs: number, name: string): ImageRef | null => {
+  const readHead = (path: string): Uint8Array => {
     const head = new Uint8Array(64)
     const fd = openSync(path, 'r')
     try {
@@ -148,10 +152,17 @@ export function createMediaCache(dir: string): MediaCache {
     } finally {
       closeSync(fd)
     }
-    const ext = sniffVideo(head)
-    if (!ext) return null
+    return head
+  }
+
+  /**
+   * A video or PDF file, copied in by the filesystem. Its id hashes where it is and which version (path, size,
+   * mtime) instead of every byte, so a long recording costs one stat and 64 bytes read each time a
+   * transcript names it; a changed file is a new version and a new copy, so an id still means one set of bytes.
+   */
+  const copyIn = (path: string, size: number, mtimeMs: number, name: string, kind: string, ext: Ext): ImageRef | null => {
     const where = process.platform === 'win32' ? resolve(path).toLowerCase() : resolve(path)
-    const hash = createHash('sha256').update(`video|${where}|${size}|${mtimeMs}`).digest('hex')
+    const hash = createHash('sha256').update(`${kind}|${where}|${size}|${mtimeMs}`).digest('hex')
     const id = `${hash}.${ext}`
     const file = join(dir, id)
     if (!existsSync(file)) {
@@ -168,6 +179,14 @@ export function createMediaCache(dir: string): MediaCache {
     }
     return { mediaType: CONTENT_TYPE[ext], url: MEDIA_ROUTE + id, bytes: size, name }
   }
+
+  const putVideo = (path: string, size: number, mtimeMs: number, name: string): ImageRef | null => {
+    const ext = sniffVideo(readHead(path))
+    return ext ? copyIn(path, size, mtimeMs, name, 'video', ext) : null
+  }
+
+  const putPdf = (path: string, size: number, mtimeMs: number, name: string): ImageRef | null =>
+    sniffPdf(readHead(path)) ? copyIn(path, size, mtimeMs, name, 'pdf', 'pdf') : null
 
   /** Where each cached id came from, so the window can show the original in Explorer; lost on a restart until a chat is shown again. */
   const sources = new Map<string, string>()
@@ -240,14 +259,15 @@ export function createMediaCache(dir: string): MediaCache {
     }
     const name = basename(path)
     let ref: ImageRef | null = null
-    if (VIDEO.test(name)) ref = size && size <= MAX_VIDEO_BYTES ? videoRef(path, size, mtimeMs, name) : null
+    if (VIDEO.test(name)) ref = size && size <= MAX_VIDEO_BYTES ? copiedRef(() => putVideo(path, size, mtimeMs, name)) : null
+    else if (PDF.test(name)) ref = size && size <= MAX_PDF_BYTES ? copiedRef(() => putPdf(path, size, mtimeMs, name)) : null
     else if (RENDERABLE.test(name) && size <= MAX_GIF_BYTES) ref = imageRef(path, size, mtimeMs, name)
     return ref ?? cardRef(name, size)
   }
 
-  function videoRef(path: string, size: number, mtimeMs: number, name: string): ImageRef | null {
+  function copiedRef(copy: () => ImageRef | null): ImageRef | null {
     try {
-      return putVideo(path, size, mtimeMs, name) || null
+      return copy()
     } catch {
       return null // unreadable: a card like any other file
     }

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { TranscriptItem } from '@shared/protocol'
 import { groupRows, tasksLine, toolSummary, workflowDots, workflowElapsed, type TaskItem, type ToolItem } from '../../src/components/transcript/lib/groups'
 import { CODE_CAP_LINES, createMarkdown, markDiffLines, renderMarkdown } from '../../src/components/transcript/lib/markdown'
-import { fileBadge, formatSize, imageSrc, videoSrc } from '../../src/components/transcript/lib/media'
+import { fileBadge, formatSize, imageSrc, pdfSrc, videoSrc } from '../../src/components/transcript/lib/media'
 
 const tool = (id: string, name = 'Bash'): ToolItem => ({ id, ts: 1, kind: 'tool_use', name, input: {}, status: 'done', startedAt: 1 })
 const user = (id: string): TranscriptItem => ({ id, ts: 1, kind: 'user', text: 'hi' })
@@ -81,6 +81,13 @@ describe('pictures and file cards', () => {
     expect(imageSrc({ mediaType: 'image/svg+xml', dataBase64: 'AAAA' })).toBeNull()
     expect(imageSrc({ mediaType: 'image/png', url: 'https://evil.example/x.png' })).toBeNull()
     expect(imageSrc({ mediaType: 'text/markdown', name: 'a.md', bytes: 3 })).toBeNull()
+  })
+
+  test('a PDF is never a picture: imageSrc ignores it and pdfSrc gives its cache url', () => {
+    const pdf = { mediaType: 'application/pdf', name: 'deck.pdf', bytes: 9, url: `/api/media/${'d'.repeat(64)}.pdf` }
+    expect(imageSrc(pdf)).toBeNull()
+    expect(pdfSrc(pdf)).toBe(pdf.url)
+    expect(pdfSrc({ mediaType: 'application/pdf', name: 'card.pdf', bytes: 9 })).toBeNull()
   })
 
   test('the card badge and size read like the real one', () => {

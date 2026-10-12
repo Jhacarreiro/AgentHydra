@@ -1,5 +1,5 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, truncateSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -7,7 +7,7 @@ import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TranscriptItem } from '@shared/protocol'
 import type { ServerContext } from '../../src/context'
 import { createNormalizer, historyToItems } from '../../src/engine/normalize'
-import { createMediaCache, MAX_MEDIA_BYTES, MAX_VIDEO_BYTES, mediaCache, sniffVideo, toStoredImage } from '../../src/media/cache'
+import { createMediaCache, MAX_MEDIA_BYTES, MAX_PDF_BYTES, MAX_VIDEO_BYTES, mediaCache, sniffVideo, toStoredImage } from '../../src/media/cache'
 import plugin, { byteRange } from '../../src/plugins/35-media'
 
 const temps: string[] = []
@@ -31,6 +31,9 @@ const MP4 = Buffer.concat([box('isom'), Buffer.alloc(4000, 7)])
 const MOV = Buffer.concat([box('qt  '), Buffer.alloc(2000, 3)])
 const WEBM = Buffer.concat([Buffer.from([0x1a, 0x45, 0xdf, 0xa3]), Buffer.alloc(3000, 5)])
 const VIDEO_RE = (ext: string) => new RegExp(`^/api/media/[0-9a-f]{64}\\.${ext}$`)
+
+const PDF = Buffer.concat([Buffer.from('%PDF-1.4\n'), Buffer.alloc(300, 0x20), Buffer.from('%%EOF\n')])
+const PDF_RE = /^\/api\/media\/[0-9a-f]{64}\.pdf$/
 
 type Tool = Extract<TranscriptItem, { kind: 'tool_use' }>
 type User = Extract<TranscriptItem, { kind: 'user' }>
@@ -153,6 +156,33 @@ describe('videos', () => {
     expect(readdirSync(dir)).toHaveLength(2)
   })
 
+  test('a PDF a transcript names is copied in like a video and served by id; a fake one is a card', () => {
+    const root = temp('pdf')
+    const dir = join(root, 'media')
+    const c = createMediaCache(dir)
+    writeFileSync(join(root, 'report.pdf'), PDF)
+    writeFileSync(join(root, 'fake.pdf'), 'not a pdf at all')
+    const pdf = c.fileRef(join(root, 'report.pdf'))!
+    expect(pdf).toMatchObject({ mediaType: 'application/pdf', name: 'report.pdf', bytes: PDF.length })
+    expect(pdf.url).toMatch(PDF_RE)
+    expect(c.lookup(pdf.url!.slice('/api/media/'.length))).toMatchObject({ contentType: 'application/pdf' })
+    expect(c.fileRef(join(root, 'fake.pdf'))).toMatchObject({ mediaType: 'application/pdf', name: 'fake.pdf', bytes: 16 })
+    expect(c.fileRef(join(root, 'fake.pdf'))!.url).toBeUndefined()
+    expect(readdirSync(dir)).toHaveLength(1)
+  })
+
+  test('a PDF over the cap is a card and is never copied', () => {
+    const root = temp('pdf-big')
+    const dir = join(root, 'media')
+    const p = join(root, 'huge.pdf')
+    writeFileSync(p, PDF)
+    truncateSync(p, MAX_PDF_BYTES + 1)
+    const ref = createMediaCache(dir).fileRef(p)
+    expect(ref).toMatchObject({ mediaType: 'application/pdf', bytes: MAX_PDF_BYTES + 1 })
+    expect(ref!.url).toBeUndefined()
+    expect(existsSync(dir)).toBe(false)
+  })
+
   test('a video over the cap stays a card and is never copied', () => {
     const root = temp('video-big')
     const dir = join(root, 'media')
@@ -176,6 +206,22 @@ describe('byteRange', () => {
     expect(byteRange('bytes=20-10', 100)).toBe('unsatisfiable')
     expect(byteRange('bytes=0-1,5-6', 100)).toBeNull()
     expect(byteRange('items=0-1', 100)).toBeNull()
+  })
+})
+
+describe('GET /api/media/:id for a PDF', () => {
+  test('serves the copied PDF inline as application/pdf', async () => {
+    const home = temp('route-pdf')
+    const root = temp('route-pdf-src')
+    const app = new Hono()
+    plugin(app, { home } as ServerContext)
+    writeFileSync(join(root, 'deck.pdf'), PDF)
+    const url = mediaCache(home)!.fileRef(join(root, 'deck.pdf'))!.url!
+    const res = await app.request(url)
+    expect(res.status).toBe(200)
+    expect(res.headers.get('content-type')).toBe('application/pdf')
+    expect(res.headers.get('content-disposition')).toBeNull()
+    expect(new Uint8Array(await res.arrayBuffer())).toEqual(new Uint8Array(PDF))
   })
 })
 

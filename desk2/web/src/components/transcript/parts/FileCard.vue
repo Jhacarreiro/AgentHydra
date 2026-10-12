@@ -4,12 +4,12 @@
 // secondary) at the bottom. A picture opens in the lightbox. A PDF shows its first page instead, once rendered.
 import { computed } from 'vue'
 import type { ImageRef } from '@shared/protocol'
-import { fileBadge, formatSize, imageSrc, openLightbox } from '../lib/media'
+import { fileBadge, formatSize, imageSrc, openLightbox, pdfSrc } from '../lib/media'
 import PdfTile from '../../media/PdfTile.vue'
 
 const props = defineProps<{ file: ImageRef }>()
 
-const pdfUrl = computed(() => (props.file.mediaType === 'application/pdf' && props.file.url?.startsWith('/api/media/') ? props.file.url : null))
+const pdfUrl = computed(() => pdfSrc(props.file))
 
 function open() {
   const src = imageSrc(props.file)
@@ -25,6 +25,7 @@ function open() {
     :height="120"
     :name="file.name || 'file'"
     :size-label="formatSize(file.bytes)"
+    :reveal-path="file.path"
   >
     <div class="tx-file-card" :data-reveal-path="file.path">
       <span class="tx-file-badge">{{ fileBadge(file) }}</span>
