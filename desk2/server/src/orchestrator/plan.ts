@@ -9,6 +9,31 @@ import { ORCHESTRATOR_FROM, ORCHESTRATOR_MOVES, type OrchestratorRow } from '@sh
 /** A person wrote in the chat this recently: it is theirs, and the orchestrator leaves it alone. */
 export const PERSON_QUIET_MS = 10 * 60_000
 
+/** An idle chat whose last reply says it waits on work is nudged once nothing has moved this long (one constant). */
+export const WAIT_MS = 20 * 60_000
+/** Only chats active in this window are looked at for waiting. */
+export const WAIT_ACTIVE_MS = 24 * 3_600_000
+
+/** The words of a reply that hands the next step to work still running: "I'll pick it up when it finishes", "waiting on". */
+const WAITS_ON =
+  /\b(?:waiting (?:on|for)|wait(?:ing)? until|will be notified|i['’]ll (?:pick|check|come back|resume|continue|report)[^.\n]{0,80}(?:when|once|after)|(?:when|once) (?:it|they|the (?:job|jobs|worker|workers|task|tasks)) (?:finish|finishes|complete|completes|is done|are done)|background (?:jobs?|tasks?)|hswarm job|climayte worker)/i
+const HSWARM_JOB = /\b\d{8}-\d{6}-[0-9a-f]{4}\b/g
+const WORKER_ID = /\bw-[0-9a-f]{8}\b/g
+
+/** What a reply waits on, or null when it does not wait: HSwarm job ids and CliMayte worker ids it names, else the
+ *  sentence that says so. Only the last 1500 characters are read. */
+export function waitedOn(text: string): string[] | null {
+  const tail = text.slice(-1500)
+  const m = WAITS_ON.exec(tail)
+  if (!m) return null
+  const ids = [...new Set([...(tail.match(HSWARM_JOB) ?? []), ...(tail.match(WORKER_ID) ?? [])])]
+  if (ids.length) return ids
+  const start = Math.max(tail.lastIndexOf('\n', m.index), tail.lastIndexOf('. ', m.index) + 1, 0)
+  const end = tail.indexOf('\n', m.index)
+  return [tail.slice(start, end < 0 ? undefined : end).trim().slice(0, 200)]
+}
+
+
 const NEED = /🔴\s*NEED:\s*/
 /** A reply that hands the next step back: "Want me to ...?", "Should I ...?". Only its last 600 characters are read. */
 const ASKS_BACK = /\b(want me to|shall I|should I|do you want me to|would you like me to)\b[^?]{0,300}\?/i
@@ -129,6 +154,16 @@ function limitMove(chat: Subject, now: number): Move {
   return { move: 'resume-after-limit', reason: `its account hit the usage limit; the babysitter continues it ${when}` }
 }
 
+/** An idle chat's last reply waits on work, nobody has written since, and it has sat WAIT_MS: the waiting move. */
+function waitingMove(all: readonly TranscriptItem[], reply: Extract<TranscriptItem, { kind: 'assistant_text' }>, now: number): (Move & { waitingOn: string[] }) | null {
+  const at = all.lastIndexOf(reply)
+  if (all.slice(at + 1).some((i) => i.kind === 'user' || i.kind === 'note')) return null
+  const on = waitedOn(reply.text)
+  const idle = now - reply.ts
+  if (!on || idle < WAIT_MS) return null
+  return { move: 'waiting', reason: `its last reply, ${Math.round(idle / 60_000)} min ago, waits on ${on.join(', ')}`, waitingOn: on }
+}
+
 /** The move for one chat. `items` is its transcript, or null when it was not read (a working chat needs none). */
 export function classify(chat: Subject, items: readonly TranscriptItem[] | null, now: number): OrchestratorRow {
   const row = { id: chat.id, title: chat.title, cwd: chat.cwd, account: chat.account, source: chat.source, status: chat.status, updatedAt: chat.updatedAt }
@@ -148,6 +183,8 @@ export function classify(chat: Subject, items: readonly TranscriptItem[] | null,
   const asked = reply && askedIn(reply.text)
   if (asked) return { ...row, move: 'answer-need', reason: NEED.test(reply.text) ? 'the last reply ended on a NEED line' : 'the last reply asks what to do next', ...asked }
   if (chat.status === 'stopped') return { ...row, move: 'leave', reason: 'a person stopped it' }
+  const waiting = reply && chat.status === 'idle' && now - chat.updatedAt < WAIT_ACTIVE_MS ? waitingMove(all, reply, now) : null
+  if (waiting) return { ...row, ...waiting }
   return { ...row, move: 'done', reason: 'finished; nothing asked' }
 }
 

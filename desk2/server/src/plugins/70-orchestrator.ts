@@ -12,8 +12,11 @@
 // no act. Own page only, and GET /api/orchestrator/model says which model the judge asks.
 // README "What Desk 2 adds", the orchestrator.
 
+import { readFileSync } from 'node:fs'
+import { homedir } from 'node:os'
+import { join } from 'node:path'
 import type { Hono } from 'hono'
-import type { AccountInfo, ChatSummary, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, CliMayteWorker, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
 import type { ServerContext } from '../context'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
@@ -36,7 +39,7 @@ import {
   type JudgeResult
 } from '../orchestrator/judge'
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
-import { classify, fromChat, fromExternal, rank } from '../orchestrator/plan'
+import { classify, fromChat, fromExternal, rank, WAIT_MS } from '../orchestrator/plan'
 import { notOwnPage } from '../own-page'
 
 const WHAT = "the orchestrator's plan"
@@ -55,6 +58,8 @@ const TICK_MS = 60_000
 /** Acts kept for the page. */
 const ACTS_KEPT = 50
 const HOUR_MS = 3_600_000
+/** A job or worker still running this long after a chat began waiting on it is overdue, and its chat is judged anyway. */
+const WAIT_OVERDUE_MS = 6 * HOUR_MS
 /** Judgments kept for the page. */
 const JUDGED_KEPT_MS = 24 * HOUR_MS
 /** A judge error that is the account's login being refused, worth one try on another account. */
@@ -94,7 +99,7 @@ interface Candidate {
   title: string
   source: OrchestratorRow['source']
   status: string
-  kind: 'error' | 'running'
+  kind: 'error' | 'running' | 'waiting'
   items: readonly TranscriptItem[]
   /** The rules' findings, in words, for the judge. */
   signals: string[]
@@ -102,7 +107,21 @@ interface Candidate {
   stalled: boolean
   /** An error chat: how many continues it has had once this one is sent (act.ts). */
   count: number
+  /** A waiting chat: what it waits on (the key of its one nudge), and what could be checked about it. */
+  waitingOn?: string[]
 }
+
+/** What the orchestrator found out about one thing a chat waits on, without a model. */
+interface Fact {
+  /** The line for the judge. */
+  text: string
+  /** Still running and not yet overdue: its chat is left alone. */
+  running: boolean
+}
+
+const HSWARM_JOB = /^\d{8}-\d{6}-[0-9a-f]{4}$/
+const WORKER_ID = /^w-[0-9a-f]{8}$/
+const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
   let stopped = false
@@ -115,11 +134,54 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const judgments = new Map<string, OrchestratorJudgment>()
   /** Chat id -> the check-ins and continues the judge sent it, newest last (an hour's worth). */
   const sends = new Map<string, { at: number; kind: 'note' | 'continue' }[]>()
+  /** Chat id -> the things it waited on that got their one nudge (a waiting chat's waitingOn, joined). */
+  const nudged = new Map<string, Set<string>>()
   /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
   let resolved: { setting: string; model: string } | null = null
 
   /** The judge's model: the owner's test double when the context carries one (tests inject it under deps), else the SDK. */
   const askModel = (): AskModel => (ctx.deps.orchestratorAsk as AskModel | undefined) ?? sdkAskModel(ctx.home, () => claudeCodeBinaryFor(ctx.home).path())
+
+  /** HSwarm's folder: the test's own, else ~/.hswarm. */
+  const hswarmHome = (): string => (ctx.deps.hswarmHome as string | undefined) ?? process.env.HSWARM_HOME ?? join(homedir(), '.hswarm')
+
+  /** What a job's record says (~/.hswarm/jobs/<id>/job.json): finished when and with what counts, or still running. */
+  function jobFact(id: string, now: number): Fact {
+    let job: { state?: unknown; finished?: unknown; summary?: { created?: unknown; finished?: unknown; counts?: unknown } }
+    try {
+      job = JSON.parse(readFileSync(join(hswarmHome(), 'jobs', id, 'job.json'), 'utf8'))
+    } catch {
+      return { text: `HSwarm job ${id}: no record of it could be read`, running: false }
+    }
+    const finished = typeof job.finished === 'string' && job.finished ? job.finished : typeof job.summary?.finished === 'string' ? job.summary.finished : ''
+    const counts = job.summary?.counts && typeof job.summary.counts === 'object' ? Object.entries(job.summary.counts as Record<string, unknown>).map(([k, n]) => `${String(n)} ${k}`).join(', ') : ''
+    if (finished && Number.isFinite(Date.parse(finished)))
+      return { text: `HSwarm job ${id} finished at ${iso(Date.parse(finished))}${counts ? ` (${counts})` : ''}; its results: hswarm_results('${id}')`, running: false }
+    const created = typeof job.summary?.created === 'string' ? Date.parse(job.summary.created) : NaN
+    const overdue = Number.isFinite(created) && now - created > WAIT_OVERDUE_MS
+    return { text: `HSwarm job ${id} is ${String(job.state ?? 'running')}${overdue ? ' and overdue' : ''}${counts ? ` (${counts})` : ''}`, running: !overdue }
+  }
+
+  function workerFact(id: string, w: CliMayteWorker | undefined, now: number): Fact {
+    if (!w) return { text: `CliMayte worker ${id}: the daemon does not list it`, running: false }
+    if (!w.active) return { text: `CliMayte worker ${id} is ${w.status}${w.endedAt ? ` since ${iso(w.endedAt)}` : ''}`, running: false }
+    const overdue = w.startedAt !== null && now - w.startedAt > WAIT_OVERDUE_MS
+    return { text: `CliMayte worker ${id} is ${w.status}${overdue ? ' and overdue' : ''}`, running: !overdue }
+  }
+
+  /** The facts that can be checked without a model about what a chat waits on: HSwarm job ids and CliMayte worker ids. */
+  async function factsOf(on: readonly string[], now: number): Promise<Fact[]> {
+    const out: Fact[] = []
+    let workers: CliMayteWorker[] | null | undefined
+    for (const id of on) {
+      if (HSWARM_JOB.test(id)) out.push(jobFact(id, now))
+      else if (WORKER_ID.test(id)) {
+        workers ??= await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
+        out.push(workerFact(id, workers?.find((w) => w.id === id), now))
+      }
+    }
+    return out
+  }
 
   async function get<T>(path: string): Promise<T | null> {
     const res = await app.request(path)
@@ -222,6 +284,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
 
   /** Sends a message to a chat: through Desk's send queue (a continue releases its hold), or to an outside session. */
   async function send(c: Candidate, text: string): Promise<string | null> {
+    if (c.source !== 'desk' && c.kind === 'waiting') {
+      // The peer pipe alone never wakes an idle chat (climayte-ping.ts): a chat Desk owns takes the ping and starts a turn.
+      const pinged = await post(`/api/sessions/${encodeURIComponent(c.id)}/ping`, { text })
+      if (pinged === null) return null
+    }
     if (c.source !== 'desk') return post(`/api/external/sessions/${encodeURIComponent(c.id)}/message`, { text })
     const id = encodeURIComponent(c.id)
     const error = await post('/api/queue', { kind: 'message', chatId: c.id, text })
@@ -284,10 +351,11 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const list = (sends.get(c.id) ?? []).filter((s) => at - s.at < HOUR_MS)
     list.push({ at, kind: c.kind === 'error' ? 'continue' : 'note' })
     sends.set(c.id, list)
+    if (c.kind === 'waiting' && !error) nudged.set(c.id, (nudged.get(c.id) ?? new Set()).add((c.waitingOn ?? []).join('|')))
     acts.unshift(
       c.kind === 'error'
         ? { ...base, move: 'retry-error', did: 'continued', ...(error ? { error } : {}) }
-        : { ...base, move: 'watch', did: 'nudged', ...(error ? { error } : {}) }
+        : { ...base, move: c.kind === 'waiting' ? 'waiting' : 'watch', did: 'nudged', ...(error ? { error } : {}) }
     )
   }
 
@@ -318,6 +386,33 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
         signals: seen.kind === 'ok' ? [] : [describe(seen)],
         stalled: seen.kind === 'stalled',
         count: 0
+      })
+    }
+    return out
+  }
+
+  /** The idle chats whose last reply waits on work that is done, overdue or cannot be checked, and that have not had their
+   *  one nudge for it. A chat whose job still runs, or whose transcript could not be read, is left (never blind). */
+  async function waitingCandidates(now: number, look: Looked, skip: ReadonlySet<string>): Promise<Candidate[]> {
+    const out: Candidate[] = []
+    for (const r of look.blind ? [] : look.rows) {
+      if (r.move !== 'waiting' || !r.waitingOn || skip.has(r.id)) continue
+      if (nudged.get(r.id)?.has(r.waitingOn.join('|'))) continue
+      const last = judgments.get(r.id)?.at
+      if (last !== undefined && now - last < PEEK_MS) continue
+      const facts = await factsOf(r.waitingOn, now)
+      if (facts.some((f) => f.running)) continue
+      out.push({
+        id: r.id,
+        title: r.title,
+        source: r.source,
+        status: r.status,
+        kind: 'waiting',
+        items: look.items.get(r.id) ?? [],
+        signals: [`waiting: ${r.reason}`, ...(facts.length ? facts.map((f) => f.text) : ['nothing it waits on can be checked from here']), `it has waited at least ${WAIT_MS / 60_000} min`],
+        stalled: false,
+        count: 0,
+        waitingOn: r.waitingOn
       })
     }
     return out
@@ -372,13 +467,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     ticking ??= (async () => {
       if (!armed()) return
       const now = Date.now()
-      const look = await read(DEFAULT_DAYS, false)
+      const look = await read(DEFAULT_DAYS, true)
       const queue = await get<QueueState>('/api/queue')
       if (armed() && queue) {
         const waiting = new Set(queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
         const skip = new Set([...look.unread, ...waiting])
         const candidates = limitCandidates(now, look, skip)
-        candidates.push(...(await runningCandidates(now, skip)))
+        candidates.push(...(await runningCandidates(now, skip)), ...(await waitingCandidates(now, look, skip)))
         await pool(candidates, JUDGE_WIDTH, async (c) => {
           if (armed()) await judgeOne(c)
         })

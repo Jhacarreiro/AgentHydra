@@ -92,6 +92,7 @@ Answer with ONE JSON object and nothing else, no code fence:
 - nudge: it is working but going nowhere: repeating a failing step, stuck in a call, drifting from its task. message is one short check-in note to send it, saying what to change.
 - continue: its last turn stopped on an error. message tells it to carry on from where it stopped and not redo finished steps.
 - leave: only a person can move it: a permission, a plan to approve, a question only the owner answers, a usage limit, or anything you cannot safely move. message "".
+- A chat whose signals say "waiting" ended its turn saying it waits on work. If the facts show that work finished (or it is overdue, or nothing can be checked), answer nudge: message is one short note saying what happened and what to do next, e.g. "The HSwarm job <id> you were waiting on finished at <time> (14 ok, 2 error). Pick it up: hswarm_results('<id>')." or "You said 25 minutes ago you were waiting on <thing>; check it now and carry on." Otherwise leave.
 - more: only when the brief says a longer slice is available and you cannot tell from this one. message "". You are asked again with more of the transcript.
 
 Rules: never invent the owner's answers or decisions; never send a chat to do more than its own task; keep message plain text under ${MESSAGE_CHARS} characters. why is one sentence for the owner, saying what you saw.`

@@ -21,6 +21,7 @@ const arming = ref(false)
 const LABEL: Record<OrchestratorMove, string> = {
   'answer-question': 'Answer its question',
   'answer-need': 'Answer its NEED',
+  waiting: 'Waiting on finished work',
   'retry-error': 'Retry after an error',
   'resume-after-limit': 'Resume after the limit',
   watch: 'Watch',

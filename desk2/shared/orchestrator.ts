@@ -12,13 +12,14 @@
 export type OrchestratorMove =
   | 'answer-question' // a question card waits for an answer
   | 'answer-need' // the last reply ended on a NEED line or a "want me to ...?" question
+  | 'waiting' // idle, its last reply says it waits on work (a job, a worker, a task) and nothing has moved for WAIT_MS
   | 'retry-error' // the last turn failed
   | 'resume-after-limit' // the account hit its limit and the chat stays on it
   | 'watch' // working, starting, queued, or moved by the engine itself
   | 'leave' // a person is in it, or it waits on something only a person grants (a permission, a plan, a form)
   | 'done' // finished, nothing asked
 
-export const ORCHESTRATOR_MOVES: readonly OrchestratorMove[] = ['answer-question', 'answer-need', 'retry-error', 'resume-after-limit', 'watch', 'leave', 'done']
+export const ORCHESTRATOR_MOVES: readonly OrchestratorMove[] = ['answer-question', 'answer-need', 'waiting', 'retry-error', 'resume-after-limit', 'watch', 'leave', 'done']
 
 /** What the CreAitor answered: decide (the owner's answer), reversible (take the reversible option), escalate (only the owner). */
 export interface CreaitorAnswer {
@@ -45,6 +46,8 @@ export interface OrchestratorRow {
   /** answer-question / answer-need: what is asked, and the choices when it gave them. */
   question?: string
   options?: string[]
+  /** waiting: what it waits on, as the planner read it: HSwarm job ids, CliMayte worker ids, or the phrase it used. */
+  waitingOn?: string[]
   /** Present only on ?ask=1, for rows with a question. */
   creaitor?: CreaitorAnswer | { error: string }
   /** The model's latest judgment of this chat, when it has judged it (the armed orchestrator). */
