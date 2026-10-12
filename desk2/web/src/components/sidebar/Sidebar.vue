@@ -38,6 +38,7 @@ import SubBadges from './SubBadges.vue'
 import FoldButton from './FoldButton.vue'
 import { folded, toggleFolded } from './folded'
 import { CHROME_OPEN, SIDEBAR_MAX, SIDEBAR_MIN, clampSidebarWidth } from './width'
+import { dropSide, type SidebarSide } from './side'
 import { expanded, rowSubItems, subModes } from './subitems'
 import RunningBadge from './RunningBadge.vue'
 import ProjectMenuItems from './ProjectMenuItems.vue'
@@ -133,11 +134,12 @@ import { leaveUnlessFiltered } from '@/lib/row-leave'
 // real app's Projects, Artifacts, Customize and More rows are left out on purpose), then Pinned and one
 // group per folder holding our chats and the sessions running elsewhere, and a 44px footer with the
 // profile (account) control and the Settings gear.
-const props = withDefaults(defineProps<{ width?: number; /** Gallery: open the account popup at once. */ accountsOpen?: boolean }>(), {
+const props = withDefaults(defineProps<{ width?: number; side?: SidebarSide; /** Gallery: open the account popup at once. */ accountsOpen?: boolean }>(), {
   width: 288,
+  side: 'left',
   accountsOpen: false
 })
-const emit = defineEmits<{ resize: [width: number] }>()
+const emit = defineEmits<{ resize: [width: number]; side: [side: SidebarSide]; 'side-preview': [side: SidebarSide | null] }>()
 
 // Dragged from 200 to 420 (width.ts); the chrome bar over its top keeps the 294 its buttons need and reaches past a
 // narrower sidebar.
@@ -841,8 +843,9 @@ const root = ref<HTMLElement | null>(null)
 function onResizeDown(e: PointerEvent) {
   const el = e.currentTarget as HTMLElement
   el.setPointerCapture(e.pointerId)
-  const left = root.value?.getBoundingClientRect().left ?? 0
-  const move = (ev: PointerEvent) => emit('resize', clampSidebarWidth(ev.clientX - left))
+  const rect = root.value?.getBoundingClientRect()
+  const width = (x: number) => (props.side === 'right' ? (rect?.right ?? 0) - x : x - (rect?.left ?? 0))
+  const move = (ev: PointerEvent) => emit('resize', clampSidebarWidth(width(ev.clientX)))
   const up = () => {
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)
@@ -851,8 +854,47 @@ function onResizeDown(e: PointerEvent) {
   el.addEventListener('pointerup', up)
 }
 function onResizeKey(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') emit('resize', clampSidebarWidth(props.width - 8))
-  else if (e.key === 'ArrowRight') emit('resize', clampSidebarWidth(props.width + 8))
+  const outward = props.side === 'right' ? 'ArrowLeft' : 'ArrowRight'
+  const inward = props.side === 'right' ? 'ArrowRight' : 'ArrowLeft'
+  if (e.key === inward) emit('resize', clampSidebarWidth(props.width - 8))
+  else if (e.key === outward) emit('resize', clampSidebarWidth(props.width + 8))
+}
+
+// The grip: dragged horizontally to the other half of the window, it previews the edge the sidebar would land on;
+// released there it moves the sidebar, released on its own half, after a click, or on Escape it does nothing.
+const GRIP_SLOP = 4
+function onGripDown(e: PointerEvent) {
+  if (e.button !== 0) return
+  const el = e.currentTarget as HTMLElement
+  el.setPointerCapture(e.pointerId)
+  const startX = e.clientX
+  let moved = false
+  let over = dropSide(e.clientX, window.innerWidth)
+  const show = () => emit('side-preview', over !== props.side ? over : null)
+  const move = (ev: PointerEvent) => {
+    if (Math.abs(ev.clientX - startX) > GRIP_SLOP) moved = true
+    over = dropSide(ev.clientX, window.innerWidth)
+    show()
+  }
+  const end = (commit: boolean) => {
+    el.removeEventListener('pointermove', move)
+    el.removeEventListener('pointerup', up)
+    el.removeEventListener('pointercancel', cancel)
+    window.removeEventListener('keydown', key)
+    emit('side-preview', null)
+    if (commit && moved && over !== props.side) emit('side', over)
+  }
+  const up = () => end(true)
+  const cancel = () => end(false)
+  const key = (ev: KeyboardEvent) => {
+    if (ev.key !== 'Escape') return
+    ev.preventDefault()
+    end(false)
+  }
+  el.addEventListener('pointermove', move)
+  el.addEventListener('pointerup', up)
+  el.addEventListener('pointercancel', cancel)
+  window.addEventListener('keydown', key)
 }
 
 defineExpose({
@@ -872,13 +914,18 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
   <aside
     ref="root"
     aria-label="Sidebar"
-    class="relative flex h-full shrink-0 flex-col border-e border-border bg-bg-sidebar pt-9"
+    class="relative flex h-full shrink-0 flex-col bg-bg-sidebar pt-9"
+    :class="side === 'right' ? 'border-s border-border' : 'border-e border-border'"
     :style="{ width: `${width}px` }"
   >
-    <!-- The shade along its right edge, just inside the line, as Claude Desktop's sidebar has (owner, 2026-10-08: "kind
+    <!-- The shade along its inner edge, just inside the line, as Claude Desktop's sidebar has (owner, 2026-10-08: "kind
          of a inner shadow. That has a little bit of a spread"; then "a little too dark", so 20% black, not 30). Over the
          rows, under every menu, never in the way of a click. -->
-    <span class="pointer-events-none absolute inset-y-0 right-0 z-10 w-4 bg-linear-to-l from-black/20 to-transparent" aria-hidden="true" />
+    <span
+      class="pointer-events-none absolute inset-y-0 z-10 w-4 from-black/20 to-transparent"
+      :class="side === 'right' ? 'left-0 bg-linear-to-r' : 'right-0 bg-linear-to-l'"
+      aria-hidden="true"
+    />
     <div class="flex min-h-0 flex-1 flex-col gap-2 px-2 pb-1 pt-2">
       <nav class="flex shrink-0 flex-col gap-[0.5px] pe-0.5">
         <div class="flex items-center gap-0.5">
@@ -899,6 +946,21 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <SidebarTools v-if="!hydraModel && !devServers.on.value" :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
         </div>
       </nav>
+
+      <!-- The grip sits in the gap under New: its negative margins keep the list where it was, and it stacks over the list's empty top padding. -->
+      <Tip label="Drag to move the sidebar to the other side">
+        <div
+          role="separator"
+          aria-orientation="horizontal"
+          aria-label="Drag to move the sidebar to the other side"
+          class="group/grip relative z-10 -mb-3 -mt-2 flex h-3 shrink-0 cursor-grab touch-none select-none items-center justify-center active:cursor-grabbing"
+          @pointerdown.prevent="onGripDown"
+        >
+          <span class="flex gap-0.5 opacity-0 transition-opacity duration-150 group-hover/grip:opacity-100" aria-hidden="true">
+            <span v-for="n in 6" :key="n" class="size-0.75 rounded-full bg-text-muted" />
+          </span>
+        </div>
+      </Tip>
 
       <!-- Sessions: Pinned, then one group per folder; ours and the ones running elsewhere together -->
       <div class="min-h-0 flex-1 overflow-y-auto pe-0.5 pt-1 [scrollbar-width:none]">
@@ -1162,8 +1224,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
       :aria-valuenow="width"
       :aria-valuemin="SIDEBAR_MIN"
       :aria-valuemax="SIDEBAR_MAX"
-      class="absolute -right-1.5 bottom-0 z-22 w-3 cursor-col-resize touch-none"
-      :class="width < CHROME_OPEN ? 'top-9' : 'top-0'"
+      class="absolute bottom-0 z-22 w-3 cursor-col-resize touch-none"
+      :class="[side === 'right' ? '-left-1.5' : '-right-1.5', width < CHROME_OPEN ? 'top-9' : 'top-0']"
       @pointerdown.prevent="onResizeDown"
       @keydown="onResizeKey"
     />

@@ -40,7 +40,8 @@ import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
-import { ownFrame, startOwnFrame } from '@/lib/host-window'
+import { CAPTION_W, ownFrame, startOwnFrame } from '@/lib/host-window'
+import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import WhatsNewDialog from './WhatsNewDialog.vue'
 import { changesTabFor } from '@/components/connectors/logic'
@@ -206,7 +207,9 @@ const slideX = computed(() => {
   // A pin starts with the flyout already out; the stage starts where it was either way.
   const sidebarOut = end ? s.open : !s.open || s.pin
   const stagePushed = end ? s.open : !s.open
-  return { sidebar: sidebarOut ? 0 : -w, stage: stagePushed ? w : 0 }
+  // On the right the stage keeps its left edge and the sidebar slides over it: the stage's content never shifts.
+  const right = sidebarSide.value === 'right'
+  return { sidebar: sidebarOut ? 0 : right ? w : -w, stage: !right && stagePushed ? w : 0 }
 })
 const SLIDE_EASE = 'transition-transform duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none'
 const sidebar = ref<InstanceType<typeof Sidebar> | null>(null)
@@ -827,14 +830,27 @@ onBeforeUnmount(() => {
 // CHROME_COLLAPSED 290 less its 4px padding); open, after the sidebar, or after the bar where it reaches past a sidebar narrower
 // than its buttons (sidebar/width.ts).
 const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarWidth.value) : CHROME_COLLAPSED))
+// On the right the chrome bar sits inside the window's caption buttons, so the title bar ends before it.
+const titlePadEnd = computed(() => (sidebarOpen.value ? CAPTION_W + 9 + chromeOverhang(sidebarWidth.value) : CAPTION_W + CHROME_COLLAPSED))
+const titleStart = computed(() => (sidebarSide.value === 'left' ? titlePad.value : 9))
+/** Dragged to the other half of the window, the sidebar moves there; the drop preview lies over that edge until it lands. */
+const sideDrop = ref<SidebarSide | null>(null)
+function moveSidebar(side: SidebarSide) {
+  sideDrop.value = null
+  setSidebarSide(side)
+}
 </script>
 
 <template>
   <!-- DOM order is the tab order: chrome bar, sidebar, then the pane (title bar first); the grid places them. -->
-  <div class="relative grid size-full grid-cols-[auto_minmax(0,1fr)] grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text">
+  <div
+    class="relative grid size-full grid-rows-[41px_minmax(0,1fr)] overflow-hidden bg-bg-page text-text"
+    :class="sidebarSide === 'right' ? 'grid-cols-[minmax(0,1fr)_auto]' : 'grid-cols-[auto_minmax(0,1fr)]'"
+  >
     <ChromeBar
       :sidebar-open="sidebarOpen"
       :width="sidebarWidth"
+      :side="sidebarSide"
       :sliding="sliding"
       :hydra-open="hydraOpen"
       :cloud-on="cloud.on.value"
@@ -860,7 +876,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
     <!-- Sliding, it lies over the stage at its full width and moves by transform (slideX); at rest it is the grid's first column. -->
     <div
       class="h-full overflow-hidden"
-      :class="slideX ? ['absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : 'col-start-1 row-span-2 row-start-1'"
+      :class="slideX ? [sidebarSide === 'right' ? 'absolute right-0 top-0 z-10' : 'absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
       :style="slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
       :inert="!sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
@@ -870,8 +886,9 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
         class="h-full"
         :class="
           flyout && [
-            'absolute left-0 top-0 z-20 shadow-(--shadow-popover)',
-            !peekOpen && 'invisible -translate-x-full',
+            'absolute top-0 z-20 shadow-(--shadow-popover)',
+            sidebarSide === 'right' ? 'right-0' : 'left-0',
+            !peekOpen && (sidebarSide === 'right' ? 'invisible translate-x-full' : 'invisible -translate-x-full'),
             peekLive && 'transition-[translate,visibility] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none'
           ]
         "
@@ -881,18 +898,33 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
         @focusin="onPeekFocusIn"
         @focusout="onPeekFocusOut"
       >
-        <Sidebar ref="sidebar" :width="sidebarWidth" :accounts-open="props.accountsOpen" @resize="resizeSidebar" />
+        <Sidebar
+          ref="sidebar"
+          :width="sidebarWidth"
+          :side="sidebarSide"
+          :accounts-open="props.accountsOpen"
+          @resize="resizeSidebar"
+          @side="moveSidebar"
+          @side-preview="(side: SidebarSide | null) => (sideDrop = side)"
+        />
       </div>
     </div>
-    <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute left-0 top-0 z-19 h-full w-1.5" />
+    <div v-if="flyout" data-peek-zone="open" aria-hidden="true" class="absolute top-0 z-19 h-full w-1.5" :class="sidebarSide === 'right' ? 'right-0' : 'left-0'" />
 
     <!-- Hydra Desk 2: the chat side and the page side (AgentHydra or the Dev servers page) on one track; their buttons
          slide it (a push: one goes out to the left as the other comes in). The side out of view is inert. -->
     <!-- Never scrolled sideways: a focus or find-in-page landing near the edge would show half of each side. -->
     <div
+      v-if="sideDrop"
+      class="pointer-events-none absolute inset-y-0 z-30 bg-accent/15"
+      :class="sideDrop === 'right' ? 'right-0' : 'left-0'"
+      :style="{ width: `${sidebarWidth}px` }"
+      data-testid="sidebar-drop"
+    />
+    <div
       ref="stageEl"
-      class="relative col-start-2 row-span-2 row-start-1 min-w-0 overflow-hidden"
-      :class="slideX && ['will-change-transform', slide?.at === 'to' && SLIDE_EASE]"
+      class="relative row-span-2 row-start-1 min-w-0 overflow-hidden"
+      :class="[sidebarSide === 'right' ? 'col-start-1' : 'col-start-2', slideX && ['will-change-transform', slide?.at === 'to' && SLIDE_EASE]]"
       :style="slideX && { transform: `translateX(${slideX.stage}px)` }"
       data-testid="stage"
       @scroll="(e: Event) => ((e.target as HTMLElement).scrollLeft = 0)"
@@ -911,7 +943,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
           <div
             class="title-drag col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
             :class="[ownFrame && 'col-end-3', sliding && 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)']"
-            :style="{ paddingInlineStart: `${titlePad}px` }"
+            :style="{ paddingInlineStart: `${titleStart}px`, paddingInlineEnd: sidebarSide === 'right' ? `${titlePadEnd}px` : undefined }"
           >
             <ShellHeader
               class="min-w-0 flex-1"
@@ -1038,7 +1070,7 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
           <div class="absolute inset-0" :class="layerSlides('hydra') && PAGE_SLIDE" :style="{ transform: layerAt('hydra') }" :inert="slotPage !== 'hydra'" :aria-hidden="slotPage !== 'hydra' || undefined">
             <HydraPane
               :open="hydraOpen"
-              :pad-left="titlePad"
+              :pad-left="titleStart"
               :preload="sidebarReady"
               :intent="hydraIntent"
               @close="toggleHydra(false)"
@@ -1048,10 +1080,10 @@ const titlePad = computed(() => (sidebarOpen.value ? 9 + chromeOverhang(sidebarW
             />
           </div>
           <div class="absolute inset-0 flex" :class="layerSlides('dev') && PAGE_SLIDE" :style="{ transform: layerAt('dev') }" :inert="slotPage !== 'dev'" :aria-hidden="slotPage !== 'dev' || undefined" data-testid="dev-page">
-            <InfoPane v-if="devMounted" :sel="devShown" :active="devPage" :pad-left="titlePad" @close="devServers.closePage()" />
+            <InfoPane v-if="devMounted" :sel="devShown" :active="devPage" :pad-left="titleStart" @close="devServers.closePage()" />
           </div>
           <div class="absolute inset-0 flex" :class="layerSlides('dash') && PAGE_SLIDE" :style="{ transform: layerAt('dash') }" :inert="slotPage !== 'dash'" :aria-hidden="slotPage !== 'dash' || undefined" data-testid="dashboard-page-layer">
-            <DashboardPage v-if="dashMounted" :cwd="dashboardCwd" :active="dashboardOpen" :pad-left="titlePad" />
+            <DashboardPage v-if="dashMounted" :cwd="dashboardCwd" :active="dashboardOpen" :pad-left="titleStart" />
           </div>
         </div>
       </div>

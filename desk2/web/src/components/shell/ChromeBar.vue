@@ -6,6 +6,8 @@ import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-update'
 import { CHROME_COLLAPSED, CHROME_OPEN } from '@/components/sidebar/width'
+import type { SidebarSide } from '@/components/sidebar/side'
+import { CAPTION_W } from '@/lib/host-window'
 
 // The custom chrome bar (h36, z21) that lies over the top of the sidebar: Menu and Hide sidebar (28px, r7).
 // The real app's Chat / Code mode switch is left out: Hydra Desk is Code only. Its Back and Forward arrows
@@ -24,7 +26,7 @@ import { CHROME_COLLAPSED, CHROME_OPEN } from '@/components/sidebar/width'
 // own title bar (lib/host-window.ts) its gaps drag the window, as Claude Desktop's do.
 // `update`: the server's code changed after it started (lib/server-update.ts): a blue dot on Menu, and Menu has
 // Restart to update (or, for a server the launcher did not start, how to restart it).
-defineProps<{ sidebarOpen: boolean; width: number; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; compactOn?: boolean; update?: UpdateOffer | null }>()
+defineProps<{ sidebarOpen: boolean; width: number; side?: SidebarSide; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; compactOn?: boolean; update?: UpdateOffer | null }>()
 const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; 'hydra-intent': []; cloud: []; tasks: []; dev: []; clean: []; compact: []; restart: [] }>()
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
@@ -44,7 +46,7 @@ const BTN = `${BTN_SHAPE} text-text`
   <div
     class="title-drag absolute left-0 top-0 z-21 flex h-9 items-center gap-1 ps-3"
     :class="[sidebarOpen ? 'pe-2' : 'pe-1', sliding ? 'transition-[width,padding] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none' : '']"
-    :style="{ width: `${sidebarOpen ? Math.max(width, CHROME_OPEN) : CHROME_COLLAPSED}px` }"
+    :style="{ width: `${sidebarOpen ? Math.max(width, CHROME_OPEN) : CHROME_COLLAPSED}px`, ...(side === 'right' ? { left: 'auto', right: `${CAPTION_W}px` } : {}) }"
     data-peek-zone="keep"
   >
     <Tip label="Menu">
