@@ -40,7 +40,7 @@ import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
-import { CAPTION_W, appFocused, collapseWindow, collapsed, expandWindow, inHost, ownFrame, startOwnFrame } from '@/lib/host-window'
+import { CAPTION_W, appFocused, canCollapse, collapseWindow, collapsed, expandWindow, ownFrame, startOwnFrame } from '@/lib/host-window'
 import { chatAction, focusAction, modeAction } from '@/components/sidebar/collapse'
 import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
@@ -843,6 +843,7 @@ const collapseMode = computed(() => src.settings.value?.collapseMode ?? 'off')
 const pointerHeld = ref(false)
 const focusWaiting = ref(false)
 function applyFocus() {
+  if (!canCollapse()) return
   const act = focusAction({ mode: collapseMode.value, collapsed: collapsed.value, focused: appFocused.value, busy: pointerHeld.value })
   focusWaiting.value = act === 'wait'
   if (act === 'collapse') collapseWindow(sidebarWidth.value)
@@ -861,7 +862,7 @@ watch(collapseMode, (mode) => {
 watch(
   () => src.selected.value,
   (v) => {
-    if (v.kind === 'chat' && chatAction({ mode: collapseMode.value, collapsed: collapsed.value }) === 'expand') expandWindow()
+    if (canCollapse() && v.kind === 'chat' && chatAction({ mode: collapseMode.value, collapsed: collapsed.value }) === 'expand') expandWindow()
   }
 )
 function collapseNow() {
@@ -946,7 +947,7 @@ function moveSidebar(side: SidebarSide) {
           :width="sidebarWidth"
           :side="sidebarSide"
           :accounts-open="props.accountsOpen"
-          :collapsible="collapseMode !== 'off' && inHost()"
+          :collapsible="collapseMode !== 'off' && canCollapse()"
           :fill="collapsed"
           @collapse="collapseNow"
           @expand="expandWindow"

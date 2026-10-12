@@ -14,6 +14,7 @@ import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { COLLAPSE_MODES, COLLAPSE_MODE_LABELS } from '@/components/sidebar/collapse'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { settingsIcons } from '@/lib/icons'
+import { canCollapse, inHost } from '@/lib/host-window'
 import { usePaneApi } from './api'
 import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
@@ -564,25 +565,24 @@ onBeforeUnmount(() => {
                   </button>
                 </div>
 
-                <div
-                  v-else-if="r.id === 'collapseMode'"
-                  role="radiogroup"
-                  aria-label="Collapse mode"
-                  :class="SEGMENTS"
-                  @keydown="onCollapseKey"
-                >
-                  <button
-                    v-for="(m, i) in COLLAPSE_MODES"
-                    :key="m"
-                    type="button"
-                    role="radio"
-                    :aria-checked="local.collapseMode === m"
-                    :tabindex="local.collapseMode === m ? 0 : -1"
-                    :class="SEGMENT"
-                    @click="save({ collapseMode: COLLAPSE_MODES[i]! })"
-                  >
-                    {{ COLLAPSE_MODE_LABELS[m].label }}
-                  </button>
+                <div v-else-if="r.id === 'collapseMode'" class="flex flex-col items-end gap-1.5">
+                  <div role="radiogroup" aria-label="Collapse mode" :class="SEGMENTS" @keydown="onCollapseKey">
+                    <button
+                      v-for="(m, i) in COLLAPSE_MODES"
+                      :key="m"
+                      type="button"
+                      role="radio"
+                      :aria-checked="local.collapseMode === m"
+                      :tabindex="local.collapseMode === m ? 0 : -1"
+                      :class="SEGMENT"
+                      @click="save({ collapseMode: COLLAPSE_MODES[i]! })"
+                    >
+                      {{ COLLAPSE_MODE_LABELS[m].label }}
+                    </button>
+                  </div>
+                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-right text-[12px] leading-4.5 text-text-muted">
+                    Close and reopen the AgentHydra window to use this: the window open now is older than collapse mode.
+                  </p>
                 </div>
 
                 <Select

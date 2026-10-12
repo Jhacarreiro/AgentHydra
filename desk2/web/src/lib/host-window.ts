@@ -7,7 +7,7 @@
 import { ref } from 'vue'
 
 interface Host {
-  agentHydraHost?: { frame?: number }
+  agentHydraHost?: { frame?: number; collapse?: number }
   ipc?: { postMessage(message: string): void }
 }
 
@@ -52,6 +52,8 @@ export function collapseWindow(cssWidth: number): void {
 export const expandWindow = () => send('expand')
 /** The AgentHydra host is present (the window is the native one, not a browser tab). */
 export const inHost = (): boolean => !!host().agentHydraHost?.frame && !!host().ipc
+/** The host can fold the window (`collapse` in its init script): an older window cannot, and its button would do nothing. */
+export const canCollapse = (): boolean => inHost() && !!host().agentHydraHost?.collapse
 /** Tells the host where the window's buttons are (`r`, the page's pixels; null while there are none), so its caption
  *  sink goes over exactly them and nowhere else. The host works in the screen's pixels. */
 export function placeButtons(r: { left: number; top: number; width: number; height: number } | null): void {
