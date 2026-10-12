@@ -1,6 +1,6 @@
 // Where CliMayte starts a task so it can finish there (climayte-placement.ts).
 import { afterAll, describe, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -11,9 +11,11 @@ import {
   killsLanded,
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteCpuReader,
   setCliMayteMemoryReader,
   startCliMayte,
 } from '../src/climayte'
+import { resetCpuRing } from '../src/climayte-cpu'
 import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../src/climayte-lib'
 import { type MachineMemory, memoryShort } from '../src/climayte-memory'
 import {
@@ -483,6 +485,99 @@ describe('a task waits for memory, and starts on the first tick with room', () =
     },
     20_000 + 2 * ATTEMPT_MS + 10_000,
   )
+})
+
+describe('a task waits while running workers peg the CPU, and starts once it is not', () => {
+  // 2026-10-12: about 60 workers ran at once and held the owner's PC at 90% CPU.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-cpu-'))
+  const cwd = join(root, 'work')
+  const acctDir = join(root, 'acct')
+  for (const d of [cwd, acctDir]) mkdirSync(d, { recursive: true })
+  // fake-slow: each worker's first turn runs 30 s, so the first four are still running when the fifth is due
+  writeFileSync(join(acctDir, 'fake-slow'), '')
+  const groups: string[] = []
+
+  afterAll(async () => {
+    for (const group of groups) climayteCancel({ group })
+    await killsLanded()
+    setCliMayteClaudeCommand(null)
+    setCliMayteAccountsProvider(null)
+    setCliMayteCpuReader(null)
+    resetCpuRing()
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('held with four workers running on a busy machine, started on the first tick it is quiet', async () => {
+    setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
+    resetCpuRing()
+    // Each read adds 3 s of CPU time: all of it busy, then (quiet) a long idle stretch that outweighs the window.
+    let quiet = false
+    let idle = 0
+    let total = 0
+    setCliMayteCpuReader(() => {
+      const step = quiet ? 1_000_000 : 3_000
+      total += step
+      if (quiet) idle += step
+      return { idle, total }
+    })
+    let ticks = 0
+    setCliMayteAccountsProvider(() => {
+      ticks++
+      return [
+        {
+          id: 'cpu-roomy',
+          num: 62,
+          name: 'roomy',
+          configDir: acctDir,
+          sessionPct: 5,
+          weekPct: 5,
+          planFactor: 20,
+          readAt: Date.now(),
+        },
+      ]
+    })
+    const until = async (ok: () => boolean, ms = 20_000) => {
+      const deadline = Date.now() + ms
+      while (!ok() && Date.now() < deadline) await Bun.sleep(100)
+    }
+    const aTick = async () => {
+      const seen = ticks
+      await until(() => ticks >= seen + 2)
+    }
+    const run = (titles: string[]) => {
+      const r = climayteRun({
+        model: 'sonnet',
+        effort: 'medium',
+        ownerWords: 'the CPU gate under test',
+        perAccount: 4,
+        tasks: titles.map((title) => ({ prompt: `run slowly: ${title}`, cwd, title })),
+      })
+      groups.push(r.group)
+      return r.workers.map((w) => w.id as string)
+    }
+    startCliMayte()
+    const four = run(['slow 1', 'slow 2', 'slow 3', 'slow 4'])
+    const status = (id: string) => climayteList({ id })[0]?.status
+    // Fewer than four running never holds a start, however busy the machine.
+    await until(() => four.every((id) => status(id) === 'running'))
+    expect(four.map(status)).toEqual(['running', 'running', 'running', 'running'])
+    // The gate judges a window: two readings at least 2.5 s apart (climayte-cpu.ts).
+    await Bun.sleep(3_000)
+    await aTick()
+    const [fifth] = run(['the fifth'])
+    const view = () => climayteList({ id: fifth as string })[0]
+    await aTick()
+    expect(view()?.status).toBe('queued')
+    expect(view()?.attempts).toHaveLength(0)
+    expect(view()?.error).toContain(
+      'Waiting for CPU: 100% busy over the last 30 s with 4 workers running',
+    )
+    quiet = true
+    // The four are still in their 30 s first turn: only the quiet machine lets the fifth start.
+    await until(() => view()?.status === 'running' || view()?.status === 'done')
+    expect(['running', 'done']).toContain(view()?.status as string)
+    expect(four.map(status)).toEqual(['running', 'running', 'running', 'running'])
+  }, 60_000)
 })
 
 describe('a reading over 10 minutes old is read again before a task starts there', () => {

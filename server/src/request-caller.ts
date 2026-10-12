@@ -41,12 +41,23 @@ export async function requestCallerOrigin(
   c: { env: unknown; req: { raw: Request } },
   budgetMs = REQUEST_ORIGIN_BUDGET_MS,
 ): Promise<{ origin: CallerChatOrigin; why: null } | { origin: null; why: string }> {
-  const pid = await requestCallerPid(c)
+  // The budget covers the pid lookup too: off Windows it shells out to lsof, which can take seconds.
+  const started = Date.now()
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const pid = await Promise.race([
+    requestCallerPid(c),
+    new Promise<null>((resolve) => {
+      timer = setTimeout(() => resolve(null), budgetMs)
+    }),
+  ]).finally(() => clearTimeout(timer))
   if (pid === null)
     return { origin: null, why: 'no origin was sent, and the calling process could not be traced' }
   if (pid === process.pid) return { origin: null, why: 'no origin was sent' }
   const { CALLER_PID_ARG, callerOrigin } = await import('./mcp-self')
-  const r = await callerOrigin({ [CALLER_PID_ARG]: async () => pid }, budgetMs)
+  const r = await callerOrigin(
+    { [CALLER_PID_ARG]: async () => pid },
+    Math.max(1, budgetMs - (Date.now() - started)),
+  )
   if (!r.origin) return { origin: null, why: `no origin was sent, and ${r.why}` }
   return {
     origin: { ...r.origin, how: `traced from the HTTP request: ${r.origin.how}`.slice(0, 300) },

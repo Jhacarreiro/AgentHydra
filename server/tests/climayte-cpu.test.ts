@@ -6,6 +6,8 @@ import {
   type CpuSample,
   cpuBusyOver,
   cpuShort,
+  recordCpu,
+  resetCpuRing,
 } from '../src/climayte-cpu'
 
 const STEP = 3_000
@@ -77,5 +79,23 @@ describe('cpuBusyOver: the average is over the window, not one sample', () => {
   test('a single reading leaves no window to judge', () => {
     expect(cpuBusyOver([{ at: 0, idle: 0, total: 0 }], 0)).toBeNull()
     expect(cpuBusyOver([], 0)).toBeNull()
+  })
+})
+
+describe('recordCpu: a caller reading often does not shrink the window', () => {
+  test('reads 100 ms apart for 5 busy seconds after 30 quiet ones still average over the 30 s', () => {
+    // Every tickState records, the capacity reads a chat polls included (review of 62e44c74).
+    resetCpuRing()
+    try {
+      recordCpu(0, { idle: 0, total: 0 })
+      recordCpu(30_000, { idle: 30_000, total: 30_000 })
+      let busy: number | null = null
+      for (let k = 1; k <= 50; k++)
+        busy = recordCpu(30_000 + k * 100, { idle: 30_000, total: 30_000 + k * 100 })
+      // 5 s busy in the last 30: 1/7 busy, not the 100% of the burst alone
+      expect(busy).toBeCloseTo((5_000 / 35_000) * 100, 5)
+    } finally {
+      resetCpuRing()
+    }
   })
 })

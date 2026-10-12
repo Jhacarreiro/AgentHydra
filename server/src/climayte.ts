@@ -205,6 +205,7 @@ import { POINTER_DIR } from './instance'
 export {
   setCliMayteAccountsProvider,
   setCliMayteClaudeCommand,
+  setCliMayteCpuReader,
   setCliMayteMemoryReader,
   setCliMayteOwnerDir,
 } from './climayte-core'

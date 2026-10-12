@@ -25,8 +25,12 @@ export const CPU_BUSY_LIMIT = 85
 /** Fewer workers than this running on the PC never hold a start: the owner's own load alone does not
  *  stop CliMayte. */
 export const CPU_MIN_WORKERS = 4
-/** Samples kept: at the 3 s tick that is about two minutes, enough to span the window. */
+/** Samples kept, at least CPU_SAMPLE_GAP_MS apart: at least 100 s, enough to span the window. */
 const CPU_RING_MAX = 40
+/** A reading this soon after the last kept one is not kept. Every tickState records (the scheduler's
+ *  tick and the capacity reads alike), so without a gap a fast poller would fill the ring in seconds
+ *  and shrink the window to them. */
+const CPU_SAMPLE_GAP_MS = 2_500
 
 /** Cumulative CPU time across every core, in ms, as os.cpus() reports it. */
 export interface CpuCounters {
@@ -82,7 +86,8 @@ const ring: CpuSample[] = []
 /** Record this tick's reading (null: unreadable, which leaves the ring as it is) and return the
  *  busy share over the window, or null when there is not yet a window to judge. */
 export function recordCpu(now: number, counters: CpuCounters | null): number | null {
-  if (counters) {
+  const kept = ring.at(-1)
+  if (counters && (!kept || now - kept.at >= CPU_SAMPLE_GAP_MS)) {
     ring.push({ at: now, idle: counters.idle, total: counters.total })
     if (ring.length > CPU_RING_MAX) ring.splice(0, ring.length - CPU_RING_MAX)
   }
