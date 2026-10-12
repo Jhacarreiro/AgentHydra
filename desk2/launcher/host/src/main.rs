@@ -259,6 +259,9 @@ mod win {
         fn GetSystemMetricsForDpi(index: i32, dpi: u32) -> i32;
         fn SetLayeredWindowAttributes(h: Hwnd, key: u32, alpha: u8, flags: u32) -> i32;
         fn TrackMouseEvent(t: *mut TRACKMOUSEEVENT) -> i32;
+        fn GetForegroundWindow() -> Hwnd;
+        fn GetWindowThreadProcessId(h: Hwnd, pid: *mut u32) -> u32;
+        fn GetAncestor(h: Hwnd, flags: u32) -> Hwnd;
     }
     #[repr(C)]
     struct TRACKMOUSEEVENT {
@@ -293,6 +296,7 @@ mod win {
         fn CreateMutexW(attrs: *const c_void, owner: i32, name: *const u16) -> isize;
         fn GetLastError() -> u32;
         fn GetModuleHandleW(name: *const u16) -> isize;
+        fn GetCurrentProcessId() -> u32;
     }
     #[link(name = "shell32")]
     extern "system" {
@@ -781,6 +785,55 @@ mod win {
         place_page_host(h, r);
     }
 
+    const ACTIVATION_SUBCLASS: usize = 0x4147_4e41; // "AGNA"
+    const WM_ACTIVATE: u32 = 0x0006;
+    const WM_ACTIVATEAPP: u32 = 0x001C;
+    const GA_ROOTOWNER: u32 = 3;
+
+    extern "system" fn activation_proc(
+        h: Hwnd,
+        msg: u32,
+        wp: usize,
+        lp: isize,
+        _id: usize,
+        data: usize,
+    ) -> isize {
+        const WM_NCDESTROY: u32 = 0x0082;
+        match msg {
+            WM_ACTIVATE | WM_ACTIVATEAPP => {
+                let tell = unsafe { &*(data as *const Box<dyn Fn()>) };
+                tell();
+            }
+            WM_NCDESTROY => {
+                unsafe { RemoveWindowSubclass(h, activation_proc, ACTIVATION_SUBCLASS) };
+                drop(unsafe { Box::from_raw(data as *mut Box<dyn Fn()>) });
+            }
+            _ => {}
+        }
+        unsafe { DefSubclassProc(h, msg, wp, lp) }
+    }
+
+    /// Calls `tell` on the main window's activation messages, which tao's Focused does not report.
+    pub fn watch_activation(h: Hwnd, tell: Box<dyn Fn()>) {
+        let data = Box::into_raw(Box::new(tell)) as usize;
+        if unsafe { SetWindowSubclass(h, activation_proc, ACTIVATION_SUBCLASS, data) } == 0 {
+            drop(unsafe { Box::from_raw(data as *mut Box<dyn Fn()>) });
+        }
+    }
+
+    /// Whether AgentHydra is the app in front, read from the foreground window (None while there is none).
+    pub fn activity(main: Hwnd) -> Option<bool> {
+        let fg = unsafe { GetForegroundWindow() };
+        let mut pid = 0u32;
+        let owner = if fg == 0 {
+            0
+        } else {
+            unsafe { GetWindowThreadProcessId(fg, &mut pid) };
+            unsafe { GetAncestor(fg, GA_ROOTOWNER) }
+        };
+        super::app_active(fg, pid, owner, main, unsafe { GetCurrentProcessId() })
+    }
+
     pub fn destroy(h: Hwnd) {
         unsafe { DestroyWindow(h) };
     }
@@ -978,6 +1031,24 @@ fn window_event_script(frame: bool, maximized: bool, collapsed: bool) -> String 
 /// The script that tells the main page the window was activated or deactivated.
 fn focus_event_script(focused: bool) -> String {
     format!("window.dispatchEvent(new CustomEvent('agenthydra:focus',{{detail:{{focused:{focused}}}}}))")
+}
+
+/// Whether AgentHydra is the app in front: its main window, any window of this process, or a window the main window
+/// owns (a file dialog a page opened, which runs in WebView2's process). None while no window is in front.
+fn app_active(fg: isize, fg_pid: u32, fg_root_owner: isize, main: isize, our_pid: u32) -> Option<bool> {
+    if fg == 0 {
+        return None;
+    }
+    Some(fg == main || fg_pid == our_pid || fg_root_owner == main)
+}
+
+/// Asks about the app's activation again shortly: Windows updates the foreground window after its messages.
+fn recheck_activation(proxy: &tao::event_loop::EventLoopProxy<Ev>, tries: u8) {
+    let proxy = proxy.clone();
+    std::thread::spawn(move || {
+        std::thread::sleep(Duration::from_millis(150));
+        let _ = proxy.send_event(Ev::Activation(tries));
+    });
 }
 
 /// Each invisible sizing border: the gap between the window's outer rect and its visible frame.
@@ -1304,6 +1375,8 @@ enum Ev {
     OpenHere(String, String),
     /// The pointer over the caption sink (the page's window buttons).
     Sink(win::SinkEvent),
+    /// Whether the app is in front is due to be read again, with this many tries left while no window is in front.
+    Activation(u8),
 }
 
 /// One page tab's browser view and the child window that holds it (win::page_host).
@@ -1521,6 +1594,13 @@ fn run(
         window.set_focus();
     }
 
+    let app_active = win::activity(hwnd).unwrap_or(true);
+    let activation_proxy = proxy.clone();
+    win::watch_activation(
+        hwnd,
+        Box::new(move || recheck_activation(&activation_proxy, 3)),
+    );
+
     let mut host = Host {
         window,
         webview,
@@ -1541,6 +1621,7 @@ fn run(
         sink: None,
         sink_tried: false,
         caption: (None, None),
+        app_active,
         pages: std::collections::HashMap::new(),
         ctx,
     };
@@ -1714,6 +1795,8 @@ struct Host {
     sink_tried: bool,
     /// The button under the pointer and the one pressed, as the page was last told.
     caption: (Option<win::CaptionButton>, Option<win::CaptionButton>),
+    /// AgentHydra is the app in front, as the page was last told it (agenthydra:focus).
+    app_active: bool,
     pages: std::collections::HashMap<String, PageView>,
     ctx: wry::WebContext,
     window: tao::window::Window,
@@ -1745,19 +1828,25 @@ impl Host {
                 ..
             } => self.close(flow),
             Event::WindowEvent {
-                event: WindowEvent::Focused(focused),
+                event: WindowEvent::Focused(_),
                 ..
-            } => self.focus_changed(focused),
+            } => recheck_activation(&self.proxy, 3),
             Event::NewEvents(_) | Event::MainEventsCleared => self.save_if_due(),
             _ => {}
         }
     }
 
-    fn focus_changed(&self, focused: bool) {
-        if !self.side {
-            let _ = self
-                .webview
-                .evaluate_script(&focus_event_script(focused));
+    fn check_activation(&mut self, tries: u8) {
+        match win::activity(self.hwnd) {
+            Some(active) if active != self.app_active => {
+                self.app_active = active;
+                if !self.side {
+                    let _ = self.webview.evaluate_script(&focus_event_script(active));
+                }
+            }
+            Some(_) => {}
+            None if tries > 0 => recheck_activation(&self.proxy, tries - 1),
+            None => {}
         }
     }
 
@@ -1912,6 +2001,7 @@ impl Host {
                 self.place_sink(None);
             }
             Ev::Sink(e) => self.sink_event(e, flow),
+            Ev::Activation(tries) => self.check_activation(tries),
             // The window's frame belongs to the main window: a side window's page has no frame to answer for.
             Ev::Window(cmd) => {
                 if !self.side {
@@ -2454,6 +2544,38 @@ mod tests {
         assert_eq!([at(990), at(1000), at(1045)], [Minimize; 3]);
         assert_eq!([at(1046), at(1091)], [Maximize; 2]);
         assert_eq!([at(1092), at(1137), at(1200)], [Close; 3]);
+    }
+
+    #[test]
+    fn main_window_in_front_is_active() {
+        assert_eq!(app_active(100, 7, 100, 100, 7), Some(true));
+    }
+
+    #[test]
+    fn keyboard_focus_in_the_page_keeps_the_app_active() {
+        // The page's WebView2 child has the keyboard, but the main window is still the foreground window.
+        assert_eq!(app_active(100, 7, 100, 100, 7), Some(true));
+    }
+
+    #[test]
+    fn another_window_of_this_process_is_active() {
+        assert_eq!(app_active(300, 7, 0, 100, 7), Some(true));
+    }
+
+    #[test]
+    fn dialog_owned_by_the_main_window_is_active() {
+        // A file dialog a page opened lives in WebView2's process, owned by the main window.
+        assert_eq!(app_active(400, 9999, 100, 100, 7), Some(true));
+    }
+
+    #[test]
+    fn another_apps_window_is_inactive() {
+        assert_eq!(app_active(900, 4242, 900, 100, 7), Some(false));
+    }
+
+    #[test]
+    fn no_foreground_window_is_unknown() {
+        assert_eq!(app_active(0, 0, 0, 100, 7), None);
     }
 
     #[test]
