@@ -164,6 +164,8 @@ function assertRunnable(t: RunTask, i: number): void {
     (typeof t.check !== 'string' || t.check.length > 2000)
   )
     throw new Error(`task ${i + 1}: check must be one shell command (at most 2000 characters)`)
+  if (t.commit !== undefined && t.commit !== null && typeof t.commit !== 'boolean')
+    throw new Error(`task ${i + 1}: commit must be true or false`)
   if (t.chat !== undefined && typeof t.chat !== 'boolean')
     throw new Error(`task ${i + 1}: chat must be true or false`)
   if (t.desk !== undefined && t.desk !== null) {
@@ -346,6 +348,7 @@ export function newWorker(
     ...(t.chat === true && t.desk ? { desk: t.desk } : {}),
     ...(t.sealed ? { sealed: sealedOf(t.sealed) } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
+    ...(typeof t.commit === 'boolean' ? { commit: t.commit } : {}),
     ...(size ? { size } : {}),
     priority: setting?.priority ?? 0,
     accounts: accounts?.length ? accounts : null,

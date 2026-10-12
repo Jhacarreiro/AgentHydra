@@ -255,6 +255,11 @@ export interface CliMayteWorker {
   /** A shell command that proves the task is done (exit 0). CliMayte runs it in `cwd` after the worker
    *  reports, records the verdict itself and sends a fail back one rung up (climayte.ts startCheck). */
   check?: string | null
+  /** false: the task leaves its changes uncommitted (the orchestrator lands them), so a passing check
+   *  is its pass alone and the brief says not to commit (NO_COMMIT_BRIEF). true: a passing check also
+   *  needs its changed files committed, whatever its prompt says. Absent: that too, unless the prompt
+   *  or a brief file it names says not to commit (climayte-unsaved.ts saysNoCommit). */
+  commit?: boolean
   /** How many times `check` has run. */
   checkRuns?: number
   /** The check running now, under a runner outside the daemon like an attempt's CLI (climayte.ts
@@ -679,6 +684,11 @@ export const WORKER_BRIEF =
   "You are a CliMayte worker: a Claude Code CLI session AgentHydra started on one of the owner's accounts, at the owner's request, to do one task for an orchestrating chat. Do all of it yourself, in this session. " +
   ETA_INSTRUCTION +
   " Nobody watches live: make the reasonable call and say which you made. Your session ends with your turn, and nothing wakes it for a background job: never end your turn to wait for a build, test or run; wait inside the turn, looping on its output with a time limit, and end the turn only with your final report or after climayte_ask. Only when blocked on a real decision the task does not settle, where a wrong guess would cost real work, call climayte_ask (question, options, context) and end your turn: whoever started you answers by message, and this session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's rules: commit only the files you changed, and push if they say to. Never read or print a secret value. Your context is small: never Read more than 120 lines at once; grep -n first, then Read with offset and limit, and pipe command output through tail -40. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a repository hook asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
+
+/** Added to WORKER_BRIEF for a task dispatched with `commit: false`: its "commit only the files you
+ *  changed" would otherwise order the opposite of what the orchestrator wants. */
+export const NO_COMMIT_BRIEF =
+  'This task leaves its changes uncommitted: do not run git commit, git add or git push; the orchestrator lands them.'
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'

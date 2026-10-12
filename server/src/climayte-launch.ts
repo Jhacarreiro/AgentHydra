@@ -50,6 +50,7 @@ import {
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   keepReport,
+  NO_COMMIT_BRIEF,
   newestTranscript,
   PAUSED_PROMPT,
   scrubbedEnv,
@@ -687,7 +688,8 @@ function briefArgs(w: CliMayteWorker): string[] {
       samples,
       etaBandCalibrations(samples),
     )
-    return ['--append-system-prompt', note ? `${WORKER_BRIEF} ${note}` : WORKER_BRIEF]
+    const brief = w.commit === false ? `${WORKER_BRIEF} ${NO_COMMIT_BRIEF}` : WORKER_BRIEF
+    return ['--append-system-prompt', note ? `${brief} ${note}` : brief]
   }
   const home = ownerHome()
   // --add-dir is variadic: the option after it ends its list.

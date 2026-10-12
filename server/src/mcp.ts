@@ -782,7 +782,7 @@ export const TOOLS: HydraTool[] = [
     name: 'climayte_run',
     listed: true,
     description:
-      "MUTATES: starts Claude Code workers that run self-contained tasks on the owner's CLI accounts, and returns the group with each worker's id, status, account and expected size. Use it when the owner asks to delegate a task, or for work that needs Claude quality HSwarm cannot deliver. This chat keeps the orchestration (split, dispatch, read results, check them); the work goes here. Each task is {prompt, cwd, title?, model?, effort?}. A worker sees nothing of this chat, so its prompt must name the folder, say what done means, and say what proof to report. A task that would use more than half the biggest window it may use starts nothing and returns 'split needed' with the number of pieces; send those as separate tasks, or size: whole to run it as it is. AgentHydra picks the account, spreads the load, and moves a worker to another account by itself when its account hits a usage limit. Workers are visible and steerable in the CliMayte view. Then read them with climayte_status { group, wait_seconds }.",
+      "MUTATES: starts Claude Code workers that run self-contained tasks on the owner's CLI accounts, and returns the group with each worker's id, status, account and expected size. Use it when the owner asks to delegate a task, or for work that needs Claude quality HSwarm cannot deliver. This chat keeps the orchestration (split, dispatch, read results, check them); the work goes here. Each task is {prompt, cwd, title?, check?, commit?}; give `commit: false` to a builder whose changes you land yourself, so a passing check is its pass and it is never sent back to commit. A worker sees nothing of this chat, so its prompt must name the folder, say what done means, and say what proof to report. A task that would use more than half the biggest window it may use starts nothing and returns 'split needed' with the number of pieces; send those as separate tasks, or size: whole to run it as it is. AgentHydra picks the account, spreads the load, and moves a worker to another account by itself when its account hits a usage limit. Workers are visible and steerable in the CliMayte view. Then read them with climayte_status { group, wait_seconds }.",
     inputSchema: S(
       {
         tasks: {
@@ -827,6 +827,11 @@ export const TOOLS: HydraTool[] = [
                 type: 'string',
                 description:
                   'One bash command that PROVES the task is done (exit 0), e.g. `bun test tests/x.test.ts` or a curl that greps the deployed page; run it through `~/.claude/tools/fairjob.cmd -Weight 3 -Run "..."` when it is heavy. CliMayte runs it in `cwd` the moment the worker reports done (status `checking`), records the verdict itself, and sends a fail back to the same session one rung up with the end of the command\'s output (3 failed rounds stop the task as failed). Give one whenever a command can tell; your own climayte_verdict is for what it cannot.',
+              },
+              commit: {
+                type: 'boolean',
+                description:
+                  'Whether the worker commits its own changes. `false` for a builder whose changes you land yourself: its passing `check` is a pass on its own, it is never sent back to commit, and its brief tells it not to commit, add or push. `true` holds it to a commit whatever its prompt says. Left out, a passing check also needs the changed files committed, unless the prompt or a brief file it names says not to commit (e.g. "Do NOT run git commit").',
               },
               size: {
                 type: 'string',

@@ -1129,6 +1129,9 @@ export function climayteRun(input: {
     ownerWords?: string
     kind?: string
     check?: string
+    /** false: leave the changes uncommitted, the check alone judges it; true: hold it to a commit
+     *  whatever its prompt says (CliMayteWorker.commit). */
+    commit?: boolean
     priority?: number
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */

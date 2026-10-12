@@ -9,6 +9,7 @@ import {
   editedPaths,
   failsOnlyOnOthersFiles,
   outputPaths,
+  saysNoCommit,
   uncommittedOf,
 } from '../src/climayte-unsaved'
 
@@ -97,6 +98,44 @@ describe('uncommittedOf', () => {
     mkdirSync(plain, { recursive: true })
     writeFileSync(join(plain, 'a.ts'), 'a\n')
     expect(await uncommittedOf(plain, new Map([[join(plain, 'a.ts'), Date.now()]]))).toEqual([])
+  })
+})
+
+describe('saysNoCommit', () => {
+  test('commit decides; left out, the words of the prompt or the brief file it names do', async () => {
+    const dir = join(root, 'briefs')
+    mkdirSync(dir, { recursive: true })
+    const brief = join(dir, 'R17-S.md').replaceAll('\\', '/')
+    writeFileSync(
+      brief,
+      '# R17-S\n**Do NOT run git commit, git add or git push: leave every change uncommitted; the orchestrator lands it.**\n',
+    )
+    const rules = join(dir, 'CLAUDE.md').replaceAll('\\', '/')
+    writeFileSync(rules, 'Do not commit until the gate is green.\n')
+    // The rb-r17 builders' prompt, 2026-10-12, word for word but its path: one to no file, so its own
+    // words decide.
+    const rb17 = `Read and carry out the brief ${join(dir, 'gone', 'R17-S.md')} exactly. It names the files you own, the test to write first, and the check to pass. Do NOT run git commit, git add or git push. Report what the brief's Check section asks for.`
+    const cases: Array<[string, string, boolean | undefined, boolean]> = [
+      ['the rb-r17 prompt', rb17, undefined, true],
+      ['a brief file that forbids committing', `Carry out the brief ${brief}.`, undefined, true],
+      ['commit: false on a plain prompt', 'build the page', false, true],
+      ['commit: true over no-commit words', 'draft it, do not commit it', true, false],
+      ['a plain prompt', 'build the page and test it', undefined, false],
+      [
+        'a rule about what never to commit',
+        'never commit secrets; build the page',
+        undefined,
+        false,
+      ],
+      [
+        "the repository's own rules are no brief",
+        `Follow the brief in ${rules}.`,
+        undefined,
+        false,
+      ],
+    ]
+    for (const [name, prompt, commit, expected] of cases)
+      expect([name, await saysNoCommit({ prompt, cwd: dir, commit })]).toEqual([name, expected])
   })
 })
 

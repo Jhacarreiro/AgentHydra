@@ -688,7 +688,12 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   that names them, on the same three rounds. A file changed more than 30 s after the session last
   wrote it is a peer's and not counted, and a task whose prompt says not to commit is not held to it
   (2026-10-05: a check passed with 15 files never committed, and the task sat done 2h26m while the
-  tasks after it waited on work that was not in git).
+  tasks after it waited on work that was not in git). A task's `commit` settles it: `false` (a
+  builder the orchestrator lands) passes on its check alone and its brief says not to commit (2026-10-12,
+  group rb-r17: two builders told "Do NOT run git commit" were ordered to commit one rung up); `true`
+  holds it to a commit whatever its words. Left out, the prompt's words decide, and so do those of a
+  brief file it names ("the brief D:/x/R17-S.md", never CLAUDE.md, AGENTS.md or README.md);
+  `saysNoCommit`.
 - **Fail severity** (owner, 2026-10-06: "Did it really fail, or did something have to just do a slight
   bit of work to fix it? Was it ... a catastrophic fail, or was it just kind of like a
   whoopsie-daisy?"; before it, every non-pass read as a full fail and Opus sat at 73%, Sonnet at 75%).

@@ -4,7 +4,8 @@
 // and the task sat 'done' for 2h26m while the two tasks after it waited on work that was never in git.
 
 import { realpathSync, statSync } from 'node:fs'
-import { isAbsolute, join, relative, resolve } from 'node:path'
+import { readFile, stat } from 'node:fs/promises'
+import { basename, isAbsolute, join, relative, resolve } from 'node:path'
 import { tailText, transcriptCandidates, transcriptFile } from './climayte-core'
 import type { CliMayteAccount, CliMayteWorker } from './climayte-lib'
 import { spawnCaptured } from './core/process'
@@ -22,9 +23,21 @@ const PEER_SLACK_MS = 30_000
 const PATHSPEC_CHUNK = 200
 
 /** A task that says its changes stay uncommitted (the orchestrator commits them, or only a draft is
- *  wanted) is not held to a commit. */
+ *  wanted) is not held to a commit: "do not commit", "Do NOT run git commit, git add or git push",
+ *  "no commit, no push", "leave every change uncommitted", "the orchestrator lands it". A rule about
+ *  what never to commit ("never commit secrets") is not one. 2026-10-12, group rb-r17: two builders
+ *  told "Do NOT run git commit" passed their checks and were ordered to commit, one rung up. */
 const NO_COMMIT =
-  /\b(?:do not|don't|never|without) (?:commit|committing)\b|\bleave [^.\n]{0,40}\buncommitted\b/i
+  /\b(?:do not|don't|never|without) (?:run )?(?:git )?(?:commit|committing)\b(?!\s+(?:any\s+|a\s+|the\s+)?(?:secrets?|keys?|tokens?|credentials?|passwords?|\.env)\b)|\bno (?:git )?commit\b|\bleave [^.\n]{0,40}\buncommitted\b|\bthe orchestrator (?:lands|commits)\b/i
+
+/** A file the prompt names as its brief: a .md or .txt path with the word "brief" in its name or in the
+ *  80 characters before it ("Read and carry out the brief D:/x/R17-S.md"). A repository's own rules
+ *  (CLAUDE.md, AGENTS.md, README.md) are never a brief: they may say what never to commit. */
+const BRIEF_PATH = /(?:[A-Za-z]:)?[\w.\-/\\~]+\.(?:md|txt)(?![\w])/gi
+const REPO_RULES = new Set(['claude.md', 'agents.md', 'readme.md'])
+/** At most this many brief files are read, each at most this big. */
+const BRIEF_FILES = 5
+const BRIEF_BYTES = 256 * 1024
 
 /** Extensions a check's output names files by; a list, so "e.g" and "v1.2" are not taken for files. */
 const OUTPUT_FILE =
@@ -170,13 +183,53 @@ export async function uncommittedOf(cwd: string, edits: Map<string, number>): Pr
   return left.sort()
 }
 
+/** The brief files `prompt` names (BRIEF_PATH), absolute (a relative one from `cwd`), first named first. */
+export function briefPaths(prompt: string, cwd: string): string[] {
+  const out: string[] = []
+  for (const m of prompt.matchAll(BRIEF_PATH)) {
+    const name = basename(m[0].replaceAll('\\', '/')).toLowerCase()
+    if (REPO_RULES.has(name)) continue
+    const before = prompt.slice(Math.max(0, (m.index ?? 0) - 80), m.index)
+    if (!name.includes('brief') && !/\bbrief/i.test(before)) continue
+    const abs = isAbsolute(m[0]) ? m[0] : resolve(cwd, m[0])
+    if (!out.includes(abs)) out.push(abs)
+    if (out.length >= BRIEF_FILES) break
+  }
+  return out
+}
+
+/** A brief file's text, or null when it is missing, not a file or over BRIEF_BYTES. */
+async function briefText(path: string): Promise<string | null> {
+  try {
+    const s = await stat(path)
+    return s.isFile() && s.size <= BRIEF_BYTES ? await readFile(path, 'utf8') : null
+  } catch {
+    return null
+  }
+}
+
+/** True when a passing check is its pass without a commit: `commit: false`; or, with no `commit`,
+ *  the prompt or a brief file it names says not to commit (NO_COMMIT). `commit: true` holds it to a
+ *  commit whatever its words say. Briefs are read off the daemon's thread, like the git facts. */
+export async function saysNoCommit(
+  w: Pick<CliMayteWorker, 'prompt' | 'cwd' | 'commit'>,
+): Promise<boolean> {
+  if (typeof w.commit === 'boolean') return !w.commit
+  if (NO_COMMIT.test(w.prompt)) return true
+  for (const path of briefPaths(w.prompt, w.cwd)) {
+    const text = await briefText(path)
+    if (text && NO_COMMIT.test(text)) return true
+  }
+  return false
+}
+
 /** The files the worker's sessions changed and never committed, in its folder's repository; [] for a
- *  task that says not to commit. */
+ *  task that is not to commit (saysNoCommit). */
 export async function unsavedEdits(
   w: CliMayteWorker,
   accounts: CliMayteAccount[],
 ): Promise<string[]> {
-  if (NO_COMMIT.test(w.prompt)) return []
+  if (await saysNoCommit(w)) return []
   return uncommittedOf(w.cwd, editsOf(w, accounts))
 }
 

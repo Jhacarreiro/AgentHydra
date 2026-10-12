@@ -430,7 +430,7 @@ describe('integration: a task with a check is judged by it', () => {
   )
 
   test(
-    "a passing check with the worker's files uncommitted sends it back; a task told not to commit passes",
+    "a passing check with the worker's files uncommitted sends it back; a task told not to commit, or dispatched with commit: false, passes",
     async () => {
       // 2026-10-05: a worker's check passed with 15 of its files never committed, and the task sat
       // 'done' 2h26m while the two tasks after it waited on work that was not in git.
@@ -457,13 +457,17 @@ describe('integration: a task with a check is judged by it', () => {
         tasks: [
           task('draft the page FAKE-EDIT:draft-a.txt', 'left unsaved'),
           task('draft the page, do not commit it FAKE-EDIT:draft-b.txt', 'draft only'),
+          // 2026-10-12, group rb-r17: a builder the orchestrator lands passed its check and was
+          // ordered to commit one rung up.
+          { ...task('build the page FAKE-EDIT:draft-c.txt', 'orchestrator lands'), commit: false },
         ],
+        perAccount: 3,
       })
       groups.push(run.group)
-      const [a, b] = run.workers.map((w) => w.id as string)
+      const [a, b, c] = run.workers.map((w) => w.id as string)
       const judged = (id: string) => (climayteList({ id })[0]?.verdicts?.length ?? 0) >= 1
       const deadline = Date.now() + 2 * ATTEMPT_MS // side by side, each an attempt and a check
-      while (!(judged(a as string) && judged(b as string)) && Date.now() < deadline)
+      while (![a, b, c].every((id) => judged(id as string)) && Date.now() < deadline)
         await climayteWait({ group: run.group }, Math.min(2_000, deadline - Date.now()))
 
       const first = climayteList({ id: a })[0]?.verdicts?.[0]
@@ -472,6 +476,9 @@ describe('integration: a task with a check is judged by it', () => {
       // Right work, a small miss: a slip (1), recorded without changing the send-back.
       expect(first?.severity).toBe(1)
       expect(climayteList({ id: b })[0]?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([
+        ['pass', 'check'],
+      ])
+      expect(climayteList({ id: c })[0]?.verdicts?.map((v) => [v.verdict, v.by])).toEqual([
         ['pass', 'check'],
       ])
       climayteCancel({ id: a })
