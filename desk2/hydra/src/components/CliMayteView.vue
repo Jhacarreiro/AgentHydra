@@ -47,6 +47,7 @@ import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import CliMayteFloat from '@/components/CliMayteFloat.vue'
 import CliMayteRow from '@/components/CliMayteRow.vue'
+import { climayteFrom, climayteFromText } from '@/lib/climayte-from'
 import CliMayteStatusBadge from '@/components/CliMayteStatusBadge.vue'
 import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
@@ -521,6 +522,8 @@ interface RowView {
   time: string
   /** The account, masked in privacy mode. */
   account: string
+  /** Who dispatched the task (the From column). */
+  from: ReturnType<typeof climayteFromText>
 }
 const rowViews = new Map<
   string,
@@ -528,7 +531,8 @@ const rowViews = new Map<
 >()
 function rowView(w: ListRow): RowView {
   const clock = isCliMayteActive(w) || w.remote ? `${now.value}/${listedAt.value}` : ''
-  const tasks = w.status === 'failed' ? workers.value : null
+  // A failed task's story and a worker-origin task's From read the other loaded tasks.
+  const tasks = w.status === 'failed' || w.originWorkerId ? workers.value : null
   const words = `${locale.value}/${privacyMode.value}`
   const key = rowKey(w)
   const hit = rowViews.get(key)
@@ -540,6 +544,7 @@ function rowView(w: ListRow): RowView {
     hint: rowHint(w),
     time: w.free ? new Date(w.updatedAt).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }) : activeLabel(activeS(w)),
     account: w.account ? pii(w.account) : t('climayte.noAccount'),
+    from: climayteFromText(climayteFrom(w, workers.value), t),
   }
   rowViews.set(key, { w, clock, tasks, words, view })
   return view
@@ -794,6 +799,7 @@ onUnmounted(() => {
         :hold="holding"
         :now="now"
         @changed="load({ silent: true, side: true })"
+        @open-worker="selectManager"
       />
     </div>
 
@@ -818,6 +824,7 @@ onUnmounted(() => {
             :account="rowView(w).account"
             :time="rowView(w).time"
             :tag="rowView(w).tag"
+            :from="rowView(w).from"
             :cloud="w.remote ? remoteLabel(w) : null"
             :priority="w.priority"
             :mark="rowView(w).mark"

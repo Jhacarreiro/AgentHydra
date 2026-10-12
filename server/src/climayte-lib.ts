@@ -11,6 +11,7 @@
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
+import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
 import {
   type CliMaytePlacement,
@@ -485,45 +486,46 @@ export function freshestPct(
 }
 
 /** The worker minus the long prompt and the log paths, plus what a reader wants at a glance. */
-export type CliMayteWorkerView = Omit<CliMayteWorker, 'prompt' | 'attempts' | 'verdicts'> & {
-  prompt: string // first 300 chars
-  /** Its verdicts, with what each judged stretch of work cost as a share of a Pro 5-hour window. */
-  verdicts?: Array<Omit<CliMayteVerdict, 'units'> & { pct: number | null }>
-  account: string | null // `#<num> <name>`
-  ranS: number // seconds its CLI sessions actually ran, summed over every attempt
-  /** The model the CLI reported at init on its newest attempt that got that far (`model` and
-   *  `effort` are what was asked for). */
-  reportedModel: string | null
-  attempts: Array<{
-    account: CliMayteAccountRef
-    outcome: AttemptOutcome
-    notice: string | null
-    requested?: { model: string | null; effort: string | null }
-    model?: string
-    /** Stopped at CliMayte's ceiling (not the account's limit). */
-    ceiling?: boolean
-    tokens?: CliMayteTokens
-    /** Its cost at API prices and its model requests; null when not measured. */
-    costUsd: number | null
-    turns: number | null
-    /** What it used, and of that its re-read (restart overhead), in % of a Pro 5-hour window. */
-    pct: number | null
-    rereadPct: number | null
-    /** Why this attempt started when the one before it ended done (attemptCause). */
-    because?: AttemptCause
-    /** What its session left running, ended with it (CliMayteAttempt.left). */
-    left?: string[]
-    /** The most processes its worker had alive at once (CliMayteAttempt.peakProcesses). */
-    peakProcesses?: number
-  }>
-  /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
-   *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
-  used: { pct: number; workPct: number; rereadPct: number }
-  /** Finished, and a verdict (a check's, the orchestrator's or the owner's) covers its newest work:
-   *  nothing ran since. A follow-up or a sent-back fail makes it unjudged again. The waiter's
-   *  `--unjudged` wakes an orchestrator only for finished work that is not. */
-  judged: boolean
-}
+export type CliMayteWorkerView = CliMayteOriginFields &
+  Omit<CliMayteWorker, 'prompt' | 'attempts' | 'verdicts'> & {
+    prompt: string // first 300 chars
+    /** Its verdicts, with what each judged stretch of work cost as a share of a Pro 5-hour window. */
+    verdicts?: Array<Omit<CliMayteVerdict, 'units'> & { pct: number | null }>
+    account: string | null // `#<num> <name>`
+    ranS: number // seconds its CLI sessions actually ran, summed over every attempt
+    /** The model the CLI reported at init on its newest attempt that got that far (`model` and
+     *  `effort` are what was asked for). */
+    reportedModel: string | null
+    attempts: Array<{
+      account: CliMayteAccountRef
+      outcome: AttemptOutcome
+      notice: string | null
+      requested?: { model: string | null; effort: string | null }
+      model?: string
+      /** Stopped at CliMayte's ceiling (not the account's limit). */
+      ceiling?: boolean
+      tokens?: CliMayteTokens
+      /** Its cost at API prices and its model requests; null when not measured. */
+      costUsd: number | null
+      turns: number | null
+      /** What it used, and of that its re-read (restart overhead), in % of a Pro 5-hour window. */
+      pct: number | null
+      rereadPct: number | null
+      /** Why this attempt started when the one before it ended done (attemptCause). */
+      because?: AttemptCause
+      /** What its session left running, ended with it (CliMayteAttempt.left). */
+      left?: string[]
+      /** The most processes its worker had alive at once (CliMayteAttempt.peakProcesses). */
+      peakProcesses?: number
+    }>
+    /** What the task used over every attempt, in % of a Pro 5-hour window: `rereadPct` re-reading its
+     *  conversation into a cold cache after a move, a limit, a handoff or a gap, `workPct` the rest. */
+    used: { pct: number; workPct: number; rereadPct: number }
+    /** Finished, and a verdict (a check's, the orchestrator's or the owner's) covers its newest work:
+     *  nothing ran since. A follow-up or a sent-back fail makes it unjudged again. The waiter's
+     *  `--unjudged` wakes an orchestrator only for finished work that is not. */
+    judged: boolean
+  }
 
 /** One row of the report view (`GET /api/corch/workers?report=1`, `climayte_status { report }`): what
  *  an orchestrator needs to judge a worker in one read, and nothing it wrote itself. Run 2
@@ -2127,11 +2129,12 @@ function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results
   return { results: turns, result: joinResults(turns) }
 }
 
-export function toView(w: CliMayteWorker, now: number): CliMayteWorkerView {
+export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
     ...w,
+    ...originFields(w.origin, lookup),
     prompt: w.prompt.slice(0, 300),
     ...keptReport(w),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,

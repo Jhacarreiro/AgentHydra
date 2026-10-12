@@ -36,7 +36,12 @@ import { resolveOwnTranscript } from '../src/compaction-history'
 import { app } from '../src/http-app'
 import { POINTER_DIR } from '../src/instance'
 import { TOOLS, toolsForCaller } from '../src/mcp'
-import { CALLER_AWARE_TOOLS, callerOrigin, setCallerTranscriptResolver } from '../src/mcp-self'
+import {
+  CALLER_AWARE_TOOLS,
+  CALLER_PID_ARG,
+  callerOrigin,
+  setCallerTranscriptResolver,
+} from '../src/mcp-self'
 import '../src/routes/climayte'
 
 // The shared `app` in http-app.ts freezes its router on its first request, after which every later
@@ -150,7 +155,8 @@ describe('climayte_run records the calling chat as the origin', () => {
       (lastPost('/api/corch/workers')?.origin as { sessionId?: string } | undefined)?.sessionId,
     ).toBe(SID)
 
-    // An unresolvable caller sends no origin at all, the spoof included.
+    // An unresolvable caller sends `origin: null` (none, on purpose: the route traces nothing), the
+    // spoof included.
     caller = () => {
       throw new Error('no live session in the calling chain')
     }
@@ -160,7 +166,7 @@ describe('climayte_run records the calling chat as the origin', () => {
         group: 'og-spoof2',
         origin: spoof,
       })) as { ping: string; workers: Array<{ id: string }> }
-      expect(lastPost('/api/corch/workers')?.origin).toBeUndefined()
+      expect(lastPost('/api/corch/workers')?.origin).toBeNull()
       expect(r.ping).toBe(
         'off: no live session in the calling chain; run python ~/.claude/tools/climayte_wait.py --group og-spoof2',
       )
@@ -193,7 +199,8 @@ describe('climayte_run records the calling chat as the origin', () => {
       group: 'og-quiet',
       notify: false,
     })) as { ping: string }
-    expect(lastPost('/api/corch/workers')?.origin).toBeUndefined()
+    // null, not absent: the route traces a body with no origin key (a plain HTTP caller), never this one.
+    expect(lastPost('/api/corch/workers')?.origin).toBeNull()
     expect(r.ping).toStartWith('off: notify: false')
   })
 
@@ -374,6 +381,79 @@ describe('resolveOwnTranscript names the Claude home it matched', () => {
 // processes: MEASURED alone 2026-10-04 with 8 GB free, past bun's 5 s default in the full suite.
 // The allowance is chosen, not inherited.
 const PROCESS_WALK_TEST_MS = 30_000
+
+// Owner, 2026-10-12: a chat's script posted about 60 workers to /api/corch/workers with no origin, and
+// nothing could say which thread ran them ("it doesn't specify what OG thread ran it"). A plain HTTP
+// dispatch is now traced from its socket to the chat its process runs under; `origin: null` is a
+// dispatcher's word that there is none. The POST comes from a child process over a real loopback
+// socket, so the route reads a real peer pid from the OS connection table.
+describe('a plain HTTP dispatch records the chat its process runs under', () => {
+  let server: ReturnType<typeof Bun.serve>
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: (req, srv) => http.fetch(req, srv),
+    })
+  })
+  afterAll(() => server.stop(true))
+
+  /** POSTs `body` to the dispatch route from a child process: the child's pid and the answer. */
+  async function postFromChild(body: Record<string, unknown>) {
+    const url = `http://127.0.0.1:${server.port}/api/corch/workers`
+    const script = `const r = await fetch(${JSON.stringify(url)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: ${JSON.stringify(JSON.stringify(body))} }); process.stdout.write(await r.text())`
+    const child = Bun.spawn([process.execPath, '-e', script], { stdout: 'pipe', stderr: 'pipe' })
+    const out = await new Response(child.stdout).text()
+    await child.exited
+    return { pid: child.pid, reply: JSON.parse(out) as { workers: Array<{ id: string }> } }
+  }
+
+  test(
+    'no origin in the body: the sending process is traced to its chat',
+    async () => {
+      const asked: Array<number | null> = []
+      setCallerTranscriptResolver(async (a) => {
+        asked.push(await (a[CALLER_PID_ARG] as () => Promise<number | null>)())
+        return caller()
+      })
+      try {
+        const { pid, reply } = await postFromChild({ tasks: [task('traced a')], group: 'og-http' })
+        expect(asked).toEqual([pid])
+        const w = climayteGet(reply.workers[0].id) as {
+          origin?: { sessionId: string; how: string }
+        }
+        expect(w.origin?.sessionId).toBe(SID)
+        expect(w.origin?.how).toBe('traced from the HTTP request: test caller')
+      } finally {
+        setCallerTranscriptResolver(async () => caller())
+      }
+    },
+    PROCESS_WALK_TEST_MS,
+  )
+
+  test(
+    'origin: null in the body: nothing is traced and the worker has no origin',
+    async () => {
+      let asked = 0
+      setCallerTranscriptResolver(async () => {
+        asked++
+        return caller()
+      })
+      try {
+        const { reply } = await postFromChild({
+          tasks: [task('traced b')],
+          group: 'og-http-none',
+          origin: null,
+        })
+        expect(asked).toBe(0)
+        expect((climayteGet(reply.workers[0].id) as { origin?: unknown }).origin).toBeUndefined()
+      } finally {
+        setCallerTranscriptResolver(async () => caller())
+      }
+    },
+    PROCESS_WALK_TEST_MS,
+  )
+})
 
 describe('a chat registered under a CLI instance is found as the caller', () => {
   // a desktop app that runs chats through the Agent SDK on a CLI instance: the engine's registry is in that

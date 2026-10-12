@@ -42,6 +42,7 @@ import { EMBEDDED, openInDesk } from '@/lib/desk-embed'
 import type { HswarmState } from '@/lib/hswarm-api'
 import { useHswarmApi } from '@/lib/hswarm-api'
 import { missingQueued } from '@/lib/job-tasks'
+import { jobOfAgent, workerOfAgent } from '@/lib/managers'
 import { formatTokens, formatUsd } from '@/lib/kit'
 import InfoHint from '@/shell/InfoHint.vue'
 
@@ -49,7 +50,8 @@ const { t } = useI18n()
 const { apiCall } = useHswarmApi()
 
 // jobId: set when the HSwarm tree picked one job; the page opens with that job open under its row.
-const props = defineProps<{ state: HswarmState; jobId?: string }>()
+// agent: set on a standing agent's page (Managers): only the work it started (its CliMayte workers and its HSwarm jobs, lib/managers.ts).
+const props = defineProps<{ state: HswarmState; jobId?: string; agent?: string }>()
 // open-task: a CliMayte worker (wave false) or a wave (wave true) was clicked; HSwarmView opens it on its page.
 const emit = defineEmits<{ changed: []; 'open-task': [id: string, wave: boolean] }>()
 
@@ -165,7 +167,13 @@ const items = computed<Item[]>(() =>
         wave,
       }),
     ),
-  ].sort((a, b) => b.at - a.at),
+  ]
+    .filter(
+      (it) =>
+        !props.agent ||
+        (it.job ? jobOfAgent(it.job.label, props.agent) : it.worker ? workerOfAgent(it.worker.group, props.agent) : false),
+    )
+    .sort((a, b) => b.at - a.at),
 )
 
 const matching = computed(() =>

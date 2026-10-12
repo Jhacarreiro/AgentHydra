@@ -67,6 +67,13 @@ export default {
   activeDays: '{d}d {h}h',
   rowActiveHint: 'Active {d} (time waiting for an account is not counted)',
   rowIdHint: 'Task {id}',
+  // Who dispatched a task (climayte-from.ts): a chat's title or short id, a worker's title, or none.
+  fromLabel: 'From',
+  fromHint: 'From {label}',
+  fromNotTraced: 'Not traced',
+  fromNotTracedHint: 'No chat or worker is known to have dispatched it (group {group})',
+  fromOpenChat: 'Open this chat in Desk',
+  fromOpenWorker: 'Open this CliMayte worker',
   // A task from another PC that shares the queue (CliMayteView remote rows): read-only.
   remoteOn: 'On {name}',
   remoteOnStale: 'On {name}, last seen {n} min ago',

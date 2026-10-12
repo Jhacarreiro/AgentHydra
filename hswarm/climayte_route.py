@@ -240,7 +240,10 @@ async def run_worker(job_id: str, task: Task, note: dict) -> Result | None:
     title = (task.prompt.strip().splitlines() or ["hswarm task"])[0][:80]
     spec = {"prompt": brief(task), "cwd": task.cwd, "title": title, "kind": worker_kind(task)}
     try:
-        status, doc = await _call("POST", "/api/corch/workers", {"tasks": [spec], "group": f"hswarm-{job_id}-{task.id}"})
+        # origin None: a routed task names no dispatching chat (its job's caller stands for it), so CliMayte
+        # neither traces one from this process nor pings a chat once per task.
+        body = {"tasks": [spec], "group": f"hswarm-{job_id}-{task.id}", "origin": None}
+        status, doc = await _call("POST", "/api/corch/workers", body)
     except (OSError, ValueError) as e:
         _say(job_id, f"CliMayte dispatch failed ({type(e).__name__}); the task runs on its API route")
         return None

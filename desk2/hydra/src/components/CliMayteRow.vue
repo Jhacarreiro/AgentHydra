@@ -25,6 +25,8 @@ defineProps<{
   /** The hover: the title in full and what needs attention. */
   hint: string
   tag?: RowTag | null
+  /** Who dispatched the task (the From column): its text, muted when not traced, and its hover. */
+  from?: { text: string; muted: boolean; hint: string } | null
   /** A small badge naming what the row is (HSwarm, CliMayte, Wave). */
   kind?: string | null
   /** Another PC's task: the cloud's hover names the PC. */
@@ -63,6 +65,12 @@ const { t } = useI18n()
     <!-- The account and the model fit the row, not the window: the pane beside HSwarm's tree is ~650px, where
          the window's breakpoints left the title ~140px of a 650px row (2026-10-10). -->
     <span class="hidden w-28 shrink-0 truncate text-muted-foreground @lg:block">{{ account }}</span>
+    <span
+      v-if="from"
+      class="hidden w-32 shrink-0 truncate @md:block"
+      :class="from.muted ? 'text-muted-foreground' : ''"
+      :title="from.hint"
+    >{{ from.text }}</span>
     <span
       class="hidden w-32 shrink-0 truncate @md:block"
       :class="tag?.differs ? 'text-warning' : 'text-muted-foreground'"

@@ -1052,6 +1052,13 @@ export interface CliMayteWorkerView {
   accounts: string[] | null
   status: CliMayteStatus
   sessionId: string | null
+  /** Who dispatched it (server climayte-origin.ts): the chat's session, or the dispatching worker's session.
+   *  Absent on rows this window builds itself (another PC's, a Free thread's). */
+  originSessionId?: string | null
+  /** The worker that dispatched it, when a worker did. */
+  originWorkerId?: string | null
+  /** The dispatching chat's title, when a chat did and it is known. */
+  originTitle?: string | null
   accountId: string | null
   /** `#<num> <name>` or null */
   account: string | null

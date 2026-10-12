@@ -948,7 +948,8 @@ export const TOOLS: HydraTool[] = [
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          ...(caller.origin ? { origin: caller.origin } : {}),
+          // null: no origin on purpose (notify false, or no traceable caller), so the route traces none.
+          origin: caller.origin,
           tasks: Array.isArray(a.tasks) ? a.tasks : [],
           group: a.group != null ? str(a.group) : undefined,
           accounts,
@@ -1032,7 +1033,8 @@ export const TOOLS: HydraTool[] = [
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          ...(caller.origin ? { origin: caller.origin } : {}),
+          // null: no origin on purpose (notify false, or no traceable caller), so the route traces none.
+          origin: caller.origin,
           plan: a.plan != null ? str(a.plan) : undefined,
           cwd: a.cwd != null ? str(a.cwd) : undefined,
           tasks: Array.isArray(a.tasks) ? a.tasks : [],

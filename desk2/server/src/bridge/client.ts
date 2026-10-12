@@ -489,6 +489,8 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {
+        // A Desk chat run as a worker is the user's own chat: no chat dispatched it, so nothing is traced or pinged.
+        origin: null,
         tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title, chat: true, ...(task.desk ? { desk: task.desk } : {}) }],
         group: task.group,
         ...(task.model ? { model: task.model, modelWhy: task.modelWhy } : {}),

@@ -60,7 +60,6 @@ import {
   updateAppearance,
 } from './connections'
 import { createChatGptContextPack } from './context-pack'
-import { refreshAccountTokens } from './core/account-tokens'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
@@ -152,6 +151,7 @@ import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
 import { relaunchWithHandoff, takeOverFromPredecessor, writeRelaunchAck } from './relaunch-handoff'
 import { planRelaunchSuccessor, relaunchRefusal } from './relaunch-identity'
+import { requestCallerPid } from './request-caller'
 import {
   acknowledgeResetEvents,
   listResetEvents,
@@ -357,22 +357,6 @@ app.get('/api/health', (c) =>
 // (and why it cannot drift from the stdio server, and why it is stateless) is in mcp-http.mjs.
 // It lives under /api/* deliberately: that is where the loopback CSRF guard is mounted, and this
 // is the route where it matters most, because `tools/call` can launch instances and move chats.
-/** The pid of the process that sent this request, or null when it cannot be told. Bun exposes the
- *  peer address through the server object Hono passes as `c.env`; everything after that is the OS
- *  connection table. Every failure answers null - "could not tell" is a fine answer here, and a
- *  guessed pid would become a confidently wrong identity. */
-async function callerPidOf(c: { env: unknown; req: { raw: Request } }): Promise<number | null> {
-  try {
-    const server = c.env as { requestIP?: (r: Request) => { port?: number } | null } | null
-    const port = typeof server?.requestIP === 'function' ? server.requestIP(c.req.raw)?.port : null
-    if (!port) return null
-    const { pidOwningLocalPort } = await import('./core/process')
-    return await pidOwningLocalPort(Number(port))
-  } catch {
-    return null
-  }
-}
-
 app.post('/api/mcp', async (c) => {
   let body: unknown
   try {
@@ -400,7 +384,7 @@ app.post('/api/mcp', async (c) => {
             mcpWithDaemonWarning(
               mcpWithOutputShaping(
                 withDeskChat(
-                  mcpToolsForCaller(() => (callerPid ??= callerPidOf(c))),
+                  mcpToolsForCaller(() => (callerPid ??= requestCallerPid(c))),
                   c.req.header(DESK_CHAT_HEADER),
                 ),
               ),
@@ -456,9 +440,9 @@ app.get('/api/mcp/shared/:name', (c) =>
 
 // --- manager MCP endpoint: `/api/corch/mcp/:managerId` gives a manager its wave's tools
 // (climayte-manager-mcp.ts; docs/CLIMAYTE.md, "Scope and identity of the manager endpoint").
-registerManagerMcpRoute(app, callerPidOf)
+registerManagerMcpRoute(app, requestCallerPid)
 // --- worker MCP endpoint: `/api/corch/ask/:workerId` gives a worker climayte_ask (climayte-ask-mcp.ts).
-registerAskMcpRoute(app, callerPidOf)
+registerAskMcpRoute(app, requestCallerPid)
 // --- worker Stop hook: `/api/corch/stop/:workerId` asks a worker whose estimate missed why (climayte-eta.ts).
 registerStopHookRoute(app)
 
@@ -1585,7 +1569,6 @@ startCliResetSweep()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
 startDesktopCliFeed()
-void refreshAccountTokens()
 // The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
 // analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.
 startKitSweep()

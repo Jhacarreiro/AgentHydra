@@ -9,6 +9,7 @@ import {
   basisText,
   changed,
   claudeCommand,
+  cpuReader,
   journal,
   memoryReader,
   overageAllowed,
@@ -19,6 +20,7 @@ import {
   wantReading,
   workers,
 } from './climayte-core'
+import { cpuShort, recordCpu } from './climayte-cpu'
 import { firstLine } from './climayte-journal'
 import { launch } from './climayte-launch'
 import {
@@ -81,6 +83,10 @@ interface TickState {
   memory: MachineMemory | null
   /** Workers started within RAMP_MS, this tick's starts included: not yet fully in `memory`. */
   growing: Growth
+  /** The machine's CPU busy share over the last CPU_WINDOW_MS (null: not read, nothing waits for it). */
+  cpu: number | null
+  /** Workers running on this PC at the start of the tick: the CPU gate holds only with enough. */
+  cpuRunning: number
   /** What the install guard said before the tick (installForTick); null: no install is judged. */
   install: InstallState | null
 }
@@ -131,6 +137,8 @@ export function tickState(
   const growing: Growth = memory
     ? growthOf(live, now)
     : { expectedBytes: DEFAULT_GROWN_BYTES, sets: [] }
+  // Sampled every tick, so the window fills whether or not a start is waiting (climayte-cpu.ts).
+  const cpu = recordCpu(now, cpuReader?.() ?? null)
   return {
     now,
     accounts,
@@ -142,6 +150,8 @@ export function tickState(
     finishedSince,
     memory,
     growing,
+    cpu,
+    cpuRunning: live.length,
     install,
   }
 }
@@ -404,7 +414,7 @@ function refusalOn(
  *  room. 2026-10-02 04:58: the hint counted every account with no worker under the stop lines and
  *  said 9 sat idle while placement held 24 tasks. */
 export function roomNow(s: TickState): CliMayteAccount[] {
-  if (memoryShort(s.memory, s.growing)) return []
+  if (memoryShort(s.memory, s.growing) || cpuShort(s.cpu, s.cpuRunning)) return []
   const { accounts, active, now, running, finishedSince } = s
   const probe = { accounts: null, accountId: null, attempts: [], priority: 0 }
   const placement = { expected: DEFAULT_TASK_PCT, running, finishedSince }
@@ -489,11 +499,27 @@ function holdForMemory(w: CliMayteWorker, short: string): void {
   changed(w)
 }
 
+const CPU_HEAD = 'Waiting for CPU'
+
+/** The machine is busy with the workers already running (climayte-cpu.ts): the task stays queued and
+ *  starts once the CPU drops. Said once, like holdForMemory: the busy share moves every tick. */
+function holdForCpu(w: CliMayteWorker, short: string): void {
+  if (w.status === 'queued' && w.error?.startsWith(CPU_HEAD)) return
+  const why = `${CPU_HEAD}: ${short}. Nothing running is stopped.`
+  journal(w, 'waiting', { error: firstLine(why) })
+  w.status = 'queued'
+  w.error = why
+  w.waitUntil = null
+  changed(w)
+}
+
 /** startOn will start the task on `acct` this tick rather than hold it (no reading due there, and
- *  the machine has the memory): a journal line about the start is written only then, not on every
- *  tick it is held. */
+ *  the machine has the memory and the CPU): a journal line about the start is written only then, not
+ *  on every tick it is held. */
 const goesNow = (s: TickState, acct: CliMayteAccount): boolean =>
-  !readingPending(acct, s.now) && !memoryShort(s.memory, s.growing)
+  !readingPending(acct, s.now) &&
+  !memoryShort(s.memory, s.growing) &&
+  !cpuShort(s.cpu, s.cpuRunning)
 
 /** Test seam: what the scheduler asks before launching (null: the real guard, which only judges the
  *  real launcher). */
@@ -584,6 +610,11 @@ function startOn(
     holdForMemory(w, short)
     return
   }
+  const busy = cpuShort(s.cpu, s.cpuRunning)
+  if (busy) {
+    holdForCpu(w, busy)
+    return
+  }
   // No slot: the task stays as it is, due again next tick (never failed or dropped).
   if (!takeLaunchSlot(s.now)) return
   const expected = cost.pct
@@ -602,6 +633,7 @@ function startOn(
   }
   if (w.status === 'running') {
     s.growing.sets.push(null) // just started: reserves its full expected size
+    s.cpuRunning++ // and counts toward the CPU gate's running workers for the rest of this tick
     bumpCount(s.active, acct.id)
     bumpCount(groupActive, acct.id)
     s.running.set(acct.id, [

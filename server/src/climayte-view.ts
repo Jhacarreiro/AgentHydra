@@ -43,6 +43,7 @@ import {
   toReport,
   toView,
 } from './climayte-lib'
+import type { OriginLookup } from './climayte-origin'
 import { roomNow, tickState } from './climayte-schedule'
 import {
   CLIMAYTE_LADDER,
@@ -56,6 +57,7 @@ import {
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
 import { attemptExited, finishedLines, lastRead, signalWindDown } from './climayte-stops'
+import { originChatTitle } from './core/climayte-queue-sync'
 
 /** The room CliMayte has right now, for an agent deciding whether to hand work over (check_my_usage
  *  and list_usage say it): `idle`, the accounts running no CliMayte worker that placement would
@@ -219,6 +221,13 @@ export interface CliMayteListFilter {
   all?: boolean
 }
 
+/** Who dispatched a worker, for the list and detail: a worker origin's session, and a chat origin's
+ *  title as the queue pass last cached it (climayte-origin.ts). */
+const originLookup: OriginLookup = {
+  sessionOf: (workerId) => workers.get(workerId)?.sessionId ?? null,
+  titleOf: originChatTitle,
+}
+
 export function climayteList(filter: CliMayteListFilter & { brief: true }): CliMayteWorkerBrief[]
 
 export function climayteList(filter?: CliMayteListFilter): CliMayteWorkerView[]
@@ -232,7 +241,7 @@ export function climayteList(
   const views = recentWorkers(
     [...workers.values()].filter((w) => matches(w, filter) && (!mine || mine.has(w.id))),
     filter.limit,
-  ).map((w) => toView(w, now))
+  ).map((w) => toView(w, now, originLookup))
   if (!filter.brief) return views
   // An orchestrator's default list is what it may act on: live work and unjudged results. Judged
   // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02).
@@ -323,7 +332,7 @@ export function climayteGet(
     events.unshift(`— attempt ${i + 1} on ${who}: ${a.outcome} —`, ...lines)
   }
   return {
-    ...toView(w, Date.now()),
+    ...toView(w, Date.now(), originLookup),
     ...(opts.fullPrompt ? { prompt: w.prompt } : {}),
     events: events.slice(-60),
   }

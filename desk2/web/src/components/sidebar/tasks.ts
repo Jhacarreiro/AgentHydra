@@ -90,8 +90,8 @@ export const isAddedRow = (id: string): boolean => id.startsWith(ADDED)
 /** The deepest indent: a task further down is still listed, at this one. */
 const MAX_DEPTH = 3
 
-/** A row the sidebar added for a CliMayte task nothing says which chat started: it carries the CliMayte mark in both lists. */
-export const isTaskRow = (id: string): boolean => /^added:[^:]*:task:/.test(id)
+/** A row the sidebar added for CliMayte tasks nothing says which chat started (one task, or a group of them): it carries the CliMayte mark in both lists. */
+export const isTaskRow = (id: string): boolean => /^added:[^:]*:task(-group)?:/.test(id)
 
 /** The group CliMayte gives a task HSwarm sent it: `hswarm-<job>-<task>` (hswarm/climayte_route.py). */
 const ROUTED = 'hswarm-'
@@ -190,7 +190,8 @@ export interface NestOptions {
  * nothing says which chat, under the dispatcher's own row (a Desk chat run as a worker is one). A task HSwarm sent
  * to CliMayte counts as dispatched by the chat that called its job (viaJobs); one whose job names no chat goes under
  * the job's row, and one whose job is not known waits for it (ROUTED_WAIT_MS), then goes under a row of such tasks
- * (routedRow): never a row of its own (owner, 2026-10-09).
+ * (routedRow): never a row of its own (owner, 2026-10-09). Origin-less tasks that share a CliMayte group on one PC are one
+ * row titled as the group (groupRow), so a script's many workers are not a row each (owner, 2026-10-12).
  */
 export function nestTasks(
   rows: readonly NestRow[],
@@ -439,10 +440,38 @@ function routedRow(st: AddedRows, r: CliMayteWorker, j: SwarmJob | null): AddedR
   return addRow(st, { id, title: j ? j.title : ROUTED_TITLE, pc, cwd, folder: j?.folder ?? r.folder ?? null, at, sessionId: null, worker: null, job: j }, [])
 }
 
+/**
+ * The key of the CliMayte group a root task shares on its PC when nothing names the chat or worker that started it and
+ * it is not a task HSwarm sent (groupRow); null for any other.
+ */
+const groupKeyOf = (r: CliMayteWorker, routed: ReadonlyMap<string, SwarmJob | null>): string | null =>
+  !r.originSessionId && !r.originWorkerId && !routed.has(keyOf(r)) && r.group ? `${r.pc ?? ''}|${r.group}` : null
+
+/**
+ * The row of a group of origin-less tasks (two or more on one PC, groupKeyOf): titled as the group, its id by PC and
+ * group name so it stays the same across polls. Its tasks nest under it as under a chat row; the row is one a task
+ * draws only while it has company (a single one keeps its own row).
+ */
+function groupRow(st: AddedRows, r: CliMayteWorker, sessions: Iterable<string>): AddedRow {
+  const pc = r.pc ?? null
+  const id = `${ADDED}${pc ?? ''}:task-group:${r.group}`
+  const row = st.added.get(id) ?? addRow(st, { id, title: r.group!, pc, cwd: null, folder: null, at: 0, sessionId: null, worker: null, job: null }, [])
+  if (!row.cwd) row.cwd = cwdOf(st, r)
+  if (!row.folder) row.folder = r.folder ?? null
+  for (const s of sessions) if (!st.bySession.has(`${pc ?? ''}|${s}`)) st.bySession.set(`${pc ?? ''}|${s}`, row)
+  return row
+}
+
 function addRoots(ix: WorkerIndex, st: AddedRows, roots: CliMayteWorker[], seen: Set<string>, routed: ReadonlyMap<string, SwarmJob | null>): void {
   /** The first non-empty title of the chat each origin stands for, as its PC sent it. */
   const titles = new Map<string, string>()
   for (const r of roots) if (r.originSessionId && r.originTitle && !titles.has(`${r.pc ?? ''}|${r.originSessionId}`)) titles.set(`${r.pc ?? ''}|${r.originSessionId}`, r.originTitle)
+  /** How many roots share each group (groupKeyOf): two or more make a group row. */
+  const groupSize = new Map<string, number>()
+  for (const r of roots) {
+    const k = groupKeyOf(r, routed)
+    if (k) groupSize.set(k, (groupSize.get(k) ?? 0) + 1)
+  }
   for (const r of roots.sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const pc = r.pc ?? null
     if (routed.has(keyOf(r))) {
@@ -457,9 +486,19 @@ function addRoots(ix: WorkerIndex, st: AddedRows, roots: CliMayteWorker[], seen:
       row.nodes.push({ worker: r, depth: 1 }, ...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 2, seen))
     } else {
       // A Hydra Desk chat run as a worker, or a task nothing says which chat started (its dispatcher is gone, or
-      // its PC's AgentHydra is too old to say): the row is the worker itself, never a "No chat" heading.
-      const row = addRow(st, { id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(st, r), folder: r.folder ?? null, at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
-      row.nodes.push(...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 1, seen))
+      // its PC's AgentHydra is too old to say): the row is the worker itself, never a "No chat" heading, unless
+      // a group of such tasks shares its group on this PC (groupRow).
+      const k = groupKeyOf(r, routed)
+      if (k && (groupSize.get(k) ?? 0) > 1) {
+        // The group's row is no task of its own: each task sits one step in, as under a chat row, and the row is as
+        // recent as its newest task.
+        const row = groupRow(st, r, sessionsOf(r))
+        row.at = Math.max(row.at, activity(r))
+        row.nodes.push({ worker: r, depth: 1 }, ...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 2, seen))
+      } else {
+        const row = addRow(st, { id: `${ADDED}${pc ?? ''}:task:${r.id}`, title: r.title, pc, cwd: cwdOf(st, r), folder: r.folder ?? null, at: activity(r), sessionId: r.sessionId, worker: r, job: null }, sessionsOf(r))
+        row.nodes.push(...walk(ix, sessionsOf(r), new Set([keyOf(r)]), 1, seen))
+      }
     }
   }
 }

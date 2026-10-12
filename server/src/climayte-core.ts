@@ -25,6 +25,7 @@ import {
 import { join } from 'node:path'
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
+import { type CpuCounters, readCpuCounters } from './climayte-cpu'
 import { type EtaReview, etaFullOfEvent, reviewOfEvent } from './climayte-eta'
 import {
   appendJournal,
@@ -633,6 +634,16 @@ export let memoryReader: (() => MachineMemory | null) | null =
 /** Tests: read the machine's memory from `fn`. null turns the memory gate off. */
 export function setCliMayteMemoryReader(fn: (() => MachineMemory | null) | null): void {
   memoryReader = fn
+}
+
+/** This machine's CPU counters, which a start must leave room in (climayte-cpu.ts). Off under tests
+ *  unless a test sets it, like memoryReader. */
+export let cpuReader: (() => CpuCounters | null) | null =
+  process.env.NODE_ENV === 'test' ? null : readCpuCounters
+
+/** Tests: read the machine's CPU from `fn`. null turns the CPU gate off. */
+export function setCliMayteCpuReader(fn: (() => CpuCounters | null) | null): void {
+  cpuReader = fn
 }
 
 /** done/'s workers as preloadDone read them, for the first load() to take instead of reading every

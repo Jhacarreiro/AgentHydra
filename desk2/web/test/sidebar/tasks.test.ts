@@ -1,7 +1,7 @@
 import { expect, test } from 'bun:test'
 import type { CliMayteWorker, ExternalSession, SwarmJob } from '@shared/protocol'
 import { deskNewFolder, type ChatGroup, type SidebarEntry } from '../../src/components/sidebar/logic'
-import { addRemoteToDeskGroups, addToDeskGroups, addedPulse, addedStatus, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
+import { addRemoteToDeskGroups, addToDeskGroups, addedPulse, addedStatus, isTaskRow, nestTasks, runningJobsIn, runningTasksIn, type AddedRow, type TaskNode } from '../../src/components/sidebar/tasks'
 
 // The sidebar's CliMayte toggle: each session's running tasks under it and nowhere else, a manager's wave one
 // step further in.
@@ -241,6 +241,32 @@ test('three tasks from one unlisted chat on another PC share one row, titled as 
   expect(named.added.map((a) => [a.title, a.sessionId, listOf(a.nodes)])).toEqual([['Example refactor chat', '0123456789abcdef', ['1:PC-X:t1', '1:PC-X:t2', '1:PC-X:t3']]])
   const plain = nestTasks([], [worker('t1', 1, { ...from }), worker('t2', 2, { ...from })])
   expect(plain.added.map((a) => a.title)).toEqual(['t1'])
+})
+
+test('origin-less tasks that share a CliMayte group on one PC are one row named for the group, its tasks nested; a group of one keeps its own task row', () => {
+  const workers = [
+    worker('a1', 1, { group: 'G' }),
+    worker('a2', 2, { group: 'G' }),
+    worker('a3', 3, { group: 'G' }),
+    worker('h1', 4, { group: 'H' })
+  ]
+  const tasks = nestTasks([], workers)
+  expect(tasks.added.map((a) => [a.id, a.title, a.worker?.id ?? null, listOf(a.nodes)])).toEqual([
+    ['added::task-group:G', 'G', null, ['1:here:a1', '1:here:a2', '1:here:a3']],
+    ['added::task:h1', 'h1', 'h1', []]
+  ])
+  expect(tasks.added.every((a) => isTaskRow(a.id))).toBe(true)
+  // The group's row is a row of its own tasks: it runs while one does, and the group row's count is its three tasks.
+  expect(addedStatus(tasks.added[0]!)).toBe('working')
+  expect(runningTasksIn([tasks.added[0]!.nodes])).toBe(3)
+})
+
+test('a group row keeps its id across polls when another task of the group arrives', () => {
+  const a = (id: string, at: number) => worker(id, at, { group: 'G' })
+  const before = nestTasks([], [a('a1', 1), a('a2', 2), a('a3', 3), worker('h1', 4, { group: 'H' })]).added
+  const after = nestTasks([], [a('a1', 1), a('a2', 2), a('a3', 3), a('a4', 5), worker('h1', 4, { group: 'H' })]).added
+  expect(after.map((r) => r.id)).toEqual(before.map((r) => r.id))
+  expect(listOf(after[0]!.nodes)).toEqual(['1:here:a1', '1:here:a2', '1:here:a3', '1:here:a4'])
 })
 
 test('a Desk chat running as a worker on another PC is its own row, with its task one step in and its HSwarm job', () => {

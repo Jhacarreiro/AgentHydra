@@ -1120,11 +1120,24 @@ process, and the tool turns that into the chat's transcript (`callerOrigin`, usi
 its own tool arguments is ignored. The tool posts the resolved origin to `POST /api/corch/workers`
 (or `/api/corch/waves`), and the route checks it again before storing it: `sessionId` must be a
 UUID and `home` an absolute folder that exists; a malformed one is dropped and pings are off for
-that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends no origin at all. The
-lookup gets 15 s (`CALLER_ORIGIN_BUDGET_MS`); past that the dispatch goes on with pings off, as for
-a caller it could not trace, and `climayte_status` takes what the lookup spent off its watch. On
-2026-10-11 the lookup's netstat waited 150-1,600 s behind a jammed spawn worker, and three
-dispatches were still waiting when the daemon restarted, so they were never sent.
+that dispatch. `notify: false` on `climayte_run` / `climayte_manage` sends `origin: null`, as does a
+call whose caller could not be traced: `null` is a dispatcher's word that there is none, and the
+route then traces nothing. The lookup gets 15 s (`CALLER_ORIGIN_BUDGET_MS`); past that the dispatch
+goes on with pings off, as for a caller it could not trace, and `climayte_status` takes what the
+lookup spent off its watch. On 2026-10-11 the lookup's netstat waited 150-1,600 s behind a jammed
+spawn worker, and three dispatches were still waiting when the daemon restarted, so they were never
+sent.
+
+**A plain HTTP dispatch is traced too** (owner, 2026-10-12: a chat's script posted about 60 workers
+with no origin, and neither the CliMayte table nor Desk's sidebar could say "what OG thread ran it").
+A `POST /api/corch/workers` or `/api/corch/waves` whose body has no `origin` key at all is traced
+from its socket: the OS connection table names the sending process, and the same registry walk the
+MCP tools use finds the chat it runs under (`requestCallerOrigin` in `request-caller.ts`, 5 s budget;
+its `how` starts `traced from the HTTP request:`). A script a chat runs therefore records that chat,
+and its news is pinged there like an MCP dispatch's. The daemon's own requests are never traced.
+Dispatchers that mean none send `origin: null`: HSwarm's per-task routing (`hswarm-<job>-<task>`
+groups, whose job's caller stands for the chat) and Desk running one of the user's own chats as a
+worker.
 
 - A `climayte_run` whose caller is itself a CliMayte worker's session gets
   `{ kind: 'worker', workerId }`: the worker hears of it through `climayteSend` (non-urgent), never

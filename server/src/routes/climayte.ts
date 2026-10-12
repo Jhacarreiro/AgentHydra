@@ -52,9 +52,11 @@ import {
   startQuickAdd,
   submitQuickAddCode,
 } from '../core/cli-quick-add'
+import { warmOriginTitles } from '../core/climayte-queue-sync'
 import { readOwnBuild } from '../core/own-build'
 import { app } from '../http-app'
 import { CLIMAYTE_MAX_WAIT_S } from '../mcp-client'
+import { requestCallerOrigin } from '../request-caller'
 import { jsonBody } from '../route-helpers'
 
 // A request at boot waits for CliMayte's first load (startCliMayte reads done/ off the daemon's thread
@@ -80,7 +82,7 @@ const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 /** The dispatching chat the MCP tool resolved from its caller binding (mcp-self.ts callerOrigin),
  *  checked before anything is pinged at it: a session id that is a UUID, a Claude home that is an
  *  absolute folder on this machine. The tool never forwards an origin from its client's arguments;
- *  a body without one is simply not pinged. */
+ *  `null` is a dispatcher's word that there is none (dispatchOrigin). */
 function chatOrigin(v: unknown): { origin: CliMayteOrigin | undefined; why: string | null } {
   if (v === undefined || v === null) return { origin: undefined, why: null }
   const o = v as Record<string, unknown>
@@ -95,6 +97,22 @@ function chatOrigin(v: unknown): { origin: CliMayteOrigin | undefined; why: stri
     origin: { kind: 'chat', sessionId: o.sessionId, home: o.home, transcript, how },
     why: null,
   }
+}
+
+/** The origin a dispatch records. An `origin` in the body is checked (chatOrigin); `null` there is the
+ *  dispatcher saying it has none on purpose (the MCP tool under notify false or with no traceable caller,
+ *  HSwarm's per-task routing, a Desk chat run as a worker), so nothing is traced. A body with no `origin`
+ *  at all is a plain HTTP caller, such as a script a chat ran: the chat its process runs under is traced
+ *  from the request's socket (request-caller.ts). */
+async function dispatchOrigin(
+  c: { env: unknown; req: { raw: Request } },
+  v: unknown,
+): Promise<{ origin: CliMayteOrigin | undefined; why: string | null }> {
+  if (v !== undefined) return chatOrigin(v)
+  const traced = await requestCallerOrigin(c)
+  return traced.origin
+    ? { origin: traced.origin, why: null }
+    : { origin: undefined, why: traced.why }
 }
 
 /** What a dispatch answers about its pings: on (to a chat, or to the worker that dispatched it),
@@ -119,7 +137,17 @@ function pingReply(
 // session ids) keeps only the workers those chats dispatched, through the workers they dispatched
 // (dispatchedFrom): Desk 2's Background tasks panel asks it for the open chat, whose finished workers
 // leave the machine-wide recent window within minutes on a busy PC.
+// Each read also starts one background pass that looks up the titles of dispatching chats not known yet
+// (warmOriginTitles; otherwise only the shared-queue pass does), so a PC that shares no queue still names
+// a task's parent chat in its From column by the next read. The answer never waits for it.
+let warmingTitles: Promise<void> | null = null
 app.get('/api/corch/workers', async (c) => {
+  if (!warmingTitles)
+    warmingTitles = warmOriginTitles()
+      .catch(() => undefined)
+      .finally(() => {
+        warmingTitles = null
+      })
   const list = (v: string | undefined) =>
     optStr(v)
       ?.split(',')
@@ -211,7 +239,7 @@ app.post('/api/corch/workers', async (c) => {
   const strict = body.perAccountStrict ?? body.per_account_strict
   if (strict !== undefined && typeof strict !== 'boolean')
     return c.json({ error: 'perAccountStrict must be true or false' }, 400)
-  const { origin, why } = chatOrigin(body.origin)
+  const { origin, why } = await dispatchOrigin(c, body.origin)
   try {
     const reply = climayteRun({
       tasks: body.tasks as Parameters<typeof climayteRun>[0]['tasks'],
@@ -313,7 +341,7 @@ app.post('/api/corch/verdicts', async (c) => {
 // mistake: 400 with the reason, nothing started.
 app.post('/api/corch/waves', async (c) => {
   const body = await jsonBody(c)
-  const { origin, why } = chatOrigin(body.origin)
+  const { origin, why } = await dispatchOrigin(c, body.origin)
   try {
     const reply = await climayteWaveStart({
       plan: body.plan,

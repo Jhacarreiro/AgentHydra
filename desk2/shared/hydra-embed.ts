@@ -102,8 +102,8 @@ export interface SidebarModel {
   footer?: SidebarButton[]
 }
 
-/** The Settings pages the copy opens Desk's Settings on: Updates, and each Instances table's page. */
-export const AH_SETTINGS_PAGES = ['updates', 'cli', 'desktop', 'free'] as const
+/** The Settings pages the copy opens Desk's Settings on: Updates, Managers (the HSwarm Managers node's pages), and each Instances table's page. */
+export const AH_SETTINGS_PAGES = ['updates', 'managers', 'cli', 'desktop', 'free'] as const
 export type AhSettingsPage = (typeof AH_SETTINGS_PAGES)[number]
 
 /** The copy to Desk. */

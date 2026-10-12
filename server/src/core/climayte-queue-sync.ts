@@ -36,6 +36,7 @@ import { createCipheriv, createDecipheriv, createHash, randomBytes } from 'node:
 import { gunzipSync } from 'node:zlib' // the first format
 import { liveByAccount, workers } from '../climayte-core'
 import { type CliMayteWorker, ranSeconds } from '../climayte-lib'
+import { type OriginLookup, originFields } from '../climayte-origin'
 import {
   folderName,
   keepRemote,
@@ -85,6 +86,15 @@ const TITLE_WAIT_MS = 2_000
 /** Chat session id -> its title as the session list shows it (null: not found). Only read by
  *  buildSnapshot; filled by warmOriginTitles at the start of a queue pass. */
 const titleCache = new Map<string, { title: string | null; at: number }>()
+
+/** A chat origin's title as the last warm pass cached it (null: unknown). */
+export const originChatTitle = (sessionId: string): string | null =>
+  titleCache.get(sessionId)?.title ?? null
+
+const originLookup: OriginLookup = {
+  sessionOf: (workerId) => workers.get(workerId)?.sessionId ?? null,
+  titleOf: originChatTitle,
+}
 
 export type TitleLookup = (sessionId: string) => Promise<string | null | undefined>
 
@@ -227,9 +237,6 @@ export async function warmSwarmJobs(fetchJobs: SwarmJobsFetch = hswarmJobsFetch)
 function reduce(w: CliMayteWorker, now: number): RemoteWorker {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const v = w.verdicts?.at(-1)?.verdict
-  // Who dispatched it, as ids only: a chat's origin also holds its Claude home and transcript path.
-  const o = w.origin
-  const byWorker = o?.kind === 'worker' ? o.workerId : null
   return {
     id: w.id,
     title: w.title,
@@ -247,16 +254,10 @@ function reduce(w: CliMayteWorker, now: number): RemoteWorker {
     error: w.error,
     verdict: v === 'pass' || v === 'fail' ? v : null,
     sessionId: w.sessionId ?? null,
-    originSessionId:
-      o?.kind === 'chat'
-        ? o.sessionId
-        : byWorker
-          ? (workers.get(byWorker)?.sessionId ?? null)
-          : null,
-    originWorkerId: byWorker,
+    // Who dispatched it, as ids and a title only (climayte-origin.ts, shared with the CliMayte list).
+    ...originFields(w.origin, originLookup),
     wave: w.wave ?? null,
     sessions: [...(w.sessions ?? [])],
-    originTitle: o?.kind === 'chat' ? (titleCache.get(o.sessionId)?.title ?? null) : null,
     folder: folderName(w.cwd),
   }
 }
