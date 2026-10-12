@@ -52,8 +52,8 @@ describe('list_sessions', () => {
     // The parameter alone is not enough: a client only reaches for `period` if it knows the default
     // is not "everything". This sentence is load-bearing, not decoration.
     const d = tool('list_sessions')?.description ?? ''
-    expect(d).toContain('24 HOURS')
-    expect(d.toLowerCase()).toContain('period="all"')
+    expect(d).toContain('24 hours')
+    expect(d.toLowerCase()).toContain("period 'all'")
   })
 
   test('period reaches the daemon', async () => {

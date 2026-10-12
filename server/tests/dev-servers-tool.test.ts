@@ -190,10 +190,10 @@ describe('dev_servers when Desk is down', () => {
 describe('dev_servers is advertised', () => {
   test('a MUTATES tool in the table, and the handshake tells sessions to use it before the shell', () => {
     const tool = TOOLS.find((t) => t.name === 'dev_servers')
-    expect(
-      tool?.description.startsWith('MUTATES: (start, stop, restart, scan, add_project) '),
-    ).toBe(true)
+    expect(tool?.description.startsWith('MUTATES: ')).toBe(true)
+    for (const action of ['start', 'stop', 'restart', 'scan', 'add_project'])
+      expect(tool?.description).toContain(action)
     expect(SERVER_INSTRUCTIONS).toContain('dev_servers {action:"start", cwd}')
-    expect(SERVER_INSTRUCTIONS).toContain('never start one from the shell')
+    expect(SERVER_INSTRUCTIONS).toContain('rather than from the shell')
   })
 })

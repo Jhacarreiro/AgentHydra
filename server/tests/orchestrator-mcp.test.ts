@@ -197,7 +197,7 @@ describe('orchestrator_cancel stops a run that is still going', () => {
     expect((t.inputSchema as { type: string }).type).toBe('object')
     expect((t.inputSchema as { required: string[] }).required).toEqual(['id'])
     expect(t.description).toContain('MUTATES')
-    expect(t.description).toContain('NOT AN UNDO')
+    expect(t.description).toContain('Cancel is not an undo')
   })
 
   test('it POSTs the cancel route for that id, and encodes it', async () => {

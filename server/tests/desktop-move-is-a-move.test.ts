@@ -65,5 +65,7 @@ test('the description promises the move, so a doc revert fails here too', () => 
   const d = moveTool().description.toLowerCase()
   expect(d).toContain('move')
   // the half-move is exactly what the owner said must not happen: the other account keeps it
-  expect(d).toMatch(/source account no longer shows it|archives every other profile/)
+  expect(d).toMatch(
+    /source account (no longer shows|stops showing) it|source account stops showing the chat|archives every other profile/,
+  )
 })

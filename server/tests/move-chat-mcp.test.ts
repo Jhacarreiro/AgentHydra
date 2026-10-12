@@ -139,11 +139,11 @@ describe('move_chat is registered as the one-call move', () => {
 
   test('the description promises the things a caller must be able to rely on', () => {
     const d = moveChat().description.toLowerCase()
-    expect(d).toContain('fuzz') // the title is matched fuzzily
+    expect(d).toContain('matched loosely') // the title is matched fuzzily
     expect(d).toContain('bypasspermissions') // every landing is stamped
     expect(d).toMatch(/person'?s word/) // force is not the tool's to spend
-    expect(d).toContain('"here"')
-    expect(d).toContain('"best"')
+    expect(d).toMatch(/["']here["']/)
+    expect(d).toMatch(/["']best["']/)
   })
 })
 

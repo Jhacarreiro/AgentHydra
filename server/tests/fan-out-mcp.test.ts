@@ -101,25 +101,25 @@ describe('the three fan-out tools exist and say what they are', () => {
   test('the two acting tools say MUTATES; the reader says READ-ONLY', () => {
     expect(tool('fan_out').description).toMatch(/^MUTATES:/)
     expect(tool('fan_out_send').description).toMatch(/^MUTATES:/)
-    expect(tool('fan_out_status').description).toMatch(/^READ-ONLY:/)
+    expect(tool('fan_out_status').description).toMatch(/Read-only\.$/)
   })
   test('fan_out_send describes the composer route it takes, not a peer channel it never uses', () => {
     const d = tool('fan_out_send').description
-    expect(d).toContain('PEER PIPE IS NOT USED')
+    expect(d).toMatch(/does not use the peer pipe/)
     expect(d.toLowerCase()).toContain('composer')
     expect(d).not.toMatch(/native peer channel when the chat is live/)
   })
   test('fan_out promises the properties that make it safe: visible, one account each, sequential', () => {
     const d = tool('fan_out').description.toLowerCase()
     expect(d).toContain('visible')
-    expect(d).toContain('one account each')
+    expect(d).toContain('one task per account')
     expect(d).toContain('one at a time')
     expect(d).toContain('never headless')
   })
   test('the two refused tools now say so up front and point at fan_out', () => {
     for (const name of ['add_queue_item', 'launch_terminal_session']) {
       const d = tool(name).description
-      expect(d.startsWith('⛔ REFUSED ON EVERY CALL')).toBe(true)
+      expect(d.startsWith('Refused on every call')).toBe(true)
       expect(d).toContain('fan_out')
     }
   })
@@ -127,7 +127,9 @@ describe('the three fan-out tools exist and say what they are', () => {
     expect(SERVER_INSTRUCTIONS).toContain('fan_out {tasks:[{cwd, prompt}]}')
     expect(SERVER_INSTRUCTIONS).toContain('fan_out_status')
     expect(SERVER_INSTRUCTIONS).toContain('fan_out_send')
-    expect(SERVER_INSTRUCTIONS).toContain('add_queue_item and launch_terminal_session are REFUSED')
+    expect(SERVER_INSTRUCTIONS).toContain(
+      'add_queue_item and launch_terminal_session refuse every call',
+    )
   })
 })
 
@@ -729,7 +731,9 @@ describe('fan_out_delete - the cleanup a probe fan-out owes', () => {
 
   test('fan_out itself and the standing instructions both say a probe must be deleted', () => {
     expect(tool('fan_out').description).toContain('fan_out_delete')
-    expect(SERVER_INSTRUCTIONS).toContain('MUST BE DELETED AFTERWARDS')
+    expect(SERVER_INSTRUCTIONS).toContain(
+      'Delete a probe chat you create afterwards with fan_out_delete',
+    )
     expect(SERVER_INSTRUCTIONS).toContain('fan_out_delete {group}')
   })
 })
