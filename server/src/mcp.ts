@@ -2240,17 +2240,34 @@ export const SERVER_INFO = { name: 'agenthydra', version: VERSION }
  * - so it hands that answer in here rather than letting the identity tools guess from a process
  * that happens to be the daemon (see detectForCaller in mcp-self.ts). */
 export function toolsForCaller(getCallerPid: () => Promise<number | null>): McpEngineTool[] {
-  // Only the identity tools are rebound; every other entry is the SAME object (pinned by
-  // mcp-caller-identity.test.ts). The side-run wrapper is applied by the HTTP route on top of this.
-  return TOOLS.map((t) =>
-    CALLER_AWARE_TOOLS.has(t.name)
-      ? {
-          ...t,
-          run: (args: Record<string, unknown>, signal?: AbortSignal) =>
-            t.run({ ...args, [CALLER_PID_ARG]: getCallerPid }, signal),
-        }
-      : t,
-  )
+  // Only the identity tools (and hydra_run, which can run them) are rebound; every other entry is
+  // the SAME object (pinned by mcp-caller-identity.test.ts). The side-run wrapper is applied by the
+  // HTTP route on top of this.
+  const bind = (args: Record<string, unknown>) => ({ ...args, [CALLER_PID_ARG]: getCallerPid })
+  return TOOLS.map((t) => {
+    if (CALLER_AWARE_TOOLS.has(t.name))
+      return {
+        ...t,
+        run: (args: Record<string, unknown>, signal?: AbortSignal) => t.run(bind(args), signal),
+      }
+    // hydra_run runs the bare tool (mcp-find.ts), so an identity tool it names gets the binding in
+    // its own arguments. Without it the tool took the daemon for its caller: 2026-10-11, a Desk chat
+    // dispatched ten workers through hydra_run { tool: 'climayte_run' }, each recorded no origin,
+    // and the chat showed none of them running.
+    if (t.name === 'hydra_run')
+      return {
+        ...t,
+        run: (a: Record<string, unknown>, signal?: AbortSignal) => {
+          if (!CALLER_AWARE_TOOLS.has(str(a.tool).trim())) return t.run(a, signal)
+          const args =
+            a.args && typeof a.args === 'object' && !Array.isArray(a.args)
+              ? (a.args as Record<string, unknown>)
+              : {}
+          return t.run({ ...a, args: bind(args) }, signal)
+        },
+      }
+    return t
+  })
 }
 
 /*

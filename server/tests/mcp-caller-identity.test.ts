@@ -29,6 +29,7 @@ describe('toolsForCaller', () => {
     const rebound = bound.filter((t, i) => t !== TOOLS[i]).map((t) => t.name)
     // history_search / history_read resolve the CALLER's own transcript, so they are bound too.
     // The climayte_* tools resolve the calling chat as the origin a ping goes back to.
+    // hydra_run passes the binding on to an identity tool it runs.
     expect(rebound.sort()).toEqual([
       'check_my_usage',
       'climayte_manage',
@@ -36,10 +37,30 @@ describe('toolsForCaller', () => {
       'climayte_status',
       'history_read',
       'history_search',
+      'hydra_run',
       'move_chat',
       'move_chats',
       'whoami',
     ])
+  })
+
+  // ⛔ 2026-10-11: a Desk chat dispatched its workers through hydra_run { tool: 'climayte_run' };
+  // the bare tool never got the binding, took the daemon for its caller, recorded no origin, and
+  // the chat listed none of its ten running workers.
+  test('an identity tool run through hydra_run asks the same caller', async () => {
+    let asked = 0
+    const bound = toolsForCaller(async () => {
+      asked++
+      return null
+    })
+    const hydraRun = bound.find((t) => t.name === 'hydra_run')!
+    const self = (await hydraRun.run({ tool: 'whoami', args: {} })) as {
+      confidence: string
+      warning?: string
+    }
+    expect(asked).toBe(1)
+    expect(self.confidence).toBe('none')
+    expect(self.warning).toContain('could not be traced')
   })
 
   test('the binding is a function, which is what makes it unforgeable', async () => {
