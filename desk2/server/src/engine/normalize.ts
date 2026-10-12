@@ -814,24 +814,35 @@ const STALE_TASK_MS = 24 * 3_600_000
  * takes the last one seen.
  */
 export function historyToItems(records: Iterable<unknown>, o: HistoryOptions = {}): TranscriptItem[] {
+  const b = historyBuilder(o)
+  for (const r of records) b.add(r)
+  return b.items()
+}
+
+/** historyToItems one record at a time, for a caller that parses a long file in slices and lets the event loop run between them. */
+export function historyBuilder(o: HistoryOptions = {}): { add(record: unknown): void; items(): TranscriptItem[] } {
   let clock = 0
   const n = createNormalizer({ now: () => clock, cwd: o.cwd ?? null, echoUserText: true, media: o.media })
   const items = new Map<string, TranscriptItem>()
-  for (const r of records) {
-    const rec = r as Loose
-    if (!rec || typeof rec !== 'object' || rec.isSidechain === true) continue
-    const t = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
-    if (Number.isFinite(t)) clock = t
-    const msg = recordMessage(rec)
-    if (!msg) continue
-    for (const e of n.handle(msg as unknown as SDKMessage)) {
-      if (e.type !== 'upsert') continue
-      const prev = items.get(e.item.id)
-      items.set(e.item.id, prev ? { ...e.item, ts: prev.ts } : e.item)
-    }
+  return {
+    add(r) {
+      const rec = r as Loose
+      if (!rec || typeof rec !== 'object' || rec.isSidechain === true) return
+      const t = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
+      if (Number.isFinite(t)) clock = t
+      const msg = recordMessage(rec)
+      if (!msg) return
+      for (const e of n.handle(msg as unknown as SDKMessage)) {
+        if (e.type !== 'upsert') continue
+        const prev = items.get(e.item.id)
+        items.set(e.item.id, prev ? { ...e.item, ts: prev.ts } : e.item)
+      }
+    },
+    items() {
+      const cutoff = (o.now ?? Date.now)() - STALE_TASK_MS
+      return [...items.values()].map((it) => settled(it, cutoff))
+    },
   }
-  const cutoff = (o.now ?? Date.now)() - STALE_TASK_MS
-  return [...items.values()].map((it) => settled(it, cutoff))
 }
 
 /** The SDK message a .jsonl record replays as; null for a record the transcript skips. */

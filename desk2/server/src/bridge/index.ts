@@ -35,7 +35,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, workerJsonlItems } from './session-jsonl'
+import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
@@ -542,6 +542,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     daemon: number
     parse: number
     cold: boolean
+    /** Where in the session's file the items begin: 0 for the whole file (or items not from a file); else what is before
+     *  it is externalOlder's. */
+    older?: number
   }
 
   /** An outside session's items: from the file it was last found in, else a search of the folders the last read knew, else
@@ -551,7 +554,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     // A Claude Code session's own .jsonl keeps every newline, list and code fence; the tail flattens them.
     const known = foundAt.get(sessionId)
     const items = known ? readItems(known) : null
-    if (items) return items
+    if (items) {
+      open.older = sessionJsonlStart(known!)
+      return items
+    }
     void cliInstances().catch(() => {})
     const key = `ext|${sessionId}`
     if (!searchedLately(key)) {
@@ -565,6 +571,7 @@ export function createBridge(opts: BridgeOptions = {}) {
         const t1 = now()
         const parsed = sessionJsonlItems(file)
         open.parse = now() - t1
+        open.older = sessionJsonlStart(file)
         return parsed
       }
       rememberMiss(key)
@@ -581,6 +588,31 @@ export function createBridge(opts: BridgeOptions = {}) {
     } finally {
       open.daemon = now() - t2
     }
+  }
+
+  /** What an outside session's file holds before byte `before` (the start externalItems reported); [] when its file is not known. */
+  async function externalOlder(sessionId: string, before: number, cwd: string | null = null): Promise<TranscriptItem[]> {
+    if (!(before > 0)) return []
+    let file = foundAt.get(sessionId) ?? null
+    if (!file) {
+      file = await findSessionJsonlAsync(sessionId, opts.projectRoots ? await projectRoots() : sessionRoots(), cwd)
+      if (file) rememberFile(sessionId, file)
+    }
+    if (!file) return []
+    try {
+      return await sessionJsonlOlder(file, before)
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
+      throw err
+    }
+  }
+
+  /** An outside session's whole history: its items, and what its file holds before them. */
+  async function externalHistory(sessionId: string, cwd: string | null = null): Promise<TranscriptItem[]> {
+    const open: ExternalOpen = { find: 0, daemon: 0, parse: 0, cold: false }
+    const items = await externalItems(sessionId, cwd, open)
+    const older = open.older ? await externalOlder(sessionId, open.older, cwd) : []
+    return older.length ? [...older, ...items] : items
   }
 
   const searchRows = new Map<string, { at: number; row: AhSessionRow | null }>()
@@ -858,6 +890,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalSessions,
     externalSession,
     externalItems,
+    externalOlder,
+    externalHistory,
     search,
     sessionRoots,
     workers,

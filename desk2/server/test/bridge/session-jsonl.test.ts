@@ -1,9 +1,10 @@
 import { afterAll, describe, expect, test } from 'bun:test'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
+import { appendFileSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, readTail, sessionJsonlItems, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
+import { historyToItems, parseJsonl } from '../../src/engine/normalize'
+import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, readTail, sessionJsonlItems, sessionJsonlOlder, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
 
 const temps: string[] = []
 const temp = () => {
@@ -199,6 +200,47 @@ describe('outside session .jsonl', () => {
     expect(sessionJsonlItems(f)).toHaveLength(400)
     appendFileSync(f, `${userRec(500, 'newest')}\n`)
     expect(sessionJsonlItems(f)).toHaveLength(401)
+  })
+
+  test('a session longer than the tail reads back whole: the tail and what is before its start, each item once', async () => {
+    // Owner, 2026-10-11: a 56 MB session showed only its last 8 MiB, none of his messages ("It just stops").
+    // Each reply is three records of one API message, so a start that fell inside one would name its blocks differently.
+    const pad = 'p'.repeat(300)
+    const turn = (n: number) => {
+      const asst = (part: number, block: unknown) =>
+        JSON.stringify({ type: 'assistant', uuid: `a${n}-${part}`, timestamp: at(n), message: { id: `msg_${n}`, role: 'assistant', content: [block] } })
+      return [
+        ...(n % 10 === 0 ? [userRec(n, `ask ${n}`)] : []),
+        asst(0, { type: 'thinking', thinking: `thought ${n} ${pad}` }),
+        asst(1, { type: 'text', text: `answer ${n} ${pad}` }),
+        asst(2, { type: 'tool_use', id: `toolu_${n}`, name: 'Bash', input: { command: `echo ${n}` } }),
+        JSON.stringify({ type: 'user', uuid: `r${n}`, timestamp: at(n), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: `toolu_${n}`, content: `out ${n} ${pad}` }] } }),
+      ].join('\n')
+    }
+    const turns = (from: number, to: number) => Array.from({ length: to - from }, (_, i) => turn(from + i)).join('\n') + '\n'
+    const f = join(temp(), 'long.jsonl')
+    const body = turns(0, 100)
+    writeFileSync(f, body)
+    // The tail's first whole line is reply 50's second record: a start taken as read would cut that reply in two.
+    const tailBytes = Buffer.byteLength(body) - Buffer.byteLength(body.slice(0, body.indexOf('{"type":"assistant","uuid":"a50-1"'))) + 1
+    const read = createJsonlReader({ tailBytes, keepBytes: tailBytes, maxFiles: 4, maxBytes: Infinity, settledFiles: 8, settledBytes: 1024 * 1024 })
+    const whole = () => historyToItems(parseJsonl(readFileSync(f, 'utf8')))
+    const both = async () => [...(await sessionJsonlOlder(f, read.startOf(f))), ...read(f)]
+
+    read(f)
+    const start = read.startOf(f)
+    expect(start).toBeGreaterThan(0)
+    expect(await both()).toEqual(whole())
+    // A session still going keeps its start, so the older part the window read stays good...
+    appendFileSync(f, turns(100, 101))
+    read(f)
+    expect(read.startOf(f)).toBe(start)
+    expect(await both()).toEqual(whole())
+    // ...until it holds twice the tail; then the start moves on, and the two still make the whole.
+    appendFileSync(f, turns(101, 190))
+    read(f)
+    expect(read.startOf(f)).toBeGreaterThan(start)
+    expect(await both()).toEqual(whole())
   })
 
   test('keeps the full text of an answer: newlines, lists, headings and fences', () => {

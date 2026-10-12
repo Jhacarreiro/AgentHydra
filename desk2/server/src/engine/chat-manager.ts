@@ -66,7 +66,7 @@ import { Timings } from './timings'
 import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalItems' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -1377,7 +1377,8 @@ export class ChatManager {
 
   private async externalItemsOf(sessionId: string): Promise<{ items: TranscriptItem[]; error: string | null }> {
     try {
-      return { items: await this.bridge.externalItems(sessionId), error: null }
+      // The whole history, not only the newest part the outside view polls: the chat it becomes shows every message.
+      return { items: await this.bridge.externalHistory(sessionId), error: null }
     } catch (err) {
       return { items: [], error: err instanceof Error ? err.message : String(err) }
     }

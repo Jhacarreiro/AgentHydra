@@ -679,6 +679,44 @@ watch(
   { flush: 'post' },
 )
 
+// Rows put in above what is on screen (a long outside session's older part, read behind its newest): scrolled up, the
+// row at the top of the view stays where it is, as for a row above re-measuring; pinned, the bottom is followed as for
+// any change. It is found again by an item it holds, not its row id: a run of tool calls the new rows go on from
+// takes a new id (the probe of 2026-10-11 jumped 100,000px that way).
+let anchor: { item: string; y: number } | null = null
+const lastItemOf = (r: DisplayRow) => (r.kind === 'item' ? r.id : r.items[r.items.length - 1]?.id)
+watch(display, (_now, before) => {
+  anchor = null
+  const el = scroller.value
+  if (!el || pinned.value || !before?.length) return
+  const view = el.getBoundingClientRect()
+  for (const row of el.querySelectorAll<HTMLElement>('[data-id]')) {
+    const box = row.getBoundingClientRect()
+    if (box.bottom <= view.top + (props.insetTop ?? 0)) continue
+    const r = before.find((x) => x.id === row.dataset.id)
+    const item = r && lastItemOf(r)
+    if (item) anchor = { item, y: box.top - view.top }
+    return
+  }
+})
+watch(
+  display,
+  () => {
+    const a = anchor
+    anchor = null
+    const el = scroller.value
+    if (!a || !el || pinned.value) return
+    const i = display.value.findIndex((r) => (r.kind === 'item' ? r.id === a.item : r.items.some((x) => x.id === a.item)))
+    if (i < 0) return
+    const want = rowTop(i) - a.y
+    if (Math.abs(want - el.scrollTop) < 1) return
+    el.scrollTop = want
+    scrollTop.value = lastTop = el.scrollTop
+    fromBottom.value = distanceOf(el)
+  },
+  { flush: 'post' },
+)
+
 // A chat whose items arrive after it mounted (a load) starts at its bottom, as on mount.
 watch(
   () => props.items.length > 0,

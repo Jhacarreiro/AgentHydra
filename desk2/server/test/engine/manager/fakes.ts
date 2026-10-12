@@ -198,7 +198,7 @@ export function fakeBridge(
       if (!found) throw new Error(`AgentHydra does not know session ${id}`)
       return found
     },
-    externalItems: async (sessionId: string) => {
+    externalHistory: async (sessionId: string) => {
       const items = o.items?.[sessionId]
       if (!items) throw new Error(`AgentHydra has no transcript for session ${sessionId}`)
       return items

@@ -23,6 +23,7 @@ export const STAGE_LABEL: Record<TimingStage, string> = {
   sync_poll: 'Transcript sync poll',
   chat_open: 'Chat open (server)',
   external_open: 'Outside session open (server)',
+  external_older: 'Outside session older history (server)',
   title: 'Title generation',
   warm: 'Warm start',
   loop_stall: 'Server event loop blocked',

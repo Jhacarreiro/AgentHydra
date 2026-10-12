@@ -14,9 +14,11 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { historyToItems, parseJsonl } from '../engine/normalize'
+import { historyBuilder, historyToItems, parseJsonl } from '../engine/normalize'
 
-/** How much of a transcript's end is read: enough for a long session's recent turns. */
+/** How much of a transcript's end is read: enough for a long session's recent turns. What is before it the window asks
+ *  for on its own (sessionJsonlOlder): a 56 MB session showed only its last 8 MiB, none of the owner's messages
+ *  (owner, 2026-10-11: "it won't let me scroll up to ... the top. It just stops"). */
 export const TAIL_BYTES = 8 * 1024 * 1024
 
 /** A session id that can only name a file in a projects folder: no dots, no separators. */
@@ -184,6 +186,8 @@ interface Memo {
   mtimeMs: number
   /** Where the first unconsumed byte is: just after the last complete line read. */
   offset: number
+  /** Where the first kept record begins: 0 when the items are the whole file, else what is before it is sessionJsonlOlder's. */
+  start: number
   recs: { rec: unknown; bytes: number; uses?: string[]; mid?: string }[]
   /** Bytes the kept records took in the file. */
   bytes: number
@@ -191,7 +195,7 @@ interface Memo {
   /** The file's last FINGERPRINT bytes before `offset`: a file rewritten in place no longer has them there. */
   tail: Buffer
 }
-type Settled = Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes'>
+type Settled = Pick<Memo, 'ino' | 'size' | 'mtimeMs' | 'items' | 'bytes' | 'start'>
 const FINGERPRINT = 64
 
 /** The last FINGERPRINT bytes the file held before `start`; a short one goes on from the old tail. */
@@ -303,6 +307,32 @@ function trimWindow(m: Memo, items: TranscriptItem[], keep: number, cap: number)
 }
 
 /**
+ * The first record a tail may begin at so that it reads the same alone as after what is before it, with no more than
+ * `keep` of the `total` bytes from there on; -1 when none does. That is the start of an API message right after a record
+ * of another kind: the message before it had every tool result back before it was asked (items number a message's
+ * blocks by arrival, so a tail begun mid-message would name them differently), and an earlier message in the records
+ * shows it is not the rest of one the cut fell in.
+ */
+function cleanCut(recs: Memo['recs'], total: number, keep: number): number {
+  let lastMid: string | undefined
+  for (let i = 0, before = 0; i < recs.length; before += recs[i]!.bytes, i++) {
+    const mid = recs[i]!.mid
+    if (mid === undefined) continue
+    if (lastMid !== undefined && mid !== lastMid && recs[i - 1]!.mid === undefined && total - before <= keep) return i
+    lastMid = mid
+  }
+  return -1
+}
+
+/** Drops the records before index `i`, and moves the start past them. */
+function dropBefore(m: Memo, i: number): void {
+  for (const r of m.recs.splice(0, i)) {
+    m.bytes -= r.bytes
+    m.start += r.bytes
+  }
+}
+
+/**
  * A session file's items, read for as long as the file is polled. An open chat is polled every few seconds and a
  * running one grows all the time, so the file is read once and then only from where the last read stopped: the new
  * complete lines are parsed and added to the records kept, and the items are made from those. A file that shrank,
@@ -319,6 +349,8 @@ export interface JsonlReader {
   (path: string, cwd?: string | null): TranscriptItem[]
   /** The same answer, parsed in slices that let the event loop run between them. */
   readAsync(path: string, cwd?: string | null): Promise<TranscriptItem[]>
+  /** Where in the file the last answer for `path` begins: 0 for the whole file (or a file not read). */
+  startOf(path: string): number
 }
 
 /** Lines parsed between two slices of an async read: about a few milliseconds of JSON.parse. */
@@ -346,7 +378,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       const [old, out] = memo.entries().next().value!
       memo.delete(old)
       memoBytes -= out.bytes
-      settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes })
+      settled.set(old, { ino: out.ino, size: out.size, mtimeMs: out.mtimeMs, items: out.items, bytes: out.bytes, start: out.start })
       settledBytes += out.bytes
       while (settled.size > o.settledFiles || settledBytes > o.settledBytes) unsettle(settled.keys().next().value!)
     }
@@ -363,7 +395,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
   }
 
   /** Parses each complete line of `buf` from `start` into `fresh`; returns where the last complete line ends. */
-  function* appendLines(fresh: Memo, buf: Buffer, start: number, windowed: boolean): Generator<Io | undefined, number, Stats | Buffer | undefined> {
+  function* appendLines(fresh: Memo, buf: Buffer, start: number): Generator<Io | undefined, number, Stats | Buffer | undefined> {
     // Lines are cut on the bytes themselves, so the offset counts what the file holds even where a line is
     // not valid UTF-8 (decoded, such a byte would count as three).
     let parsed = 0
@@ -374,7 +406,7 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       sessionJsonlWork.parsedBytes += bytes
       const recs = parseJsonl(buf.subarray(start, nl).toString('utf8'))
       if (!recs.length) continue
-      fresh.recs.push({ rec: recs[0], bytes, ...(windowed ? marks(recs[0]) : {}) })
+      fresh.recs.push({ rec: recs[0], bytes, ...marks(recs[0]) })
       fresh.bytes += bytes
     }
     return start
@@ -411,15 +443,26 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
       start = nl < 0 ? buf.length : nl + 1
       from += start
     }
-    const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, recs: [], bytes: 0, items: [], tail: prevTail }
-    start = yield* appendLines(fresh, buf, start, windowed)
+    const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, start: from, recs: [], bytes: 0, items: [], tail: prevTail }
+    start = yield* appendLines(fresh, buf, start)
+    if (!windowed && !m && from > 0) {
+      // A first read from inside the file begins at a clean cut, so what is before it reads the same on its own.
+      const i = cleanCut(fresh.recs, fresh.bytes, Infinity)
+      if (i > 0) dropBefore(fresh, i)
+    }
     // The last line may still be being written: it counts when it already parses, but is read again next time.
     const unfinished = parseJsonl(buf.subarray(start).toString('utf8'))
     fresh.tail = fingerprintTail(buf, start, prevTail)
     fresh.size = st.size
     fresh.mtimeMs = st.mtimeMs
     fresh.ino = st.ino
-    if (!windowed) while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) fresh.bytes -= fresh.recs.shift()!.bytes
+    // A session that goes on growing keeps its start until it holds twice the tail, so the window's older part (asked for
+    // once per start) stays good; then it moves on to a clean cut. Only with none in the newest tail is it cut anywhere.
+    if (!windowed && fresh.bytes > 2 * o.tailBytes) {
+      const i = cleanCut(fresh.recs, fresh.bytes, o.tailBytes)
+      if (i > 0) dropBefore(fresh, i)
+      else while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) dropBefore(fresh, 1)
+    }
     yield
     const answer = historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })
     fresh.items = answer
@@ -466,7 +509,9 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     }
   }
 
-  return Object.assign(drive, { readAsync })
+  const startOf = (path: string): number => memo.get(path)?.start ?? settled.get(path)?.start ?? 0
+
+  return Object.assign(drive, { readAsync, startOf })
 }
 
 const SETTLED = { settledFiles: 1024, settledBytes: 64 * 1024 * 1024 }
@@ -480,6 +525,67 @@ const readSession = createJsonlReader({ tailBytes: TAIL_BYTES, keepBytes: TAIL_B
 
 export function sessionJsonlItems(path: string, cwd?: string | null): TranscriptItem[] {
   return readSession(path, cwd)
+}
+
+/** Where sessionJsonlItems' last answer for the file begins; what is before it is sessionJsonlOlder's. 0: the whole file. */
+export function sessionJsonlStart(path: string): number {
+  return readSession.startOf(path)
+}
+
+/** Source bytes parsed between two yields of an older read, beside LINES_PER_SLICE: a transcript line can be megabytes. */
+const SLICE_BYTES = 2 * 1024 * 1024
+/** Older answers kept, by file and start: a reopened long session answers at once. Each is a whole session's items. */
+const OLDER_KEPT = 2
+const olderKept = new Map<string, TranscriptItem[]>()
+const olderReading = new Map<string, Promise<TranscriptItem[]>>()
+
+/**
+ * The items of a session file from before byte `before` (sessionJsonlStart): the whole file is read through, so a tool or
+ * task launched before the cut is settled by what came after it, less every item the records from `before` on make
+ * themselves (those are sessionJsonlItems'). Parsed in slices that let the event loop run (a 56 MB session is 25,000
+ * records), on the file thread pool. A file that only grows never changes before its cut, so the answer is kept.
+ */
+export async function sessionJsonlOlder(path: string, before: number, cwd?: string | null): Promise<TranscriptItem[]> {
+  if (!(before > 0)) return []
+  const st = await stat(path)
+  const key = `${path}|${st.ino}|${before}|${cwd ?? ''}`
+  const kept = olderKept.get(key)
+  if (kept) return kept
+  const running = olderReading.get(key)
+  if (running) return running
+  const read = (async () => {
+    const buf = (await runAsync({ op: 'read', path, from: 0, to: st.size })) as Buffer
+    const all = historyBuilder({ cwd: cwd ?? null })
+    const after = historyBuilder({ cwd: cwd ?? null })
+    let lines = 0
+    let bytes = 0
+    for (let start = 0; start < buf.length; ) {
+      if (++lines >= LINES_PER_SLICE || bytes >= SLICE_BYTES) {
+        lines = bytes = 0
+        await new Promise((done) => setImmediate(done))
+      }
+      const nl = buf.indexOf(10, start)
+      const end = nl < 0 ? buf.length : nl
+      const text = buf.subarray(start, end).toString('utf8')
+      for (const rec of parseJsonl(text)) all.add(rec)
+      // Parsed again, not shared: each normalizer keeps what it is handed.
+      if (start >= before) for (const rec of parseJsonl(text)) after.add(rec)
+      bytes += end - start
+      start = end + 1
+    }
+    const theirs = new Set(after.items().map((i) => i.id))
+    return all.items().filter((i) => !theirs.has(i.id))
+  })()
+  olderReading.set(key, read)
+  try {
+    const items = await read
+    olderKept.delete(key)
+    olderKept.set(key, items)
+    while (olderKept.size > OLDER_KEPT) olderKept.delete(olderKept.keys().next().value!)
+    return items
+  } finally {
+    olderReading.delete(key)
+  }
 }
 
 /**
