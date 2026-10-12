@@ -67,6 +67,7 @@ import { queueSideWrite, queueStoreWrite } from './climayte-store-writer'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { loginExpiryState } from './core/desktop-cli-renew'
+import { fsSlot } from './core/fs-slots'
 import { handsOnAgoMs } from './core/hands-on'
 import { type JsonStoreSpec, readJsonStore } from './core/json-store'
 import { mapPool } from './core/map-pool'
@@ -690,7 +691,7 @@ async function readDoneAhead(): Promise<void> {
     }
     const read = await mapPool(names, 32, async (name) => {
       try {
-        return doneWorker(name, await readFileAsync(join(DONE, name), 'utf8'))
+        return doneWorker(name, await fsSlot(() => readFileAsync(join(DONE, name), 'utf8')))
       } catch (err) {
         console.error(`[climayte] ${join(DONE, name)} could not be read; left as it is:`, err)
         return null
