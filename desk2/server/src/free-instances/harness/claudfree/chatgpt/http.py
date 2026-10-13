@@ -334,6 +334,7 @@ class ChatGPTHttp:
             "windows": [],
             "exact_remaining_messages": None,
             "note": _usage_note(unlimited, plan),
+            "models": _offered(models),
         }
 
     def model_for(self, prefer):
@@ -398,6 +399,19 @@ def _offers_luna(models):
     return any(isinstance(model, dict) and model.get("slug") == TEXT_MODEL
                and model.get("title") == TEXT_MODEL_NAME and model.get("reasoning_type") == "none"
                for model in advertised)
+
+
+def _offered(models):
+    """The models this account lists for Temporary Chats (slug, title, reasoning type): what a new private chat could
+    ask for, read so which plan offers which model is a reading, not a guess (owner, 2026-10-13: "We literally have
+    access to Go accounts. Do those not provide any higher level models?")."""
+    advertised = models.get("models", [])
+    if not isinstance(advertised, list):
+        return []
+    def text(value):
+        return value if isinstance(value, str) else None
+    return [{"slug": m["slug"], "title": text(m.get("title")), "reasoning": text(m.get("reasoning_type"))}
+            for m in advertised if isinstance(m, dict) and isinstance(m.get("slug"), str)][:40]
 
 
 def _usage_note(unlimited, plan):

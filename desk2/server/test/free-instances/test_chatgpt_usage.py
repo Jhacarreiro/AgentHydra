@@ -40,9 +40,13 @@ class ChatGPTUsageTests(unittest.TestCase):
         self.assertEqual(result["source"], "verified_free_text_policy")
 
     def test_paid_personal_plan_includes_the_free_text_policy(self):
-        result = usage({"personal": account("go")}, [model()])
+        result = usage({"personal": account("go")}, [model(), {"slug": "gpt-5-6-t-mini", "title": "Thinking mini", "reasoning_type": "reasoning"}, "junk"])
         self.assertTrue(result["unlimited_text"])
         self.assertEqual(result["plan"], "go")
+        self.assertEqual(result["models"], [
+            {"slug": TEXT_MODEL, "title": TEXT_MODEL_NAME, "reasoning": "none"},
+            {"slug": "gpt-5-6-t-mini", "title": "Thinking mini", "reasoning": "reasoning"},
+        ])
         self.assertEqual(result["source"], "plan_includes_free_text_policy")
         self.assertIn("on the Go plan, which includes everything in Free", result["note"])
 

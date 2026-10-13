@@ -49,6 +49,8 @@ export interface FreeUsage {
   observed_at: string | null
   note: string
   windows: { id: string; used_percent: number | null; remaining_percent: number | null; resets_at: string | null; reset_passed: boolean }[]
+  /** ChatGPT: the models the account lists for Temporary Chats, what a new private chat could ask for. */
+  models?: { slug: string; title?: string; reasoning?: string }[]
 }
 export interface FreeResult {
   ok: boolean

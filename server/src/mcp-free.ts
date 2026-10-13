@@ -27,6 +27,8 @@ interface FreeUsage {
   /** The plan the site reports (ChatGPT: free, go, plus); Claude reports none. */
   plan?: string | null
   windows: FreeWindow[]
+  /** ChatGPT: the models the account lists for Temporary Chats (desk2 shared/free-instances.ts). */
+  models?: { slug: string }[]
 }
 export interface FreeInstance {
   id: string
@@ -681,6 +683,8 @@ async function freeStatus() {
         num: i.num,
         provider: i.provider,
         ...(i.usage?.plan ? { plan: i.usage.plan } : {}),
+        // What a new thread could ask for, so a plan's better models are seen rather than assumed (owner, 2026-10-13).
+        ...(i.usage?.models?.length ? { offers: i.usage.models.map((m) => m.slug) } : {}),
         signedIn: i.loggedIn,
         busy: busy.has(i.id),
         // HSwarm counts an account resting after a failed send as not idle (hswarm/free_route.py _idle).

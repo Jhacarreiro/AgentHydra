@@ -131,9 +131,11 @@ describe('Free instance boundary', () => {
 
   test('a verified unlimited text policy has no invented percentage or message count', () => {
     const policy = parseResult('usage', output({ ok: true, available: true, unlimited_text: true,
-      text_model: 'GPT-5.6 Luna', windows: [], exact_remaining_messages: null, token: 'fake-secret' }))
+      text_model: 'GPT-5.6 Luna', windows: [], exact_remaining_messages: null, token: 'fake-secret',
+      models: [{ slug: 'gpt-5-6-mini', title: 'GPT-5.6 Luna', reasoning: 'none' }, { title: 'no slug' }, 'junk'] }))
     expect(policy.usage?.unlimited_text).toBe(true)
     expect(policy.usage?.text_model).toBe('GPT-5.6 Luna')
+    expect(policy.usage?.models).toEqual([{ slug: 'gpt-5-6-mini', title: 'GPT-5.6 Luna', reasoning: 'none' }])
     expect(policy.usage?.windows).toEqual([])
     expect(JSON.stringify(policy)).not.toContain('fake-secret')
     expect(parseResult('usage', output({ ok: true, available: false, unlimited_text: true })).usage?.unlimited_text).toBe(false)

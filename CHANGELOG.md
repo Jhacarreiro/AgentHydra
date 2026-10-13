@@ -15,6 +15,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   can now run on an idle Free ChatGPT or Claude account at no cost, where before only tasks with no tools could. In a
   blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and web
   research work stays on paid keys, where the Free answers scored lower.
+- **Free ChatGPT accounts say which models they offer.** Each account's usage check now records the models it lists
+  for private chats, and the Free account status shows them, so whether a Go account has a better model than the
+  default is a reading rather than a guess.
 - **Restart to update restarts AgentHydra itself too.** On a copy run from source, the update click fetched the new
   code and restarted the window, but AgentHydra kept running the old code until you restarted it by hand. It now
   restarts onto the update by itself, as it already did on its own schedule.

@@ -51,6 +51,8 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
       text_model: str(r.text_model, 100) || undefined, plan: str(r.plan, 20).trim() || null, is_snapshot: r.is_snapshot === true,
       observed_at: str(r.observed_at, 100) || null, note: str(r.note, 2000),
       windows: list(r.windows).map(item => { const w = object(item); return { id: str(w.id, 100), used_percent: percent(w.used_percent), remaining_percent: percent(w.remaining_percent), resets_at: str(w.resets_at, 100) || null, reset_passed: w.reset_passed === true } }) }
+    const models = list(r.models).map(item => { const m = object(item); return { slug: str(m.slug, 100), title: str(m.title, 100) || undefined, reasoning: str(m.reasoning, 40) || undefined } }).filter(m => m.slug).slice(0, 40)
+    if (models.length) usage.models = models
     return { ok: true, usage }
   }
   const chatId = str(r.chat_id, 100)
