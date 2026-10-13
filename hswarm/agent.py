@@ -21,7 +21,7 @@ from . import capability, config, goal, plans, redaction, selection, survival, t
 from .acceptance import decide as decide_acceptance
 from .budget import CACHE_LIVE_S, Budget, checkpoint_due, checkpoint_text, plan_turn, release, settle_turn, status_line, top_rates, worst_turn_usd
 from .capability import Capability
-from .client import RATE_WAIT, ApiError, ChatResult, DeepSeekClient, Usage
+from .client import ON_WIRE, RATE_WAIT, ApiError, ChatResult, DeepSeekClient, Usage
 from .guard import with_charter
 from .leggate import wait_for_pilot
 from .loopguard import LoopGuard
@@ -345,6 +345,8 @@ async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: Co
         res.add_taint("C")  # a cost ceiling (the worker's or the job's) refused the next turn
         return None
     max_tokens, hold = plan
+    wire = [False]  # client.ON_WIRE: True while a request of this turn is out with no reply
+    wired = ON_WIRE.set(wire)
     call = client.chat(
         editor.view(messages), model=task.model, tools=send_tools, max_tokens=max_tokens,
         thinking=task.thinking if not exhausted else False, reasoning_effort=task.reasoning_effort, temperature=task.temperature, user=user_tag, zdr=task.zdr,
@@ -382,13 +384,17 @@ async def _call_turn(client: DeepSeekClient, task: Task, res: Result, editor: Co
         release(ceilings, hold)  # the provider refused the call with a status: nothing was billed
         raise
     except BaseException as exc:
-        settle_turn(ceilings, hold, None)  # cut off mid-call (timeout, cancel): it may have been billed, so the hold stays spent
-        budget.cut_hold = hold
+        if wire[0]:
+            settle_turn(ceilings, hold, None)  # cut off with a request out and no reply: it may have been billed, so the hold stays spent
+            budget.cut_hold = hold
+        else:
+            release(ceilings, hold)  # no request out: refused before sending, or cut while waiting for a key or resting on 429s
         if isinstance(exc, TimeoutError) and limit is not None and limit.expired():
             raise SlowLeg(f"SlowLeg: {task.model} gave no reply to one turn in {config.SLOW_LEG_CALL_S:.0f}s - failing over "
                           f"while the task still has time") from None
         raise
     finally:
+        ON_WIRE.reset(wired)
         if live is not None:
             live.in_flight = False
     settle_turn(ceilings, hold, r.cost_usd)

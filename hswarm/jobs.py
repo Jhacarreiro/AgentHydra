@@ -1567,7 +1567,8 @@ class JobManager:
         tripped = (res.error or "").startswith("NoCreditLeft:")
         res.status, res.error, res.finished = "error" if tripped else "cancelled", res.error or "cancelled", now_iso()
         # The turns it had paid for go on its row and into the ledger (they were journaled at $0). The turn in flight
-        # when it stopped is not in `spent`: its cost never came back, and the job budget keeps its hold as spent.
+        # when it stopped is not in `spent`: its cost never came back, and the job budget keeps its hold as spent if a
+        # request was out (agent._call_turn, client.ON_WIRE), else gives it back.
         add_spend(res, [spent])
         job.results[task.id] = res
         self._journal(job, task, res, transcript)

@@ -69,6 +69,12 @@ from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-
 # dead task's rerun keeps it on its run clock (jobs.remaining). Jobs 20260926-003426-92c1: 13 builders spent ~2,000 s
 # of a 2,400 s budget on Gemini 429s and ended with the budget gone.
 RATE_WAIT: contextvars.ContextVar[list[float] | None] = contextvars.ContextVar("hswarm_rate_wait", default=None)
+# Whether the running turn has a request out that no reply has come back for: the one state in which a call that ends
+# without a reply (a cancel, a SlowLeg or wall timer, an error raised past it) may still be billed. agent._call_turn sets
+# a fresh box per turn and books the turn's hold as spent only on True; a call refused before sending, or cut while
+# waiting for a key or resting on 429s, gives its hold back. Job 20261013-175800-4d25: such turns were booked at their
+# worst case, and a $6 budget read as spent after $0.11 of real cost, so 16 of its 17 tasks were cancelled.
+ON_WIRE: contextvars.ContextVar[list[bool] | None] = contextvars.ContextVar("hswarm_on_wire", default=None)
 
 
 def _note_rate_wait(limited_since: float | None) -> None:
@@ -1432,7 +1438,11 @@ class ChatClient:
                 # In a thread: the append takes a file lock and reads the ledger's tail, 272k times a day on the server's
                 # loop (2026-10-02). to_thread copies the context, so egress.fail_closed still holds there.
                 await asyncio.to_thread(egress.record, sink, payload, provider=self.provider, model=model_id)
+                if (wire := ON_WIRE.get()) is not None:
+                    wire[0] = True  # until a reply comes back, a cut here may leave a request the provider bills
                 r = await self._http.post(self._chat_url, content=payload, headers={**headers_json, **self._auth(key)}, timeout=req_timeout)
+                if wire is not None:
+                    wire[0] = False  # answered: a 200 brings its cost, and any other status billed nothing
             except httpx.ReadTimeout:
                 self.stalls += 1
                 stalls += 1

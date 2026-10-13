@@ -9,11 +9,14 @@ import asyncio
 import sys
 from pathlib import Path
 
+import httpx
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
 from hswarm import agent, config  # noqa: E402
-from hswarm.budget import top_rates  # noqa: E402
-from hswarm.client import ChatResult, Usage  # noqa: E402
+from hswarm.budget import Budget, top_rates  # noqa: E402
+from hswarm.client import ChatClient, ChatResult, Usage  # noqa: E402
 from hswarm.jobs import JobManager  # noqa: E402
 from hswarm.spec import Task  # noqa: E402
 
@@ -111,3 +114,44 @@ def test_sibling_holds_wait_instead_of_refusing_or_shrinking(tmp_path, monkeypat
     assert all(r.status == "ok" for r in job.results.values()), {r.id: r.error for r in job.results.values()}
     assert job.cost() <= budget + 1e-9, job.cost()
     assert client.max_tokens_sent and set(client.max_tokens_sent) == {tasks[0].max_tokens}
+
+
+@pytest.mark.parametrize("way", ["refused_unbilled", "cut_while_resting", "cut_on_the_wire"])
+def test_a_turn_with_no_reply_spends_its_hold_only_when_a_request_was_out(way, tmp_path):
+    # Contract: a turn that ends without a reply books its hold as spent only if a request was on the wire unanswered
+    # (it may be billed); refused before any billing, or cut while the client rests on 429s, it gives the hold back.
+    # Regression: every such turn was booked at its worst case, so job 20261013-175800-4d25 read its $6 budget as spent
+    # after $0.11 of real cost and cancelled 16 of its 17 tasks. A real ChatClient over a mock transport.
+    seen: list[httpx.Request] = []
+
+    async def handler(req):
+        seen.append(req)
+        if way == "refused_unbilled":  # out of credit: NoUsableKey, a RuntimeError the client raises after the reply
+            return httpx.Response(429, json={"error": {"message": "Insufficient Balance"}})
+        if way == "cut_while_resting":
+            return httpx.Response(429, json={"error": {"message": "Rate limit reached"}})
+        await asyncio.Event().wait()  # never answers
+
+    async def go():
+        client = ChatClient(api_keys=["sk-invented-aaaa1111"])
+        client._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
+        job, task = Budget(1.0, "job budget (budget_usd)"), _task(tmp_path, tools="none")
+        run = asyncio.create_task(agent.run_api_task(client, task, job_budget=job))
+        if way == "refused_unbilled":
+            res, _ = await run
+            assert "NoUsableKey" in (res.error or ""), res.error
+        else:
+            while not (client.retries if way == "cut_while_resting" else seen):
+                await asyncio.sleep(0.005)
+            run.cancel()
+            with pytest.raises(asyncio.CancelledError):
+                await run
+        await client.aclose()
+        return job, task
+
+    job, task = asyncio.run(go())
+    assert seen and job.held == 0
+    if way == "cut_on_the_wire":
+        assert job.settled >= task.max_tokens * OUT_RATE / 1_000_000.0  # the whole worst case stays spent
+    else:
+        assert job.settled == 0.0, job.settled
