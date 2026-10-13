@@ -64,7 +64,8 @@ export async function applyRelease(api: PaneApi, before: string | null, onProgre
       method: 'POST',
       signal: AbortSignal.timeout(APPLY_TIMEOUT_MS),
     })
-    return { note: r.restartRequired ? `${r.message} Restart AgentHydra from its tray icon to run the new code.` : r.message, error: null }
+    // The daemon restarts itself onto an update that needs it, and its message says so (or why it did not).
+    return { note: r.message, error: null }
   } catch (e) {
     const version = await waitForRestart(api)
     if (version) return { note: version === before ? `AgentHydra restarted and runs v${version}.` : `Updated to v${version}.`, error: null }

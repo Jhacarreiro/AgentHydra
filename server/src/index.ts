@@ -502,9 +502,13 @@ app.get('/api/update/available', (c) => {
 app.get('/api/update/progress', (c) => c.json(updateProgress()))
 app.post('/api/update/apply', async (c) => {
   const result = await applyUpdate()
+  if (!result.ok || !result.restartRequired) return c.json(result)
   // A compiled apply swapped the binary on disk; the running process is still the OLD one, so it
-  // MUST relaunch for the update to take effect (a source apply leaves the daemon to be restarted
-  // manually — restartGuidance in the UI — matching its historical behavior).
+  // MUST relaunch for the update to take effect. A source apply relaunches too (owner, 2026-10-13:
+  // "I'm clicking restart to update, and it's not doing it"): it pulled and rebuilt, and left to a
+  // manual restart the daemon went on serving the code it started with while its own check read
+  // "up to date", so the auto-update loop never relaunched it either. Only what /api/daemon/restart
+  // refuses past holds a source relaunch back, and the answer says so.
   //
   // The delay is the whole point, and 250ms was too short. relaunchDaemon exits the process 800ms
   // after IT is called, so at 250ms the socket carrying this very response died about a second
@@ -516,11 +520,29 @@ app.post('/api/update/apply', async (c) => {
   // far more time than a loopback response needs to flush. The client also recovers on its own now
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
-  if (IS_RELEASE && result.ok && result.restartRequired) {
-    setTimeout(() => void relaunchDaemon(), 3000)
-  }
-  return c.json(result)
+  const refusal = IS_RELEASE ? null : restartRefusal(false)
+  if (refusal)
+    return c.json({ ...result, message: `${result.message} It was not restarted: ${refusal}` })
+  setTimeout(() => void relaunchDaemon(), 3000)
+  return c.json(
+    IS_RELEASE
+      ? result
+      : {
+          ...result,
+          message: 'AgentHydra was updated and restarts itself onto the new code in a few seconds.',
+        },
+  )
 })
+
+/** Why restarting now would lose work, or null: a CliMayte worker this daemon spawned itself (before runners,
+ *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
+ *  (orchestrator.ts). `force` restarts past both. */
+function restartRefusal(force: boolean): string | null {
+  const climayte = climayteRunningCount()
+  if (climayte > 0 && !force)
+    return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
+  return moveRestartRefusal(force)
+}
 
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
 //
@@ -545,22 +567,10 @@ app.post('/api/daemon/restart', async (c) => {
   // have decoupling from tasks running and my ability to restart"). Dispatch runs, CliMayte workers
   // and their checks all run under detached runners and are read on by the next daemon, so a person's
   // click restarts past them; the unattended auto-update loop still waits for them
-  // (setAutoUpdateHooks.hasActiveRuns below), because there nobody decided. What is left: a CliMayte
-  // worker the daemon spawned itself (before runners, 2026-09-30), whose CLI the restart kills.
-  const climayte = climayteRunningCount()
-  const active = activeCount() + climayte
-  if (climayte > 0 && body.force !== true)
-    return c.json(
-      {
-        ok: false,
-        error: `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`,
-        activeRuns: active,
-      },
-      409,
-    )
-  // A chat move running through the toolbox is work a restart can leave half-done (orchestrator.ts).
-  const moving = moveRestartRefusal(body.force === true)
-  if (moving) return c.json({ ok: false, error: moving, activeRuns: active }, 409)
+  // (setAutoUpdateHooks.hasActiveRuns below), because there nobody decided. What is left is restartRefusal's.
+  const active = activeCount() + climayteRunningCount()
+  const refusal = restartRefusal(body.force === true)
+  if (refusal) return c.json({ ok: false, error: refusal, activeRuns: active }, 409)
   // Awaited: the answer is only true once the successor has reported in, which on a healthy box
   // takes about a second and on a failed spawn takes the handoff's whole deadline.
   const ok = await relaunchDaemon()

@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Restart to update restarts AgentHydra itself too.** On a copy run from source, the update click fetched the new
+  code and restarted the window, but AgentHydra kept running the old code until you restarted it by hand. It now
+  restarts onto the update by itself, as it already did on its own schedule.
 - **Right-click a Codex chat to move it to another Codex account.** Codex chats in the sidebar now have Move to account,
   like Claude chats. The chat is copied to the account you pick, checked, and only then archived on the old one.
 - **Codex accounts are named after the account.** The Instances table's name column shows a Codex account's own name,
