@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
+import { StickyNote } from '@lucide/vue'
 import { shellGlyphs } from '@/lib/icons'
 import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
@@ -123,6 +124,8 @@ defineExpose({ startRename })
             @blur="commitRename"
           />
           <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
+          <!-- A note on the chat (Add note…): its mark here, its text in the row's tooltip. -->
+          <StickyNote v-if="!renaming && chat.note" role="img" aria-label="Has a note" class="size-3 shrink-0 text-text-muted" />
 
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->

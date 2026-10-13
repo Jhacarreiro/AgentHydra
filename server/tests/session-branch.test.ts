@@ -69,6 +69,27 @@ test('a tool call made before the cut keeps its result', () => {
   ])
 })
 
+test('a whole copy (Duplicate to account) holds every line under its own id, and the original is untouched', () => {
+  const path = transcript()
+  const made = branchSession(path, null, 'Build fix (copy)')
+  expect(made?.sessionId).not.toBe(OLD)
+  if (!made) return
+  const lines = read(made.path)
+  expect(lines.map((l) => l.uuid ?? l.type)).toEqual([
+    'u1',
+    'a1',
+    'a2',
+    'a3',
+    'u2',
+    'a4',
+    'u3',
+    'custom-title',
+  ])
+  expect(lines.every((l) => l.sessionId === made.sessionId)).toBe(true)
+  expect(lines.at(-1)?.customTitle).toBe('Build fix (copy)')
+  expect(readFileSync(path, 'utf8')).toBe(`${LINES.join('\n')}\n`)
+})
+
 test('a reply that is not in the chat makes nothing', () => {
   const path = transcript()
   expect(branchSession(path, 'not-there', 'x')).toBeNull()

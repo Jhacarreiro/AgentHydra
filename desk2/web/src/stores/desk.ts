@@ -1248,7 +1248,7 @@ export function useDesk() {
         body: JSON.stringify(patch)
       })
       const s = findExternal(sessionId)
-      if (s) Object.assign(s, { pinned: meta.pinned, archived: meta.archived, unread: meta.unread, group: meta.group }, meta.title ? { title: meta.title } : {})
+      if (s) Object.assign(s, { pinned: meta.pinned, archived: meta.archived, unread: meta.unread, group: meta.group, note: meta.note, unassigned: meta.unassigned }, meta.title ? { title: meta.title } : {})
       return meta
     },
 

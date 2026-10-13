@@ -86,8 +86,11 @@ export interface SidebarGroups {
 /** Hide's tooltip, in both lists' group menus. */
 export const HIDE_TITLE = 'Hides this group, not its chats (they stay active). Filter, Show hidden groups brings it back.'
 
-/** Hide is offered on a folder or moved-to group's header; Pinned and Archived are not projects. */
-export const hideable = (g: Pick<ChatGroup, 'key'>): boolean => g.key !== 'pinned' && g.key !== 'archived'
+/** The Unassigned holding area's group key (Move to account > Unassigned): last of the folder groups, never A-Z sorted. */
+export const UNASSIGNED = 'unassigned'
+
+/** Hide is offered on a folder or moved-to group's header; Pinned, Archived and Unassigned are not projects. */
+export const hideable = (g: Pick<ChatGroup, 'key'>): boolean => g.key !== 'pinned' && g.key !== 'archived' && g.key !== UNASSIGNED
 
 /**
  * The groups a list shows once the hidden ones (a group's right-click → Hide, by its groupOrderKey) are
@@ -124,6 +127,8 @@ export const NO_FOLDER = 'No folder'
 /** The marks a row is grouped by, whichever kind it is (an outside session's are Hydra Desk's overlay). */
 const marksOf = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat : e.session)
 const entryCwd = (e: SidebarEntry) => (e.kind === 'chat' ? e.chat.cwd : (e.session.cwd ?? ''))
+/** On no account, in the Unassigned holding area (ExternalSession.unassigned): only an outside session can be. */
+const parkedOf = (e: SidebarEntry) => e.kind === 'external' && e.session.unassigned === true
 
 /**
  * Active: Pinned first (its own group, newest first), then one group per folder, and one per group a
@@ -170,9 +175,12 @@ export function groupChats(
     if (list) list.push(e)
     else map.set(key, [e])
   }
+  // Unassigned rows wait in their own group, whatever folder or moved-to group they had; Archived groups them by folder.
+  const parked: SidebarEntry[] = []
   for (const e of inGroups) {
     const group = marksOf(e).group
-    if (group) add(byGroup, group.toLowerCase(), e)
+    if (filter !== 'archived' && parkedOf(e)) parked.push(e)
+    else if (group) add(byGroup, group.toLowerCase(), e)
     else add(byFolder, folderKey(entryCwd(e)), e)
   }
   const groups: ChatGroup[] = [...byFolder.values()].map((list) => {
@@ -191,10 +199,12 @@ export function groupChats(
   const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
   for (const g of groups) g.entries = rows(g.entries)
   const folders = dropHidden(sortFolders(groups), groupOrderKey, opts.hidden, !!opts.showHidden || !!query)
+  // The holding area goes after the folders: its chats are parked, not worked on.
+  const unassigned: ChatGroup[] = parked.length ? [{ key: UNASSIGNED, label: 'Unassigned', cwd: null, entries: rows(parked.sort(newestFirst)) }] : []
 
   return nestChildren({
     pinned: pinned.length ? { key: 'pinned', label: 'Pinned', cwd: null, entries: rows(pinned) } : null,
-    folders: folders.shown,
+    folders: [...folders.shown, ...unassigned],
     archived: archived.length ? { key: 'archived', label: 'Archived', cwd: null, entries: archived } : null,
     hiddenOut: folders.out
   })
@@ -326,7 +336,7 @@ export function newChatFolder(cwd: string | null, chats: readonly { cwd: string 
  * PC's chat works in a folder of that PC, never one here, so it names none.
  */
 export function deskNewFolder(group: ChatGroup): string | null {
-  if (group.key === 'pinned' || group.key === 'archived') return null
+  if (group.key === 'pinned' || group.key === 'archived' || group.key === UNASSIGNED) return null
   const here = group.entries.filter((e) => e.kind === 'chat' || !e.session.fromPc)
   return newChatFolder(group.cwd, here.map((e) => ({ cwd: entryCwd(e) || null, at: e.at })))
 }
@@ -337,7 +347,7 @@ export function deskNewFolder(group: ChatGroup): string | null {
  * project when several hold it). Else by name: the project whose name is the group's name. Null when neither matches.
  */
 export function projectOfGroup(group: Pick<ChatGroup, 'key' | 'cwd' | 'label'>, projects: readonly ProjectEntry[]): ProjectEntry | null {
-  if (group.key === 'pinned' || group.key === 'archived') return null
+  if (group.key === 'pinned' || group.key === 'archived' || group.key === UNASSIGNED) return null
   if (group.cwd) {
     const cwd = folderKey(group.cwd)
     let best: ProjectEntry | null = null
@@ -728,6 +738,7 @@ export function rowTooltip(chat: ChatSummary, now: number = Date.now()): string 
   if (chat.status === 'error' && chat.lastError) lines.push(chat.lastError)
   if (chat.climayteActive > 0) lines.push(`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`)
   lines.push(accountTitle(chat.account))
+  if (chat.note) lines.push(`Note: ${chat.note}`)
   return lines.join('\n')
 }
 
@@ -754,6 +765,10 @@ export interface RowState {
   movable: 'desktop' | 'codex' | null
   /** Whether the person muted this chat's sound (lib/chat-audio.ts); left out, the menu has no Mute entry (a row that cannot mute). */
   muted?: boolean
+  /** The person's note on it: the menu offers Edit note… for one, Add note… otherwise. */
+  note?: string | null
+  /** In the Unassigned holding area (on no account): Move to account ticks Unassigned, and its first line says so. */
+  unassigned?: boolean
 }
 export interface RowAccount {
   num: number | null
@@ -784,7 +799,8 @@ export function chatRow(chat: ChatSummary): RowState {
     forkable: Boolean(chat.sessionId ?? chat.forkedFrom),
     id: chat.sessionId ?? chat.id,
     account: { num: chat.account.number ?? null, title: accountTitle(chat.account) },
-    movable: null
+    movable: null,
+    note: chat.note ?? null
   }
 }
 
@@ -805,7 +821,9 @@ export function externalRow(s: ExternalSession): RowState {
     id: s.id,
     account: s.instance ? (num ? { num: Number(num[1]), title: null } : { num: null, title: s.instance }) : null,
     // A chat the chat sync brought from the other PC lives in that PC's apps: this PC's AgentHydra cannot move it.
-    movable: s.fromPc ? null : claude ? 'desktop' : s.source === 'codex' ? 'codex' : null
+    movable: s.fromPc ? null : claude ? 'desktop' : s.source === 'codex' ? 'codex' : null,
+    note: s.note ?? null,
+    unassigned: s.unassigned === true
   }
 }
 
@@ -815,7 +833,9 @@ export function externalRow(s: ExternalSession): RowState {
  * the item while the menu is open; `separator` draws a 1px rule; an entry with `items` is a submenu.
  * AgentHydra 2.0 adds a first line naming the row (its id and account, a click copies the id) and, for a
  * Claude session of another app, Move to account › (owner, 2026-10-08: "I need to be able to see what this
- * thread ID is ... I'd love an option to, like, right-click and select... move to account").
+ * thread ID is ... I'd love an option to, like, right-click and select... move to account"). Owner, 2026-10-13:
+ * Add note… N on every row; for a Claude session of another app, Move to account's Unassigned ("not assigned to an
+ * account, but it's not archived") and Duplicate to account › ("duplicate would be the right word").
  */
 export type RowAction =
   | 'open'
@@ -824,6 +844,8 @@ export type RowAction =
   | 'copySessionId'
   | 'copyId'
   | 'moveToAccount'
+  | 'unassign'
+  | 'duplicateToAccount'
   | 'stop'
   | 'pin'
   | 'unpin'
@@ -832,6 +854,7 @@ export type RowAction =
   | 'mute'
   | 'unmute'
   | 'rename'
+  | 'note'
   | 'fork'
   | 'moveTo'
   | 'newGroup'
@@ -847,7 +870,7 @@ export interface RowMenuItem {
   disabled?: boolean
   checked?: boolean
   title?: string // the native tooltip
-  /** What the item acts on beyond its label: the id copyId copies, the account ref moveToAccount moves to. */
+  /** What the item acts on beyond its label: the id copyId copies, the account ref moveToAccount moves to and duplicateToAccount copies to. */
   value?: string
   /** Muted text at the item's end: the account on the first line, "closed" on an account whose app is not running. */
   hint?: string
@@ -882,20 +905,35 @@ export function rowIdentity(id: string, account: RowAccount | null, accounts: re
   return { action: 'copyId', label: id.slice(0, 8), value: id, identity: true, ...(hint ? { hint } : {}), title: `${id}\nClick to copy the whole ID` }
 }
 
+/** The accounts of a Move to or Duplicate to submenu: those whose app runs first, then a rule, then the closed ones, each by number. */
+function accountItems(accounts: readonly AccountChoice[], item: (a: AccountChoice) => RowMenuItem): (RowMenuItem | 'separator')[] {
+  const byNum = (a: AccountChoice, b: AccountChoice) => a.num - b.num
+  const running = accounts.filter((a) => a.running).sort(byNum).map(item)
+  const closed = accounts.filter((a) => !a.running).sort(byNum).map(item)
+  return running.length && closed.length ? [...running, 'separator', ...closed] : [...running, ...closed]
+}
+
+const UNASSIGN_TITLE = 'Takes it off its account without archiving it: it waits in the Unassigned group until you move it to an account'
+const CLOSED_DESKTOP_TITLE = 'Its app is not running: the chat lands in its store, ready when it starts'
+
 /**
  * Move to account ›: every desktop (or, for a Codex chat, Codex) account, those whose app runs first, then by number;
  * the one the session is on now is ticked and off. A closed desktop account's app is not started: the chat lands in
  * its store for when it starts. A Codex move opens the destination's app to show the chat there.
- * `accounts` null: AgentHydra's list is not read yet (or did not answer).
+ * `accounts` null: AgentHydra's list is not read yet (or did not answer). `unassigned` (a Claude chat's): Unassigned
+ * first, the holding area on no account, ticked and off while the chat is there; null leaves it out.
  */
 export function accountMenu(
   current: number | null,
   accounts: readonly AccountChoice[] | null,
-  kind: 'desktop' | 'codex' = 'desktop'
+  kind: 'desktop' | 'codex' = 'desktop',
+  unassigned: boolean | null = null
 ): { label: string; items: (RowMenuItem | 'separator')[] } {
+  const parked: (RowMenuItem | 'separator')[] =
+    unassigned === null ? [] : [{ action: 'unassign', label: 'Unassigned', checked: unassigned, disabled: unassigned, title: UNASSIGN_TITLE }, 'separator']
   if (!accounts?.length)
-    return { label: 'Move to account', items: [{ action: 'moveToAccount', label: accounts ? `No ${kind === 'codex' ? 'Codex' : 'desktop'} accounts` : 'Reading accounts…', disabled: true }] }
-  const closedTitle = kind === 'codex' ? 'Its app is not running: the move opens it to show the chat' : 'Its app is not running: the chat lands in its store, ready when it starts'
+    return { label: 'Move to account', items: [...parked, { action: 'moveToAccount', label: accounts ? `No ${kind === 'codex' ? 'Codex' : 'desktop'} accounts` : 'Reading accounts…', disabled: true }] }
+  const closedTitle = kind === 'codex' ? 'Its app is not running: the move opens it to show the chat' : CLOSED_DESKTOP_TITLE
   const item = (a: AccountChoice): RowMenuItem => ({
     action: 'moveToAccount',
     label: `#${a.num} ${a.name}`,
@@ -904,10 +942,21 @@ export function accountMenu(
     disabled: a.num === current,
     ...(a.running ? {} : { hint: 'closed', title: closedTitle })
   })
-  const byNum = (a: AccountChoice, b: AccountChoice) => a.num - b.num
-  const running = accounts.filter((a) => a.running).sort(byNum).map(item)
-  const closed = accounts.filter((a) => !a.running).sort(byNum).map(item)
-  return { label: 'Move to account', items: running.length && closed.length ? [...running, 'separator', ...closed] : [...running, ...closed] }
+  return { label: 'Move to account', items: [...parked, ...accountItems(accounts, item)] }
+}
+
+/**
+ * Duplicate to account ›: a second chat holding the whole conversation, landed on the account picked, the original left
+ * where it is. Every desktop account, the one it is on now included (marked "current"): the copy is a chat of its own.
+ */
+export function duplicateMenu(current: number | null, accounts: readonly AccountChoice[] | null): { label: string; items: (RowMenuItem | 'separator')[] } {
+  if (!accounts?.length)
+    return { label: 'Duplicate to account', items: [{ action: 'duplicateToAccount', label: accounts ? 'No desktop accounts' : 'Reading accounts…', disabled: true }] }
+  const item = (a: AccountChoice): RowMenuItem => {
+    const hint = [a.num === current ? 'current' : '', a.running ? '' : 'closed'].filter(Boolean).join(' · ')
+    return { action: 'duplicateToAccount', label: `#${a.num} ${a.name}`, value: a.ref, ...(hint ? { hint } : {}), ...(a.running ? {} : { title: CLOSED_DESKTOP_TITLE }) }
+  }
+  return { label: 'Duplicate to account', items: accountItems(accounts, item) }
 }
 
 /** `codexAccounts` are a Codex chat's: its first line and Move to account name those instead of the desktop ones. */
@@ -924,8 +973,9 @@ export function rowMenu(
   moveTo.push({ action: 'newGroup', label: 'New group…' })
   if (row.group) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
 
+  const identity = rowIdentity(row.id, row.account, accounts)
   const out: RowMenuEntry[] = [
-    rowIdentity(row.id, row.account, accounts),
+    row.unassigned ? { ...identity, hint: 'Unassigned' } : identity,
     'separator',
     {
       label: 'Open in',
@@ -942,9 +992,13 @@ export function rowMenu(
   out.push(row.unread ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
   if (row.muted !== undefined) out.push(row.muted ? { action: 'unmute', label: 'Unmute chat', shortcut: 'M' } : { action: 'mute', label: 'Mute chat', shortcut: 'M' })
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
+  out.push({ action: 'note', label: row.note ? 'Edit note…' : 'Add note…', shortcut: 'N' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
   out.push('separator', { label: 'Move to group', items: moveTo })
-  if (row.movable) out.push(accountMenu(accountNum(row.account, accounts), accounts, row.movable))
+  // An Unassigned chat is on no account: none is ticked, and Unassigned is.
+  const onAccount = row.unassigned ? null : accountNum(row.account, accounts)
+  if (row.movable) out.push(accountMenu(onAccount, accounts, row.movable, row.movable === 'desktop' ? !!row.unassigned : null))
+  if (row.movable === 'desktop') out.push(duplicateMenu(onAccount, accounts))
   out.push('separator')
   out.push(
     row.archived

@@ -31,10 +31,11 @@ const ui =
     ? { Item: ContextMenuItem, Separator: ContextMenuSeparator, Shortcut: ContextMenuShortcut, Sub: ContextMenuSub, SubTrigger: ContextMenuSubTrigger, SubContent: ContextMenuSubContent }
     : { Item: DropdownMenuItem, Separator: DropdownMenuSeparator, Shortcut: DropdownMenuShortcut, Sub: DropdownMenuSub, SubTrigger: DropdownMenuSubTrigger, SubContent: DropdownMenuSubContent }
 
-// The first line's account name and Move to account read AgentHydra's account list: an opened menu asks for it
-// (the list mounts with the menu), and the entries follow when it answers.
+// The first line's account name, Move to account and Duplicate to account read AgentHydra's account list: an opened menu
+// asks for it (the list mounts with the menu), and the entries follow when it answers.
+const ACCOUNT_ACTIONS = new Set<RowMenuItem['action']>(['moveToAccount', 'duplicateToAccount'])
 onMounted(() => {
-  if (props.entries.some((e) => e !== 'separator' && ('items' in e ? e.items.some((s) => s !== 'separator' && s.action === 'moveToAccount') : e.identity))) void refreshAhInstances()
+  if (props.entries.some((e) => e !== 'separator' && ('items' in e ? e.items.some((s) => s !== 'separator' && ACCOUNT_ACTIONS.has(s.action)) : e.identity))) void refreshAhInstances()
 })
 </script>
 

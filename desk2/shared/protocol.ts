@@ -58,6 +58,8 @@ export interface ChatSummary {
   pinned: boolean
   archived: boolean
   group: string | null // the sidebar group it was moved to; null = its project folder's group
+  /** The person's own note on the chat (the row menu's Add note…); absent or null = none. */
+  note?: string | null
   forkedFrom: string | null // the session it was forked from: until it has its own, its next message resumes a fork of that one
   createdAt: number
   updatedAt: number // last activity of any kind
@@ -281,6 +283,10 @@ export interface ExternalSession {
   archived: boolean
   unread: boolean
   group: string | null
+  /** The person's note on it (SessionMeta.note); absent = none. */
+  note?: string | null
+  /** In the sidebar's Unassigned holding area: taken off its account, not archived, on no account now (SessionMeta.unassigned). */
+  unassigned?: boolean
 }
 
 /** The usage limit an outside session still sits at. */
@@ -327,7 +333,18 @@ export interface SessionMeta {
   archived: boolean
   unread: boolean
   group: string | null
+  /** The person's note on the chat (the row menu's Add note…), at most NOTE_MAX characters; null = none. */
+  note: string | null
+  /**
+   * Move to account > Unassigned (owner, 2026-10-13: "not assigned to an account, but it's not archived"): the chat was
+   * taken off its account (archived in that account's app) and waits in the sidebar's Unassigned group, listed however
+   * old, until Move to account lands it on one. The list drops the mark once the chat shows on an account again.
+   */
+  unassigned: boolean
 }
+
+/** The longest note a chat keeps. */
+export const NOTE_MAX = 2000
 
 export type SessionMetaPatch = Partial<SessionMeta>
 
@@ -610,6 +627,7 @@ export interface ChatPatch {
   accountId?: string // takes effect at the next runtime start
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
+  note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note
 }
 
 export interface ImportSessionRequest {

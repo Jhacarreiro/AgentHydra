@@ -42,6 +42,7 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
+import { NOTE_MAX } from '@shared/protocol'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
@@ -338,7 +339,7 @@ export class ChatManager {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
     this.failures = new FailureLedger(o.home, o.now)
     this.timings = Timings.for(o.home, o.now)
-    this.sessionMeta = new SessionMetaStore(o.home)
+    this.sessionMeta = new SessionMetaStore(o.home, o.now)
     this.emitEvent = o.emit
     this.settingsOf = o.settings
     this.bridge = o.bridge
@@ -367,8 +368,8 @@ export class ChatManager {
     // Our own chats are not "Elsewhere".
     this.bridge.setExcludeSessionIds(() => [...this.sessionIds(), ...this.sessionMeta.tombstoned()])
     this.bridge.setExtraWorkerIds(() => this.workerIdsOfChats())
-    // Outside sessions are listed with Hydra Desk's marks on them.
-    this.bridge.setSessionMeta((list) => this.sessionMeta.apply(list), () => this.sessionMeta.pinnedIds())
+    // Outside sessions are listed with Hydra Desk's marks on them; the pinned and Unassigned ones however old.
+    this.bridge.setSessionMeta((list, onAccount) => this.sessionMeta.apply(list, onAccount), () => this.sessionMeta.listedIds())
   }
 
   // Reads
@@ -1262,6 +1263,7 @@ export class ChatManager {
     if (p.archived !== undefined) chat.archived = p.archived
     if (archiving) this.onChatEnd?.(this.browserSessions(id))
     if (p.group !== undefined) chat.group = p.group
+    if (p.note !== undefined) chat.note = p.note
     // Put in another folder by hand: the next turn resumes the session there (seedResume / the worker's next send).
     const relocated = p.cwd !== undefined && p.cwd.toLowerCase() !== chat.cwd.toLowerCase()
     if (p.cwd !== undefined) {
@@ -1556,6 +1558,7 @@ export class ChatManager {
       sessionId: req.fork ? null : req.sessionId,
       forkedFrom: req.fork && cut?.cut !== null ? req.sessionId : null,
       group: meta?.group ?? null,
+      ...(meta?.note ? { note: meta.note } : {}),
       title: req.fork ? forkTitle(title) : title,
       cwd,
       account,
@@ -2692,7 +2695,7 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note']
 
 /** POST /api/chats/import-desk: `ids`, the chats to copy (every one when absent). */
 export function parseImportDesk(body: unknown): { ids?: string[] } {
@@ -2734,10 +2737,21 @@ export function parsePatch(body: unknown): ChatPatch {
     if (isUncOrDevicePath(cwd)) throw new ChatError(400, `cwd must be a local folder, not a share or device path: ${JSON.stringify(cwd)}`)
     p.cwd = checkCwd(cwd)
   }
+  const note = optNote(b)
+  if (note !== undefined) p.note = note
   return p
 }
 
-const META_KEYS = ['title', 'pinned', 'archived', 'unread', 'group']
+/** A chat's note (the row menu's Add note…): trimmed, at most NOTE_MAX characters; null or empty is no note. */
+function optNote(b: Record<string, unknown>): string | null | undefined {
+  const note = optNullableString(b, 'note')
+  if (note === undefined) return undefined
+  const t = note?.trim() ?? ''
+  if (t.length > NOTE_MAX) throw new ChatError(400, `a note is at most ${NOTE_MAX} characters`)
+  return t || null
+}
+
+const META_KEYS = ['title', 'pinned', 'archived', 'unread', 'group', 'note', 'unassigned']
 
 /** The marks on an outside session; a null or empty title goes back to the session's own. */
 export function parseSessionMeta(body: unknown): SessionMetaPatch {
@@ -2747,12 +2761,14 @@ export function parseSessionMeta(body: unknown): SessionMetaPatch {
   const p: SessionMetaPatch = {}
   const title = optNullableString(b, 'title')
   if (title !== undefined) p.title = title?.trim().slice(0, 200) || null
-  for (const k of ['pinned', 'archived', 'unread'] as const) {
+  for (const k of ['pinned', 'archived', 'unread', 'unassigned'] as const) {
     const v = optBool(b, k)
     if (v !== undefined) p[k] = v
   }
   const group = optGroup(b)
   if (group !== undefined) p.group = group
+  const note = optNote(b)
+  if (note !== undefined) p.note = note
   return p
 }
 

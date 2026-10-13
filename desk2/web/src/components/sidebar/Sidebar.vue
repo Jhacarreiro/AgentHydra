@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import type { ChatSummary, CliMayteWorker, CloudSession, ExternalSession, SessionMetaPatch, SwarmJob } from '@shared/protocol'
+import { NOTE_MAX, type ChatSummary, type CliMayteWorker, type CloudSession, type ExternalSession, type SessionMetaPatch, type SwarmJob } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -17,7 +17,7 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { moveCodexSession, moveSession } from '@/components/session-header/ah'
+import { duplicateSession, moveCodexSession, moveSession, unassignSession } from '@/components/session-header/ah'
 import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -669,6 +669,9 @@ function act(row: Row, item: RowMenuItem) {
   else if (item.action === 'copySessionId' && state.sessionId) attempt('Copy', navigator.clipboard.writeText(state.sessionId))
   else if (item.action === 'copyId' && item.value) attempt('Copy', navigator.clipboard.writeText(item.value))
   else if (item.action === 'moveToAccount' && state.movable) void moveToAccount(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
+  else if (item.action === 'note') openNote(row)
+  else if (item.action === 'unassign' && row.kind === 'external' && state.movable === 'desktop') void unassign(row.session, state)
+  else if (item.action === 'duplicateToAccount' && state.movable === 'desktop') void duplicate(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
 }
 
 // Move to account: AgentHydra's migrate, as the session header's Migrate runs it (one move at a time, a move ends a
@@ -710,13 +713,16 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
     if (!x.ok) {
       noteRow(null)
       rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
-    } else
+    } else {
+      // Out of the holding area: it is on an account now.
+      if (src.external.value.some((s) => s.id === sessionId && s.unassigned)) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
       noteRow(
         x.sourceStillShown?.length
           ? `Moved to ${item.label}. An old account still lists it.`
           : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`,
         stopped ? 15000 : 8000
       )
+    }
   } catch (err) {
     noteRow(null)
     rowError.value = `Move failed: ${err instanceof Error ? err.message : String(err)}`
@@ -724,6 +730,92 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
     moving.value = false
     void refreshAhInstances(true)
     if (cloud.on.value) void cloud.refresh()
+  }
+}
+
+/**
+ * Move to account > Unassigned (owner, 2026-10-13: "it's not assigned to an account, but it's not archived"): marked
+ * first, so the list keeps it however old, then archived in its account's app, as a move retires its old copy. A refusal
+ * takes the mark back. It waits in the Unassigned group until Move to account lands it on an account.
+ */
+async function unassign(s: ExternalSession, state: RowState) {
+  if (moving.value) {
+    rowError.value = 'Another move is still running. Try again when it ends.'
+    return
+  }
+  moving.value = true
+  rowError.value = null
+  noteRow(`Taking “${s.title}” off its account…`)
+  const ref = state.account?.num != null ? (accountChoices.value?.find((a) => a.num === state.account?.num)?.ref ?? null) : null
+  const failed = async (why: string) => {
+    await src.updateSessionMeta(s.id, { unassigned: false }).catch(() => {})
+    noteRow(null)
+    rowError.value = `Unassign failed: ${why}`
+  }
+  try {
+    await src.updateSessionMeta(s.id, { unassigned: true, archived: false })
+    const x = await unassignSession(s.id, ref)
+    if (!x.ok) await failed(x.error)
+    else noteRow(x.stillShown ? 'Unassigned. Its old account’s app shows it until that app restarts.' : 'Unassigned. It waits there until you move it to an account.', 8000)
+  } catch (err) {
+    await failed(err instanceof Error ? err.message : String(err))
+  } finally {
+    moving.value = false
+    void refreshAhInstances(true)
+    if (cloud.on.value) void cloud.refresh()
+  }
+}
+
+/**
+ * Duplicate to account (owner, 2026-10-13): a second chat with the whole conversation, landed on the account picked; the
+ * original stays where it is. A copy that could not land waits in Unassigned, so it is never lost on no account.
+ */
+async function duplicate(sessionId: string, title: string, item: RowMenuItem) {
+  if (!item.value) return
+  if (moving.value) {
+    rowError.value = 'Another move is still running. Try again when it ends.'
+    return
+  }
+  moving.value = true
+  rowError.value = null
+  noteRow(`Duplicating “${title}” to ${item.label}…`)
+  try {
+    const x = await duplicateSession(sessionId, item.value)
+    if (x.ok) noteRow(`Duplicated to ${item.label} as “${x.title}”.`, 8000)
+    else {
+      if (x.copyId) await src.updateSessionMeta(x.copyId, { unassigned: true }).catch(() => {})
+      noteRow(null)
+      rowError.value = `Duplicate failed: ${x.error ?? 'AgentHydra did not say why'}${x.copyId ? ' The copy waits in Unassigned.' : ''}`
+    }
+  } catch (err) {
+    noteRow(null)
+    rowError.value = `Duplicate failed: ${err instanceof Error ? err.message : String(err)}`
+  } finally {
+    moving.value = false
+    void refreshAhInstances(true)
+    if (cloud.on.value) void cloud.refresh()
+  }
+}
+
+// Add note… / Edit note…: the person's own words on a chat, shown as a mark on its row and in its tooltip.
+const noting = ref<Row | null>(null)
+const noteDraft = ref('')
+const noteHad = ref(false)
+function openNote(row: Row) {
+  const had = stateOf(row).note ?? ''
+  noteDraft.value = had
+  noteHad.value = had !== ''
+  noting.value = row
+}
+function saveNote(text: string) {
+  const row = noting.value
+  noting.value = null
+  if (row) mark(row, { note: text.trim() || null })
+}
+function onNoteKey(e: KeyboardEvent) {
+  if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
+    e.preventDefault()
+    saveNote(noteDraft.value)
   }
 }
 
@@ -1301,6 +1393,29 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             >
               Move
             </button>
+          </div>
+        </form>
+      </DialogContent>
+    </Dialog>
+    <Dialog :open="noting !== null" @update:open="(o: boolean) => !o && (noting = null)">
+      <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">{{ noteHad ? 'Edit note' : 'Add note' }}</DialogTitle>
+        <DialogDescription class="sr-only">A note on this chat, shown when you point at its row.</DialogDescription>
+        <form class="flex flex-col gap-3" @submit.prevent="saveNote(noteDraft)">
+          <textarea
+            v-model="noteDraft"
+            aria-label="Note"
+            placeholder="Note"
+            rows="4"
+            :maxlength="NOTE_MAX"
+            class="min-h-20 resize-y rounded-(--radius-6) border border-border bg-transparent px-2.5 py-1.5 text-ui leading-4.75 text-text outline-none placeholder:text-text-muted focus-visible:ring-2 focus-visible:ring-(--accent)"
+            @keydown="onNoteKey"
+          />
+          <div class="flex items-center gap-2">
+            <button v-if="noteHad" type="button" class="h-7 rounded-(--radius-6) px-2 text-ui text-danger-text hover:bg-fill-hover" @click="saveNote('')">Remove</button>
+            <span class="flex-1" />
+            <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="noting = null">Cancel</button>
+            <button type="submit" :disabled="!noteHad && !noteDraft.trim()" class="h-7 rounded-(--radius-6) bg-accent px-3 text-ui font-medium text-white hover:brightness-110 disabled:opacity-50">Save</button>
           </div>
         </form>
       </DialogContent>

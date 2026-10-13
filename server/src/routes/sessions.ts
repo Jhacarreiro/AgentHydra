@@ -589,8 +589,9 @@ app.get('/api/sessions/:id/file-location', async (c) => {
 // buildTranscriptOpenArgv names an editor explicitly so that never happens (transcript-open.ts).
 /**
  * "Copy up to here into a new chat": a new Claude transcript holding this chat up to one reply
- * (session-branch.ts). Body: `{ uuid, title }`, the reply's line and the chat's title. Answers the
- * new session's id; the original is not touched.
+ * (session-branch.ts). Body: `{ uuid, title }`, the reply's line and the chat's title; or
+ * `{ whole: true, title }`, the whole chat, titled "<title> (copy)" (Desk's Duplicate to account,
+ * which then lands the copy with /migrate). Answers the new session's id; the original is not touched.
  */
 app.post('/api/sessions/:id/branch', async (c) => {
   const locator = c.req.query('locator') || undefined
@@ -598,11 +599,21 @@ app.post('/api/sessions/:id/branch', async (c) => {
   if (!tf) return c.json({ error: 'session not found' }, 404)
   if (tf.source !== 'claude') return c.json({ error: 'only a Claude chat can be branched' }, 409)
   const body = await jsonBody(c)
+  const whole = body.whole === true
   const uuid = typeof body.uuid === 'string' ? body.uuid : ''
-  if (!uuid) return c.json({ error: 'uuid is required' }, 400)
+  if (!uuid && !whole) return c.json({ error: 'uuid is required' }, 400)
   const base = typeof body.title === 'string' ? body.title.trim().slice(0, 200) : ''
-  const made = branchSession(tf.path, uuid, base ? `${base} (branch)` : 'Branch')
-  if (!made) return c.json({ error: 'that reply is not in this chat' }, 404)
+  const suffix = whole ? 'copy' : 'branch'
+  const made = branchSession(
+    tf.path,
+    whole ? null : uuid,
+    base ? `${base} (${suffix})` : whole ? 'Copy' : 'Branch',
+  )
+  if (!made)
+    return c.json(
+      { error: whole ? 'the chat has no lines to copy' : 'that reply is not in this chat' },
+      404,
+    )
   return c.json({ session_id: made.sessionId, source: 'claude' })
 })
 

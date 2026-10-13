@@ -42,11 +42,23 @@ export const ah = {
   focusInstance: (dir: string) => call<{ ok: boolean; message?: string }>(`/instances/${encodeURIComponent(dir)}/focus`, { method: 'POST' }),
   openInstance: (dir: string) => call<{ ok: boolean; message?: string }>(`/instances/${encodeURIComponent(dir)}/open`, { method: 'POST' }),
   /** Moves the chat to another account's desktop app; its current title restated is the required title decision. */
-  migrate: (row: AhSessionRow, instanceRef: string) =>
-    call<{ ok: boolean; error?: string; sourceStillShown?: string[] }>(`/sessions/${sid(row)}/migrate`, {
+  migrate: (row: AhSessionRow, instanceRef: string) => land(row.session_id, instanceRef, { confirm_title: row.title }),
+  /**
+   * Archives the chat in its account's desktop app, through the app when it runs (`instanceRef`: that account; null lets
+   * AgentHydra find the one account that has it). Never throws on a refusal: archiveVerdict reads the answer.
+   */
+  desktopArchive: async (sessionId: string, instanceRef: string | null): Promise<{ status: number; body: Record<string, unknown> | null }> => {
+    const res = await fetch(`${BASE}/sessions/${encodeURIComponent(sessionId)}/desktop-archive`, {
       method: 'POST',
-      body: JSON.stringify({ instance_ref: instanceRef, confirm_title: row.title })
-    }),
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify(instanceRef ? { instance_ref: instanceRef } : {})
+    })
+    const body = (await res.json().catch(() => null)) as Record<string, unknown> | null
+    return { status: res.status, body: body && typeof body === 'object' ? body : null }
+  },
+  /** A whole copy of the chat under a new session id, titled "<title> (copy)", on no account yet (AgentHydra's session-branch). */
+  copy: (row: AhSessionRow) =>
+    call<{ session_id: string }>(`/sessions/${sid(row)}/branch${where(row)}`, { method: 'POST', body: JSON.stringify({ whole: true, title: row.title }) }),
   exportUrl: (row: AhSessionRow, format: 'markdown' | 'html') => `${BASE}/sessions/${sid(row)}/export${where(row)}&format=${format}`,
   fileUrl: (row: AhSessionRow) => `${BASE}/sessions/${sid(row)}/file${where(row)}`,
   codexInstances: () => call<AhCodexInstance[]>('/codex-instances'),
@@ -58,9 +70,53 @@ export const ah = {
     call<{ ok: boolean; error?: string }>(`/codex-instances/${encodeURIComponent(fromId)}/move-chat`, { method: 'POST', body: JSON.stringify(body) })
 }
 
+type Landing = { ok: boolean; error?: string; sourceStillShown?: string[] }
+
+/** AgentHydra's migrate: lands the chat in the account's desktop app and retires its old copies; `title` is the required title decision. */
+function land(sessionId: string, instanceRef: string, title: { confirm_title: string } | { title: string }): Promise<Landing> {
+  return call<Landing>(`/sessions/${encodeURIComponent(sessionId)}/migrate`, { method: 'POST', body: JSON.stringify({ instance_ref: instanceRef, ...title }) })
+}
+
 /** Migrate by the session's id alone (the row menu's Move to account): AgentHydra's row first, whose title the move restates. */
-export async function moveSession(sessionId: string, instanceRef: string): ReturnType<typeof ah.migrate> {
+export async function moveSession(sessionId: string, instanceRef: string): Promise<Landing> {
   return ah.migrate(await ah.session(sessionId, 'claude'), instanceRef)
+}
+
+/**
+ * desktop-archive's answer as one verdict. Archived: `stillShown` when its app runs and still lists it until it restarts.
+ * A chat no desktop account holds (a terminal session: AgentHydra found no record, 404) has nothing to take off: also
+ * archived. Anything refused, unverified or put back right after the write is not.
+ */
+function archiveVerdict(status: number, body: Record<string, unknown> | null): { ok: true; stillShown: boolean } | { ok: false; error: string } {
+  const said = [body?.error, body?.reason, body?.note].find((s): s is string => typeof s === 'string' && s !== '')
+  if (status === 404 && Array.isArray(body?.hits) && body.hits.length === 0) return { ok: true, stillShown: false }
+  if (status >= 400 || !body || body.ok === false) return { ok: false, error: said ?? `AgentHydra answered ${status}` }
+  if (body.verified === false) return { ok: false, error: said ?? 'its app did not confirm the archive' }
+  if (body.flagStuck === false && Array.isArray(body.flagOnDisk) && body.flagOnDisk.length > 0)
+    return { ok: false, error: 'something put it back on its account right after the archive' }
+  return { ok: true, stillShown: body.stillOnScreen === true }
+}
+
+/** Move to account > Unassigned: archives the chat on the account it is on, leaving it on none (the sidebar marks it). */
+export async function unassignSession(sessionId: string, instanceRef: string | null): Promise<ReturnType<typeof archiveVerdict>> {
+  const { status, body } = await ah.desktopArchive(sessionId, instanceRef)
+  return archiveVerdict(status, body)
+}
+
+/**
+ * Duplicate to account: AgentHydra copies the whole chat under a new id, then lands the copy on the account like a move
+ * does. The original is not touched. A copy that could not land is on no account: `copyId` names it.
+ */
+export async function duplicateSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string; copyId?: string; title?: string }> {
+  const row = await ah.session(sessionId, 'claude')
+  const made = await ah.copy(row)
+  const title = row.title?.trim() ? `${row.title.trim().slice(0, 200)} (copy)` : 'Copy'
+  try {
+    const x = await land(made.session_id, instanceRef, { title })
+    return x.ok ? { ok: true, copyId: made.session_id, title } : { ok: false, error: x.error ?? 'AgentHydra did not say why', copyId: made.session_id }
+  } catch (err) {
+    return { ok: false, error: err instanceof Error ? err.message : String(err), copyId: made.session_id }
+  }
 }
 
 /**

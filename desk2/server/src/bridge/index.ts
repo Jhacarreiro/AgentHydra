@@ -117,7 +117,8 @@ export function createBridge(opts: BridgeOptions = {}) {
   }
   let excludeSessionIds: () => Ids = opts.excludeSessionIds ?? (() => [])
   let extraWorkerIds: () => string[] = () => []
-  let sessionMeta: (list: ExternalSession[]) => ExternalSession[] = (list) => list
+  let sessionMeta: (list: ExternalSession[], onAccount?: ReadonlySet<string>) => ExternalSession[] = (list) => list
+  /** The sessions kept listed however old: pinned, or in the Unassigned holding area (session-meta.ts listedIds). */
   let pinnedIds: () => string[] = () => []
   let lastWorkers: { at: number; workers: CliMayteWorker[] } | null = null
   let lastRawWorkers: { at: number; recent: Promise<AhWorker[]> | null; all: Promise<AhWorker[]> | null } | null = null
@@ -475,6 +476,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const who = await resumeData()
     // A pinned session stays listed however old: the index answer is only the last 24 h, so a pinned id
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
+    // An Unassigned one too: its account's app archived it, so /api/chats no longer lists it.
     const pinned = pinnedIds()
     for (const old of pinnedRows.keys()) if (!pinned.includes(old)) pinnedRows.delete(old)
     const known = new Set(inp.sessions.map((s) => s.session_id))
@@ -484,7 +486,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
     const list = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
     rememberTitles(list)
-    return sessionMeta(list)
+    return sessionMeta(list, onAccountIds(inp))
   }
 
   /** A pinned session's index row read by id; a read that failed is its last row (KEEP_LAST_MS), so a pinned row
@@ -519,7 +521,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       (s) => s.id === id,
     )
     if (!found) throw new BridgeError('http', `AgentHydra does not know session ${id}`, 404)
-    return sessionMeta([found])[0] ?? found
+    return sessionMeta([found], onAccountIds(base))[0] ?? found
   }
 
   let rootsRead: { at: number; roots: string[] } | null = null
@@ -973,13 +975,18 @@ export function createBridge(opts: BridgeOptions = {}) {
     excludeIds: (): Ids => excludeSessionIds(),
     extraIds: (): string[] => extraWorkerIds(),
     /** Registers Hydra Desk's marks on outside sessions (the engine's session-meta store); externalSessions() applies them. */
-    setSessionMeta(fn: (list: ExternalSession[]) => ExternalSession[], pinned: () => string[] = () => []): void {
+    setSessionMeta(fn: (list: ExternalSession[], onAccount?: ReadonlySet<string>) => ExternalSession[], pinned: () => string[] = () => []): void {
       sessionMeta = fn
       pinnedIds = pinned
     },
-    applySessionMeta: (list: ExternalSession[]): ExternalSession[] => sessionMeta(list),
+    applySessionMeta: (list: ExternalSession[], onAccount?: ReadonlySet<string>): ExternalSession[] => sessionMeta(list, onAccount),
     pinnedSessionIds: (): string[] => pinnedIds(),
   }
+}
+
+/** The sessions an account's app lists now: this PC's unarchived Desktop chats and every Codex account's unarchived chats. */
+function onAccountIds(inp: Pick<ExternalInputs, 'chats' | 'codexChats'>): Set<string> {
+  return new Set([...inp.chats.filter((c) => c.sessionId && !c.archived).map((c) => c.sessionId), ...(inp.codexChats ?? []).map((c) => c.threadId)])
 }
 
 export type Bridge = ReturnType<typeof createBridge>
@@ -1000,7 +1007,7 @@ export function configureBridge(opts: BridgeOptions): Bridge {
     const prev = instance
     next.setExcludeSessionIds(() => prev.excludeIds())
     next.setExtraWorkerIds(() => prev.extraIds())
-    next.setSessionMeta((list) => prev.applySessionMeta(list), () => prev.pinnedSessionIds())
+    next.setSessionMeta((list, onAccount) => prev.applySessionMeta(list, onAccount), () => prev.pinnedSessionIds())
   }
   instance = next
   return next

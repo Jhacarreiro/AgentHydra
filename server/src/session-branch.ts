@@ -29,11 +29,12 @@ function toolIds(ev: any): { calls: string[]; results: string[] } {
 /**
  * The branch's transcript text: the lines up to the one whose `uuid` is `uuid` (plus any lines a
  * tool call before it needs for its result), moved to `sessionId`, ending with its title. Null when
- * no line carries that uuid.
+ * no line carries that uuid. A null `uuid` copies every line: the sidebar's Duplicate to account
+ * (owner, 2026-10-13), a whole second chat the original never hears of.
  */
 export function branchTranscript(
   text: string,
-  uuid: string,
+  uuid: string | null,
   sessionId: string,
   title: string,
 ): string | null {
@@ -45,7 +46,7 @@ export function branchTranscript(
       return null
     }
   })
-  const at = parsed.findIndex((ev) => ev?.uuid === uuid)
+  const at = uuid === null ? parsed.length - 1 : parsed.findIndex((ev) => ev?.uuid === uuid)
   if (at < 0) return null
   const open = new Set<string>()
   let end = 0
@@ -63,10 +64,10 @@ export function branchTranscript(
   return `${out.join('\n')}\n`
 }
 
-/** Writes the branch beside `path`; its new session id and file. Never overwrites a file. */
+/** Writes the branch beside `path` (a null `uuid`: the whole chat); its new session id and file. Never overwrites a file. */
 export function branchSession(
   path: string,
-  uuid: string,
+  uuid: string | null,
   title: string,
 ): { sessionId: string; path: string } | null {
   const sessionId = randomUUID()

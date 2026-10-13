@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, ref } from 'vue'
-import { Cloud } from '@lucide/vue'
+import { Cloud, StickyNote } from '@lucide/vue'
 import { isAddedRow, isTaskRow } from './tasks'
 import type { ExternalSession } from '@shared/protocol'
 import { shellGlyphs, shellIcons } from '@/lib/icons'
@@ -63,8 +63,10 @@ const { seen, listeners } = useFirstInterest()
 const [DefineBody, ReuseBody] = createReusableTemplate()
 // A Desktop chat AgentHydra's chat sync took from another PC: a cloud beside the status dot, as the cloud list draws it.
 const fromPc = computed(() => (props.session.fromPc ? fromPcLabel(props.session.fromPc, ahSource(props.session.source)) : null))
+// An Unassigned chat is on no account (Move to account > Unassigned): it says so in place of where it runs.
+const where = computed(() => (props.session.unassigned ? 'Unassigned' : `${source.value}${props.session.instance ? ` ${props.session.instance}` : ''}`))
 const tooltip = computed(() =>
-  [props.session.title, `${glyph.value.label} · ${source.value}${props.session.instance ? ` ${props.session.instance}` : ''}`, fromPc.value, props.session.activity]
+  [props.session.title, `${glyph.value.label} · ${where.value}`, fromPc.value, props.session.activity, props.session.note ? `Note: ${props.session.note}` : null]
     .filter(Boolean)
     .join('\n')
 )
@@ -74,7 +76,7 @@ const dotClass = computed(() => glyphDotClass(glyph.value))
 // The account number (an instance named "#38") and the age since its last activity, as the cloud list draws them;
 // Clean sidebar (clean.ts) hides both (owner, 2026-10-07).
 const account = computed(() => {
-  const num = cleanSidebar.value ? null : props.session.instance?.match(/^#(\d+)$/)
+  const num = cleanSidebar.value || props.session.unassigned ? null : props.session.instance?.match(/^#(\d+)$/)
   return num ? Number(num[1]) : null
 })
 const aged = computed(() => !cleanSidebar.value && props.session.lastActivityAt !== null)
@@ -147,6 +149,8 @@ function onMenuClosed(e: Event) {
             @blur="commitRename"
           />
           <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.title }}</span>
+          <!-- A note on the chat (Add note…): its mark here, its text in the row's tooltip. -->
+          <StickyNote v-if="!renaming && session.note" role="img" aria-label="Has a note" class="size-3 shrink-0 text-text-muted" />
 
           <!-- The account number, the sub-item badges (SubBadges.vue, when the sidebar shows them as counts) and the age; they
                make room for the three dots on hover, the age giving its place. -->

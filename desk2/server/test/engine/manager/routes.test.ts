@@ -7,7 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
 import type { PermissionResult, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatSummary, ExternalSession, QueueState, ServerEvent, SessionMeta, TranscriptItem } from '@shared/protocol'
+import { NOTE_MAX, type ChatSummary, type ExternalSession, type QueueState, type ServerEvent, type SessionMeta, type TranscriptItem } from '@shared/protocol'
 import { createServer, type DeskServer } from '../../../src/index'
 import { encodeProjectDir } from '../../../src/bridge/session-jsonl'
 import { titleFrom } from '@shared/chat-title'
@@ -656,6 +656,10 @@ describe('the row menu routes', () => {
     expect((await call<ChatSummary>(t.desk, 'GET', `/api/chats/${chat.id}`)).body.group).toBe('Launch')
     expect((await call<ChatSummary>(t.desk, 'PATCH', `/api/chats/${chat.id}`, { group: 'x'.repeat(60) })).body.group).toBe('x'.repeat(60))
     expect((await call<ChatSummary>(t.desk, 'PATCH', `/api/chats/${chat.id}`, { group: null })).body.group).toBeNull()
+    // A note: trimmed and kept on the chat; empty is none.
+    expect((await call<ChatSummary>(t.desk, 'PATCH', `/api/chats/${chat.id}`, { note: ' Ask about the release ' })).body.note).toBe('Ask about the release')
+    expect((await call<ChatSummary>(t.desk, 'GET', `/api/chats/${chat.id}`)).body.note).toBe('Ask about the release')
+    expect((await call<ChatSummary>(t.desk, 'PATCH', `/api/chats/${chat.id}`, { note: '' })).body.note).toBeNull()
   })
 
   test('outside sessions: the marks live in Hydra Desk home, are applied to the list and survive a restart', async () => {
@@ -665,8 +669,13 @@ describe('the row menu routes', () => {
 
     const res = await call<SessionMeta>(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { title: ' Renamed here ', pinned: true, group: ' Ops ' })
     expect(res.status).toBe(200)
-    expect(res.body).toEqual({ title: 'Renamed here', pinned: true, archived: false, unread: false, group: 'Ops' })
-    expect((await first.bridge.externalSessions())[0]).toEqual({ ...ext, title: 'Renamed here', pinned: true, group: 'Ops' })
+    expect(res.body).toEqual({ title: 'Renamed here', pinned: true, archived: false, unread: false, group: 'Ops', note: null, unassigned: false })
+    expect((await first.bridge.externalSessions())[0]).toEqual({ ...ext, title: 'Renamed here', pinned: true, group: 'Ops', note: null, unassigned: false })
+    // A note (the row menu's Add note…) is trimmed, and too long a one is refused; Unassigned is a mark like the others.
+    const noted = await call<SessionMeta>(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { note: '  Parked for the next account  ', unassigned: true })
+    expect(noted.body).toMatchObject({ note: 'Parked for the next account', unassigned: true })
+    expect((await call(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { note: 'x'.repeat(NOTE_MAX + 1) })).status).toBe(400)
+    await call(first.desk, 'PATCH', '/api/external/sessions/ext-1/meta', { note: '', unassigned: false })
     const metaFile = join(first.home, 'session-meta.json')
     const landedBy = Date.now() + 5000
     while (!existsSync(metaFile)) {

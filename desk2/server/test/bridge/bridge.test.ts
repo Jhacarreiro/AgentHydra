@@ -141,6 +141,24 @@ describe('bridge', () => {
     expect((await b.externalSessions()).map((s) => s.id)).not.toContain(sid(901))
   })
 
+  test('an Unassigned chat its account archived stays listed, and only a chat an account still shows counts as on one', async () => {
+    const f = await fake()
+    const row = (n: number, archived: boolean) => ({ instance: '#5', chatId: `c${n}`, sessionId: sid(n), title: `Chat ${n}`, archived, lastActivityAt: null, cwd: null, live: false })
+    f.state.chats = { rows: [row(950, false), row(951, true)] }
+    f.state.sessions.push({ ...f.state.sessions[0], session_id: sid(951), source: 'claude', last_activity_at: NOW - 3 * 24 * 3600_000 })
+    const b = createBridge({ url: f.url, now: () => NOW })
+    let seen: ReadonlySet<string> = new Set()
+    b.setSessionMeta(
+      (list, onAccount) => {
+        seen = onAccount ?? new Set()
+        return list
+      },
+      () => [sid(951)]
+    )
+    expect((await b.externalSessions()).map((s) => s.id)).toContain(sid(951))
+    expect([seen.has(sid(950)), seen.has(sid(951))]).toEqual([true, false])
+  })
+
   test('items come from the tail, a worker falls back to its detail, an unknown id is a 404', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })

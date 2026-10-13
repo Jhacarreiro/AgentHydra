@@ -245,7 +245,17 @@ sidebar on the left stays put, and only the pane on the right changes.
   the original itself, so nothing is closed; a background command the original still ran is stopped by
   that archive, and the line under the list names it. The list holds every unarchived Codex chat on this
   PC however old, as each Codex app shows them (AgentHydra's `GET /api/codex-chats`; owner, 2026-10-13: it
-  had shown one of ten, only those written in the last 10 minutes). Opening a session from a search while the
+  had shown one of ten, only those written in the last 10 minutes). A Claude chat's Move to account opens with
+  **Unassigned**, a holding area on no account (owner, 2026-10-13: "it's not assigned to an account, but it's not
+  archived"): the chat is marked, then archived in its account's app (AgentHydra's `desktop-archive`, through the
+  app when it runs), and waits in an Unassigned group after the folders, listed however old, until Move to account
+  lands it on one. A refusal takes the mark back; a mark on a chat an account shows again for over two minutes
+  (moved there some other way) is dropped (`server/src/engine/session-meta.ts`). **Duplicate to account ›** copies
+  the whole chat under a new id, "<title> (copy)" (AgentHydra's `branch` with `whole: true`), and lands the copy on
+  the account picked, the current one included; the original is not touched, and a copy that could not land waits
+  in Unassigned (`duplicateSession` in `session-header/ah.ts`). Every row also has **Add note… N**: a note of up to
+  2,000 characters on the chat (Desk's own chats keep it on the chat, an outside session in Desk's marks), drawn as
+  a note mark beside the title, its text in the row's tooltip. Opening a session from a search while the
   session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
   it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
