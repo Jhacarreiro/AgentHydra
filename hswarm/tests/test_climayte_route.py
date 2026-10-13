@@ -41,6 +41,9 @@ class _Fake:
         self.idle, self.waiting, self.delay, self.capacity_status, self.enabled = idle, waiting, delay, capacity_status, enabled
         self.held = held
         self.running_for, self.t0 = running_for, time.monotonic()
+        # Set by _run(hold=): true once every task has taken a route. Workers stay running until then (running_for is
+        # only the ceiling), so a slow start on a loaded box cannot free a slot before the last task decides.
+        self.until = None
         self.cancelled: list[str] = []
         self.worker = worker or {"status": "done", "result": "worker report", "reportedModel": "claude-sonnet-5-5"}
         self.reads = 0
@@ -78,7 +81,7 @@ class _Fake:
                     return self._send(fake.capacity_status, {"idle": fake.idle, "accounts": 35, "running": 0, "waiting": fake.waiting,
                                                                   "held": fake.held})
                 if self.path == "/api/corch/workers/w1":
-                    if time.monotonic() - fake.t0 < fake.running_for:
+                    if time.monotonic() - fake.t0 < fake.running_for and not (fake.until and fake.until()):
                         return self._send(200, {"id": "w1", "status": "running"})
                     return self._send(200, {"id": "w1", **fake.worker})
                 self._send(404, {})
@@ -117,8 +120,10 @@ def fake(monkeypatch, tmp_path):
         f.close()
 
 
-def _run(tmp_path, tools="read", schema=None, timeout_s=30, n=1):
+def _run(tmp_path, tools="read", schema=None, timeout_s=30, n=1, hold=None):
     api = _Api()
+    if hold is not None:
+        hold.until = lambda: len(hold.dispatched) + api.calls >= n
     specs = [{"id": f"t{i}", "prompt": "look at it", "cwd": str(tmp_path), "tools": tools, "model": "deepseek-flash", "timeout_s": timeout_s} for i in range(n)]
     if schema:
         for spec in specs:
@@ -163,8 +168,8 @@ def test_with_no_idle_account_the_task_runs_on_its_api_route_at_once(fake, tmp_p
 # Contract: a burst of tasks that read one idle count takes only that many accounts: a task sent moments before a read
 # is subtracted from it, so the rest run on their API route instead of queueing in CliMayte.
 def test_a_burst_takes_only_the_idle_accounts(fake, tmp_path):
-    f = fake(idle=2, running_for=0.5)
-    job, _, api = _run(tmp_path, n=5)
+    f = fake(idle=2, running_for=10)
+    job, _, api = _run(tmp_path, n=5, hold=f)
     assert len(f.dispatched) == 2 and api.calls == 3
     assert sorted(r.answer for r in job.results.values()).count("api route") == 3
 
@@ -266,8 +271,8 @@ def test_a_request_carrying_the_worker_header_is_never_routed(fake, tmp_path):
 
 def test_over_the_cap_a_task_takes_its_api_route_without_asking(fake, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_MAX", 4)
-    f = fake(running_for=0.5)
-    job, _, api = _run(tmp_path, n=5)
+    f = fake(running_for=10)
+    job, _, api = _run(tmp_path, n=5, hold=f)
     assert len(f.dispatched) == 4 and api.calls == 1
     assert sorted(r.answer for r in job.results.values()).count("api route") == 1
 
