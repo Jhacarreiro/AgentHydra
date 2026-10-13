@@ -75,7 +75,14 @@ const HISTORY = `(${VISIBLE})([...document.querySelectorAll('button[aria-label^=
 // A tooltip-wrapped toggle (aria-pressed): its first value is noted when it is first picked.
 const toggle = (sel: string) => `(() => { const b = (${VISIBLE})([...document.querySelectorAll('${sel}')]); if (b && window.__p0 === undefined) window.__p0 = b.getAttribute('aria-pressed'); return b })()`
 const flipped = (sel: string) => `(document.querySelector('${sel}')?.getAttribute('aria-pressed') !== window.__p0)`
-const TASKS = 'button[aria-label="CliMayte tasks in the sidebar"]'
+// The chrome bar's More options menu (ChromeBar.vue, owner 2026-10-12): its trigger, and its four items as checkbox items in
+// order: Cloud sessions, CliMayte tasks, the details, Compact sidebar. OPEN_MORE opens it the way a press on the trigger does.
+const MORE = `(${VISIBLE})([...document.querySelectorAll('button[aria-label="More options"]')])`
+const OPEN_MORE = `document.querySelector('button[aria-label="More options"]').click()`
+const MORE_ITEMS = `[...document.querySelectorAll('[role="menu"] [role="menuitemcheckbox"]')]`
+// The CliMayte tasks item: its checked state is noted when it is first picked, as the toggle above notes aria-pressed.
+const TASKS_ITEM = `(() => { if (!${MORE_ITEMS}.length) { ${OPEN_MORE}; return null } const b = ${MORE_ITEMS}[1]; if (b && window.__p0 === undefined) window.__p0 = b.getAttribute('aria-checked'); return b })()`
+const TASKS_ITEM_FLIPPED = `(${MORE_ITEMS}[1]?.getAttribute('aria-checked') !== window.__p0)`
 // Instances rows: icon-only actions in IconTooltips (Open and Focus act on real accounts: hovered or focused, never clicked) and
 // the name cell, a 16px button in an IconTooltip whose click copies the account's address and shows one toast.
 const ACTION = `(${VISIBLE})([...document.querySelectorAll('[data-instance-num] button[aria-label="Open"], [data-instance-num] button[aria-label="Focus"]')])`
@@ -121,7 +128,8 @@ each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Tip button: 
 each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outside a session) is selected', pick: ROW, ok: SELECTED })
 each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pick: ROW, ok: MENU_OPEN })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'sidebar row ... menu opens', pick: ROW_MORE, ok: MENU_OPEN })
-each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: CliMayte tasks flips once, no tooltip', pick: toggle(TASKS), ok: `${flipped(TASKS)} && !(${TIP_OPEN})`, diag: `[${flipped(TASKS)}, ${TIP_OPEN}]` })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'More options menu opens with its four toggles', pick: MORE, ok: `${MENU_OPEN} && ${MORE_ITEMS}.length === 4` })
+each(['key'], { page: 'desk', what: 'More options: CliMayte tasks item flips once', pick: TASKS_ITEM, ok: TASKS_ITEM_FLIPPED, setup: OPEN_MORE })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: Dev servers flips once, no tooltip', pick: toggle(DEV), ok: `${flipped(DEV)} && !(${TIP_OPEN})`, diag: `[${flipped(DEV)}, ${TIP_OPEN}]` })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its details', pick: DEV_ROW, ok: DETAILS_PANE, setup: `document.querySelector('${DEV}').click()` })
 

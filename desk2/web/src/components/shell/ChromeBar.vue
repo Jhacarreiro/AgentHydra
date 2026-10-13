@@ -1,7 +1,7 @@
 <script setup lang="ts">
-import { Cloud, Rows3, Server } from '@lucide/vue'
+import { Cloud, EllipsisVertical, Rows3, Server } from '@lucide/vue'
 import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
-import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
+import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-update'
@@ -17,10 +17,10 @@ import { CAPTION_W } from '@/lib/host-window'
 // sidebar/tasks.ts), Dev servers (the sidebar lists the projects and servers AgentHydra runs, servers/DevServersList.vue),
 // Clean sidebar (rows without their account number and times, sidebar/clean.ts) and Compact sidebar (no project
 // headers, each chat shows its project's icon in a ring, sidebar/compact.ts; owner, 2026-10-10).
-// Each shows when it is on: AgentHydra pressed, Cloud, CliMayte, Compact and Dev servers blue. Clean sidebar is the other
-// way round: on by default and plain, blue while it is off and the rows show their details (owner, 2026-10-08:
-// "invert this. Make it default on. not blue and blue is off"). A thin divider sets Cloud and the toggles after
-// it apart from Menu and Hide sidebar, with 8px each side (owner, 2026-10-10: "a little bit more gap"). AgentHydra and Dev servers sit at the right end, after another: with the sidebar open, at its right edge; hidden, right after Compact sidebar. The bar's
+// Each shows when it is on: AgentHydra pressed and Dev servers blue. Cloud, CliMayte tasks, the details and Compact sidebar
+// are items of one More options menu (owner, 2026-10-12), each with a check mark while on; the details item is checked while
+// the rows show their details (owner, 2026-10-08: "invert this. Make it default on. not blue and blue is off"). A thin
+// divider sets More options apart from Menu and Hide sidebar, with 8px each side (owner, 2026-10-10: "a little bit more gap"). AgentHydra and Dev servers sit at the right end, after another: with the sidebar open, at its right edge; hidden, right after Compact sidebar. The bar's
 // width follows the sidebar's slide (`sliding`, DeskFrame's 300 ms snap), so the two glide left and right with it.
 // data-peek-zone: pointing at the toggle opens the collapsed sidebar's flyout (DeskFrame). title-drag: with the window's
 // own title bar (lib/host-window.ts) its gaps drag the window, as Claude Desktop's do.
@@ -35,9 +35,9 @@ const BTN_SHAPE =
   'flex size-7 shrink-0 items-center justify-center rounded-[var(--radius-7)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-50 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text`
 /**
- * Hidden, the bar is just its buttons: 12 + 8 buttons of 28 + 9 gaps of 4 + two 1px dividers + 12 of divider margins
- * (the Cloud divider's 4px each side, the right divider's 4px on its right) + 4 = 290 (sidebar/width.ts CHROME_COLLAPSED).
- * Open, it is the sidebar's width, and never less than this less the 4px right padding plus 8px more (CHROME_OPEN, 294):
+ * Hidden, the bar is just its buttons: 12 + 5 buttons of 28 + 6 gaps of 4 + two 1px dividers + 12 of divider margins
+ * (the More options divider's 4px each side, the right divider's 4px on its right) + 4 = 194 (sidebar/width.ts CHROME_COLLAPSED).
+ * Open, it is the sidebar's width, and never less than this less the 4px right padding plus 8px more (CHROME_OPEN, 198):
  * over a narrower sidebar it reaches past its edge, and the title bar starts after it (DeskFrame titlePad).
  */
 </script>
@@ -86,28 +86,33 @@ const BTN = `${BTN_SHAPE} text-text`
     <!-- A divider before Cloud, 8px each side: the bar's 4px gap and 4px more (owner, 2026-10-07: "a little normal amount", not pushed
          off to the right as AgentHydra and Dev servers are; 2026-10-10: "a little bit more gap"). -->
     <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
-    <Tip :label="cloudOn ? 'Disable cloud sessions' : 'Enable cloud sessions'">
-      <!-- On shows as a blue icon alone, no pressed background (Michael, 2026-10-04). -->
-      <button type="button" :class="[BTN_SHAPE, cloudOn ? 'text-accent-text' : 'text-text']" aria-label="Cloud sessions" :aria-pressed="!!cloudOn" @click="emit('cloud')">
-        <Cloud class="size-4" />
-      </button>
-    </Tip>
-    <Tip :label="tasksOn ? 'Hide CliMayte tasks' : 'Show CliMayte tasks'">
-      <button type="button" :class="[BTN_SHAPE, tasksOn ? 'text-accent-text' : 'text-text']" aria-label="CliMayte tasks in the sidebar" :aria-pressed="!!tasksOn" @click="emit('tasks')">
-        <component :is="shellIcons.climayte" class="size-4" />
-      </button>
-    </Tip>
-    <Tip :label="cleanOn ? 'Show more details' : 'Show fewer details'">
-      <!-- Pressed and blue while the details show, the state that is not the default. -->
-      <button type="button" :class="[BTN_SHAPE, cleanOn ? 'text-text' : 'text-accent-text']" aria-label="Account numbers and times in the sidebar" :aria-pressed="!cleanOn" @click="emit('clean')">
-        <component :is="shellGlyphs.cleanSidebar" class="size-4" />
-      </button>
-    </Tip>
-    <Tip :label="compactOn ? 'Disable compact mode' : 'Enable compact mode'">
-      <!-- On shows as a blue icon alone, as Cloud does (owner, 2026-10-10: "add one more icon ... a compact mode"). -->
-      <button type="button" :class="[BTN_SHAPE, compactOn ? 'text-accent-text' : 'text-text']" aria-label="Compact sidebar" :aria-pressed="!!compactOn" @click="emit('compact')">
-        <Rows3 class="size-4" />
-      </button>
+    <!-- The four view toggles (Cloud sessions, CliMayte tasks, the details, compact mode) are items here, each checked while on
+         (owner, 2026-10-12). A check mark shows the state; choosing one emits what its button did, and the menu closes as the
+         other checkbox menus do. Labels are the tooltips they replace, so they name the state too. -->
+    <Tip label="More options">
+      <span class="inline-flex">
+    <DropdownMenu>
+        <DropdownMenuTrigger as-child>
+          <button type="button" :class="[BTN, 'no-drag']" aria-label="More options">
+            <EllipsisVertical class="size-4" />
+          </button>
+        </DropdownMenuTrigger>
+        <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
+          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!cloudOn" @select="emit('cloud')">
+            <Cloud class="size-4" />{{ cloudOn ? 'Disable cloud sessions' : 'Enable cloud sessions' }}
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!tasksOn" @select="emit('tasks')">
+            <component :is="shellIcons.climayte" class="size-4" />{{ tasksOn ? 'Hide CliMayte tasks' : 'Show CliMayte tasks' }}
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!cleanOn" @select="emit('clean')">
+            <component :is="shellGlyphs.cleanSidebar" class="size-4" />{{ cleanOn ? 'Show more details' : 'Show fewer details' }}
+          </DropdownMenuCheckboxItem>
+          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!compactOn" @select="emit('compact')">
+            <Rows3 class="size-4" />{{ compactOn ? 'Disable compact mode' : 'Enable compact mode' }}
+          </DropdownMenuCheckboxItem>
+        </DropdownMenuContent>
+      </DropdownMenu>
+      </span>
     </Tip>
     <!-- AgentHydra and Dev servers sit at the bar's right end, after a thin divider (owner, 2026-10-07), with 8px on its right (owner, 2026-10-10). -->
     <span class="ms-auto me-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
