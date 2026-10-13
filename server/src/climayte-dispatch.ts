@@ -153,6 +153,10 @@ export function sealedTask(t: RunTask, i: number): RunTask {
 
 /** Refuse a task that could not run: no prompt, no such folder, a check that is not one command. */
 function assertRunnable(t: RunTask, i: number): void {
+  // First: Hydra Desk asks whether this AgentHydra reads requestId with a task that has nothing else,
+  // which an older one refuses for its empty prompt (takesRequestIds). Neither makes a worker.
+  const badId = requestIdProblem(t?.requestId)
+  if (badId) throw new Error(`task ${i + 1}: ${badId}`)
   if (typeof t?.prompt !== 'string' || !t.prompt.trim())
     throw new Error(`task ${i + 1}: prompt is empty`)
   // A sealed task names no folder: it runs in an empty one of its own (newWorker).
@@ -180,6 +184,25 @@ function assertRunnable(t: RunTask, i: number): void {
     const why = deskProblem(t.desk, t.chat === true)
     if (why) throw new Error(`task ${i + 1}: ${why}`)
   }
+}
+
+/** The longest request id a task or a message may carry (CliMayteWorker.requestId, sendIds). */
+const REQUEST_ID_MAX = 200
+
+/** Why `v` cannot be a request id, or null when it can (or is absent). */
+export function requestIdProblem(v: unknown): string | null {
+  if (v === undefined || v === null) return null
+  if (typeof v !== 'string' || !v.trim() || v.length > REQUEST_ID_MAX)
+    return `requestId must be a non-empty string of at most ${REQUEST_ID_MAX} characters`
+  return null
+}
+
+/** The worker a request with this id already made, whatever its state since, or null. A caller that
+ *  got no answer sends the same request again; answering the first worker never starts a second. */
+export function madeFor(requestId: string | undefined): CliMayteWorker | null {
+  if (!requestId) return null
+  for (const w of workers.values()) if (w.requestId === requestId) return w
+  return null
 }
 
 /** The longest `desk.append` a chat may carry; a longer one is refused, never cut. */
@@ -354,6 +377,7 @@ export function newWorker(
     ...(setting?.auto ? { auto: true } : {}),
     ...(t.chat === true ? { chat: true } : {}),
     ...(t.chat === true && t.desk ? { desk: t.desk } : {}),
+    ...(t.requestId ? { requestId: t.requestId } : {}),
     ...(t.sealed ? { sealed: sealedOf(t.sealed) } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(typeof t.commit === 'boolean' ? { commit: t.commit } : {}),

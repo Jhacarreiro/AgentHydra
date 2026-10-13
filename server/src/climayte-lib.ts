@@ -247,6 +247,13 @@ export interface CliMayteWorker {
   /** A Desk chat's add-ons (only with `chat`): its appended system text and connector MCP servers.
    *  Every launch of the worker, continuations and account moves included, carries them. */
   desk?: { append: string; mcpServers: Record<string, object> }
+  /** The caller's id for the request that made it (a task's `requestId`): the same request sent
+   *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
+   *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */
+  requestId?: string
+  /** The newest message request ids it took (climayteSend `requestId`, at most SEND_IDS_KEPT): the
+   *  same message sent again is answered as taken and queued once. */
+  sendIds?: string[]
   /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
    *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
   sealed?: CliMayteSealed
@@ -2153,6 +2160,8 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
   return {
     ...w,
     ...originFields(w.origin, lookup),
+    // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
+    sendIds: undefined,
     prompt: w.prompt.slice(0, 300),
     ...keptReport(w),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
