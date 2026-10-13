@@ -7,6 +7,7 @@ import {
   readFileSync,
   realpathSync,
   renameSync,
+  rmSync,
   type Stats,
   statSync,
   writeFileSync,
@@ -377,6 +378,16 @@ function assertNoUnfinishedTurn(transcript: Buffer): void {
   }
 }
 
+/** Write through a sibling staging file and a rename, so a crash leaves the old file or the whole
+ * new one, never a prefix that blocks every retry. A staging file left by such a crash is Hydra's
+ * own (Codex reads only `.jsonl`), so it is replaced. */
+function writeWhole(path: string, content: string | Buffer, suffix: string): void {
+  const staged = `${path}.${suffix}`
+  rmSync(staged, { force: true })
+  writeFileSync(staged, content, { flag: 'wx', mode: 0o600 })
+  renameSync(staged, path)
+}
+
 /** Name the destination id and path in the receipt before any file exists, so an interrupted
  * copy resumes into them instead of creating a second chat. */
 function planCopy(
@@ -416,8 +427,7 @@ async function ensureCopied(
   if (!isPathInside(realpathSync(to.codexHome), realpathSync(dirname(transcriptPath)))) {
     throw new Error('The destination session directory points outside this instance.')
   }
-  if (!existsSync(transcriptPath))
-    writeFileSync(transcriptPath, content, { flag: 'wx', mode: 0o600 })
+  if (!existsSync(transcriptPath)) writeWhole(transcriptPath, content, 'hydra-copy')
   else if (readFileSync(transcriptPath, 'utf8') !== content)
     throw new Error(
       'An interrupted copy left a different file at its planned destination. Both were kept; review them before retrying.',
@@ -579,9 +589,7 @@ function completeDestination(
     const backup = join(deps.backupRoot, `codex-move-${id}-${Date.now()}`)
     mkdirSync(backup, { recursive: true })
     copyFileSync(path, join(backup, basename(path)), constants.COPYFILE_EXCL)
-    const staged = `${path}.hydra-repair`
-    writeFileSync(staged, rebuilt.content, { flag: 'wx', mode: 0o600 })
-    renameSync(staged, path)
+    writeWhole(path, rebuilt.content, 'hydra-repair')
     const removed = deps.resetProjection(to.codexHome, id)
     writeFileSync(join(backup, 'history-projection.json'), JSON.stringify(removed))
     return { keptRows: rebuilt.keptRows, recoveredRows: rebuilt.recoveredRows, backup }

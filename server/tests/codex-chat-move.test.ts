@@ -387,10 +387,14 @@ describe('Codex chat move', () => {
     const planned = Object.values(JSON.parse(readFileSync(f.deps.journalPath, 'utf8'))) as {
       phase: string
       destinationThreadId?: string
+      transcriptPath?: string
     }[]
     expect(planned).toHaveLength(1)
     expect(planned[0]?.phase).toBe('copying')
     f.unblockCopy()
+    // A crash mid-write leaves only the staging file, never a partial transcript.
+    mkdirSync(join(planned[0]!.transcriptPath!, '..'), { recursive: true })
+    writeFileSync(`${planned[0]!.transcriptPath}.hydra-copy`, 'partial')
     const resumed = await moveCodexChat('0', f.request, f.deps)
     expect(resumed.ok).toBe(true)
     expect(resumed.destinationThreadId).toBe(planned[0]!.destinationThreadId!)
@@ -594,6 +598,8 @@ describe('Codex chat move: history split across rollouts', () => {
     expect(f.state.archived).toBe(false)
 
     f.state.writerBusy = false
+    // A crash between staging the rewrite and renaming it left this behind.
+    writeFileSync(`${copyPath}.hydra-repair`, 'partial')
     const done = await moveCodexChat('0', f.request, f.deps)
     expect(done).toMatchObject({
       ok: true,
