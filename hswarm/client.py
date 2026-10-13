@@ -159,6 +159,12 @@ QUOTA_RESET_UTC_HOUR = 7
 # ZERO_QUOTA_REST_S, the shared key state takes the leg out of every plan on the machine until the keys wake.
 _ZERO_QUOTA_429 = re.compile(r'"quota_limit_value"\s*:\s*"0"')
 ZERO_QUOTA_REST_S = 1800.0
+# Resting each key as it answers still sends one request per key first, and a call may try every key (max_attempts is
+# the pool size + 2). 2026-10-13: every probed Gemini key (30 of 715, all seven models) answered quota_limit_value "0"
+# in us-south1, and HSwarm sent 4,095 Gemini requests from 03:00 to 04:00 UTC and 2,238 the next hour for one job
+# whose tasks timed out at 600-1,170 s. So once this many distinct keys say it with no 200 between, the whole pool
+# rests: a 200 clears the count, so a few dead keys among live ones never rest the rest.
+ZERO_QUOTA_POOL_KEYS = 5
 
 
 def _zero_limit_header(headers) -> bool:
@@ -508,6 +514,7 @@ class KeyPool:
         self._pending: dict[str, tuple] = {}
         self._pending_lock = threading.Lock()
         self._pending_path = None  # the state file the queued ops belong to
+        self._zero_quota: set[str] = set()  # keys that answered a zero quota since this pool's last 200 (ZERO_QUOTA_POOL_KEYS)
         _LIVE_POOLS.append(self)
         if state is None:
             self._load(force=True)
@@ -688,6 +695,19 @@ class KeyPool:
             e["free_ok"] = bool(e.get("free_left"))  # last /key probe said there was free-tier allowance left
         return e
 
+    def zero_quota(self, key: str) -> bool:
+        """The key answered that its quota is zero where the call landed: rest it ZERO_QUOTA_REST_S, and once
+        ZERO_QUOTA_POOL_KEYS distinct keys have said so since the pool's last 200, rest every key. True when it rested
+        the whole pool."""
+        self.rest(key, ZERO_QUOTA_REST_S, status=429)
+        self._zero_quota.add(key)
+        if len(self._zero_quota) < ZERO_QUOTA_POOL_KEYS:
+            return False
+        for k in self._keys:
+            self.rest(k, ZERO_QUOTA_REST_S, status=429)
+        self._zero_quota.clear()
+        return True
+
     def recover(self, key: str, free: bool = False) -> None:
         """A key that just answered 200 is healthy: its rest, strikes and disabling are cleared (a write only when
         there was something to clear). The last balance reading stays, so a working key is not re-probed for it.
@@ -697,6 +717,7 @@ class KeyPool:
         money back into PAID rotation - where the very next request 402s. Found in review, 2026-09-17, before it
         ever shipped: every free call on such a key silently undid its own disable.
         """
+        self._zero_quota.clear()
         self._load()  # the copy this process has (a few seconds old at most): a write only when it shows something to clear
         if free and self._free_ok(key):
             return
@@ -1314,7 +1335,7 @@ class ChatClient:
         if r.status_code == 429 and _DAILY_QUOTA_429.search(r.text or ""):
             self.pool.rest(key, _until_quota_reset(), status=429)  # spent for today: no retry on it until the reset
         elif r.status_code == 429 and (_ZERO_QUOTA_429.search(r.text or "") or _zero_limit_header(r.headers)):
-            self.pool.rest(key, ZERO_QUOTA_REST_S, status=429)  # no quota where the call landed: waiting 20 s changes nothing
+            self.pool.zero_quota(key)  # no quota where the call landed: waiting 20 s changes nothing
         elif r.status_code == 429:
             self.pool.rest(key, self._retry_after(r.headers.get("retry-after"), RATE_REST_S), status=429)
         elif r.status_code in DEAD_KEY_STATUS or (r.status_code == 400 and _KEY_SHAPED_400.search(r.text or "")):

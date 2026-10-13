@@ -544,6 +544,34 @@ def test_a_key_with_a_zero_quota_where_the_call_landed_rests_half_an_hour_not_tw
     assert c.pool.soonest_wake() == pytest.approx(client_mod.ZERO_QUOTA_REST_S, abs=60)
 
 
+# Contract: a zero quota said by ZERO_QUOTA_POOL_KEYS distinct keys with no 200 between rests the whole pool after that
+# many requests, and fewer keys saying it before a 200 rest only themselves. Regression: 2026-10-13, every Gemini key
+# answered a zero quota in us-south1 and each call could try every one of the 715 keys before failing over (4,095
+# Gemini requests in an hour for one job).
+def test_a_zero_quota_said_by_several_keys_rests_the_whole_pool_without_trying_every_key():
+    from hswarm import client as client_mod
+
+    keys = [f"sk-zero{i:04d}" for i in range(12)]
+    sent = []
+
+    def zero(req):
+        sent.append(req.headers["Authorization"])
+        return httpx.Response(429, json=_GEMINI_ZERO)
+
+    c = _client_with_transport(zero, keys=keys)
+    with pytest.raises(ApiError):
+        asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
+    assert len(sent) == client_mod.ZERO_QUOTA_POOL_KEYS
+    assert c.pool.available() == 0 and c.pool.soonest_wake() == pytest.approx(client_mod.ZERO_QUOTA_REST_S, abs=60)
+
+    keys = [f"sk-live{i:04d}" for i in range(12)]  # fresh keys: the first pool's rests are in the shared key state
+    few = set(keys[:client_mod.ZERO_QUOTA_POOL_KEYS - 1])  # fewer dead keys, then a live one: only they rest
+    c = _client_with_transport(lambda req: httpx.Response(429, json=_GEMINI_ZERO) if req.headers["Authorization"].split()[-1] in few
+                               else _ok(), keys=keys)
+    asyncio.run(asyncio.wait_for(c.chat([{"role": "user", "content": "x"}], rest_budget_s=5), timeout=5))
+    assert c.pool.available() == len(keys) - len(few)
+
+
 # Contract: "ready" in the console means the provider accepted the key. A key it refuses (401) goes to the disabled
 # slot with the reason and the answer never carries the key. Regression: a key shown ready that every call rejects.
 def test_a_checked_key_the_provider_refuses_is_disabled_with_the_reason(monkeypatch):
