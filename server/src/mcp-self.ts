@@ -16,8 +16,16 @@ import type { UsageAdvice, UsageSnapshot } from './types'
 /** The detection half is memoized: which instance a process belongs to CANNOT change while that
  *  process lives, and the ancestry fallback costs a PowerShell spawn. The dir→instance lookup is
  *  deliberately NOT cached — the fleet's account/plan data can change under us, and it is one
- *  loopback request. */
-let selfDetectionCache: Promise<SelfIdentityDetection> | null = null
+ *  loopback request. The memo is keyed on the env signals detection reads: a process that changes
+ *  them (the test suite does, in one shared bun process) must not be answered from an earlier one. */
+let selfDetectionCache: { key: string; result: Promise<SelfIdentityDetection> } | null = null
+const DETECTION_ENV = [
+  'CODEX_HOME',
+  'CLAUDE_CONFIG_DIR',
+  'CLAUDE_CODE_EXECPATH',
+  'CLAUDE_CODE_HOST_SESSION_ID',
+]
+const detectionEnvKey = () => DETECTION_ENV.map((k) => process.env[k] ?? '').join('\0')
 
 /** ⛔ OVER HTTP, "THIS PROCESS" IS THE DAEMON, AND THE ANSWER WAS USELESS (2026-09-11).
  *  mcp-register.ts registers the HTTP transport for every client, so `whoami` ran inside the
@@ -87,14 +95,18 @@ async function detectSelf(
 ): Promise<SelfIdentityDetection> {
   if (callerPid === null) return UNTRACED_CALLER
   if (callerPid) return detectForCaller(callerPid, fresh)
-  if (fresh || !selfDetectionCache) {
-    selfDetectionCache = (async () => {
-      const { detectSelfIdentity } = await import('./core/self-identity')
-      return detectSelfIdentity()
-    })()
+  const key = detectionEnvKey()
+  if (fresh || selfDetectionCache?.key !== key) {
+    selfDetectionCache = {
+      key,
+      result: (async () => {
+        const { detectSelfIdentity } = await import('./core/self-identity')
+        return detectSelfIdentity()
+      })(),
+    }
   }
   try {
-    return await selfDetectionCache
+    return await selfDetectionCache.result
   } catch (e) {
     selfDetectionCache = null // a failed probe must not be remembered as the answer
     throw e

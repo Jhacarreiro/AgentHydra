@@ -16,6 +16,9 @@ import {
 test('OpenCode SQLite sessions are listed and rendered from message/part rows', () => {
   const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
   const db = new Database(path)
+  // One commit for the whole fixture: each autocommit is a journal fsync, which the Windows runner
+  // pays for dearly (this test took 5.4 s there, 9 ms on Linux).
+  db.exec('begin')
   db.exec(`
     create table session (
       id text primary key, project_id text, directory text, title text,
@@ -63,6 +66,7 @@ test('OpenCode SQLite sessions are listed and rendered from message/part rows', 
     3000,
     JSON.stringify({ type: 'text', text: 'Fixed.' }),
   )
+  db.exec('commit')
   db.close()
 
   expect(listOpenCodeSessions(path)).toEqual([
@@ -93,6 +97,7 @@ test('OpenCode SQLite sessions are listed and rendered from message/part rows', 
 test('a subagent session carries the id of the session that spawned it', () => {
   const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
   const db = new Database(path)
+  db.exec('begin')
   db.exec(`
     create table session (
       id text primary key, project_id text, directory text, title text,
@@ -120,6 +125,7 @@ test('a subagent session carries the id of the session that spawned it', () => {
   // An OpenCode old enough to write '' rather than NULL must not make this the child of a session
   // that does not exist.
   insert.run('ses_blank', 'p1', 'D:\\work', 'Blank parentage', 2000, 3000, null, '')
+  db.exec('commit')
   db.close()
 
   const byId = new Map(listOpenCodeSessions(path).map((s) => [s.session_id, s]))
@@ -135,6 +141,7 @@ test('a subagent session carries the id of the session that spawned it', () => {
 function storeWithOneSession(): string {
   const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
   const db = new Database(path)
+  db.exec('begin')
   db.exec(`
     create table session (
       id text primary key, project_id text, directory text, title text,
@@ -156,6 +163,7 @@ function storeWithOneSession(): string {
     2000,
     null,
   )
+  db.exec('commit')
   db.close()
   return path
 }
@@ -163,9 +171,11 @@ function storeWithOneSession(): string {
 /** Add a second session to a closed store, the way OpenCode would. */
 function addSecondSession(path: string): void {
   const again = new Database(path)
+  again.exec('begin')
   again
     .query('insert into session values (?, ?, ?, ?, ?, ?, ?)')
     .run('ses_two', 'p1', 'D:work', 'Second', 3000, 4000, null)
+  again.exec('commit')
   again.close()
 }
 
@@ -267,6 +277,7 @@ test('the async OpenCode listing returns the sync listing, with and without pare
   for (const parentColumn of ['', ', parent_id text']) {
     const path = join(CONFIG_DIR, `opencode-${crypto.randomUUID()}.db`)
     const db = new Database(path)
+    db.exec('begin')
     db.exec(`
       create table session (
         id text primary key, project_id text, directory text, title text,
@@ -281,6 +292,7 @@ test('the async OpenCode listing returns the sync listing, with and without pare
       'insert into session (id, project_id, title, time_created, time_updated) values (?, ?, ?, ?, ?)',
     ).run('ses_a', 'p', 'A', 1, 2)
     db.query('insert into message values (?, ?, ?, ?)').run('m1', 'ses_a', 1, 'hello world')
+    db.exec('commit')
     db.close()
 
     const sync = listOpenCodeSessions(path)

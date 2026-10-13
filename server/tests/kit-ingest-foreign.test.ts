@@ -637,6 +637,9 @@ describe('foreign ingest into the kit store', () => {
     const dbPath = join(root, 'hermes-resume.db')
     const db = hermesDb(dbPath)
     const put = (input: number, at: number) => {
+      // One commit per write is a journal fsync each; on the Windows runner that alone outran the
+      // test's 5 s limit (9 commits, 5277 ms). The session's row is written as one transaction.
+      db.exec('begin')
       db.query('insert or replace into sessions values (?,?,?,?,?,?,?,0,null)').run(
         's1',
         '/w',
@@ -652,6 +655,7 @@ describe('foreign ingest into the kit store', () => {
            cache_read_tokens, cache_write_tokens, reasoning_tokens, first_seen, last_seen)
          values ('s1', 'hm-model', 1, ?, 10, 0, 0, 0, ?, ?)`,
       ).run(input, at / 1000, at / 1000)
+      db.exec('commit')
     }
     const src: ForeignSources = {
       codex: [],
