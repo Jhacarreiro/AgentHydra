@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **AgentHydra keeps your always-on helpers running, one copy each.** List the background servers and watchers you
+  want in a helpers file; AgentHydra starts any that are missing, takes over ones already running instead of starting a
+  second, and restarts one that stops or grows past its memory limit. The header shows them with their memory, a
+  restart for each, and Stop all with Undo.
+- **One Allow-once clicker covers every account.** The watcher that answers Claude Desktop's switch-permission card
+  now runs once for all accounts instead of once per account.
 - **CliMayte knows which chat started work a script sent.** A script a chat runs that posts workers straight to the
   service (with no MCP call) is now traced to that chat, so its workers show their parent chat and that chat hears
   when they finish.
