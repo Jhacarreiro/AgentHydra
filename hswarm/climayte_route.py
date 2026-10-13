@@ -33,6 +33,7 @@ _ELIGIBLE_TOOLS = ("read", "edit", "all")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks routed to CliMayte right now, across every job of this process (route_via_climayte_max)
 _ASKED: set[tuple[str, str]] = set()  # (job, task) CliMayte was asked to run: before_last_resort does not ask twice
+_WAITED: set[tuple[str, str]] = set()  # (job, task) whose wait for a CliMayte slot ran out: a later ask takes a free slot, never waits again
 _SWITCH = {"at": -1e9, "on": True}  # AgentHydra's own routing on/off, read at most once per SWITCH_TTL_S
 SWITCH_TTL_S = 60.0
 
@@ -322,7 +323,7 @@ async def _wait_worker(job_id: str, task: Task, note: dict, wid: str) -> Result 
 
 
 def _result(task: Task, w: dict, note: dict, started: str, job_id: str) -> Result | None:
-    from .worker import payload_in_text, schema_errors
+    from .worker import payload_in_text
 
     text = str(w.get("result") or "").strip()
     res = Result(id=task.id, backend=task.backend, model=w.get("reportedModel") or w.get("model") or "claude", status="ok",
@@ -355,14 +356,16 @@ async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Re
     unserved = {"via": "api", "floor_miss": missed} if missed else None
     if not await switch_on():  # read before any wait: a slot is no use with the owner's switch off
         return None, unserved
-    if first and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+    if first and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and (job_id, task.id) not in _WAITED:
         # Its own route is below its bar or kept for after CliMayte: worth a wait for a slot, as long as a queued worker is given to start.
         until = asyncio.get_running_loop().time() + config.ROUTE_VIA_CLIMAYTE_START_S
         while _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and asyncio.get_running_loop().time() < until:
             await asyncio.sleep(POLL_S)
     if _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
         if first:
-            _asked(job_id, task)  # it waited its turn once; the walk does not wait again before its last legs
+            # It waited its turn once. Not an ask: CliMayte never saw it, so the walk still offers it before its last legs
+            # (a slot may be free by then), only without waiting again (2026-10-13: recorded as an ask, it skipped CliMayte).
+            _remember(_WAITED, job_id, task)
         return None, unserved
     _ACTIVE += 1  # taken with no await since the cap check, held to the worker's end: the cap is on tasks in CliMayte's hands
     try:
@@ -371,10 +374,10 @@ async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Re
         _ACTIVE -= 1
 
 
-def _asked(job_id: str, task: Task) -> None:
-    if len(_ASKED) > 20_000:  # a long-running server: the ids are only needed for the walk of a task still running
-        _ASKED.clear()
-    _ASKED.add((job_id, task.id))
+def _remember(seen: set, job_id: str, task: Task) -> None:
+    if len(seen) > 20_000:  # a long-running server: the ids are only needed for the walk of a task still running
+        seen.clear()
+    seen.add((job_id, task.id))
 
 
 async def _consult(job_id: str, task: Task, first: str | None = None, missed: str | None = None) -> tuple[Result | None, dict | None]:
@@ -387,7 +390,7 @@ async def _consult(job_id: str, task: Task, first: str | None = None, missed: st
         note = {"provider": "climayte", "decided": doc["route"], "why": doc.get("why", "")}
         if doc["route"] != "subscription":
             return None, {"via": "api", "decided": "api", "why": note["why"]}
-    _asked(job_id, task)
+    _remember(_ASKED, job_id, task)
     res = await run_worker(job_id, task, note)
     if res is not None:
         return res, None

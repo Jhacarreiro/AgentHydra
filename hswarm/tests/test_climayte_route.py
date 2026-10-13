@@ -336,6 +336,26 @@ def test_a_below_floor_task_whose_worker_failed_runs_its_live_route_and_says_so(
     assert res.selection["route"]["floor_miss"] == "no live route meets profile critical" and res.selection["route"]["climayte_failed"] == "w1"
 
 
+# Contract: a task whose wait for a CliMayte slot ran out is still offered to CliMayte when its walk reaches its first
+# `after_climayte` leg, taking a slot free by then; it only does not wait for one again. Regression: 2026-10-13 (review),
+# the timed-out wait was recorded as an ask, so the walk stepped onto the paid leg with CliMayte idle.
+def test_a_task_whose_slot_wait_ran_out_is_still_offered_to_climayte_before_its_last_legs(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_START_S", 0.6)
+    monkeypatch.setattr(climayte_route, "_ASKED", set())
+    f = fake()
+    t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="critical", max_turns=10, max_cost_usd=1.0)
+    monkeypatch.setattr(climayte_route, "_ACTIVE", config.ROUTE_VIA_CLIMAYTE_MAX)  # every slot taken
+    t0 = time.monotonic()
+    assert asyncio.run(climayte_route.consult("j-wait", t, first="only anthropic routes are left")) == (None, None)
+    assert time.monotonic() - t0 >= 0.6 and f.dispatched == []  # it waited its turn
+    t0 = time.monotonic()
+    assert asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"])) == (None, None)
+    assert time.monotonic() - t0 < 0.3 and f.dispatched == []  # still full: no second wait
+    monkeypatch.setattr(climayte_route, "_ACTIVE", 0)  # a slot came free
+    res, _ = asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"]))
+    assert res is not None and res.answer == "worker report" and len(f.dispatched) == 1
+
+
 class _Mgr:
     """The manager surface dispatch.run_selected reads, with no gates."""
 
