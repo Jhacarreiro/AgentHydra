@@ -37,7 +37,9 @@
 // "describe" is an optional true or false (default false), for "schedule" and "status" routines: true, and once each run
 // that printed something ends (a prompt run: its chat's last answer), an AI reads it and writes what the run did in two or
 // three plain sentences, kept with the run (owner, 2026-10-13: "every time they finish, to have a, like, AI description of
-// what they did ... have a toggle"). A busy run is not described. The card's Describe runs switch sets it (the window only).
+// what they did ... have a toggle"). A busy run is not described. The card's Describe runs switch sets it.
+// The owner edits a routine's file in its card (owner, 2026-10-13: "I need to be able to, like, edit them ... rename them"):
+// POST `edit` changes the keys it names (null removes one), and the file must still check out.
 //
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
 // <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
@@ -133,6 +135,10 @@ export interface Routine {
   windowsTask: string | null
   /** What a schedule or status routine does when it runs; null for a windowsTask routine. */
   what: 'run' | 'prompt' | null
+  /** Its file's prompt, run and status, for its Edit form; null when it has none (or its file is broken). */
+  prompt: string | null
+  command: string[] | null
+  statusCommand: string[] | null
   cwd: string | null
   timeoutMinutes: number | null
   until: string | null
@@ -169,7 +175,9 @@ export interface RoutinesStatus {
 
 /**
  * POST /api/routines. One action per call besides `enabled`. The window (X-Desk-Caller: window) may do every action; an
- * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `describe` sets a routine file's `describe`.
+ * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `edit` sets the keys of a routine's file that
+ * `set` names (null removes one: `until`, say), every other key as it was; 409 with the reason when the result does not
+ * check out, and the file is left alone.
  */
 export interface RoutinesRequest {
   enabled?: boolean
@@ -179,7 +187,7 @@ export interface RoutinesRequest {
   approve?: string
   discard?: string
   propose?: RoutineProposal
-  describe?: { id: string; on: boolean }
+  edit?: { id: string; set: Record<string, unknown> }
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

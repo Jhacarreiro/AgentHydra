@@ -1,15 +1,16 @@
 <script setup lang="ts">
 // One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, what the last run did when
 // it is described, and its own on/off switch) that opens into its schedule in words, its Describe runs switch, its history
-// with each run's description, and its actions: Run now, and Open chat for a prompt run's chat.
+// with each run's description, and its actions: Run now, Open chat for a prompt run's chat, and Edit (its Edit form).
 import { computed, ref } from 'vue'
-import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Repeat, Sparkles } from '@lucide/vue'
+import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
 import { usePaneApi } from './api'
 import { BUTTON } from './settings-styles'
 import PaneSwitch from './PaneSwitch.vue'
+import RoutineEditForm from './RoutineEditForm.vue'
 import RoutineStatusChip from './RoutineStatusChip.vue'
 import { lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
 
@@ -27,6 +28,7 @@ const src = useShellSource()
 const busy = ref(false)
 const error = ref('')
 const open = ref(false)
+const editing = ref(false)
 const openRuns = ref<Set<number>>(new Set())
 
 const canRun = computed(() => props.enabled && !busy.value && ['idle', 'due'].includes(props.routine.state) && props.routine.kind !== null)
@@ -66,17 +68,30 @@ function openChat(sessionId: string) {
   else src.select({ kind: 'external', id: sessionId })
 }
 
-async function act(body: Parameters<typeof api.routinesAct>[0]) {
+/** Sends one action; true when the server took it, else its reason is in `error`. */
+async function act(body: Parameters<typeof api.routinesAct>[0]): Promise<boolean> {
   busy.value = true
   error.value = ''
   try {
     await api.routinesAct(body)
+    return true
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+    return false
   } finally {
     busy.value = false
     emit('changed')
   }
+}
+
+/** Saves the Edit form's changes; it closes once the server has them. */
+async function saveEdit(set: Record<string, unknown>) {
+  if (await act({ edit: { id: props.routine.id, set } })) editing.value = false
+}
+
+function toggleEdit() {
+  error.value = ''
+  editing.value = !editing.value
 }
 </script>
 
@@ -142,7 +157,7 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
           :model-value="routine.describe"
           :label="`Describe each run of ${routine.name}`"
           :disabled="busy"
-          @update:model-value="(on: boolean) => act({ describe: { id: routine.id, on } })"
+          @update:model-value="(on: boolean) => act({ edit: { id: routine.id, set: { describe: on } } })"
         />
       </div>
       <div class="mt-3 text-ui-sm leading-4.5 text-text-2">Recent runs</div>
@@ -174,9 +189,14 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
       <div class="mt-3 flex flex-wrap gap-2">
         <button type="button" :class="BUTTON" :disabled="!canRun" @click="act({ run: routine.id })">Run now</button>
         <button v-if="chatSession" type="button" :class="BUTTON" @click="openChat(chatSession)">Open chat</button>
+        <button v-if="routine.kind !== null" type="button" :class="[BUTTON, 'gap-1.5']" :aria-expanded="editing" @click="toggleEdit">
+          <Pencil class="size-3.5" aria-hidden="true" />Edit
+        </button>
       </div>
+      <RoutineEditForm v-if="editing" :routine="routine" :busy="busy" :error="error" @save="saveEdit" @cancel="toggleEdit" />
     </div>
-    <!-- Under the card, open or not: the row's own switch fails here too, and a closed card would hide it. -->
-    <div v-if="error" role="alert" class="wrap-break-word px-3 pb-2 text-ui-sm leading-4.5 text-danger-text">{{ error }}</div>
+    <!-- Under the card, open or not: the row's own switch fails here too, and a closed card would hide it. The Edit form
+         shows its own. -->
+    <div v-if="error && !(open && editing)" role="alert" class="wrap-break-word px-3 pb-2 text-ui-sm leading-4.5 text-danger-text">{{ error }}</div>
   </div>
 </template>

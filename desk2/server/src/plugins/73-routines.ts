@@ -57,11 +57,11 @@ const RUNNER_START_MS = 60_000
 /** A runner still going this long past its run's timeout (it ends the command itself at the timeout) is ended here. */
 const RUNNER_GRACE_MS = 2 * 60_000
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
-const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'describe'] as const
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'describe']
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit'] as const
+const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract }, "describe"?: { "id": "<id>", "on": true | false } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } } }, one action per call besides "enabled"'
 /** A description still being written when Desk stopped is never finished: the output it read went with that Desk. */
 const RESTARTED: RunDescription = { state: 'failed', text: 'AgentHydra restarted before it was described' }
 
@@ -593,7 +593,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const j = judge(s, mem, t, enabled(), false)
     return {
       id: entry.id,
-      name: def?.name ?? entry.id,
+      name: def?.name ?? (entry.def === null ? entry.name : undefined) ?? entry.id,
       kind: def ? kindOf(def) : null,
       state: j.state,
       reason: j.reason,
@@ -601,6 +601,9 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       schedule: def?.schedule ?? null,
       windowsTask: def?.windowsTask ?? null,
       what: def?.run !== undefined ? 'run' : def?.prompt !== undefined ? 'prompt' : null,
+      prompt: def?.prompt ?? null,
+      command: def?.run ?? null,
+      statusCommand: def?.status ?? null,
       cwd: def?.cwd ?? null,
       timeoutMinutes: def?.timeoutMinutes ?? null,
       until: def?.until ?? null,
@@ -648,8 +651,8 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const typed = actions.every((k) =>
       k === 'propose'
         ? typeof body.propose === 'object' && body.propose !== null
-        : k === 'describe'
-          ? typeof body.describe?.id === 'string' && typeof body.describe.on === 'boolean'
+        : k === 'edit'
+          ? typeof body.edit?.id === 'string' && typeof body.edit.set === 'object' && body.edit.set !== null && !Array.isArray(body.edit.set)
           : typeof body[k] === 'string',
     )
     if (
@@ -663,7 +666,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const [action] = actions
     if (body.enabled !== undefined && !owner) return c.json(OWNER_ONLY, 403)
     if (action !== undefined && OWNER_ACTIONS.includes(action) && !owner) return c.json(OWNER_ONLY, 403)
-    const id = action === 'propose' ? '' : action === 'describe' ? body.describe!.id : (body[action as 'run'] ?? '')
+    const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : (body[action as 'run'] ?? '')
     if (action !== undefined && action !== 'propose' && !ROUTINE_ID.test(id)) return c.json({ error: `"${id}" is not a routine id` }, 400)
 
     if (body.enabled !== undefined && body.enabled !== ctx.settings().routines) ctx.updateSettings({ routines: body.enabled })
@@ -712,8 +715,9 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       return c.json(status())
     }
 
-    if (action === 'describe') {
-      // The owner's switch writes the routine's own file, every other key as it was.
+    if (action === 'edit') {
+      // The owner's edit (its Edit form, its Describe runs switch) writes the routine's own file: the keys `set` names,
+      // null removing one, every other key as it was. One that would not check out is refused and the file left alone.
       const routineFile = join(routinesDir, `${id}.json`)
       let raw: Record<string, unknown>
       try {
@@ -721,11 +725,15 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       } catch {
         return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing or not JSON` }, 404)
       }
-      const next = { ...raw, describe: body.describe!.on }
+      const next: Record<string, unknown> = { ...raw }
+      for (const [key, value] of Object.entries(body.edit!.set)) {
+        if (value === null) delete next[key]
+        else next[key] = value
+      }
       try {
         checkDefinition(id, next)
       } catch (err) {
-        return c.json({ error: `"${id}" cannot be described: ${message(err)}` }, 409)
+        return c.json({ error: `"${id}" was not saved: ${message(err)}` }, 409)
       }
       writeWhole(routineFile, next)
       await look()

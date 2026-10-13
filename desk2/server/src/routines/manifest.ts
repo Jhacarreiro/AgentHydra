@@ -15,8 +15,18 @@ export const TIMEOUT_DEFAULT = 120
 const ASKED_MAX = 500
 const WHY_MAX = 500
 
-/** One <id>.json in a folder: its definition, or the reason it is broken. */
-export type Entry<T extends RoutineDefinition = RoutineDefinition> = { id: string; def: T; broken: null } | { id: string; def: null; broken: string }
+/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one). */
+export type Entry<T extends RoutineDefinition = RoutineDefinition> = { id: string; def: T; broken: null } | { id: string; def: null; broken: string; name?: string }
+
+/** The name a file that does not check out still gives itself, so its card keeps its name rather than its file's. */
+function nameIn(raw: string): string | undefined {
+  try {
+    const name = (JSON.parse(raw) as { name?: unknown } | null)?.name
+    return typeof name === 'string' && name.trim() ? name.trim() : undefined
+  } catch {
+    return undefined
+  }
+}
 
 const isArgv = (v: unknown): v is string[] => Array.isArray(v) && v.length > 0 && v.every((s) => typeof s === 'string' && s.length > 0)
 const text = (v: unknown, key: string): string => {
@@ -151,10 +161,12 @@ export function readEntries<T extends RoutineDefinition>(dir: string, parse: (id
     .sort()
     .map((f): Entry<T> => {
       const id = f.slice(0, -'.json'.length)
+      let raw = ''
       try {
-        return { id, def: parse(id, readFileSync(join(dir, f), 'utf8')), broken: null }
+        raw = readFileSync(join(dir, f), 'utf8')
+        return { id, def: parse(id, raw), broken: null }
       } catch (err) {
-        return { id, def: null, broken: err instanceof Error ? err.message : String(err) }
+        return { id, def: null, broken: err instanceof Error ? err.message : String(err), name: nameIn(raw) }
       }
     })
 }

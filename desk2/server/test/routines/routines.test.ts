@@ -568,7 +568,7 @@ describe('the plugin', () => {
     const d = desk()
     d.routine('example-owned', { name: 'Example owned', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
     await get(d.app, true)
-    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { describe: { id: 'example-owned', on: true } }, { enabled: false }]) {
+    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { edit: { id: 'example-owned', set: { name: 'Example renamed' } } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
       expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
@@ -702,21 +702,33 @@ describe('the plugin', () => {
     expect(asked).toHaveLength(2)
   }, 60_000)
 
-  test("the describe switch writes the routine's own file, the rest of it as it was; a Windows task routine refuses it", async () => {
+  // Owner, 2026-10-13: "I need to be able to, like, edit them ... I can't rename them either".
+  test("an edit writes the routine's own file: the keys it names, null removing one, the rest as it was; one that would not check out is refused and the file left alone", async () => {
     const d = desk()
-    const body = { name: 'Example switch', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5 }
-    d.routine('example-switch', body)
-    d.routine('example-task', { name: 'Example task', askedBy, windowsTask: '\\Example nightly job' })
+    const body = { name: 'Example edit', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5, until: '2026-10-23' }
+    d.routine('example-edit', body)
     await get(d.app, true)
-    const res = await post(d.app, { describe: { id: 'example-switch', on: true } }, OWNER)
+    const res = await post(d.app, { edit: { id: 'example-edit', set: { name: 'Example renamed', describe: true, until: null } } }, OWNER)
     expect(res.status).toBe(200)
-    expect(((await res.json()) as RoutinesStatus).routines.find((r) => r.id === 'example-switch')?.describe).toBe(true)
-    expect(JSON.parse(readFileSync(join(d.home, 'routines', 'example-switch.json'), 'utf8'))).toEqual({ ...body, describe: true })
+    expect(((await res.json()) as RoutinesStatus).routines[0]).toMatchObject({ name: 'Example renamed', describe: true, until: null })
+    const file = join(d.home, 'routines', 'example-edit.json')
+    const kept: Record<string, unknown> = { ...body, name: 'Example renamed', describe: true }
+    delete kept.until
+    expect(JSON.parse(readFileSync(file, 'utf8'))).toEqual(kept)
 
-    const task = join(d.home, 'routines', 'example-task.json')
-    const before = readFileSync(task, 'utf8')
-    expect((await post(d.app, { describe: { id: 'example-task', on: true } }, OWNER)).status).toBe(409)
-    expect(readFileSync(task, 'utf8')).toBe(before)
+    const before = readFileSync(file, 'utf8')
+    const refused = await post(d.app, { edit: { id: 'example-edit', set: { schedule: 'MON' } } }, OWNER)
+    expect(refused.status).toBe(409)
+    expect(((await refused.json()) as { error: string }).error).toStartWith('"example-edit" was not saved: ')
+    expect(readFileSync(file, 'utf8')).toBe(before)
+  })
+
+  // Regression (2026-10-13): a Desk that did not know a new key read Archangel's file as broken and listed it by its file
+  // name, "michaiel".
+  test('a routine whose file does not check out keeps the name the file gives it', async () => {
+    const d = desk()
+    d.routine('example-broken', { name: 'Example broken', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), notAKey: true })
+    expect((await get(d.app, true)).routines[0]).toMatchObject({ id: 'example-broken', name: 'Example broken', state: 'broken' })
   })
 
   test('a description still being written when Desk stopped reads failed after the restart, never pending for good', async () => {
