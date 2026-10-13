@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 from test_decisions import FakeJev, FakeMgr, _item  # noqa: E402
 from test_free_route import _consult, _task, fake  # noqa: E402,F401 - the fake daemon fixture
 
-from hswarm import booking, config, free_backfill, free_route, ledger  # noqa: E402
+from hswarm import booking, commands, config, free_route, ledger  # noqa: E402
 from hswarm import decisions as d  # noqa: E402
 from hswarm import typesafe  # noqa: E402
 from hswarm.jobs import JobManager  # noqa: E402
@@ -155,9 +155,9 @@ def test_backfill_adds_each_old_note_once(monkeypatch):
     line = {"id": "t1", "status": "ok", "started": now,
             "selection": {"profile": "routine", "route": {"via": "api", "fallback": "free account failed", "account": "claude-1"}}}
     (job / "results.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
-    monkeypatch.setattr(free_backfill.archive, "job_ids", lambda: [job.name])
-    dry = free_backfill.backfill(30, dry_run=True)
+    monkeypatch.setattr(commands.archive, "job_ids", lambda: [job.name])
+    dry = commands.backfill_free_misses(30, dry_run=True)
     assert dry["rows"] == 1 and dry["by_model"] == {"free:claude-haiku-5-5": 1} and not config.LEDGER.exists()
-    assert free_backfill.backfill(30)["rows"] == 1
-    again = free_backfill.backfill(30)
+    assert commands.backfill_free_misses(30)["rows"] == 1
+    again = commands.backfill_free_misses(30)
     assert again["rows"] == 0 and again["existing"] == 1 and len(_ledger()) == 1
