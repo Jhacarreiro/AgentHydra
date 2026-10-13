@@ -8,6 +8,11 @@ describe('scriptLabel names a dispatching process by its script', () => {
     ['python C:\\Users\\me\\tools\\michaiel\\act.py --dry-run --key=abc', 'michaiel/act.py'],
     ['"C:\\Program Files\\nodejs\\node.exe" "D:/work/creaitor/arbiter.py"', 'creaitor/arbiter.py'],
     ['bun /srv/tools/sweep/run.mjs', 'sweep/run.mjs'],
+    ['pythonw.exe -m hswarm serve --port 7793', 'hswarm'],
+    [
+      `pythonw.exe -c "import sys,runpy;runpy.run_module('hswarm',run_name='__main__')" C:\\Users\\me\\.hswarm\\code`,
+      'hswarm',
+    ],
     ['claude.exe --output-format json', null],
     [null, null],
   ])('%s -> %s', (commandLine, label) => {

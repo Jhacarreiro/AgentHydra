@@ -43,8 +43,13 @@ export function parseBy(v: unknown): { by: CliMayteBy | undefined; why: string |
 const SCRIPT = /\.(py|mjs|cjs|js|ts|ps1|sh)$/i
 const SHELL = /^(cmd|powershell|pwsh|bash|sh|zsh|conhost)(\.exe)?$/i
 
+/** A Python module run by name: `-m hswarm`, or `runpy.run_module('hswarm', ...)` in a `-c` line (HSwarm's shared
+ *  server, 2026-10-13, which read only "pythonw" before). */
+const MODULE = /(?:^|\s)-m\s+([\w.]+)|run_module\(\s*['"]([\w.]+)['"]/
+
 /** A readable name for a process's script from its command line: the script's folder and file, as in
- *  `michaiel/act.py`. Flags and arguments are never part of it. Null when no script is named. */
+ *  `michaiel/act.py`, else the Python module it runs, as in `hswarm`. Flags and arguments are never part of it.
+ *  Null when no script or module is named. */
 export function scriptLabel(commandLine: string | null | undefined): string | null {
   if (!commandLine) return null
   for (const token of commandLine.match(/"[^"]*"|\S+/g) ?? []) {
@@ -53,7 +58,8 @@ export function scriptLabel(commandLine: string | null | undefined): string | nu
     const parts = path.split(/[\\/]+/).filter(Boolean)
     return parts.slice(-2).join('/').slice(0, LABEL_MAX)
   }
-  return null
+  const module = commandLine.match(MODULE)
+  return module ? (module[1] ?? module[2] ?? '').slice(0, LABEL_MAX) || null : null
 }
 
 /** How deep the walk looks for a named script: a launcher's script is one or two hops up at most. */
