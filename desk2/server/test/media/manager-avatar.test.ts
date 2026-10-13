@@ -112,6 +112,7 @@ test('a PNG is saved, served with its headers, and reaches the manager label', a
     title: 'Invented title',
     oneLiner: 'An invented line.',
     photo,
+    statsLine: null,
   })
 })
 

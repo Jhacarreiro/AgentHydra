@@ -285,8 +285,10 @@ export async function run(input, env = process.env) {
   } else if (state.pinned && current) {
     decision = { slug: current, why: "pinned in session", p: null };
   } else if (mentioned) {
+    source = "at-name";
     decision = { slug: mentioned.slug, why: `@${mentioned.name} in the message`, p: null };
   } else if (current && isContinuation(prompt)) {
+    source = "continuation";
     decision = { slug: current, why: "continuation", p: null };
   } else {
     const scored = await scoreMessage(prompt, personas, env);
@@ -300,6 +302,7 @@ export async function run(input, env = process.env) {
   const full = persona !== null && (swapped || messages % FULL_EVERY === 0);
   const briefText = full ? readFileSync(persona.briefPath, "utf8") : "";
   const reason = swapped ? (current ? `swapped from ${current}` : "assigned") : `re-injected at message ${messages}`;
+  const transcriptPath = typeof input.transcript_path === "string" ? input.transcript_path : null;
   const next = {
     manager: persona ? persona.slug : null,
     since: swapped ? at : state.since,
@@ -309,6 +312,7 @@ export async function run(input, env = process.env) {
     history: swapped
       ? [...state.history, { at, manager: persona.slug, why: decision.why, p: decision.p }].slice(-HISTORY_MAX)
       : state.history,
+    transcriptPath,
   };
   mkdirSync(path.dirname(sessionFile), { recursive: true });
   writeFileSync(sessionFile, `${JSON.stringify(next, null, 2)}\n`);
@@ -320,6 +324,31 @@ export async function run(input, env = process.env) {
   );
   if (!persona) return null;
 
+  let analyticsError = null;
+  try {
+    mkdirSync(path.join(root, "analytics"), { recursive: true });
+    const line = {
+      v: 1,
+      at,
+      session: sessionId,
+      manager: persona.slug,
+      decision: swapped ? "swap" : "stay",
+      why: decision.why,
+      source,
+      p: decision.p ?? null,
+      message: messages,
+      pinned: next.pinned,
+      deskChat: env.HYDRA_DESK_CHAT_ID || null,
+      cwd: typeof input.cwd === "string" ? input.cwd : process.cwd(),
+      transcriptPath,
+      promptChars: prompt.length,
+    };
+    appendFileSync(path.join(root, "analytics", "routes.jsonl"), `${JSON.stringify(line)}\n`);
+  } catch (error) {
+    analyticsError = error.message;
+    appendFileSync(logFile, `${at} session=${sessionId} analytics ERROR ${error.message}\n`);
+  }
+
   const injection = buildInjection(persona, personas, { full, briefText, reason });
   const output = {
     hookSpecificOutput: {
@@ -327,7 +356,10 @@ export async function run(input, env = process.env) {
       additionalContext: note ? `Manager Hydra routing note: ${note}.\n${injection}` : injection,
     },
   };
-  if (swapped) output.systemMessage = `Now: ${persona.name}, ${persona.title}${note ? ` (${note})` : ""}`;
+  const messageLines = [];
+  if (swapped) messageLines.push(`Now: ${persona.name}, ${persona.title}${note ? ` (${note})` : ""}`);
+  if (analyticsError) messageLines.push(`Manager Hydra error: analytics line not written (${analyticsError})`);
+  if (messageLines.length) output.systemMessage = messageLines.join("\n");
   return output;
 }
 

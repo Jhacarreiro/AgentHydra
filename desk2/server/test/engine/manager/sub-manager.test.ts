@@ -7,6 +7,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerEvent } from '../../../../shared/protocol'
 import { ChatManager, parseCreate } from '../../../src/engine/chat-manager'
+import { forgetManagerStats } from '../../../src/engine/manager-stats'
 import { currentManager } from '../../../src/engine/managers'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
@@ -92,11 +93,20 @@ test('the manager label is the pin, else the manager the session is on, and none
   const personas = process.env.AGENTHYDRA_MANAGERS_DIR!
   mkdirSync(join(personas, 'sessions'))
   writeFileSync(join(personas, 'sessions', 'sess-1.json'), JSON.stringify({ manager: 'example-manager' }))
-  const label = { slug: 'example-manager', name: 'Example Manager', title: null, oneLiner: null, photo: null }
+  const label = { slug: 'example-manager', name: 'Example Manager', title: null, oneLiner: null, photo: null, statsLine: null }
   expect(currentManager(null, 'sess-1')).toEqual(label)
   expect(currentManager('example-manager', null)).toEqual(label)
   expect(currentManager('ghost', 'sess-1')).toBeNull()
   expect(currentManager(null, 'unknown-session')).toBeNull()
+})
+
+test('the manager label carries its analytics line once summary.json has one', () => {
+  setup()
+  const personas = process.env.AGENTHYDRA_MANAGERS_DIR!
+  mkdirSync(join(personas, 'analytics'))
+  writeFileSync(join(personas, 'analytics', 'summary.json'), JSON.stringify({ v: 1, managers: { 'example-manager': { turns: 3, line: '3 turns · 100% answered' } } }))
+  forgetManagerStats()
+  expect(currentManager('example-manager', null)?.statsLine).toBe('3 turns · 100% answered')
 })
 
 test('a manager photo change sends the chats on that manager again, and no others', async () => {

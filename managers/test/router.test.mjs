@@ -74,6 +74,8 @@ async function withRig(fn) {
     const base = { ...process.env };
     delete base.AGENTHYDRA_MANAGER;
     delete base.AGENTHYDRA_CLIMAYTE_WORKER;
+    delete base.AGENTHYDRA_CLIMAYTE_CHAT;
+    delete base.HYDRA_DESK_CHAT_ID;
     return {
       ...base,
       AGENTHYDRA_MANAGERS_DIR: managers,
@@ -282,5 +284,106 @@ test("an unusable session id is named as an error", async () => {
     const result = await runRouter({ session_id: "../evil", prompt: "the button layout on the screen" }, rig.env());
     assert.equal(JSON.parse(result.stdout).systemMessage, "Manager Hydra error: hook input has no usable session_id");
     assert.match(rig.readLog(), /ERROR hook input has no usable session_id/);
+  });
+});
+
+const analyticsLines = (rig) =>
+  readFileSync(path.join(rig.managers, "analytics", "routes.jsonl"), "utf8")
+    .trimEnd()
+    .split("\n")
+    .map((line) => JSON.parse(line));
+
+test("each routed message writes one analytics line for a pin, a pinned stay, an @name swap and a continuation stay", async () => {
+  await withRig(async (rig) => {
+    const transcript = path.join(rig.root, "transcripts", "sess-pin.jsonl");
+    const cwd = path.join(rig.root, "work");
+    const pinPrompt = "FIXTURE-PROMPT-ONE the button layout on the screen";
+    await runRouter(
+      { session_id: "sess-pin", prompt: pinPrompt, transcript_path: transcript, cwd },
+      rig.env({ AGENTHYDRA_MANAGER: "floor-quick", HYDRA_DESK_CHAT_ID: "desk-7" }),
+    );
+    await runRouter({ session_id: "sess-pin", prompt: "the api endpoint writes to the database" }, rig.env());
+    await runRouter({ session_id: "sess-at", prompt: "@ben is the button layout on the screen right?" }, rig.env());
+    await runRouter({ session_id: "sess-at", prompt: "ok thanks" }, rig.env());
+
+    const [pin, pinnedStay, atSwap, continuation] = analyticsLines(rig);
+    assert.equal(analyticsLines(rig).length, 4);
+    assert.deepEqual(Object.keys(pin).sort(), [
+      "at", "cwd", "decision", "deskChat", "manager", "message", "p", "pinned", "promptChars", "session", "source", "transcriptPath", "v", "why",
+    ]);
+    assert.equal(pin.v, 1);
+    assert.equal(pin.session, "sess-pin");
+    assert.equal(pin.manager, "floor-quick");
+    assert.equal(pin.decision, "swap");
+    assert.equal(pin.why, "pinned by AGENTHYDRA_MANAGER");
+    assert.equal(pin.source, "router");
+    assert.equal(pin.p, null);
+    assert.equal(pin.message, 1);
+    assert.equal(pin.pinned, true);
+    assert.equal(pin.deskChat, "desk-7");
+    assert.equal(pin.cwd, cwd);
+    assert.equal(pin.transcriptPath, transcript);
+    assert.equal(pin.promptChars, pinPrompt.length);
+    assert.equal(Number.isNaN(Date.parse(pin.at)), false);
+
+    assert.equal(pinnedStay.decision, "stay");
+    assert.equal(pinnedStay.why, "pinned in session");
+    assert.equal(pinnedStay.message, 2);
+    assert.equal(pinnedStay.deskChat, null);
+    assert.equal(pinnedStay.transcriptPath, null);
+
+    assert.equal(atSwap.session, "sess-at");
+    assert.equal(atSwap.manager, "beta-backend");
+    assert.equal(atSwap.decision, "swap");
+    assert.equal(atSwap.why, "@Ben in the message");
+    assert.equal(atSwap.source, "at-name");
+    assert.equal(atSwap.pinned, false);
+    assert.equal(atSwap.promptChars, "@ben is the button layout on the screen right?".length);
+
+    assert.equal(continuation.manager, "beta-backend");
+    assert.equal(continuation.decision, "stay");
+    assert.equal(continuation.why, "continuation");
+    assert.equal(continuation.source, "continuation");
+    assert.equal(continuation.message, 2);
+    assert.equal(continuation.promptChars, "ok thanks".length);
+    assert.equal(rig.stub.calls.length, 0);
+  });
+});
+
+test("an analytics line holds the prompt length and never the prompt text", async () => {
+  await withRig(async (rig) => {
+    const secret = "FIXTURE-SECRET-PHRASE the api endpoint writes to the database";
+    await runRouter({ session_id: "sess-text", prompt: `@ben ${secret}` }, rig.env());
+    const raw = readFileSync(path.join(rig.managers, "analytics", "routes.jsonl"), "utf8");
+    assert.equal(raw.includes("FIXTURE-SECRET-PHRASE"), false);
+    assert.equal(analyticsLines(rig)[0].promptChars, `@ben ${secret}`.length);
+  });
+});
+
+test("transcriptPath lands in the session file and the existing session fields are kept", async () => {
+  await withRig(async (rig) => {
+    const transcript = path.join(rig.root, "transcripts", "sess-t.jsonl");
+    await runRouter({ session_id: "sess-t", prompt: "@ben the api endpoint", transcript_path: transcript }, rig.env());
+    const state = rig.readSession("sess-t");
+    assert.equal(state.transcriptPath, transcript);
+    assert.equal(state.manager, "beta-backend");
+    assert.equal(state.messages, 1);
+    assert.equal(state.pinned, false);
+    assert.equal(state.history.length, 1);
+    assert.equal(state.history[0].manager, "beta-backend");
+    assert.equal(analyticsLines(rig)[0].transcriptPath, transcript);
+  });
+});
+
+test("an unwritable analytics folder is named in the output and the log, and routing still happens", async () => {
+  await withRig(async (rig) => {
+    writeFileSync(path.join(rig.managers, "analytics"), "not a folder");
+    const result = await runRouter({ session_id: "sess-blocked", prompt: "@ben the api endpoint" }, rig.env());
+    assert.equal(result.code, 0, result.stderr);
+    const out = JSON.parse(result.stdout);
+    assert.match(out.systemMessage, /^Now: Ben, Backend Engineer\nManager Hydra error: analytics line not written \(/);
+    assert.match(out.hookSpecificOutput.additionalContext, /FIXTURE-BRIEF-BETA/);
+    assert.equal(rig.readSession("sess-blocked").manager, "beta-backend");
+    assert.match(rig.readLog(), /session=sess-blocked analytics ERROR /);
   });
 });

@@ -28,7 +28,7 @@ import { startClaudeNativePrewarm, stopClaudeNativePrewarm } from './claude-nati
 import { resumeHeldNativeSends } from './claude-native-send'
 import { climayteRunningCount, startCliMayte, stopCliMaytePing } from './climayte'
 import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
-import { preloadDone } from './climayte-core'
+import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import { flushCliMayteStore } from './climayte-store-writer'
 import {
@@ -114,6 +114,9 @@ import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { startLoopDetector } from './loop-detector'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
+import { startManagerAnalytics } from './manager-analytics/collect'
+import { startManagerJudge } from './manager-analytics/judge'
+import { autoRsiTick, startTrialSettling } from './manager-analytics/rsi'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
@@ -1653,6 +1656,24 @@ startShortfallWatch()
 // The owner's always-on helpers (<CONFIG_DIR>/helpers.json; server/src/helpers.ts). A side-run never
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
+
+// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
+if (IS_PRIMARY_INSTALL) {
+  startManagerAnalytics((worker) =>
+    storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
+  )
+  startManagerJudge()
+  startTrialSettling()
+  setTimeout(
+    () =>
+      setInterval(() => {
+        autoRsiTick().catch((e) =>
+          console.error(`[manager-rsi] auto tick failed: ${(e as Error).message}`),
+        )
+      }, 60_000),
+    90_000,
+  )
+}
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon

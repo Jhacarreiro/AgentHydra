@@ -4,6 +4,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { managerStats } from './manager-stats'
 
 export const MANAGER_SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/
 
@@ -12,7 +13,7 @@ export type AvatarExt = keyof typeof AVATAR_TYPES
 
 export type ManagerAvatar = { path: string; ext: AvatarExt; contentType: string; photo: number }
 
-export type CurrentManager = { slug: string; name: string; title: string | null; oneLiner: string | null; photo: number | null }
+export type CurrentManager = { slug: string; name: string; title: string | null; oneLiner: string | null; photo: number | null; statsLine: string | null }
 
 export function managersDir(): string {
   return process.env.AGENTHYDRA_MANAGERS_DIR?.trim() || join(homedir(), '.agenthydra', 'managers')
@@ -71,7 +72,9 @@ function labelOf(slug: string): Omit<CurrentManager, 'slug'> | null {
   if (hit && now - hit.at < LABEL_MS) return hit.label
   const persona = personaOf(slug)
   const name = text(persona?.name)
-  const label = name ? { name, title: text(persona?.title), oneLiner: text(persona?.oneLiner), photo: managerAvatar(slug)?.photo ?? null } : null
+  const label = name
+    ? { name, title: text(persona?.title), oneLiner: text(persona?.oneLiner), photo: managerAvatar(slug)?.photo ?? null, statsLine: managerStats(slug)?.line ?? null }
+    : null
   labels.set(key, { at: now, label })
   return label
 }

@@ -3,6 +3,16 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { loadMerged, openTurnsOf, readDeskIndex, titlesOf } from './manager-analytics/collect'
+import {
+  list as rsiList,
+  next as rsiNext,
+  start as rsiStart,
+  status as rsiStatus,
+  settleTrials,
+} from './manager-analytics/rsi'
+import { buildStats } from './manager-analytics/stats'
+import { readState } from './manager-analytics/store'
 import { type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
 
@@ -203,6 +213,62 @@ export const MANAGER_TOOLS: HydraTool[] = [
     run: async (a: Record<string, unknown>) => {
       const chat = pickDeskChat(await deskChats(), str(a.chat))
       return replyWhenDone(chat, null, waitSeconds(a))
+    },
+  },
+  {
+    name: 'manager_stats',
+    listed: true,
+    description:
+      'Manager Hydra turn statistics from the collector: per manager, answered rate, latency, judge score, owner corrections, sub-manager asks, CliMayte worker verdicts, tokens and cost, facets, router picks by source, the worst turns with their Desk chat titles, and the open turns (open, stuckNow, openTurns). Read-only; answers from the collector output as of its last pass.',
+    inputSchema: S({
+      manager: { type: 'string', description: 'Only this manager slug.' },
+      facet: { type: 'string', description: 'Only turns that read this facet.' },
+      days: { type: 'string', description: 'Look-back in days, or "all". Default 7.' },
+      worst: {
+        type: 'number',
+        description: 'How many worst turns to list per manager. Default 5.',
+      },
+    }),
+    run: async (a: Record<string, unknown>) => {
+      const days = a.days === 'all' ? 'all' : Number(a.days) > 0 ? Number(a.days) : 7
+      const worst = Number(a.worst) > 0 ? Number(a.worst) : 5
+      return buildStats(loadMerged(), {
+        now: Date.now(),
+        days,
+        worst,
+        manager: str(a.manager) || undefined,
+        facet: str(a.facet) || undefined,
+        open: openTurnsOf(readState()),
+        titles: titlesOf(readDeskIndex()),
+      })
+    },
+  },
+  {
+    name: 'manager_rsi',
+    listed: true,
+    description:
+      'Recursive self-improvement of Manager Hydra managers. action "next" picks the weakest manager and its failing pattern (read-only). action "list" shows every trial and its status (read-only). action "status" shows whether the daily automatic run is on, when it last ran and what it did, and every trial (read-only). action "settle" checks open trials now. action "start" MUTATES: it backs up the manager\'s brief and weakest facet, dispatches a docs worker to edit them, and records a trial; pass manager and optionally facet. Refused while a trial for that manager is still open.',
+    inputSchema: S({
+      action: {
+        type: 'string',
+        description: 'next | start | settle | list | status. Default next.',
+      },
+      manager: { type: 'string', description: 'Manager slug, required for start.' },
+      facet: {
+        type: 'string',
+        description: 'Playbook facet file to improve, for start. Default the weakest.',
+      },
+    }),
+    run: async (a: Record<string, unknown>) => {
+      const action = str(a.action) || 'next'
+      if (action === 'next') return rsiNext()
+      if (action === 'list') return rsiList()
+      if (action === 'status') return rsiStatus()
+      if (action === 'settle') return settleTrials()
+      if (action === 'start') {
+        return rsiStart({ manager: str(a.manager), facet: str(a.facet) || undefined })
+      }
+      return { ok: false, reason: `unknown action "${action}"; use next, start, settle or list` }
     },
   },
 ]

@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Manager Hydra keeps score on its managers.** Every manager turn is now recorded: whether it answered, how long it
+  took, what it cost, and how your next message took it. A cheap judge on your Free accounts scores each answer, and each
+  manager's card in Desk shows a one-line summary. Once a day the weakest manager's instructions get one careful edit,
+  which is kept only if its scores go up and is undone otherwise.
 - **Free accounts now do HSwarm work that reads files.** A routine or general HSwarm task that only reads your project
   can now run on an idle Free ChatGPT or Claude account at no cost, where before only tasks with no tools could. In a
   blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and web
