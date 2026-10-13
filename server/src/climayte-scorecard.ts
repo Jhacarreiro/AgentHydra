@@ -218,7 +218,7 @@ export function checkTemplate(t: { check?: string | null; group?: string | null 
   if (c) {
     return `c:${c
       .replace(/"[^"]*"|'[^']*'/g, '""')
-      .replace(/(?:[A-Za-z]:/|\/)[^\s"']*/g, '/P')
+      .replace(/(?:[A-Za-z]:[\\/]|\/)[^\s"']*/g, '/P')
       .replace(/\d+/g, '#')}`
   }
   return t.group ? `g:${t.group}` : null
