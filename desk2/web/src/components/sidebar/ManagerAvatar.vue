@@ -56,7 +56,8 @@ async function onPicked() {
               @click.stop
               @keydown.enter.stop
             >
-              <img v-if="photo" :src="photo" alt="" decoding="async" class="size-full object-cover" @error="broken = true" />
+              <!-- Zoomed from the top so a head-and-shoulders portrait shows its face at 16px; the card shows the whole photo. -->
+              <img v-if="photo" :src="photo" alt="" decoding="async" class="size-full origin-top scale-160 object-cover" @error="broken = true" />
               <span v-else class="text-3xs font-semibold leading-none">{{ face.initial }}</span>
             </button>
           </PopoverTrigger>
