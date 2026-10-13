@@ -310,19 +310,20 @@ def _read_task(tmp_path, **kw):
 
 
 def test_a_read_task_runs_its_tools_on_a_free_thread(fake, tmp_path, tool_route):
-    # As GPT-5.6 mini did on real tasks (2026-10-13): the first reply says it has no tools, the nudge gets the call, shown
-    # in a fence as chat models do, and the last reply answers from the tool result.
-    f = fake(reply=["FAILED: the project tools are unavailable in this chat.",
+    # As GPT-5.6 mini did on real tasks (2026-10-13): the thread says it has no tools, and again after the nudge; a new
+    # thread makes the call, shown in a fence as chat models do, and its last reply answers from the tool result.
+    f = fake(reply=["FAILED: the project tools are unavailable in this chat.", "I can't issue those <tool_call> lines.",
                     '```json\n{"name": "read_file", "arguments": {"path": "notes.txt"}}\n```', "It is 42."])
     res, note = _consult(_read_task(tmp_path))
     assert note is None and res.status == "ok" and res.answer == "It is 42." and res.cost_usd == 0.0
     assert res.model == "free:gpt-5-6-mini" and res.selection["route"]["via"] == "free"
-    first, nudge, third = (c["tasks"][0] for c in f.chats)
+    first, nudge, fresh, last = (c["tasks"][0] for c in f.chats)
     assert first["prompt"].startswith("# Tools you have in this chat") and "## read_file" in first["prompt"] and "chat_id" not in first
     assert nudge == {"prompt": free_client.NUDGE, "chat_id": "c1"}
+    assert fresh["prompt"] == first["prompt"] and "chat_id" not in fresh and fresh["name"] == first["name"] + " r2"
     # The thread already holds the brief and the task: the next message is only the tool's result.
-    assert third["chat_id"] == "c1" and third["prompt"].startswith('<tool_result name="read_file">')
-    assert "the answer is 42" in third["prompt"] and "# Your brief" not in third["prompt"]
+    assert last["chat_id"] == "c1" and last["prompt"].startswith('<tool_result name="read_file">')
+    assert "the answer is 42" in last["prompt"] and "# Your brief" not in last["prompt"]
 
 
 def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake, tmp_path, tool_route):

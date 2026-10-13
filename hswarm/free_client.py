@@ -12,8 +12,10 @@ which comes back as a structured tool call (toolcall_repair), so the loop runs i
 Measured on real hswarm tasks (2026-10-13): with the worker's brief first and the tools after it, GPT-5.6 mini answered
 "FAILED: ... tools are unavailable in this chat" to 29 of 29 tasks and Sonnet 5.5 to 1 of 1. With the tools first, as
 this chat's own, and the task ending on "reply now with the <tool_call> lines", Sonnet called them on 4 of 4 first
-replies and GPT-5.6 mini on 5 of 10; one NUDGE after a refusal brought GPT-5.6 mini to 8 of 10. Nothing here talks to
-the network except through `call` (free_route._call)."""
+replies and GPT-5.6 mini on 5 of 10; one NUDGE after a refusal brought GPT-5.6 mini to 8 of 10. A thread that still
+refused after it kept refusing (3 of 3 threads, through a second nudge and the loop's own), while a new thread is a fresh
+roll of the same odds, so the second try is a new thread (FRESH). Nothing here talks to the network except through
+`call` (free_route._call)."""
 from __future__ import annotations
 
 import asyncio
@@ -50,7 +52,8 @@ START = "Reply now with the <tool_call> line(s) for what you need first."
 # Sent in the same thread when a reply asks for no tool before any tool has run (a model that doubts it has them).
 NUDGE = ("The tools are available: I am the program that runs them, on my machine, as soon as you write the <tool_call> "
          "lines. Write the line(s) for what you need first now, and nothing else.")
-NUDGES = 2
+NUDGES = 1  # per thread
+FRESH = 1  # new threads opened for a task whose first thread refused its nudge
 # After a note the loop sends mid-thread (the api route's own nudges, such as "call submit_result now"), which a chat model
 # took for its app's function feature: GPT-5.6 mini answered "submit_result ... is not available to me in this chat",
 # and Sonnet 5.5 called it there and got "Tool 'submit_result' not found" (2026-10-13).
@@ -119,7 +122,8 @@ class FreeChatClient:
         self.sent = 0  # how many transcript messages the thread already holds
         self.turns = 0
         self.called = False  # whether any reply in this thread has asked for a tool yet
-        self.nudged = 0
+        self.nudged = 0  # in the current thread
+        self.fresh = 0
 
     def render(self, messages: list[dict], tools: list[dict] | None) -> str:
         """What this turn sends: on a new thread the instructions, the tools and the task; on a continued one only the
@@ -158,18 +162,25 @@ class FreeChatClient:
         return f"{text[:keep]}\n\n[... {len(text) - 2 * keep} characters cut to fit one message ...]\n\n{text[-keep:]}"
 
     async def chat(self, messages: list[dict], model: str | None = None, tools: list[dict] | None = None, **_) -> ChatResult:
-        text = self.render(messages, tools)
         started = time.monotonic()
-        one = await self._turn(text)
-        sent_chars, reply = len(text), str(one.get("response") or "")
-        seconds = float(one.get("seconds") or 0.0)
-        message = reply_message(reply, tools)
-        while tools and not message.get("tool_calls") and not self.called and self.nudged < NUDGES:
-            self.nudged += 1
-            one = await self._turn(NUDGE)
-            sent_chars, reply = sent_chars + len(NUDGE), str(one.get("response") or "")
-            seconds += float(one.get("seconds") or 0.0)
+        sent_chars, seconds = 0, 0.0
+        text = self.render(messages, tools)
+        while True:
+            one = await self._turn(text)
+            reply = str(one.get("response") or "")
+            sent_chars, seconds = sent_chars + len(text), seconds + float(one.get("seconds") or 0.0)
             message = reply_message(reply, tools)
+            if message.get("tool_calls") or self.called or not tools:
+                break
+            if self.nudged < NUDGES:
+                self.nudged += 1
+                text = NUDGE
+            elif self.turns == 0 and self.fresh < FRESH:
+                self.fresh += 1
+                self.chat_id, self.nudged = None, 0
+                text = self.render(messages, tools)
+            else:
+                break
         self.called = self.called or bool(message.get("tool_calls"))
         self.sent = len(messages)
         self.turns += 1
@@ -182,7 +193,7 @@ class FreeChatClient:
         ends the leg on; free_route then hands the task to its API route."""
         item: dict = {"prompt": text}
         if self.chat_id is None:
-            item["name"] = f"hswarm {self.job_id} {self.task.id}"
+            item["name"] = f"hswarm {self.job_id} {self.task.id}" + (f" r{self.fresh + 1}" if self.fresh else "")
             if self.family:
                 item["model"] = self.family
         else:
