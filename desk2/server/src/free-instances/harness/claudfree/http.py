@@ -462,8 +462,13 @@ class ClaudeHttp:
                 if kind == "message_limit":
                     self._observe_limit(event)
                 if kind == "error" or event.get("error"):
+                    # Claude's own words for it (overloaded, rate limited, ...), as the ChatGPT harness gives its own.
+                    raw = event.get("error")
+                    why = (raw.get("message") or raw.get("type")) if isinstance(raw, dict) else raw
+                    why = " ".join(str(why or event.get("message") or "").split())[:200]
                     raise HttpError(
-                        "Claude reported an error while generating the reply. Read the chat before sending again.",
+                        f"Claude reported an error while generating the reply{f' ({why})' if why else ''}. "
+                        "Read the chat before sending again.",
                         code="generation_error",
                         chat_id=chat,
                     )
