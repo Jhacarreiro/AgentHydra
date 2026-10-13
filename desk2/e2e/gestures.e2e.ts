@@ -129,7 +129,8 @@ each(['tap', 'press', 'hover-press'], { page: 'desk', what: 'sidebar row (outsid
 each(['right-click'], { page: 'desk', what: 'sidebar row context menu opens', pick: ROW, ok: MENU_OPEN })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'sidebar row ... menu opens', pick: ROW_MORE, ok: MENU_OPEN })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'More options menu opens with its four toggles', pick: MORE, ok: `${MENU_OPEN} && ${MORE_ITEMS}.length === 4` })
-each(['key'], { page: 'desk', what: 'More options: CliMayte tasks item flips once', pick: TASKS_ITEM, ok: TASKS_ITEM_FLIPPED, setup: OPEN_MORE })
+// The menu stays open on a choice (owner, 2026-10-12: "so I can click through them faster"); with it closed, the flip read no item at all.
+each(['press', 'key'], { page: 'desk', what: 'More options: CliMayte tasks item flips once, menu stays open', pick: TASKS_ITEM, ok: `${MENU_OPEN} && ${MORE_ITEMS}.length === 4 && ${TASKS_ITEM_FLIPPED}`, setup: OPEN_MORE })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: Dev servers flips once, no tooltip', pick: toggle(DEV), ok: `${flipped(DEV)} && !(${TIP_OPEN})`, diag: `[${flipped(DEV)}, ${TIP_OPEN}]` })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its details', pick: DEV_ROW, ok: DETAILS_PANE, setup: `document.querySelector('${DEV}').click()` })
 
