@@ -104,3 +104,14 @@ def test_judge_builder_shuffles_deterministically_and_never_names_the_free_answe
         assert "Free" not in p and "free" not in p.lower().replace("freely", "")
         assert t["profile"] == "critical" and t["tools"] == "read"
         assert not free_route.eligible(Task.from_dict(t, {}, 0))  # a judge never runs on the Free route it grades
+
+
+def test_compare_counts_only_the_tasks_every_arm_served():
+    a = _rep_inputs({"free": 2, "api": 2})            # tasks 0-3, all served
+    b = _rep_inputs({"free": 3, "api": 1})
+    del b[0][3]["free"]                                # arm b did not serve task 3 (judged as an api win in arm a)
+    out = free_ab.compare({"a": a, "b": b})
+    assert out["paired"] == 3
+    assert out["arms"]["a"]["tally"] == {"free": 2, "api": 1, "tie": 0}
+    assert out["arms"]["b"]["tally"] == {"free": 3, "api": 0, "tie": 0}
+    assert out["arms"]["a"]["only_this_arm_served"] == 1 and out["arms"]["b"]["only_this_arm_served"] == 0

@@ -20,6 +20,10 @@ The four commands, in order (all state lives under ~/.hswarm/free-ab/<run>/, nev
   python -m hswarm.free_ab report --run NAME [--arm luna-thinking]
       -> JSON tally per arm and a verdict line: 'holds level' (win+tie share >= 45% and judged errors not above
          the API's) or 'loses'.
+  python -m hswarm.free_ab compare --run NAME --arms gpt-5-6-mini gpt-6-mini
+      -> the arms side by side on only the tasks every arm served, and what each arm lost to the API route. Use it to
+         ask "is the new model better than the one we use": two arms' own tallies cover different tasks, and the
+         same API answers scored 7.44 in one judge run and 6.69 in another (2026-10-13), so compare paired.
 
 How the 2026-10-13 numbers were made: this flow, as three scratch scripts. Luna Thinking scored 13 free wins,
 15 API wins, 1 tie on 29 judged critical read tasks, and 7-5 on code read.
@@ -329,6 +333,38 @@ def verdict(rep: dict) -> str:
     return f"{'holds level' if ok else 'loses'} (win+tie {share:.0%} of {n} judged, errors free {rep['errors']['free']} vs api {rep['errors']['api']})"
 
 
+def _judged(d: Path, arm: str) -> tuple[list[dict], dict, dict]:
+    slug = _slug(arm)
+    return (_read_jsonl(d / f"arm_{slug}.jsonl"), json.loads((d / f"judge_key_{slug}.json").read_text(encoding="utf-8")),
+            json.loads((d / f"judge_{slug}.json").read_text(encoding="utf-8")))
+
+
+def compare(arms: dict[str, tuple[list[dict], dict, dict]]) -> dict:
+    """Each arm's report on only the tasks every arm served, and how many tasks each served that another did not."""
+    served = {n: {r["i"] for r in rows if "free" in r} for n, (rows, _, _) in arms.items()}
+    both = set.intersection(*served.values()) if served else set()
+    out = {"paired": len(both), "arms": {}}
+    for n, (rows, key, doc) in arms.items():
+        rep = report([r for r in rows if r["i"] in both], {k: v for k, v in key.items() if v["i"] in both}, doc)
+        out["arms"][n] = {"served": len(served[n]), "only_this_arm_served": len(served[n] - both), "tally": rep["tally"],
+                          "mean_score": rep["mean_score"], "errors": rep["errors"], "verdict": verdict(rep)}
+    return out
+
+
+def cmd_compare(a) -> int:
+    d = run_dir(a.run)
+    try:
+        arms = {n: _judged(d, n) for n in a.arms}
+    except (OSError, ValueError) as e:
+        print(f"not judged yet ({e})", file=sys.stderr)
+        return 1
+    out = compare(arms)
+    print(json.dumps(out, indent=1))
+    for n, v in out["arms"].items():
+        print(f"{n} on the {out['paired']} tasks every arm served: {v['verdict']}")
+    return 0
+
+
 def cmd_report(a) -> int:
     d = run_dir(a.run)
     arms = [a.arm] if a.arm else sorted(p.stem[len("arm_"):] for p in d.glob("arm_*.jsonl"))
@@ -377,6 +413,10 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--run", required=True)
     s.add_argument("--arm")
     s.set_defaults(fn=cmd_report)
+    s = sub.add_parser("compare")
+    s.add_argument("--run", required=True)
+    s.add_argument("--arms", nargs="+", required=True)
+    s.set_defaults(fn=cmd_compare)
     a = p.parse_args(argv)
     return a.fn(a)
 
