@@ -163,16 +163,16 @@ const brokenAvatars = ref(new Set<string>())
 const empty = computed(() => !rows.value.length)
 
 const ROW =
-  'group/row flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] pe-1 text-start text-[13px] leading-[19.5px] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none focus-visible:ring-1 focus-visible:ring-accent'
+  'group/row flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] pe-1 text-start text-ui leading-[19.5px] outline-none transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none focus-visible:ring-1 focus-visible:ring-accent'
 const HEAD_BTN =
   'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors hover:bg-fill-hover hover:text-text disabled:opacity-40 disabled:hover:bg-transparent'
 const FOOT_BTN =
-  'flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-[12px] text-text-2 hover:bg-[var(--fill-secondary-hover)] hover:text-text disabled:opacity-50'
+  'flex h-7 min-w-0 flex-1 items-center justify-center gap-1 rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-2 text-ui-sm text-text-2 hover:bg-[var(--fill-secondary-hover)] hover:text-text disabled:opacity-50'
 </script>
 
 <template>
   <div class="flex flex-col" :class="stale ? 'opacity-60' : ''" :inert="stale" :aria-busy="stale || undefined" role="region" :aria-label="model.title" data-testid="hydra-sidebar">
-    <header class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
+    <header class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-ui-sm leading-4 text-text-muted">
       <component :is="icon(model.icon)" v-if="model.icon" class="size-3.5 shrink-0" />
       <span class="min-w-0 truncate font-medium text-text-2">{{ model.title }}</span>
       <span v-if="model.count != null" class="shrink-0 tnum">{{ model.count }}</span>
@@ -198,7 +198,7 @@ const FOOT_BTN =
       </Tip>
     </header>
 
-    <p v-if="model.banner" role="status" class="mx-1 mb-1 flex items-start gap-1.5 rounded-(--radius-6) bg-fill-5 px-2 py-1.5 text-[12px] leading-4" :class="tone(model.banner.tone)">
+    <p v-if="model.banner" role="status" class="mx-1 mb-1 flex items-start gap-1.5 rounded-(--radius-6) bg-fill-5 px-2 py-1.5 text-ui-sm leading-4" :class="tone(model.banner.tone)">
       <component :is="icon(model.banner.icon)" v-if="model.banner.icon" class="mt-px size-3.5 shrink-0" />
       <span class="min-w-0">{{ model.banner.text }}</span>
     </p>
@@ -209,7 +209,7 @@ const FOOT_BTN =
       type="button"
       role="switch"
       :aria-checked="s.on"
-      class="flex h-6.5 w-full items-center gap-2 rounded-(--radius-6) px-1.5 text-start text-[12px] leading-4 text-text-muted hover:bg-fill-hover hover:text-text-2"
+      class="flex h-6.5 w-full items-center gap-2 rounded-(--radius-6) px-1.5 text-start text-ui-sm leading-4 text-text-muted hover:bg-fill-hover hover:text-text-2"
       @click="send.switch(s.id, !s.on)"
     >
       <span class="min-w-0 flex-1 truncate">{{ s.label }}<span v-if="s.note" class="tnum"> · {{ s.note }}</span></span>
@@ -225,7 +225,7 @@ const FOOT_BTN =
         type="text"
         :aria-label="model.search.label"
         :placeholder="model.search.placeholder"
-        class="h-full min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-text-muted"
+        class="h-full min-w-0 flex-1 bg-transparent text-ui text-text outline-none placeholder:text-text-muted"
         @input="onSearchInput"
         @keydown="onSearchKey"
       />
@@ -240,7 +240,7 @@ const FOOT_BTN =
       </button>
     </div>
 
-    <div v-if="model.legend?.length" class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1.5 pb-1 text-[11px] leading-4 text-text-muted">
+    <div v-if="model.legend?.length" class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-1.5 pb-1 text-2xs leading-4 text-text-muted">
       <span v-for="l in model.legend" :key="l.label" class="flex items-center gap-1"><span class="size-1.5 rounded-full" :class="DOT[l.dot]" />{{ l.label }}</span>
       <span v-if="model.legendNote" class="ms-auto font-mono">{{ model.legendNote }}</span>
     </div>
@@ -248,7 +248,7 @@ const FOOT_BTN =
     <div ref="list" role="tree" :aria-label="model.title" class="flex flex-col">
       <section v-for="sec in model.sections" :key="sec.key" :aria-label="sec.label || undefined">
         <Tip v-if="sec.label" :label="sec.hint ?? ''">
-          <header class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-[12px] leading-4 text-text-muted">
+          <header class="flex h-7.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-2.5 text-ui-sm leading-4 text-text-muted">
             <span class="truncate">{{ sec.label }}</span>
             <span class="flex-1" />
             <span class="tnum">{{ sec.rows.length }}</span>
@@ -300,22 +300,22 @@ const FOOT_BTN =
             <span class="min-w-0 flex-1 truncate"><template v-for="[before, match, after] in [parts(r)]" :key="r.key">{{ before }}<mark v-if="match" class="rounded-xs bg-[rgb(250_204_21/0.3)] text-inherit">{{ match }}</mark>{{ after }}</template></span>
             <component :is="icon(r.badge.icon)" v-if="r.badge" class="size-3.5 shrink-0 text-text-muted" :aria-label="r.badge.label" />
             <Tip v-if="r.chip" :label="r.chip.hint ?? ''">
-              <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-warning-text">{{ r.chip.text }}</span>
+              <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-warning-text">{{ r.chip.text }}</span>
             </Tip>
-            <span v-if="r.count != null" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">({{ r.count }})</span>
-            <span v-if="r.tag" class="max-w-[45%] shrink-0 truncate text-[11px] leading-4" :class="r.tag.tone === 'warning' ? 'text-warning-text' : 'text-text-muted'">{{ r.tag.text }}</span>
+            <span v-if="r.count != null" class="shrink-0 text-ui-sm leading-4 text-text-muted tnum">({{ r.count }})</span>
+            <span v-if="r.tag" class="max-w-[45%] shrink-0 truncate text-2xs leading-4" :class="r.tag.tone === 'warning' ? 'text-warning-text' : 'text-text-muted'">{{ r.tag.text }}</span>
             <Tip v-if="r.mark" :label="r.mark.hint ?? r.mark.label">
               <span class="inline-flex shrink-0" :class="tone(r.mark.tone)">
                 <component :is="icon(r.mark.icon)" class="size-3.5" :aria-label="r.mark.label" />
               </span>
             </Tip>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the detail and the time out; warnings and marks stay. -->
-            <span v-if="r.meta && !cleanSidebar" class="shrink-0 font-mono text-[11px] leading-4 text-text-muted">{{ r.meta }}</span>
-            <span v-if="r.time && !cleanSidebar" class="shrink-0 text-[12px] leading-4 text-text-muted tnum">{{ r.time }}</span>
+            <span v-if="r.meta && !cleanSidebar" class="shrink-0 font-mono text-2xs leading-4 text-text-muted">{{ r.meta }}</span>
+            <span v-if="r.time && !cleanSidebar" class="shrink-0 text-ui-sm leading-4 text-text-muted tnum">{{ r.time }}</span>
             <Tip v-if="r.star" :label="r.star.label">
               <button
                 type="button"
-                class="shrink-0 rounded-sm px-0.5 text-[11px] leading-4 hover:bg-fill-hover"
+                class="shrink-0 rounded-sm px-0.5 text-2xs leading-4 hover:bg-fill-hover"
                 :class="[r.star.on ? 'text-accent-text' : 'text-text-muted', r.star.busy ? 'opacity-50' : '']"
                 :aria-label="r.star.label"
                 @click.stop="send.star(r.key)"
@@ -332,7 +332,7 @@ const FOOT_BTN =
     <div v-if="empty && model.loading" class="flex flex-col gap-1.5 px-1.5 pt-2" aria-busy="true">
       <span v-for="i in 3" :key="i" class="h-5.5 animate-pulse rounded-(--radius-6) bg-fill-5" />
     </div>
-    <p v-else-if="empty && model.empty" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">{{ model.empty }}</p>
+    <p v-else-if="empty && model.empty" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-muted">{{ model.empty }}</p>
 
     <div v-if="model.footer?.length" class="mt-2 flex gap-1.5 px-0.5">
       <button v-for="b in model.footer" :key="b.id" type="button" :class="FOOT_BTN" :disabled="b.disabled" @click="send.button(b.id)">

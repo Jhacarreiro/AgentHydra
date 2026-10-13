@@ -198,7 +198,7 @@ async function browse(): Promise<void> {
 }
 
 const CHIP_TOGGLE =
-  'inline-flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2.5 text-[13px] leading-[19px] transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
+  'inline-flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2.5 text-ui leading-[19px] transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none'
 const chipClass = (on: boolean): string[] => [
   CHIP_TOGGLE,
   on ? 'bg-fill-selected text-text shadow-[inset_0_0_0_1px_var(--border-strong)]' : 'bg-fill-5 text-text-2 shadow-[inset_0_0_0_1px_var(--border)] hover:bg-fill-hover hover:text-text'
@@ -206,10 +206,10 @@ const chipClass = (on: boolean): string[] => [
 </script>
 
 <template>
-  <form class="flex min-h-full flex-col text-[13px]" @submit.prevent="save">
+  <form class="flex min-h-full flex-col text-ui" @submit.prevent="save">
     <div class="mx-auto flex w-full max-w-160 flex-col gap-6 p-4 pb-6">
       <div v-if="loading" :class="[CARD, 'flex h-85 items-center justify-center']" aria-busy="true">
-        <p class="text-[13px] text-text-muted">Reading its entry…</p>
+        <p class="text-ui text-text-muted">Reading its entry…</p>
       </div>
       <template v-else>
         <FormSection title="Basics" description="What it is and how it starts.">
@@ -253,7 +253,7 @@ const chipClass = (on: boolean): string[] => [
 
         <FormSection title="Startup" description="When it starts and with what.">
           <div class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[12px] font-medium leading-4 text-text-2">Start after</span>
+            <span class="text-ui-sm font-medium leading-4 text-text-2">Start after</span>
             <Segmented v-model="waitMode" :options="waitOptions" label="Start after" />
           </div>
           <Field v-if="waitMode === 'port'" label="Port to wait for">
@@ -269,33 +269,33 @@ const chipClass = (on: boolean): string[] => [
             </template>
           </Field>
           <div v-if="others.length" class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[12px] font-medium leading-4 text-text-2">Runs with</span>
+            <span class="text-ui-sm font-medium leading-4 text-text-2">Runs with</span>
             <div role="group" aria-label="Runs with" class="flex flex-wrap gap-1.5">
               <button v-for="o in others" :key="o.id" type="button" :class="chipClass(links.includes(o.localId))" :aria-pressed="links.includes(o.localId)" @click="toggleLink(o.localId)">
                 <Check v-if="links.includes(o.localId)" class="size-3.5" />{{ o.name }}
               </button>
             </div>
-            <p class="text-[12px] leading-4 text-text-muted">Starting or stopping one starts or stops them all.</p>
+            <p class="text-ui-sm leading-4 text-text-muted">Starting or stopping one starts or stops them all.</p>
           </div>
           <SwitchRow v-model="companion" label="Start with any server of this project" description="Starts whenever another server of this project is started. For a shared database or queue." />
           <SwitchRow v-model="autostart" label="Start automatically" description="Starts when AgentHydra starts, if its project's autostart is on." />
           <div class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[12px] font-medium leading-4 text-text-2">Runtime</span>
+            <span class="text-ui-sm font-medium leading-4 text-text-2">Runtime</span>
             <Segmented v-model="runtime" :options="RUNTIMES" label="Runtime" />
-            <p class="text-[12px] leading-4 text-text-muted">How a bun, node or package-script command is run.</p>
+            <p class="text-ui-sm leading-4 text-text-muted">How a bun, node or package-script command is run.</p>
           </div>
         </FormSection>
 
         <FormSection title="Appearance">
           <div class="flex min-w-0 flex-col gap-1.5">
-            <span class="text-[12px] font-medium leading-4 text-text-2">Color</span>
+            <span class="text-ui-sm font-medium leading-4 text-text-2">Color</span>
             <ColorPicker v-model="color" label="Color" />
-            <p class="text-[12px] leading-4 text-text-muted">Its dot in the list.</p>
+            <p class="text-ui-sm leading-4 text-text-muted">Its dot in the list.</p>
           </div>
         </FormSection>
 
         <FormSection title="Environment variables" description="Set for this server only.">
-          <p v-if="!env.length" class="text-[13px] text-text-muted">No variables.</p>
+          <p v-if="!env.length" class="text-ui text-text-muted">No variables.</p>
           <div v-else class="flex flex-col gap-2">
             <div v-for="(r, i) in env" :key="i" class="flex min-w-0 items-center gap-2">
               <input v-model="r.k" :class="[INPUT_MONO, 'max-w-50']" aria-label="Variable name" placeholder="NAME" />
@@ -332,11 +332,11 @@ const chipClass = (on: boolean): string[] => [
         <FormSection v-if="processId !== null" title="Danger zone" tone="danger">
           <div class="flex min-w-0 flex-wrap items-center gap-3">
             <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-              <span class="text-[13px] leading-5 text-text">Delete this server</span>
-              <span class="text-[12px] leading-4 text-text-muted">It is stopped if AgentHydra runs it, and removed from the project's .devwebui file.</span>
+              <span class="text-ui leading-5 text-text">Delete this server</span>
+              <span class="text-ui-sm leading-4 text-text-muted">It is stopped if AgentHydra runs it, and removed from the project's .devwebui file.</span>
             </div>
             <div v-if="confirmDelete" class="flex items-center gap-1.5">
-              <span class="text-[12px] text-text-2">Delete it from the .devwebui file?</span>
+              <span class="text-ui-sm text-text-2">Delete it from the .devwebui file?</span>
               <button type="button" :class="BTN_DANGER" :disabled="busy" @click="remove">Delete</button>
               <button type="button" :class="BTN_GHOST" :disabled="busy" @click="confirmDelete = false">Keep</button>
             </div>
@@ -348,7 +348,7 @@ const chipClass = (on: boolean): string[] => [
 
     <div class="sticky bottom-0 mt-auto border-t border-border bg-bg-page/95 px-4 py-3 backdrop-blur">
       <div class="mx-auto flex w-full max-w-160 flex-wrap items-center gap-2">
-        <p v-if="error" role="alert" class="min-w-0 flex-1 wrap-break-word text-[12px] leading-4 text-danger-text">{{ error }}</p>
+        <p v-if="error" role="alert" class="min-w-0 flex-1 wrap-break-word text-ui-sm leading-4 text-danger-text">{{ error }}</p>
         <span v-else class="flex-1" />
         <button type="button" :class="BTN_GHOST" :disabled="busy" @click="emit('cancel')">Cancel</button>
         <button type="submit" :class="BTN_PRIMARY" :disabled="busy || loading">

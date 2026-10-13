@@ -22,7 +22,7 @@ const tone = computed(() => (props.open ? 'text-text-muted' : props.needsYou ? '
       type="button"
       :aria-label="label"
       :aria-expanded="open"
-      class="flex h-4 min-w-4 shrink-0 cursor-default items-center justify-center gap-0.5 rounded-sm bg-(--fill-secondary) px-1 text-[11px] leading-4 text-text-muted tnum transition-colors duration-(--dur-fast) hover:bg-fill-hover"
+      class="flex h-4 min-w-4 shrink-0 cursor-default items-center justify-center gap-0.5 rounded-sm bg-(--fill-secondary) px-1 text-2xs leading-4 text-text-muted tnum transition-colors duration-(--dur-fast) hover:bg-fill-hover"
       @click.stop="$emit('toggle')"
       @keydown.enter.stop
     >

@@ -135,7 +135,7 @@ const toggleSessionHeader = () => (headerOpen.value = !headerOpen.value)
 // The running-tasks count on Background tasks: gray, not the accent (owner, 2026-10-08: "an annoying blue icon, make it
 // grey"); a solid gray so the icon under its corner does not show through.
 const COUNT_BADGE =
-  'tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))] px-0.75 text-[10px] font-medium leading-none text-text'
+  'tnum absolute -right-0.5 -top-0.5 flex h-3.5 min-w-3.5 items-center justify-center rounded-full bg-[color-mix(in_srgb,var(--text-muted)_55%,var(--bg-page))] px-0.75 text-3xs font-medium leading-none text-text'
 
 const DASHBOARD_BTN =
   'ms-0.5 flex size-5 shrink-0 items-center justify-center rounded-(--radius-6) text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent @max-[498px]:hidden'
@@ -150,7 +150,7 @@ const PANE_BTN =
        title bar (lib/host-window.ts) this row is the title bar: its right end keeps clear of the window's buttons
        (--caption-w), so the pane buttons sit beside them (owner, 2026-10-08: "move these icons, here"). -->
   <header
-    class="@container flex h-8 min-w-0 items-center gap-x-2 ps-1 pe-[calc(0.75rem+var(--caption-w))] text-[13px] leading-[19.5px]"
+    class="@container flex h-8 min-w-0 items-center gap-x-2 ps-1 pe-[calc(0.75rem+var(--caption-w))] text-ui leading-[19.5px]"
     :style="{ '--side': side }"
   >
     <span aria-hidden="true" class="min-w-0 flex-1" />
@@ -164,7 +164,7 @@ const PANE_BTN =
         ref="input"
         v-model="draft"
         aria-label="Rename session"
-        class="h-6 w-[320px] max-w-[40vw] rounded-(--radius-6) bg-bg-deepest px-1 text-[13px] font-medium text-text outline-none ring-1 ring-accent"
+        class="h-6 w-[320px] max-w-[40vw] rounded-(--radius-6) bg-bg-deepest px-1 text-ui font-medium text-text outline-none ring-1 ring-accent"
         @keydown.enter="commitRename"
         @keydown.escape="renaming = false"
         @blur="commitRename"
@@ -190,7 +190,7 @@ const PANE_BTN =
           </button>
         </DropdownMenuTrigger>
         <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
-          <p class="max-w-72 truncate px-2 py-1 text-[12px] leading-4 text-text-muted" :title="chat.cwd">{{ chat.cwd }}</p>
+          <p class="max-w-72 truncate px-2 py-1 text-ui-sm leading-4 text-text-muted" :title="chat.cwd">{{ chat.cwd }}</p>
           <RowMenuList :entries="menu" kind="dropdown" @run="run" />
           <template v-if="accounts.length">
             <DropdownMenuSeparator :class="MENU_SEPARATOR" />
@@ -206,14 +206,14 @@ const PANE_BTN =
       </Tip>
 
       <!-- Hydra Desk extras -->
-      <span v-if="cue" data-fit="status" class="ms-1 flex h-5 shrink-0 items-center gap-1.5 text-[12px] leading-4 @max-[286px]:ms-0" :class="cue.tone" role="status" :aria-label="cue.text">
+      <span v-if="cue" data-fit="status" class="ms-1 flex h-5 shrink-0 items-center gap-1.5 text-ui-sm leading-4 @max-[286px]:ms-0" :class="cue.tone" role="status" :aria-label="cue.text">
         <span v-if="cue.dot" class="size-1.5 shrink-0 rounded-full" :class="cue.dot" />
         <span class="tnum @max-[430px]:hidden">{{ cue.text }}</span>
       </span>
       <Tip v-if="chat.climayteActive > 0" label="CliMayte workers">
         <button
           type="button"
-          class="ms-1 flex h-5 shrink-0 cursor-default items-center gap-1 rounded-(--radius-6) px-1.25 text-[12px] leading-4 text-text-2 hover:bg-fill-hover"
+          class="ms-1 flex h-5 shrink-0 cursor-default items-center gap-1 rounded-(--radius-6) px-1.25 text-ui-sm leading-4 text-text-2 hover:bg-fill-hover"
           :aria-label="`${chat.climayteActive} CliMayte ${chat.climayteActive === 1 ? 'worker' : 'workers'} active`"
           :aria-pressed="pane === 'climayte'"
           @click="emit('toggle-pane', 'climayte')"
@@ -226,7 +226,7 @@ const PANE_BTN =
     </template>
     <template v-else-if="external">
       <span class="truncate px-1 font-medium text-text">{{ external.title }}</span>
-      <span v-if="!resumable(external)" class="ms-1 shrink-0 text-[12px] leading-4 text-text-muted">read-only</span>
+      <span v-if="!resumable(external)" class="ms-1 shrink-0 text-ui-sm leading-4 text-text-muted">read-only</span>
       <DropdownMenu v-else-if="standIn && accounts.length">
         <DropdownMenuTrigger as-child>
           <button
@@ -247,7 +247,7 @@ const PANE_BTN =
 
     <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
     <div class="flex min-w-(--side) flex-1 shrink-0 items-center justify-end gap-1" :class="chat && '@max-[286px]:-ms-2'">
-    <Tip v-if="alert" :label="alert"><p role="alert" data-fit="alert" class="min-w-0 truncate pe-1 text-[12px] leading-4 text-danger-text @max-[286px]:sr-only">{{ alert }}</p></Tip>
+    <Tip v-if="alert" :label="alert"><p role="alert" data-fit="alert" class="min-w-0 truncate pe-1 text-ui-sm leading-4 text-danger-text @max-[286px]:sr-only">{{ alert }}</p></Tip>
     <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Background tasks">
         <button type="button" :class="PANE_BTN" class="relative" :aria-label="tasksRunning ? `Background tasks, ${tasksRunning} running` : 'Background tasks'" :aria-pressed="tasksOpen" @click="emit('toggle-tasks')">

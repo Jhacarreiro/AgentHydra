@@ -13,12 +13,12 @@ const showAll = computed(() => ctx.isOpen(key.value))
 <template>
   <div>
     <pre
-      class="code-scroll max-h-[60vh] overflow-auto whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-[12px] leading-4.75"
+      class="code-scroll max-h-[60vh] overflow-auto whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-ui-sm leading-4.75"
       :class="error ? 'text-danger-text' : 'text-text-2'"
     >{{ showAll ? text : cut.shown }}<span v-if="!text" class="italic text-text-muted">(no output)</span></pre>
     <div
       v-if="cut.truncated || serverTruncated"
-      class="flex items-center gap-3 border-t border-border px-3 py-1 text-[12px] text-text-muted"
+      class="flex items-center gap-3 border-t border-border px-3 py-1 text-ui-sm text-text-muted"
     >
       <button v-if="cut.truncated" type="button" class="text-text-muted hover:text-text" @click="ctx.toggle(key)">
         {{ showAll ? 'Show less' : `Show all (${cut.totalLines} lines)` }}

@@ -79,7 +79,7 @@ async function other() {
           </DropdownMenuItem>
         </DropdownMenuSubContent>
       </DropdownMenuSub>
-      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-(--danger-text)">{{ error }}</p>
+      <p v-if="error" role="alert" class="px-2 py-1 text-ui-sm leading-4 text-(--danger-text)">{{ error }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
   <span v-else class="contents" v-on="listeners"><slot /></span>

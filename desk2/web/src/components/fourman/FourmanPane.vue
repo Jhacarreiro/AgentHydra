@@ -89,7 +89,7 @@ onBeforeUnmount(() => {
     <header class="relative flex h-9 shrink-0 items-center gap-2 border-b border-border px-2.5">
       <button
         type="button"
-        class="flex min-w-0 items-center gap-1 rounded-sm px-1 py-0.5 text-[12px] font-medium text-text hover:bg-(--bg-popover)"
+        class="flex min-w-0 items-center gap-1 rounded-sm px-1 py-0.5 text-ui-sm font-medium text-text hover:bg-(--bg-popover)"
         aria-haspopup="listbox"
         :aria-expanded="menuOpen"
         @click="menuOpen = !menuOpen"
@@ -99,10 +99,10 @@ onBeforeUnmount(() => {
       </button>
       <ul v-if="menuOpen" role="listbox" aria-label="Project" class="absolute start-2 top-8 z-20 max-h-72 min-w-44 overflow-y-auto rounded-md border border-border bg-(--bg-popover) py-1 shadow-lg">
         <li v-for="c in choices" :key="c.label + JSON.stringify(c.scope)" role="option" :aria-selected="sameScope(c.scope, scope)">
-          <button type="button" class="w-full truncate px-2.5 py-1 text-start text-[12px] text-text hover:bg-(--bg-panel)" @click="pick(c)">{{ c.label }}</button>
+          <button type="button" class="w-full truncate px-2.5 py-1 text-start text-ui-sm text-text hover:bg-(--bg-panel)" @click="pick(c)">{{ c.label }}</button>
         </li>
       </ul>
-      <div class="ms-auto flex min-w-0 items-center gap-1.5 text-[11px] text-text-muted">
+      <div class="ms-auto flex min-w-0 items-center gap-1.5 text-2xs text-text-muted">
         <template v-if="board">
           <span class="inline-block size-1.5 shrink-0 rounded-full bg-(--success)" aria-hidden="true" />
           <span class="whitespace-nowrap">{{ board.readyCount }} ready</span>
@@ -118,15 +118,15 @@ onBeforeUnmount(() => {
       </div>
     </header>
 
-    <p v-if="error" class="px-2.5 py-2 text-[12px] leading-4.5 text-danger-text">{{ error }}</p>
+    <p v-if="error" class="px-2.5 py-2 text-ui-sm leading-4.5 text-danger-text">{{ error }}</p>
 
     <div class="min-h-0 flex-1 overflow-y-auto pb-3">
       <template v-if="board">
         <div v-if="forYouRows.length" class="mb-1">
           <div class="flex h-7 items-baseline gap-2 px-2.5 pt-2">
-            <span class="text-[10px] font-semibold tracking-wide text-(--accent-text) uppercase">For you</span>
-            <span class="text-[10px] text-text-muted">Human tasks</span>
-            <span class="ms-auto font-mono text-[10px] text-text-muted">{{ forYouRows.length }}</span>
+            <span class="text-3xs font-semibold tracking-wide text-(--accent-text) uppercase">For you</span>
+            <span class="text-3xs text-text-muted">Human tasks</span>
+            <span class="ms-auto font-mono text-3xs text-text-muted">{{ forYouRows.length }}</span>
           </div>
           <FourmanRow
             v-for="row in forYouRows"
@@ -141,9 +141,9 @@ onBeforeUnmount(() => {
 
         <div v-for="s in sections" :key="s.tier" class="mb-1">
           <div v-if="s.total" class="flex h-7 items-baseline gap-2 px-2.5 pt-2">
-            <span class="text-[10px] font-semibold tracking-wide text-text-2 uppercase">Tier {{ s.tier }}</span>
-            <span class="text-[10px] text-text-muted">{{ s.label }}</span>
-            <span class="ms-auto font-mono text-[10px] text-text-muted">{{ s.total }}</span>
+            <span class="text-3xs font-semibold tracking-wide text-text-2 uppercase">Tier {{ s.tier }}</span>
+            <span class="text-3xs text-text-muted">{{ s.label }}</span>
+            <span class="ms-auto font-mono text-3xs text-text-muted">{{ s.total }}</span>
           </div>
           <FourmanRow
             v-for="t in s.shown"
@@ -152,14 +152,14 @@ onBeforeUnmount(() => {
             :open="openId === t.id"
             @toggle="toggleRow(t.id)"
           />
-          <button v-if="s.more" type="button" class="w-full px-2.5 py-1 text-start text-[11px] text-accent-text hover:underline" @click="toggleTier(s.tier)">
+          <button v-if="s.more" type="button" class="w-full px-2.5 py-1 text-start text-2xs text-accent-text hover:underline" @click="toggleTier(s.tier)">
             Show {{ s.more }} more
           </button>
         </div>
 
-        <p v-if="!forYouRows.length && !board.ready.length" class="px-2.5 py-3 text-[12px] text-text-muted">Nothing ready on this board.</p>
+        <p v-if="!forYouRows.length && !board.ready.length" class="px-2.5 py-3 text-ui-sm text-text-muted">Nothing ready on this board.</p>
       </template>
-      <p v-else-if="!error" class="px-2.5 py-3 text-[12px] text-text-muted">Loading…</p>
+      <p v-else-if="!error" class="px-2.5 py-3 text-ui-sm text-text-muted">Loading…</p>
     </div>
   </section>
 </template>

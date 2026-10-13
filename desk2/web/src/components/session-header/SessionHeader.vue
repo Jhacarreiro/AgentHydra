@@ -375,7 +375,7 @@ const BTN_SHAPE =
   'flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
 // Each fact its own colour (Michael, 2026-10-04: "a little bit more color"); the clickable ones brighten on hover.
-const CHIP = 'flex h-[22px] min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-[12px] leading-4 transition-colors duration-[60ms]'
+const CHIP = 'flex h-[22px] min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-ui-sm leading-4 transition-colors duration-[60ms]'
 const TONE = {
   id: 'bg-[var(--fill-secondary)] text-text-2 hover:bg-[var(--fill-secondary-hover)] hover:text-text',
   account: 'bg-[#8B5CF6]/14 text-[#C4B5FD]',
@@ -411,7 +411,7 @@ const TONE = {
         <div class="flex min-w-0 flex-1 flex-wrap items-center gap-1.5">
           <span
             v-if="row"
-            class="flex h-5.5 shrink-0 items-center rounded-(--radius-6) border px-1.5 text-[12px] font-medium"
+            class="flex h-5.5 shrink-0 items-center rounded-(--radius-6) border px-1.5 text-ui-sm font-medium"
             :class="SOURCE_TONE[row.source] ?? 'border-border bg-(--fill-secondary) text-text-2'"
           >{{ sourceName(row) }}</span>
           <Tip label="Copy session id">
@@ -515,7 +515,7 @@ const TONE = {
                   <DropdownMenuItem v-if="cwd" :class="MENU_ITEM" @select="openFolder">Open the folder</DropdownMenuItem>
                   <DropdownMenuSeparator v-if="cwd" :class="MENU_SEPARATOR" />
 
-                  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[12px] font-medium text-text-muted">Display</DropdownMenuLabel>
+                  <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-ui-sm font-medium text-text-muted">Display</DropdownMenuLabel>
                   <DropdownMenuItem role="menuitemcheckbox" :aria-checked="displayPrefs.humanOnly" :class="MENU_ITEM" @select="setDisplay('humanOnly')">
                     <span class="flex-1">Only what I typed</span>
                     <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="displayPrefs.humanOnly" /></span>
@@ -535,7 +535,7 @@ const TONE = {
 
                   <template v-if="row && hasFile(row.source)">
                     <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-                    <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-[12px] font-medium text-text-muted">Session file</DropdownMenuLabel>
+                    <DropdownMenuLabel class="flex h-5.75 items-center px-2 py-0 text-ui-sm font-medium text-text-muted">Session file</DropdownMenuLabel>
                     <DropdownMenuItem v-if="fileIsText(row.source)" :class="MENU_ITEM" @select="openFile">Open session file</DropdownMenuItem>
                     <DropdownMenuSub>
                       <DropdownMenuSubTrigger :class="MENU_ITEM">Save copy of session file</DropdownMenuSubTrigger>
@@ -557,7 +557,7 @@ const TONE = {
                       <DropdownMenuSubContent :class="MENU_CONTENT" class="max-h-[60vh] overflow-y-auto">
                         <DropdownMenuItem v-if="!targets.length" :class="MENU_ITEM" disabled>No other instances</DropdownMenuItem>
                         <template v-if="targets.some((t) => t.isRunning)">
-                          <DropdownMenuLabel class="px-2 py-1 text-[12px] font-medium text-text-muted">Running</DropdownMenuLabel>
+                          <DropdownMenuLabel class="px-2 py-1 text-ui-sm font-medium text-text-muted">Running</DropdownMenuLabel>
                           <DropdownMenuItem
                             v-for="t in targets.filter((x) => x.isRunning)"
                             :key="t.ref"
@@ -569,7 +569,7 @@ const TONE = {
                           </DropdownMenuItem>
                         </template>
                         <template v-if="targets.some((t) => !t.isRunning)">
-                          <DropdownMenuLabel class="max-w-64 px-2 py-1 text-[12px] font-medium text-text-muted">Not running: lands in its store, ready when it starts</DropdownMenuLabel>
+                          <DropdownMenuLabel class="max-w-64 px-2 py-1 text-ui-sm font-medium text-text-muted">Not running: lands in its store, ready when it starts</DropdownMenuLabel>
                           <DropdownMenuItem
                             v-for="t in targets.filter((x) => !x.isRunning)"
                             :key="t.ref"
@@ -599,14 +599,14 @@ const TONE = {
       </section>
 
       <div v-if="findOpen" ref="findEl" class="pointer-events-auto border-b border-border bg-bg-page py-1 ps-3 pe-2" role="search">
-        <div class="flex w-full items-center gap-1 text-[12px] leading-4">
+        <div class="flex w-full items-center gap-1 text-ui-sm leading-4">
           <Search class="size-3.5 shrink-0 text-text-muted" />
           <input
             ref="findInput"
             v-model="query"
             aria-label="Find in this session"
             placeholder="Find in this session…"
-            class="h-6 min-w-0 flex-1 bg-transparent px-1 text-[13px] text-text outline-none placeholder:text-text-muted"
+            class="h-6 min-w-0 flex-1 bg-transparent px-1 text-ui text-text outline-none placeholder:text-text-muted"
             @keydown="onFindKey"
           />
           <span class="shrink-0 tnum text-text-muted" role="status">{{ searched.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
@@ -627,7 +627,7 @@ const TONE = {
       <p
         v-if="note"
         role="status"
-        class="pointer-events-auto absolute right-3 max-w-[70%] truncate rounded-(--radius-10) bg-bg-popover px-2.5 py-1 text-[12px] leading-4 shadow-(--shadow-menu-ringed)"
+        class="pointer-events-auto absolute right-3 max-w-[70%] truncate rounded-(--radius-10) bg-bg-popover px-2.5 py-1 text-ui-sm leading-4 shadow-(--shadow-menu-ringed)"
         :class="note.bad ? 'text-danger-text' : 'text-text-2'"
         :style="{ top: `${inset + 6}px` }"
       >
@@ -637,18 +637,18 @@ const TONE = {
 
     <Dialog :open="secretsOpen" @update:open="(o: boolean) => (secretsOpen = o)">
       <DialogContent class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-120">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Credentials found in this transcript</DialogTitle>
-        <DialogDescription class="text-[12px] leading-4 text-text-muted">
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Credentials found in this transcript</DialogTitle>
+        <DialogDescription class="text-ui-sm leading-4 text-text-muted">
           Shown redacted, and never revealed here. Only unmistakable formats are matched, so this is a prompt to go and rotate something, not a clean bill of health.
         </DialogDescription>
-        <ul class="flex max-h-[50vh] flex-col gap-1 overflow-y-auto text-[12px] leading-4">
+        <ul class="flex max-h-[50vh] flex-col gap-1 overflow-y-auto text-ui-sm leading-4">
           <li v-for="(f, i) in secrets?.findings ?? []" :key="i" class="flex items-center gap-2">
             <span class="shrink-0 rounded-(--radius-6) border border-border px-1.5 text-text-2">{{ f.kind }}</span>
             <span class="min-w-0 flex-1 truncate font-mono text-text">{{ f.redacted }}</span>
             <span class="shrink-0 tnum text-text-muted">turn {{ f.turn + 1 }}</span>
           </li>
         </ul>
-        <p v-if="secrets?.truncated" class="text-[12px] text-text-muted">Showing the first findings of {{ secrets.count }}.</p>
+        <p v-if="secrets?.truncated" class="text-ui-sm text-text-muted">Showing the first findings of {{ secrets.count }}.</p>
       </DialogContent>
     </Dialog>
   </div>

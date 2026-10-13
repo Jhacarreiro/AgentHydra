@@ -91,37 +91,37 @@ function startDeny() {
 
 <template>
   <!-- Answered: one line -->
-  <div v-if="answered" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-if="answered" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <component :is="answered.icon" class="size-4 shrink-0" :class="answered.cls" />
     <span class="shrink-0">{{ answered.text }}</span>
     <span class="shrink-0 font-medium text-text">{{ label }}</span>
-    <span class="min-w-0 truncate font-mono text-[12px]">{{ arg }}</span>
+    <span class="min-w-0 truncate font-mono text-ui-sm">{{ arg }}</span>
   </div>
 
-  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <ShieldQuestion class="size-4 shrink-0 text-warning-text" />
     <span class="shrink-0">Waiting for you</span>
     <span class="shrink-0 font-medium text-text">{{ label }}</span>
-    <span class="min-w-0 truncate font-mono text-[12px]">{{ arg }}</span>
+    <span class="min-w-0 truncate font-mono text-ui-sm">{{ arg }}</span>
   </div>
 
   <div v-else ref="dockEl" class="tx-ask" role="group" :aria-label="item.title || `Allow ${label}?`">
-    <div class="flex items-center gap-2 px-3 pt-2.5 text-[14px]">
+    <div class="flex items-center gap-2 px-3 pt-2.5 text-ui-lg">
       <ShieldQuestion class="size-4 shrink-0 text-warning-text" />
       <!-- The SDK's own sentence when it gives one ("Claude wants to run git push") -->
       <span v-if="item.title" class="min-w-0 text-text">{{ item.title }}</span>
       <template v-else>
         <span class="text-text">Allow <span class="font-medium">{{ label }}</span>?</span>
-        <span class="min-w-0 truncate font-mono text-[12px] text-text-muted">{{ arg }}</span>
+        <span class="min-w-0 truncate font-mono text-ui-sm text-text-muted">{{ arg }}</span>
       </template>
     </div>
-    <p v-if="item.description" class="px-3 pt-1 ps-9 text-[12px] text-text-muted">{{ item.description }}</p>
-    <p v-if="item.reason" class="px-3 pt-1 ps-9 text-[12px] text-warning-text">{{ item.reason }}</p>
-    <p v-if="item.blockedPath" class="px-3 pt-1 ps-9 text-[12px] text-text-muted">
+    <p v-if="item.description" class="px-3 pt-1 ps-9 text-ui-sm text-text-muted">{{ item.description }}</p>
+    <p v-if="item.reason" class="px-3 pt-1 ps-9 text-ui-sm text-warning-text">{{ item.reason }}</p>
+    <p v-if="item.blockedPath" class="px-3 pt-1 ps-9 text-ui-sm text-text-muted">
       Outside the allowed folders: <span class="font-mono">{{ item.blockedPath }}</span>
     </p>
     <div class="mx-3 mt-2 overflow-hidden rounded-md border border-border bg-bg-page">
-      <pre v-if="command" class="whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-[12px] text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
+      <pre v-if="command" class="whitespace-pre-wrap wrap-break-word px-3 py-2 font-mono text-ui-sm text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
       <DiffView v-else-if="diff" :id="`${item.id}:diff`" :diff="diff" :max-lines="24" />
       <OutputBlock v-else :id="`${item.id}:in`" :text="inputJson" :max-lines="12" />
     </div>
@@ -155,11 +155,11 @@ function startDeny() {
         <button type="button" class="tx-btn tx-btn-danger" :disabled="busy" @click="decide('deny')">Deny</button>
         <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="denying = false">Cancel</button>
       </template>
-      <span v-if="err" class="text-[12px] text-danger-text">{{ err }}</span>
+      <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
-    <p v-if="!ctx.readOnly.value && !denying && item.canAlwaysAllow && item.alwaysRules?.length" class="-mt-1 px-3 pb-2.5 text-[12px] text-text-muted">
+    <p v-if="!ctx.readOnly.value && !denying && item.canAlwaysAllow && item.alwaysRules?.length" class="-mt-1 px-3 pb-2.5 text-ui-sm text-text-muted">
       Always allow saves <span class="font-mono">{{ item.alwaysRules.join('; ') }}</span>
     </p>
-    <div v-if="ctx.readOnly.value" class="px-3 py-2 text-[12px] text-text-muted">Waiting for an answer</div>
+    <div v-if="ctx.readOnly.value" class="px-3 py-2 text-ui-sm text-text-muted">Waiting for an answer</div>
   </div>
 </template>

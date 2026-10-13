@@ -82,7 +82,7 @@ function saveFloor(e: Event) {
     @update:model-value="(v: boolean) => inst.saveFree({ keepWindows: v })"
   />
 
-  <div v-else-if="id === 'ahFreeFloor' && inst.free.value" class="flex shrink-0 items-center gap-2 text-[13px] leading-4.75 text-text-muted">
+  <div v-else-if="id === 'ahFreeFloor' && inst.free.value" class="flex shrink-0 items-center gap-2 text-ui leading-4.75 text-text-muted">
     <input
       :key="inst.free.value.weeklyFloorPct"
       type="number"

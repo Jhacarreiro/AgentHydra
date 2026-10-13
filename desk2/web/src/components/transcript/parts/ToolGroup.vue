@@ -30,7 +30,7 @@ const shimmer = computed(() => sum.value.running && (ctx.shimmerId ? ctx.shimmer
       <!-- one line: template whitespace would show as stray spaces -->
       <span class="min-w-0 truncate" :class="shimmer && 'tx-shimmer'"><template v-for="(p, i) in sum.phrases" :key="i">{{ i ? ', ' : '' }}{{ p.text }}{{ p.target ? ' ' : '' }}<span v-if="p.target" class="tx-target ms-0.75">{{ p.target }}</span>{{ p.after ? ' ' + p.after : '' }}</template></span>
       <template #after>
-        <span v-if="sum.added || sum.removed" class="shrink-0 font-mono text-[12px] tabular-nums">
+        <span v-if="sum.added || sum.removed" class="shrink-0 font-mono text-ui-sm tabular-nums">
           <span class="text-git-add">+{{ sum.added }}</span>
           <span v-if="sum.removed" class="ms-1 text-git-del">-{{ sum.removed }}</span>
         </span>

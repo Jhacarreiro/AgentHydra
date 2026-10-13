@@ -1356,13 +1356,13 @@ onBeforeUnmount(() => {
             :placeholder="shown || 'Describe a task or ask a question'"
             spellcheck="true"
             aria-label="Message"
-            class="block max-h-96 min-h-6 flex-1 resize-none overflow-hidden bg-transparent px-1 py-0.5 text-[14px] leading-5 text-(--text) caret-(--text) outline-none placeholder:text-(--text-muted)"
+            class="block max-h-96 min-h-6 flex-1 resize-none overflow-hidden bg-transparent px-1 py-0.5 text-ui-lg leading-5 text-(--text) caret-(--text) outline-none placeholder:text-(--text-muted)"
             @keydown="onKeydown"
             @keyup="syncCaret"
             @click="syncCaret"
             @paste="onPaste"
           />
-          <span v-if="(busy || enterQueues) && hasContent" class="mb-0.75 shrink-0 text-[12px] text-(--text-muted)">Queue</span>
+          <span v-if="(busy || enterQueues) && hasContent" class="mb-0.75 shrink-0 text-ui-sm text-(--text-muted)">Queue</span>
           <SendSplit
             v-model:open="queueOpen"
             :show-stop="showStop"
@@ -1383,7 +1383,7 @@ onBeforeUnmount(() => {
 
       <p
         v-if="notice"
-        class="-mt-0.5 px-2 text-[12px]"
+        class="-mt-0.5 px-2 text-ui-sm"
         :class="noticeInfo ? 'text-(--text-muted)' : 'text-(--warning-text)'"
         :role="noticeInfo ? 'status' : 'alert'"
       >{{ notice }}</p>

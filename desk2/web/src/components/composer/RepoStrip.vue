@@ -46,7 +46,7 @@ const Chevron = icons.morePrOptions
 <template>
   <nav
     aria-label="Repository and pull request controls"
-    class="flex h-10 items-center gap-1.25 rounded-(--radius-10) bg-(--fill-5) p-2 text-[13px] leading-4.75"
+    class="flex h-10 items-center gap-1.25 rounded-(--radius-10) bg-(--fill-5) p-2 text-ui leading-4.75"
   >
     <div class="flex min-w-0 flex-1 items-center gap-1.25">
       <slot>
@@ -89,7 +89,7 @@ const Chevron = icons.morePrOptions
       <Tip label="Ask Claude to commit and open a pull request" side="top">
         <button
           type="button"
-          class="px-2 text-[13px] font-medium text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
+          class="px-2 text-ui font-medium text-(--text) transition-colors duration-60 hover:bg-(--fill-hover)"
           @click="emit('create-pr', false)"
         >
           Create PR

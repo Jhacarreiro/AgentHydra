@@ -48,11 +48,11 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
 </script>
 
 <template>
-  <div class="text-[13px]/4.75" data-testid="speed">
+  <div class="text-ui/4.75" data-testid="speed">
     <p v-if="error" class="text-danger-text">Could not load timings: {{ error }}</p>
     <p v-else-if="!data" class="text-text-muted">Loading…</p>
     <template v-else>
-      <h3 class="text-[13px] font-semibold leading-5 text-text">What is slow right now <span class="font-normal text-text-muted">(today, by time lost)</span></h3>
+      <h3 class="text-ui font-semibold leading-5 text-text">What is slow right now <span class="font-normal text-text-muted">(today, by time lost)</span></h3>
       <p v-if="!slowNow.length" class="mt-1 text-text-muted">Nothing measured today.</p>
       <ol v-else class="mt-1">
         <li v-for="r in slowNow" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -63,18 +63,18 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
       </ol>
 
       <div class="mt-8 flex items-baseline gap-3">
-        <h3 class="text-[13px] font-semibold leading-5 text-text">Per stage</h3>
+        <h3 class="text-ui font-semibold leading-5 text-text">Per stage</h3>
         <button
           v-for="k in ['today', 'week'] as const"
           :key="k"
           type="button"
-          class="cursor-default rounded px-1.5 text-[12px]"
+          class="cursor-default rounded px-1.5 text-ui-sm"
           :class="range === k ? 'bg-fill-selected text-text' : 'text-text-muted hover:text-text'"
           @click="range = k"
         >
           {{ k === 'today' ? 'Today' : '7 days' }}
         </button>
-        <span class="ms-auto text-[12px] text-text-muted">bar = p50, lighter = p90</span>
+        <span class="ms-auto text-ui-sm text-text-muted">bar = p50, lighter = p90</span>
       </div>
       <p v-if="!stages.length" class="mt-1 text-text-muted">No spans yet.</p>
       <ul v-else class="mt-1">
@@ -88,7 +88,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
         </li>
       </ul>
 
-      <h3 class="mt-8 text-[13px] font-semibold leading-5 text-text">Slowest turns <span class="font-normal text-text-muted">(7 days)</span></h3>
+      <h3 class="mt-8 text-ui font-semibold leading-5 text-text">Slowest turns <span class="font-normal text-text-muted">(7 days)</span></h3>
       <p v-if="!turns.length" class="mt-1 text-text-muted">No turns measured yet.</p>
       <ul v-else>
         <li v-for="{ t, parts, title } in turnRows" :key="t.turnId || t.ts" class="border-b border-border py-2 last:border-b-0">
@@ -106,7 +106,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
               {{ title }}
             </button>
           </div>
-          <div v-if="parts.length" class="mt-0.5 flex flex-wrap gap-x-3 text-[12px] text-text-muted">
+          <div v-if="parts.length" class="mt-0.5 flex flex-wrap gap-x-3 text-ui-sm text-text-muted">
             <span v-for="[k, v] in parts" :key="k" class="tnum">{{ partLabel(k) }} {{ ms(v) }}</span>
           </div>
         </li>
@@ -114,7 +114,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
 
       <div class="mt-8 grid gap-6 sm:grid-cols-2">
         <div>
-          <h3 class="text-[13px] font-semibold leading-5 text-text">Cold start <span class="font-normal text-text-muted">(7 days, by time lost)</span></h3>
+          <h3 class="text-ui font-semibold leading-5 text-text">Cold start <span class="font-normal text-text-muted">(7 days, by time lost)</span></h3>
           <p v-if="!coldStart.length" class="mt-1 text-text-muted">No cold starts measured yet.</p>
           <ul v-else class="mt-1">
             <li v-for="r in coldStart" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -122,7 +122,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
               <span class="tnum shrink-0 text-text">{{ r.count }}× · p50 {{ ms(r.p50) }} · max {{ ms(r.max) }}</span>
             </li>
           </ul>
-          <h4 class="mt-4 text-[12px] font-semibold text-text-2">Send to ready, by how the process stood</h4>
+          <h4 class="mt-4 text-ui-sm font-semibold text-text-2">Send to ready, by how the process stood</h4>
           <p v-if="!ready.length" class="mt-1 text-text-muted">None yet.</p>
           <ul v-else class="mt-1">
             <li v-for="g in ready" :key="g.key" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -132,7 +132,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
           </ul>
         </div>
         <div>
-          <h3 class="text-[13px] font-semibold leading-5 text-text">Worker chats <span class="font-normal text-text-muted">(7 days)</span></h3>
+          <h3 class="text-ui font-semibold leading-5 text-text">Worker chats <span class="font-normal text-text-muted">(7 days)</span></h3>
           <p v-if="!workers.length" class="mt-1 text-text-muted">No worker waits measured yet.</p>
           <ul v-else class="mt-1">
             <li v-for="r in workers" :key="r.stage + (r.name ?? '')" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -145,7 +145,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
 
       <div class="mt-8 grid gap-6 sm:grid-cols-3">
         <div v-for="g in groups" :key="g.h">
-          <h3 class="text-[13px] font-semibold leading-5 text-text">{{ g.h }} <span class="font-normal text-text-muted">(turns, 7 days)</span></h3>
+          <h3 class="text-ui font-semibold leading-5 text-text">{{ g.h }} <span class="font-normal text-text-muted">(turns, 7 days)</span></h3>
           <p v-if="!g.d.length" class="mt-1 text-text-muted">None</p>
           <ul v-else class="mt-1">
             <li v-for="r in g.d" :key="r.key" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -155,7 +155,7 @@ const COLD: Record<string, string> = { new: 'New process', resume: 'Resumed sess
           </ul>
         </div>
       </div>
-      <p class="mt-6 text-[12px] text-text-muted">{{ data.spans ?? 0 }} spans in the last 7 days, from timings.jsonl.</p>
+      <p class="mt-6 text-ui-sm text-text-muted">{{ data.spans ?? 0 }} spans in the last 7 days, from timings.jsonl.</p>
     </template>
   </div>
 </template>

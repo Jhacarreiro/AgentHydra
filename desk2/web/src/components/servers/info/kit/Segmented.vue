@@ -26,7 +26,7 @@ function key(e: KeyboardEvent, i: number) {
       role="radio"
       :aria-checked="modelValue === o.value"
       :tabindex="modelValue === o.value ? 0 : -1"
-      class="inline-flex h-6.5 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-5) px-2.5 text-[13px] leading-4.75 text-text-2 transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none aria-checked:bg-(--fill-secondary) aria-checked:text-text"
+      class="inline-flex h-6.5 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-5) px-2.5 text-ui leading-4.75 text-text-2 transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none aria-checked:bg-(--fill-secondary) aria-checked:text-text"
       @click="emit('update:modelValue', o.value)"
       @keydown="key($event, i)"
     >

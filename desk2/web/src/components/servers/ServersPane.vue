@@ -421,7 +421,7 @@ watch(
 </script>
 
 <template>
-  <section class="relative flex size-full min-w-0 flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)" aria-label="Servers">
+  <section class="relative flex size-full min-w-0 flex-col bg-(--bg-page) text-ui leading-[19.5px] text-(--text)" aria-label="Servers">
     <!-- The tab strip, like a browser's: tabs, a + after the last, and the pane's own buttons at the right end. -->
     <div class="flex h-10.25 shrink-0 items-end gap-1 border-b border-border bg-(--bg-sidebar) ps-2 pe-1.5 pt-2.25">
       <div ref="strip" role="tablist" aria-label="Tabs" class="-mb-px flex min-w-0 items-end gap-px overflow-x-auto pb-px [scrollbar-width:none] [&::-webkit-scrollbar]:hidden">
@@ -443,10 +443,10 @@ watch(
           <Globe v-else-if="t.kind === 'page' || (t.kind === 'saved' && t.page)" class="size-3.5 shrink-0" aria-hidden="true" />
           <AppWindow v-else-if="t.kind === 'saved'" class="size-3.5 shrink-0" aria-hidden="true" />
           <Search v-else class="size-3.5 shrink-0" aria-hidden="true" />
-          <span class="min-w-0 flex-1 truncate text-[12px]">{{ titleOf(t) }}</span>
+          <span class="min-w-0 flex-1 truncate text-ui-sm">{{ titleOf(t) }}</span>
           <Tip v-if="t.kind === 'saved' && t.page" :label="`Chrome profile: ${t.target}`">
             <span
-              class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-[10px] leading-4 text-(--text-2)"
+              class="max-w-14.5 shrink-0 truncate rounded-(--radius-6) bg-(--fill-selected) px-1 text-3xs leading-4 text-(--text-2)"
               data-testid="profile-badge"
             >{{ labelOf(t.target) ?? t.target }}</span>
           </Tip>
@@ -514,7 +514,7 @@ watch(
         @toggle="toggle"
       />
     </template>
-    <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-30 max-w-[90%] -translate-x-1/2 rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-[12px] text-(--text) shadow-(--shadow-menu-ringed)">{{ notice }}</div>
+    <div v-if="notice" role="status" aria-live="polite" class="pointer-events-none absolute bottom-3 left-1/2 z-30 max-w-[90%] -translate-x-1/2 rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-ui-sm text-(--text) shadow-(--shadow-menu-ringed)">{{ notice }}</div>
     <SavedBrowsers v-if="activeTab.kind === 'saved' && activeTab.target" ref="savedEl" :key="`${cwd}|${activeTab.id}|${activeTab.target}|${activeTab.page ?? ''}`" :cwd="cwd" :chat-id="chatId" :profile="activeTab.target" :url="activeTab.url" :page-id="activeTab.page" />
   </section>
 </template>

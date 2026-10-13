@@ -103,7 +103,7 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
       <Card v-else flush :title="`${preview.processes.length} ${preview.processes.length === 1 ? 'server' : 'servers'} in this file`">
         <ul class="divide-y divide-border border-t border-border">
           <li v-for="p in preview.processes" :key="p.id" class="flex min-h-11 items-center gap-2 px-4 py-2">
-            <span class="shrink-0 text-[13px] text-text">{{ p.name }}</span>
+            <span class="shrink-0 text-ui text-text">{{ p.name }}</span>
             <span v-if="p.port" :class="[CHIP, 'tnum']">:{{ p.port }}</span>
             <Tip :label="p.command"><span :class="[MONO, 'min-w-0 flex-1 truncate text-end text-text-muted']">{{ p.command }}</span></Tip>
           </li>
@@ -116,7 +116,7 @@ const unignore = () => act(async () => { await unignoreFolder(props.item.path); 
     </template>
 
     <template v-else-if="preview?.kind === 'detected' && proposal">
-      <p class="text-[13px] leading-5 text-text-2">No .devwebui file yet: review what goes into it.</p>
+      <p class="text-ui leading-5 text-text-2">No .devwebui file yet: review what goes into it.</p>
       <ProposalEditor v-model="proposal" />
       <div class="sticky bottom-0 -mx-4 -mb-4 mt-auto flex items-center justify-end gap-2 border-t border-border bg-bg-page/95 px-4 py-3 backdrop-blur">
         <button v-if="!ignored" type="button" :class="BTN_GHOST" :disabled="busy" @click="ignore">Ignore</button>

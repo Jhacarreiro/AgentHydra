@@ -42,8 +42,8 @@ function categorize(): void {
 
 <template>
   <template v-if="showStats">
-    <div v-if="stats === undefined" class="px-2 py-0.5 text-[12px] leading-4.5 text-text-muted" role="status">Loading...</div>
-    <div v-else class="px-2 py-0.5 text-[12px] leading-4.5 text-text-muted" aria-label="Project stats">
+    <div v-if="stats === undefined" class="px-2 py-0.5 text-ui-sm leading-4.5 text-text-muted" role="status">Loading...</div>
+    <div v-else class="px-2 py-0.5 text-ui-sm leading-4.5 text-text-muted" aria-label="Project stats">
       <div v-for="line in lines" :key="line">{{ line }}</div>
     </div>
     <div :class="MENU_SEPARATOR" />

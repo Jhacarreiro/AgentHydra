@@ -28,13 +28,13 @@ const when = computed(() => new Date(props.item.ts).toLocaleString(undefined, { 
       <span class="min-w-0 truncate">{{ item.from }}<template v-if="summary"> · {{ summary }}</template></span>
     </StatusRow>
     <Tip v-else :label="when">
-      <div class="flex h-6 items-center gap-1.5 px-1 text-[14px]">
+      <div class="flex h-6 items-center gap-1.5 px-1 text-ui-lg">
         <Bot class="size-4 shrink-0" />
         <span class="min-w-0 truncate">{{ item.from }}</span>
       </div>
     </Tip>
     <Collapse :open="open && !!body">
-      <div class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap wrap-break-word border-s border-border ps-3 text-[13px] leading-5">{{ body }}</div>
+      <div class="mb-1 ms-1 mt-1.5 whitespace-pre-wrap wrap-break-word border-s border-border ps-3 text-ui leading-5">{{ body }}</div>
     </Collapse>
   </div>
 </template>

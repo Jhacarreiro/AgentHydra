@@ -15,7 +15,7 @@ const visible = computed(() => props.pending > 0 || props.queued > 0)
 </script>
 
 <template>
-  <div v-if="visible" class="flex flex-col gap-1.5 text-[13px] leading-4.75" aria-label="Hydra Desk status">
+  <div v-if="visible" class="flex flex-col gap-1.5 text-ui leading-4.75" aria-label="Hydra Desk status">
     <div class="flex h-6 items-center gap-1.25">
       <button
         v-if="pending > 0"

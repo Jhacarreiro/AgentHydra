@@ -144,7 +144,7 @@ function addFolder(kind: 'folders' | 'roots'): void {
   addProjectFolder(kind, { pickFolder: pick, changeProjectChoice: change }).then((added) => added && load(), fail)
 }
 
-const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-[12px] leading-4'
+const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-ui-sm leading-4'
 const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text' : 'text-text-muted hover:text-text-2']
 
 // A tile that stops matching the filter (owner, 2026-10-08: "those kinda like nicely animated filtering ... instead of
@@ -172,7 +172,7 @@ const TOGGLE = 'flex size-8 shrink-0 items-center justify-center rounded-(--radi
 // The project's open chats, at the end of its name (owner, 2026-10-08: "a little badge on them, with how many active
 // chats or, I guess, unarchived chats exist for each"); those projects come first.
 const DASH_GLYPH = 'flex shrink-0 items-center rounded-(--radius-5) px-1 text-text-muted hover:bg-fill-hover hover:text-text'
-const OPEN_CHATS ='ms-auto flex shrink-0 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] font-semibold leading-4 tabular-nums text-text-2'
+const OPEN_CHATS ='ms-auto flex shrink-0 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-2xs font-semibold leading-4 tabular-nums text-text-2'
 const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 </script>
 
@@ -195,7 +195,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 
       <template v-if="tab === 'projects'">
         <div class="mt-3 flex w-full items-center gap-1.5">
-          <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-[13px] leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
+          <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-ui leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
           <Tip label="View options">
             <span class="inline-flex">
               <DropdownMenu>
@@ -235,7 +235,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
               <span v-else :class="[iconSize, 'flex shrink-0 items-center justify-center rounded-(--radius-6) bg-(--fill-secondary) text-text-muted']">
                 <Folder :class="folderSize" aria-hidden="true" />
               </span>
-              <span class="truncate text-[13px] font-semibold leading-4.75 text-text">{{ p.name }}</span>
+              <span class="truncate text-ui font-semibold leading-4.75 text-text">{{ p.name }}</span>
               <Tip v-if="p.hidden" label="Hidden from Projects">
                 <span class="inline-flex shrink-0 text-text-muted"><EyeOff class="size-3" aria-hidden="true" /></span>
               </Tip>
@@ -252,14 +252,14 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
             </span>
           </Tip>
           <span :class="showProjectDetails ? 'flex min-w-0 flex-col gap-2' : DETAILS_HOVER">
-            <span class="truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
-            <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-[11px] leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
+            <span class="truncate text-2xs leading-4 text-text-muted">{{ p.path }}</span>
+            <span v-if="syncLabel(p.git)" class="self-start rounded-(--radius-5) bg-(--fill-secondary) px-1.5 text-2xs leading-4 text-text-2">{{ syncLabel(p.git) }}</span>
           </span>
         </DefineTile>
-        <p v-if="actionProblem" role="alert" class="mt-3 text-[12px] leading-4 text-danger">{{ actionProblem }}</p>
-        <p v-if="problem && !answer" class="mt-4 text-[12px] leading-4 text-text-muted">Could not load your projects: {{ problem }}</p>
-        <p v-else-if="!answer && loading" class="mt-4 text-[12px] leading-4 text-text-muted">Loading your projects…</p>
-        <p v-else-if="!listed.length" class="mt-4 text-[12px] leading-4 text-text-muted">{{ query ? 'No project matches that.' : 'No projects yet. Start a chat in a folder and it shows up here.' }}</p>
+        <p v-if="actionProblem" role="alert" class="mt-3 text-ui-sm leading-4 text-danger">{{ actionProblem }}</p>
+        <p v-if="problem && !answer" class="mt-4 text-ui-sm leading-4 text-text-muted">Could not load your projects: {{ problem }}</p>
+        <p v-else-if="!answer && loading" class="mt-4 text-ui-sm leading-4 text-text-muted">Loading your projects…</p>
+        <p v-else-if="!listed.length" class="mt-4 text-ui-sm leading-4 text-text-muted">{{ query ? 'No project matches that.' : 'No projects yet. Start a chat in a folder and it shows up here.' }}</p>
         <TransitionGroup
           v-else
           ref="grid"
@@ -290,8 +290,8 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
             </button>
           </div>
         </TransitionGroup>
-        <button v-if="overflow" type="button" :aria-expanded="expanded" class="mt-3 h-7 rounded-(--radius-8) bg-fill-5 px-3 text-[12px] leading-4 text-text-2 hover:bg-fill-hover" @click="expanded = !expanded">{{ moreLabel }}</button>
-        <p v-if="answer?.hydra.found && answer.hydra.problem" class="mt-3 text-[11px] leading-4 text-text-muted">Project Hydra: {{ answer.hydra.problem }}</p>
+        <button v-if="overflow" type="button" :aria-expanded="expanded" class="mt-3 h-7 rounded-(--radius-8) bg-fill-5 px-3 text-ui-sm leading-4 text-text-2 hover:bg-fill-hover" @click="expanded = !expanded">{{ moreLabel }}</button>
+        <p v-if="answer?.hydra.found && answer.hydra.problem" class="mt-3 text-2xs leading-4 text-text-muted">Project Hydra: {{ answer.hydra.problem }}</p>
         <ProjectFoldersDialog :open="managing" :choices="choices" :projects="answer?.projects ?? []" @update:open="(o: boolean) => (managing = o)" @changed="load" @failed="fail" />
       </template>
 

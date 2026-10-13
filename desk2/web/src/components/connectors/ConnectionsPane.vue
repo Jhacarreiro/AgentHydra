@@ -41,14 +41,14 @@ watch(() => props.chat.id, reload)
 </script>
 
 <template>
-  <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-(--bg) text-[12px] text-(--text-2)" aria-label="Connections">
+  <section class="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-(--bg) text-ui-sm text-(--text-2)" aria-label="Connections">
     <header class="flex h-9 shrink-0 items-center border-b border-border px-3">
       <span class="flex-1 truncate font-medium text-(--text)">Connections</span>
       <button type="button" :class="TEXT_BTN" @click="openStudio">Open Connections Studio</button>
     </header>
 
     <div class="flex shrink-0 flex-col gap-1 border-b border-border p-3">
-      <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">Server</h3>
+      <h3 class="text-2xs font-medium uppercase tracking-wide text-text-muted">Server</h3>
       <template v-if="server">
         <p class="flex items-center gap-1.5">
           <span class="size-1.5 rounded-full" :class="server.running ? 'bg-(--status-working)' : 'bg-(--status-error)'" />
@@ -61,7 +61,7 @@ watch(() => props.chat.id, reload)
     </div>
 
     <div class="flex shrink-0 flex-col gap-1 border-b border-border p-3">
-      <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">Account</h3>
+      <h3 class="text-2xs font-medium uppercase tracking-wide text-text-muted">Account</h3>
       <p class="text-(--text)">{{ signInLine(ws) }}</p>
       <div v-if="ws && !ws.signedIn" class="pt-1">
         <button type="button" :class="TEXT_BTN" @click="signIn">Sign in to Connections</button>
@@ -70,10 +70,10 @@ watch(() => props.chat.id, reload)
 
     <!-- The list scrolls inside; the search, "No workspace" and the Bypass row stay in view whatever the list's length. -->
     <div v-if="!ws || ws.signedIn" class="flex min-h-0 flex-1 flex-col gap-1 p-3">
-      <h3 class="text-[11px] font-medium uppercase tracking-wide text-text-muted">This chat's workspace</h3>
+      <h3 class="text-2xs font-medium uppercase tracking-wide text-text-muted">This chat's workspace</h3>
       <p class="pb-1">
         <span :class="current.muted ? 'text-text-muted' : 'text-(--text)'">{{ current.text }}</span>
-        <span v-if="current.pinned" class="ms-1 rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] text-text-muted">this chat</span>
+        <span v-if="current.pinned" class="ms-1 rounded-(--radius-6) bg-(--fill-secondary) px-1 text-3xs text-text-muted">this chat</span>
       </p>
       <label :class="SEARCH_BOX">
         <component :is="settingsIcons.search" class="size-4 shrink-0 text-text-muted" />
@@ -111,7 +111,7 @@ watch(() => props.chat.id, reload)
         <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="ws && !ws.company" /></span>
       </button>
       <Tip v-if="bypass" :label="BYPASS_TIP">
-        <button type="button" :class="[PANE_ROW, 'text-[12px] text-text-2']" @click="openStudio">
+        <button type="button" :class="[PANE_ROW, 'text-ui-sm text-text-2']" @click="openStudio">
           <span class="flex-1">{{ bypass.label }}</span>
           <span class="flex items-center gap-1" :class="bypass.on ? 'text-text-2' : 'text-text-muted'">
             <component :is="icons.check" v-if="bypass.on" class="size-3.5" />{{ bypass.value }}

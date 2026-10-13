@@ -1052,7 +1052,7 @@ function moveSidebar(side: SidebarSide) {
               </div>
 
               <div v-if="notice" role="status" data-testid="archived-notice" class="shrink-0 bg-(--bg-page) px-4 pb-1.5 pt-1">
-                <p class="mx-auto w-full max-w-3xl text-center text-[13px] leading-4.75 text-text-muted">
+                <p class="mx-auto w-full max-w-3xl text-center text-ui leading-4.75 text-text-muted">
                   This chat was archived.
                   <button type="button" class="rounded-(--radius-6) text-text-2 underline-offset-2 transition-colors duration-60 hover:text-(--accent-text) hover:underline focus-visible:underline" @click="unarchive">Click here to unarchive.</button>
                 </p>

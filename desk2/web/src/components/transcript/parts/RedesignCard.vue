@@ -122,11 +122,11 @@ const moreCount = computed(() => view.value.options.length || expected.value)
   <div class="tx-card @container w-155 max-w-full overflow-hidden shadow-[inset_0_0_0_1px_color-mix(in_srgb,var(--brand)_35%,transparent)]">
     <div class="px-3 pb-2 pt-2.5">
       <div class="flex items-center gap-2">
-        <span class="inline-flex shrink-0 items-center gap-1 rounded-6 bg-fill-hover px-1.5 py-0.5 text-[12px] font-medium text-text">
+        <span class="inline-flex shrink-0 items-center gap-1 rounded-6 bg-fill-hover px-1.5 py-0.5 text-ui-sm font-medium text-text">
           <LayoutGrid class="size-3.5" aria-hidden="true" />ReDesign
         </span>
-        <span class="min-w-0 truncate text-[14px] font-medium text-text">{{ title }}</span>
-        <span v-if="countLabel" class="ms-auto shrink-0 text-[12px] text-text-muted">{{ countLabel }}</span>
+        <span class="min-w-0 truncate text-ui-lg font-medium text-text">{{ title }}</span>
+        <span v-if="countLabel" class="ms-auto shrink-0 text-ui-sm text-text-muted">{{ countLabel }}</span>
         <button
           v-if="view.state === 'done' && pickedOpt && expanded"
           type="button"
@@ -138,7 +138,7 @@ const moreCount = computed(() => view.value.options.length || expected.value)
         </button>
       </div>
       <Tip v-if="view.brief" :label="view.brief">
-        <p class="mt-1 truncate text-[12px] text-text-muted">{{ view.brief }}</p>
+        <p class="mt-1 truncate text-ui-sm text-text-muted">{{ view.brief }}</p>
       </Tip>
     </div>
 
@@ -147,26 +147,26 @@ const moreCount = computed(() => view.value.options.length || expected.value)
         <li v-for="n in expected" :key="n" class="min-w-0">
           <div class="relative flex aspect-16/10 w-full items-center justify-center rounded-lg bg-fill-hover shadow-[inset_0_0_0_1px_var(--border)]" :class="!landed[n - 1] && 'animate-pulse'">
             <LoaderCircle class="size-5 animate-spin text-text-muted" />
-            <span v-if="landed[n - 1]" class="absolute bottom-2 left-2 max-w-[80%] truncate rounded-full bg-black/70 px-2.5 py-1 text-[12px] font-medium text-white">{{ landed[n - 1] }}</span>
+            <span v-if="landed[n - 1]" class="absolute bottom-2 left-2 max-w-[80%] truncate rounded-full bg-black/70 px-2.5 py-1 text-ui-sm font-medium text-white">{{ landed[n - 1] }}</span>
           </div>
-          <p class="mt-1 text-[12px] font-medium text-text-muted">Option {{ n }}</p>
+          <p class="mt-1 text-ui-sm font-medium text-text-muted">Option {{ n }}</p>
         </li>
       </ul>
-      <p class="px-3 pb-3 text-[12px] text-text-muted" role="status">{{ (!landed.length && item.progress) || 'ReDesign is making options…' }}</p>
+      <p class="px-3 pb-3 text-ui-sm text-text-muted" role="status">{{ (!landed.length && item.progress) || 'ReDesign is making options…' }}</p>
     </template>
     <div v-else-if="setup" class="grid gap-2 px-3 pb-3" role="status">
-      <p class="flex items-center gap-1.5 text-[13px] font-medium text-text"><KeyRound class="size-3.5 text-text-muted" aria-hidden="true" />{{ setup.title }}</p>
-      <p class="text-[13px] text-text-muted">{{ setup.line }}</p>
+      <p class="flex items-center gap-1.5 text-ui font-medium text-text"><KeyRound class="size-3.5 text-text-muted" aria-hidden="true" />{{ setup.title }}</p>
+      <p class="text-ui text-text-muted">{{ setup.line }}</p>
       <div v-if="setup.kind === 'no-key'" class="flex flex-wrap items-center gap-2">
         <button type="button" class="tx-btn" @click="openKeys">Open ReDesign to add a key</button>
         <button type="button" class="tx-btn tx-btn-primary" :disabled="keyBusy || keyOk" @click="useHswarmKeys">
           <LoaderCircle v-if="keyBusy" class="size-3.5 animate-spin" aria-hidden="true" />Use HSwarm's keys
         </button>
-        <span v-if="keyNote" class="min-w-0 truncate text-[12px]" :class="keyOk ? 'text-text-muted' : 'text-danger-text'">{{ keyNote }}</span>
+        <span v-if="keyNote" class="min-w-0 truncate text-ui-sm" :class="keyOk ? 'text-text-muted' : 'text-danger-text'">{{ keyNote }}</span>
       </div>
-      <p v-if="view.error" class="whitespace-pre-wrap wrap-break-word text-[12px] text-text-muted opacity-80">{{ view.error }}</p>
+      <p v-if="view.error" class="whitespace-pre-wrap wrap-break-word text-ui-sm text-text-muted opacity-80">{{ view.error }}</p>
     </div>
-    <p v-else-if="view.state === 'error'" class="whitespace-pre-wrap wrap-break-word px-3 pb-3 text-[13px] text-danger-text">{{ view.error }}</p>
+    <p v-else-if="view.state === 'error'" class="whitespace-pre-wrap wrap-break-word px-3 pb-3 text-ui text-danger-text">{{ view.error }}</p>
 
     <template v-else>
       <button
@@ -178,12 +178,12 @@ const moreCount = computed(() => view.value.options.length || expected.value)
       >
         <span class="block aspect-16/10 w-28 shrink-0 overflow-hidden rounded-lg bg-(--bg-picture) shadow-[0_0_0_2px_var(--accent)]">
           <img v-if="pickedOpt.src" :src="pickedOpt.src" :alt="optionLabel(pickedOpt)" class="size-full object-cover object-top" draggable="false" />
-          <span v-else class="flex size-full items-center justify-center text-[12px] text-text-muted">No picture</span>
+          <span v-else class="flex size-full items-center justify-center text-ui-sm text-text-muted">No picture</span>
         </span>
-        <span class="flex min-w-0 items-center gap-1 text-[13px] font-medium text-text">
+        <span class="flex min-w-0 items-center gap-1 text-ui font-medium text-text">
           <Check class="size-3.5 shrink-0" aria-hidden="true" /><span class="truncate">{{ optionLabel(pickedOpt) }}</span>
         </span>
-        <span class="ms-auto flex shrink-0 items-center gap-1 text-[12px] text-text-muted">Show all {{ view.options.length }}<ChevronDown class="size-3.5" aria-hidden="true" /></span>
+        <span class="ms-auto flex shrink-0 items-center gap-1 text-ui-sm text-text-muted">Show all {{ view.options.length }}<ChevronDown class="size-3.5" aria-hidden="true" /></span>
       </button>
       <ul v-else class="grid grid-cols-1 gap-2.5 px-3 pb-2.5 @[420px]:grid-cols-2" aria-label="Design options">
         <li v-for="o in view.options" :key="o.n" class="min-w-0">
@@ -200,14 +200,14 @@ const moreCount = computed(() => view.value.options.length || expected.value)
             >
               <img :src="o.src" :alt="optionLabel(o)" class="size-full object-cover object-top" draggable="false" />
             </button>
-            <span v-else class="flex aspect-16/10 w-full items-center justify-center text-[12px] text-text-muted">No picture</span>
+            <span v-else class="flex aspect-16/10 w-full items-center justify-center text-ui-sm text-text-muted">No picture</span>
             <Tip :label="editable ? `Choose ${optionLabel(o)}` : ''">
               <component
                 :is="editable ? 'button' : 'span'"
                 :type="editable ? 'button' : undefined"
                 :role="editable ? 'radio' : undefined"
                 :aria-checked="editable ? choice === o.n : undefined"
-                class="absolute bottom-2 left-2 flex max-w-[75%] items-center gap-1 rounded-full px-2.5 py-1 text-[12px] font-medium shadow outline-none focus-visible:ring-2 focus-visible:ring-brand"
+                class="absolute bottom-2 left-2 flex max-w-[75%] items-center gap-1 rounded-full px-2.5 py-1 text-ui-sm font-medium shadow outline-none focus-visible:ring-2 focus-visible:ring-brand"
                 :class="[
                   shown(o.n) ? 'bg-accent text-white' : 'bg-black/70 text-white backdrop-blur-sm',
                   editable && !shown(o.n) && 'hover:bg-black/85'
@@ -250,14 +250,14 @@ const moreCount = computed(() => view.value.options.length || expected.value)
             </button>
           </Tip>
           <button type="button" class="tx-btn" :class="choice === 'other' && 'border-accent text-text'" :aria-pressed="choice === 'other'" @click="choose('other')">Other</button>
-          <span v-if="err" class="min-w-0 truncate text-[12px] text-danger-text">{{ err }}</span>
+          <span v-if="err" class="min-w-0 truncate text-ui-sm text-danger-text">{{ err }}</span>
           <button type="button" class="tx-btn tx-btn-primary ms-auto" :disabled="!ready || busy" @click="send">Send</button>
         </div>
       </div>
-      <p v-else-if="sent" class="flex items-center gap-1.5 border-t border-border px-3 py-2 text-[12px] text-text-muted">
+      <p v-else-if="sent" class="flex items-center gap-1.5 border-t border-border px-3 py-2 text-ui-sm text-text-muted">
         <Check class="size-3.5 shrink-0" aria-hidden="true" /><span class="min-w-0 truncate">{{ sentChip?.line(view.options.length) ?? sent }}</span>
       </p>
-      <p v-else-if="view.askOwner && ctx.readOnly.value" class="border-t border-border px-3 py-2 text-[12px] text-text-muted">Waiting for the person's choice.</p>
+      <p v-else-if="view.askOwner && ctx.readOnly.value" class="border-t border-border px-3 py-2 text-ui-sm text-text-muted">Waiting for the person's choice.</p>
     </template>
   </div>
 </template>

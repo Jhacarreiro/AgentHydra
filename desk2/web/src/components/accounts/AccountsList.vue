@@ -100,15 +100,15 @@ onMounted(async () => {
 })
 
 const ROW =
-  'flex h-7 w-full cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-start text-[13px] leading-[19px] transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none aria-disabled:hover:bg-transparent'
+  'flex h-7 w-full cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-2 text-start text-ui leading-[19px] transition-colors duration-[60ms] hover:bg-fill-hover focus-visible:bg-fill-hover focus-visible:outline-none aria-disabled:hover:bg-transparent'
 </script>
 
 <template>
-  <div class="flex max-h-[70vh] w-85 flex-col p-1 text-[13px] leading-4.75 text-text">
-    <div class="flex h-5.75 shrink-0 items-center px-2 text-[13px] font-medium text-text-muted">Account for new chats</div>
+  <div class="flex max-h-[70vh] w-85 flex-col p-1 text-ui leading-4.75 text-text">
+    <div class="flex h-5.75 shrink-0 items-center px-2 text-ui font-medium text-text-muted">Account for new chats</div>
 
-    <div v-if="error" class="shrink-0 px-2 py-1 text-[12px] text-danger-text">{{ error }}</div>
-    <div v-else-if="loaded && accounts.length === 0" class="shrink-0 px-2 py-1 text-[12px] text-text-muted">No accounts. Is AgentHydra running?</div>
+    <div v-if="error" class="shrink-0 px-2 py-1 text-ui-sm text-danger-text">{{ error }}</div>
+    <div v-else-if="loaded && accounts.length === 0" class="shrink-0 px-2 py-1 text-ui-sm text-text-muted">No accounts. Is AgentHydra running?</div>
 
     <div
       ref="listEl"
@@ -135,19 +135,19 @@ const ROW =
           <span class="min-w-0 truncate" :class="row.disabled ? 'text-text-muted' : ''">{{ row.label }}</span>
           <span
             v-if="row.plan"
-            class="flex h-4 shrink-0 items-center rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted"
+            class="flex h-4 shrink-0 items-center rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted"
             :class="row.disabled ? 'opacity-60' : ''"
           >{{ row.plan }}</span>
           <span class="min-w-2 flex-1" />
-          <span v-if="!row.account" class="min-w-0 truncate text-[12px] leading-4 text-text-muted">{{ pickLabel ? `right now: ${pickLabel}` : '' }}</span>
-          <span v-else-if="row.disabled" class="shrink-0 text-[12px] leading-4 text-text-muted">Signed out</span>
+          <span v-if="!row.account" class="min-w-0 truncate text-ui-sm leading-4 text-text-muted">{{ pickLabel ? `right now: ${pickLabel}` : '' }}</span>
+          <span v-else-if="row.disabled" class="shrink-0 text-ui-sm leading-4 text-text-muted">Signed out</span>
           <span v-else class="flex shrink-0 items-center gap-2.5">
             <span v-for="w in windows(row.account)" :key="w.name" class="flex items-center gap-1">
-              <span class="text-[10px] leading-4 text-text-muted">{{ w.name }}</span>
+              <span class="text-3xs leading-4 text-text-muted">{{ w.name }}</span>
               <span class="h-1 w-7 overflow-hidden rounded-full bg-(--fill-secondary)">
                 <span class="block h-full rounded-full" :style="{ width: `${Math.max(0, Math.min(100, w.pct ?? 0))}%`, background: barColor(w.pct) }" />
               </span>
-              <span class="tnum w-6.5 text-end text-[11px] leading-4" :class="w.pct == null ? 'text-text-muted' : 'text-text-2'">{{ pctText(w.pct) }}</span>
+              <span class="tnum w-6.5 text-end text-2xs leading-4" :class="w.pct == null ? 'text-text-muted' : 'text-text-2'">{{ pctText(w.pct) }}</span>
             </span>
           </span>
         </button>

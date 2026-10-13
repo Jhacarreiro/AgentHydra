@@ -22,7 +22,7 @@ const chip = computed(() => (props.task?.claimedBy ? claimInitials(props.task.cl
       @click="emit('toggle')"
     >
       <User v-if="forYou" :size="11" class="shrink-0 text-(--warning)" aria-hidden="true" />
-      <span class="min-w-0 flex-1 truncate text-[12px] leading-4 text-text" :class="note?.done ? 'line-through' : ''">{{ title }}</span>
+      <span class="min-w-0 flex-1 truncate text-ui-sm leading-4 text-text" :class="note?.done ? 'line-through' : ''">{{ title }}</span>
       <template v-if="task">
         <span v-if="task.live" class="rounded-sm bg-(--danger-bg) px-1 font-mono text-[9px] font-semibold leading-3.5 text-(--danger-text)">LIVE</span>
         <span class="rounded-sm border border-border px-1 font-mono text-[9px] leading-3.5 text-text-muted">{{ task.type }}</span>
@@ -35,9 +35,9 @@ const chip = computed(() => (props.task?.claimedBy ? claimInitials(props.task.cl
         >{{ chip }}</span>
         <span v-else class="size-4 shrink-0 rounded-full border border-dashed border-text-muted" aria-label="Nobody has claimed it" />
       </template>
-      <span v-else-if="note?.due" class="shrink-0 font-mono text-[10px] text-text-muted">{{ note.due }}</span>
+      <span v-else-if="note?.due" class="shrink-0 font-mono text-3xs text-text-muted">{{ note.due }}</span>
     </button>
-    <div v-if="task && open" class="flex flex-col gap-1.5 px-2.5 pb-2 ps-6 text-[12px] leading-4.5 text-text-2">
+    <div v-if="task && open" class="flex flex-col gap-1.5 px-2.5 pb-2 ps-6 text-ui-sm leading-4.5 text-text-2">
       <p v-if="task.body" class="whitespace-pre-wrap wrap-break-word">{{ task.body }}</p>
       <p v-if="task.tierWhy" class="text-text-muted"><span class="text-text-2">Why this tier:</span> {{ task.tierWhy }}</p>
     </div>

@@ -166,14 +166,14 @@ watch(() => props.text, () => nextTick(fit))
         {{ expanded ? 'Show less' : 'Show more' }}
       </button>
     </div>
-    <div v-if="sendFailed" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-[13px] text-text-muted">
+    <div v-if="sendFailed" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-ui text-text-muted">
       <Tip :label="sendFailed">
         <span class="text-danger-text">Not sent</span>
       </Tip>
       <span aria-hidden="true">·</span>
       <button type="button" class="cursor-pointer hover:text-text" @click="retrySend">Retry</button>
     </div>
-    <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-[13px] text-text-muted">
+    <div v-if="queued" class="flex min-h-6 max-w-[85%] items-center gap-1.5 text-end text-ui text-text-muted">
       <span v-if="sendNowState === 'failed'" class="text-danger-text">Send now failed{{ sendNowError ? `: ${sendNowError}` : '' }}</span>
       <span v-else-if="sendNowNote">{{ sendNowNote }}</span>
       <template v-else>

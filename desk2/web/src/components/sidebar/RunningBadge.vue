@@ -9,7 +9,7 @@ defineProps<{ tasks: number; jobs: number; chats: number }>()
 </script>
 
 <template>
-  <span class="flex shrink-0 items-center gap-1.5 text-[11px] text-text-2 tnum">
+  <span class="flex shrink-0 items-center gap-1.5 text-2xs text-text-2 tnum">
     <Tip v-if="tasks" :label="`${tasks} CliMayte ${tasks === 1 ? 'task runs' : 'tasks run'} in this folded group`">
       <span class="flex items-center gap-1">
         <span class="size-1.5 rounded-full bg-(--status-working)" aria-hidden="true" />

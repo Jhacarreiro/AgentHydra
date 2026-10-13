@@ -102,12 +102,12 @@ const confirmCancel = () => {
     <!-- Header -->
     <div class="flex items-center justify-between px-4 py-3 border-b border-(--border)">
       <div class="flex items-center gap-2">
-        <h2 class="text-[13px] font-medium">CliMayte</h2>
-        <span class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-[11px] leading-4 text-(--text-2)">
+        <h2 class="text-ui font-medium">CliMayte</h2>
+        <span class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-2xs leading-4 text-(--text-2)">
           {{ activeWorkers.length }}
         </span>
       </div>
-      <label v-if="originSessionId" class="flex items-center gap-2 text-[12px]">
+      <label v-if="originSessionId" class="flex items-center gap-2 text-ui-sm">
         <input
           v-model="showOnlyThisChat"
           type="checkbox"
@@ -122,7 +122,7 @@ const confirmCancel = () => {
       <!-- Active workers grouped -->
       <div v-if="activeWorkers.length > 0">
         <div v-for="group in groupedActive" :key="group.group || 'ungrouped'" class="border-b border-(--border) last:border-b-0">
-          <div v-if="group.group" class="px-4 py-2 text-[12px] font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0">
+          <div v-if="group.group" class="px-4 py-2 text-ui-sm font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0">
             {{ group.group }}
           </div>
           <div
@@ -134,15 +134,15 @@ const confirmCancel = () => {
             <div class="flex items-start gap-2 mb-2">
               <div :class="glyphClass(worker)" />
               <div class="flex-1 min-w-0">
-                <div class="text-[13px] font-medium truncate">{{ worker.title }}</div>
+                <div class="text-ui font-medium truncate">{{ worker.title }}</div>
               </div>
-              <div class="shrink-0 text-[12px] text-(--text-muted)">
+              <div class="shrink-0 text-ui-sm text-(--text-muted)">
                 {{ elapsedTime(worker) }}
               </div>
             </div>
 
             <!-- Account and model/effort -->
-            <div class="flex items-center gap-2 mb-2 text-[12px]">
+            <div class="flex items-center gap-2 mb-2 text-ui-sm">
               <span v-if="worker.account" class="text-(--text-muted)">{{ worker.account }}</span>
               <span v-if="worker.model" class="text-(--text-muted)">{{ worker.model }}</span>
               <span v-if="worker.effort" class="text-(--text-muted)">{{ worker.effort }}</span>
@@ -157,7 +157,7 @@ const confirmCancel = () => {
             </div>
 
             <!-- Last activity -->
-            <div v-if="worker.lastActivity" class="text-[12px] text-(--text-muted) mb-2 truncate">
+            <div v-if="worker.lastActivity" class="text-ui-sm text-(--text-muted) mb-2 truncate">
               {{ worker.lastActivity }}
             </div>
 
@@ -166,7 +166,7 @@ const confirmCancel = () => {
               <Tip :label="'Stop ' + worker.title" side="top">
                 <button
                   @click="cancelTarget = worker"
-                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
+                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-ui-sm bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
                 >
                   <Square class="size-3.5" />
                   <span class="hidden sm:inline">Stop</span>
@@ -175,27 +175,27 @@ const confirmCancel = () => {
               <Tip v-if="worker.sessionId" :label="'Open ' + worker.title" side="top">
                 <button
                   @click="desk.select({ kind: 'external', id: worker.sessionId || '' })"
-                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-[12px] bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
+                  class="flex-1 flex items-center justify-center gap-1 px-2 py-1.5 text-ui-sm bg-(--fill-5) hover:bg-(--fill-hover) rounded-(--radius-6) text-(--text-muted) transition-colors duration-60 hover:text-(--text)"
                 >
                   <ArrowUpRight class="size-3.5" />
                   <span class="hidden sm:inline">Open</span>
                 </button>
               </Tip>
             </div>
-            <p v-if="cancelErrors.get(worker.id)" role="alert" class="mt-2 text-[12px] text-danger-text">{{ cancelErrors.get(worker.id) }}</p>
+            <p v-if="cancelErrors.get(worker.id)" role="alert" class="mt-2 text-ui-sm text-danger-text">{{ cancelErrors.get(worker.id) }}</p>
           </div>
         </div>
       </div>
 
       <!-- Recently finished -->
       <div v-if="finishedWorkers.length > 0">
-        <div class="px-4 py-2 text-[12px] font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0 z-10">
+        <div class="px-4 py-2 text-ui-sm font-medium text-(--text-muted) bg-(--bg-popover) sticky top-0 z-10">
           Recently finished
         </div>
         <div
           v-for="worker in finishedWorkers"
           :key="worker.id"
-          class="px-4 py-2 border-b border-(--border) last:border-b-0 hover:bg-(--fill-hover) text-[12px]"
+          class="px-4 py-2 border-b border-(--border) last:border-b-0 hover:bg-(--fill-hover) text-ui-sm"
         >
           <div class="flex items-center gap-2 mb-1">
             <span
@@ -207,7 +207,7 @@ const confirmCancel = () => {
             </span>
             <span class="truncate">{{ worker.title }}</span>
           </div>
-          <div v-if="worker.error" class="text-(--danger-text) text-[12px] truncate">
+          <div v-if="worker.error" class="text-(--danger-text) text-ui-sm truncate">
             {{ worker.error }}
           </div>
         </div>
@@ -216,8 +216,8 @@ const confirmCancel = () => {
       <!-- Empty state -->
       <div v-if="activeWorkers.length === 0 && finishedWorkers.length === 0" class="flex items-center justify-center h-full text-(--text-muted)">
         <div class="text-center">
-          <p class="text-[13px] font-medium">No workers</p>
-          <p class="text-[12px]">{{ showOnlyThisChat ? 'This chat has not dispatched any workers' : 'No active or recent workers' }}</p>
+          <p class="text-ui font-medium">No workers</p>
+          <p class="text-ui-sm">{{ showOnlyThisChat ? 'This chat has not dispatched any workers' : 'No active or recent workers' }}</p>
         </div>
       </div>
     </div>

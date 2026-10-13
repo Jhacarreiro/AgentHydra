@@ -141,7 +141,7 @@ function setInclude(r: Row, v: boolean): void {
       </template>
     </section>
 
-    <p v-if="modelValue.truncated" class="text-[12px] leading-4 text-text-muted">
+    <p v-if="modelValue.truncated" class="text-ui-sm leading-4 text-text-muted">
       {{ modelValue.truncated }} more dev scripts were left out to keep the list short.
     </p>
   </div>

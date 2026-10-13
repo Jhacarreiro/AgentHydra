@@ -123,7 +123,7 @@ const summary = computed(() => {
 </script>
 
 <template>
-  <div v-if="item.state !== 'pending'" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-if="item.state !== 'pending'" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <Check v-if="item.state === 'answered'" class="size-4 shrink-0 text-success-text" />
     <SkipForward v-else-if="item.state === 'skipped'" class="size-4 shrink-0 text-text-muted" />
     <Clock v-else class="size-4 shrink-0 text-text-muted" />
@@ -132,14 +132,14 @@ const summary = computed(() => {
     <span v-else class="min-w-0 truncate">{{ item.questions[0]?.question }}</span>
   </div>
 
-  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <MessageCircleQuestion class="size-4 shrink-0 text-warning-text" />
     <span class="shrink-0">Waiting for you</span>
     <span class="min-w-0 truncate text-text">{{ item.questions[0]?.question }}</span>
   </div>
 
   <div v-else class="tx-ask px-3 py-2.5" role="group" aria-label="Claude has a question" @keydown.enter.self.prevent="next()">
-    <div v-if="many" class="mb-2 flex items-center gap-2 ps-6 text-[12px] text-text-muted">
+    <div v-if="many" class="mb-2 flex items-center gap-2 ps-6 text-ui-sm text-text-muted">
       <span class="font-medium text-text">Question {{ step + 1 }} of {{ item.questions.length }}</span>
       <span class="flex items-center gap-1" aria-hidden="true">
         <span
@@ -151,12 +151,12 @@ const summary = computed(() => {
       </span>
     </div>
     <div v-if="q" :key="q.question" class="mb-1">
-      <div class="flex items-start gap-2 text-[14px]">
+      <div class="flex items-start gap-2 text-ui-lg">
         <MessageCircleQuestion class="mt-0.5 size-4 shrink-0 text-warning-text" />
         <div class="min-w-0">
-          <span v-if="q.header" class="me-2 rounded bg-fill-hover px-1.5 py-0.5 text-[11px] text-text-muted">{{ q.header }}</span>
+          <span v-if="q.header" class="me-2 rounded bg-fill-hover px-1.5 py-0.5 text-2xs text-text-muted">{{ q.header }}</span>
           <span class="text-text">{{ q.question }}</span>
-          <span v-if="q.multiSelect" class="ms-1 text-[12px] text-text-muted">(pick any)</span>
+          <span v-if="q.multiSelect" class="ms-1 text-ui-sm text-text-muted">(pick any)</span>
         </div>
       </div>
       <div class="mt-2 grid gap-1 ps-6">
@@ -164,7 +164,7 @@ const summary = computed(() => {
           v-for="o in q.options"
           :key="o.label"
           type="button"
-          class="flex items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-start text-[13px] transition-colors"
+          class="flex items-baseline gap-2 rounded-md border px-2.5 py-1.5 text-start text-ui transition-colors"
           :class="
             picked[q.question]?.includes(o.label)
               ? 'border-brand/60 bg-brand/10 text-text'
@@ -174,12 +174,12 @@ const summary = computed(() => {
           @click="toggle(q.question, o.label, q.multiSelect)"
         >
           <span class="shrink-0 font-medium">{{ o.label }}</span>
-          <span v-if="o.description" class="min-w-0 truncate text-[12px] text-text-muted">{{ o.description }}</span>
+          <span v-if="o.description" class="min-w-0 truncate text-ui-sm text-text-muted">{{ o.description }}</span>
         </button>
         <template v-if="!ctx.readOnly.value">
           <button
             type="button"
-            class="rounded-md border px-2.5 py-1.5 text-start text-[13px]"
+            class="rounded-md border px-2.5 py-1.5 text-start text-ui"
             :class="otherOn[q.question] ? 'border-brand/60 bg-brand/10 text-text' : 'border-border text-text-muted hover:bg-fill-hover'"
             :disabled="busy"
             @click="toggleOther(q.question, q.multiSelect)"
@@ -214,7 +214,7 @@ const summary = computed(() => {
                 </button>
               </span>
             </div>
-            <span v-if="pictureErr" class="text-[12px] text-danger-text">{{ pictureErr }}</span>
+            <span v-if="pictureErr" class="text-ui-sm text-danger-text">{{ pictureErr }}</span>
           </div>
         </template>
       </div>
@@ -224,7 +224,7 @@ const summary = computed(() => {
       <button v-if="!last" type="button" class="tx-btn tx-btn-primary" :disabled="busy || !stepDone" @click="next()">Next</button>
       <button v-else type="button" class="tx-btn tx-btn-primary" :disabled="busy || !complete" @click="submit()">Answer</button>
       <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="submit(true)">Skip</button>
-      <span v-if="err" class="text-[12px] text-danger-text">{{ err }}</span>
+      <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
   </div>
 </template>

@@ -35,7 +35,7 @@ const pulse = (b: SubBadge) => (!b.running ? '' : b.open ? 'run-pulse' : runPuls
         type="button"
         :aria-label="label(b)"
         :aria-expanded="b.open"
-        class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-[11px] leading-4 tnum transition-colors duration-(--dur-fast)"
+        class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-2xs leading-4 tnum transition-colors duration-(--dur-fast)"
         :class="look(b)"
         @click.stop="toggleExpanded(rowKey, b.kind)"
         @keydown.enter.stop

@@ -11,12 +11,12 @@ const helpId = `${id}-help`
 
 <template>
   <div class="flex min-w-0 flex-col gap-1.5">
-    <label :for="id" class="flex items-baseline gap-1.5 text-[12px] font-medium leading-4 text-text-2">
+    <label :for="id" class="flex items-baseline gap-1.5 text-ui-sm font-medium leading-4 text-text-2">
       {{ props.label }}
       <span v-if="optional" class="font-normal text-text-muted">Optional</span>
     </label>
     <slot v-bind="{ id, describedBy: help || error ? helpId : undefined, invalid: !!error }" />
-    <p v-if="error" :id="helpId" role="alert" class="text-[12px] leading-4 text-danger-text">{{ error }}</p>
-    <p v-else-if="help" :id="helpId" class="text-[12px] leading-4 text-text-muted">{{ help }}</p>
+    <p v-if="error" :id="helpId" role="alert" class="text-ui-sm leading-4 text-danger-text">{{ error }}</p>
+    <p v-else-if="help" :id="helpId" class="text-ui-sm leading-4 text-text-muted">{{ help }}</p>
   </div>
 </template>

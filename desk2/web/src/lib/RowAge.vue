@@ -9,5 +9,5 @@ const now = useClock(30_000)
 </script>
 
 <template>
-  <span class="shrink-0 text-[12px] leading-4 text-text-muted tnum">{{ relativeTime(at, now) }}</span>
+  <span class="shrink-0 text-ui-sm leading-4 text-text-muted tnum">{{ relativeTime(at, now) }}</span>
 </template>

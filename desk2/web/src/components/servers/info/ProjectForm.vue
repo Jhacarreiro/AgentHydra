@@ -64,7 +64,7 @@ async function remove() {
           </template>
         </Field>
         <div class="flex flex-col gap-1.5">
-          <span class="text-[12px] font-medium leading-4 text-text-2">Color</span>
+          <span class="text-ui-sm font-medium leading-4 text-text-2">Color</span>
           <ColorPicker v-model="color" label="Project color" />
         </div>
       </FormSection>
@@ -76,8 +76,8 @@ async function remove() {
       <FormSection title="Danger zone" tone="danger">
         <div class="flex flex-wrap items-center gap-3">
           <div class="flex min-w-0 flex-1 flex-col gap-0.5">
-            <span class="text-[13px] leading-5 text-text">Remove this project</span>
-            <span class="text-[12px] leading-4 text-text-muted">Stops the servers AgentHydra started for it and takes it off the list. Its .devwebui file is kept.</span>
+            <span class="text-ui leading-5 text-text">Remove this project</span>
+            <span class="text-ui-sm leading-4 text-text-muted">Stops the servers AgentHydra started for it and takes it off the list. Its .devwebui file is kept.</span>
           </div>
           <button type="button" :class="BTN_DANGER" @click="removing = true">Remove project…</button>
         </div>
@@ -85,7 +85,7 @@ async function remove() {
     </div>
 
     <div class="sticky bottom-0 mt-auto flex flex-wrap items-center gap-2 border-t border-border bg-bg-page/95 px-4 py-3 backdrop-blur">
-      <p v-if="error" role="alert" class="min-w-0 flex-1 text-[12px] leading-4 text-danger-text">{{ error }}</p>
+      <p v-if="error" role="alert" class="min-w-0 flex-1 text-ui-sm leading-4 text-danger-text">{{ error }}</p>
       <span v-else class="flex-1" />
       <button type="button" :class="BTN_GHOST" @click="emit('cancel')">Cancel</button>
       <button type="submit" :class="BTN_PRIMARY" :disabled="saving">Save</button>

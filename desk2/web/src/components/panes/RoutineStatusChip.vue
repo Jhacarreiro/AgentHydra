@@ -18,7 +18,7 @@ const icon = computed(() => ICON[props.status])
 </script>
 
 <template>
-  <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-fill-5 px-2 py-0.5 text-[12px] leading-4 shadow-[inset_0_0_0_1px_var(--border)]" :style="{ color: COLOR[status] }">
+  <span class="inline-flex shrink-0 items-center gap-1 rounded-full bg-fill-5 px-2 py-0.5 text-ui-sm leading-4 shadow-[inset_0_0_0_1px_var(--border)]" :style="{ color: COLOR[status] }">
     <component :is="icon" class="size-3.5" :class="status === 'running' ? 'animate-spin' : ''" aria-hidden="true" />
     {{ STATUS_LABEL[status] }}
   </span>

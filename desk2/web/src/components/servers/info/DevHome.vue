@@ -31,8 +31,8 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
     <section class="flex flex-wrap items-end gap-3">
       <div class="min-w-0 flex-1">
         <h2 class="text-[20px] font-semibold leading-7 text-text">Dev servers</h2>
-        <p class="text-[13px] leading-5 text-text-muted">The projects AgentHydra runs, and their servers. Pick one to see it.</p>
-        <p v-if="servers.refreshing.value" class="text-[12px] leading-4 text-text-muted">Refreshing…</p>
+        <p class="text-ui leading-5 text-text-muted">The projects AgentHydra runs, and their servers. Pick one to see it.</p>
+        <p v-if="servers.refreshing.value" class="text-ui-sm leading-4 text-text-muted">Refreshing…</p>
       </div>
       <button type="button" :class="BTN" @click="servers.select({ kind: 'add' })"><Plus class="size-3.5" aria-hidden="true" />Add project</button>
     </section>
@@ -69,7 +69,7 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
           <h3 class="min-w-0">
             <button
               type="button"
-              class="max-w-full cursor-default truncate rounded-(--radius-5) px-1 text-[14px] font-medium leading-5 text-text transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+              class="max-w-full cursor-default truncate rounded-(--radius-5) px-1 text-ui-lg font-medium leading-5 text-text transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               :aria-label="`${g.project.name} details`"
               @click="servers.select({ kind: 'project', id: g.project.id })"
             >{{ g.project.name }}</button>
@@ -87,7 +87,7 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
           <ServerRows :processes="starredFirst(g.servers)" />
         </Card>
         <Card v-else>
-          <p class="text-[13px] leading-5 text-text-muted">No servers in this project yet. Open it to add one.</p>
+          <p class="text-ui leading-5 text-text-muted">No servers in this project yet. Open it to add one.</p>
         </Card>
       </section>
     </template>

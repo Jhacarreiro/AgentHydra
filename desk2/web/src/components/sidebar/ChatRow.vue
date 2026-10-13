@@ -111,7 +111,7 @@ defineExpose({ startRename })
             ref="input"
             v-model="draft"
             aria-label="Rename session"
-            class="h-5 min-w-0 flex-1 rounded-sm bg-bg-deepest px-1 text-[13px] text-text outline-none ring-1 ring-accent"
+            class="h-5 min-w-0 flex-1 rounded-sm bg-bg-deepest px-1 text-ui text-text outline-none ring-1 ring-accent"
             @click.stop
             @keydown.enter.stop="commitRename"
             @keydown.escape.stop="renaming = false"
@@ -122,8 +122,8 @@ defineExpose({ startRename })
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->
           <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (account !== null || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-[12px] leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
-            <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ account }}</span>
+          <span v-if="!renaming && (account !== null || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+            <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ account }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
@@ -138,7 +138,7 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
-          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',
@@ -178,7 +178,7 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
-          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-[13px] leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
+          class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
             selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
             menuOpen && !selected ? 'bg-fill-hover' : '',

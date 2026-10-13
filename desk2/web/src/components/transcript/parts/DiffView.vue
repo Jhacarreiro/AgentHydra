@@ -12,7 +12,7 @@ const shown = computed(() => (ctx.isOpen(key.value) ? rows.value : rows.value.sl
 </script>
 
 <template>
-  <div class="code-scroll overflow-x-auto font-mono text-[12px] leading-4.75">
+  <div class="code-scroll overflow-x-auto font-mono text-ui-sm leading-4.75">
     <table class="w-full border-collapse">
       <tbody>
         <template v-for="(l, i) in shown" :key="i">
@@ -39,7 +39,7 @@ const shown = computed(() => (ctx.isOpen(key.value) ? rows.value : rows.value.sl
         </template>
       </tbody>
     </table>
-    <div v-if="rows.length > limit" class="border-t border-border px-3 py-1 text-[12px] text-text-muted">
+    <div v-if="rows.length > limit" class="border-t border-border px-3 py-1 text-ui-sm text-text-muted">
       <button type="button" class="text-text-muted hover:text-text" @click="ctx.toggle(key)">
         {{ ctx.isOpen(key) ? 'Show less' : `Show all (${rows.length} lines)` }}
       </button>

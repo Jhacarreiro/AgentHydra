@@ -89,8 +89,8 @@ const selectSession = (session: ExternalSession) => {
     <!-- Header -->
     <div class="px-4 py-3 border-b border-(--border)">
       <div class="flex items-center gap-2 mb-2">
-        <h2 class="text-[13px] font-medium">Elsewhere</h2>
-        <span v-if="workingCount > 0" class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-[11px] leading-4 text-(--text-2)">
+        <h2 class="text-ui font-medium">Elsewhere</h2>
+        <span v-if="workingCount > 0" class="rounded-(--radius-4) bg-(--fill-secondary) px-1 text-2xs leading-4 text-(--text-2)">
           {{ workingCount }} working
         </span>
       </div>
@@ -100,7 +100,7 @@ const selectSession = (session: ExternalSession) => {
           v-model="searchQuery"
           type="text"
           placeholder="Search sessions..."
-          class="w-full ps-8 pe-3 py-1.5 bg-(--fill-5) rounded-(--radius-6) text-[13px] text-(--text) shadow-[inset_0_0_0_1px_var(--border)] placeholder:text-(--text-muted) focus:outline-none focus:shadow-(--shadow-composer-focus)"
+          class="w-full ps-8 pe-3 py-1.5 bg-(--fill-5) rounded-(--radius-6) text-ui text-(--text) shadow-[inset_0_0_0_1px_var(--border)] placeholder:text-(--text-muted) focus:outline-none focus:shadow-(--shadow-composer-focus)"
         />
       </div>
     </div>
@@ -116,21 +116,21 @@ const selectSession = (session: ExternalSession) => {
         >
           <!-- Title with status -->
           <div class="flex items-center gap-2 mb-1">
-            <span class="text-[13px] font-medium truncate">{{ session.title }}</span>
-            <span :class="statusColor(session.status)" class="text-[12px] font-medium whitespace-nowrap">
+            <span class="text-ui font-medium truncate">{{ session.title }}</span>
+            <span :class="statusColor(session.status)" class="text-ui-sm font-medium whitespace-nowrap">
               {{ session.status }}
             </span>
           </div>
 
           <!-- Metadata row -->
-          <div class="flex items-center gap-2 text-[12px] text-(--text-muted)">
+          <div class="flex items-center gap-2 text-ui-sm text-(--text-muted)">
             <span v-if="session.source" class="shrink-0">{{ sourceIcon(session.source) }}</span>
             <span v-if="session.instance" class="shrink-0">{{ session.instance }}</span>
             <span v-if="session.cwd" class="truncate text-(--text-muted)">{{ session.cwd }}</span>
           </div>
 
           <!-- Activity and time -->
-          <div class="flex items-center gap-2 text-[12px] text-(--text-muted) mt-1">
+          <div class="flex items-center gap-2 text-ui-sm text-(--text-muted) mt-1">
             <span v-if="session.activity" class="truncate">{{ session.activity }}</span>
             <span v-if="session.lastActivityAt" class="shrink-0">{{ time }}</span>
           </div>
@@ -140,8 +140,8 @@ const selectSession = (session: ExternalSession) => {
       <!-- Empty state -->
       <div v-else class="flex items-center justify-center h-full text-(--text-muted)">
         <div class="text-center">
-          <p class="text-[13px] font-medium">{{ searchQuery ? 'No sessions found' : 'No sessions' }}</p>
-          <p class="text-[12px]">{{ searchQuery ? 'Try a different search' : 'No Claude Desktop, CLI, or other sessions running elsewhere' }}</p>
+          <p class="text-ui font-medium">{{ searchQuery ? 'No sessions found' : 'No sessions' }}</p>
+          <p class="text-ui-sm">{{ searchQuery ? 'Try a different search' : 'No Claude Desktop, CLI, or other sessions running elsewhere' }}</p>
         </div>
       </div>
     </div>

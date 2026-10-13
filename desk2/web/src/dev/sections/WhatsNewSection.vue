@@ -29,7 +29,7 @@ function show() {
 
 <template>
   <div class="flex flex-col gap-3">
-    <h3 class="text-[13px] font-semibold text-text">What's new</h3>
+    <h3 class="text-ui font-semibold text-text">What's new</h3>
     <div>
       <Button size="sm" @click="show">Show the pop-up</Button>
     </div>

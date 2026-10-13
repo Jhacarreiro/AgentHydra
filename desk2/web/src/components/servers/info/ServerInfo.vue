@@ -206,7 +206,7 @@ function tabKey(e: KeyboardEvent) {
   requestAnimationFrame(() => (bar?.querySelector('[aria-selected="true"]') as HTMLElement | null)?.focus())
 }
 const setTab = (t: ServerTab) => (serverTab.value = t)
-const MENU_ITEM = 'text-[13px]'
+const MENU_ITEM = 'text-ui'
 </script>
 
 <template>
@@ -225,7 +225,7 @@ const MENU_ITEM = 'text-[13px]'
         <div class="flex min-w-0 flex-1 flex-col gap-1">
           <div class="flex min-w-0 flex-wrap items-center gap-x-2 gap-y-1">
             <h2 class="min-w-0 truncate text-[17px] font-semibold leading-6 text-text">{{ p.name }}</h2>
-            <span class="inline-flex h-5.5 shrink-0 items-center gap-1.5 rounded-full px-2 text-[12px] font-medium leading-4" :class="TONE_BG[tone]" role="status">
+            <span class="inline-flex h-5.5 shrink-0 items-center gap-1.5 rounded-full px-2 text-ui-sm font-medium leading-4" :class="TONE_BG[tone]" role="status">
               <span class="size-1.5 rounded-full bg-current" :class="tone === 'warning' && 'animate-pulse motion-reduce:animate-none'" aria-hidden="true" />
               {{ statusText }}
             </span>
@@ -233,7 +233,7 @@ const MENU_ITEM = 'text-[13px]'
               <span :class="CHIP">Started outside</span>
             </Tip>
           </div>
-          <div class="flex min-w-0 items-center gap-1 text-[12px] leading-5">
+          <div class="flex min-w-0 items-center gap-1 text-ui-sm leading-5">
             <template v-if="address">
               <Tip :label="address"><a :href="address" target="_blank" rel="noopener" class="min-w-0 truncate font-mono text-accent-text hover:underline">{{ address }}</a></Tip>
               <Tip :label="copied === 'address' ? 'Copied' : 'Copy the address'">
@@ -280,7 +280,7 @@ const MENU_ITEM = 'text-[13px]'
             <DropdownMenuItem :class="[MENU_ITEM, 'text-danger-text']" @select="deleting = true">Delete server…</DropdownMenuItem>
           </DropdownMenuContent>
         </DropdownMenu>
-        <span v-if="copied === 'command'" role="status" class="text-[12px] text-text-muted">Copied the command.</span>
+        <span v-if="copied === 'command'" role="status" class="text-ui-sm text-text-muted">Copied the command.</span>
       </div>
     </header>
 
@@ -348,8 +348,8 @@ const MENU_ITEM = 'text-[13px]'
 
       <section class="flex flex-col gap-2.5" aria-label="Resources">
         <div class="flex items-baseline gap-2 px-0.5">
-          <h3 class="text-[13px] font-medium leading-5 text-text">Resources</h3>
-          <span class="text-[12px] leading-4 text-text-muted">Its whole process tree, {{ spanWords }}</span>
+          <h3 class="text-ui font-medium leading-5 text-text">Resources</h3>
+          <span class="text-ui-sm leading-4 text-text-muted">Its whole process tree, {{ spanWords }}</span>
         </div>
         <div class="grid gap-2.5 @[540px]:grid-cols-2">
           <MetricCard

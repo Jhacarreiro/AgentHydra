@@ -173,7 +173,7 @@ if (view) {
       <button
         v-else-if="!view && frameSrc && proc"
         type="button"
-        class="absolute bottom-2 right-2 flex h-6 items-center rounded-(--radius-6) bg-(--bg-popover) px-2 text-[12px] text-(--text) opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-60 hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+        class="absolute bottom-2 right-2 flex h-6 items-center rounded-(--radius-6) bg-(--bg-popover) px-2 text-ui-sm text-(--text) opacity-80 shadow-(--shadow-menu-ringed) transition-opacity duration-60 hover:opacity-100 focus-visible:opacity-100 focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
         :aria-pressed="viaManager"
         @click="viaManager = !viaManager"
       >{{ viaManager ? 'Show directly' : 'Blank? Show through the server manager' }}</button>

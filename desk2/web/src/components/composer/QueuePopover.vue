@@ -113,7 +113,7 @@ function onCloseFocus(e: Event) {
           <div class="min-w-0 flex-1">
             <span
               v-if="row.chip"
-              class="inline-block max-w-full truncate rounded-(--radius-4) bg-(--fill-secondary) px-1 align-top text-[11px] leading-4 text-(--text-2)"
+              class="inline-block max-w-full truncate rounded-(--radius-4) bg-(--fill-secondary) px-1 align-top text-2xs leading-4 text-(--text-2)"
             >{{ row.chip }}</span>
             <template v-if="editing === row.item.id">
               <textarea
@@ -121,13 +121,13 @@ function onCloseFocus(e: Event) {
                 v-model="draft"
                 rows="3"
                 aria-label="Edit queued message"
-                class="block w-full resize-none rounded-(--radius-6) bg-(--bg-page) px-1.5 py-1 text-[13px] leading-4.75 text-(--text) outline-none"
+                class="block w-full resize-none rounded-(--radius-6) bg-(--bg-page) px-1.5 py-1 text-ui leading-4.75 text-(--text) outline-none"
                 @keydown="onEditKey($event, row.item)"
               />
-              <p class="text-[12px] leading-4 text-(--text-muted)">Enter saves, Shift+Enter adds a line, Esc cancels</p>
+              <p class="text-ui-sm leading-4 text-(--text-muted)">Enter saves, Shift+Enter adds a line, Esc cancels</p>
             </template>
             <p v-else class="line-clamp-2 whitespace-pre-wrap wrap-break-word">{{ row.text }}</p>
-            <p v-if="row.images || row.badge" class="flex gap-1.5 text-[12px] leading-4 text-(--text-muted)">
+            <p v-if="row.images || row.badge" class="flex gap-1.5 text-ui-sm leading-4 text-(--text-muted)">
               <span v-if="row.images" class="shrink-0">{{ row.images }}</span>
               <span v-if="row.badge" class="min-w-0" :class="row.badge.tone === 'warn' ? 'text-(--warning-text)' : ''">
                 {{ row.badge.label }}{{ row.badge.reason ? `: ${row.badge.reason}` : '' }}
@@ -146,7 +146,7 @@ function onCloseFocus(e: Event) {
         </li>
       </ul>
 
-      <p v-if="error" class="px-2 pb-0.5 pt-1 text-[12px] text-(--warning-text)" role="alert">{{ error }}</p>
+      <p v-if="error" class="px-2 pb-0.5 pt-1 text-ui-sm text-(--warning-text)" role="alert">{{ error }}</p>
     </div>
   </PopoverContent>
 </template>

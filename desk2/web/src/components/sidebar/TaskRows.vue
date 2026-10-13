@@ -80,7 +80,7 @@ const hot = ref<string | null>(null)
       type="button"
       :title="hot === key ? tip(n.worker, status, now) : base"
       :aria-current="own && selectedId === own ? 'page' : undefined"
-      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) pe-1 text-start text-[12px] leading-4 transition-colors duration-(--dur-fast)"
+      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) pe-1 text-start text-ui-sm leading-4 transition-colors duration-(--dur-fast)"
       :class="own && selectedId === own ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover'"
       :style="{ paddingInlineStart: `${4 + (n.depth - 1) * 14}px` }"
       @click="emit('open', n.worker)"
@@ -104,23 +104,23 @@ const hot = ref<string | null>(null)
         </span>
       </Tip>
       <!-- Its account, in that account's colour (account-tone.ts). -->
-      <span v-if="n.worker.account" class="shrink-0 text-[11px] tnum" :style="{ color: accountTone(n.worker.account) ?? undefined }">{{ n.worker.account }}</span>
-      <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-[11px] text-text-muted">{{ modelName(n.worker.model) }}</span>
-      <span class="shrink-0 text-[11px] text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
+      <span v-if="n.worker.account" class="shrink-0 text-2xs tnum" :style="{ color: accountTone(n.worker.account) ?? undefined }">{{ n.worker.account }}</span>
+      <span v-if="n.worker.model" class="max-w-[38%] shrink-0 truncate text-2xs text-text-muted">{{ modelName(n.worker.model) }}</span>
+      <span class="shrink-0 text-2xs text-text-muted tnum">{{ elapsedLabel(n.worker.startedAt, now) }}</span>
     </button>
     <button
       v-for="j in props.jobs ?? []"
       :key="`swarm:${j.id}`"
       type="button"
       :title="jobTip(j)"
-      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) ps-1 pe-1 text-start text-[12px] leading-4 text-text-2 transition-colors duration-(--dur-fast) hover:bg-fill-hover"
+      class="flex h-5.5 w-full min-w-0 cursor-default items-center gap-1 rounded-e-(--radius-6) ps-1 pe-1 text-start text-ui-sm leading-4 text-text-2 transition-colors duration-(--dur-fast) hover:bg-fill-hover"
       @click="emit('open-job', j)"
     >
       <!-- A running job's network mark is the sidebar's one blue, pulsing slowly (owner, 2026-10-05: "a slow blue pulsing icon"). -->
       <Network class="size-3 shrink-0" :class="j.active ? runPulse('blue') : j.tasks.failed ? 'text-danger-text' : 'text-text-muted'" aria-hidden="true" />
       <span class="sr-only">HSwarm job, {{ j.status }}:</span>
       <span class="min-w-0 flex-1 truncate">{{ j.title }}</span>
-      <span class="shrink-0 text-[11px] text-text-muted tnum">{{ j.tasks.done }}/{{ j.tasks.total }}</span>
+      <span class="shrink-0 text-2xs text-text-muted tnum">{{ j.tasks.done }}/{{ j.tasks.total }}</span>
     </button>
   </TransitionGroup>
 </template>

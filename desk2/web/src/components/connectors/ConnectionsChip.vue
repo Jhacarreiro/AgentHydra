@@ -103,14 +103,14 @@ watch(
     <DropdownMenuTrigger as-child>
       <button
         type="button"
-        class="ms-1 flex h-5 min-w-6 max-w-45 shrink cursor-default items-center gap-1 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
+        class="ms-1 flex h-5 min-w-6 max-w-45 shrink cursor-default items-center gap-1 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         :class="text.muted ? 'text-text-muted' : 'text-text-2'"
         :aria-label="`Connections workspace: ${text.text}${text.pinned ? ', this chat only' : ''}`"
       >
         <img v-if="!logoFailed" :src="CONNECTIONS_LOGO_URL" alt="" class="size-3.5 shrink-0" @error="logoFailed = true" />
         <component :is="settingsIcons.connections" v-else class="size-3.5 shrink-0" />
         <span class="min-w-0 truncate">{{ text.text }}</span>
-        <span v-if="text.pinned" class="min-w-0 truncate rounded-(--radius-6) bg-(--fill-secondary) px-1 text-[10px] leading-3.5 text-text-muted">this chat</span>
+        <span v-if="text.pinned" class="min-w-0 truncate rounded-(--radius-6) bg-(--fill-secondary) px-1 text-3xs leading-3.5 text-text-muted">this chat</span>
       </button>
     </DropdownMenuTrigger>
     <DropdownMenuContent align="start" :collision-padding="8" :class="[MENU_CONTENT, 'flex w-64 flex-col']" @open-auto-focus="focusSearch" @keydown.capture="contentKey">
@@ -154,7 +154,7 @@ watch(
             </Tip>
             <span class="flex size-4 items-center justify-center"><component :is="icons.check" v-if="isCurrent(ws, c)" /></span>
           </DropdownMenuItem>
-          <p v-if="!matches.length" class="flex h-6 items-center px-2 text-[13px] leading-4.75 text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>
+          <p v-if="!matches.length" class="flex h-6 items-center px-2 text-ui leading-4.75 text-text-muted">{{ loaded ? 'No workspace matches' : 'Loading workspaces…' }}</p>
         </div>
         <DropdownMenuItem v-if="showNone" :class="MENU_ITEM" :disabled="busy" @select="pick(null)">
           <span class="flex-1">No workspace</span>
@@ -163,14 +163,14 @@ watch(
       </template>
       <template v-if="bypass">
         <DropdownMenuSeparator :class="MENU_SEPARATOR" />
-        <DropdownMenuItem :class="[MENU_ITEM, 'ps-5 text-[12px] text-text-2']" :title="BYPASS_TIP" @select="openStudio">
+        <DropdownMenuItem :class="[MENU_ITEM, 'ps-5 text-ui-sm text-text-2']" :title="BYPASS_TIP" @select="openStudio">
           <span class="flex-1">{{ bypass.label }}</span>
           <span class="flex items-center gap-1" :class="bypass.on ? 'text-text-2' : 'text-text-muted'">
             <component :is="icons.check" v-if="bypass.on" class="size-3.5" />{{ bypass.value }}
           </span>
         </DropdownMenuItem>
       </template>
-      <p v-if="note" role="status" class="max-w-72 px-2 py-1 text-[12px] leading-4 text-text-muted">{{ note }}</p>
+      <p v-if="note" role="status" class="max-w-72 px-2 py-1 text-ui-sm leading-4 text-text-muted">{{ note }}</p>
     </DropdownMenuContent>
   </DropdownMenu>
     </span>

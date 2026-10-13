@@ -234,21 +234,21 @@ function open() {
           v-if="gone"
           class="absolute inset-0 flex flex-col items-center justify-center gap-1.5 bg-[color-mix(in_srgb,var(--bg-picture)_80%,transparent)] px-4 text-center text-text-muted"
         >
-          <span class="text-[13px]">{{ ownChrome ? 'Tab closed' : 'Browser closed' }}</span>
-          <span v-if="shownUrl" class="max-w-full truncate font-mono text-[12px]">{{ shownUrl }}</span>
+          <span class="text-ui">{{ ownChrome ? 'Tab closed' : 'Browser closed' }}</span>
+          <span v-if="shownUrl" class="max-w-full truncate font-mono text-ui-sm">{{ shownUrl }}</span>
         </span>
         <span v-else-if="!picture" class="flex size-full flex-col items-center justify-center gap-1 text-text-muted">
           <Monitor v-if="ownChrome" class="size-5" aria-hidden="true" />
           <Globe v-else class="size-5" aria-hidden="true" />
-          <span v-if="ownChrome" class="text-[12px]">{{ YOUR_CHROME }}</span>
-          <span v-if="host" class="max-w-[90%] truncate text-[12px]">{{ host }}</span>
-          <span v-if="ownChrome" class="mt-0.5 max-w-[90%] truncate rounded-full bg-black/10 px-2 py-0.5 text-[12px] text-text">{{ ownAction }}</span>
+          <span v-if="ownChrome" class="text-ui-sm">{{ YOUR_CHROME }}</span>
+          <span v-if="host" class="max-w-[90%] truncate text-ui-sm">{{ host }}</span>
+          <span v-if="ownChrome" class="mt-0.5 max-w-[90%] truncate rounded-full bg-black/10 px-2 py-0.5 text-ui-sm text-text">{{ ownAction }}</span>
         </span>
-        <span v-if="gone" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">× Closed</span>
-        <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-[11px] text-white/85">Page closed</span>
+        <span v-if="gone" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-2xs text-white/85">× Closed</span>
+        <span v-else-if="past" class="absolute left-1.5 top-1.5 rounded bg-black/55 px-1.5 text-2xs text-white/85">Page closed</span>
         <Tip :label="`${info.verb}${info.url ? ' ' + info.url : ''}`">
         <span
-          class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-[12px] text-white opacity-35 transition-opacity duration-120 hover:opacity-100 group-focus-visible/open:opacity-100"
+          class="absolute inset-x-0 bottom-0 flex min-w-0 items-center gap-1.5 bg-[linear-gradient(to_top,rgb(0_0_0/0.78),transparent)] px-2.5 pb-1.5 pt-5 text-ui-sm text-white opacity-35 transition-opacity duration-120 hover:opacity-100 group-focus-visible/open:opacity-100"
         >
           <Tip v-if="live" label="Live">
             <span class="size-1.5 shrink-0 animate-pulse rounded-full bg-success" />
@@ -257,7 +257,7 @@ function open() {
           <Globe v-else class="size-3.5 shrink-0" aria-hidden="true" />
           <span class="min-w-0 truncate">{{ shownUrl && !gone ? shownUrl : ownChrome ? ownAction : info.verb }}</span>
           <Tip :label="ownChrome ? 'Your own Chrome window' : info.profile">
-            <span class="shrink-0 rounded bg-white/20 px-1.5 text-[11px]">{{ chip }}</span>
+            <span class="shrink-0 rounded bg-white/20 px-1.5 text-2xs">{{ chip }}</span>
           </Tip>
           <!-- Room for the count and status drawn over this end: the address truncates before the chip meets them. -->
           <span class="invisible flex shrink-0 items-center gap-1.5 tabular-nums" aria-hidden="true">
@@ -270,7 +270,7 @@ function open() {
       </component>
       </Tip>
       <!-- Over the caption's right end, not inside its button: the count and status, with Copy the calls on hover. -->
-      <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-[12px] text-white">
+      <span class="pointer-events-none absolute bottom-0 right-0 flex items-center px-2.5 pb-1.5 text-ui-sm text-white">
         <span class="group/calls pointer-events-auto flex items-center gap-1.5 tabular-nums opacity-35 transition-opacity duration-120 focus-within:opacity-100 hover:opacity-100">
           <Tip :label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'">
             <button
@@ -280,7 +280,7 @@ function open() {
               :aria-label="count > 1 ? `Copy the ${count} calls` : 'Copy the call'"
               @click="copyCalls"
             >
-              <span v-if="copied" class="flex items-center gap-1 text-[11px]"><Check class="size-3" aria-hidden="true" />Copied</span>
+              <span v-if="copied" class="flex items-center gap-1 text-2xs"><Check class="size-3" aria-hidden="true" />Copied</span>
               <Copy v-else class="size-3" aria-hidden="true" />
             </button>
           </Tip>
@@ -301,7 +301,7 @@ function open() {
     </Tip>
     <!-- A failure in words, at most two lines: the headline in the danger colour, its hint muted; the full text on hover. -->
     <Tip v-if="error" :label="[error.headline, error.hint].filter(Boolean).join(' — ')">
-      <p class="mt-1 line-clamp-2 min-w-0 wrap-break-word px-1 text-[12px]">
+      <p class="mt-1 line-clamp-2 min-w-0 wrap-break-word px-1 text-ui-sm">
         <span class="text-danger-text">{{ error.headline }}</span>
         <span v-if="error.hint" class="text-text-muted"> — {{ error.hint }}</span>
       </p>

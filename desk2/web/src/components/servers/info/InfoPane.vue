@@ -166,7 +166,7 @@ function afterDelete() {
 <template>
   <section class="flex h-full min-h-0 min-w-0 flex-1 flex-col bg-bg-page" :aria-label="sel ? 'Server details' : 'Dev servers overview'">
     <!-- The window's title row when it draws its own (lib/host-window.ts): it drags the window, and keeps clear of its buttons. -->
-    <header class="title-drag flex h-10.25 shrink-0 items-center gap-1 border-b border-border pe-[calc(0.5rem+var(--caption-w))] text-[13px]" :style="{ paddingInlineStart: `${padLeft}px` }">
+    <header class="title-drag flex h-10.25 shrink-0 items-center gap-1 border-b border-border pe-[calc(0.5rem+var(--caption-w))] text-ui" :style="{ paddingInlineStart: `${padLeft}px` }">
       <Tip v-if="showBack" label="Back">
         <button type="button" :class="ICON_BTN" aria-label="Back" @click="back"><ChevronLeft class="size-4" /></button>
       </Tip>
@@ -196,7 +196,7 @@ function afterDelete() {
     </header>
 
     <!-- One centered column, capped so a wide window does not stretch the cards; each view fills its height (a form's Save bar sticks to the bottom). -->
-    <div ref="body" class="relative min-h-0 flex-1 overflow-y-auto text-[13px] leading-5 text-text">
+    <div ref="body" class="relative min-h-0 flex-1 overflow-y-auto text-ui leading-5 text-text">
       <div class="@container mx-auto flex min-h-full w-full max-w-240 flex-col *:flex-1">
         <p v-if="down && (!sel || sel.kind === 'server' || sel.kind === 'project')" role="status" class="p-4 text-text-muted">
           <template v-if="state === 'starting'">Starting the dev-servers service…</template>

@@ -89,7 +89,7 @@ const maxModel = computed(() => Math.max(1, ...models.value.map((m) => m.session
 // place and folds them again (owner, 2026-10-05: "it gets really, really long"; foldModels in stats.ts).
 const modelFold = computed(() => foldModels(models.value))
 const moreModels = ref(false)
-const MODEL_ROW = 'relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-[13px] leading-[19px]'
+const MODEL_ROW = 'relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-ui leading-[19px]'
 
 const footer = computed(() => {
   if (home.value) return homeFooter(home.value)
@@ -100,7 +100,7 @@ const footerTitle = computed(() => (home.value ? undefined : failed[range.value]
 
 const SOURCE_COLS = 'grid grid-cols-[minmax(0,1fr)_52px_56px_64px] items-center gap-x-2 px-1.5'
 
-const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-[12px] leading-4'
+const CHIP = 'flex h-5 cursor-default items-center rounded-[var(--radius-5)] px-1.5 text-ui-sm leading-4'
 const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text' : 'text-text-muted hover:text-text-2']
 </script>
 
@@ -122,24 +122,24 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
     <template v-if="tab === 'overview'">
       <div class="mt-5 grid grid-cols-3 gap-1">
         <Tip v-for="t in tiles" :key="t.label" :label="t.title ?? ''"><div class="flex h-11 min-w-0 flex-col justify-start rounded-(--radius-6) bg-(--fill-secondary) px-1 pt-[2.5px]">
-          <span class="truncate text-[12px] leading-4 text-text-muted">{{ t.label }}</span>
-          <span class="tnum truncate text-[13px] leading-4.75 text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
+          <span class="truncate text-ui-sm leading-4 text-text-muted">{{ t.label }}</span>
+          <span class="tnum truncate text-ui leading-4.75 text-text" :class="t.strong ? 'font-semibold' : ''">{{ t.value }}</span>
         </div></Tip>
       </div>
       <div v-if="sources.length" class="mt-1.5 flex flex-col gap-0.5">
-        <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-start text-[11px] leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
+        <button type="button" class="flex h-5 items-center gap-1 px-1.5 text-start text-2xs leading-4 text-text-muted hover:text-text-2" :aria-expanded="sourcesOpen" aria-controls="stats-sources" @click="toggleSources">
           <ChevronRight class="size-3 transition-transform" :class="sourcesOpen ? 'rotate-90' : ''" aria-hidden="true" />
           <span>Sources</span>
           <span class="tnum">{{ sources.length }}</span>
         </button>
         <div v-if="sourcesOpen" id="stats-sources" class="flex flex-col gap-0.5" role="table" aria-label="Sources">
-          <div role="row" :class="SOURCE_COLS" class="h-4 text-[11px] leading-4 text-text-muted">
+          <div role="row" :class="SOURCE_COLS" class="h-4 text-2xs leading-4 text-text-muted">
             <span role="columnheader">Source</span>
             <span role="columnheader" class="text-end">Sessions</span>
             <span role="columnheader" class="text-end">Tokens</span>
             <span role="columnheader" class="text-end">Cost</span>
           </div>
-          <Tip v-for="s in sources" :key="s.key" :label="s.title ?? ''"><div role="row" :class="SOURCE_COLS" class="relative h-5.5 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) text-[12px] leading-4">
+          <Tip v-for="s in sources" :key="s.key" :label="s.title ?? ''"><div role="row" :class="SOURCE_COLS" class="relative h-5.5 overflow-hidden rounded-(--radius-6) bg-(--fill-secondary) text-ui-sm leading-4">
             <span class="absolute bottom-0 left-0 h-0.5 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${s.share * 100}%` }" />
             <span role="cell" class="relative truncate text-text">{{ s.label }}</span>
             <span role="cell" class="tnum relative text-end text-text-2">{{ s.sessions }}</span>
@@ -160,7 +160,7 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
         <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
       </div>
       <template v-if="modelFold.rest.length">
-        <button type="button" class="flex h-7 items-center gap-1 rounded-(--radius-6) px-1.5 text-start text-[13px] leading-4.75 text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
+        <button type="button" class="flex h-7 items-center gap-1 rounded-(--radius-6) px-1.5 text-start text-ui leading-4.75 text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
           <ChevronRight class="size-3 shrink-0 transition-transform" :class="moreModels ? 'rotate-90' : ''" aria-hidden="true" />
           <span class="min-w-0 flex-1 truncate">+{{ modelFold.rest.length }} more</span>
           <span class="tnum">{{ percent(modelFold.restShare) }}</span>
@@ -173,10 +173,10 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
           </div>
         </div>
       </template>
-      <p v-if="!models.length" class="text-[12px] leading-4 text-text-muted">No sessions in this range yet.</p>
+      <p v-if="!models.length" class="text-ui-sm leading-4 text-text-muted">No sessions in this range yet.</p>
     </div>
 
-    <Tip :label="footerTitle ?? ''"><div class="mt-2 text-[11px] leading-4 text-text-muted">
+    <Tip :label="footerTitle ?? ''"><div class="mt-2 text-2xs leading-4 text-text-muted">
       <p v-for="line in footer" :key="line">{{ line }}</p>
     </div></Tip>
   </section>

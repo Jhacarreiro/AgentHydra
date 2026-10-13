@@ -98,23 +98,23 @@ const folder = (file: string) => {
 }
 const at = (f: DevWebSourceFrame) => `:${f.line}${f.column ? `:${f.column}` : ''}`
 const count = computed(() => list.value.length)
-const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-deepest p-3 font-mono text-[12px] leading-5 text-text-2'
+const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-deepest p-3 font-mono text-ui-sm leading-5 text-text-2'
 </script>
 
 <template>
   <div class="flex flex-col gap-4">
     <div v-if="count" class="flex min-h-8 flex-wrap items-center gap-2">
-      <span class="text-[13px] font-medium text-text tnum">{{ count }} {{ count === 1 ? 'error' : 'errors' }}</span>
-      <span class="text-[12px] text-text-muted">grouped by message</span>
+      <span class="text-ui font-medium text-text tnum">{{ count }} {{ count === 1 ? 'error' : 'errors' }}</span>
+      <span class="text-ui-sm text-text-muted">grouped by message</span>
       <span class="flex-1" />
       <template v-if="confirming">
-        <span class="text-[12px] text-text-2 tnum">Clear all {{ count }}?</span>
+        <span class="text-ui-sm text-text-2 tnum">Clear all {{ count }}?</span>
         <button type="button" :class="BTN_DANGER_SM" @click="clearAll">Clear</button>
         <button type="button" :class="BTN_GHOST_SM" @click="confirming = false">Keep</button>
       </template>
       <button v-else type="button" :class="BTN_GHOST" @click="confirming = true">Clear all</button>
     </div>
-    <p v-if="failure" role="alert" class="text-[12px] text-danger-text">{{ failure }}</p>
+    <p v-if="failure" role="alert" class="text-ui-sm text-danger-text">{{ failure }}</p>
 
     <EmptyState
       v-if="!count"
@@ -133,7 +133,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
         </div>
 
         <div class="flex flex-col gap-2">
-          <p class="wrap-break-word text-[13px] font-medium leading-5 text-danger-text">{{ title(e) }}</p>
+          <p class="wrap-break-word text-ui font-medium leading-5 text-danger-text">{{ title(e) }}</p>
           <template v-if="rest(e)">
             <pre :class="[CODE, expanded.has(e.fingerprint) ? '' : 'line-clamp-6']">{{ rest(e) }}</pre>
             <button v-if="isLong(rest(e))" type="button" :class="BTN_GHOST_SM" class="self-start" @click="toggleText(e.fingerprint)">
@@ -142,7 +142,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
           </template>
         </div>
 
-        <p class="flex items-center gap-1.5 text-[12px] text-text-muted">
+        <p class="flex items-center gap-1.5 text-ui-sm text-text-muted">
           <Clock class="size-3.5 shrink-0" aria-hidden="true" />
           <span>First seen {{ clockTime(e.firstSeen, now) }} · <Tip :label="clockTime(e.lastSeen, now)"><span>last seen {{ ago(e.lastSeen, now) }}</span></Tip></span>
         </p>
@@ -160,7 +160,7 @@ const CODE = 'whitespace-pre-wrap break-words rounded-[var(--radius-6)] bg-bg-de
             <Tip v-for="(f, j) in e.frames" :key="`${f.file}${at(f)}#${j}`" :label="`${f.file}${at(f)}`">
             <button
               type="button"
-              class="group flex min-h-8 min-w-0 cursor-default items-center gap-2 px-3 text-start text-[12px] hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+              class="group flex min-h-8 min-w-0 cursor-default items-center gap-2 px-3 text-start text-ui-sm hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
               :aria-label="`Open ${f.file}:${f.line} in the editor`"
               @click="jump(f)"
             >

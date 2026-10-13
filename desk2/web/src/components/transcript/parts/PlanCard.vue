@@ -53,23 +53,23 @@ async function respond(approve: boolean, mode?: PermissionMode) {
       <span class="shrink-0">{{ item.state === 'approved' ? 'Plan approved' : item.state === 'rejected' ? 'Kept planning' : 'Plan expired' }}</span>
       <span class="min-w-0 truncate text-text">{{ title }}</span>
     </button>
-    <div v-if="ctx.isOpen(openKey)" class="ms-2.75 mt-1 border-s border-border ps-4 text-[14px]">
+    <div v-if="ctx.isOpen(openKey)" class="ms-2.75 mt-1 border-s border-border ps-4 text-ui-lg">
       <MarkdownBlock :text="item.plan" />
     </div>
   </div>
 
-  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <ClipboardList class="size-4 shrink-0 text-warning-text" />
     <span class="shrink-0">Waiting for you</span>
     <span class="min-w-0 truncate text-text">{{ title }}</span>
   </div>
 
   <div v-else class="tx-ask" role="group" aria-label="Plan ready for review">
-    <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-[14px]">
+    <div class="flex items-center gap-2 border-b border-border px-3 py-2 text-ui-lg">
       <ClipboardList class="size-4 shrink-0 text-warning-text" />
       <span class="text-text">Ready to code? Here is the plan</span>
     </div>
-    <div class="max-h-[50vh] overflow-auto px-4 py-2 text-[14px]">
+    <div class="max-h-[50vh] overflow-auto px-4 py-2 text-ui-lg">
       <MarkdownBlock :text="item.plan" />
     </div>
     <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-2 border-t border-border px-3 py-2.5">
@@ -89,7 +89,7 @@ async function respond(approve: boolean, mode?: PermissionMode) {
         <button type="button" class="tx-btn tx-btn-primary" :disabled="busy" @click="respond(false)">Send</button>
         <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="revising = false">Cancel</button>
       </template>
-      <span v-if="err" class="text-[12px] text-danger-text">{{ err }}</span>
+      <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
   </div>
 </template>

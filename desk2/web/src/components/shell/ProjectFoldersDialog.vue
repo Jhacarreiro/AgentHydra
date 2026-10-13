@@ -38,37 +38,37 @@ async function setChoice(kind: ProjectChoiceKind, path: string, on: boolean): Pr
 <template>
   <Dialog :open="open" @update:open="(o: boolean) => emit('update:open', o)">
     <DialogContent :show-close-button="false" class="max-h-[80vh] gap-3 overflow-y-auto rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-120">
-      <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Manage folders</DialogTitle>
+      <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Manage folders</DialogTitle>
       <DialogDescription class="sr-only">The folders the New screen shows, its hidden projects, and the projects it found on its own, each with its action.</DialogDescription>
       <section v-for="section in sourceSections" :key="section.title" class="flex flex-col gap-1.5">
-        <h2 class="text-[12px] font-semibold leading-4 text-text-2">{{ section.title }} <span class="font-normal text-text-muted">{{ section.items.length }}</span></h2>
-        <p class="text-[11px] leading-4 text-text-muted">{{ section.hint }}</p>
-        <p v-if="!section.items.length" class="text-[12px] leading-4 text-text-muted">None yet.</p>
+        <h2 class="text-ui-sm font-semibold leading-4 text-text-2">{{ section.title }} <span class="font-normal text-text-muted">{{ section.items.length }}</span></h2>
+        <p class="text-2xs leading-4 text-text-muted">{{ section.hint }}</p>
+        <p v-if="!section.items.length" class="text-ui-sm leading-4 text-text-muted">None yet.</p>
         <details v-else :open="section.items.length <= 5">
-          <summary class="cursor-pointer text-[12px] leading-4 text-text-2">Show list</summary>
+          <summary class="cursor-pointer text-ui-sm leading-4 text-text-2">Show list</summary>
           <ul class="mt-1 flex flex-col gap-1">
             <li v-for="p in section.items" :key="p.path" class="flex min-w-0 items-center gap-2 rounded-(--radius-6) bg-fill-5 px-2 py-1">
               <span class="min-w-0 flex-1">
-                <span class="block truncate text-[12px] leading-4 text-text">{{ p.name }}</span>
+                <span class="block truncate text-ui-sm leading-4 text-text">{{ p.name }}</span>
                 <Tip :label="p.path">
-                  <span class="block truncate text-[11px] leading-4 text-text-muted">{{ p.path }}</span>
+                  <span class="block truncate text-2xs leading-4 text-text-muted">{{ p.path }}</span>
                 </Tip>
               </span>
-              <button type="button" class="h-6 shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-2 text-[12px] text-text hover:bg-(--fill-secondary-hover)" @click="setChoice('hidden', p.path, true)">Hide</button>
+              <button type="button" class="h-6 shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-2 text-ui-sm text-text hover:bg-(--fill-secondary-hover)" @click="setChoice('hidden', p.path, true)">Hide</button>
             </li>
           </ul>
         </details>
       </section>
       <section v-for="section in sections" :key="section.kind" class="flex flex-col gap-1.5">
-        <h2 class="text-[12px] font-semibold leading-4 text-text-2">{{ section.title }}</h2>
-        <p class="text-[11px] leading-4 text-text-muted">{{ section.hint }}</p>
-        <p v-if="!section.paths.length" class="text-[12px] leading-4 text-text-muted">None yet.</p>
+        <h2 class="text-ui-sm font-semibold leading-4 text-text-2">{{ section.title }}</h2>
+        <p class="text-2xs leading-4 text-text-muted">{{ section.hint }}</p>
+        <p v-if="!section.paths.length" class="text-ui-sm leading-4 text-text-muted">None yet.</p>
         <ul v-else class="flex flex-col gap-1">
           <li v-for="path in section.paths" :key="path" class="flex min-w-0 items-center gap-2 rounded-(--radius-6) bg-fill-5 px-2 py-1">
             <Tip :label="path">
-              <span class="min-w-0 flex-1 truncate text-[12px] leading-4 text-text">{{ path }}</span>
+              <span class="min-w-0 flex-1 truncate text-ui-sm leading-4 text-text">{{ path }}</span>
             </Tip>
-            <button type="button" class="h-6 shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-2 text-[12px] text-text hover:bg-(--fill-secondary-hover)" @click="setChoice(section.kind, path, false)">{{ section.action }}</button>
+            <button type="button" class="h-6 shrink-0 rounded-(--radius-6) bg-(--fill-secondary) px-2 text-ui-sm text-text hover:bg-(--fill-secondary-hover)" @click="setChoice(section.kind, path, false)">{{ section.action }}</button>
           </li>
         </ul>
       </section>

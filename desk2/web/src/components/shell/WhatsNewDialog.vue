@@ -53,7 +53,7 @@ function focusGotIt(event: Event) {
         </span>
         <div class="flex min-w-0 flex-1 flex-col gap-1">
           <DialogTitle class="text-[15px] font-semibold leading-5 text-text">{{ heading }}</DialogTitle>
-          <DialogDescription class="flex items-center gap-1.5 text-[12px] leading-4 text-text-muted">
+          <DialogDescription class="flex items-center gap-1.5 text-ui-sm leading-4 text-text-muted">
             <span v-if="whatsNew.updated" class="size-1.5 shrink-0 rounded-full bg-success" aria-hidden="true" />
             <span>{{ status }}</span>
           </DialogDescription>
@@ -62,7 +62,7 @@ function focusGotIt(event: Event) {
 
       <div class="flex flex-col gap-4 px-5 pb-4">
         <section v-for="(group, gi) in whatsNew.groups" :key="gi" class="flex flex-col gap-1.5">
-          <h2 class="text-[12px] font-semibold leading-4 text-text-2">
+          <h2 class="text-ui-sm font-semibold leading-4 text-text-2">
             {{ group.version ? `v${group.version}` : 'Unreleased' }}<span v-if="group.date" class="font-normal text-text-muted"> · {{ group.date }}</span>
           </h2>
           <ul class="flex flex-col gap-1">
@@ -74,7 +74,7 @@ function focusGotIt(event: Event) {
                 :disabled="!entry.detail"
                 @click="toggle(keyOf(gi, ei))"
               >
-                <span class="min-w-0 flex-1 text-[13px] leading-5 text-text">{{ entry.headline }}</span>
+                <span class="min-w-0 flex-1 text-ui leading-5 text-text">{{ entry.headline }}</span>
                 <ChevronDown
                   v-if="entry.detail"
                   class="mt-0.5 size-3.5 shrink-0 text-text-muted transition-transform duration-60"
@@ -82,19 +82,19 @@ function focusGotIt(event: Event) {
                   aria-hidden="true"
                 />
               </button>
-              <p v-if="entry.detail && expanded.has(keyOf(gi, ei))" class="px-2.5 pb-2 text-[12px] leading-5 text-text-2">{{ entry.detail }}</p>
+              <p v-if="entry.detail && expanded.has(keyOf(gi, ei))" class="px-2.5 pb-2 text-ui-sm leading-5 text-text-2">{{ entry.detail }}</p>
             </li>
           </ul>
         </section>
       </div>
 
       <footer class="flex items-center gap-3 border-t border-border px-5 py-3">
-        <a :href="CHANGELOG_URL" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-[12px] text-text-2 hover:text-text">
+        <a :href="CHANGELOG_URL" target="_blank" rel="noopener noreferrer" class="inline-flex items-center gap-1 text-ui-sm text-text-2 hover:text-text">
           Full changelog <ExternalLink class="size-3" aria-hidden="true" />
         </a>
         <span class="flex-1" />
-        <span class="text-[11px] text-text-muted">Esc to dismiss</span>
-        <button ref="gotIt" type="button" class="h-7 rounded-(--radius-6) bg-brand px-3 text-[12px] font-medium text-white hover:bg-brand-hover" @click="dismissWhatsNew">
+        <span class="text-2xs text-text-muted">Esc to dismiss</span>
+        <button ref="gotIt" type="button" class="h-7 rounded-(--radius-6) bg-brand px-3 text-ui-sm font-medium text-white hover:bg-brand-hover" @click="dismissWhatsNew">
           Got it
         </button>
       </footer>

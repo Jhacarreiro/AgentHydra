@@ -86,9 +86,9 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
       >
         <ChevronRight class="size-4 shrink-0 text-text-muted transition-transform" :class="open ? 'rotate-90' : ''" aria-hidden="true" />
         <component :is="KindIcon" class="size-4 shrink-0 text-text-2" aria-hidden="true" />
-        <span class="min-w-0 flex-1 truncate text-[13px] leading-5 text-text">{{ routine.name }}</span>
+        <span class="min-w-0 flex-1 truncate text-ui leading-5 text-text">{{ routine.name }}</span>
         <RoutineStatusChip :status="status" />
-        <span class="flex basis-full flex-wrap items-center gap-x-4 gap-y-0.5 ps-12 text-[12px] leading-4.5 text-text-muted">
+        <span class="flex basis-full flex-wrap items-center gap-x-4 gap-y-0.5 ps-12 text-ui-sm leading-4.5 text-text-muted">
           <span class="inline-flex items-center gap-1" :title="last ? stamp(last.endedAt) : 'never run'">
             <CircleCheck v-if="lastOutcome === 'ok'" class="size-3.5 text-success" aria-hidden="true" />
             <CircleAlert v-else-if="lastOutcome === 'failed'" class="size-3.5 text-danger-text" aria-hidden="true" />
@@ -112,27 +112,27 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
       />
     </div>
     <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
-      <div class="flex items-start gap-1.5 text-[12px] leading-4.5 text-text-2">
+      <div class="flex items-start gap-1.5 text-ui-sm leading-4.5 text-text-2">
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span class="wrap-break-word">{{ scheduleText }}<template v-if="routine.until"> · until {{ routine.until }}</template></span>
       </div>
-      <div class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
-      <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
-      <div v-if="totalsText" class="mt-0.5 tnum ps-5 text-[12px] leading-4.5 text-text-muted">{{ totalsText }}</div>
-      <div v-if="routine.what === 'prompt' && routine.cwd" class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">An AI prompt in {{ routine.cwd }}</div>
+      <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
+      <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
+      <div v-if="totalsText" class="mt-0.5 tnum ps-5 text-ui-sm leading-4.5 text-text-muted">{{ totalsText }}</div>
+      <div v-if="routine.what === 'prompt' && routine.cwd" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">An AI prompt in {{ routine.cwd }}</div>
       <dl v-if="settingRows.length" class="mt-2 grid gap-1">
-        <div v-for="[k, v] in settingRows" :key="k" class="flex items-baseline justify-between gap-4 text-[12px] leading-4.5">
+        <div v-for="[k, v] in settingRows" :key="k" class="flex items-baseline justify-between gap-4 text-ui-sm leading-4.5">
           <dt class="text-text-muted">{{ k }}</dt>
           <dd class="tnum truncate text-text-2">{{ String(v) }}</dd>
         </div>
       </dl>
-      <div class="mt-3 text-[12px] leading-4.5 text-text-2">Recent runs</div>
-      <div v-if="!routine.runs.length" class="text-[12px] leading-4.5 text-text-muted">No runs yet.</div>
+      <div class="mt-3 text-ui-sm leading-4.5 text-text-2">Recent runs</div>
+      <div v-if="!routine.runs.length" class="text-ui-sm leading-4.5 text-text-muted">No runs yet.</div>
       <ul v-else class="mt-1 grid gap-0.5">
         <li v-for="r in routine.runs.slice(0, 8)" :key="r.startedAt">
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-[12px] leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
+            class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
             :aria-expanded="openRuns.has(r.startedAt)"
             :disabled="!r.lastLine"
             @click="toggleRun(r.startedAt)"
@@ -144,7 +144,7 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
             <span class="tnum text-text-muted">{{ spanOf(r.endedAt - r.startedAt) }} · {{ r.outcome }}</span>
             <ChevronRight v-if="r.lastLine" class="ms-auto size-3.5 shrink-0 text-text-muted transition-transform" :class="openRuns.has(r.startedAt) ? 'rotate-90' : ''" aria-hidden="true" />
           </button>
-          <div v-if="openRuns.has(r.startedAt)" class="wrap-break-word ps-7 font-mono text-[12px] leading-4.5 text-text-muted">{{ r.lastLine }}</div>
+          <div v-if="openRuns.has(r.startedAt)" class="wrap-break-word ps-7 font-mono text-ui-sm leading-4.5 text-text-muted">{{ r.lastLine }}</div>
         </li>
       </ul>
       <div class="mt-3 flex flex-wrap gap-2">
@@ -153,6 +153,6 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
       </div>
     </div>
     <!-- Under the card, open or not: the row's own switch fails here too, and a closed card would hide it. -->
-    <div v-if="error" role="alert" class="wrap-break-word px-3 pb-2 text-[12px] leading-4.5 text-danger-text">{{ error }}</div>
+    <div v-if="error" role="alert" class="wrap-break-word px-3 pb-2 text-ui-sm leading-4.5 text-danger-text">{{ error }}</div>
   </div>
 </template>

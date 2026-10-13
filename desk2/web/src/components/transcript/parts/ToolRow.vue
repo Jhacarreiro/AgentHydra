@@ -41,7 +41,7 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
       <div class="bg-bg-panel" :class="step ? 'border-t border-border' : 'mb-1.5 ms-6.5 mt-0.5 overflow-hidden rounded-8 border border-border'">
         <!-- Bash: the command, its output, the exit state -->
         <template v-if="family === 'bash'">
-          <pre class="whitespace-pre-wrap wrap-break-word border-b border-border px-3 py-2 font-mono text-[12px] leading-4.75 text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
+          <pre class="whitespace-pre-wrap wrap-break-word border-b border-border px-3 py-2 font-mono text-ui-sm leading-4.75 text-text"><span class="select-none text-text-muted">$ </span>{{ command }}</pre>
           <OutputBlock
             v-if="item.result || item.progress"
             :id="item.id"
@@ -49,7 +49,7 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
             :error="item.result?.isError"
             :server-truncated="item.result?.truncated"
           />
-          <div class="flex items-center gap-2 border-t border-border px-3 py-1 font-mono text-[11px]">
+          <div class="flex items-center gap-2 border-t border-border px-3 py-1 font-mono text-2xs">
             <span :class="exit.ok === false ? 'text-danger-text' : exit.ok ? 'text-success-text' : 'text-text-muted'">{{ exit.label }}</span>
             <span v-if="item.input.description" class="truncate font-sans text-text-muted">{{ item.input.description }}</span>
           </div>
@@ -75,10 +75,10 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
         <!-- Everything else: input, then result -->
         <template v-else>
           <div v-if="showInput" class="border-b border-border">
-            <div class="px-3 pt-1.5 text-[12px] text-text-muted">Input</div>
+            <div class="px-3 pt-1.5 text-ui-sm text-text-muted">Input</div>
             <OutputBlock :id="`${item.id}:in`" :text="inputJson" :max-lines="20" />
           </div>
-          <div v-if="showInput" class="px-3 pt-1.5 text-[12px] text-text-muted">Result</div>
+          <div v-if="showInput" class="px-3 pt-1.5 text-ui-sm text-text-muted">Result</div>
           <ImageTiles v-if="item.result?.images?.length" :images="item.result.images" class="px-3 py-2" />
           <OutputBlock
             v-if="item.result && !pictureOnly"
@@ -88,7 +88,7 @@ const pictureOnly = computed(() => !!props.item.result?.images?.length && /^(\[i
             :server-truncated="item.result.truncated"
             :max-lines="family === 'read' ? 20 : 30"
           />
-          <div v-else class="px-3 py-2 text-[12px] text-text-muted">
+          <div v-else class="px-3 py-2 text-ui-sm text-text-muted">
             {{ item.status === 'running' ? item.progress || 'Running…' : item.status === 'denied' ? 'Denied' : 'No result' }}
           </div>
         </template>

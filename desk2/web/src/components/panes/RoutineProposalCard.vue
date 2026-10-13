@@ -59,29 +59,29 @@ async function act(body: { approve: string } | { discard: string }) {
     >
       <ChevronRight class="size-4 shrink-0 text-text-muted transition-transform" :class="open ? 'rotate-90' : ''" aria-hidden="true" />
       <component :is="proposal.prompt !== undefined ? MessageSquare : Repeat" class="size-4 shrink-0 text-text-2" aria-hidden="true" />
-      <span class="min-w-0 flex-1 truncate text-[13px] leading-5 text-text">{{ proposal.name }}</span>
+      <span class="min-w-0 flex-1 truncate text-ui leading-5 text-text">{{ proposal.name }}</span>
       <RoutineStatusChip status="waiting" />
-      <span class="basis-full truncate ps-12 text-[12px] leading-4.5 text-text-muted">{{ when }}</span>
+      <span class="basis-full truncate ps-12 text-ui-sm leading-4.5 text-text-muted">{{ when }}</span>
     </button>
     <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
-      <div class="wrap-break-word text-[12px] leading-4.5 text-text-2">Why: {{ proposal.why }}</div>
-      <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">When: {{ when }}<template v-if="proposal.until"> · until {{ proposal.until }}</template></div>
-      <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">What: {{ what }}</div>
+      <div class="wrap-break-word text-ui-sm leading-4.5 text-text-2">Why: {{ proposal.why }}</div>
+      <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">When: {{ when }}<template v-if="proposal.until"> · until {{ proposal.until }}</template></div>
+      <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">What: {{ what }}</div>
       <template v-if="proposal.prompt !== undefined">
         <div
-          class="mt-1 whitespace-pre-wrap wrap-break-word ps-2 text-[12px] leading-4.5 text-text-2 shadow-[inset_2px_0_0_var(--border)]"
+          class="mt-1 whitespace-pre-wrap wrap-break-word ps-2 text-ui-sm leading-4.5 text-text-2 shadow-[inset_2px_0_0_var(--border)]"
           :class="promptOpen ? 'max-h-96 overflow-y-auto' : 'line-clamp-4'"
         >{{ proposal.prompt }}</div>
-        <button type="button" class="mt-0.5 text-[12px] leading-4.5 text-accent hover:underline" :aria-expanded="promptOpen" @click="promptOpen = !promptOpen">
+        <button type="button" class="mt-0.5 text-ui-sm leading-4.5 text-accent hover:underline" :aria-expanded="promptOpen" @click="promptOpen = !promptOpen">
           {{ promptOpen ? 'Show less' : 'Show more' }}
         </button>
       </template>
-      <div class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">Asked for by {{ proposal.askedBy }}</div>
+      <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">Asked for by {{ proposal.askedBy }}</div>
       <div class="mt-3 flex flex-wrap gap-2">
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ discard: proposal.id })">Discard</button>
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ approve: proposal.id })">Approve</button>
       </div>
-      <div v-if="error" role="alert" class="mt-1.5 wrap-break-word text-[12px] leading-4.5 text-danger-text">{{ error }}</div>
+      <div v-if="error" role="alert" class="mt-1.5 wrap-break-word text-ui-sm leading-4.5 text-danger-text">{{ error }}</div>
     </div>
   </div>
 </template>

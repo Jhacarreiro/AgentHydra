@@ -167,11 +167,11 @@ const SQUARE: Record<AgentState, string> = {
 }
 const ICON_BTN =
   'flex size-6 items-center justify-center rounded-[var(--radius-6)] text-[var(--text)] outline-none transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] focus-visible:shadow-[var(--focus-ring)]'
-const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'
+const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)]'
 </script>
 
 <template>
-  <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-[13px] leading-5" aria-label="Background tasks">
+  <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-ui leading-5" aria-label="Background tasks">
     <header class="flex h-8.5 shrink-0 items-center ps-2 pe-1">
       <h2 class="min-w-0 flex-1 truncate font-normal text-(--text-2)">Background tasks</h2>
       <Tip v-if="lists.finished.length" label="Clear finished" side="bottom">
@@ -350,11 +350,11 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-[12px] transition-colors 
 
     <Dialog :open="stopping !== null" @update:open="(o: boolean) => !o && (stopping = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">{{ stopTitle }}</DialogTitle>
-        <DialogDescription class="text-[13px] leading-4.75 text-text-2">{{ stopText }}</DialogDescription>
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">{{ stopTitle }}</DialogTitle>
+        <DialogDescription class="text-ui leading-4.75 text-text-2">{{ stopText }}</DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="stopping = null">Cancel</button>
-          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmStop">Stop</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="stopping = null">Cancel</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-ui font-medium text-white hover:brightness-110" @click="confirmStop">Stop</button>
         </div>
       </DialogContent>
     </Dialog>

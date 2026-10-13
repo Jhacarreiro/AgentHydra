@@ -53,7 +53,7 @@ onBeforeUnmount(() => {
 </script>
 
 <template>
-  <div ref="bar" class="no-drag fixed right-0 top-0 z-70 flex h-9 select-none font-[Segoe_Fluent_Icons,Segoe_MDL2_Assets] text-[10px]" data-testid="window-controls">
+  <div ref="bar" class="no-drag fixed right-0 top-0 z-70 flex h-9 select-none font-[Segoe_Fluent_Icons,Segoe_MDL2_Assets] text-3xs" data-testid="window-controls">
     <button type="button" tabindex="-1" aria-label="Minimize" :class="[BTN, state('minimize')]" @click="minimizeWindow">&#xE921;</button>
     <button type="button" tabindex="-1" :aria-label="maximized ? 'Restore' : 'Maximize'" :class="[BTN, state('maximize')]" @click="toggleMaximize">
       {{ maximized ? '' : '' }}

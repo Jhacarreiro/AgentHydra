@@ -45,13 +45,13 @@ const known = (id: string): boolean => knownIds.value.has(id)
 </script>
 
 <template>
-  <div class="text-[13px]/4.75" data-testid="failures">
+  <div class="text-ui/4.75" data-testid="failures">
     <p v-if="error" class="text-danger-text">Could not load failures: {{ error }}</p>
     <p v-else-if="!week" class="text-text-muted">Loading…</p>
     <template v-else>
       <div class="grid gap-6 sm:grid-cols-3">
         <div v-for="b in blocks" :key="b.h">
-          <h3 class="text-[13px] font-semibold leading-5 text-text">{{ b.h }} <span class="tnum font-normal text-text-muted">({{ b.n }})</span></h3>
+          <h3 class="text-ui font-semibold leading-5 text-text">{{ b.h }} <span class="tnum font-normal text-text-muted">({{ b.n }})</span></h3>
           <p v-if="!b.n" class="mt-1 text-text-muted">None</p>
           <ul v-else class="mt-1">
             <li v-for="[k, n] in ranked(b.d)" :key="k" class="flex justify-between gap-3 border-b border-border py-1 last:border-b-0">
@@ -62,7 +62,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
         </div>
       </div>
 
-      <h3 class="mt-8 text-[13px] font-semibold leading-5 text-text">Latest failures</h3>
+      <h3 class="mt-8 text-ui font-semibold leading-5 text-text">Latest failures</h3>
       <p v-if="!week.rows.length" class="mt-1 text-text-muted">No failures in the last 7 days.</p>
       <ul v-else>
         <li v-for="r in week.rows" :key="r.id" class="border-b border-border py-2 last:border-b-0">
@@ -81,7 +81,7 @@ const known = (id: string): boolean => knownIds.value.has(id)
             </button>
             <span v-else class="ms-auto truncate text-text-muted">{{ r.title }}</span>
           </div>
-          <Tip :label="r.message"><div class="mt-0.5 truncate font-mono text-[12px] text-text-muted">{{ r.message }}</div></Tip>
+          <Tip :label="r.message"><div class="mt-0.5 truncate font-mono text-ui-sm text-text-muted">{{ r.message }}</div></Tip>
         </li>
       </ul>
     </template>

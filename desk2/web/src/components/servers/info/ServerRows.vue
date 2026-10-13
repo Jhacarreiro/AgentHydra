@@ -19,8 +19,8 @@ const servers = useDevServers()
     <li v-for="x in processes" :key="x.id" class="group relative">
       <button type="button" class="flex h-12 w-full cursor-default items-center gap-2.5 px-4 text-start transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none" :aria-label="`${x.name} details`" @click="servers.select({ kind: 'server', id: x.id })">
         <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(x.status)]" aria-hidden="true" />
-        <span class="min-w-0 truncate text-[13px] text-text">{{ x.name }}</span>
-        <span class="shrink-0 text-[12px] text-text-muted">{{ statusWord(x) }}</span>
+        <span class="min-w-0 truncate text-ui text-text">{{ x.name }}</span>
+        <span class="shrink-0 text-ui-sm text-text-muted">{{ statusWord(x) }}</span>
         <span v-if="x.port" :class="CHIP" class="tnum">{{ serverPort(x) }}</span>
         <CountBadge v-if="x.errorCount" :count="x.errorCount" />
         <span class="flex-1" />

@@ -87,7 +87,7 @@ onBeforeUnmount(disarm)
         <!-- Centered in the transcript's 768px text column (owner, 2026-10-12: "center the block please. Not, left align"),
              with the same 56px each side so it clears the step arrows on the right and stays truly centered. -->
         <div class="mx-auto flex max-w-192 flex-col items-center">
-          <div class="mb-1 flex items-center gap-2 text-[12px] text-text-muted">
+          <div class="mb-1 flex items-center gap-2 text-ui-sm text-text-muted">
             <span>Previous message you sent</span>
             <button
               type="button"
@@ -105,7 +105,7 @@ onBeforeUnmount(disarm)
               {{ expanded ? 'Read less' : 'Read more' }}
             </button>
           </div>
-          <p v-if="item.images?.length" class="mt-1 text-[12px] text-text-muted">
+          <p v-if="item.images?.length" class="mt-1 text-ui-sm text-text-muted">
             {{ item.images.length === 1 ? 'And 1 image' : `And ${item.images.length} images` }}
           </p>
         </div>

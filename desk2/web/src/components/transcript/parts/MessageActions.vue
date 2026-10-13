@@ -253,14 +253,14 @@ async function branch() {
     </Tip>
     <Dialog v-if="undoMounted" :open="undoShown" @update:open="(o: boolean) => !o && (askUndo = false)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
-        <DialogDescription class="text-[13px] leading-4.75 text-text-2">
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Undo {{ undoTakes?.total }} messages?</DialogTitle>
+        <DialogDescription class="text-ui leading-4.75 text-text-2">
           This takes your message from {{ undoTime }} and everything after it out of this chat: {{ undoTakes?.yours }} of your messages and {{ undoTakes?.replies }} {{ undoTakes?.replies === 1 ? 'reply' : 'replies' }}. Fork instead keeps this chat as it is and opens a new chat from just before that message.
         </DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="askUndo = false">Cancel</button>
-          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="forkInstead">Fork instead</button>
-          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmUndo">Undo {{ undoTakes?.total }} messages</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="askUndo = false">Cancel</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="forkInstead">Fork instead</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-ui font-medium text-white hover:brightness-110" @click="confirmUndo">Undo {{ undoTakes?.total }} messages</button>
         </div>
       </DialogContent>
     </Dialog>

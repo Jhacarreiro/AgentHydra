@@ -15,7 +15,7 @@ const props = defineProps<{ chat: ChatSummary }>()
 const src = useShellSource()
 
 const PILL =
-  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-text-2'
+  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
 
 const projects = ref<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
 const open = ref(false)
@@ -121,7 +121,7 @@ function onKey(e: KeyboardEvent) {
         type="text"
         placeholder="Filter projects"
         aria-label="Filter projects"
-        class="h-6 w-full rounded-(--radius-6) bg-bg-deepest px-2 text-[13px] text-text outline-none placeholder:text-text-muted focus:ring-1 focus:ring-accent"
+        class="h-6 w-full rounded-(--radius-6) bg-bg-deepest px-2 text-ui text-text outline-none placeholder:text-text-muted focus:ring-1 focus:ring-accent"
         @keydown="onKey"
       />
       <div role="listbox" aria-label="Projects" class="mt-1 flex max-h-72 flex-col overflow-y-auto">
@@ -141,7 +141,7 @@ function onKey(e: KeyboardEvent) {
           <span class="min-w-0 flex-1 truncate">{{ r.project.name }}</span>
           <Check v-if="r.current" class="size-3.5 shrink-0 text-text-2" aria-label="Current project" />
         </button>
-        <p v-if="!rows.length" class="px-2 py-1 text-[12px] text-text-muted">No project matches</p>
+        <p v-if="!rows.length" class="px-2 py-1 text-ui-sm text-text-muted">No project matches</p>
       </div>
       <div role="separator" :class="MENU_SEPARATOR" />
       <button
@@ -152,8 +152,8 @@ function onKey(e: KeyboardEvent) {
       >
         Choose another folder…
       </button>
-      <p v-if="error" role="alert" class="px-2 py-1 text-[12px] leading-4 text-danger-text">{{ error }}</p>
-      <p v-if="note" class="px-2 pt-1 text-[12px] leading-4 text-text-muted">{{ note }}</p>
+      <p v-if="error" role="alert" class="px-2 py-1 text-ui-sm leading-4 text-danger-text">{{ error }}</p>
+      <p v-if="note" class="px-2 pt-1 text-ui-sm leading-4 text-text-muted">{{ note }}</p>
     </PopoverContent>
   </Popover>
 </template>

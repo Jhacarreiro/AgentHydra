@@ -276,7 +276,7 @@ onBeforeUnmount(() => {
         />
       </div>
     </div>
-    <div class="flex shrink-0 items-center justify-center gap-3 px-4 py-3 text-[12px] text-text-muted">
+    <div class="flex shrink-0 items-center justify-center gap-3 px-4 py-3 text-ui-sm text-text-muted">
       <span v-if="error" class="text-danger-text">{{ error }}</span>
       <span v-else class="opacity-70">Draw on the picture · Save copy puts the annotated version next to the original · Esc goes back</span>
     </div>

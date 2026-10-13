@@ -195,10 +195,10 @@ watch(
         <button type="button" :class="ICON_BTN" aria-label="Clear this view" @click="clear"><Eraser class="size-3.5" /></button>
       </Tip>
     </div>
-    <p v-if="error" role="alert" class="text-[12px] text-danger-text">{{ error }}</p>
+    <p v-if="error" role="alert" class="text-ui-sm text-danger-text">{{ error }}</p>
     <div
       ref="box"
-      class="relative h-[min(560px,calc(100vh-290px))] min-h-60 overflow-auto rounded-(--radius-10) bg-bg-deepest p-3 font-mono text-[12px] leading-5 shadow-[inset_0_0_0_1px_var(--border)]"
+      class="relative h-[min(560px,calc(100vh-290px))] min-h-60 overflow-auto rounded-(--radius-10) bg-bg-deepest p-3 font-mono text-ui-sm leading-5 shadow-[inset_0_0_0_1px_var(--border)]"
       role="log"
       aria-label="Server log"
       @scroll="onScroll"
@@ -206,7 +206,7 @@ watch(
       <div v-if="more" class="mb-2 flex justify-center">
         <button type="button" :class="BTN_GHOST" :disabled="loadingOlder" :aria-busy="loadingOlder" @click="older">Load older</button>
       </div>
-      <p v-if="!text.length" class="flex h-full items-center justify-center font-sans text-[13px] text-text-muted">
+      <p v-if="!text.length" class="flex h-full items-center justify-center font-sans text-ui text-text-muted">
         {{ lines.length ? 'No line matches.' : loaded ? 'Nothing logged yet.' : 'Reading the log…' }}
       </p>
       <div
@@ -216,7 +216,7 @@ watch(
         :class="l.stream === 'stderr' ? 'border-danger/60 text-danger-text' : 'border-transparent text-text-2'"
       >{{ l.line }}</div>
     </div>
-    <div class="flex flex-wrap items-center gap-x-2 text-[12px] leading-4.5 text-text-muted tnum">
+    <div class="flex flex-wrap items-center gap-x-2 text-ui-sm leading-4.5 text-text-muted tnum">
       <span>{{ text.length }} {{ text.length === 1 ? 'line' : 'lines' }} · {{ stderrCount }} from stderr</span>
       <template v-if="!stick">
         <span aria-hidden="true">·</span>

@@ -11,7 +11,7 @@ defineProps<{ chip: ReplyChip; ts: number }>()
 <template>
   <div class="flex justify-end" data-redesign-chip>
     <Tip :label="new Date(ts).toLocaleString()">
-      <span class="inline-flex max-w-[85%] items-center gap-1.5 rounded-full bg-fill-hover px-2.5 py-1 text-[13px] text-text">
+      <span class="inline-flex max-w-[85%] items-center gap-1.5 rounded-full bg-fill-hover px-2.5 py-1 text-ui text-text">
         <LayoutGrid class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
         <span class="min-w-0 truncate">{{ chip.label }}</span>
       </span>

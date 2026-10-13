@@ -1,7 +1,12 @@
 import { type ClassValue, clsx } from "clsx";
-import { twMerge } from "tailwind-merge";
+import { extendTailwindMerge } from "tailwind-merge";
 
-/** Standard shadcn-vue class merge helper. Shared verbatim across all apps. */
+// tailwind-merge knows Tailwind's own text sizes (and any NNxs/NNxl shape, so 2xs and 3xs) and reads any other text-*
+// as a colour: cn() kept one of "text-muted-foreground text-ui", and the select's row variant lost its text-ui size to
+// its colour. These are the steps kit-base.css declares (--text-3xs, --text-2xs, --text-ui).
+const twMerge = extendTailwindMerge({ extend: { theme: { text: ["3xs", "2xs", "ui"] } } });
+
+/** Standard shadcn-vue class merge helper. */
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
 }

@@ -198,10 +198,10 @@ const ACTION = {
 } as const
 const ROW_BTN =
   'flex size-5 shrink-0 items-center justify-center rounded-[var(--radius-5)] text-text-muted hover:bg-fill-hover hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:pointer-events-none disabled:opacity-40'
-const NOTE = 'px-1.5 pt-3 text-[12px] leading-4 text-text-muted'
+const NOTE = 'px-1.5 pt-3 text-ui-sm leading-4 text-text-muted'
 const LINK = 'ms-1 rounded-[4px] px-1 text-text-2 hover:bg-fill-hover'
 // A group inside a part: a row-high header, and its rows, each step in by 12px.
-const SUB_HEADER = 'group/head flex h-[26px] items-center gap-1 pe-1 text-[12px] leading-4 text-text-muted'
+const SUB_HEADER = 'group/head flex h-[26px] items-center gap-1 pe-1 text-ui-sm leading-4 text-text-muted'
 const HEAD_INDENT = ['ps-1.5', 'ps-[18px]', 'ps-[30px]'] as const
 const ROW_INDENT = ['', 'ps-3', 'ps-6'] as const
 const CHEVRON = 'flex size-4 shrink-0 items-center justify-center rounded-[4px] hover:text-text-2'
@@ -374,7 +374,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
     <p v-else-if="view.kind === 'unreachable'" role="alert" :class="[NOTE, 'text-danger-text']">The server manager did not answer: {{ view.reason }}</p>
 
     <template v-if="view.kind === 'list' || view.kind === 'empty'">
-      <p v-if="servers.actionError.value || error" role="alert" class="px-1.5 pt-2 text-[12px] leading-4 text-danger-text">{{ servers.actionError.value || error }}</p>
+      <p v-if="servers.actionError.value || error" role="alert" class="px-1.5 pt-2 text-ui-sm leading-4 text-danger-text">{{ servers.actionError.value || error }}</p>
       <p v-if="view.kind === 'empty' && !items.length" role="status" :class="NOTE">No projects yet. Scan this PC, or add a folder with the + button.</p>
 
       <section v-if="projectLines.length" aria-label="Projects" class="flex flex-col gap-[1.5px]">
@@ -413,7 +413,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
             <Tip :label="`${upCount(l.g)} of ${l.g.total} running`"><span class="tnum">{{ upCount(l.g) }}/{{ l.g.total }}</span></Tip>
           </header>
 
-          <p v-else-if="l.kind === 'none'" class="pb-1 text-[12px] leading-4 text-text-muted" :class="HEAD_INDENT[l.depth]">No servers in this project.</p>
+          <p v-else-if="l.kind === 'none'" class="pb-1 text-ui-sm leading-4 text-text-muted" :class="HEAD_INDENT[l.depth]">No servers in this project.</p>
 
           <div v-else :class="ROW_INDENT[l.depth]">
             <Tip :label="tip(l.project, l.p)" side="right" align="start">
@@ -439,10 +439,10 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
                 </span>
                 <CountBadge v-if="l.p.errorCount" :count="l.p.errorCount" :title="`${l.p.errorCount} errors`" />
                 <AlertTriangle v-if="l.p.alertsFiring" class="size-3 shrink-0 text-warning-text" aria-label="An alert is firing" />
-                <Tip v-if="outsideNote(l.p)" :label="OUTSIDE_TIP"><span class="shrink-0 text-[11px] leading-4 text-text-muted">{{ outsideNote(l.p) }}</span></Tip>
+                <Tip v-if="outsideNote(l.p)" :label="OUTSIDE_TIP"><span class="shrink-0 text-2xs leading-4 text-text-muted">{{ outsideNote(l.p) }}</span></Tip>
                 <!-- The port steps aside for the hover buttons: with a running server's three and the star, it pushed the star
                      to the middle of the row, where a click meant for the row starred the server. -->
-                <span v-if="l.p.port" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(l.p) }}</span>
+                <span v-if="l.p.port" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum group-hover/row:hidden group-focus-within/row:hidden">{{ serverPort(l.p) }}</span>
                 <span class="hidden shrink-0 items-center gap-0.5 group-hover/row:flex group-focus-within/row:flex" @click.stop>
                   <Tip v-if="processAddress(l.p)" label="Open in browser">
                     <button type="button" :class="ROW_BTN" :aria-label="`Open ${l.p.name} in browser`" @click="openBrowser(l.project, l.p)"><ExternalLink class="size-3.5" /></button>
@@ -494,7 +494,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               >
                 <span class="flex size-6 shrink-0 items-center justify-center"><span class="size-1.5 rounded-full" :class="DOT.run" aria-hidden="true" /></span>
                 <span class="min-w-0 flex-1 truncate">{{ l.label.name }}<span v-if="l.label.where" class="text-text-muted">&ensp;{{ l.label.where }}</span></span>
-                <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">:{{ l.o.port }}</span>
+                <span class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">:{{ l.o.port }}</span>
               </div>
             </Tip>
           </div>
@@ -540,7 +540,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               >
                 <span class="flex size-6 shrink-0 items-center justify-center text-text-muted"><component :is="l.item.kind === 'file' ? File : Folder" class="size-3.5" aria-hidden="true" /></span>
                 <span class="min-w-0 flex-1 truncate">{{ l.item.name }}<span v-if="l.where" class="text-text-muted">&ensp;{{ l.where }}</span></span>
-                <span class="shrink-0 truncate text-[11px] leading-4 text-text-muted group-hover/row:hidden group-focus-within/row:hidden">{{ l.item.framework ?? (l.item.processes === 1 ? '1 server' : `${l.item.processes} servers`) }}</span>
+                <span class="shrink-0 truncate text-2xs leading-4 text-text-muted group-hover/row:hidden group-focus-within/row:hidden">{{ l.item.framework ?? (l.item.processes === 1 ? '1 server' : `${l.item.processes} servers`) }}</span>
                 <span class="hidden shrink-0 items-center gap-0.5 group-hover/row:flex group-focus-within/row:flex" @click.stop>
                   <Tip label="Add this project">
                     <button type="button" :class="ROW_BTN" :disabled="busyFound.has(l.item.path)" :aria-label="`Add ${l.item.name}`" @click="add(l.item)"><FolderPlus class="size-3.5" /></button>

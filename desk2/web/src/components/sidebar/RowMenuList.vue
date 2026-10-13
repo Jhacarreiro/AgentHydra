@@ -57,7 +57,7 @@ onMounted(() => {
             @select="emit('run', sub)"
           >
             <span class="min-w-0 flex-1 truncate">{{ sub.label }}</span>
-            <span v-if="sub.hint" class="ms-3 shrink-0 text-[12px] text-text-muted">{{ sub.hint }}</span>
+            <span v-if="sub.hint" class="ms-3 shrink-0 text-ui-sm text-text-muted">{{ sub.hint }}</span>
             <component :is="icons.check" v-if="sub.checked" class="ms-3" />
           </component>
         </template>
@@ -73,8 +73,8 @@ onMounted(() => {
       @select="emit('run', entry)"
     >
       <Hash class="size-3.5 shrink-0 text-text-muted" />
-      <span class="shrink-0 font-mono text-[12px] text-text-2">{{ entry.label }}</span>
-      <span v-if="entry.hint" class="ms-auto min-w-0 truncate ps-4 text-[12px] text-text-muted">{{ entry.hint }}</span>
+      <span class="shrink-0 font-mono text-ui-sm text-text-2">{{ entry.label }}</span>
+      <span v-if="entry.hint" class="ms-auto min-w-0 truncate ps-4 text-ui-sm text-text-muted">{{ entry.hint }}</span>
     </component>
     <component
       :is="ui.Item"

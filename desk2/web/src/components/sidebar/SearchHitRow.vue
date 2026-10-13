@@ -35,12 +35,12 @@ const tooltip = computed(() => [sourceLabel(props.hit.source), props.hit.cwd].fi
       @click="emit('select')"
     >
       <span class="flex w-full min-w-0 items-baseline gap-2">
-        <span class="min-w-0 flex-1 truncate text-[13px] leading-[19.5px] text-text">
+        <span class="min-w-0 flex-1 truncate text-ui leading-[19.5px] text-text">
           <template v-for="(p, i) in title" :key="i"><mark v-if="p.mark" class="bg-transparent font-semibold text-text">{{ p.text }}</mark><template v-else>{{ p.text }}</template></template>
         </span>
-        <span class="shrink-0 text-[12px] leading-4 text-text-muted">{{ meta }}</span>
+        <span class="shrink-0 text-ui-sm leading-4 text-text-muted">{{ meta }}</span>
       </span>
-      <span v-if="hit.snippet" class="line-clamp-2 w-full text-[12px] leading-4 text-text-muted">
+      <span v-if="hit.snippet" class="line-clamp-2 w-full text-ui-sm leading-4 text-text-muted">
         <template v-for="(p, i) in snippet" :key="i"><mark v-if="p.mark" class="bg-transparent font-medium text-text-2">{{ p.text }}</mark><template v-else>{{ p.text }}</template></template>
       </span>
     </button>

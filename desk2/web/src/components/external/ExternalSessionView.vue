@@ -253,7 +253,7 @@ onUnmounted(() => {
 </script>
 
 <template>
-  <div class="flex h-full flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)">
+  <div class="flex h-full flex-col bg-(--bg-page) text-ui leading-[19.5px] text-(--text)">
     <!-- The header is clipped here: folded, it slides up out of this box, never over the title bar. -->
     <div class="relative min-h-0 flex-1 overflow-hidden">
       <SessionHeader
@@ -297,18 +297,18 @@ onUnmounted(() => {
            turn's, as between any two rows (owner, 2026-10-08: the last ones had "way too big of gaps"). -->
       <div class="shrink-0 px-8 pb-4 pt-1">
         <Tip :label="liveWhere">
-          <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-[14px] leading-5 text-(--text-muted)" role="status">
+          <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-ui-lg leading-5 text-(--text-muted)" role="status">
             <span class="flex size-6 shrink-0 items-center justify-center">
               <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
               <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
             <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
             <RevealStep v-if="liveStep" @click="revealLive" />
-            <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
+            <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-ui" aria-hidden="true">{{ liveFor }}</span>
             <span class="sr-only">{{ liveWhere }}</span>
           </p>
         </Tip>
-        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-[12px] leading-4 text-(--text-muted)" aria-label="Queued messages">
+        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-ui-sm leading-4 text-(--text-muted)" aria-label="Queued messages">
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
         </ul>
       </div>
@@ -322,9 +322,9 @@ onUnmounted(() => {
           <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
         </span>
         <template v-if="isWorking">
-          <Tip :label="liveWhere"><span class="min-w-0 truncate text-[14px] leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span></Tip>
+          <Tip :label="liveWhere"><span class="min-w-0 truncate text-ui-lg leading-5" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span></Tip>
           <RevealStep v-if="liveStep" @click="revealLive" />
-          <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-[13px]" aria-hidden="true">{{ liveFor }}</span>
+          <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-ui" aria-hidden="true">{{ liveFor }}</span>
           <span class="sr-only">{{ liveWhere }}</span>
         </template>
         <span v-else class="min-w-0 flex-1 truncate">{{ liveWhere }}</span>
@@ -345,7 +345,7 @@ onUnmounted(() => {
           <span v-if="isWorking" class="text-(--text-muted)"> · {{ liveText }}</span>
         </span>
         <RevealStep v-if="liveStep" @click="revealLive" />
-        <span v-if="liveFor" class="shrink-0 tabular-nums text-[13px] text-(--text-muted)" aria-hidden="true">{{ liveFor }}</span>
+        <span v-if="liveFor" class="shrink-0 tabular-nums text-ui text-(--text-muted)" aria-hidden="true">{{ liveFor }}</span>
         <Tip v-if="error" :label="error"><span class="max-w-[40%] shrink truncate text-(--danger-text)">{{ error }}</span></Tip>
       </div>
     </div>

@@ -129,7 +129,7 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
       </span>
       <div class="flex min-w-0 flex-1 items-baseline gap-2">
         <h2 class="truncate text-[15px] leading-5 font-semibold text-text">{{ title }}</h2>
-        <span v-if="updated" class="min-w-0 truncate text-[11px] leading-4 text-text-muted">{{ updated }}</span>
+        <span v-if="updated" class="min-w-0 truncate text-2xs leading-4 text-text-muted">{{ updated }}</span>
       </div>
       <Tip label="Reload">
         <button type="button" aria-label="Reload dashboard" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="reload">
@@ -138,12 +138,12 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
       </Tip>
       <template v-if="hasSite">
         <Tip label="Open in a tab of Desk's browser pane">
-          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-[12px] leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openInTab">
+          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-ui-sm leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openInTab">
             <AppWindow class="size-3.5" aria-hidden="true" /><span class="sr-only @2xl:not-sr-only">Open in tab</span>
           </button>
         </Tip>
         <Tip label="Open in your web browser">
-          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-[12px] leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openOutside">
+          <button type="button" class="flex h-7 min-w-7 shrink-0 items-center justify-center gap-1.5 rounded-(--radius-8) text-ui-sm leading-4 text-text-2 hover:bg-fill-hover hover:text-text @2xl:px-2" @click="openOutside">
             <ExternalLink class="size-3.5" aria-hidden="true" /><span class="sr-only @2xl:not-sr-only">Open in browser</span>
           </button>
         </Tip>
@@ -155,7 +155,7 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
       </Tip>
     </header>
 
-    <p v-if="problem" role="alert" class="shrink-0 px-6 pb-2 text-[12px] leading-4 text-text-muted">
+    <p v-if="problem" role="alert" class="shrink-0 px-6 pb-2 text-ui-sm leading-4 text-text-muted">
       Could not reach AgentHydra: <span class="text-danger">{{ problem }}</span>
     </p>
 
@@ -170,12 +170,12 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
 
     <div v-else-if="loaded && !problem" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <h3 class="text-[15px] leading-5 font-semibold text-text">No dashboard yet</h3>
-      <p class="max-w-md text-[13px] leading-5 text-text-muted">
+      <p class="max-w-md text-ui leading-5 text-text-muted">
         This project has no dashboard yet. A chat in it builds one: a page of any HTML, CSS, JavaScript or data, with whatever it wants on it. It writes the page with dashboard_write on the agenthydra MCP.
       </p>
       <div class="flex items-center gap-2 rounded-(--radius-8) bg-fill-5 py-1.5 ps-3 pe-1.5">
-        <code class="text-[12px] leading-4 text-text-2">{{ EXAMPLE_PROMPT }}</code>
-        <button type="button" class="flex h-6 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-2 text-[12px] leading-4 text-text-2 hover:text-text" @click="copyPrompt">
+        <code class="text-ui-sm leading-4 text-text-2">{{ EXAMPLE_PROMPT }}</code>
+        <button type="button" class="flex h-6 items-center gap-1 rounded-(--radius-5) bg-(--fill-secondary) px-2 text-ui-sm leading-4 text-text-2 hover:text-text" @click="copyPrompt">
           <Copy class="size-3" aria-hidden="true" />{{ copied ? 'Copied' : 'Copy' }}
         </button>
       </div>

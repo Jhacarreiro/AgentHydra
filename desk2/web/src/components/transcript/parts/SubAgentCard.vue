@@ -33,12 +33,12 @@ const latest = computed(() => {
     <div class="px-1 pt-0.5" :class="!open && 'pb-0.5'">
       <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id, running)" />
     </div>
-    <div v-if="!open && (steps || latest)" class="-mt-0.5 px-3 pb-1.5 ps-7.5 text-[13px] text-text-muted">
+    <div v-if="!open && (steps || latest)" class="-mt-0.5 px-3 pb-1.5 ps-7.5 text-ui text-text-muted">
       {{ steps }} tool call{{ steps === 1 ? '' : 's' }}<template v-if="running && latest"> · {{ latest }}</template>
     </div>
     <Collapse :open="open">
       <div class="space-y-1 border-t border-border px-3 py-2">
-        <p v-if="prompt" class="line-clamp-3 whitespace-pre-wrap text-[13px] leading-5 text-text-muted">{{ prompt }}</p>
+        <p v-if="prompt" class="line-clamp-3 whitespace-pre-wrap text-ui leading-5 text-text-muted">{{ prompt }}</p>
         <div v-if="kids.length" class="flex flex-col gap-2 border-s border-border ps-3">
           <template v-for="r in kidRows" :key="r.id">
             <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" />
@@ -47,10 +47,10 @@ const latest = computed(() => {
             <slot v-else-if="r.kind === 'item'" name="row" :item="r.item" />
           </template>
         </div>
-        <p v-else-if="running" class="text-[13px] text-text-muted">Starting…</p>
-        <div v-if="item.result" class="pt-1 text-[13px]">
+        <p v-else-if="running" class="text-ui text-text-muted">Starting…</p>
+        <div v-if="item.result" class="pt-1 text-ui">
           <MarkdownBlock v-if="!item.result.isError" :text="item.result.text" />
-          <p v-else class="whitespace-pre-wrap text-[13px] text-danger-text">{{ item.result.text }}</p>
+          <p v-else class="whitespace-pre-wrap text-ui text-danger-text">{{ item.result.text }}</p>
         </div>
       </div>
     </Collapse>

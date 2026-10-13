@@ -179,13 +179,13 @@ onMounted(async () => {
 <template>
   <div class="space-y-6">
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">A ReDesign card asking the owner to pick (4 options)</h3>
+      <h3 class="mb-2 text-ui text-text-muted">A ReDesign card asking the owner to pick (4 options)</h3>
       <div class="h-225 overflow-hidden rounded-lg border border-border" data-gallery-redesign>
         <TranscriptView chat-id="gallery-redesign" :items="redesignItems" :chat="null" />
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">The same card while it runs, and after More options was sent</h3>
+      <h3 class="mb-2 text-ui text-text-muted">The same card while it runs, and after More options was sent</h3>
       <div class="h-140 overflow-hidden rounded-lg border border-border" data-gallery-redesign-running>
         <TranscriptView chat-id="gallery-redesign-running" :items="redesignRunning" :chat="null" />
       </div>
@@ -194,20 +194,20 @@ onMounted(async () => {
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">A program's note (an AgentHydra ping), closed</h3>
+      <h3 class="mb-2 text-ui text-text-muted">A program's note (an AgentHydra ping), closed</h3>
       <div class="h-65 overflow-hidden rounded-lg border border-border" data-gallery-note>
         <TranscriptView chat-id="gallery-note" :items="pingItems" :chat="null" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">A saved browser's calls in one turn: one Browser card</h3>
+        <h3 class="mb-2 text-ui text-text-muted">A saved browser's calls in one turn: one Browser card</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-browser>
           <TranscriptView chat-id="gallery-browser" :items="browserItems" :chat="browserChat" />
         </div>
       </div>
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">A Browser card with no picture</h3>
+        <h3 class="mb-2 text-ui text-text-muted">A Browser card with no picture</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-browser-noshot>
           <TranscriptView chat-id="gallery-browser-2" :items="browserNoShot" :chat="browserChat2" />
         </div>
@@ -215,53 +215,53 @@ onMounted(async () => {
     </div>
     <div class="grid grid-cols-3 gap-4">
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: open, click and read in one turn</h3>
+        <h3 class="mb-2 text-ui text-text-muted">Your Chrome: open, click and read in one turn</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome>
           <TranscriptView chat-id="gallery-your-chrome" :items="ownChromeRun" :chat="ownChromeChat" />
         </div>
       </div>
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: a run that closes its tab</h3>
+        <h3 class="mb-2 text-ui text-text-muted">Your Chrome: a run that closes its tab</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome-closed>
           <TranscriptView chat-id="gallery-your-chrome-closed" :items="ownChromeClosedRun" :chat="ownChromeClosedChat" />
         </div>
       </div>
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">Your Chrome: the last call's steps failed</h3>
+        <h3 class="mb-2 text-ui text-text-muted">Your Chrome: the last call's steps failed</h3>
         <div class="h-115 overflow-hidden rounded-lg border border-border" data-gallery-your-chrome-error>
           <TranscriptView chat-id="gallery-your-chrome-error" :items="ownChromeErrorRun" :chat="ownChromeErrorChat" />
         </div>
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">Every row, finished turn (some rows opened)</h3>
+      <h3 class="mb-2 text-ui text-text-muted">Every row, finished turn (some rows opened)</h3>
       <div class="h-[1900px] overflow-hidden rounded-lg border border-border">
         <TranscriptView chat-id="gallery-done" :items="finished" :chat="null" :expanded-ids="open" />
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">Pending cards, streaming, Working row</h3>
+      <h3 class="mb-2 text-ui text-text-muted">Pending cards, streaming, Working row</h3>
       <div class="h-287.5 overflow-hidden rounded-lg border border-border">
         <TranscriptView chat-id="gallery-transcript" :items="live" :chat="transcriptChat" />
       </div>
     </div>
     <div class="grid grid-cols-2 gap-4">
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">Shell fixtures, read-only (buttons hidden)</h3>
+        <h3 class="mb-2 text-ui text-text-muted">Shell fixtures, read-only (buttons hidden)</h3>
         <div class="h-130 overflow-hidden rounded-lg border border-border">
           <TranscriptView chat-id="gallery-readonly" :items="transcriptFixtures" :chat="chatFixtures[1]" read-only />
         </div>
       </div>
       <div>
-        <h3 class="mb-2 text-[13px] text-text-muted">Windowed: {{ STRESS_N }} items</h3>
+        <h3 class="mb-2 text-ui text-text-muted">Windowed: {{ STRESS_N }} items</h3>
         <div ref="stressBox" class="h-130 overflow-hidden rounded-lg border border-border">
           <TranscriptView chat-id="gallery-stress" :items="stressItems" :chat="null" />
         </div>
-        <p class="mt-2 font-mono text-[11px] text-text-muted" data-stress-stats>{{ stats }}</p>
+        <p class="mt-2 font-mono text-2xs text-text-muted" data-stress-stats>{{ stats }}</p>
       </div>
     </div>
     <div>
-      <h3 class="mb-2 text-[13px] text-text-muted">Markdown and code, pictures, files and background tasks (one place to check the look)</h3>
+      <h3 class="mb-2 text-ui text-text-muted">Markdown and code, pictures, files and background tasks (one place to check the look)</h3>
       <div class="h-[2600px] overflow-hidden rounded-lg border border-border" data-gallery-markdown>
         <TranscriptView chat-id="gallery-markdown" :items="markdownItems" :chat="null" />
       </div>

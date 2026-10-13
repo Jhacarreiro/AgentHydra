@@ -40,7 +40,7 @@ const meta = (t: TaskItem) =>
           <X v-else-if="t.status === 'failed'" class="size-3.5 shrink-0 text-danger-text" />
           <CircleStop v-else class="size-3.5 shrink-0 text-text-muted" />
           <span class="min-w-0 truncate text-text-2">{{ t.description || t.summary || t.taskId }}</span>
-          <span v-if="meta(t)" class="ms-auto shrink-0 ps-3 text-[12px] text-text-muted tabular-nums">{{ meta(t) }}</span>
+          <span v-if="meta(t)" class="ms-auto shrink-0 ps-3 text-ui-sm text-text-muted tabular-nums">{{ meta(t) }}</span>
         </button>
       </div>
     </Collapse>

@@ -71,13 +71,13 @@ const any = computed(() => !!(found.value.length || backups.value.length || resu
 <template>
   <component :is="embedded ? Card : 'div'" v-if="!embedded || any" v-bind="embedded ? { title: 'Started outside AgentHydra' } : {}" :class="embedded ? '' : 'flex flex-col gap-4 p-4'">
     <div class="flex flex-col" :class="embedded ? 'gap-3' : 'gap-4'">
-      <p v-if="found.length" class="text-[13px] leading-5 text-text-2">This folder also starts its server by itself, so it can run twice. Take over turns that off so only AgentHydra starts it. The files are backed up first and can be put back.</p>
+      <p v-if="found.length" class="text-ui leading-5 text-text-2">This folder also starts its server by itself, so it can run twice. Take over turns that off so only AgentHydra starts it. The files are backed up first and can be put back.</p>
 
       <div v-for="t in found" :key="t.file + t.label" :class="[CARD, 'flex min-w-0 gap-3', embedded ? 'p-3' : 'p-4']">
         <component :is="ICON[t.kind] ?? Code2" class="mt-0.5 size-4 shrink-0 text-text-2" aria-hidden="true" />
         <div class="flex min-w-0 flex-1 flex-col gap-1">
-          <span class="text-[13px] font-medium leading-5 text-text">{{ t.label }}</span>
-          <span class="text-[12px] leading-4 text-text-2">{{ WHAT[t.kind] }} {{ t.detail }}</span>
+          <span class="text-ui font-medium leading-5 text-text">{{ t.label }}</span>
+          <span class="text-ui-sm leading-4 text-text-2">{{ WHAT[t.kind] }} {{ t.detail }}</span>
           <Tip :label="t.file"><span :class="MONO" class="truncate text-text-muted">{{ t.file }}</span></Tip>
         </div>
       </div>
@@ -96,7 +96,7 @@ const any = computed(() => !!(found.value.length || backups.value.length || resu
       <div v-if="found.length || backups.length" class="flex flex-col gap-2">
         <div v-if="found.length" class="flex flex-wrap items-center gap-2">
           <template v-if="confirming">
-            <span class="text-[13px] text-text-2">Turn these off?</span>
+            <span class="text-ui text-text-2">Turn these off?</span>
             <button type="button" :class="BTN_PRIMARY" :disabled="busy" @click="doTakeOver">Take over</button>
             <button type="button" :class="BTN_GHOST" :disabled="busy" @click="confirming = false">Cancel</button>
           </template>
@@ -104,7 +104,7 @@ const any = computed(() => !!(found.value.length || backups.value.length || resu
         </div>
         <div v-if="backups.length" class="flex flex-wrap items-center gap-2">
           <template v-if="confirmingRestore">
-            <span class="text-[13px] text-text-2">Put the files back? Edits made to them since the take-over are lost.</span>
+            <span class="text-ui text-text-2">Put the files back? Edits made to them since the take-over are lost.</span>
             <button type="button" :class="BTN" :disabled="busy" @click="doRestore">Restore</button>
             <button type="button" :class="BTN_GHOST" :disabled="busy" @click="confirmingRestore = false">Cancel</button>
           </template>

@@ -214,7 +214,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
             <component :is="shellIcons.climayte" v-if="isTaskRow(r.id)" role="img" aria-label="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
             <span class="min-w-0 flex-1 truncate">{{ r.title }}</span>
             <!-- Clean sidebar (sidebar/clean.ts) leaves the account number and the age out. -->
-            <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-sm bg-fill-5 px-1 text-[11px] leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
+            <span v-if="r.instanceNum !== null && !cleanSidebar" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ r.instanceNum }}</span>
             <slot name="sub-badges" :id="r.id" />
             <RowAge v-if="!cleanSidebar" class="pe-1" :at="r.lastActivityAt" />
     </DefineRowBody>
@@ -241,19 +241,19 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
         </button>
       </Tip>
     </DefineGroupHead>
-    <header v-if="shownGroups.length === 0" class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
+    <header v-if="shownGroups.length === 0" class="flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-px pt-3 text-ui-sm leading-4 text-text-muted">
       <span v-if="!cloud.loaded.value && !cloud.error.value" role="status">Loading sessions…</span>
     </header>
 
-    <p v-if="cloud.error.value" role="alert" class="px-1.5 pt-2 text-[12px] leading-4 text-danger-text">
+    <p v-if="cloud.error.value" role="alert" class="px-1.5 pt-2 text-ui-sm leading-4 text-danger-text">
       {{ cloud.error.value }}
       <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="cloud.refresh()">Retry</button>
     </p>
-    <p v-else-if="cloud.loaded.value && shownGroups.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+    <p v-else-if="cloud.loaded.value && shownGroups.length === 0 && cloud.hiddenOut.value" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-muted">
       Every group here is hidden.
       <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
     </p>
-    <p v-else-if="cloud.loaded.value && shownGroups.length === 0" class="px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+    <p v-else-if="cloud.loaded.value && shownGroups.length === 0" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-muted">
       No sessions match.
       <button type="button" class="ms-1 rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="cloud.reset()">Reset filters</button>
     </p>
@@ -263,7 +263,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
       <span v-if="!compactOf(g)" class="block" v-on="groupMenus.listeners(g.key)">
       <ContextMenu v-if="groupMenus.seen(g.key)">
       <ContextMenuTrigger as-child :disabled="g.key === RESULTS_KEY">
-      <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
+      <header class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-ui-sm leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
         <ReuseGroupHead :g="g" />
       </header>
       </ContextMenuTrigger>
@@ -283,7 +283,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
         </ContextMenuItem>
       </ContextMenuContent>
       </ContextMenu>
-      <header v-else class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-[12px] leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
+      <header v-else class="group/head flex h-8.5 items-center gap-1 pb-1 ps-1.5 pe-1 pt-3 text-ui-sm leading-4 text-text-muted" :class="g.hidden && 'opacity-60'">
         <ReuseGroupHead :g="g" />
       </header>
       </span>
@@ -341,7 +341,7 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
     </section>
     </TransitionGroup>
 
-    <div v-if="cloud.selectMode.value" class="sticky bottom-0 mt-2 flex items-center gap-1 rounded-(--radius-6) bg-bg-popover px-1.5 py-1 text-[12px] text-text-2 shadow-(--shadow-popover)">
+    <div v-if="cloud.selectMode.value" class="sticky bottom-0 mt-2 flex items-center gap-1 rounded-(--radius-6) bg-bg-popover px-1.5 py-1 text-ui-sm text-text-2 shadow-(--shadow-popover)">
       <span class="flex-1">{{ cloud.selected.value.size }} selected</span>
       <button type="button" class="rounded-sm px-1.5 py-0.5 hover:bg-fill-hover disabled:opacity-50" :disabled="cloud.selected.value.size === 0" @click="copyIds">
         {{ copied ? 'Copied' : `Copy ${cloud.selected.value.size} id${cloud.selected.value.size === 1 ? '' : 's'}` }}

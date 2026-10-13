@@ -198,10 +198,10 @@ function run(key: BarKey) {
 
 const other = computed(() => state.value?.branches.filter((b) => b !== props.git.branch) ?? [])
 const sections: BarKey[][] = [['commit', 'push', 'pull', 'create-pr'], ['new-branch'], ['undo', 'redo'], ['undo-chat', 'open']]
-const BTN = 'text-[13px] font-medium text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent'
+const BTN = 'text-ui font-medium text-[var(--text)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] disabled:cursor-default disabled:opacity-50 disabled:hover:bg-transparent'
 const FIELD =
-  'w-full rounded-[var(--radius-6)] bg-[var(--fill-5)] px-2 py-1 text-[13px] leading-[19px] text-[var(--text)] outline-none placeholder:text-[var(--text-muted)] focus-visible:ring-1 focus-visible:ring-[var(--border)]'
-const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] font-medium transition-colors duration-[60ms]'
+  'w-full rounded-[var(--radius-6)] bg-[var(--fill-5)] px-2 py-1 text-ui leading-[19px] text-[var(--text)] outline-none placeholder:text-[var(--text-muted)] focus-visible:ring-1 focus-visible:ring-[var(--border)]'
+const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-ui font-medium transition-colors duration-[60ms]'
 </script>
 
 <template>
@@ -263,23 +263,23 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
           @keydown.ctrl.enter.prevent="commit"
         />
         <div class="flex items-center gap-2">
-          <label class="flex items-center gap-1.5 text-[13px] text-(--text-muted)">
+          <label class="flex items-center gap-1.5 text-ui text-(--text-muted)">
             <input v-model="amend" type="checkbox" class="size-3.5" />
             Amend the last commit
           </label>
-          <span class="tnum ms-auto text-[13px] text-(--text-muted)">{{ props.git.changed }} {{ props.git.changed === 1 ? 'file' : 'files' }}</span>
+          <span class="tnum ms-auto text-ui text-(--text-muted)">{{ props.git.changed }} {{ props.git.changed === 1 ? 'file' : 'files' }}</span>
           <button type="submit" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover) disabled:opacity-50" :disabled="!message.trim()">Commit</button>
         </div>
       </form>
 
       <form v-else-if="panel === 'branch'" class="flex flex-col gap-2" aria-label="New branch" @submit.prevent="createBranch">
         <input ref="branchBox" v-model="branchName" :class="FIELD" placeholder="New branch name" aria-label="New branch name" />
-        <p class="text-[13px] text-(--text-muted)">Created from {{ props.git.branch }} and switched to.</p>
+        <p class="text-ui text-(--text-muted)">Created from {{ props.git.branch }} and switched to.</p>
         <button type="submit" :class="ACT" class="self-end bg-(--fill-secondary) hover:bg-(--fill-secondary-hover) disabled:opacity-50" :disabled="!branchName.trim()">Create</button>
       </form>
 
       <div v-else-if="panel === 'step'" class="flex flex-col gap-2" role="alertdialog" aria-label="Confirm">
-        <p class="text-[13px]/4.75">{{ stepText }}</p>
+        <p class="text-ui/4.75">{{ stepText }}</p>
         <div class="flex justify-end gap-1.5">
           <button type="button" :class="ACT" class="text-(--text-muted) hover:bg-(--fill-hover)" @click="panel = null">Cancel</button>
           <button type="button" :class="ACT" class="bg-(--fill-secondary) hover:bg-(--fill-secondary-hover)" @click="runStep">
@@ -289,20 +289,20 @@ const ACT = 'flex h-6 items-center rounded-[var(--radius-6)] px-2.5 text-[13px] 
       </div>
 
       <div v-else-if="panel === 'chat'" class="flex flex-col gap-2" role="alertdialog" aria-label="Undo this chat's changes">
-        <p class="text-[13px] font-medium leading-4.75">Put these files back to how they were before this chat</p>
-        <p v-if="planError" class="text-[13px] text-(--text-muted)">{{ planError }}</p>
-        <p v-else-if="!plan" class="text-[13px] text-(--text-muted)">Reading the chat…</p>
-        <p v-else-if="!plan.files.length" class="text-[13px] text-(--text-muted)">This chat changed no files that are still different.</p>
+        <p class="text-ui font-medium leading-4.75">Put these files back to how they were before this chat</p>
+        <p v-if="planError" class="text-ui text-(--text-muted)">{{ planError }}</p>
+        <p v-else-if="!plan" class="text-ui text-(--text-muted)">Reading the chat…</p>
+        <p v-else-if="!plan.files.length" class="text-ui text-(--text-muted)">This chat changed no files that are still different.</p>
         <ul v-else class="flex max-h-56 flex-col gap-0.5 overflow-y-auto">
-          <li v-for="f in plan.files" :key="f.path" class="flex items-start gap-1.5 text-[13px] leading-4.75">
+          <li v-for="f in plan.files" :key="f.path" class="flex items-start gap-1.5 text-ui leading-4.75">
             <input type="checkbox" class="mt-0.75 size-3.5 shrink-0" :checked="picked.has(f.path)" :disabled="f.state !== 'ready'" :aria-label="undoLine(f)" @change="toggle(f.path)" />
             <span class="min-w-0 flex-1">
               <Tip :label="f.path"><span class="block truncate font-mono">{{ f.path }}</span></Tip>
-              <span v-if="f.state === 'ready'" class="tnum text-[12px]">
+              <span v-if="f.state === 'ready'" class="tnum text-ui-sm">
                 <span class="text-(--git-add)">+{{ f.added }}</span> <span class="text-(--git-del)">−{{ f.removed }}</span>
                 <span v-if="f.kind === 'delete'" class="text-(--text-muted)"> · created by the chat, deleted</span>
               </span>
-              <span v-else class="block text-[12px] text-(--text-muted)">Left alone: {{ f.reason }}</span>
+              <span v-else class="block text-ui-sm text-(--text-muted)">Left alone: {{ f.reason }}</span>
             </span>
           </li>
         </ul>

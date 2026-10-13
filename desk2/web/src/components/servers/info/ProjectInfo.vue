@@ -75,7 +75,7 @@ const addServer = () => nav.open({ kind: 'add-server', projectId: pr.value.id })
         <button type="button" :class="BTN" @click="addServer"><Plus class="size-3.5" />Add server</button>
         <button type="button" :class="BTN" @click="nav.open({ kind: 'edit-project', id: pr.id })"><Pencil class="size-3.5" />Edit project</button>
       </div>
-      <p v-if="error || servers.actionError.value" role="alert" class="text-[12px] leading-4 text-danger-text">{{ error || servers.actionError.value }}</p>
+      <p v-if="error || servers.actionError.value" role="alert" class="text-ui-sm leading-4 text-danger-text">{{ error || servers.actionError.value }}</p>
     </section>
 
     <div class="grid grid-cols-2 gap-2.5 @lg:grid-cols-4">

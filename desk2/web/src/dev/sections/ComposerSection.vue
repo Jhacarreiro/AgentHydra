@@ -134,7 +134,7 @@ const shotCases = shot === 'composer' ? cases : menuCases.filter((c) => c.id ===
   </div>
 
   <div v-else class="flex flex-col gap-6">
-    <p class="text-[12px] text-(--text-muted)">
+    <p class="text-ui-sm text-(--text-muted)">
       Open one menu at a time:
       <a v-for="c in menuCases" :key="c.id" class="me-3 text-(--accent-text) hover:underline" :href="`?shot=${c.id}#/gallery`">{{ c.label }}</a>
       <a class="text-(--accent-text) hover:underline" href="?shot=composer#/gallery">All states alone</a>

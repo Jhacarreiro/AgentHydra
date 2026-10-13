@@ -91,6 +91,16 @@
   --radius-12: 12px; /* composer */
   --radius-22: 22px; /* popover dialog */
 
+  /* The type scale (2026-10-13): the 10 to 14 px sizes the window hard-coded as arbitrary text utilities, declared
+     once, in px as the literals were. No --line-height sub-keys on purpose: an arbitrary size set only the font size,
+     so these must too (leading stays inherited). desk2/hydra names its 10, 11 and 13 px steps the same; lib/utils.ts
+     tells tailwind-merge about every step here. (No bracketed class names in this comment: Tailwind would build them.) */
+  --text-3xs: 10px;
+  --text-2xs: 11px;
+  --text-ui-sm: 12px;
+  --text-ui: 13px;
+  --text-ui-lg: 14px;
+
   --shadow-menu: 0 8px 24px #00000052, 0 2px 6px #0003;
   --shadow-composer: inset 0 0 0 1px #ffffff1a, 0 4px 20px #00000009;
   --shadow-popover: inset 0 0 0 1px #ffffff1a, 0 8px 24px #000000;

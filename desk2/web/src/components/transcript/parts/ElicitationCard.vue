@@ -74,14 +74,14 @@ const answered = computed(() => {
 </script>
 
 <template>
-  <div v-if="answered" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-if="answered" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <component :is="answered.icon" class="size-4 shrink-0" :class="answered.cls" />
     <span class="shrink-0">{{ answered.text }}</span>
     <span class="shrink-0 font-medium text-text">{{ item.serverName }}</span>
     <span class="min-w-0 truncate">{{ item.message }}</span>
   </div>
 
-  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-[14px] text-text-muted">
+  <div v-else-if="!docked" class="flex h-6 min-w-0 items-center gap-1.5 px-1 text-ui-lg text-text-muted">
     <Plug class="size-4 shrink-0 text-warning-text" />
     <span class="shrink-0">Waiting for you</span>
     <span class="shrink-0 font-medium text-text">{{ item.serverName }}</span>
@@ -89,20 +89,20 @@ const answered = computed(() => {
   </div>
 
   <div v-else class="tx-ask" role="group" :aria-label="item.title || `${item.serverName} asks for your input`">
-    <div class="flex items-start gap-2 px-3 pt-2.5 text-[14px]">
+    <div class="flex items-start gap-2 px-3 pt-2.5 text-ui-lg">
       <Plug class="mt-0.5 size-4 shrink-0 text-warning-text" />
       <div class="min-w-0">
-        <span class="me-2 rounded bg-fill-hover px-1.5 py-0.5 text-[11px] text-text-muted">{{ item.serverName }}</span>
+        <span class="me-2 rounded bg-fill-hover px-1.5 py-0.5 text-2xs text-text-muted">{{ item.serverName }}</span>
         <!-- The server's own header for a permission it asks through a form ("Allow ... to delete ...?") -->
         <span class="whitespace-pre-wrap wrap-break-word text-text">{{ item.title || item.message }}</span>
       </div>
     </div>
-    <p v-if="item.description" class="px-3 pt-1 ps-9 text-[12px] text-text-muted">{{ item.description }}</p>
-    <p v-if="item.title && item.message !== item.title" class="whitespace-pre-wrap wrap-break-word px-3 pt-1 ps-9 text-[13px] text-text">{{ item.message }}</p>
+    <p v-if="item.description" class="px-3 pt-1 ps-9 text-ui-sm text-text-muted">{{ item.description }}</p>
+    <p v-if="item.title && item.message !== item.title" class="whitespace-pre-wrap wrap-break-word px-3 pt-1 ps-9 text-ui text-text">{{ item.message }}</p>
 
     <div v-if="item.mode === 'form' && fields.length" class="grid max-h-[50vh] gap-2.5 overflow-auto px-3 pt-2.5 ps-9">
       <div v-for="f in fields" :key="f.name" class="grid gap-1">
-        <label v-if="f.type === 'boolean'" class="flex items-center gap-2 text-[13px] text-text">
+        <label v-if="f.type === 'boolean'" class="flex items-center gap-2 text-ui text-text">
           <input
             type="checkbox"
             class="size-4 accent-(--accent)"
@@ -112,11 +112,11 @@ const answered = computed(() => {
           />
           <span>{{ f.label }}</span>
         </label>
-        <label v-else :for="`${item.id}:${f.name}`" class="text-[13px] text-text">
+        <label v-else :for="`${item.id}:${f.name}`" class="text-ui text-text">
           {{ f.label }}<span v-if="f.required" class="text-text-muted"> *</span>
         </label>
-        <p v-if="f.description" class="text-[12px] text-text-muted">{{ f.description }}</p>
-        <p v-if="limitHint(f)" class="text-[12px] text-text-muted">{{ limitHint(f) }}</p>
+        <p v-if="f.description" class="text-ui-sm text-text-muted">{{ f.description }}</p>
+        <p v-if="limitHint(f)" class="text-ui-sm text-text-muted">{{ limitHint(f) }}</p>
         <input
           v-if="f.type === 'text' || f.type === 'number'"
           :id="`${item.id}:${f.name}`"
@@ -155,7 +155,7 @@ const answered = computed(() => {
             v-for="o in f.options ?? []"
             :key="o.value"
             type="button"
-            class="rounded-md border px-2.5 py-1.5 text-start text-[13px] transition-colors"
+            class="rounded-md border px-2.5 py-1.5 text-start text-ui transition-colors"
             :class="
               (f.type === 'choice' ? form[f.name] === o.value : picksOf(f.name).includes(o.value))
                 ? 'border-brand/60 bg-brand/10 text-text'
@@ -179,14 +179,14 @@ const answered = computed(() => {
             <ExternalLink class="size-3.5" />
           </a>
         </Tip>
-        <span class="min-w-0 truncate text-[13px] font-medium text-text">{{ link.host }}</span>
-        <span v-if="link.insecure" class="text-[12px] text-warning-text">Not secure (http)</span>
+        <span class="min-w-0 truncate text-ui font-medium text-text">{{ link.host }}</span>
+        <span v-if="link.insecure" class="text-ui-sm text-warning-text">Not secure (http)</span>
       </div>
       <Tip :label="link.href">
-        <p class="truncate font-mono text-[12px] text-text-muted">{{ link.href }}</p>
+        <p class="truncate font-mono text-ui-sm text-text-muted">{{ link.href }}</p>
       </Tip>
     </div>
-    <p v-else-if="item.mode === 'url'" class="px-3 pt-2 ps-9 text-[12px] text-warning-text">
+    <p v-else-if="item.mode === 'url'" class="px-3 pt-2 ps-9 text-ui-sm text-warning-text">
       The link it sent was refused: only http and https links open here.
     </p>
 
@@ -195,9 +195,9 @@ const answered = computed(() => {
         {{ item.mode === 'url' ? 'I have finished' : 'Submit' }}
       </button>
       <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="respond(false)">Cancel</button>
-      <span v-if="answer.invalid.length" class="text-[12px] text-danger-text">{{ answer.invalid.join('; ') }}</span>
-      <span v-if="err" class="text-[12px] text-danger-text">{{ err }}</span>
+      <span v-if="answer.invalid.length" class="text-ui-sm text-danger-text">{{ answer.invalid.join('; ') }}</span>
+      <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
-    <div v-else class="px-3 py-2 text-[12px] text-text-muted">Waiting for an answer</div>
+    <div v-else class="px-3 py-2 text-ui-sm text-text-muted">Waiting for an answer</div>
   </div>
 </template>

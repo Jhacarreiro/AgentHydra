@@ -908,7 +908,7 @@ defineExpose({
 })
 
 const NAV_ROW =
-  'group/nav flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-start text-[13px] leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none'
+  'group/nav flex h-[26px] w-full cursor-default items-center gap-1 rounded-[var(--radius-6)] px-0.5 text-start text-ui leading-[19.5px] transition-colors duration-[var(--dur-fast)] ease-[var(--ease-snap)] select-none'
 const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-text-2 hover:bg-fill-hover hover:text-text'
 </script>
 
@@ -942,7 +942,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               </span>
             </span>
             <span class="min-w-0 flex-1 truncate">New</span>
-            <kbd class="pe-1.5 font-sans text-[12px] text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
+            <kbd class="pe-1.5 font-sans text-ui-sm text-text-shortcut opacity-0 group-hover/nav:opacity-100">Ctrl + N</kbd>
           </button>
           <!-- The Search and Filter buttons (SidebarTools.vue) sit beside New, over the desk list and the cloud list alike. -->
           <SidebarTools v-if="!hydraModel && !devServers.on.value" :search-open="searchOpen" :filter="filter" @search="searchOpen ? closeSearch() : openSearch()" @update:filter="(f: SidebarFilter) => (filter = f)" />
@@ -984,7 +984,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             type="text"
             aria-label="Search sessions"
             :placeholder="cloud.on.value ? 'Search every session' : 'Search sessions'"
-            class="h-full min-w-0 flex-1 bg-transparent text-[13px] text-text outline-none placeholder:text-text-muted"
+            class="h-full min-w-0 flex-1 bg-transparent text-ui text-text outline-none placeholder:text-text-muted"
             @keydown="cloud.on.value ? onCloudSearchKey($event) : onSearchKey($event)"
           />
           <button type="button" aria-label="Close search" class="flex size-5 items-center justify-center rounded-(--radius-5) text-text-muted hover:bg-fill-hover hover:text-text" @click="closeSearch">
@@ -1040,7 +1040,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <ContextMenu v-if="groupMenus.seen(group.key)">
           <ContextMenuTrigger as-child :disabled="!hideable(group)">
           <header
-            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
+            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-ui-sm leading-4 text-text-muted"
             :class="group.hidden && 'opacity-60'"
           >
             <ReuseGroupHead :group="group" />
@@ -1064,7 +1064,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </ContextMenu>
           <header
             v-else
-            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted"
+            class="group/head flex h-8.5 items-center gap-0 pb-1 ps-1.5 pe-px pt-3 text-ui-sm leading-4 text-text-muted"
             :class="group.hidden && 'opacity-60'"
           >
             <ReuseGroupHead :group="group" />
@@ -1120,7 +1120,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         </section>
         </TransitionGroup>
 
-        <div v-if="groupList.length === 0" class="flex items-center gap-1 px-1.5 pt-3 text-[12px] leading-4 text-text-muted">
+        <div v-if="groupList.length === 0" class="flex items-center gap-1 px-1.5 pt-3 text-ui-sm leading-4 text-text-muted">
           <span class="flex-1">{{ emptyText }}</span>
           <template v-if="filtering && !searchOpen">
             <button type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="filter = 'active'">Show active</button>
@@ -1129,8 +1129,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <button v-if="groups.hiddenOut" type="button" class="rounded-sm px-1 text-text-2 hover:bg-fill-hover" @click="hiddenGroups.setShowHidden(true)">Show hidden</button>
         </div>
 
-        <p v-if="rowNote" role="status" class="px-1.5 pt-3 text-[12px] leading-4 text-text-2">{{ rowNote }}</p>
-        <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
+        <p v-if="rowNote" role="status" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-2">{{ rowNote }}</p>
+        <p v-if="rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-ui-sm leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
           <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
             <component :is="icons.dismiss" class="size-3" />
@@ -1139,7 +1139,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
         <!-- AgentHydra's transcript search: sessions the query was said in, minus the rows above -->
         <section v-if="searchOpen && search.phase !== 'idle'" aria-label="Everywhere">
-          <header class="flex h-8.5 items-center gap-1.5 pb-1 ps-1.5 pe-px pt-3 text-[12px] leading-4 text-text-muted">
+          <header class="flex h-8.5 items-center gap-1.5 pb-1 ps-1.5 pe-px pt-3 text-ui-sm leading-4 text-text-muted">
             <span>Everywhere</span>
             <!-- A gray pulsing dot, not a spinner: nothing in the sidebar spins (owner, 2026-10-05). -->
             <span
@@ -1150,13 +1150,13 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               :class="runPulse('gray')"
             />
           </header>
-          <p v-if="search.phase === 'offline'" class="px-1.5 text-[12px] leading-4 text-text-muted">AgentHydra search is offline</p>
+          <p v-if="search.phase === 'offline'" class="px-1.5 text-ui-sm leading-4 text-text-muted">AgentHydra search is offline</p>
           <Tip v-else-if="search.phase === 'failed'" :label="search.error ?? ''">
-            <p class="truncate px-1.5 text-[12px] leading-4 text-text-muted">
+            <p class="truncate px-1.5 text-ui-sm leading-4 text-text-muted">
               AgentHydra search failed: {{ search.error }}
             </p>
           </Tip>
-          <p v-else-if="search.phase === 'done' && everywhere.length === 0" class="px-1.5 text-[12px] leading-4 text-text-muted">No matches</p>
+          <p v-else-if="search.phase === 'done' && everywhere.length === 0" class="px-1.5 text-ui-sm leading-4 text-text-muted">No matches</p>
           <div v-else class="flex flex-col gap-[1.5px] pt-[1.5px]">
             <SearchHitRow
               v-for="row in everywhere"
@@ -1170,8 +1170,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </div>
         </section>
         </template>
-        <p v-if="cloud.on.value && !hydraModel && rowNote" role="status" class="px-1.5 pt-3 text-[12px] leading-4 text-text-2">{{ rowNote }}</p>
-        <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-[12px] leading-4 text-danger-text">
+        <p v-if="cloud.on.value && !hydraModel && rowNote" role="status" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-2">{{ rowNote }}</p>
+        <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-ui-sm leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
           <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
             <component :is="icons.dismiss" class="size-3" />
@@ -1187,7 +1187,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           type="button"
           :disabled="!updateRow.clickable"
           :aria-busy="updateRow.busy || undefined"
-          class="flex h-8 w-full min-w-0 items-center gap-2 rounded-(--radius-6) border border-border ps-2.5 pe-2 text-start text-[13px] leading-[19.5px] text-text-2 transition-colors duration-60 hover:bg-fill-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent) disabled:cursor-default disabled:hover:bg-transparent"
+          class="flex h-8 w-full min-w-0 items-center gap-2 rounded-(--radius-6) border border-border ps-2.5 pe-2 text-start text-ui leading-[19.5px] text-text-2 transition-colors duration-60 hover:bg-fill-hover focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent) disabled:cursor-default disabled:hover:bg-transparent"
           @click="clickUpdateRow"
         >
           <span class="size-1.5 shrink-0 rounded-full bg-accent" :class="updateRow.busy ? 'animate-pulse' : ''" aria-hidden="true" />
@@ -1195,7 +1195,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           <ChevronRight v-if="updateRow.clickable" class="size-3 shrink-0 text-text-muted" aria-hidden="true" />
         </button>
       </Tip>
-      <p v-if="updateRow.error" role="alert" class="px-1 pt-1.5 text-[12px] leading-4 text-danger-text">{{ updateRow.error }}</p>
+      <p v-if="updateRow.error" role="alert" class="px-1 pt-1.5 text-ui-sm leading-4 text-danger-text">{{ updateRow.error }}</p>
     </div>
 
     <!-- Footer: the profile pill opens the account popup above it; the gear opens Settings itself -->
@@ -1206,10 +1206,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           :aria-label="`Account for new chats: ${face.name}`"
           class="flex h-7 min-w-0 cursor-default items-center gap-1.5 rounded-(--radius-6) ps-1 pe-1.5 transition-colors duration-60 hover:bg-fill-hover data-[state=open]:bg-fill-hover"
         >
-          <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-(--fill-secondary) text-[10px] font-semibold leading-none text-text">{{ face.initial }}</span>
+          <span class="flex size-5 shrink-0 items-center justify-center rounded-full bg-(--fill-secondary) text-3xs font-semibold leading-none text-text">{{ face.initial }}</span>
           <!-- In a narrow sidebar the plan ("· 41 accounts") gives way before the name does. -->
-          <span class="max-w-full shrink-0 truncate text-[13px] leading-[19.5px] text-text-2">{{ face.name }}</span>
-          <span v-if="face.plan" class="min-w-0 truncate text-[12px] leading-4 text-text-muted">· {{ face.plan }}</span>
+          <span class="max-w-full shrink-0 truncate text-ui leading-[19.5px] text-text-2">{{ face.name }}</span>
+          <span v-if="face.plan" class="min-w-0 truncate text-ui-sm leading-4 text-text-muted">· {{ face.plan }}</span>
           <component :is="icons.more" class="ms-2.5 size-3 shrink-0 text-text-muted" />
         </button>
       </AccountsPopover>
@@ -1246,29 +1246,29 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
 
     <Dialog :open="deleting !== null" @update:open="(o: boolean) => !o && (deleting = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Delete session?</DialogTitle>
-        <DialogDescription class="text-[13px] leading-4.75 text-text-2">
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Delete session?</DialogTitle>
+        <DialogDescription class="text-ui leading-4.75 text-text-2">
           “{{ deleting?.title }}” will be removed from Hydra Desk. This cannot be undone.
         </DialogDescription>
         <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="deleting = null">Cancel</button>
-          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-[13px] font-medium text-white hover:brightness-110" @click="confirmDelete">Delete</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="deleting = null">Cancel</button>
+          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-ui font-medium text-white hover:brightness-110" @click="confirmDelete">Delete</button>
         </div>
       </DialogContent>
     </Dialog>
 
     <Dialog :open="naming !== null" @update:open="(o: boolean) => !o && (naming = null)">
       <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-[14px] font-semibold leading-5 text-text">New group</DialogTitle>
+        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">New group</DialogTitle>
         <DialogDescription class="sr-only">Name the group to move this session to.</DialogDescription>
         <form class="flex flex-col gap-3" @submit.prevent="confirmGroup">
-          <Input v-model="groupDraft" aria-label="Group name" placeholder="Group name" :maxlength="GROUP_MAX" class="h-8 text-[13px]" />
+          <Input v-model="groupDraft" aria-label="Group name" placeholder="Group name" :maxlength="GROUP_MAX" class="h-8 text-ui" />
           <div class="flex justify-end gap-2">
-            <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover)" @click="naming = null">Cancel</button>
+            <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="naming = null">Cancel</button>
             <button
               type="submit"
               :disabled="!groupName"
-              class="h-7 rounded-(--radius-6) bg-accent px-3 text-[13px] font-medium text-white hover:brightness-110 disabled:opacity-50"
+              class="h-7 rounded-(--radius-6) bg-accent px-3 text-ui font-medium text-white hover:brightness-110 disabled:opacity-50"
             >
               Move
             </button>

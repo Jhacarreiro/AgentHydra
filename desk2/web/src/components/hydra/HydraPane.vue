@@ -154,9 +154,9 @@ function reload() {
         class="absolute inset-0 size-full border-0"
         @load="syncPad"
       />
-      <div v-else-if="started" class="flex h-full flex-col items-center justify-center gap-2 text-[13px] text-text-2">
+      <div v-else-if="started" class="flex h-full flex-col items-center justify-center gap-2 text-ui text-text-2">
         <p>AgentHydra is not answering{{ daemon ? ` at ${daemon}` : '' }}.</p>
-        <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-[13px] text-text hover:bg-(--fill-secondary-hover) disabled:opacity-60" :disabled="checking" :aria-busy="checking" @click="reload">
+        <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover) disabled:opacity-60" :disabled="checking" :aria-busy="checking" @click="reload">
           Try again
         </button>
       </div>

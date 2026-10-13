@@ -763,7 +763,7 @@ watch(
            Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
       <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
-        <div v-if="!items.length && !showWorking" class="py-16 text-center text-[14px] text-text-muted">{{ emptyText }}</div>
+        <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
         <div :style="{ height: `${padTop}px` }" />
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />
@@ -785,7 +785,7 @@ watch(
       <ContextMenuItem :class="MENU_ITEM" :disabled="!reveal?.path" @select="copyPath">
         <icons.copy />Copy path
       </ContextMenuItem>
-      <ContextMenuLabel v-if="reveal?.media" class="px-2 py-1 text-[12px] font-normal leading-4 text-text-muted">
+      <ContextMenuLabel v-if="reveal?.media" class="px-2 py-1 text-ui-sm font-normal leading-4 text-text-muted">
         Shift + right-click for the browser menu (Loop, Save video as, Picture in picture)
       </ContextMenuLabel>
     </ContextMenuContent>
@@ -793,7 +793,7 @@ watch(
     <div
       v-if="revealNote"
       role="status"
-      class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-[13px] text-text-2 shadow-(--shadow-menu-ringed)"
+      class="pointer-events-none absolute bottom-4 left-1/2 -translate-x-1/2 rounded-(--radius-10) bg-bg-popover px-3 py-1.5 text-ui text-text-2 shadow-(--shadow-menu-ringed)"
     >{{ revealNote }}</div>
     <MessagePeek :item="peekItem" :top="insetTop ?? 0" @close="peekId = null" @go="goToPeek" />
     <!-- Each button keeps its own slot, so the down arrow never moves up under the pointer when the up arrow goes. The peek

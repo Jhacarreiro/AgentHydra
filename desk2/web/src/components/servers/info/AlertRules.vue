@@ -136,7 +136,7 @@ onBeforeUnmount(() => {
 
 <template>
   <div class="flex min-w-0 flex-col gap-4">
-    <p v-if="error" role="alert" class="text-[13px] leading-4.75 text-danger-text">{{ error }}</p>
+    <p v-if="error" role="alert" class="text-ui leading-4.75 text-danger-text">{{ error }}</p>
     <div v-if="!alerts" role="status" class="flex flex-col gap-3" aria-busy="true">
       <span class="sr-only">Reading the alert rules…</span>
       <div class="h-8 w-40 animate-pulse rounded-(--radius-6) bg-fill-5 motion-reduce:animate-none" />
@@ -169,12 +169,12 @@ onBeforeUnmount(() => {
             <div v-else class="flex min-h-13 items-center gap-3 px-4 py-3">
               <PaneSwitch :model-value="rule.enabled" label="Turn alert rule on/off" @update:model-value="toggleRule(rule)" />
               <div class="min-w-0 flex-1" :class="!rule.enabled && 'opacity-60'">
-                <p class="text-[13px] leading-5 text-text-2">
+                <p class="text-ui leading-5 text-text-2">
                   Alert if <span class="font-medium text-text">{{ rule.metric === 'cpu' ? 'CPU' : 'memory' }}</span> stays over
                   <span class="font-medium text-text tnum">{{ limit(rule) }}</span> for
                   <span class="font-medium text-text tnum">{{ duration(rule.forMs) }}</span>
                 </p>
-                <p class="flex flex-wrap items-center gap-x-2 text-[12px] leading-4.5 text-text-muted">
+                <p class="flex flex-wrap items-center gap-x-2 text-ui-sm leading-4.5 text-text-muted">
                   <span v-if="!processId" class="truncate">
                     {{ liveProcess(rule.processId)?.name ?? serverOf(rule.processId)?.name ?? rule.processId }}<template v-if="serverOf(rule.processId)"> · {{ serverOf(rule.processId)?.projectName }}</template>
                   </span>
@@ -204,7 +204,7 @@ onBeforeUnmount(() => {
       <Card v-if="events.length" title="History">
         <template #actions>
           <template v-if="confirmClear">
-            <span class="text-[12px] leading-4 text-text-2">{{ processId ? "Clear every server's alert history?" : 'Clear all alert history?' }}</span>
+            <span class="text-ui-sm leading-4 text-text-2">{{ processId ? "Clear every server's alert history?" : 'Clear all alert history?' }}</span>
             <button type="button" :class="BTN_DANGER_SM" @click="clearEvents">Clear</button>
             <button type="button" :class="BTN_GHOST_SM" @click="confirmClear = false">Keep</button>
           </template>
@@ -217,10 +217,10 @@ onBeforeUnmount(() => {
               :class="stillFiring(ev) ? 'bg-warning' : 'bg-text-muted'"
               aria-hidden="true"
             />
-            <p class="min-w-0 flex-1 text-[13px] leading-5 text-text-2">
+            <p class="min-w-0 flex-1 text-ui leading-5 text-text-2">
               {{ ev.metric === 'cpu' ? 'CPU' : 'Memory' }} reached <span class="font-medium text-text tnum">{{ amount(ev.metric, ev.value) }}</span>
               (over {{ amount(ev.metric, ev.threshold) }})
-              <span class="block text-[12px] leading-4.5 text-text-muted">
+              <span class="block text-ui-sm leading-4.5 text-text-muted">
                 <template v-if="!processId">{{ serverName(ev) }} · </template><Tip :label="clockTime(ev.firedAt)"><span>{{ ago(ev.firedAt) }}</span></Tip>
               </span>
             </p>

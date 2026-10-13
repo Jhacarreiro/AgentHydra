@@ -50,7 +50,7 @@ watch(
 
 <template>
   <Tip :label="hint">
-    <span class="flex h-6 min-w-0 shrink items-center truncate px-1.5 text-[12px] leading-4 text-text-muted" :aria-label="`Account: ${label}`">
+    <span class="flex h-6 min-w-0 shrink items-center truncate px-1.5 text-ui-sm leading-4 text-text-muted" :aria-label="`Account: ${label}`">
       {{ label }}
     </span>
   </Tip>

@@ -60,7 +60,7 @@ const NONE = '__default'
 
 const SEGMENTS = 'flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px'
 const SEGMENT =
-  'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-[13px] leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
+  'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-ui leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
 
 const local = ref<DeskSettings | null>(null)
 const models = ref<ModelChoice[]>([])
@@ -446,7 +446,7 @@ onBeforeUnmount(() => {
           type="search"
           placeholder="Search"
           aria-label="Search settings"
-          class="min-w-0 flex-1 bg-transparent text-[13px] leading-4.75 text-text outline-none placeholder:text-text-muted [&::-webkit-search-cancel-button]:appearance-none"
+          class="min-w-0 flex-1 bg-transparent text-ui leading-4.75 text-text outline-none placeholder:text-text-muted [&::-webkit-search-cancel-button]:appearance-none"
           @keydown.down.prevent="focusSection(section)"
         />
       </label>
@@ -455,7 +455,7 @@ onBeforeUnmount(() => {
         <template v-for="(s, i) in SETTINGS_SECTIONS" :key="s.id">
           <div
             v-if="s.caption !== SETTINGS_SECTIONS[i - 1]?.caption"
-            class="hidden px-2 pb-1.5 text-[12px] leading-4 text-text-muted sm:block"
+            class="hidden px-2 pb-1.5 text-ui-sm leading-4 text-text-muted sm:block"
             :class="i ? 'pt-4' : 'pt-2'"
           >
             {{ s.caption }}
@@ -465,7 +465,7 @@ onBeforeUnmount(() => {
             :data-section="s.id"
             :aria-current="!searching && section === s.id ? 'page' : undefined"
             :tabindex="section === s.id ? 0 : -1"
-            class="flex h-8 shrink-0 cursor-default items-center gap-2 rounded-full px-3 text-start text-[13px] leading-4.75 transition-colors duration-(--dur-fast) focus-visible:shadow-(--focus-ring) focus-visible:outline-none sm:rounded-(--radius-6) sm:px-2"
+            class="flex h-8 shrink-0 cursor-default items-center gap-2 rounded-full px-3 text-start text-ui leading-4.75 transition-colors duration-(--dur-fast) focus-visible:shadow-(--focus-ring) focus-visible:outline-none sm:rounded-(--radius-6) sm:px-2"
             :class="!searching && section === s.id ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover hover:text-text'"
             @click="pick(s.id)"
           >
@@ -477,18 +477,18 @@ onBeforeUnmount(() => {
     </nav>
 
     <section ref="contentEl" class="relative min-h-0 min-w-0 flex-1 overflow-y-auto px-6 pb-6 pt-12" aria-label="Settings">
-      <div class="absolute left-6 top-4 flex h-5 items-center gap-3 text-[12px] leading-4" aria-live="polite">
+      <div class="absolute left-6 top-4 flex h-5 items-center gap-3 text-ui-sm leading-4" aria-live="polite">
         <span class="flex items-center gap-1 text-text-muted transition-opacity duration-300" :class="showSaved ? 'opacity-100' : 'opacity-0'">
           <Check class="size-3.5 text-success-text" /> Saved
         </span>
         <span v-if="saveError || ah.error.value || dw.error.value" class="text-danger-text">Not saved: {{ saveError || ah.error.value || dw.error.value }}</span>
       </div>
 
-      <div v-if="!local && needsSettings" class="text-[13px]/4.75" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
+      <div v-if="!local && needsSettings" class="text-ui/4.75" :class="loadError ? 'text-danger-text' : 'text-text-muted'">
         {{ loadError ? `Could not load settings: ${loadError}` : 'Loading…' }}
       </div>
 
-      <p v-else-if="searching && !groups.length" class="text-[13px] leading-4.75 text-text-muted">No settings match</p>
+      <p v-else-if="searching && !groups.length" class="text-ui leading-4.75 text-text-muted">No settings match</p>
 
       <DiagnosticsView v-else-if="section === 'diagnostics' && !searching" />
 
@@ -496,22 +496,22 @@ onBeforeUnmount(() => {
 
       <template v-else>
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">
-          <h3 class="text-[13px] font-semibold leading-5 text-text">{{ g.heading }}</h3>
+          <h3 class="text-ui font-semibold leading-5 text-text">{{ g.heading }}</h3>
           <div>
             <div v-for="r in g.rows" :key="r.id" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5 last:border-b-0">
               <div class="min-w-50 flex-1">
-                <div class="text-[13px] leading-5 text-text">{{ r.label }}</div>
-                <div class="mt-0.5 text-[13px] leading-4.75 text-text-muted">
+                <div class="text-ui leading-5 text-text">{{ r.label }}</div>
+                <div class="mt-0.5 text-ui leading-4.75 text-text-muted">
                   {{ r.id === 'notifications' && notifyNote ? notifyNote : r.id === 'collapseMode' ? COLLAPSE_MODE_LABELS[local?.collapseMode ?? 'off'].sentence : r.description }}
                 </div>
-                <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
-                <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
-                <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
-                <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
-                <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
+                <div v-if="r.id === 'bridge'" class="truncate font-mono text-ui-sm leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
+                <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ babysitterNote }}</div>
+                <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
+                <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
+                <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-if="r.id === 'ahDesktopCliPair' && inst.pairingConfirm.value" class="mt-1.5">
-                  <div class="text-[13px] leading-4.75 text-text">{{ inst.pairingQuestion.value }}</div>
-                  <div v-for="c in inst.pairing.value?.candidates ?? []" :key="c.desktopDir" class="text-[12px] leading-4.5 text-text-muted">{{ inst.candidateLine(c) }}</div>
+                  <div class="text-ui leading-4.75 text-text">{{ inst.pairingQuestion.value }}</div>
+                  <div v-for="c in inst.pairing.value?.candidates ?? []" :key="c.desktopDir" class="text-ui-sm leading-4.5 text-text-muted">{{ inst.candidateLine(c) }}</div>
                   <div class="mt-1.5 flex gap-2">
                     <button type="button" :class="BUTTON" @click="inst.savePairing(true)">Yes, add them</button>
                     <button type="button" :class="BUTTON" @click="inst.cancelPairing()">Cancel</button>
@@ -522,8 +522,8 @@ onBeforeUnmount(() => {
               <InstancesControl v-if="inst.owns(r.id)" :id="r.id" :label="r.label" :inst="inst" />
               <AgentHydraControl v-else-if="isAh(r.id)" :id="r.id" :label="r.label" :ah="ah" />
               <DevServersControl v-else-if="isDw(r.id)" :id="r.id" :label="r.label" :ctx="dw" />
-              <span v-else-if="r.id === 'version'" class="font-mono text-[13px] leading-4.75 text-text-2">{{ version ? `v${version}` : '…' }}</span>
-              <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-[12px] leading-4.75 text-text-2">
+              <span v-else-if="r.id === 'version'" class="font-mono text-ui leading-4.75 text-text-2">{{ version ? `v${version}` : '…' }}</span>
+              <span v-else-if="r.id === 'home'" class="max-w-[60%] truncate font-mono text-ui-sm leading-4.75 text-text-2">
                 {{ home ?? '~/.hydra-desk-2 (or HYDRA_DESK_HOME)' }}
               </span>
 
@@ -577,7 +577,7 @@ onBeforeUnmount(() => {
                       {{ COLLAPSE_MODE_LABELS[m].label }}
                     </button>
                   </div>
-                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-right text-[12px] leading-4.5 text-text-muted">
+                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-right text-ui-sm leading-4.5 text-text-muted">
                     Close and reopen the AgentHydra window to use this: the window open now is older than collapse mode.
                   </p>
                 </div>
@@ -598,13 +598,13 @@ onBeforeUnmount(() => {
                   <PaneSwitch label="Notifications" :model-value="local.notifications" @update:model-value="(v: boolean) => save(switchPatch('notifications', v))" />
                 </div>
 
-                <div v-else-if="r.id === 'idle'" class="flex shrink-0 items-center gap-2 text-[13px] leading-4.75 text-text-muted">
+                <div v-else-if="r.id === 'idle'" class="flex shrink-0 items-center gap-2 text-ui leading-4.75 text-text-muted">
                   <input
                     v-model="idleDraft"
                     type="number"
                     min="1"
                     max="1440"
-                    class="tnum h-7 w-16 rounded-(--radius-6) bg-fill-5 px-2 text-end text-[13px] text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none [appearance:textfield] focus:shadow-(--focus-ring) [&::-webkit-inner-spin-button]:appearance-none"
+                    class="tnum h-7 w-16 rounded-(--radius-6) bg-fill-5 px-2 text-end text-ui text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none [appearance:textfield] focus:shadow-(--focus-ring) [&::-webkit-inner-spin-button]:appearance-none"
                     aria-label="Idle-close minutes"
                     @input="onIdleInput"
                     @blur="commitIdle"
@@ -639,7 +639,7 @@ onBeforeUnmount(() => {
                     v-if="orchestratorModelChoice === 'custom'"
                     v-model="customModelDraft"
                     type="text"
-                    class="h-7 w-52 rounded-(--radius-6) bg-fill-5 px-2 font-mono text-[13px] text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-(--focus-ring)"
+                    class="h-7 w-52 rounded-(--radius-6) bg-fill-5 px-2 font-mono text-ui text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-(--focus-ring)"
                     aria-label="Custom model id"
                     placeholder="claude-opus-5-5"
                     @blur="commitOrchestratorModel"
@@ -663,9 +663,9 @@ onBeforeUnmount(() => {
                   @update:model-value="(v: boolean) => save(switchPatch('delegate', v))"
                 />
 
-                <span v-else-if="r.id === 'workers'" class="tnum text-[13px] leading-4.75 text-text-2">{{ activeWorkers }}</span>
+                <span v-else-if="r.id === 'workers'" class="tnum text-ui leading-4.75 text-text-2">{{ activeWorkers }}</span>
 
-                <span v-else-if="r.id === 'bridge'" class="flex items-center gap-2 text-[13px] leading-4.75 text-text-2">
+                <span v-else-if="r.id === 'bridge'" class="flex items-center gap-2 text-ui leading-4.75 text-text-2">
                   <span
                     class="inline-block size-2 rounded-full"
                     :style="{ background: bridge === null ? 'var(--text-muted)' : bridge.up ? 'var(--success)' : 'var(--danger)' }"
@@ -677,15 +677,15 @@ onBeforeUnmount(() => {
               <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
                    centred down the list. -->
               <div v-if="r.id === 'routines' && routines" class="basis-full">
-                <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-[12px] leading-4.5 text-text-muted">
+                <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
                   No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                 </div>
                 <template v-if="routines.proposals.length">
-                  <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
+                  <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
                   <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
                 </template>
                 <template v-if="routines.routines.length">
-                  <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0">
+                  <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0">
                     <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
                   </h4>
                   <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />

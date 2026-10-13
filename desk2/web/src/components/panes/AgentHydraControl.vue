@@ -129,14 +129,14 @@ function onVersion() {
   />
 
   <Tip v-else-if="ah.down.value" :label="ah.down.value">
-    <span class="text-[13px] leading-4.75 text-text-muted">AgentHydra is not answering</span>
+    <span class="text-ui leading-4.75 text-text-muted">AgentHydra is not answering</span>
   </Tip>
 
   <template v-else-if="id === 'ahVersion'">
     <Tip :label="versionTitle">
       <button
         type="button"
-        class="flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-(--radius-6) px-2 font-mono text-[13px] leading-4.75 transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none disabled:opacity-70"
+        class="flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-(--radius-6) px-2 font-mono text-ui leading-4.75 transition-colors duration-60 hover:bg-fill-hover focus-visible:shadow-(--focus-ring) focus-visible:outline-none disabled:opacity-70"
         :disabled="ah.applying.value"
         @click="onVersion"
       >
@@ -179,11 +179,11 @@ function onVersion() {
     {{ ah.confirmDisconnect.value ? 'Click again to disconnect' : 'Disconnect' }}
   </button>
 
-  <span v-else-if="!s" class="text-[13px] leading-4.75 text-text-muted">Loading…</span>
+  <span v-else-if="!s" class="text-ui leading-4.75 text-text-muted">Loading…</span>
 
   <PaneSwitch v-else-if="sw" :label="label" :model-value="s[sw]" @update:model-value="(v: boolean) => ah.save({ [sw!]: v } as AhSettingsPatch)" />
 
-  <div v-else-if="num" class="flex shrink-0 items-center gap-2 text-[13px] leading-4.75 text-text-muted">
+  <div v-else-if="num" class="flex shrink-0 items-center gap-2 text-ui leading-4.75 text-text-muted">
     <input
       :key="s[num.key]"
       type="number"

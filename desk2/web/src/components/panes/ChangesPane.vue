@@ -55,7 +55,7 @@ onBeforeUnmount(() => {
     </div>
     <RepoYetiPane v-if="side === 'repoyeti'" :cwd="cwd" @close="emit('close')" />
     <template v-else>
-      <div v-if="previewLine" class="shrink-0 truncate border-b border-border px-3 py-1.5 text-[12px] text-(--text-muted)" :title="previewLine">{{ previewLine }}</div>
+      <div v-if="previewLine" class="shrink-0 truncate border-b border-border px-3 py-1.5 text-ui-sm text-(--text-muted)" :title="previewLine">{{ previewLine }}</div>
       <DiffPane :cwd="cwd" />
     </template>
   </div>

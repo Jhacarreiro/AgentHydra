@@ -142,7 +142,7 @@ provide(PANE_API, fixtureApi)
         </div>
         <div class="mt-3">
           <AccountsPopover>
-            <button type="button" class="rounded px-2 py-1 text-[13px] text-(--text-muted) hover:bg-(--fill-hover)">Auto account</button>
+            <button type="button" class="rounded px-2 py-1 text-ui text-(--text-muted) hover:bg-(--fill-hover)">Auto account</button>
           </AccountsPopover>
         </div>
       </div>

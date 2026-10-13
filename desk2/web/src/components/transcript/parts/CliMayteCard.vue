@@ -37,19 +37,19 @@ function dot(w: CliMayteWorker | null): string {
     <div v-else class="px-1 pt-0.5" :class="!info.tasks.length && !workers.length && 'pb-0.5'">
       <ToolHeader :item="item" :open="open" @toggle="ctx.toggle(item.id)" />
     </div>
-    <div v-if="info.tasks.length || workers.length" class="space-y-1 px-3 pb-2 ps-8 text-[13px]">
+    <div v-if="info.tasks.length || workers.length" class="space-y-1 px-3 pb-2 ps-8 text-ui">
       <div v-for="(t, i) in info.tasks" :key="i" class="flex min-w-0 items-center gap-2">
-        <span class="w-4 shrink-0 text-end font-mono text-[11px] text-text-muted">{{ i + 1 }}</span>
+        <span class="w-4 shrink-0 text-end font-mono text-2xs text-text-muted">{{ i + 1 }}</span>
         <span class="min-w-0 truncate text-text">{{ t.title }}</span>
-        <span v-if="t.kind" class="shrink-0 rounded bg-fill-hover px-1.5 text-[11px] text-text-muted">{{ t.kind }}</span>
-        <span v-if="t.cwd" class="ms-auto flex shrink-0 items-center gap-1 text-[11px] text-text-muted">
+        <span v-if="t.kind" class="shrink-0 rounded bg-fill-hover px-1.5 text-2xs text-text-muted">{{ t.kind }}</span>
+        <span v-if="t.cwd" class="ms-auto flex shrink-0 items-center gap-1 text-2xs text-text-muted">
           <FolderOpen class="size-3" />{{ shortPath(t.cwd).split('/').pop() }}
         </span>
       </div>
       <div v-if="workers.length" class="flex flex-wrap items-center gap-1.5 pt-0.5">
-        <span class="text-[11px] text-text-muted">Workers</span>
+        <span class="text-2xs text-text-muted">Workers</span>
         <Tip v-for="w in workers" :key="w.id" :label="w.worker ? `${w.worker.title} · ${w.worker.status}` : w.id">
-          <span class="inline-flex items-center gap-1.5 rounded-md bg-fill-hover px-1.5 py-0.5 font-mono text-[11px] text-text-muted">
+          <span class="inline-flex items-center gap-1.5 rounded-md bg-fill-hover px-1.5 py-0.5 font-mono text-2xs text-text-muted">
             <span class="size-1.5 rounded-full" :class="dot(w.worker)" />{{ w.id.slice(0, 10) }}
             <span v-if="w.worker" class="font-sans text-text-muted">{{ w.worker.status }}</span>
           </span>

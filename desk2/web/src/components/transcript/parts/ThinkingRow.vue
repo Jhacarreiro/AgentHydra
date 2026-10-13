@@ -24,7 +24,7 @@ const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
     <button
       v-if="step"
       type="button"
-      class="group flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-start text-[14px] transition-colors duration-60 hover:bg-fill-hover"
+      class="group flex h-8 w-full min-w-0 items-center gap-1.5 px-3 text-start text-ui-lg transition-colors duration-60 hover:bg-fill-hover"
       :aria-expanded="ctx.isOpen(id)"
       data-expander
       @click="ctx.toggle(id)"
@@ -37,8 +37,8 @@ const shown = computed(() => props.text.replace(/^\s*\n/, '').trimEnd())
       <span :class="shimmer && 'tx-shimmer'">{{ label }}</span>
     </StatusRow>
     <Collapse :open="ctx.isOpen(id)">
-      <div v-if="step" class="whitespace-pre-wrap border-t border-border px-3 py-2 text-[14px] leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
-      <div v-else class="tx-steps mb-1 mt-1.5 whitespace-pre-wrap px-3 py-2 text-[14px] leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
+      <div v-if="step" class="whitespace-pre-wrap border-t border-border px-3 py-2 text-ui-lg leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
+      <div v-else class="tx-steps mb-1 mt-1.5 whitespace-pre-wrap px-3 py-2 text-ui-lg leading-5 text-text-muted">{{ shown }}<span v-if="streaming" class="stream-cursor" /></div>
     </Collapse>
   </div>
 </template>

@@ -10,7 +10,7 @@ const emit = defineEmits<{ try: [tip: Tip]; dismiss: [tip: Tip] }>()
 </script>
 
 <template>
-  <div role="note" aria-label="Tip" class="flex h-10 min-w-0 items-center rounded-(--radius-10) bg-fill-5 ps-2 pe-2 text-[13px] leading-4.75">
+  <div role="note" aria-label="Tip" class="flex h-10 min-w-0 items-center rounded-(--radius-10) bg-fill-5 ps-2 pe-2 text-ui leading-4.75">
     <span class="flex size-5 shrink-0 items-center justify-center rounded-[5px] bg-(--fill-secondary) text-text-2" aria-hidden="true">
       <newSessionGlyphs.tip class="size-4" />
     </span>

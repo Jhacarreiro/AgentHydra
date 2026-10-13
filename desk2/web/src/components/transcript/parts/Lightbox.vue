@@ -276,14 +276,14 @@ onBeforeUnmount(() => {
             <video v-if="kind === 'video'" :key="current.src" :src="current.src" controls class="max-h-full max-w-full rounded-lg" />
             <iframe v-else-if="kind === 'pdf'" :src="current.src" :title="current.alt" class="size-full rounded-lg bg-white" />
             <iframe v-else-if="kind === 'html'" :src="current.src" :title="current.alt" sandbox="" class="size-full rounded-lg bg-white" />
-            <pre v-else-if="kind === 'text'" class="size-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[#161618] p-4 font-mono text-[12px] leading-relaxed text-text" data-testid="viewer-text">{{ textShown }}</pre>
+            <pre v-else-if="kind === 'text'" class="size-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[#161618] p-4 font-mono text-ui-sm leading-relaxed text-text" data-testid="viewer-text">{{ textShown }}</pre>
             <div v-else class="flex flex-col items-center gap-3 rounded-lg bg-[#202022] px-8 py-6 text-center" data-testid="viewer-file">
               <p class="text-[15px] font-medium text-text">{{ current.alt || 'file' }}</p>
-              <p class="text-[12px] text-text-muted">{{ fileLine }}</p>
+              <p class="text-ui-sm text-text-muted">{{ fileLine }}</p>
               <button v-if="current.reveal" type="button" class="tx-action w-auto px-3" data-testid="viewer-reveal" @click.stop="reveal">Show in folder</button>
             </div>
           </div>
-          <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 ps-4 pe-[calc(1rem+var(--caption-w))] py-3 text-[13px] text-text-muted">
+          <div class="pointer-events-none absolute inset-x-0 top-0 flex items-center justify-between gap-3 ps-4 pe-[calc(1rem+var(--caption-w))] py-3 text-ui text-text-muted">
             <span class="truncate" data-testid="viewer-title">{{ current.alt }}</span>
             <span class="flex shrink-0 items-center gap-1">
               <Tip v-if="annotatable" label="Annotate: draw, highlight, circle (A)">
@@ -307,7 +307,7 @@ onBeforeUnmount(() => {
               <ChevronRight class="size-4" />
             </button>
           </template>
-          <div class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 px-4 py-3 text-[12px] text-text-muted">
+          <div class="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-center gap-3 px-4 py-3 text-ui-sm text-text-muted">
             <span v-if="count > 1" data-testid="viewer-count">{{ index + 1 }} / {{ count }}</span>
             <span v-if="percent" data-testid="viewer-zoom">{{ percent }}%</span>
             <span class="opacity-70">Space or Esc closes · ← → step · wheel or + − zoom · 1 toggles 100% · W fits the width<template v-if="annotatable"> · A annotates</template></span>

@@ -15,7 +15,7 @@ const emit = defineEmits<{ pick: [id: string] }>()
   <DropdownMenuSub>
     <DropdownMenuSubTrigger :class="MENU_ITEM">Account</DropdownMenuSubTrigger>
     <DropdownMenuSubContent :class="MENU_CONTENT">
-      <DropdownMenuLabel class="max-w-64 px-2 py-1 text-[12px] font-normal leading-4 text-text-muted">{{ note }}</DropdownMenuLabel>
+      <DropdownMenuLabel class="max-w-64 px-2 py-1 text-ui-sm font-normal leading-4 text-text-muted">{{ note }}</DropdownMenuLabel>
       <DropdownMenuItem
         v-for="a in accounts"
         :key="a.id"

@@ -134,11 +134,11 @@ onMounted(refresh)
 </script>
 
 <template>
-  <div class="flex size-full min-w-0 flex-col bg-(--bg-page) text-[13px] leading-[19.5px] text-(--text)">
+  <div class="flex size-full min-w-0 flex-col bg-(--bg-page) text-ui leading-[19.5px] text-(--text)">
     <div class="flex h-8 shrink-0 items-center gap-1 ps-3 pe-2">
       <span class="font-medium">Changes</span>
       <Tip v-if="status?.isRepo && status.branch" :label="status.branch">
-        <span class="ms-1 flex h-5 min-w-0 items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-[12px] leading-4 text-(--text-2)">
+        <span class="ms-1 flex h-5 min-w-0 items-center gap-1 rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-(--text-2)">
           <component :is="icons.branch" class="size-3 shrink-0" />
           <span class="truncate">{{ status.branch }}</span>
           <span v-if="status.ahead" class="tnum shrink-0 text-(--text-muted)">↑{{ status.ahead }}</span>
@@ -146,7 +146,7 @@ onMounted(refresh)
         </span>
       </Tip>
       <span class="flex-1" />
-      <span v-if="status?.isRepo && files.length" class="tnum me-1 flex shrink-0 gap-1 text-[12px] leading-4">
+      <span v-if="status?.isRepo && files.length" class="tnum me-1 flex shrink-0 gap-1 text-ui-sm leading-4">
         <span class="text-(--git-add)">+{{ status.added }}</span>
         <span class="text-(--git-del)">-{{ status.removed }}</span>
       </span>
@@ -172,7 +172,7 @@ onMounted(refresh)
       </Tip>
     </div>
 
-    <div v-if="error" class="mx-2 mt-1 rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-[13px] text-(--danger-text)">
+    <div v-if="error" class="mx-2 mt-1 rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-ui text-(--danger-text)">
       {{ error }}
     </div>
 
@@ -192,7 +192,7 @@ onMounted(refresh)
 
     <template v-else>
       <div class="shrink-0 overflow-y-auto px-2 pb-1" :class="selectedPath ? 'max-h-[40%]' : 'min-h-0 flex-1'">
-        <div class="flex h-8.5 items-end pb-1 ps-1.5 text-[12px] leading-4 text-(--text-muted)">
+        <div class="flex h-8.5 items-end pb-1 ps-1.5 text-ui-sm leading-4 text-(--text-muted)">
           {{ files.length === 1 ? '1 file changed' : `${files.length} files changed` }}
         </div>
         <Tip v-for="{ f, letter, word, name, dir } in fileRows" :key="f.path" :label="`${word}: ${f.path}`">
@@ -204,14 +204,14 @@ onMounted(refresh)
             @click="open(f.path)"
           >
             <span
-              class="flex size-6 shrink-0 items-center justify-center text-[12px] font-semibold leading-4"
+              class="flex size-6 shrink-0 items-center justify-center text-ui-sm font-semibold leading-4"
               :style="{ color: letterColor[letter] ?? 'var(--text-muted)' }"
             >{{ letter }}</span>
             <span class="min-w-0 flex-1 truncate">
               <span>{{ name }}</span>
-              <span v-if="dir" class="ms-1.5 text-[12px] text-(--text-muted)">{{ dir }}</span>
+              <span v-if="dir" class="ms-1.5 text-ui-sm text-(--text-muted)">{{ dir }}</span>
             </span>
-            <span class="tnum flex shrink-0 gap-1 pe-1.5 text-[12px] leading-4">
+            <span class="tnum flex shrink-0 gap-1 pe-1.5 text-ui-sm leading-4">
               <span v-if="f.added" class="text-(--git-add)">+{{ f.added }}</span>
               <span v-if="f.removed" class="text-(--git-del)">-{{ f.removed }}</span>
             </span>
@@ -222,7 +222,7 @@ onMounted(refresh)
       <div v-if="selectedPath" class="min-h-0 flex-1 overflow-auto border-t border-(--border)">
         <div class="sticky top-0 z-10 flex h-8 items-center gap-1.5 bg-(--bg-page) ps-3 pe-2 shadow-[inset_0_-1px_0_var(--border)]">
           <Tip :label="selectedPath"><span class="min-w-0 flex-1 truncate text-(--text-2)">{{ selectedPath }}</span></Tip>
-          <span v-if="selectedFile" class="tnum flex shrink-0 gap-1 text-[12px] leading-4">
+          <span v-if="selectedFile" class="tnum flex shrink-0 gap-1 text-ui-sm leading-4">
             <span v-if="selectedFile.added" class="text-(--git-add)">+{{ selectedFile.added }}</span>
             <span v-if="selectedFile.removed" class="text-(--git-del)">-{{ selectedFile.removed }}</span>
           </span>
@@ -240,7 +240,7 @@ onMounted(refresh)
         <div v-if="diffLoading && !diff" class="px-3 py-1.5 text-(--text-muted)">Loading diff…</div>
         <div v-else-if="diffError" class="px-3 py-1.5 text-(--danger-text)">{{ diffError }}</div>
         <div v-else-if="diff && diff.rows.length === 0" class="px-3 py-1.5 text-(--text-muted)">No textual changes.</div>
-        <table v-else-if="diff" class="w-full border-collapse font-mono text-[13px] leading-4.75 [font-feature-settings:'calt'_0,'liga'_0]">
+        <table v-else-if="diff" class="w-full border-collapse font-mono text-ui leading-4.75 [font-feature-settings:'calt'_0,'liga'_0]">
           <tbody>
             <tr
               v-for="(row, i) in diff.rows"

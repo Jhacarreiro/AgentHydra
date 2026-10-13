@@ -103,7 +103,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
   </template>
 
   <div v-else-if="item.kind === 'todos'" class="tx-card px-3 py-2">
-    <div class="mb-1 text-[13px] text-text-muted">
+    <div class="mb-1 text-ui text-text-muted">
       To-dos · {{ item.todos.filter((t) => t.status === 'completed').length }}/{{ item.todos.length }} done
     </div>
     <TodoList :todos="item.todos" />
@@ -118,7 +118,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 
   <div
     v-else-if="item.kind === 'system'"
-    class="flex min-h-6 items-start gap-1.5 px-1 py-0.5 text-[13px] leading-5"
+    class="flex min-h-6 items-start gap-1.5 px-1 py-0.5 text-ui leading-5"
     :class="item.level === 'error' ? 'text-danger-text' : item.level === 'warn' ? 'text-warning-text' : 'text-text-muted'"
   >
     <CircleAlert v-if="item.level === 'error'" class="mt-0.5 size-4 shrink-0" />
@@ -138,7 +138,7 @@ const turnPrompt = computed(() => (props.item.kind !== 'assistant_text' || !prop
 
   <div
     v-else-if="item.kind === 'result'"
-    class="flex h-6 items-center px-1 text-[13px] tabular-nums"
+    class="flex h-6 items-center px-1 text-ui tabular-nums"
     :class="item.ok ? 'text-text-muted' : 'text-danger-text'"
   >
     {{ resultLine }}

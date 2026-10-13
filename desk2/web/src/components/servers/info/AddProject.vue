@@ -151,8 +151,8 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         <div class="flex items-start gap-3">
           <span :class="ICON_TILE"><FolderPlus class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0">
-            <h3 class="text-[13px] font-medium leading-5 text-text">Add a folder</h3>
-            <p class="text-[12px] leading-4.5 text-text-muted">A folder with a package.json, or a .devwebui file. A file:// link works too.</p>
+            <h3 class="text-ui font-medium leading-5 text-text">Add a folder</h3>
+            <p class="text-ui-sm leading-4.5 text-text-muted">A folder with a package.json, or a .devwebui file. A file:// link works too.</p>
           </div>
         </div>
         <Field label="Folder or .devwebui file" v-slot="{ id, describedBy }">
@@ -166,10 +166,10 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         </Field>
         <template v-if="scaffold">
           <div class="flex flex-col gap-3 border-t border-border pt-3">
-            <p class="text-[13px] leading-5 text-text-2">This folder has no .devwebui file yet. Review what goes into it.</p>
+            <p class="text-ui leading-5 text-text-2">This folder has no .devwebui file yet. Review what goes into it.</p>
             <ProposalEditor v-model="scaffold.proposal" />
             <div class="sticky bottom-0 z-10 -mx-4 -mb-4 flex flex-wrap items-center justify-end gap-2 rounded-b-(--radius-10) border-t border-border bg-bg-panel/95 px-4 py-3 backdrop-blur">
-              <p v-if="error" role="alert" class="me-auto min-w-0 text-[12px] leading-4 text-danger-text">{{ error }}</p>
+              <p v-if="error" role="alert" class="me-auto min-w-0 text-ui-sm leading-4 text-danger-text">{{ error }}</p>
               <button type="button" :class="BTN_GHOST" @click="scaffold = null">Cancel</button>
               <button type="button" :class="BTN_PRIMARY" :disabled="busy || !scaffold.proposal.processes.length" @click="writeScaffold">Create .devwebui and add</button>
             </div>
@@ -182,8 +182,8 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         <div class="flex items-start gap-3">
           <span :class="ICON_TILE"><GitBranch class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0">
-            <h3 class="text-[13px] font-medium leading-5 text-text">Clone a repository</h3>
-            <p class="text-[12px] leading-4.5 text-text-muted">Clones it into a folder, then adds it.</p>
+            <h3 class="text-ui font-medium leading-5 text-text">Clone a repository</h3>
+            <p class="text-ui-sm leading-4.5 text-text-muted">Clones it into a folder, then adds it.</p>
           </div>
         </div>
         <Field label="Repository URL" v-slot="{ id }">
@@ -204,8 +204,8 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         <div class="flex items-start gap-3">
           <span :class="ICON_TILE"><ScanSearch class="size-4" aria-hidden="true" /></span>
           <div class="min-w-0 flex-1">
-            <h3 class="text-[13px] font-medium leading-5 text-text">Find projects on this PC</h3>
-            <p class="text-[12px] leading-4.5 text-text-muted">Looks for .devwebui files and project folders not added yet.</p>
+            <h3 class="text-ui font-medium leading-5 text-text">Find projects on this PC</h3>
+            <p class="text-ui-sm leading-4.5 text-text-muted">Looks for .devwebui files and project folders not added yet.</p>
           </div>
           <button type="button" :class="BTN_GHOST" :disabled="busy" @click="toggleIgnored">{{ ignored ? 'Hide ignored' : 'Show ignored' }}</button>
         </div>
@@ -221,27 +221,27 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
             <LoaderCircle v-if="scanning === p.id" class="mt-0.5 size-3.5 shrink-0 animate-spin text-accent-text motion-reduce:animate-none" aria-hidden="true" />
             <component :is="p.icon" v-else class="mt-0.5 size-3.5 shrink-0 text-text-2" aria-hidden="true" />
             <span class="flex min-w-0 flex-col">
-              <span class="text-[13px] font-medium leading-5 text-text">{{ scanning === p.id ? 'Scanning…' : p.title }}</span>
-              <span class="text-[12px] leading-4 text-text-muted">{{ p.line }}</span>
+              <span class="text-ui font-medium leading-5 text-text">{{ scanning === p.id ? 'Scanning…' : p.title }}</span>
+              <span class="text-ui-sm leading-4 text-text-muted">{{ p.line }}</span>
             </span>
           </button>
         </div>
 
         <template v-if="scan">
-          <p class="text-[12px] leading-4 text-text-muted">
+          <p class="text-ui-sm leading-4 text-text-muted">
             Looked in {{ scan.scannedDirs }} folders in {{ (scan.ms / 1000).toFixed(1) }} s.
             <template v-if="scan.truncated"> Stopped at the result limit.</template>
             <template v-if="scan.timedOut"> Stopped at the time limit.</template>
           </p>
-          <p v-if="!scan.files.length && !scan.detected.length" class="text-[13px] leading-5 text-text-2">Nothing new was found.</p>
+          <p v-if="!scan.files.length && !scan.detected.length" class="text-ui leading-5 text-text-2">Nothing new was found.</p>
           <Card v-else flush>
             <ul class="divide-y divide-border">
               <li v-for="f in scan.files.filter((x) => !gone.has(x.path))" :key="f.path" class="flex min-h-12 items-center gap-3 px-4 py-2.5">
                 <FileCode class="size-4 shrink-0 text-text-2" aria-hidden="true" />
                 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <span class="truncate text-[13px] text-text">{{ f.name }}</span>
-                    <span class="text-[12px] text-text-muted">{{ plural(f.processes) }}</span>
+                    <span class="truncate text-ui text-text">{{ f.name }}</span>
+                    <span class="text-ui-sm text-text-muted">{{ plural(f.processes) }}</span>
                     <span v-if="!f.valid" :class="chip('danger')">Does not parse</span>
                   </div>
                   <Tip :label="f.path"><div :class="[MONO, 'truncate text-text-muted']">{{ f.path }}</div></Tip>
@@ -253,8 +253,8 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
                 <Folder class="size-4 shrink-0 text-text-2" aria-hidden="true" />
                 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div class="flex min-w-0 flex-wrap items-center gap-1.5">
-                    <span class="truncate text-[13px] text-text">{{ d.name }}</span>
-                    <span class="text-[12px] text-text-muted">{{ plural(d.processes) }}</span>
+                    <span class="truncate text-ui text-text">{{ d.name }}</span>
+                    <span class="text-ui-sm text-text-muted">{{ plural(d.processes) }}</span>
                     <span :class="CHIP">No .devwebui</span>
                     <span v-if="d.framework" :class="CHIP">{{ d.framework }}</span>
                   </div>
@@ -269,7 +269,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
         </template>
 
         <Card v-if="ignored" title="Ignored folders" flush>
-          <p v-if="!ignored.length" class="px-4 pb-4 text-[12px] text-text-muted">No folders are ignored.</p>
+          <p v-if="!ignored.length" class="px-4 pb-4 text-ui-sm text-text-muted">No folders are ignored.</p>
           <ul v-else class="divide-y divide-border border-t border-border">
             <li v-for="p in ignored" :key="p" class="flex min-h-10 items-center gap-3 px-4 py-1.5">
               <Tip :label="p"><span :class="[MONO, 'min-w-0 flex-1 truncate text-text-2']">{{ p }}</span></Tip>

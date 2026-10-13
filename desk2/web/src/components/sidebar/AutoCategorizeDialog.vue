@@ -71,15 +71,15 @@ async function putBack(item: PlacementProposal): Promise<void> {
 <template>
   <Dialog :open="categorizing !== null" @update:open="(o: boolean) => !o && close()">
     <DialogContent :show-close-button="false" class="max-h-[80vh] gap-3 overflow-y-auto rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-120">
-      <DialogTitle class="text-[14px] font-semibold leading-5 text-text">Auto-categorize chats</DialogTitle>
-      <DialogDescription class="text-[13px] leading-4.75 text-text-2">
+      <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Auto-categorize chats</DialogTitle>
+      <DialogDescription class="text-ui leading-4.75 text-text-2">
         Each chat moves to the project its transcript shows it worked in. Nothing moves until you confirm, and no session file is touched.
       </DialogDescription>
 
-      <div v-if="items === null && !error" class="text-[13px] text-text-muted" role="status">Reading the chats...</div>
-      <div v-if="error" class="text-[13px] text-text-2" role="alert">{{ error }}</div>
+      <div v-if="items === null && !error" class="text-ui text-text-muted" role="status">Reading the chats...</div>
+      <div v-if="error" class="text-ui text-text-2" role="alert">{{ error }}</div>
 
-      <ul v-if="items" class="flex flex-col gap-1.5 text-[13px] leading-4.75 text-text">
+      <ul v-if="items" class="flex flex-col gap-1.5 text-ui leading-4.75 text-text">
         <li v-for="item in items" :key="item.id" class="flex items-baseline gap-2">
           <span class="min-w-0 flex-1 truncate">{{ item.title || 'Untitled chat' }}</span>
           <span v-if="moved.has(item.id)" class="shrink-0 text-text-2">moved to {{ item.project?.name }}</span>
@@ -90,7 +90,7 @@ async function putBack(item: PlacementProposal): Promise<void> {
           <button
             v-if="moved.has(item.id)"
             type="button"
-            class="shrink-0 rounded-md px-1.5 text-[12px] text-text-2 underline-offset-2 hover:underline"
+            class="shrink-0 rounded-md px-1.5 text-ui-sm text-text-2 underline-offset-2 hover:underline"
             :disabled="busy"
             @click="putBack(item)"
           >
@@ -101,11 +101,11 @@ async function putBack(item: PlacementProposal): Promise<void> {
       </ul>
 
       <div class="flex justify-end gap-2 pt-1">
-        <button type="button" class="rounded-md px-3 py-1.5 text-[13px] text-text-2 hover:text-text" @click="close">Close</button>
+        <button type="button" class="rounded-md px-3 py-1.5 text-ui text-text-2 hover:text-text" @click="close">Close</button>
         <button
           v-if="toMove.length"
           type="button"
-          class="rounded-md bg-accent px-3 py-1.5 text-[13px] font-medium text-white disabled:opacity-50"
+          class="rounded-md bg-accent px-3 py-1.5 text-ui font-medium text-white disabled:opacity-50"
           :disabled="busy"
           @click="confirm"
         >

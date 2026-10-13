@@ -27,6 +27,6 @@ const emit = defineEmits<{ click: [] }>()
     <span class="flex min-w-0 items-center gap-1.5 text-[18px] font-semibold leading-6 tnum" :class="tone ? TONE_TEXT[tone] : 'text-text'">
       <slot><span class="truncate">{{ value }}</span></slot>
     </span>
-    <span v-if="sub || $slots.sub" class="truncate text-[12px] leading-4 text-text-muted"><slot name="sub">{{ sub }}</slot></span>
+    <span v-if="sub || $slots.sub" class="truncate text-ui-sm leading-4 text-text-muted"><slot name="sub">{{ sub }}</slot></span>
   </component>
 </template>

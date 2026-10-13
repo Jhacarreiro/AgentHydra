@@ -59,7 +59,7 @@ function openAt(f: ImageRef) {
     <div v-if="files.length" class="flex flex-wrap gap-2 ps-0">
       <FileCard v-for="(f, i) in files" :key="`f${i}`" :file="f" @open="openAt(f)" />
     </div>
-    <div v-else-if="item.status === 'running'" class="px-1 text-[14px] leading-5 text-text-muted"><span :class="shimmer && 'tx-shimmer'">Sending a file</span></div>
-    <div v-else-if="item.result?.isError" class="px-1 text-[14px] leading-5 text-danger-text">{{ item.result.text || 'The file could not be sent' }}</div>
+    <div v-else-if="item.status === 'running'" class="px-1 text-ui-lg leading-5 text-text-muted"><span :class="shimmer && 'tx-shimmer'">Sending a file</span></div>
+    <div v-else-if="item.result?.isError" class="px-1 text-ui-lg leading-5 text-danger-text">{{ item.result.text || 'The file could not be sent' }}</div>
   </div>
 </template>

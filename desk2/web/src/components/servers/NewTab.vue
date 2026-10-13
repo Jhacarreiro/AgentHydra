@@ -97,7 +97,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
 
         <div v-else-if="view.kind === 'failed'" class="mx-1 flex flex-col gap-2 rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-center text-(--danger-text)" role="alert">
           <div>The server manager did not start.</div>
-          <div class="wrap-break-word font-mono text-[12px]">{{ view.reason }}</div>
+          <div class="wrap-break-word font-mono text-ui-sm">{{ view.reason }}</div>
           <button type="button" :class="TEXT_BTN" class="self-center" @click="emit('tryAgain')">Try again</button>
         </div>
 
@@ -114,13 +114,13 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
           <div class="font-medium">No servers in this folder</div>
           <div class="break-all text-(--text-muted)">{{ cwd }}</div>
           <div class="rounded-(--radius-10) bg-(--fill-secondary) px-3 py-2" role="status">{{ view.reason }}</div>
-          <div class="text-[12px] text-(--text-muted)">Servers come from Claude Code's .claude/launch.json, or the dev scripts in package.json.</div>
+          <div class="text-ui-sm text-(--text-muted)">Servers come from Claude Code's .claude/launch.json, or the dev scripts in package.json.</div>
           <button type="button" :class="TEXT_BTN" class="self-center" @click="emit('lookAgain')">Look again</button>
         </div>
 
         <section v-else-if="view.kind === 'project' && project" aria-label="Servers">
           <div class="flex min-h-7 items-center gap-1 px-1">
-            <span class="text-[12px] font-medium text-(--text-muted)">Servers</span>
+            <span class="text-ui-sm font-medium text-(--text-muted)">Servers</span>
             <span class="flex-1" />
             <template v-if="project.processes.length > 1">
               <button type="button" :class="TEXT_BTN" :disabled="busy.has(allKey(project))" @click="emit('all', 'start')"><Play class="size-3" />Start all</button>
@@ -134,9 +134,9 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                 <button type="button" class="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-(--radius-6) text-start focus-visible:shadow-(--focus-ring) focus-visible:outline-none" :aria-label="`Open ${p.name}`" @click="emit('server', p)">
                   <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(p.status)]" aria-hidden="true" />
                   <span class="truncate font-medium">{{ p.name }}</span>
-                  <span v-if="p.port" class="tnum shrink-0 text-[12px] text-(--text-muted)">:{{ p.port }}</span>
-                  <span class="shrink-0 text-[12px] text-(--text-muted)">{{ pendingText(p) }}</span>
-                  <Tip v-if="outsideNote(p)" :label="OUTSIDE_TIP"><span class="truncate text-[12px] text-(--text-muted)">{{ outsideNote(p) }}</span></Tip>
+                  <span v-if="p.port" class="tnum shrink-0 text-ui-sm text-(--text-muted)">:{{ p.port }}</span>
+                  <span class="shrink-0 text-ui-sm text-(--text-muted)">{{ pendingText(p) }}</span>
+                  <Tip v-if="outsideNote(p)" :label="OUTSIDE_TIP"><span class="truncate text-ui-sm text-(--text-muted)">{{ outsideNote(p) }}</span></Tip>
                 </button>
                 <Tip :label="isUp(p.status) ? 'Stop' : (startBlock(p) ?? 'Start and open')">
                   <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id) || !!startBlock(p)" :aria-label="`${isUp(p.status) ? 'Stop' : 'Start and open'} ${p.name}`" @click="isUp(p.status) ? emit('toggle', p) : emit('server', p)">
@@ -148,22 +148,22 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <button type="button" :class="ICON_BTN" :disabled="busy.has(p.id) || !!startBlock(p)" :aria-label="`Restart ${p.name}`" @click="emit('restart', p)"><RotateCw class="size-3.5" /></button>
                 </Tip>
               </div>
-              <div v-if="startBlock(p)" class="mx-1 mb-1 wrap-break-word text-[12px] text-(--warning-text)" :aria-label="`${p.name} cannot start`">{{ startBlock(p) }}</div>
-              <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap wrap-break-word rounded-(--radius-6) bg-(--fill-secondary) px-2 py-1 font-mono text-[11px] leading-4 text-(--text-2)" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
+              <div v-if="startBlock(p)" class="mx-1 mb-1 wrap-break-word text-ui-sm text-(--warning-text)" :aria-label="`${p.name} cannot start`">{{ startBlock(p) }}</div>
+              <pre v-if="logOf(p).length" class="mx-1 mb-1 max-h-24 overflow-auto whitespace-pre-wrap wrap-break-word rounded-(--radius-6) bg-(--fill-secondary) px-2 py-1 font-mono text-2xs leading-4 text-(--text-2)" :aria-label="`Last output of ${p.name}`">{{ logOf(p).join('\n') }}</pre>
             </li>
           </ul>
         </section>
 
         <section v-if="other.length" class="pt-2" aria-label="Also running">
-          <div class="px-1 pb-0.5 text-[12px] font-medium text-(--text-muted)">Also running</div>
+          <div class="px-1 pb-0.5 text-ui-sm font-medium text-(--text-muted)">Also running</div>
           <ul class="flex flex-col gap-0.5" aria-label="Servers running for other folders">
             <li v-for="r in other" :key="r.proc.id" class="flex min-h-7 items-center gap-1.5 rounded-(--radius-6) px-1 hover:bg-(--fill-hover)">
               <button type="button" class="flex min-h-7 min-w-0 flex-1 items-center gap-1.5 rounded-(--radius-6) text-start focus-visible:shadow-(--focus-ring) focus-visible:outline-none" :aria-label="`Open ${r.proc.name}`" @click="emit('server', r.proc)">
                 <span class="size-2 shrink-0 rounded-full" :class="DOT[statusDot(r.proc.status)]" aria-hidden="true" />
                 <span class="truncate font-medium">{{ r.proc.name }}</span>
-                <span class="truncate text-[12px] text-(--text-muted)">{{ r.project.name }}</span>
-                <span v-if="r.proc.port" class="tnum shrink-0 text-[12px] text-(--text-muted)">:{{ r.proc.port }}</span>
-                <Tip v-if="outsideNote(r.proc)" :label="OUTSIDE_TIP"><span class="truncate text-[12px] text-(--text-muted)">{{ outsideNote(r.proc) }}</span></Tip>
+                <span class="truncate text-ui-sm text-(--text-muted)">{{ r.project.name }}</span>
+                <span v-if="r.proc.port" class="tnum shrink-0 text-ui-sm text-(--text-muted)">:{{ r.proc.port }}</span>
+                <Tip v-if="outsideNote(r.proc)" :label="OUTSIDE_TIP"><span class="truncate text-ui-sm text-(--text-muted)">{{ outsideNote(r.proc) }}</span></Tip>
               </button>
               <Tip label="Stop">
                 <button type="button" :class="ICON_BTN" :disabled="busy.has(r.proc.id)" :aria-label="`Stop ${r.proc.name}`" @click="emit('toggle', r.proc)"><Square class="size-3.5" /></button>
@@ -174,7 +174,7 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
 
         <section v-if="showLocal" class="pt-2" aria-label="Other localhost servers">
           <div class="flex min-h-7 items-center gap-1 px-1">
-            <span class="text-[12px] font-medium text-(--text-muted)">Other localhost servers</span>
+            <span class="text-ui-sm font-medium text-(--text-muted)">Other localhost servers</span>
             <span class="flex-1" />
             <button type="button" :class="TEXT_BTN" :aria-pressed="allPorts" @click="emit('allPorts', !allPorts)">{{ allPorts ? 'Dev servers only' : local?.hidden ? `All ports (${local?.hidden} hidden)` : 'All ports' }}</button>
           </div>
@@ -186,14 +186,14 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                 <span class="size-2 shrink-0 rounded-full" :class="DOT.run" aria-hidden="true" />
                 <span class="tnum shrink-0 font-medium">:{{ s.port }}</span>
                 <span v-if="s.title" class="truncate">{{ s.title }}</span>
-                <span v-if="s.process" class="truncate text-[12px] text-(--text-muted)">{{ s.process }}</span>
+                <span v-if="s.process" class="truncate text-ui-sm text-(--text-muted)">{{ s.process }}</span>
               </button>
             </li>
           </ul>
         </section>
 
         <section v-if="!query.trim() || saved.length" :class="apart ? 'mt-5 border-t border-border pt-4' : 'pt-2'" aria-label="Saved browsers">
-          <div class="px-1 pb-0.5 text-[12px] font-medium text-(--text-muted)">Saved browsers</div>
+          <div class="px-1 pb-0.5 text-ui-sm font-medium text-(--text-muted)">Saved browsers</div>
           <div v-if="profilesError" class="rounded-(--radius-10) bg-(--danger-bg) px-3 py-2 text-(--danger-text)" role="alert">{{ profilesError }}</div>
           <div v-else-if="!profiles" class="px-1 text-(--text-muted)" role="status">Loading…</div>
           <div v-else-if="!profiles.length" class="px-1 text-(--text-muted)" role="status">The AI creates saved browsers as it works, and they appear here.</div>
@@ -204,12 +204,12 @@ const pendingText = (p: DevWebProcess) => (props.pending.includes(p.id) && (p.st
                   <Tip :label="r.open ? 'Open' : 'Not open'"><span class="size-2 shrink-0 rounded-full" :class="r.open ? DOT.run : DOT.off" aria-hidden="true" /></Tip>
                   <Tip :label="r.label && r.label !== r.name ? r.name : ''"><span class="truncate font-medium">{{ r.label ?? r.name }}</span></Tip>
                   <span class="flex-1" />
-                  <span class="shrink-0 text-[12px] text-(--text-muted)">{{ r.open ? 'open · ' : '' }}{{ r.lastUsed }}</span>
+                  <span class="shrink-0 text-ui-sm text-(--text-muted)">{{ r.open ? 'open · ' : '' }}{{ r.lastUsed }}</span>
                 </span>
-                <Tip :label="r.note ?? ''"><span class="truncate text-[12px]" :class="r.note ? 'text-(--text-2)' : 'text-(--text-muted)'">{{ r.note ?? 'no note' }}</span></Tip>
+                <Tip :label="r.note ?? ''"><span class="truncate text-ui-sm" :class="r.note ? 'text-(--text-2)' : 'text-(--text-muted)'">{{ r.note ?? 'no note' }}</span></Tip>
                 <span v-if="chipsOf(r).length" class="flex flex-wrap gap-1">
-                  <span v-for="h in splitChips(chipsOf(r)).shown" :key="h" class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-[11px] text-(--text-2)">{{ h }}</span>
-                  <Tip v-if="splitChips(chipsOf(r)).more.length" :label="moreTitle(chipsOf(r))"><span class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-[11px] text-(--text-2)">+{{ splitChips(chipsOf(r)).more.length }}</span></Tip>
+                  <span v-for="h in splitChips(chipsOf(r)).shown" :key="h" class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-2xs text-(--text-2)">{{ h }}</span>
+                  <Tip v-if="splitChips(chipsOf(r)).more.length" :label="moreTitle(chipsOf(r))"><span class="rounded-(--radius-6) bg-(--fill-secondary) px-1.5 text-2xs text-(--text-2)">+{{ splitChips(chipsOf(r)).more.length }}</span></Tip>
                 </span>
               </button>
             </li>

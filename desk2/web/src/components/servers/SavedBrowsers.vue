@@ -317,7 +317,7 @@ defineExpose({ refresh })
         <Tip label="Reload"><button type="button" :class="ICON_BTN" aria-label="Reload" :disabled="!page" @click="history('reload')"><RotateCw class="size-4" /></button></Tip>
         <input ref="addressEl" v-model="address" type="text" spellcheck="false" aria-label="Address" placeholder="An address" :class="INPUT" />
       </form>
-      <Tip v-if="note" :label="note"><div class="truncate border-b border-border px-3 py-1 text-[12px] text-(--text-muted)" data-testid="browser-note">{{ note }}</div></Tip>
+      <Tip v-if="note" :label="note"><div class="truncate border-b border-border px-3 py-1 text-ui-sm text-(--text-muted)" data-testid="browser-note">{{ note }}</div></Tip>
       <div class="relative min-h-0 flex-1 bg-(--bg-page)">
         <div ref="stage" class="absolute inset-0" :class="phase === 'live' || phase === 'connecting' ? '' : 'invisible'">
           <canvas
@@ -346,7 +346,7 @@ defineExpose({ refresh })
           @blur="focused = false"
         />
         <div v-if="phase === 'live' && page && !isRealPage(page.tab.url)" class="pointer-events-none absolute inset-x-0 top-3 flex justify-center" role="status" data-testid="page-blank">
-          <span class="rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-[12px] text-(--text-muted) shadow-(--shadow-menu-ringed)">This page is blank.</span>
+          <span class="rounded-(--radius-10) bg-(--bg-popover) px-3 py-1.5 text-ui-sm text-(--text-muted) shadow-(--shadow-menu-ringed)">This page is blank.</span>
         </div>
         <div v-if="phase === 'connecting'" class="pointer-events-none absolute inset-0 flex items-center justify-center text-(--text-muted)" role="status">Connecting…</div>
         <div v-else-if="phase === 'closed'" class="absolute inset-0 flex flex-col items-center justify-center gap-2 bg-(--bg-page) px-6 text-center" role="status">

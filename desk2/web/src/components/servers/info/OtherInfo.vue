@@ -56,7 +56,7 @@ const answer = computed(() => {
           <a :href="s.url" target="_blank" rel="noopener" :class="MONO" class="min-w-0 truncate text-accent-text hover:underline">{{ s.url }}</a>
           <span :class="CHIP">Not managed by AgentHydra</span>
         </div>
-        <p class="text-[12px] leading-4.5 text-text-muted">No project lists this server. AgentHydra did not start it and never starts or stops it.</p>
+        <p class="text-ui-sm leading-4.5 text-text-muted">No project lists this server. AgentHydra did not start it and never starts or stops it.</p>
         <div class="mt-1 flex flex-wrap gap-1.5">
           <a :href="s.url" target="_blank" rel="noopener" :class="BTN_PRIMARY" aria-label="Open in browser"><ExternalLink class="size-3.5" />Open in browser</a>
           <button type="button" :class="BTN" aria-label="Copy address" @click="copy">

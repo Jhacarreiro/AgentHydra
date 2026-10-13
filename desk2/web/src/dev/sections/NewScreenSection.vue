@@ -41,7 +41,7 @@ const managing = ref(false)
     </div>
     <div>
       <h3 class="mb-2 text-sm text-(--text-muted)">Manage folders (sources with counts, and a hidden project)</h3>
-      <button type="button" class="h-7 rounded-(--radius-6) bg-fill-5 px-3 text-[12px] text-text hover:bg-fill-hover" @click="managing = true">Manage folders…</button>
+      <button type="button" class="h-7 rounded-(--radius-6) bg-fill-5 px-3 text-ui-sm text-text hover:bg-fill-hover" @click="managing = true">Manage folders…</button>
       <ProjectFoldersDialog :open="managing" :choices="choices" :projects="projects" @update:open="(o: boolean) => (managing = o)" @changed="() => {}" @failed="() => {}" />
     </div>
   </div>
