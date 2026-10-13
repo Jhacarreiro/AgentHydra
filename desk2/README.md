@@ -78,8 +78,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   dims its title and its icon together; one whose sub-tasks run (its CliMayte tasks, the HSwarm jobs it called, a chat
   nested under it) looks like a running one, never done (owner, 2026-10-10: "If the task has threads running, it should
   not be dimmed, the icon or the text"; `isQuiet` and `withThreads` in `sidebar/logic.ts`). The cloud list's group headers show their project's icon as the desk list's do, so turning Cloud
-  on keeps the icons. Each chrome-bar toggle's tooltip names what a click does ("Enable cloud sessions", "Show
-  fewer details", "Enable compact mode", "Open AgentHydra"), and its two dividers have more room either side.
+  on keeps the icons. Cloud sessions, CliMayte tasks, the details and compact mode are checked items of the chrome bar's
+  More options menu (the vertical dots, owner 2026-10-12: one flyout instead of four buttons), each label naming what a
+  click does ("Enable cloud sessions", "Show fewer details", "Enable compact mode"). It opens to the right of its button
+  with a small dark shadow, and stays open while you click through them. Open AgentHydra keeps its own button, and the
+  bar's two dividers have more room either side.
 - **A project header's right-click menu** (owner, 2026-10-10: "open project folder, collapse ... some stats ... if
   it's behind on commits"), in both lists (`sidebar/ProjectMenuItems.vue`). It opens with the folder's stats: branch,
   ahead and behind its upstream, uncommitted files, the last commit's age, and, where Project Hydra is installed and
@@ -172,13 +175,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   http://127.0.0.1:7787), only from Desk 2's own page and without the browser's cookies or origin; the
   daemon itself is not copied, since two would both run work on the same accounts. `bun run build`
   builds both windows.
-- **The cloud button adds your other PC's chats.** The cloud button (next to it, blue while it is on) keeps the
+- **Cloud sessions adds your other PC's chats.** Cloud sessions (in More options, checked while it is on) keeps the
   sidebar exactly as it is and adds the chats of your other PC that AgentHydra knows and the list does not show
   yet (owner, 2026-10-10: it "should show exactly the same as with the cloud toggled off. It should just also show
   me any external chats from the cloud"). Each goes in the group of the folder of the same name here (paths differ
   between PCs), after that group's own rows, else in a group of its folder's name, which offers no "New session
   in" since the folder is that PC's; once shown it keeps its place in the one saved order. Turning the cloud on or
-  off moves nothing else. The other PC's running CliMayte tasks and HSwarm jobs join the list the same way. The
+  off moves nothing else, and with it off no chat of the other PC shows anywhere, synced or found by a search included
+  (owner, 2026-10-12). The other PC's running CliMayte tasks and HSwarm jobs join the list the same way. The
   cloud icon means the other PC and nothing else (owner, 2026-10-05: "why chats on my computer are considered cloud ... it's a
   different app, sure, but it's not cloud"): a row from the other PC leads with a cloud, its tooltip naming
   that PC (and the app when it is not Claude), pulsing gray while that chat or the work a row was added for
@@ -283,7 +287,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   down over the transcript's top with that message, stays two seconds, stays while the pointer is on it and goes a
   second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`). The message sits in the sent
   bubble's lighter grey, clamped at its 180px with a fade and Read more (owner, 2026-10-10: "it needs to cap off a
-  little bit better with a 'read more.' ... a lighter gray bubble").
+  little bit better with a 'read more.' ... a lighter gray bubble"). The tray's label, bubble and image line sit centered
+  in the conversation's 768px column (owner, 2026-10-12: "center the block please. Not, left align").
 - **One shimmer at a time, and slower** (owner, 2026-10-10: the run's line and the working line were "excessively
   shimmery"; Claude Desktop has one, "the upper one. And then as it changes, it would ... step down"). Only the newest
   live row of the turn shimmers: a run with a call going, thinking as it streams, a file being sent. With none, the
@@ -312,7 +317,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   waiting on you, which includes a reply you have not read and an error (owner, 2026-10-08: "ones that are
   waiting on me to view it or do something"). Both lists and every row kind follow it, and it is remembered
   (`sidebar/active.ts`) (owner, 2026-10-07). An inactive chat is dimmed with Cloud on or off: the dim rule is one (`dimText` in `sidebar/rowClasses.ts`).
-- **CliMayte tasks in the sidebar.** The robot button beside the cloud (blue while on) lists, under each
+- **CliMayte tasks in the sidebar.** More options' CliMayte tasks item (checked while on) lists, under each
   chat or session in the sidebar that has CliMayte tasks running, those tasks, one short indented line
   each (status, title, model, how long it has run); a task a manager started sits one step further in,
   under its manager. A task with a session opens it; one without opens it on the CliMayte page of
@@ -348,7 +353,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   rows do; with the cloud off only this PC's are added. A folded group's heading carries a gray dot with
   how many CliMayte tasks run under it, a blue dot with how many HSwarm jobs, and a green dot with how
   many of its chats run (owner, 2026-10-05).
-- **HSwarm jobs in the sidebar.** While the robot button is on, a chat's row also lists the HSwarm jobs it
+- **HSwarm jobs in the sidebar.** While CliMayte tasks is on, a chat's row also lists the HSwarm jobs it
   started, after its CliMayte tasks (owner, 2026-10-05: "ZSwarm threads should also be displayed on the
   HydraDesk 2 sidebar"), placed by the same rules: under the chat's row in either list, else under the
   added row of its caller on the job's PC. A running job with no such row adds one, its caller's row

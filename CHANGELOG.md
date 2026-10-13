@@ -7,6 +7,22 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A CliMayte update wakes the Claude Desktop chat that asked for the work.** When a worker finishes, its update is
+  typed into that chat and starts a turn there, even if the chat sat idle. A chat that is busy gets it as soon as it is
+  free.
+- **CliMayte wave managers no longer wait forever.** A worker's question now reaches its manager instead of nobody, a
+  manager with nothing left to run reports and finishes, and any worker or manager stuck for more than two hours is
+  flagged, its chat nudged once, or closed.
+- **Turning cloud sessions off hides every chat from your other PC.** Synced chats and ones found by a search no longer
+  slip into the sidebar while it is off.
+- **The title bar's view toggles are one More options menu.** Cloud sessions, CliMayte tasks, details and compact mode
+  are checked items in one menu that opens to the right of its button and stays open while you click through them.
+  Check marks in menus no longer run into long labels.
+- **Routines read at a glance, and each one has its own switch.** Settings > Managers shows each routine as one row with
+  its status, last run and next run, which opens for its schedule in plain words, its recent runs and Run now. A row's
+  switch pauses or resumes that routine; the switch beside the title still turns them all off.
+- **Build tools are updated past three security advisories.** nanoid, postcss and source-map-js, which run only while
+  AgentHydra's pages are built, moved to their fixed versions.
 - **AgentHydra keeps your always-on helpers running, one copy each.** List the background servers and watchers you
   want in a helpers file; AgentHydra starts any that are missing, takes over ones already running instead of starting a
   second, and restarts one that stops or grows past its memory limit. The header shows them with their memory, a
@@ -82,7 +98,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   finished, and a busy PC no longer pushes its finished ones out of the list.
 - **The transcript's message arrows land on the message, with a peek.** The up and down arrows reach the message
   every time, the last message has room under it, and an eye under the arrows shows the previous message in a small
-  tray without moving the view.
+  tray, centered over the conversation, without moving the view.
 - **A tool run opens with its edits closed, and Claude Desktop's spare engines are no longer listed.** Desktop keeps a
   spare engine beside each chat, which showed as a row titled by its ID that opened to nothing.
 - **CliMayte is part of HSwarm.** HSwarm's page lists CliMayte above Providers, CliMayte's runs and HSwarm's jobs

@@ -195,7 +195,9 @@ proposals wait in
 
 Who may do what. Any caller (the window or an agent) may read, run one now, pause one, and propose one. Only the window (the
 owner's click, `X-Desk-Caller: window`) may resume, approve, discard, switch the manager (`enabled`), or edit a routine; an
-agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. A proposal is a routine's
+agent's request for those gets 403 `only the owner can do that, in Settings > Managers > Routines`. On that page each routine
+is one row (icon, name, status, last run, next run) that opens for its schedule in words, its history, Run now and Open
+chat; the row's own switch pauses or resumes it, and the switch beside the Routines title is the manager's `enabled`. A proposal is a routine's
 contract plus `why` (one or two sentences: what it does and why it should be a routine rather than a background task the agent
 runs itself). It is checked with the same parser, refused with 400 when it does not check out, and never run; approve moves it
 into `routines/<id>.json` without `why`, discard deletes it.
