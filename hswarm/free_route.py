@@ -47,7 +47,7 @@ SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, 
 def eligible(task: Task) -> bool:
     """A text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat, offered no
     tool, or only tools a Free thread may run (config.ROUTE_VIA_FREE_TOOLS) on a profile that may use them there
-    (config.ROUTE_VIA_FREE_TOOL_PROFILES).
+    (config.ROUTE_VIA_FREE_TOOL_PROFILES); a tool-free task's profile must be one of config.ROUTE_VIA_FREE_PROFILES.
     A CliMayte worker's own asks qualify: the worker guard is climayte_route's (a worker must not start another worker),
     and copied here it kept every tool-free ask a worker made off the Free accounts (5,400 in 48 h, 5 of them on Free,
     2026-10-09; owner: "why you're running nothing on there")."""
@@ -55,13 +55,16 @@ def eligible(task: Task) -> bool:
         return False
     if getattr(task, "images", None) or task.zdr:
         return False
-    if task.tools != "none" and (task.profile not in config.ROUTE_VIA_FREE_TOOL_PROFILES or not tool_names_allowed(task)):
-        return False
     if task.purpose == "evaluation" or task.backend != "api":
         return False
     # An auto task carries its profile and, once built, the plan's first concrete model (spec._resolve_backend); a
-    # pinned one has no profile. So the profile, never `model == auto`, says whether HSwarm may choose the route.
-    if task.profile not in config.ROUTE_VIA_FREE_PROFILES:
+    # pinned one has no profile. So the profile, never `model == auto`, says whether HSwarm may choose the route. Each
+    # kind of task has its own list: critical read work goes to Free (Luna Thinking held level with the API on it),
+    # critical tool-free work was never measured there and does not.
+    if task.tools != "none":
+        if task.profile not in config.ROUTE_VIA_FREE_TOOL_PROFILES or not tool_names_allowed(task):
+            return False
+    elif task.profile not in config.ROUTE_VIA_FREE_PROFILES:
         return False
     return len(shape(task)) <= MAX_PROMPT_CHARS
 

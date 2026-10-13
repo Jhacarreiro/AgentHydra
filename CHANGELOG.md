@@ -19,7 +19,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and research
   work, web research included, goes to Sonnet on a Free Claude account that has room, where it scored above the paid
   answers. With no such account, research goes to a Free ChatGPT account, which checks its claims before it answers and
-  then scored above the paid answers too; decision work stays on paid keys.
+  then scored above the paid answers too; decision work stays on paid keys. Critical work that reads files goes to
+  Luna Thinking on a Free ChatGPT account, which scored level with the paid answers with half their errors.
 - **Free account work survives AgentHydra restarting itself.** AgentHydra restarts onto each update it pulls, about
   every 25 minutes on a busy day, and each restart used to drop every Free account task in flight onto paid keys. The
   task now waits for AgentHydra to come back and takes its answer from the chat, which kept going meanwhile.

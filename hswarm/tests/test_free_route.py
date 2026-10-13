@@ -443,10 +443,12 @@ def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path,
     ("5h 40%, week 3%", "research", {"model": "sonnet", "provider": "claude"}),
     ("5h 95%, week 3%", "research", {"model": None, "provider": "chatgpt"}),
     ("5h 95%, week 3%", "decision", None),
+    ("5h 40%, week 3%", "critical", {"model": "luna-thinking", "provider": "chatgpt"}),
 ])
-def test_research_and_decision_go_to_sonnet_first_and_only_research_then_to_chatgpt(fake, claude_usage, profile, sent):
+def test_each_tool_profile_goes_to_the_free_model_that_held_level_with_the_api(fake, claude_usage, profile, sent):
     # By default: Sonnet on a Claude account with room for both; with none, research goes to a ChatGPT account (mini,
     # which checks its claims, 8 to 4 against the API), and decision is a shortfall (it lost there even when checked).
+    # Critical read work goes to Luna Thinking whatever Claude has left (13-15-1 against the API, half its errors).
     chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
     f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt], reply="I could not finish.")
     task = _task(tools="web" if profile == "research" else "read", cwd=".")

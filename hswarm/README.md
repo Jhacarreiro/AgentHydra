@@ -189,10 +189,14 @@ ledger line says provider `free`. Order: free accounts first, then CliMayte, the
 
 A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
 tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in
-`route_via_free_tool_profiles` (default routine, general, decision, research). `route_via_free_tool_asks` names the
+`route_via_free_tool_profiles` (default routine, general, decision, research, critical). `route_via_free_tool_asks` names the
 model and provider a profile's thread asks for, best first: decision and research ask for Sonnet on a Claude account
 (`sonnet@claude`) with under 80% of its 5-hour window used; with none, research goes to GPT-5.6 mini on a ChatGPT
-account (`@chatgpt`) and decision takes its API route. In a blind A/B on real tasks (2026-10-13) Sonnet there beat the
+account (`@chatgpt`) and decision takes its API route. Critical read work asks for Luna Thinking (GPT-5.6 Thinking
+mini) on a ChatGPT account: over 29 real critical read tasks it won 13, lost 15 and tied 1 against the API answers, with
+19 judged errors to the API's 42, in half the time; about a third of its threads fail at once and take their API route.
+A critical task with no tools still takes its API route (`route_via_free_profiles` gates tool-free work and leaves
+critical out). In a blind A/B on real tasks (2026-10-13) Sonnet there beat the
 API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, GPT-6, Luna Thinking) lost it: they
 read a median of 3 times before answering where the API read 20. A ChatGPT thread of a profile in
 `route_via_free_check_profiles` (default decision, research) that would finish on fewer than 8 tool results is asked
