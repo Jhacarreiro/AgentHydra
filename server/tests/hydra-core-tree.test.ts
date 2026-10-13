@@ -127,3 +127,14 @@ test("q1 offers a folder's main rules entry and counts its other rules instead o
   expect(context.folderMore?.count).toBe(4)
   expect(context.folderMore?.find).toContain('core_find')
 })
+
+test('matches are shown once: a later question does not repeat the same list', () => {
+  startChat(dir, chat, 'Rebuild the dashboard layout')
+  scope(dir, chat, now)
+  const q3 = answer(dir, chat, { answer: 'yes: dashboard layout' }, now)
+  expect(q3.step).toBe('q3')
+  expect((q3.matches as unknown[] | undefined)?.length).toBeGreaterThan(0)
+  const q4 = answer(dir, chat, { answer: 'delegate' }, now)
+  expect(q4.step).toBe('q4')
+  expect(q4.matches).toBeUndefined()
+})

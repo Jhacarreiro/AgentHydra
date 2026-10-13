@@ -235,8 +235,12 @@ function questionOf(step: Step, doc: HydraDoc | null): string {
   return QUESTIONS[step]
 }
 
+/** The next question. Matches ride along only when the list changed: the chat already holds the ones it was shown. */
 function next(ctx: Ctx, state: RunState, doc: HydraDoc | null): Reply {
-  return { step: state.step, question: questionOf(state.step, doc), matches: view(ctx, state) }
+  const before = state.shown.join('\n')
+  const matches = view(ctx, state)
+  const fresh = matches.length > 0 && state.shown.join('\n') !== before
+  return { step: state.step, question: questionOf(state.step, doc), ...(fresh ? { matches } : {}) }
 }
 
 function reject(ctx: Ctx, state: RunState, doc: HydraDoc | null, why: string): Reply {
