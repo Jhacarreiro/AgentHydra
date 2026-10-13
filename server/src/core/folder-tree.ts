@@ -13,7 +13,9 @@
 // seen at the next walk; a file that only grows does not move it, and nothing here needs it to (the
 // callers stat files themselves). The exact mtime is kept, not a whole millisecond, so a file created
 // just after a listing still moves it. Every folder is listed again at least every FULL_RELIST_MS, and
-// whenever a caller asks (`relist`), in case a filesystem misses an update.
+// whenever a caller asks (`relist`), in case a filesystem misses an update. A folder listed while its mtime
+// was still recent is listed again until that mtime is safely old (RACY_MS), since a change in the same
+// mtime tick as the listing does not move it.
 
 import type { Dirent } from 'node:fs'
 import { readdir, stat } from 'node:fs/promises'
@@ -24,6 +26,8 @@ import { mapPool } from './map-pool'
 
 export interface Folder {
   mtimeMs: number
+  /** When this folder was listed (before its stat), for the racy-mtime check in `listed`. */
+  listedAt: number
   /** This folder under the tree's root, `/`-separated; '' for the root itself. */
   rel: string
   /** Absolute paths of the subfolders. */
@@ -39,6 +43,12 @@ interface Tree {
 }
 
 const FULL_RELIST_MS = 10 * 60_000
+/**
+ * A folder whose mtime is not at least this much older than its listing may have changed within the same
+ * mtime tick as that listing without moving the mtime (NTFS directory times can lag too), so it is listed
+ * again on the next walk until its mtime is safely in the past (the racy-git rule).
+ */
+const RACY_MS = 2_000
 /** Folders listed at once; each call also takes an fsSlot. */
 const WIDTH = 4
 
@@ -89,16 +99,18 @@ async function walk(root: string, tree: Tree, relist: boolean): Promise<Map<stri
 
 /** The folder as it is now: `known` while its mtime holds, else listed again; null when it is gone. */
 async function listed(dir: string, rel: string, known: Folder | undefined): Promise<Folder | null> {
+  const listedAt = Date.now()
   const st = await fsSlot(() => stat(dir)).catch(() => null)
   if (!st?.isDirectory()) return null
-  if (known && known.mtimeMs === st.mtimeMs) return known
+  if (known && known.mtimeMs === st.mtimeMs && known.listedAt - known.mtimeMs >= RACY_MS)
+    return known
   let entries: Dirent[]
   try {
     entries = await fsSlot(() => readdir(dir, { withFileTypes: true }))
   } catch {
     return null
   }
-  const folder: Folder = { mtimeMs: st.mtimeMs, rel, dirs: [], files: [] }
+  const folder: Folder = { mtimeMs: st.mtimeMs, listedAt, rel, dirs: [], files: [] }
   for (const e of entries) {
     if (e.isDirectory()) folder.dirs.push(intern(join(dir, e.name)))
     else if (e.isFile()) folder.files.push(e.name)
