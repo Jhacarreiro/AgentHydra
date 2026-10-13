@@ -245,7 +245,8 @@ async def hswarm_status(job_id: str, verbose: bool = False) -> dict:
     not_advanced, acceptance, mis_scoped, web_approvals. `waiting_on_rate_limited_pool` says every key of a provider
     is resting - the state that used to read as a silent "running" - and comes with `pools`: each provider the tasks
     sit on, with the gate's live limit and how many keys are ready. `quiet_running` names the running
-    tasks with no model reply for QUIET_TASK_S (stalled, not slow); hswarm_results gives every running task its `quiet_s`.
+    tasks with no model reply for QUIET_TASK_S (stalled, not slow); a task on CliMayte reads `climayte:<model>` and its
+    worker's log counts as replies. hswarm_results gives every running task its `quiet_s`.
     verbose adds the bookkeeping (dir, caller, savings, created, finished, task ages, pools while it runs)."""
     try:
         full = manager().status(manager().get(job_id))

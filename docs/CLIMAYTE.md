@@ -1706,6 +1706,11 @@ environment says nothing about the caller); at most `route_via_climayte_max` (un
 a worker not running within `route_via_climayte_start_s` (90 s) is cancelled (`POST /api/corch/cancel`) and
 the task runs on its API route once, as does a worker that fails; a cancelled HSwarm task cancels its
 worker. These workers show in the CliMayte view like any other, under the chat that called HSwarm.
+While a worker runs, HSwarm's row for the task names it (`climayte:<model>`) and each change in the worker's
+`lastActivity`, output tokens or turns counts as a reply, so `hswarm_status` never lists a working worker under
+`quiet_running`. A worker that is `running` with no output from its model for HSwarm's `QUIET_TASK_S` (180 s) is
+cancelled and the task runs on its API route; the result names the worker in `failover` (2026-10-13: until then a
+working worker read as a stalled API leg, and a chat cancelled two, one 3 s after it had finished).
 
 ## A broken Claude Code install holds work: `server/src/claude-install-guard.ts` (2026-10-06)
 
