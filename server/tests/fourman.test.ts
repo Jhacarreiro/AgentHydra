@@ -2,6 +2,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:tes
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Hono } from 'hono'
 import {
   DashboardError,
   dashboardId,
@@ -20,6 +21,10 @@ import {
 } from '../src/fourman'
 import { app } from '../src/http-app'
 import '../src/routes/fourman'
+
+// A copy of the routes so far: a request through the shared app builds its router, and every later
+// test file that loads a routes/*.ts module then dies at import (queue-patch-guard.test.ts).
+const http = new Hono().route('/', app)
 
 const scratch = mkdtempSync(join(tmpdir(), 'fourman-test-'))
 const engine = join(scratch, 'fake-4man.mjs')
@@ -165,19 +170,19 @@ describe('the board', () => {
 
 describe('routes', () => {
   test('the board needs a cwd, a project or all=1', async () => {
-    const res = await app.fetch(new Request('http://127.0.0.1/api/fourman/board'))
+    const res = await http.fetch(new Request('http://127.0.0.1/api/fourman/board'))
     expect(res.status).toBe(400)
   })
 
   test('a relative cwd is refused', async () => {
-    const res = await app.fetch(
+    const res = await http.fetch(
       new Request('http://127.0.0.1/api/fourman/board?cwd=relative/folder'),
     )
     expect(res.status).toBe(400)
   })
 
   test('GET /api/fourman reports the engine and the notes status', async () => {
-    const res = await app.fetch(new Request('http://127.0.0.1/api/fourman'))
+    const res = await http.fetch(new Request('http://127.0.0.1/api/fourman'))
     const body = (await res.json()) as { available: boolean; notes: { available: boolean } }
     expect(body.available).toBe(true)
     expect(body.notes.available).toBe(false)

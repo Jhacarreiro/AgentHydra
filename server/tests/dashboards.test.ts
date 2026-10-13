@@ -2,6 +2,7 @@ import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { Hono } from 'hono'
 import {
   DashboardError,
   dashboardId,
@@ -18,6 +19,10 @@ import '../src/routes/dashboards'
 import { TOOLS } from '../src/mcp'
 import { resetDaemonResolutionForTests, useOwnDaemon } from '../src/mcp-client'
 import { withDeskChat } from '../src/mcp-find'
+
+// A copy of the routes so far: a request through the shared app builds its router, and every later
+// test file that loads a routes/*.ts module then dies at import (queue-patch-guard.test.ts).
+const http = new Hono().route('/', app)
 
 const root = mkdtempSync(join(tmpdir(), 'dashboards-test-'))
 const project = join(root, 'My Project!')
@@ -52,7 +57,7 @@ beforeAll(() => {
   daemon = Bun.serve({
     port: 0,
     hostname: '127.0.0.1',
-    fetch: async (req, srv) => (await serveDashboardSite(req)) ?? app.fetch(req, srv),
+    fetch: async (req, srv) => (await serveDashboardSite(req)) ?? http.fetch(req, srv),
   })
   port = daemon.port as number
   setDashboardSelfUrl(`http://127.0.0.1:${port}`)

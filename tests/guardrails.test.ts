@@ -195,8 +195,43 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
         resetOrchestratorOperationsForTests()
       })
       `,
+      // Rule D, fourman.test.ts as it shipped until 2026-10-12: a request through the shared app
+      // built its router, and every later file loading a routes/*.ts module died at import.
+      `
+      import { expect, test } from 'bun:test'
+      import { app } from '../src/http-app'
+      import '../src/routes/fourman'
+      test('x', async () => {
+        const res = await app.fetch(new Request('http://127.0.0.1/api/fourman'))
+        expect(res.status).toBe(200)
+      })
+      `,
+      // The same through a dynamic import under another name, as the mocking route tests load it.
+      `
+      import { expect, test } from 'bun:test'
+      const { app: shared } = await import('../src/http-app')
+      test('x', async () => { expect((await shared.request('/api/queue')).status).toBe(200) })
+      `,
     ],
     fixed: [
+      // Rule D's fixed shape (queue-patch-guard.test.ts): requests go through a copy with its own router.
+      `
+      import { expect, test } from 'bun:test'
+      import { Hono } from 'hono'
+      import { app } from '../src/http-app'
+      import '../src/routes/queue'
+      const http = new Hono().route('/', app)
+      test('x', async () => { expect((await http.request('/api/queue')).status).toBe(200) })
+      `,
+      // A test building its OWN Hono app named app (api-body-limit.test.ts) freezes nothing shared,
+      // and an import of http-app quoted in a comment is prose, not a binding.
+      `
+      import { expect, test } from 'bun:test'
+      import { Hono } from 'hono'
+      // was: import { app } from '../src/http-app'
+      const app = new Hono()
+      test('x', async () => { expect((await app.request('/x')).status).toBe(404) })
+      `,
       // resource-status.test.ts's shape: stubbed inside the test through a helper, restored in finally.
       `
       import { expect, test } from 'bun:test'

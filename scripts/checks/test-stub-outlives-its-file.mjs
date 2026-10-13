@@ -64,6 +64,21 @@ const ORCH_CALL = /(?<![\w$.])(?:runOrchestrator|startOrchestratorOperation)\s*\
 const NEVER_SETTLES = /(?<![\w$.])new\s+Promise\s*(?:<[^>(]*>\s*)?\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/g
 const ORCH_RESET = /(?<![\w$.])resetOrchestratorOperationsForTests\s*\(/g
 
+// RULE D, a request through the shared Hono app, added 2026-10-12 after it held both CI legs red for
+// a day. server/src/http-app.ts exports ONE `app` for the whole process; every routes/*.ts module
+// registers on it when imported, and Hono builds its router on the first request and refuses a new
+// route after that. fourman.test.ts and dashboards.test.ts sent requests through it directly, so
+// every later file that loaded a routes/*.ts module died at import with "Can not add a route since
+// the matcher is already built" (9 files on windows, more on ubuntu). Worse, three of those files
+// had installed mock.module fakes before the import that threw, so their after hooks never ran and
+// session-launch's fakes reached every file after them: 109 red tests on ubuntu, none in either
+// culprit. The fixed shape is queue-patch-guard.test.ts's: request through a copy,
+// `const http = new Hono().route('/', app)`, which has its own router and leaves the shared one open.
+// The import is read from the untouched text (its specifier is a string the scanner blanks) and
+// accepted only where the blanked code still shows it, so an import quoted in a comment is ignored.
+const SHARED_APP_IMPORT =
+  /\bimport\s*\{([^}]*)\}\s*from\s*(['"])[^'"\n]*\/http-app(?:\.[cm]?[jt]s)?\2|\{([^}]*)\}\s*=\s*await\s+import\s*\(\s*(['"])[^'"\n]*\/http-app(?:\.[cm]?[jt]s)?\4\s*\)/g
+
 const SKIP_DIRS = new Set(['node_modules', 'dist', '.git', 'tmp', '.arkitect', 'coverage', 'build'])
 const TEST_FILE = /\.(?:test|spec)\.[cm]?[jt]sx?$/
 
@@ -278,15 +293,38 @@ export function findViolations(text) {
     for (const m of code.matchAll(NEVER_SETTLES)) hits.push({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' })
   }
 
+  // Rule D: a request or fetch through the shared app, under whatever local name it was imported as.
+  for (const name of sharedAppNames(text, code)) {
+    const call = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\s*\\.\\s*(?:request|fetch)\\s*\\(`, 'g')
+    for (const m of code.matchAll(call)) hits.push({ index: m.index, kind: 'shared-app', name })
+  }
+
   return hits.sort((a, b) => a.index - b.index)
+}
+
+/** The local names this file binds http-app's `app` to: `import { app } from '../src/http-app'`,
+ *  `{ app as shared }`, or `const { app } = await import(...)`. Only imports the blanked code still
+ *  shows count, so one quoted in a comment or a string is not read as real. */
+function sharedAppNames(text, code) {
+  const names = new Set()
+  SHARED_APP_IMPORT.lastIndex = 0
+  for (const m of text.matchAll(SHARED_APP_IMPORT)) {
+    const isImport = m[1] !== undefined
+    if (isImport ? !code.startsWith('import', m.index) : code[m.index] !== '{') continue
+    for (const part of (isImport ? m[1] : m[3]).split(',')) {
+      const bind = part.trim().match(isImport ? /^app(?:\s+as\s+([\w$]+))?$/ : /^app(?:\s*:\s*([\w$]+))?$/)
+      if (bind) names.add(bind[1] ?? 'app')
+    }
+  }
+  return names
 }
 
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
 const CHEAP_REJECT =
-  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation/
+  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation|\/http-app/
 
-/** The three rules' user-facing text, keyed by hit kind, so a new rule cannot be added without
+/** The four rules' user-facing text, keyed by hit kind, so a new rule cannot be added without
  *  saying what it found, why it matters and what to do - the half a check is actually read for. */
 function explain(hit) {
   if (hit.kind === 'global')
@@ -319,6 +357,21 @@ function explain(hit) {
         "is a copy of the fake, because mock.module rewrites the namespace's live bindings. " +
         'Better still, inject the dependency and mock nothing (tests/monitor.test.ts).',
     }
+  if (hit.kind === 'shared-app')
+    return {
+      what: `a request through the shared http-app (${hit.name})`,
+      message:
+        `${hit.name} is http-app.ts's one Hono app for the whole bun test run. Hono builds its ` +
+        'router on the first request and refuses new routes after it, so every LATER file that ' +
+        'imports a routes/*.ts module dies at import with "Can not add a route since the matcher ' +
+        'is already built". On 2026-10-12 fourman.test.ts and dashboards.test.ts did this: nine ' +
+        'files red on windows and 109 tests on ubuntu, because files that died at import never ' +
+        'ran the after hooks that put their mock.module fakes back.',
+      fix:
+        `Request through a copy with its own router: \`const http = new Hono().route('/', ${hit.name})\` ` +
+        'after importing the routes the test needs, then http.request(...) or http.fetch(...) - ' +
+        'the shape server/tests/queue-patch-guard.test.ts ships.',
+    }
   return {
     what: 'a never-settling orchestrator run leaves its route lock behind',
     message:
@@ -339,7 +392,7 @@ function explain(hit) {
 export const audit = {
   id: ID,
   title:
-    'a test file must put back every global it stubs, every module it mocks, and every route lock it parks before it ends',
+    'a test file must put back every global it stubs, every module it mocks, and every route lock it parks before it ends, and never freeze the shared app with a request',
   category: 'custom',
   domain: 'code',
   requires: {},
@@ -379,8 +432,8 @@ export const audit = {
           .map((f) => `- ${f.file}:${f.line} (${f.what})`)
           .join('\n')}`
       : `Every module-scope or before-hook global stub, every mock.module and every parked ` +
-        `orchestrator route lock in the test tree is put back in an after hook ` +
-        `(${filesScanned} stubbing file(s) scanned). ✓`
+        `orchestrator route lock in the test tree is put back in an after hook, and no test ` +
+        `requests through the shared http-app (${filesScanned} stubbing file(s) scanned). ✓`
 
     return { failed, findings, report }
   },
