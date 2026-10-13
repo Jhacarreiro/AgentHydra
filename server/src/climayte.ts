@@ -188,10 +188,13 @@ import { judgeWaveTask, type WaveJudgement, waveBatch, writeWave } from './clima
 import {
   addToWaveBatch,
   endedInWave,
+  escalateAsking,
+  failStuckTask,
   liveWave,
   modifiedWaves,
   reconcilableWave,
   reconcileManager,
+  releaseStuckManager,
   settledWaves,
   settleKeyOfWorker,
   WAVE_MIN_TASKS,
@@ -1012,6 +1015,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     )
   if (!asking && w.status === 'done' && w.check) startCheck(w)
   if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
+  if (asking) escalateAsking(w, now)
 
   changed(w)
   schedule(50)
@@ -1525,6 +1529,19 @@ function reconcileWaveTask(id: string, task: CliMayteWave['tasks'][number], now:
     if (w.status === 'done') {
       // With a check, only its own latest pass settles the task (a fail sends the worker back).
       const last = w.verdicts?.at(-1)
+      if (w.question) {
+        escalateAsking(w, now)
+        return
+      }
+      // A fail by check or wave that sent nothing back (refused, or the top rung) ends the key.
+      if (
+        last?.verdict === 'fail' &&
+        (last.by === 'check' || last.by === 'wave') &&
+        !w.pending.length
+      ) {
+        failStuckTask(w, last.note ?? 'failed with no send-back', now)
+        return
+      }
       if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
       judgeWave(w, w.check ? true : null).catch((err) =>
         console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
@@ -1566,6 +1583,8 @@ function reconcileWaves(now: number): void {
   // A manager that ended `done` on its finished wave before settleWorker reported it (an older
   // daemon, a restart between): its wave is reported now (reportForManager).
   for (const m of ended) reconcileManager(m, now)
+  // A manager held on a wave where nothing runs and nothing can be dispatched is decided again.
+  for (const m of workers.values()) releaseStuckManager(m, now)
   const finished = ended.filter((w) => w.kind !== 'manage')
   if (!finished.length) return
   const ids = new Set(finished.map((w) => w.wave as string))

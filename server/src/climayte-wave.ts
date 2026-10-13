@@ -130,6 +130,11 @@ function formatTaskLine(
   if (worker) {
     line += ` → ${workerStatus}`
   }
+  if (worker?.question) {
+    const q = worker.question
+    const opts = q.options?.length ? ` options: ${q.options.join(' | ')}` : ''
+    line += ` asking: "${q.text.replace(/\s+/g, ' ').slice(0, 200)}"${opts}`
+  }
   if (task.proof) {
     const parts = formatTaskProofParts(task.proof)
     if (parts.length > 0) {

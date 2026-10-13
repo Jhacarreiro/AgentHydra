@@ -111,6 +111,9 @@ export interface PingWorker {
   verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string; at?: number }>
   error: string | null
   origin?: CliMayteOrigin
+  /** The wave it belongs to and its kind: a wave task has no origin, its question goes to its manager's. */
+  wave?: string | null
+  kind?: string | null
   /** The question it waits on (climayteAsk): while set, its ended turn is no finish. */
   question?: { text: string; options?: string[]; at: number }
 }
@@ -609,7 +612,11 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     const prev = snaps.get(w.id) ?? null
     const events = pingEvents(prev, w, now)
     snaps.set(w.id, snapshotOf(w, prev, now))
-    const origin = w.origin
+    const origin =
+      w.origin ??
+      (w.wave && w.kind !== 'manage' && events.some((e) => e.kind === 'asking')
+        ? deps.workers().find((m) => m.kind === 'manage' && m.wave === w.wave)?.origin
+        : undefined)
     if (!origin || !events.length || pingOff()) return
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {

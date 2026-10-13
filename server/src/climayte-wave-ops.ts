@@ -23,9 +23,27 @@ export function holdManagerForWave(w: CliMayteWorker, waveId: string, now: numbe
     const found = liveWave(waveId)
     const wave = found?.wave
     if (found && wave && wave.status === 'running' && !wave.report && !waveDone(wave)) {
-      const running = wave.tasks.filter((t) => t.state === 'running').length
+      const running = runningKeys(wave).length
       const queued = wave.tasks.filter((t) => t.state === 'pending').length
-      if (running || w.status !== 'done') {
+      const stuck = !running && w.status === 'done' && !dispatchable(wave)
+      if (stuck && w.waveNudged) {
+        // Nothing can ever run again: report for the manager, which ends done.
+        const blocked = wave.tasks.filter((t) => t.state === 'pending').map((t) => t.key)
+        const said = w.results?.at(-1) ?? w.result ?? ''
+        reportWave(
+          wave,
+          `The manager ended without wave_report; nothing left could run (blocked: ${blocked.join(', ') || 'none'}); its last answer:\n\n${said || '(none)'}`,
+          waveHeadNow(wave),
+          now,
+        )
+        modifiedWaves.set(wave.id, found)
+        w.hold = null
+      } else if (stuck) {
+        w.waveNudged = true
+        w.pending.push(NOTHING_CAN_RUN)
+        w.status = 'queued'
+        w.revived = true
+      } else if (running || w.status !== 'done') {
         w.waveNudged = false
         w.status = 'waiting'
         w.hold = 'wave'
@@ -49,6 +67,51 @@ export function holdManagerForWave(w: CliMayteWorker, waveId: string, now: numbe
 /** The one message a manager gets when its turn ends with nothing of its wave running and no report. */
 const REPORT_OR_DISPATCH =
   'Report or dispatch: nothing in your wave is running and it has no report. Dispatch the next ready keys (wave_dispatch), escalate a key that cannot run (wave_escalate), or call wave_report if every key is passed, failed or escalated. Another turn like this one fails you.'
+
+/** The message a manager gets when nothing of its wave runs and no pending key can be dispatched. */
+const NOTHING_CAN_RUN =
+  'Nothing left can run: every pending key sits behind a failed or escalated key and no worker is live. Call wave_report now and list the blocked keys.'
+
+/** Keys of `wave` still `running` whose worker is live, or finished and not yet judged, or not named
+ *  yet (a dispatch on its way). A finished worker that asks waits on a person, not on the daemon: it
+ *  holds nothing. */
+function runningKeys(wave: CliMayteWave): string[] {
+  return wave.tasks
+    .filter((t) => {
+      if (t.state !== 'running') return false
+      if (!t.workerId) return true
+      const x = workers.get(t.workerId)
+      return (
+        !!x &&
+        !(x.status === 'done' && x.question) &&
+        x.status !== 'failed' &&
+        x.status !== 'cancelled'
+      )
+    })
+    .map((t) => t.key)
+}
+
+/** True when a pending key has all its `after` keys passed. */
+function dispatchable(wave: CliMayteWave): boolean {
+  return wave.tasks.some(
+    (t) =>
+      t.state === 'pending' &&
+      t.after.every((k) => wave.tasks.find((x) => x.key === k)?.state === 'passed'),
+  )
+}
+
+/** Safety net (reconcileWaves): a manager held on a wave where nothing runs and nothing can be
+ *  dispatched gets the same decision as at the end of its turn. */
+export function releaseStuckManager(m: CliMayteWorker, now: number): void {
+  if (m.kind !== 'manage' || m.status !== 'waiting' || m.hold !== 'wave' || !m.wave) return
+  const found = reconcilableWave(m.wave, now)
+  const wave = found?.wave
+  if (!found || !wave || wave.status !== 'running' || wave.report || wave.batch.held.length) return
+  if (runningKeys(wave).length || dispatchable(wave)) return
+  m.status = 'done'
+  m.hold = null
+  holdManagerForWave(m, wave.id, now)
+}
 
 /** A manager that ended `done` on its finished wave without calling wave_report: its last answer is the
  *  report, so climayte_wait --wave wakes and climayte_wave_verify takes the wave. RustTor, 2026-10-05:
@@ -97,6 +160,36 @@ export function addToWaveBatch(w: CliMayteWorker, now: number, judged = false): 
       // If we can't update the wave, the batch will be updated on the next tick.
     }
   }
+}
+
+/** A wave task whose worker asked (climayteAsk) while its key is `running`: the key is escalated with
+ *  the question and joins the batch, so the manager wakes (wave_send answers and resumes it). */
+export function escalateAsking(w: CliMayteWorker, now: number): void {
+  if (!w.wave || w.kind === 'manage' || !w.question) return
+  const found = liveWave(w.wave)
+  const wave = found?.wave
+  const task = wave?.tasks.find((t) => t.workerId === w.id)
+  if (!found || !wave || wave.status !== 'running' || wave.report) return
+  if (!task || task.state !== 'running') return
+  const opts = w.question.options?.length ? ` (options: ${w.question.options.join(' | ')})` : ''
+  task.state = 'escalated'
+  wave.escalations.push({ key: task.key, reason: `asks: ${w.question.text}${opts}`, at: now })
+  modifiedWaves.set(wave.id, found)
+  addToWaveBatch(w, now, true)
+}
+
+/** A wave task whose finished worker was not judged and cannot be sent back: its key `failed` with
+ *  the verdict's note, batched for the manager. */
+export function failStuckTask(w: CliMayteWorker, note: string, now: number): void {
+  if (!w.wave) return
+  const found = liveWave(w.wave)
+  const wave = found?.wave
+  const task = wave?.tasks.find((t) => t.workerId === w.id)
+  if (!found || !wave || !task || task.state !== 'running') return
+  task.state = 'failed'
+  task.proof = { ...(task.proof ?? { check: null, paths: null, commits: [] }), note }
+  modifiedWaves.set(wave.id, found)
+  addToWaveBatch(w, now, true)
 }
 
 /** Every directory a wave record may sit in: each account's config dir (readWave's `configDir`). */

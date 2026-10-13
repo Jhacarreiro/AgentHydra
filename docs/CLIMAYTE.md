@@ -1152,6 +1152,12 @@ worker.
   `{ kind: 'worker', workerId }`: the worker hears of it through `climayteSend` (non-urgent), never
   its transcript. Wave tasks (`wave_dispatch`) get no origin: the wave report already wakes the
   manager. The manager worker carries the origin of the chat that called `climayte_manage`.
+  A wave task that asks (`climayte_ask`) is the exception: its question pings that origin, and its
+  key is escalated (`asks: <question>`) so the manager wakes; `wave_send` answers it and the key
+  runs again. A manager is held only while a key's worker is live; when nothing runs and no pending
+  key is ready (its `after` keys passed), it is told once to call `wave_report` (every key passed,
+  failed or escalated, or nothing left can run), and if it ends again without, the daemon reports
+  the wave itself and the manager ends `done`.
 - The tool's answer says which: `ping: "on: <first 8 of the session id> is messaged when work
   settles (<how>)"`, `ping: "on: manager <id> is sent a message when work settles"`, or
   `ping: "off: <why>; run python ~/.claude/tools/climayte_wait.py --group <g>"` (the owner's waiter script, which polls the workers endpoint until the group settles; see [CLIMAYTE-FIELD-NOTES.md](CLIMAYTE-FIELD-NOTES.md)).

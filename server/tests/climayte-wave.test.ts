@@ -9,6 +9,7 @@ import {
   climayteList,
   climayteRun,
   climayteScorecard,
+  climayteSend,
   climayteTotals,
   climayteVerdict,
   climayteWait,
@@ -23,6 +24,7 @@ import {
 import { workers as liveWorkers, setSpendKit } from '../src/climayte-core'
 import { MANAGER_CONTEXT_TOKENS } from '../src/climayte-launch'
 import type { CliMayteWave, CliMayteWorker } from '../src/climayte-lib'
+import { managerTools } from '../src/climayte-manager-mcp'
 import { OPUS } from '../src/climayte-scorecard'
 import {
   judgeWaveTask,
@@ -1267,6 +1269,125 @@ describe('a wave is judged wherever it is stored, not only on the account its ta
     expect(saved?.report).toContain('The manager ended without wave_report')
     expect(climayteWaveVerify(wave.id, { ok: true })).toMatchObject({ ok: true, status: 200 })
   }, 90_000)
+  describe('a wave worker that asks, a refused send-back, and a wave nothing can run', () => {
+    // Found live 2026-10-12: three managers sat held 30-39 hours on keys whose workers had asked
+    // (climayte_ask) or whose send-back was refused, and on pending keys behind a stuck key.
+    const doneWorker = async (title: string) => {
+      const run = climayteRun({
+        tasks: [{ prompt: title, cwd: repo, title, kind: 'code', model: 'opus', effort: 'high' }],
+        group: `asks-${title}`,
+      })
+      groups.push(run.group)
+      const id = run.workers[0]?.id as string
+      await until(() => climayteList({ id })[0]?.status === 'done', 30_000)
+      return liveWorkers.get(id) as CliMayteWorker
+    }
+    const idleTick = async (ok: () => boolean) => {
+      const deadline = Date.now() + 40_000
+      while (!ok() && Date.now() < deadline) await new Promise((r) => setTimeout(r, 500))
+    }
+
+    test('a worker that asked escalates its key with the question and batches it for the manager', async () => {
+      const w = await doneWorker('asker')
+      const wave = oneTask('wv-asks', w.id)
+      writeWave(acctA, wave)
+      w.wave = wave.id
+      w.question = { text: 'Spend real money in prod?', options: ['yes', 'no'], at: Date.now() }
+      await idleTick(() => readWave(acctA, wave.id)?.tasks[0]?.state !== 'running')
+
+      const saved = readWave(acctA, wave.id)
+      expect(saved?.tasks[0]?.state).toBe('escalated')
+      expect(saved?.escalations[0]).toMatchObject({ key: 'x' })
+      expect(saved?.escalations[0]?.reason).toBe(
+        'asks: Spend real money in prod? (options: yes | no)',
+      )
+      expect(saved?.batch.held).toEqual(['x'])
+    }, 90_000)
+
+    test('wave_send to an asking worker puts its key back to running and drops the escalation', async () => {
+      const w = await doneWorker('answered')
+      const mgr = await doneWorker('answer-manager')
+      mgr.kind = 'manage'
+      const wave = { ...oneTask('wv-answer', w.id), managerId: mgr.id }
+      ;(wave.tasks[0] as CliMayteWave['tasks'][0]).state = 'escalated'
+      wave.escalations = [{ key: 'x', reason: 'asks: ok?', at: Date.now() }]
+      writeWave(acctA, wave)
+      w.wave = wave.id
+      mgr.wave = wave.id
+      w.question = { text: 'ok?', at: Date.now() }
+
+      const send = managerTools(mgr.id).find((t) => t.name === 'wave_send')
+      await send?.run({ key: 'x', text: 'yes, go on' })
+
+      const saved = readWave(acctA, wave.id)
+      expect(saved?.tasks[0]?.state).toBe('running')
+      expect(saved?.escalations).toEqual([])
+      expect(w.question).toBeUndefined()
+    }, 90_000)
+
+    test('a done worker whose check failed and was not sent back ends its key failed with the verdict note', async () => {
+      const w = await doneWorker('refused')
+      w.check = 'exit 1'
+      w.verdicts = [
+        {
+          at: Date.now(),
+          verdict: 'fail',
+          note: 'tests red',
+          by: 'check',
+          model: null,
+          effort: null,
+          units: 0,
+        },
+      ]
+      const wave = oneTask('wv-refused', w.id)
+      writeWave(acctA, wave)
+      w.wave = wave.id
+      await idleTick(() => readWave(acctA, wave.id)?.tasks[0]?.state !== 'running')
+
+      const saved = readWave(acctA, wave.id)
+      expect(saved?.tasks[0]?.state).toBe('failed')
+      expect(saved?.tasks[0]?.proof?.note).toBe('tests red')
+      expect(saved?.batch.held).toEqual(['x'])
+    }, 90_000)
+
+    test('a manager whose only pending key sits behind an escalated key is told once, then the daemon reports and it ends done', async () => {
+      const mgr = await doneWorker('stuck-manager')
+      mgr.kind = 'manage'
+      const wave = oneTask('wv-stuck', 'w-gone')
+      wave.managerId = mgr.id
+      const [a] = wave.tasks as [CliMayteWave['tasks'][0]]
+      a.state = 'escalated'
+      wave.tasks.push({
+        ...a,
+        key: 'b',
+        title: 'b',
+        after: ['a'],
+        state: 'pending',
+        workerId: null,
+      })
+      a.key = 'a'
+      writeWave(acctA, wave)
+      mgr.wave = wave.id
+
+      // The manager takes a turn and ends it twice; the wave has nothing live and nothing ready.
+      climayteSend(mgr.id, 'carry on')
+      await idleTick(() => readWave(acctA, wave.id)?.report != null)
+
+      const saved = readWave(acctA, wave.id)
+      expect(saved?.report).toContain('nothing left could run (blocked: b)')
+      const told = [acctA, acctB].flatMap((dir) => {
+        try {
+          return readFileSync(join(dir, 'fake-launches.jsonl'), 'utf8')
+            .split('\n')
+            .filter((l) => l.includes('Nothing left can run'))
+        } catch {
+          return []
+        }
+      })
+      expect(told).toHaveLength(1)
+      expect(climayteList({ id: mgr.id })[0]?.status).toBe('done')
+    }, 90_000)
+  })
 })
 
 describe('the orchestrator starts and verifies a wave (piece 7)', () => {

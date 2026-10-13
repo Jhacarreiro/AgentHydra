@@ -178,7 +178,14 @@ export function managerTools(managerId: string): McpEngineTool[] {
           const task = taskOf(wave, args.key)
           if (!task) return { error: `no such key: ${str(args.key)}` }
           if (!task.workerId) return { error: `${task.key} has no worker yet` }
-          return climayteSend(task.workerId, str(args.text))
+          const asked = !!workers.get(task.workerId)?.question
+          const sent = climayteSend(task.workerId, str(args.text))
+          // The answer resumes a worker that asked: its key runs again and is judged as usual.
+          if (asked && sent.ok && task.state === 'escalated') {
+            task.state = 'running'
+            wave.escalations = wave.escalations.filter((e) => e.key !== task.key)
+          }
+          return sent
         }),
     },
     {
@@ -229,7 +236,7 @@ export function managerTools(managerId: string): McpEngineTool[] {
     {
       name: 'wave_report',
       description:
-        'Report that the wave is done: every key is passed, failed or escalated. At most 2,000 chars; the daemon prefixes a table with one line per key.',
+        'Report that the wave is done: every key is passed, failed or escalated, or nothing left can run. At most 2,000 chars; the daemon prefixes a table with one line per key.',
       inputSchema: {
         type: 'object',
         properties: { text: { type: 'string', description: "The manager's final report." } },
