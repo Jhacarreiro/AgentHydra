@@ -2,19 +2,19 @@
 import { describe, expect, test } from 'bun:test'
 import { type RunDefaults, runSetting } from '../src/climayte'
 import {
+  bestRung,
   bestRungPastHaiku,
+  CAMPAIGN_CAP,
   type CliMayteVerdict,
+  checkTemplate,
   HAIKU,
   nextRung,
   OPUS,
   pickConfig,
+  pickedRung,
   SONNET,
   scoreOf,
   scoreRows,
-  CAMPAIGN_CAP,
-  checkTemplate,
-  bestRung,
-  pickedRung,
 } from '../src/climayte-scorecard'
 
 const v = (
@@ -417,7 +417,8 @@ describe('scoreRows honesty', () => {
     rows.find((r) => r.model === model && r.effort === effort)
 
   test('since narrows the rows shown but a window never changes a pick', () => {
-    const old = (n: number) => times(n, () => task('code', v('pass', SONNET, 'high', 1, { at: 10 })))
+    const old = (n: number) =>
+      times(n, () => task('code', v('pass', SONNET, 'high', 1, { at: 10 })))
     const tasks = [...haikuOut('code'), ...old(3)]
     const shown = scoreRows(tasks, 100)
     expect(rowOf(shown, SONNET, 'high')).toBeUndefined()
@@ -449,17 +450,17 @@ describe('scoreRows honesty', () => {
         check: `node cut.mjs --target ${i} "file ${i}.ts" C:/work/x${i}/a.ts`,
         verdicts: [v('fail', HAIKU, 'medium')],
       }))
-    const good = times(9, () => task('code', v('pass', HAIKU, 'medium')))
+    const good = times(90, () => task('code', v('pass', HAIKU, 'medium')))
     const rows = scoreRows([...good, ...campaign(600)])
     // Display keeps the plain counts.
     expect(rowOf(rows, HAIKU, 'medium')?.fail).toBe(600)
-    // Routing: 600 fails weigh CAMPAIGN_CAP in all, so 9 passes still beat them.
+    // Routing: 600 fails weigh CAMPAIGN_CAP in all, so 90 passes still beat them.
     expect(CAMPAIGN_CAP).toBe(30)
     expect(pickedRung('code', rows)).toBe(pickedRung('code', scoreRows(good)))
   })
 
   test('checkTemplate drops digits, quoted strings and absolute paths; no check keys on the group', () => {
-    expect(checkTemplate({ check: 'run 12 "a b" C:\x\y.ts /tmp/z' })).toBe(
+    expect(checkTemplate({ check: 'run 12 "a b" C:\\x\\y.ts /tmp/z' })).toBe(
       checkTemplate({ check: 'run 99 "c" D:/q/r.ts /var/w' }),
     )
     expect(checkTemplate({ group: 'g-1' })).not.toBe(checkTemplate({ group: 'g-2' }))
@@ -474,7 +475,10 @@ describe('backfillVerdictCost', () => {
     const w: any = {
       model: SONNET,
       attempts: [{ startedAt: 100, endedAt: 200, tokens, model: SONNET }],
-      verdicts: [v('fail', SONNET, 'low', 0, { at: 300 }), v('pass', SONNET, 'low', 0, { at: 400 })],
+      verdicts: [
+        v('fail', SONNET, 'low', 0, { at: 300 }),
+        v('pass', SONNET, 'low', 0, { at: 400 }),
+      ],
     }
     expect(backfillVerdictCost(w)).toBe(true)
     expect(w.verdicts[0].span).toBe(100)
