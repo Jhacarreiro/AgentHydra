@@ -1,11 +1,12 @@
 <script setup lang="ts">
 // "What works" in full: the scorecard rows per kind of task, each model and thinking level with its
 // passes, fails and cost per task (opened from the stats card's bar chart).
-import { Star, ThumbsDown, ThumbsUp } from '@lucide/vue'
+import { Star, ThumbsDown, ThumbsUp, Wrench } from '@lucide/vue'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import type { CliMayteScorecard } from '@/lib/api'
+import { countsPct } from '@/lib/climayte-score'
 import { modelName } from '@/lib/climayte-status'
 
 const props = defineProps<{ scorecard: CliMayteScorecard }>()
@@ -21,7 +22,7 @@ const scoreKinds = computed(() => {
   }
   return [...map.entries()].map(([kind, rows]) => ({ kind, rows }))
 })
-const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefault'))
+const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefaultUnrecorded'))
 </script>
 
 <template>
@@ -41,6 +42,8 @@ const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefa
           v-for="(r, i) in k.rows"
           :key="i"
           class="flex flex-wrap items-center gap-x-3 gap-y-0.5 px-3 py-1"
+          :class="r.onLadder === false ? 'opacity-60' : ''"
+          :title="r.onLadder === false ? $t('climayte.scoreOffLadder') : undefined"
         >
           <span class="min-w-24 font-medium">
             {{ scoreModel(r.model) }}
@@ -53,12 +56,24 @@ const scoreModel = (m: string | null) => (m ? modelName(m) : t('climayte.runDefa
             <ThumbsUp class="size-3" aria-hidden="true" />{{ r.pass }}
           </span>
           <span
-            class="flex items-center gap-1 tabular-nums text-destructive"
-            :title="$t('climayte.scoreFailsSplit', { n: r.fail, slip: r.slip ?? 0, rework: r.rework ?? 0, failed: r.failed ?? r.fail })"
+            class="flex items-center gap-1 tabular-nums text-warning"
+            :title="$t('climayte.scoreFixedSplit', { slip: r.slip ?? 0, rework: r.rework ?? 0 })"
+            :aria-label="$t('climayte.scoreFixedSplit', { slip: r.slip ?? 0, rework: r.rework ?? 0 })"
           >
-            <ThumbsDown class="size-3" aria-hidden="true" />{{ r.fail }}
+            <Wrench class="size-3" aria-hidden="true" />{{ (r.slip ?? 0) + (r.rework ?? 0) }}
           </span>
-          <span v-if="r.score != null" class="tabular-nums font-medium">{{ Math.round(r.score * 100) }}%</span>
+          <span
+            class="flex items-center gap-1 tabular-nums text-destructive"
+            :title="$t('climayte.scoreFailedN', { n: r.failed ?? r.fail })"
+            :aria-label="$t('climayte.scoreFailedN', { n: r.failed ?? r.fail })"
+          >
+            <ThumbsDown class="size-3" aria-hidden="true" />{{ r.failed ?? r.fail }}
+          </span>
+          <span
+            v-if="r.score != null"
+            class="tabular-nums font-medium"
+            :title="$t('climayte.scoreScoreHint')"
+          >{{ countsPct({ pass: r.pass, slip: r.slip ?? 0, rework: r.rework ?? 0, failed: r.failed ?? r.fail }) }}</span>
           <span
             v-if="r.excluded > 0"
             class="tabular-nums text-muted-foreground"

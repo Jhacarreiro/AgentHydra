@@ -1158,6 +1158,10 @@ export interface CliMayteScorecard {
     score: number | null
     pctPerTask: number | null
     pick: boolean
+    /** Verdicts with no earlier fail on the same task. */
+    fresh?: { pass: number; fail: number; slip: number; rework: number }
+    /** False for a null model, Haiku 4.5 and anything off the ladder: history only. */
+    onLadder?: boolean
   }[]
 }
 export interface CliMayteTask {
@@ -1177,6 +1181,13 @@ export interface CliMayteTokens {
 /** What CliMayte has offloaded over every task on record: the CliMayte view's counter. */
 export interface CliMayteTotals {
   tasks: number
+  /** Tasks with at least one attempt that launched a CLI. */
+  tasksRan?: number
+  tasksByStatus?: { done: number; failed: number; cancelled: number; neverRan: number }
+  /** Ended attempts that never launched a CLI (not in `sessions`). */
+  neverLaunched?: number
+  /** When the first task on record was created (epoch ms). */
+  firstAt?: number | null
   /** Runs: every start of the CLI (retries, resumes, handoffs included). */
   sessions: number
   runsByOutcome?: Partial<Record<CliMayteAttemptOutcome, number>>
@@ -1305,7 +1316,8 @@ export const listCliMayteWaves = () =>
   j<{ waves: CliMayteWave[] }>('/api/corch/waves?lean=1')
     .then((r) => r.waves ?? [])
     .catch(() => [] as CliMayteWave[])
-export const getCliMayteScorecard = () => j<CliMayteScorecard>('/api/corch/scorecard')
+export const getCliMayteScorecard = (since?: number) =>
+  j<CliMayteScorecard>(since ? `/api/corch/scorecard?since=${since}` : '/api/corch/scorecard')
 /** A thumbs up or down on a finished task; a fail with `retry` sends it back one rung up the
  *  model/thinking ladder, and `next` says which. */
 export const postCliMayteVerdict = (

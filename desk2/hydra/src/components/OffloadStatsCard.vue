@@ -11,6 +11,7 @@ import CliMayteScoreList from '@/components/CliMayteScoreList.vue'
 import PassFailBars from '@/components/charts/PassFailBars.vue'
 import { Badge } from '@/components/ui/badge'
 import type { CliMayteScorecard, CliMayteTotals } from '@/lib/api'
+import { countsPct, type ScoreCounts } from '@/lib/climayte-score'
 import { CLIMAYTE_OUTCOME, modelName, tokenTotal } from '@/lib/climayte-status'
 import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
 import { useSwarmStats } from '@/lib/swarm-stats'
@@ -53,62 +54,134 @@ const totalsHint = computed(() => {
       cacheRead: formatTokens(x.tokens.cacheRead),
       cacheWrite: formatTokens(x.tokens.cacheWrite),
       cost: formatUsd(x.costUsd),
+      filed: x.tasks,
     }) +
+    (x.tasksByStatus
+      ? ` ${t('climayte.offloadedFiled', { filed: x.tasks, ...x.tasksByStatus })}`
+      : '') +
+    (x.neverLaunched ? ` ${t('climayte.offloadedNeverLaunched', { n: x.neverLaunched })}` : '') +
     (x.rereadShare
       ? ` ${t('climayte.offloadedReread', { share: x.rereadShare, pct: x.rereadPct })}`
       : '')
   )
 })
 
-/** One bar per model, summed over kinds and efforts. */
+/** One bar per model, summed over kinds and efforts: passed, fixed (small fix or rework) and failed,
+ *  and the score pooled from those counts (never an average of rows' scores). The tooltip adds the
+ *  model's score on fresh tasks (no earlier fail on the same task) and its kind mix. */
 const modelRows = computed(() => {
   const map = new Map<
     string,
-    { key: string; label: string; pass: number; fail: number; slip: number; rework: number; failed: number; excluded: number }
+    {
+      key: string
+      model: string | null
+      pass: number
+      slip: number
+      rework: number
+      failed: number
+      excluded: number
+      onLadder: boolean
+      fresh: ScoreCounts
+      kinds: Map<string, number>
+    }
   >()
   for (const r of props.scorecard?.rows ?? []) {
     const key = r.model ?? ''
     const row = map.get(key) ?? {
       key,
-      label: r.model ? modelName(r.model) : t('climayte.runDefault'),
+      model: r.model,
       pass: 0,
-      fail: 0,
       slip: 0,
       rework: 0,
       failed: 0,
       excluded: 0,
+      onLadder: r.onLadder !== false,
+      fresh: { pass: 0, slip: 0, rework: 0, failed: 0 },
+      kinds: new Map<string, number>(),
     }
     row.pass += r.pass
-    row.fail += r.fail
     row.slip += r.slip ?? 0
     row.rework += r.rework ?? 0
     row.failed += r.failed ?? r.fail
     row.excluded += r.excluded ?? 0
+    row.fresh.pass += r.fresh?.pass ?? 0
+    row.fresh.slip += r.fresh?.slip ?? 0
+    row.fresh.rework += r.fresh?.rework ?? 0
+    row.fresh.failed += r.fresh ? r.fresh.fail - r.fresh.slip - r.fresh.rework : 0
+    row.kinds.set(r.kind, (row.kinds.get(r.kind) ?? 0) + r.pass + r.fail)
     map.set(key, row)
   }
-  // Pooled from the counts, never by averaging the rows' scores.
-  return [...map.values()].map((row) => ({
-    ...row,
-    credit: row.pass + (row.slip * 2) / 3 + row.rework / 3,
-    hint: t('climayte.scoreModelHint', row),
-  }))
+  return [...map.values()].map((row) => {
+    const fixed = row.slip + row.rework
+    const kinds = [...row.kinds.entries()]
+      .sort((a, b) => b[1] - a[1])
+      .map(([k, n]) => `${k} ${n}`)
+      .join(', ')
+    const hint = [
+      t('climayte.scoreModelHint', row),
+      t('climayte.scoreFresh', { pct: countsPct(row.fresh) }),
+      t('climayte.scoreKinds', { kinds }),
+      row.onLadder ? '' : t('climayte.scoreOffLadder'),
+    ]
+      .filter(Boolean)
+      .join(' · ')
+    return {
+      key: row.key,
+      label: row.model ? modelName(row.model) : t('climayte.runDefaultUnrecorded'),
+      pass: row.pass,
+      fixed,
+      fail: row.failed,
+      score: countsPct(row),
+      dim: !row.onLadder,
+      hint,
+    }
+  })
 })
 const listOpen = ref(false)
+
+/** Tasks that actually ran; every filed task (cancelled before a start included) is in the hint. */
+const tasksShown = computed(() => props.totals?.tasksRan ?? props.totals?.tasks ?? 0)
+/** The share of the token headline that is cache re-reads. */
+const rereadShare = computed(() => {
+  const tk = props.totals?.tokens
+  if (!tk) return null
+  const all = tokenTotal(tk)
+  return all > 0 ? Math.round((tk.cacheRead / all) * 100) : null
+})
+const tokensHint = computed(() => {
+  const tk = props.totals?.tokens
+  if (!tk) return ''
+  return t('climayte.tokensBreakdown', {
+    input: formatTokens(tk.input),
+    output: formatTokens(tk.output),
+    cacheRead: formatTokens(tk.cacheRead),
+    cacheWrite: formatTokens(tk.cacheWrite),
+  })
+})
+const sinceHint = computed(() => {
+  const at = props.totals?.firstAt
+  return at
+    ? t('climayte.sinceHint', { date: new Date(at).toLocaleDateString() })
+    : t('climayte.allTimeHint')
+})
 </script>
 
 <template>
   <div class="@container flex flex-col gap-1.5 rounded-lg border border-border bg-card px-3 py-2">
     <div class="grid grid-cols-1 gap-x-6 gap-y-1.5 @2xl:grid-cols-2">
       <section class="flex min-w-0 flex-col gap-1" :aria-label="$t('climayte.title')">
-        <h3 class="text-xs font-semibold">{{ $t('climayte.title') }}</h3>
+        <h3 class="text-xs font-semibold">
+          {{ $t('climayte.title') }}
+          <span class="font-normal text-muted-foreground" :title="sinceHint">{{ $t('climayte.allTime') }}</span>
+        </h3>
         <p
           v-if="totals && totals.tasks > 0"
           class="flex flex-wrap items-baseline gap-x-4 gap-y-0.5 text-xs"
           :title="totalsHint"
         >
           <span class="whitespace-nowrap">
-            <span class="font-semibold tabular-nums">{{ totals.tasks }}</span>
-            <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedTasks', totals.tasks) }}</span>
+            <span class="font-semibold tabular-nums">{{ tasksShown }}</span>
+            <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedTasks', tasksShown) }}</span>
           </span>
           <span class="whitespace-nowrap">
             <span class="font-semibold tabular-nums">{{ totals.sessions }}</span>
@@ -116,11 +189,12 @@ const listOpen = ref(false)
           </span>
           <span class="whitespace-nowrap">
             <span class="font-semibold tabular-nums">{{ formatTokens(tokensShown) }}</span>
-            <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedTokens') }}</span>
+            <span class="ms-1 text-muted-foreground" :title="tokensHint">{{ $t('climayte.offloadedTokens') }}</span>
+            <span v-if="rereadShare !== null" class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedCacheShare', { pct: rereadShare }) }}</span>
           </span>
           <span class="whitespace-nowrap">
             <span class="font-semibold tabular-nums">{{ formatUsd(totals.costUsd) }}</span>
-            <span class="ms-1 text-muted-foreground">{{ $t('climayte.offloadedCost') }}</span>
+            <span class="ms-1 text-muted-foreground" :title="$t('climayte.offloadedCostHint')">{{ $t('climayte.offloadedCost') }}</span>
           </span>
         </p>
         <p v-else class="text-xs text-muted-foreground">{{ $t('climayte.offloadedNone') }}</p>
@@ -173,6 +247,7 @@ const listOpen = ref(false)
         v-if="modelRows.length"
         :rows="modelRows"
         :limit="6"
+        :score-hint="$t('climayte.scoreScoreHint')"
         :more-label="(n: number) => $t('climayte.scoreMoreModels', { n })"
         class="cursor-pointer"
         @click="listOpen = !listOpen"

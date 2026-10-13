@@ -86,7 +86,10 @@ export default {
     sourceTag: { hswarm: 'HSwarm', climayte: 'CliMayte' },
     outcomes: 'Thumbs up and down',
     outcomesCaption:
-      'Passed (up) and failed (down) tasks per model, busiest first. The bar is the share that passed. CliMayte counts all time.',
+      'HSwarm rows: up is a task that got an answer, down is an error or timeout; the % is the answer rate, not correctness. CliMayte rows: up passed its check, the wrench is a pass after a small fix or rework, down failed; the % is the score (pass 1, small fix 2/3, rework 1/3), the number routing uses. Busiest first. CliMayte follows the range chosen above.',
+    hswarmPctHint: 'Share of tasks that got an answer. It does not say the answer was right.',
+    fixed: 'fixed',
+    tokensEstimated: 'tokens estimated (Free routes report none)',
     noRows: 'No model has finished tasks for this source.',
     climayteMissing: "CliMayte's scorecard is not available right now.",
     upDown: '{up} up · {down} down',
@@ -98,7 +101,7 @@ export default {
     modelAxis: 'Model, best first',
     tokensPerOk: 'Tokens per success',
     tokensCaption:
-      "Input and output tokens of a model's tasks, divided by its successes. Cache reads and writes are left out. Fewest first; the line averages three bars. A model with fewer than 5 successes is marked and listed last.",
+      "Input and output tokens of a model's tasks, divided by its successes. Cache reads and writes are left out. Free models count tokens by estimate. Fewest first; the line averages three bars. A model with fewer than 5 successes is marked and listed last.",
     tokensHswarmOnly: 'Tokens come from HSwarm only. CliMayte keeps no token count per model.',
     noOk: 'No model has a successful task yet.',
     noTokens: '{n} models with successes recorded no tokens and are left out.',

@@ -4,7 +4,7 @@
 // them. Volume, tokens and money per model are the analytics toolkit's (`source=hswarm`, groupBy model); only the
 // edit-survival scoring is HSwarm's own (`model-stats`). Each range is kept once it has been read, so switching
 // back is instant, and the scoring joins in after the page has painted.
-import { ThumbsDown, ThumbsUp } from '@lucide/vue'
+import { ThumbsDown, ThumbsUp, Wrench } from '@lucide/vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import BarRows from '@/components/charts/BarRows.vue'
@@ -19,6 +19,7 @@ import {
   rankBySample,
   type ResultsSource,
   SMALL_SAMPLE,
+  type ThumbRow,
   thumbRows,
   tokensPerOk,
 } from '@/lib/hswarm-results'
@@ -169,8 +170,8 @@ async function load() {
         groupBy: ['day', 'model'],
         measures: ['calls'],
       }),
-      // CliMayte's scorecard has no window of its own: it is all time whatever the range says.
-      getCliMayteScorecard().catch(() => null),
+      // The scorecard shows the range's window; its picks still come from all time (server side).
+      getCliMayteScorecard(key === 'all' ? undefined : rollingDaysFrom(key)).catch(() => null),
     ])
     const snap: Snapshot = {
       kit: toKit(byModel, byDayModel),
@@ -227,9 +228,16 @@ const models = computed<ModelRow[]>(() =>
 const order = computed(() => models.value.map((m) => m.model))
 
 const outcomes = computed(() => thumbRows(models.value, climayte.value?.rows ?? null, source.value))
-const outcomeMax = computed(() => Math.max(1, ...outcomes.value.map((r) => r.up + r.down)))
+const outcomeMax = computed(() => Math.max(1, ...outcomes.value.map((r) => r.up + r.fixed + r.down)))
 const shownOutcomes = computed(() => (outcomesOpen.value ? outcomes.value : outcomes.value.slice(0, TOP)))
-const pct = (n: number) => `${Math.round(n * 100)}%`
+const rowName = (r: { source: 'hswarm' | 'climayte'; model: string }) =>
+  r.model || t('climayte.runDefaultUnrecorded')
+const rowHint = (r: ThumbRow) =>
+  r.source === 'hswarm'
+    ? t('hswarm.v.overview.results.hswarmPctHint')
+    : [t('climayte.scoreScoreHint'), t('climayte.scoreFixedSplit', { slip: r.slip, rework: r.rework }), r.dim ? t('climayte.scoreOffLadder') : '']
+        .filter(Boolean)
+        .join(' · ')
 const pctFmt = (n: number) => `${Math.round(n)}%`
 const tokenFmt = formatTokens
 const sourceTag = (s: 'hswarm' | 'climayte') => t(`hswarm.v.overview.results.sourceTag.${s}`)
@@ -247,6 +255,7 @@ const tokenPoints = computed(() =>
           value: m.tokens_per_ok ?? 0,
           small,
           detail: [
+            m.model.startsWith('free:') ? t('hswarm.v.overview.results.tokensEstimated') : '',
             small ? t('hswarm.v.overview.results.fewTasks', { n: SMALL_SAMPLE }) : '',
             m.cost_per_ok != null ? `${formatUsd(m.cost_per_ok, { style: 'fine' })} ${t('hswarm.v.money.atListPrice')}` : '',
           ]
@@ -263,16 +272,16 @@ const shownTokens = computed(() => (tokensOpen.value ? tokenPoints.value : token
 const failedPoints = computed(() =>
   rankBySample(
     outcomes.value
-      .filter((r) => r.up + r.down > 0)
+      .filter((r) => r.up + r.fixed + r.down > 0)
       .map((r) => {
-        const total = r.up + r.down
+        const total = r.up + r.fixed + r.down
         const small = total < SMALL_SAMPLE
         return {
           key: r.key,
-          label: small ? `${r.model} (${t('hswarm.v.overview.results.few')})` : r.model,
+          label: small ? `${rowName(r)} (${t('hswarm.v.overview.results.few')})` : rowName(r),
           value: (r.down / total) * 100,
           small,
-          detail: `${r.up} ${t('hswarm.v.overview.results.up')} · ${r.down} ${t('hswarm.v.overview.results.down')} · ${sourceTag(r.source)}`,
+          detail: `${r.up} ${t('hswarm.v.overview.results.up')} · ${r.fixed ? `${r.fixed} ${t('hswarm.v.overview.results.fixed')} · ` : ''}${r.down} ${t('hswarm.v.overview.results.down')} · ${sourceTag(r.source)}`,
         }
       }),
   ),
@@ -355,22 +364,26 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
           <p v-if="source !== 'hswarm' && !climayte" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.climayteMissing') }}</p>
           <p v-else-if="!outcomes.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noRows') }}</p>
           <ul v-else class="space-y-1.5">
-            <li v-for="r in shownOutcomes" :key="r.key">
+            <li v-for="r in shownOutcomes" :key="r.key" :class="r.dim ? 'opacity-60' : ''" :title="rowHint(r)">
               <div class="flex items-baseline justify-between gap-3 text-xs">
                 <span class="flex min-w-0 items-baseline gap-1.5">
                   <span class="shrink-0 rounded bg-muted px-1 text-2xs text-muted-foreground">{{ sourceTag(r.source) }}</span>
-                  <span class="truncate text-muted-foreground" :title="r.model">{{ r.model }}</span>
+                  <span class="truncate text-muted-foreground" :title="rowName(r)">{{ rowName(r) }}</span>
                 </span>
                 <span class="shrink-0 tabular-nums font-medium">
-                  <ThumbsUp class="mr-0.5 inline size-3 text-success" />{{ r.up }}
-                  <ThumbsDown class="mx-0.5 inline size-3 text-destructive" />{{ r.down }}
-                  · {{ pct(r.up / (r.up + r.down)) }}
+                  <ThumbsUp class="mr-0.5 inline size-3 text-success" :aria-label="t('hswarm.v.overview.results.up')" />{{ r.up }}
+                  <template v-if="r.source === 'climayte'">
+                    <Wrench class="mx-0.5 inline size-3 text-warning" :aria-label="t('hswarm.v.overview.results.fixed')" />{{ r.fixed }}
+                  </template>
+                  <ThumbsDown class="mx-0.5 inline size-3 text-destructive" :aria-label="t('hswarm.v.overview.results.down')" />{{ r.down }}
+                  · {{ r.pct }}
                 </span>
               </div>
               <div class="mt-0.5 h-1.5 overflow-hidden rounded-full bg-muted">
-                <div class="flex h-full w-(--bar-w)" :style="{ '--bar-w': `${Math.max(1.5, ((r.up + r.down) / outcomeMax) * 100)}%` }">
-                  <div class="h-full w-(--ok-w) bg-success" :style="{ '--ok-w': `${(r.up / (r.up + r.down)) * 100}%` }"></div>
-                  <div class="h-full w-(--failed-w) bg-destructive" :style="{ '--failed-w': `${(r.down / (r.up + r.down)) * 100}%` }"></div>
+                <div class="flex h-full w-(--bar-w)" :style="{ '--bar-w': `${Math.max(1.5, ((r.up + r.fixed + r.down) / outcomeMax) * 100)}%` }">
+                  <div class="h-full w-(--ok-w) bg-success" :style="{ '--ok-w': `${(r.up / (r.up + r.fixed + r.down)) * 100}%` }"></div>
+                  <div class="h-full w-(--fixed-w) bg-warning" :style="{ '--fixed-w': `${(r.fixed / (r.up + r.fixed + r.down)) * 100}%` }"></div>
+                  <div class="h-full w-(--failed-w) bg-destructive" :style="{ '--failed-w': `${(r.down / (r.up + r.fixed + r.down)) * 100}%` }"></div>
                 </div>
               </div>
             </li>
