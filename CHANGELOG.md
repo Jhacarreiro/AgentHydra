@@ -14,6 +14,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   like Claude chats. The chat is copied to the account you pick, checked, and only then archived on the old one.
 - **Codex chats move with both Codex apps open.** A move no longer needs the chat's own Codex app closed: an open
   app archives the original itself, so its list updates at once and nothing you have running there stops.
+- **Sidebar notes show once.** With the cloud list switched on, a note or error under the sidebar, such as "Moved to
+  …" after Move to account, was drawn twice. It is drawn once now.
 - **Codex accounts are named after the account.** The Instances table's name column shows a Codex account's own name,
   as it does for Claude accounts, unless you renamed it yourself; "Name it after the account" switches back.
 - **A long Codex chat moves to another account with all of its history.** A chat that had rolled over to a new
