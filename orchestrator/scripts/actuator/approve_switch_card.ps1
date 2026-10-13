@@ -188,9 +188,9 @@ function Get-Accounts {
   $out = @()
   foreach ($g in ($procs | Where-Object { $_.Leaf } | Group-Object Leaf)) {
     if ($g.Count -ne 1) {
-      if ($script:SkipNote[$g.Name] -ne $g.Count) {
+      if (-not $script:SkipNote.ContainsKey($g.Name)) {
         Write-Log $g.Name "skipped: $($g.Count) claude.exe main processes carry this profile (the watcher needs exactly 1)"
-        $script:SkipNote[$g.Name] = $g.Count
+        $script:SkipNote[$g.Name] = $true
       }
       continue
     }
