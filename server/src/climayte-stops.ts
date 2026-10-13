@@ -539,9 +539,10 @@ export function finishedLines(path: string): string[] {
   if (kept) return kept
   const r = peekLog(path)
   // Where the lines came from, when it is not logs/: the retention pass moved the log into its day
-  // archive, or it is nowhere (the reader is told so instead of shown an empty attempt).
+  // archive, or it is nowhere (the reader is told so instead of shown an empty attempt). Last, so the
+  // view's newest-60-lines cut keeps it.
   const recent = r.archive
-    ? [`(log read from its day archive ${r.archive})`, ...r.recent]
+    ? [...r.recent, `(log read from its day archive ${r.archive})`]
     : r.offset === 0 && !existsSync(path) && !existsSync(packedPath(path))
       ? [`(no log on disk: not in logs/ nor in ${archiveOfLog(path) ?? 'any day archive'})`]
       : r.recent

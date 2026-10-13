@@ -158,8 +158,9 @@ ended, so a reader finds them from the attempt alone (`archiveOfLog`); a check l
 worker's last attempt ended, and a file of no worker on record to the day it was last written. A pass
 moves at most 256 MB (whole workers); the rest goes a minute later. The readers (`peekLog`,
 `readInto`, the session, peak and ceiling backfills, the resume check of a revived worker) fall through
-to the archive, and `climayte_status { id }` heads an archived attempt's lines with
-`(log read from its day archive <path>)`, or says `(no log on disk: ...)` when the log is nowhere.
+to the archive, and `climayte_status { id }` ends an archived attempt's lines with
+`(log read from its day archive <path>)` (last, so the newest-60-lines cut keeps it), or says
+`(no log on disk: ...)` when the log is nowhere.
 `GET /api/corch/log-archive` shows the setting and the last pass; `POST` with `{ days }` changes the
 setting, with `{ run: true }` runs a pass now and answers with it. The orchestration journal
 (`climayte_log`) is `journal.jsonl`, not these files, and is untouched.
