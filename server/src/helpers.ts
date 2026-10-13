@@ -442,14 +442,25 @@ let timer: ReturnType<typeof setInterval> | null = null
 export function startHelpers(): void {
   if (process.platform !== 'win32' || helpers) return
   helpers = createHelpers(realDeps())
-  const run = () =>
-    void helpers
-      ?.tick()
-      .catch((e) =>
-        console.error('[helpers] check failed:', e instanceof Error ? e.message : String(e)),
-      )
+  const run = () => {
+    try {
+      helpers
+        ?.tick()
+        .catch((e) =>
+          console.error('[helpers] check failed:', e instanceof Error ? e.message : String(e)),
+        )
+    } catch (e) {
+      console.error('[helpers] check failed:', e instanceof Error ? e.message : String(e))
+    }
+  }
   run()
-  timer = setInterval(run, CHECK_EVERY_MS)
+  timer = setInterval(() => {
+    try {
+      run()
+    } catch (e) {
+      console.error('[helpers] check failed:', e instanceof Error ? e.message : String(e))
+    }
+  }, CHECK_EVERY_MS)
   ;(timer as { unref?(): void }).unref?.()
 }
 

@@ -164,7 +164,15 @@ export function createNativeSendHold(deps: HoldDeps) {
 
   function ensureTimer(): void {
     if (timer || !pending()) return
-    timer = setInterval(() => void drain(), deps.intervalMs ?? DEFAULT_INTERVAL_MS)
+    timer = setInterval(() => {
+      try {
+        drain().catch((e) =>
+          console.error('[send-hold] drain failed:', e instanceof Error ? e.message : String(e)),
+        )
+      } catch (e) {
+        console.error('[send-hold] drain failed:', e instanceof Error ? e.message : String(e))
+      }
+    }, deps.intervalMs ?? DEFAULT_INTERVAL_MS)
     timer.unref?.()
   }
 
