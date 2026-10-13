@@ -11,8 +11,13 @@ import CliMayteScoreList from '@/components/CliMayteScoreList.vue'
 import PassFailBars from '@/components/charts/PassFailBars.vue'
 import { Badge } from '@/components/ui/badge'
 import type { CliMayteScorecard, CliMayteTotals } from '@/lib/api'
-import { countsPct, type ScoreCounts } from '@/lib/climayte-score'
-import { CLIMAYTE_OUTCOME, modelName, tokenTotal } from '@/lib/climayte-status'
+import {
+  CLIMAYTE_OUTCOME,
+  countsPct,
+  modelName,
+  type ScoreCounts,
+  tokenTotal,
+} from '@/lib/climayte-status'
 import { formatTokens, formatUsd, useKitSourceTokens } from '@/lib/kit'
 import { useSwarmStats } from '@/lib/swarm-stats'
 import { useSwarmTiles } from '@/lib/swarm-tiles'

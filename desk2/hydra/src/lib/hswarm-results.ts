@@ -2,8 +2,7 @@
 // CliMayte's scorecard, side by side), tokens per successful task, and the ranking that keeps a model with two
 // lucky successes from topping the list. Kept apart from the card so the numbers can be read on their own.
 import type { CliMayteScorecard } from '@/lib/api'
-import { countsPct, formatScorePct } from '@/lib/climayte-score'
-import { modelName } from '@/lib/climayte-status'
+import { countsPct, formatScorePct, modelName } from '@/lib/climayte-status'
 
 /** Fewer successes (or tasks) than this and one task moves the number too far to rank the model. */
 export const SMALL_SAMPLE = 5

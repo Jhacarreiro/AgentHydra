@@ -459,3 +459,29 @@ const VERDICT_RETRY: Record<VerdictBy, string> = {
 function verdictBy(by: string | undefined): VerdictBy {
   return by !== undefined && Object.hasOwn(VERDICT_PASS, by) ? (by as VerdictBy) : 'unknown'
 }
+
+// --- The one CliMayte score on the page: pass 1, slip 2/3, rework 1/3, failure 0, pooled from counts
+// (never averaged across rows). Mirrors scoreOf in server/src/climayte-scorecard.ts, which routing uses.
+export interface ScoreCounts {
+  pass: number
+  slip: number
+  rework: number
+  failed: number
+}
+
+export function climayteScore(c: ScoreCounts): number | null {
+  const n = c.pass + c.slip + c.rework + c.failed
+  return n ? (c.pass + (c.slip * 2) / 3 + c.rework / 3) / n : null
+}
+
+/** "87%", but never "100%" while anything failed and never "0%" while anything passed. */
+export function formatScorePct(score: number | null, anyBad: boolean, anyGood: boolean): string {
+  if (score === null) return '—'
+  const p = Math.round(score * 100)
+  if (p >= 100 && anyBad) return '>99%'
+  if (p <= 0 && anyGood) return '<1%'
+  return `${p}%`
+}
+
+export const countsPct = (c: ScoreCounts): string =>
+  formatScorePct(climayteScore(c), c.slip + c.rework + c.failed > 0, c.pass > 0)

@@ -6,8 +6,7 @@ import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import type { CliMayteScorecard } from '@/lib/api'
-import { countsPct } from '@/lib/climayte-score'
-import { modelName } from '@/lib/climayte-status'
+import { countsPct, modelName } from '@/lib/climayte-status'
 
 const props = defineProps<{ scorecard: CliMayteScorecard }>()
 const { t } = useI18n()
