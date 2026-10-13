@@ -163,3 +163,61 @@ test('a message held when the server stopped is sent after the restart, with the
   expect(new Set(first.b.state.requestIds).size).toBe(1)
   expect(first.b.state.requestIds).toHaveLength(2)
 })
+
+test('Cancel on a held message: one never sent goes at once, one AgentHydra may have is taken back from the worker', async () => {
+  const { m, b, home } = setup()
+  const chat = await m.create({ cwd: home, prompt: 'first' })
+  await until(() => !!m.get(chat.id).workerId, 'the worker')
+  b.state.requestIds.length = 0
+  b.state.takesRequestIds = null // AgentHydra does not answer for now
+  b.state.failNext.push({ err: late(), took: true })
+  await m.send(chat.id, 'one')
+  await m.send(chat.id, 'two')
+  const idOf = (text: string) => users(m, chat.id).find((u) => u.text === text)!.id
+
+  // Never sent: it goes without asking AgentHydra, which is down.
+  expect(await m.cancelQueued(chat.id, idOf('two'))).toEqual({ ok: true, cancelled: true, message: 'Taken back: it is not sent.' })
+  expect(b.state.heldCancels).toEqual([])
+  // Sent once and not answered: AgentHydra is asked to take it back, and it stays while AgentHydra cannot be.
+  b.state.cancelHeldRoute = false
+  await expect(m.cancelQueued(chat.id, idOf('one'))).rejects.toThrow(/could not take it back/)
+  b.state.cancelHeldRoute = true
+  expect(await m.cancelQueued(chat.id, idOf('one'))).toMatchObject({ cancelled: true })
+  expect(b.state.heldCancels).toEqual([{ id: 'w1', text: 'one' }])
+  expect(users(m, chat.id).map((u) => u.text)).toEqual(['first'])
+
+  // Neither is sent again once AgentHydra answers.
+  b.state.takesRequestIds = true
+  await new Promise((r) => setTimeout(r, 100))
+  expect(b.state.requestIds).toHaveLength(1)
+  expect(b.state.sentToWorker.map((s) => s.text)).toEqual(['one'])
+})
+
+test('a first message that may have started the worker cannot be taken back', async () => {
+  const { m, b, home } = setup()
+  b.state.takesRequestIds = null
+  b.state.failNext.push({ err: late(), took: true })
+  const chat = await m.create({ cwd: home, prompt: 'start me' })
+  await until(() => users(m, chat.id).some((u) => u.queued), 'the held message')
+  const r = await m.cancelQueued(chat.id, users(m, chat.id)[0]!.id)
+  expect(r).toMatchObject({ cancelled: false })
+  expect(r.message).toMatch(/may already have started this chat/)
+  b.state.takesRequestIds = true
+  await until(() => !!m.get(chat.id).workerId, 'the worker')
+  expect(b.state.started).toHaveLength(1)
+})
+
+test('a worker that fails keeps a message the chat is still sending: no "send it again" line that would run it twice', async () => {
+  const { m, b, home } = setup()
+  const chat = await m.create({ cwd: home, prompt: 'first' })
+  await until(() => !!m.get(chat.id).workerId, 'the worker')
+  b.state.takesRequestIds = null
+  b.state.failNext.push({ err: late() })
+  await m.send(chat.id, 'keep me')
+  Object.assign(b.state.rows[0]!, { status: 'failed', error: 'The worker failed.' })
+  await m.syncWorkers(chat.id)
+  expect(lines(m, chat.id).filter((t) => t.startsWith('Not delivered'))).toEqual(['Not delivered, send it again: "first"'])
+  expect(users(m, chat.id).find((u) => u.text === 'keep me')).toMatchObject({ queued: true })
+  b.state.takesRequestIds = true
+  await until(() => b.state.sentToWorker.some((s) => s.text === 'keep me'), 'the message sent')
+})

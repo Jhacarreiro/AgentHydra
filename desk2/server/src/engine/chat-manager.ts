@@ -235,6 +235,8 @@ interface Entry {
   retrying?: RetryItem[]
   /** The one loop sending `retrying`, while it runs. */
   retryLoop?: Promise<void>
+  /** The held message that loop is sending right now: Cancel waits for its answer. */
+  retrySending?: RetryItem
   /** The ledger id of the chat's latest failure: a move to another account marks it recovered. */
   lastFailure?: string
   /** A CliMayte chat: the worker error already in the ledger, so a re-read of the same failure adds no row. */
@@ -808,7 +810,7 @@ export class ChatManager {
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
     if (behind) {
-      this.holdForRetry(e, standIn, text)
+      this.holdForRetry(e, standIn, text, false)
       return { queued: true }
     }
     const sentAt = this.now()
@@ -820,7 +822,7 @@ export class ChatManager {
     } catch (err) {
       // AgentHydra did not answer (busy, restarting, down) or failed on its side: kept and sent again, never dropped.
       const hold = retryable(err) && this.chats.get(chat.id) === e
-      if (hold) this.holdForRetry(e, standIn, text)
+      if (hold) this.holdForRetry(e, standIn, text, true)
       else this.dropStandIn(e, standIn)
       started?.()
       if (hold) return { queued: true }
@@ -868,9 +870,9 @@ export class ChatManager {
   }
 
   /** A message AgentHydra did not take: kept with the chat, shown queued, and sent again until it is (retryHeld). */
-  private holdForRetry(e: Entry, standIn: UserItem, text: string): void {
+  private holdForRetry(e: Entry, standIn: UserItem, text: string, tried: boolean): void {
     const first = !e.retrying?.length
-    ;(e.retrying ??= []).push({ itemId: standIn.id, text, requestId: standIn.id })
+    ;(e.retrying ??= []).push({ itemId: standIn.id, text, requestId: standIn.id, ...(tried ? { tried } : {}) })
     const i = e.sent?.indexOf(standIn) ?? -1
     if (i >= 0 && !standIn.queued) {
       const held: UserItem = { ...standIn, queued: true }
@@ -918,6 +920,11 @@ export class ChatManager {
       if (!item) return
       const takes = await this.bridge.takesRequestIds()
       if (!live()) return
+      // Taken back meanwhile (cancelRetrying).
+      if (e.retrying?.[0] !== item) {
+        wait = 0
+        continue
+      }
       if (takes === null) {
         later()
         continue
@@ -930,9 +937,15 @@ export class ChatManager {
       }
       // A new worker runs it as its first turn; a worker's running turn holds it.
       const queued = !!e.chat.workerId && busy(e.chat)
+      if (!item.tried) {
+        item.tried = true
+        this.store.saveChats(this.stored())
+      }
+      e.retrySending = item
       try {
         await this.dispatchToWorker(e, item.text, queued, {}, item.requestId)
       } catch (err) {
+        e.retrySending = undefined
         if (!live()) return
         if (retryable(err) && (err.unreachable || ++serverErrors < SERVER_ERROR_TRIES)) {
           later()
@@ -942,6 +955,7 @@ export class ChatManager {
         wait = 0
         continue
       }
+      e.retrySending = undefined
       if (!live()) return
       this.retryEnded(e, item, null)
       wait = 0
@@ -1076,10 +1090,45 @@ export class ChatManager {
   async cancelQueued(id: string, itemId: string): Promise<CancelQueuedResult> {
     const e = this.entry(id)
     const tooLate = { ok: true as const, cancelled: false, message: 'Too late to cancel: it already went into this turn.' }
+    const retrying = e.retrying?.find((r) => r.itemId === itemId)
+    if (retrying) return this.cancelRetrying(e, retrying)
     if (e.chat.workerId) return this.cancelHeld(e, itemId, tooLate)
     if (!e.runtime?.running || !(await e.runtime.cancelQueued(itemId))) return tooLate
     this.store.keepItems(id, new Set(this.listItems(id).map((i) => i.id).filter((x) => x !== itemId)))
     this.emitEvent({ type: 'item.removed', chatId: id, itemId })
+    this.changed(e.chat)
+    return { ok: true, cancelled: true, message: 'Taken back: it is not sent.' }
+  }
+
+  /**
+   * Takes back a message the chat is still sending again (retryHeld). One never sent goes at once, even with AgentHydra
+   * down; one AgentHydra may have (it did not answer) is taken back from the worker too, and stays when AgentHydra
+   * cannot be asked. One that may have started the chat's worker cannot be taken back.
+   */
+  private async cancelRetrying(e: Entry, item: RetryItem): Promise<CancelQueuedResult> {
+    if (e.retrySending === item) return { ok: true, cancelled: false, message: 'It is being sent to CliMayte right now: try again in a moment.' }
+    if (item.tried && !e.chat.workerId) {
+      return { ok: true, cancelled: false, message: 'AgentHydra may already have started this chat with it, so it cannot be taken back: stop the chat once it starts.' }
+    }
+    // Out of the list first, so the loop never sends it while AgentHydra is asked.
+    const at = e.retrying!.indexOf(item)
+    e.retrying!.splice(at, 1)
+    if (item.tried) {
+      try {
+        await this.bridge.cancelWorkerHeld(e.chat.workerId as string, item.text)
+      } catch (err) {
+        if (this.chats.get(e.chat.id) === e) {
+          ;(e.retrying ??= []).splice(at, 0, item)
+          this.retryHeld(e)
+        }
+        throw new ChatError(502, `CliMayte could not take it back (${err instanceof Error ? err.message : String(err)}): it stays, and goes when AgentHydra takes it.`)
+      }
+    }
+    if (!e.retrying?.length) e.retrying = undefined
+    const standIn = e.sent?.find((s) => s.id === item.itemId)
+    if (standIn) this.dropStandIn(e, standIn)
+    else this.store.saveChats(this.stored())
+    e.chat.queuedCount = e.sent?.filter((s) => s.queued).length ?? 0
     this.changed(e.chat)
     return { ok: true, cancelled: true, message: 'Taken back: it is not sent.' }
   }
@@ -2241,9 +2290,11 @@ export class ChatManager {
     for (const item of e.sent) if (marked.has(item.id)) this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item })
   }
 
-  /** A failed worker never reached the messages still held for it: they are dropped and the chat says so. */
+  /** A failed worker never reached the messages still held for it: they are dropped and the chat says so. One the chat
+   *  is still sending again (retrying) stays: the chat sends it, and "send it again" would run it twice. */
   private undelivered(e: Entry): void {
-    for (const item of e.sent?.filter((s) => s.queued) ?? []) {
+    const ours = new Set(e.retrying?.map((r) => r.itemId))
+    for (const item of e.sent?.filter((s) => s.queued && !ours.has(s.id)) ?? []) {
       this.dropStandIn(e, item)
       this.systemLine(e.chat.id, `undelivered:${item.id}`, 'warn',`Not delivered, send it again: "${item.text.slice(0, 80)}"`)
     }

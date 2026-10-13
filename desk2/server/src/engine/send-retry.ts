@@ -6,11 +6,13 @@
 
 import { BridgeError } from '../bridge/client'
 
-/** One message still to be taken: its stand-in, the text the worker gets, and its request id. */
+/** One message still to be taken: its stand-in, the text the worker gets, and its request id. `tried`: it was sent to
+ *  AgentHydra at least once, so AgentHydra may have it; one waiting behind another was never sent. */
 export interface RetryItem {
   itemId: string
   text: string
   requestId: string
+  tried?: boolean
 }
 
 /** The first wait before a message is sent again, doubling up to `maxMs`. */
