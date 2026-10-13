@@ -203,6 +203,8 @@ class FreeChatClient:
                 self.fresh += 1
                 self.chat_id, self.nudged = None, 0
                 text = self.render(messages, tools)
+            elif self.turns == 0:
+                raise ToolsRefused(f"{self.fresh + 1} Free threads refused their tools: {' '.join(reply.split())[:160]}")
             else:
                 break
         self.called = self.called or bool(message.get("tool_calls"))
@@ -244,6 +246,12 @@ class FreeChatClient:
 
     async def aclose(self) -> None:
         pass
+
+
+class ToolsRefused(RuntimeError):
+    """Every thread a tool task opened refused its tools on its first turn. Returned as the answer instead, the refusal
+    went out as an ok Free result of a task without a schema (\"I can't use those tools here.\"), and a schema task spent
+    two more nudges on it before failing (9 of the 11 GPT-5.6 mini misses on 25 code read tasks, 2026-10-13)."""
 
 
 class TurnError(ApiError):

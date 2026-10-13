@@ -406,6 +406,14 @@ def test_a_continued_message_the_daemon_dropped_before_its_thread_had_it_is_sent
     assert res.selection["route"]["recovered"] == 1
 
 
+def test_a_task_whose_every_thread_refuses_its_tools_goes_to_its_api_route(fake, tmp_path):
+    # Before 2026-10-13 the last refusal came back as the answer: an ok Free result saying the tools were unavailable.
+    f = fake(reply="I can't use those tools here.")
+    res, note = _consult(_read_task(tmp_path))
+    assert res is None and note["via"] == "api" and note["free_kind"] == "model"
+    assert len(f.chats) == 2 * (1 + free_client.NUDGES) and "refused their tools" in note["error"]
+
+
 def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake, tmp_path):
     fake(reply=['<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>',
                 '<tool_call>{"name": "submit_result", "arguments": {"n": 42}}</tool_call>'])
