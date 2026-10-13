@@ -130,7 +130,7 @@ const whichCache = new Map<string, string>()
 export function whichOnce(name: string): string | null {
   const kept = whichCache.get(name)
   if (kept && existsSync(kept)) return kept
-  const found = Bun.which(name)
+  const found = Bun.which(name, { PATH: process.env.PATH })
   if (found) whichCache.set(name, found)
   else whichCache.delete(name)
   return found
