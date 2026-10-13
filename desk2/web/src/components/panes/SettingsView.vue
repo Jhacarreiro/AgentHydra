@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Check } from '@lucide/vue'
+import { Activity, Check, CirclePause, Hourglass } from '@lucide/vue'
+import { groupRoutines } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
 import type { RoutinesStatus } from '@shared/routines'
@@ -68,6 +69,7 @@ const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
+const routineGroups = computed(() => groupRoutines(routines.value?.routines ?? []))
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -505,13 +507,18 @@ onBeforeUnmount(() => {
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
                 <template v-if="r.id === 'routines' && routines">
-                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
-                  <div v-if="!routines.routines.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
+                  <div v-if="!routines.routines.length && !routines.proposals.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
                     No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                   </div>
                   <template v-if="routines.proposals.length">
-                    <h4 class="mt-3 text-[12px] leading-4.5 text-text-2">Waiting for your yes</h4>
+                    <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
                     <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
+                  </template>
+                  <template v-for="g in routineGroups" :key="g.key">
+                    <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2">
+                      <CirclePause v-if="g.key === 'paused'" class="size-3.5 text-text-muted" aria-hidden="true" /><Activity v-else class="size-3.5 text-success" aria-hidden="true" />{{ g.title }} ({{ g.routines.length }})
+                    </h4>
+                    <RoutineCard v-for="x in g.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
                   </template>
                 </template>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
