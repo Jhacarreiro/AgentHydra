@@ -190,11 +190,16 @@ ledger line says provider `free`. Order: free accounts first, then CliMayte, the
 A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
 tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in
 `route_via_free_tool_profiles` (default routine, general, decision, research). `route_via_free_tool_asks` names the
-model and provider a profile's thread asks for: decision and research ask for Sonnet on a Claude account
-(`sonnet@claude`) with under 80% of its 5-hour window used, else they take their API route. In a blind A/B on real tasks
-(2026-10-13) Sonnet there beat the API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, and
-GPT-6) lost it: they read a median of 3 times before answering where the API read 20. Routine and general work runs on
-whichever account is idle, where mini held level with the API.
+model and provider a profile's thread asks for, best first: decision and research ask for Sonnet on a Claude account
+(`sonnet@claude`) with under 80% of its 5-hour window used; with none, research goes to GPT-5.6 mini on a ChatGPT
+account (`@chatgpt`) and decision takes its API route. In a blind A/B on real tasks (2026-10-13) Sonnet there beat the
+API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, GPT-6, Luna Thinking) lost it: they
+read a median of 3 times before answering where the API read 20. A ChatGPT thread of a profile in
+`route_via_free_check_profiles` (default decision, research) that would finish on fewer than 8 tool results is asked
+once to check its claims with its tools; mini then read a median 6 times and drew level, research 8 to 4 against the
+API. Routine and general work runs on whichever account is idle, where mini held level with the API. A turn that
+AgentHydra's restart cut off (it restarts onto each update it pulls) is read back from its thread once AgentHydra
+answers again, rather than paid for on the API route.
 
 `hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
 one Free message was measured on Dredd's gold asks and not shipped (2026-10-08,

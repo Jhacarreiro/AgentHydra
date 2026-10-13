@@ -320,11 +320,21 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
 # whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
 # asks for its Claude family on whichever account is idle, which a ChatGPT account answers on Luna Instant (GPT-5.6 mini).
-# Decision and research go to Sonnet 5.5 on a Claude Free account only, by the same A/B's later arms: there Sonnet
+# Decision and research go to Sonnet 5.5 on a Claude Free account first, by the same A/B's later arms: there Sonnet
 # beat the API answers 10 to 0 (1 tie) on decision read and research web, mean 7.4 vs 5.3, where GPT-5.6 mini had lost
 # them 8 to 32 over three runs and GPT-6 on a ChatGPT thread lost 1 to 10 (it read a median 3 times against the API's 20).
-_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",), "research": ("sonnet@claude",)}
+# With no Claude account free (the usual case: 10 of 11 sat at 98-100% of their 5-hour window that evening), research
+# goes to GPT-5.6 mini on a ChatGPT account ("@chatgpt"), which checks its claims before it finishes
+# (route_via_free_check_profiles): 8 to 4 against the API answers over two runs, where mini without the check lost
+# research 4 to 11. Decision stays off ChatGPT: 4 to 8 (1 tie) with the check, Luna Thinking 2 to 6, GPT-6 2 to 3.
+_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",),
+                                                                 "research": ("sonnet@claude", "@chatgpt")}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
+# `route_via_free_check_profiles`: the profiles whose tool tasks on a ChatGPT thread are asked once, before they finish
+# on fewer than free_client.CHECK_READS tool results, to check their claims with their tools (free_client.CHECK). A
+# Claude thread is not asked: Sonnet won without it, and the extra turn spends its account's 5-hour window.
+_ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT = ("decision", "research")
+ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -514,7 +524,7 @@ def _inherit() -> None:
 def _apply_settings(doc: dict) -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
@@ -542,6 +552,9 @@ def _apply_settings(doc: dict) -> None:
     fwp = doc.get("route_via_free_web_profiles")
     if isinstance(fwp, list) and all(isinstance(p, str) for p in fwp):
         ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
+    fcp = doc.get("route_via_free_check_profiles")
+    if isinstance(fcp, list) and all(isinstance(p, str) for p in fcp):
+        ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)
     fta = doc.get("route_via_free_tool_asks")
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
@@ -573,7 +586,7 @@ _BUILTIN_DOCS = _builtins()
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -586,6 +599,7 @@ def _reset() -> None:
     ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOLS_DEFAULT, _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
     ROUTE_VIA_FREE_TOOL_ASKS = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
     ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

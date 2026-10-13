@@ -491,8 +491,13 @@ def _read_stream(response, server_id, on_id):
 
 def _stream_event(event, server_id, on_id):
     if event.get("type") == "error" or event.get("error"):
+        # ChatGPT's own words for it, so a failure says whether it was a model's usage cap or something else: 3 of
+        # the first 6 Luna Thinking threads of an A/B failed here in 6 to 9 s with nothing more (2026-10-13).
+        raw = event.get("error")
+        why = (raw.get("message") or raw.get("code")) if isinstance(raw, dict) else raw
+        why = " ".join(str(why or event.get("message") or event.get("code") or "").split())[:200]
         raise ClaudeError(
-            "ChatGPT generation failed; read the chat before sending again.",
+            f"ChatGPT generation failed{f' ({why})' if why else ''}; read the chat before sending again.",
             code="generation_error",
         )
     candidate = event.get("conversation_id")

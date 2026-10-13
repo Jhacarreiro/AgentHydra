@@ -18,7 +18,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   can now run on an idle Free ChatGPT or Claude account at no cost, where before only tasks with no tools could. In a
   blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and research
   work, web research included, goes to Sonnet on a Free Claude account that has room, where it scored above the paid
-  answers; with no such account it stays on paid keys.
+  answers. With no such account, research goes to a Free ChatGPT account, which checks its claims before it answers and
+  then scored above the paid answers too; decision work stays on paid keys.
 - **Free account work survives AgentHydra restarting itself.** AgentHydra restarts onto each update it pulls, about
   every 25 minutes on a busy day, and each restart used to drop every Free account task in flight onto paid keys. The
   task now waits for AgentHydra to come back and takes its answer from the chat, which kept going meanwhile.

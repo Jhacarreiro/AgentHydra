@@ -40,13 +40,14 @@ class _Fake:
     does: the message is taken, then its batch is forgotten."""
 
     def __init__(self, accounts=None, reply="free answer", state="done", status_delays=(), cut=(), threads=(), read=(),
-                 chat_error=False):
+                 chat_error=False, model="gpt-5-6-mini"):
         self.accounts = ACCOUNTS if accounts is None else accounts
         self.reply, self.state = reply, state
         self.cut, self.cutting = set(cut), False
         self.threads, self.read = list(threads), list(read)
         self.chat_error = chat_error  # free_chat answers with a tool error, as for a request it refuses
         self.names: list[str] = []  # every tool called, in order
+        self.model = model  # the model every reply names
         self.chats: list[dict] = []
         self.status_delays = list(status_delays)  # seconds before each free_status answer, in arrival order
         self.hold = threading.Event()  # cleared, a sent chat is not answered until it is set again
@@ -102,7 +103,7 @@ class _Fake:
     def batch(self):
         # A list of replies answers each sent message in turn: a tool task's thread is several messages long.
         reply = self.reply[min(len(self.chats), len(self.reply)) - 1] if isinstance(self.reply, list) else self.reply
-        one = {"task": 0, "state": self.state, "account": "a1", "chat_id": "c1", "response": reply, "model": "gpt-5-6-mini", "seconds": 1.0}
+        one = {"task": 0, "state": self.state, "account": "a1", "chat_id": "c1", "response": reply, "model": self.model, "seconds": 1.0}
         return {"batch": "b1", "finished": self.state == "done", "done": 1, "tasks": [one]}
 
     @property
@@ -377,16 +378,19 @@ def test_a_read_task_runs_its_tools_on_a_free_thread(fake, tmp_path):
     assert "the answer is 42" in last["prompt"] and "# Your brief" not in last["prompt"]
 
 
-def test_a_thread_that_finishes_on_too_few_reads_is_asked_once_to_check(fake, tmp_path, monkeypatch):
+@pytest.mark.parametrize("model, answer", [("gpt-5-6-mini", "It is 42."), ("claude-sonnet-5-5", "It is 41.")])
+def test_a_chatgpt_thread_that_finishes_on_too_few_reads_is_asked_once_to_check(fake, tmp_path, monkeypatch, model, answer):
     # Free ChatGPT threads answered after a median of 3 reads where the API route read 20 (2026-10-13): one that would
-    # finish on fewer than CHECK_READS tool results is asked, in the same thread, to check its claims first.
+    # finish on fewer than CHECK_READS tool results is asked, in the same thread, to check its claims first. A Claude
+    # thread is not: Sonnet won without it, and the turn would spend its 5-hour window.
     monkeypatch.setattr(free_client, "CHECK_READS", 2)
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_CHECK_PROFILES", ("general",))
     read = '<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>'
-    f = fake(reply=[read, "It is 41.", read, "It is 42.", "never sent"])
+    f = fake(reply=[read, "It is 41.", read, "It is 42.", "never sent"], model=model)
     res, note = _consult(_read_task(tmp_path))
-    assert note is None and res.status == "ok" and res.answer == "It is 42."
+    assert note is None and res.status == "ok" and res.answer == answer
     sent = [c["tasks"][0]["prompt"] for c in f.chats]
-    assert len(sent) == 4 and sent[2] == free_client.CHECK and sent.count(free_client.CHECK) == 1
+    assert sent.count(free_client.CHECK) == (answer == "It is 42.") and len(sent) == (4 if answer == "It is 42." else 2)
 
 
 def test_a_continued_message_the_daemon_dropped_before_its_thread_had_it_is_sent_again_once(fake, tmp_path):
@@ -419,6 +423,7 @@ def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path,
     # A Claude account near the end of its 5-hour window is passed over: a thread of several messages there hits its limit.
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_PROFILES", ("general", "decision"))
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_ASKS", {"decision": asks})
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_CHECK_PROFILES", ())  # which model is asked, not the claim check
     chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
     f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt],
              reply=['<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>', "It is 42."])
@@ -434,15 +439,24 @@ def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path,
     assert after["chat_id"] == "c1" and "model" not in after and "provider" not in after
 
 
-def test_research_with_web_tools_waits_for_a_claude_account_with_room(fake):
-    # By default research may take its web tools to Free, on Sonnet on a Claude account only: a ChatGPT account idle
-    # and a Claude one near its 5-hour limit is a shortfall, not a send.
+@pytest.mark.parametrize("claude_usage, profile, sent", [
+    ("5h 40%, week 3%", "research", {"model": "sonnet", "provider": "claude"}),
+    ("5h 95%, week 3%", "research", {"model": None, "provider": "chatgpt"}),
+    ("5h 95%, week 3%", "decision", None),
+])
+def test_research_and_decision_go_to_sonnet_first_and_only_research_then_to_chatgpt(fake, claude_usage, profile, sent):
+    # By default: Sonnet on a Claude account with room for both; with none, research goes to a ChatGPT account (mini,
+    # which checks its claims, 8 to 4 against the API), and decision is a shortfall (it lost there even when checked).
     chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
-    f = fake(accounts=[{**ACCOUNTS[0], "usage": "5h 95%, week 3%"}, chatgpt])
-    task = _task(tools="web")
-    task.profile = "research"
+    f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt], reply="I could not finish.")
+    task = _task(tools="web" if profile == "research" else "read", cwd=".")
+    task.profile = profile
     res, note = _consult(task)
-    assert res is None and note["short"] == "free" and f.chats == []
+    if sent is None:
+        assert res is None and note["short"] == "free" and f.chats == []
+        return
+    first = f.chats[0]["tasks"][0]
+    assert {k: first.get(k) for k in ("model", "provider")} == sent
 
 
 def test_a_free_tool_run_that_fails_goes_to_its_api_route(fake, tmp_path):

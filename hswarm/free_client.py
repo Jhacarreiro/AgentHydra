@@ -67,10 +67,11 @@ FRESH = 1  # new threads opened for a task whose first thread refused its nudge
 # took for its app's function feature: GPT-5.6 mini answered "submit_result ... is not available to me in this chat",
 # and Sonnet 5.5 called it there and got "Tool 'submit_result' not found" (2026-10-13).
 REMIND = "(As before: call a tool, submit_result included, by writing its <tool_call> line in your reply.)"
-# Sent once in the same thread when a reply would finish after fewer than CHECK_READS tool results: Free ChatGPT threads
-# read a median of 3 times before answering where the API route read 20, and lost decision work 4 to 21 for it
-# (2026-10-13). 0 is off.
-CHECK_READS = 0
+# Sent once in the same thread when a reply would finish after fewer than CHECK_READS tool results, on a ChatGPT thread of
+# a profile in config.ROUTE_VIA_FREE_CHECK_PROFILES: Free ChatGPT threads read a median of 3 times before answering where
+# the API route read 20, and lost decision and research work 8 to 32 for it. Asked to check, GPT-5.6 mini read a median 6
+# times and drew level, 12 to 12 (1 tie) over 25 judged pairs, research 8 to 4 (2026-10-13). 0 is off.
+CHECK_READS = 8
 CHECK = ("Before you finish: check every claim in your answer against the sources with your tools. Read each file and "
          "line you cite, and search for each name and count you give; correct whatever does not hold. Then give your whole "
          "answer again as the brief says (with submit_result when it is listed), even if nothing changed.\n\n" + REMIND)
@@ -214,8 +215,10 @@ class FreeChatClient:
     def _unchecked(self, message: dict, messages: list[dict], tools: list[dict] | None) -> bool:
         """Whether this reply would finish the task (submit_result, or a plain answer once tools have run) on fewer
         than CHECK_READS tool results, before the thread was asked to check its claims."""
-        if not CHECK_READS or self.checked or not tools:
+        if not CHECK_READS or self.checked or not tools or self.task.profile not in config.ROUTE_VIA_FREE_CHECK_PROFILES:
             return False
+        if not ((self.model or "").startswith("gpt") or (self.model is None and self.provider == "chatgpt")):
+            return False  # a Claude thread (see config.ROUTE_VIA_FREE_CHECK_PROFILES)
         calls = message.get("tool_calls") or []
         finishing = any((c.get("function") or {}).get("name") == "submit_result" for c in calls) or (not calls and self.called)
         return finishing and sum(1 for m in messages if m.get("role") == "tool") < CHECK_READS
