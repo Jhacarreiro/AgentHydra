@@ -194,6 +194,34 @@ export interface ScoreRow {
   /** Severity-0 fails: in neither pass nor fail, and their units are not counted. */
   excluded: number
   units: number
+  /** Verdicts with no earlier fail on the same task (first tries; the rest are climbs after a fail). */
+  fresh: { pass: number; fail: number; slip: number; rework: number }
+  /** False for a null model, Haiku 4.5 and anything else off CLIMAYTE_LADDER: history only. */
+  onLadder: boolean
+  /** The counts routing reads (statAt): each verdict weighted by the per-check-template cap
+   *  (templateWeight). The plain counts above stay what the card shows. */
+  routing: { pass: number; fail: number; slip: number; rework: number; units: number }
+}
+
+/** A campaign of near-identical tasks (one check command, hundreds of times) counts for at most this
+ *  many verdicts per kind and rung in the routing statistics. 2026-10-12: a 657-task cut-percentage
+ *  campaign filed under `code` flipped the code pick from Haiku medium to Sonnet low in one day,
+ *  because its tasks failed the target together and outweighed everything else the kind had learned.
+ *  Each verdict weighs min(1, CAMPAIGN_CAP / n), n = the verdicts of its kind and rung that share
+ *  its check template. */
+export const CAMPAIGN_CAP = 30
+
+/** A check command with what varies per task taken out (digits, quoted strings, absolute paths);
+ *  tasks with no check are keyed by their group, and with neither by nothing (weight 1). */
+export function checkTemplate(t: { check?: string | null; group?: string | null }): string | null {
+  const c = t.check?.trim()
+  if (c) {
+    return `c:${c
+      .replace(/"[^"]*"|'[^']*'/g, '""')
+      .replace(/(?:[A-Za-z]:/|\/)[^\s"']*/g, '/P')
+      .replace(/\d+/g, '#')}`
+  }
+  return t.group ? `g:${t.group}` : null
 }
 
 /** Credit a scored verdict earns: a pass 1, a slip 2/3, a rework 1/3, a failed 0. */
@@ -212,17 +240,38 @@ export function scoreOf(r: Pick<ScoreRow, 'pass' | 'slip' | 'rework' | 'fail'>):
  *  Counts only the newest verdict per span of work: a later verdict on the same work (no attempt
  *  since the previous verdict) replaces an earlier one. */
 export function scoreRows(
-  tasks: Iterable<{ kind?: string | null; verdicts?: CliMayteVerdict[] }>,
+  tasks: Iterable<{
+    kind?: string | null
+    check?: string | null
+    group?: string | null
+    verdicts?: CliMayteVerdict[]
+  }>,
+  since?: number,
 ): ScoreRow[] {
   const rows = new Map<string, ScoreRow>()
+  const counted: Array<{
+    row: ScoreRow
+    v: CliMayteVerdict
+    fresh: boolean
+    template: string | null
+    cell: string
+  }> = []
+  const cellSize = new Map<string, number>()
   for (const t of tasks) {
     if (!t.kind || !t.verdicts?.length) continue
     // The newest verdict per span of work; a provisional one leaves its span out of the card.
     const bySpan = new Map<number | string, CliMayteVerdict>()
-    for (const [i, v] of t.verdicts.entries()) bySpan.set(v.span ?? `v${i}`, v)
+    const index = new Map<CliMayteVerdict, number>()
+    for (const [i, v] of t.verdicts.entries()) {
+      bySpan.set(v.span ?? `v${i}`, v)
+      index.set(v, i)
+    }
     const filteredVerdicts = [...bySpan.values()].filter((v) => !v.provisional)
+    const template = checkTemplate(t)
     for (const v of filteredVerdicts) {
+      if (since && v.at < since) continue
       const key = `${t.kind}|${v.model ?? ''}|${v.effort ?? ''}`
+      const onLadder = ladderIndex({ model: ladderModel(v.model), effort: v.effort }) !== -1
       const row = rows.get(key) ?? {
         kind: t.kind,
         model: v.model,
@@ -234,23 +283,52 @@ export function scoreRows(
         failed: 0,
         excluded: 0,
         units: 0,
+        fresh: { pass: 0, fail: 0, slip: 0, rework: 0 },
+        onLadder,
+        routing: { pass: 0, fail: 0, slip: 0, rework: 0, units: 0 },
       }
       rows.set(key, row)
       if (v.verdict === 'fail' && v.severity === 0) {
         row.excluded++
         continue
       }
-      if (v.verdict === 'pass') row.pass++
-      else {
+      // Fresh: no fail earlier on the task (a not-scored or provisional one counts: the task climbs after it).
+      const at = index.get(v) ?? 0
+      const fresh = !t.verdicts.slice(0, at).some((e) => e.verdict === 'fail')
+      const f = fresh ? row.fresh : null
+      if (v.verdict === 'pass') {
+        row.pass++
+        if (f) f.pass++
+      } else {
         row.fail++
-        if (v.severity === 1) row.slip++
-        else if (v.severity === 2) row.rework++
-        else row.failed++
+        if (f) f.fail++
+        if (v.severity === 1) {
+          row.slip++
+          if (f) f.slip++
+        } else if (v.severity === 2) {
+          row.rework++
+          if (f) f.rework++
+        } else row.failed++
       }
       // The work only: a move's re-read is what the move cost, not what the kind costs.
       row.units += Math.max(0, v.units - (v.reread ?? 0))
-      rows.set(key, row)
+      const rung = ladderIndex({ model: ladderModel(v.model), effort: v.effort })
+      const cell = `${t.kind}|${rung}|${template ?? ''}`
+      if (template) cellSize.set(cell, (cellSize.get(cell) ?? 0) + 1)
+      counted.push({ row, v, fresh, template, cell })
     }
+  }
+  for (const { row, v, template, cell } of counted) {
+    const n = template ? (cellSize.get(cell) ?? 1) : 1
+    const w = Math.min(1, CAMPAIGN_CAP / n)
+    const r = row.routing
+    if (v.verdict === 'pass') r.pass += w
+    else {
+      r.fail += w
+      if (v.severity === 1) r.slip += w
+      else if (v.severity === 2) r.rework += w
+    }
+    r.units += w * Math.max(0, v.units - (v.reread ?? 0))
   }
   const rung = (r: ScoreRow): number => {
     const i = ladderIndex({ model: r.model, effort: r.effort })
@@ -297,11 +375,11 @@ function statAt(rows: ScoreRow[], kind: string, i: number): RungStat {
   let units = 0
   for (const x of rows)
     if (x.kind === kind && ladderIndex({ model: ladderModel(x.model), effort: x.effort }) === i) {
-      sum.pass += x.pass
-      sum.fail += x.fail
-      sum.slip += x.slip
-      sum.rework += x.rework
-      units += x.units
+      sum.pass += x.routing.pass
+      sum.fail += x.routing.fail
+      sum.slip += x.routing.slip
+      sum.rework += x.routing.rework
+      units += x.routing.units
     }
   const n = sum.pass + sum.fail
   const rate = scoreOf(sum) ?? 0

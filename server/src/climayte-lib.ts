@@ -2165,7 +2165,7 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
       model: a.model,
       ...(a.ceiling ? { ceiling: true } : {}),
       tokens: a.tokens,
-      costUsd: a.spend ? a.spend.costUsd : null,
+      costUsd: attemptKitCost(w, a) ?? (a.spend ? a.spend.costUsd : null),
       turns: a.spend ? a.spend.turns : null,
       pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
       rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
@@ -2186,4 +2186,25 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
 }
 
 /** Weighted units as % of a Pro 5-hour window, to one decimal. */
+/** What the kit holds for one attempt, in list $ (the measure the totals' headline sums): its session
+ *  over its window, CliMayte calls only. null when the kit holds none (the transcript was gone before
+ *  it existed), so the caller keeps the attempt's stored spend. */
+function attemptKitCost(w: CliMayteWorker, a: CliMayteWorker['attempts'][number]): number | null {
+  const session = a.sessionId === undefined ? w.sessionId : a.sessionId
+  if (!session || a.endedAt === null) return null
+  try {
+    const t = usageQuery(
+      {
+        window: { from: a.startedAt, to: a.endedAt },
+        filter: { session, source: 'climayte' },
+        measures: ['list_usd', 'calls'],
+      },
+      { coverage: false },
+    ).totals
+    return t.calls ? (t.list_usd ?? 0) : null
+  } catch {
+    return null
+  }
+}
+
 const pctOf = (units: number): number => Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10

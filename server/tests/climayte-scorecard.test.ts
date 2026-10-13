@@ -11,6 +11,10 @@ import {
   SONNET,
   scoreOf,
   scoreRows,
+  CAMPAIGN_CAP,
+  checkTemplate,
+  bestRung,
+  pickedRung,
 } from '../src/climayte-scorecard'
 
 const v = (
@@ -405,5 +409,84 @@ describe('a task that deploys or deletes live things never runs on Haiku', () =>
     const haikuTrusted = scoreRows(times(3, () => task('code', v('pass', HAIKU, 'medium', 10_000))))
     expect(pick('rename a helper', haikuTrusted)).toMatchObject({ model: HAIKU })
     expect(pick('delete the production stack', haikuTrusted)).toMatchObject({ model: SONNET })
+  })
+})
+
+describe('scoreRows honesty', () => {
+  const rowOf = (rows: ReturnType<typeof scoreRows>, model: string, effort: string | null) =>
+    rows.find((r) => r.model === model && r.effort === effort)
+
+  test('since narrows the rows shown but a window never changes a pick', () => {
+    const old = (n: number) => times(n, () => task('code', v('pass', SONNET, 'high', 1, { at: 10 })))
+    const tasks = [...haikuOut('code'), ...old(3)]
+    const shown = scoreRows(tasks, 100)
+    expect(rowOf(shown, SONNET, 'high')).toBeUndefined()
+    expect(rowOf(scoreRows(tasks), SONNET, 'high')?.pass).toBe(3)
+    // Routing is computed from the unfiltered rows.
+    expect(bestRung('code', scoreRows(tasks))).toBeGreaterThan(bestRung('code', shown))
+  })
+
+  test('fresh counts verdicts with no earlier fail on the task; onLadder flags off-ladder rows', () => {
+    const climbed = task(
+      'code',
+      v('fail', HAIKU, 'medium', 1, { span: 1, severity: 1 }),
+      v('pass', SONNET, 'low', 1, { span: 2 }),
+    )
+    const rows = scoreRows([climbed, task('code', v('pass', SONNET, 'low'))])
+    expect(rowOf(rows, HAIKU, 'medium')?.fresh).toEqual({ pass: 0, fail: 1, slip: 1, rework: 0 })
+    expect(rowOf(rows, SONNET, 'low')?.fresh.pass).toBe(1) // the climb's pass is not fresh
+    expect(rowOf(rows, SONNET, 'low')?.pass).toBe(2)
+    const off = scoreRows([task('code', v('pass', 'claude-haiku-4-5-20251001', null))])
+    expect(off[0]?.onLadder).toBe(false)
+    expect(rows.every((r) => r.onLadder)).toBe(true)
+  })
+
+  test('one check template cannot outweigh the rest of a kind in the routing statistics', () => {
+    // 2026-10-12: 657 cut-percentage tasks failing together flipped code from Haiku medium to Sonnet.
+    const campaign = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        kind: 'code',
+        check: `node cut.mjs --target ${i} "file ${i}.ts" C:/work/x${i}/a.ts`,
+        verdicts: [v('fail', HAIKU, 'medium')],
+      }))
+    const good = times(9, () => task('code', v('pass', HAIKU, 'medium')))
+    const rows = scoreRows([...good, ...campaign(600)])
+    // Display keeps the plain counts.
+    expect(rowOf(rows, HAIKU, 'medium')?.fail).toBe(600)
+    // Routing: 600 fails weigh CAMPAIGN_CAP in all, so 9 passes still beat them.
+    expect(CAMPAIGN_CAP).toBe(30)
+    expect(pickedRung('code', rows)).toBe(pickedRung('code', scoreRows(good)))
+  })
+
+  test('checkTemplate drops digits, quoted strings and absolute paths; no check keys on the group', () => {
+    expect(checkTemplate({ check: 'run 12 "a b" C:\x\y.ts /tmp/z' })).toBe(
+      checkTemplate({ check: 'run 99 "c" D:/q/r.ts /var/w' }),
+    )
+    expect(checkTemplate({ group: 'g-1' })).not.toBe(checkTemplate({ group: 'g-2' }))
+    expect(checkTemplate({})).toBeNull()
+  })
+})
+
+describe('backfillVerdictCost', () => {
+  test('legacy verdicts on the same work share a span and the survivor keeps its cost; cost follows settled spend', async () => {
+    const { backfillVerdictCost } = await import('../src/climayte-core')
+    const tokens = { input: 1000, output: 0, cacheRead: 0, cacheWrite: 0 }
+    const w: any = {
+      model: SONNET,
+      attempts: [{ startedAt: 100, endedAt: 200, tokens, model: SONNET }],
+      verdicts: [v('fail', SONNET, 'low', 0, { at: 300 }), v('pass', SONNET, 'low', 0, { at: 400 })],
+    }
+    expect(backfillVerdictCost(w)).toBe(true)
+    expect(w.verdicts[0].span).toBe(100)
+    expect(w.verdicts[1].span).toBe(100)
+    expect(w.verdicts[0].units).toBeGreaterThan(0)
+    expect(w.verdicts[1].units).toBe(w.verdicts[0].units)
+    const counted = scoreRows([{ kind: 'code', verdicts: w.verdicts }])
+    expect(counted.reduce((s, r) => s + r.pass + r.fail, 0)).toBe(1)
+    // Spend settling later raises the attempt's tokens: the next backfill follows.
+    const before = w.verdicts[1].units
+    w.attempts[0].tokens = { ...tokens, input: 5000 }
+    backfillVerdictCost(w)
+    expect(w.verdicts[1].units).toBeGreaterThan(before)
   })
 })

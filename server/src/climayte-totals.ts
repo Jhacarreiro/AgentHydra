@@ -75,6 +75,14 @@ interface TotalsTally {
   peaks: Map<string, WindowPeak>
   runsByOutcome: Partial<Record<TotalsAttempt['outcome'] | 'ceiling', number>>
   distinct: Set<string>
+  /** Ended attempts that never launched a CLI: in neither `sessions` nor `runsByOutcome`. */
+  neverLaunched: number
+}
+
+/** An attempt that ended without a CLI ever running: no process, never started, no runner. One still
+ *  waiting for its runner to claim the spec is not (it has not ended). */
+function neverLaunchedRun(at: TotalsAttempt): boolean {
+  return at.endedAt !== null && at.pid === null && !at.started && !at.runner?.pid
 }
 
 /** What CliMayte's calls cost since a moment, from the analytics kit: tokens, list $ and weighted
@@ -141,7 +149,7 @@ function runsOnAccount(tally: TotalsTally, accountId: string, t: number): number
  *  when it was created after it (its runs are counted one by one, tallyRecentRun). */
 function tallyTask(tally: TotalsTally, w: CliMayteWorker): void {
   if (!tally.since) {
-    tally.sessions += w.attempts.length
+    tally.sessions += w.attempts.filter((a) => !neverLaunchedRun(a)).length
     tally.costUsd += w.costUsd
     if (w.tokens) tally.tokens = addTokens(tally.tokens, w.tokens)
     tally.tasksInScope.add(w.id)
@@ -149,7 +157,7 @@ function tallyTask(tally: TotalsTally, w: CliMayteWorker): void {
 }
 
 function tallyRecentRun(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
-  if (!tally.since) return
+  if (!tally.since || neverLaunchedRun(at)) return
   tally.sessions++
   tally.costUsd += at.spend?.costUsd ?? 0
   if (at.tokens) tally.tokens = addTokens(tally.tokens, at.tokens)
@@ -215,6 +223,7 @@ function tallyPeak(tally: TotalsTally, at: TotalsAttempt): void {
 }
 
 function tallyUsage(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
+  if (neverLaunchedRun(at)) return
   const shown = at.ceiling && at.outcome === 'quota' ? 'ceiling' : at.outcome
   tally.runsByOutcome[shown] = (tally.runsByOutcome[shown] ?? 0) + 1
   tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
@@ -239,6 +248,10 @@ function tallyConversation(tally: TotalsTally, w: CliMayteWorker, at: TotalsAtte
 function tallyAttempt(tally: TotalsTally, w: CliMayteWorker, at: TotalsAttempt): void {
   const recent = (at.endedAt ?? Date.now()) >= tally.since
   if (!recent) return
+  if (neverLaunchedRun(at)) {
+    tally.neverLaunched++
+    return
+  }
   tallyRecentRun(tally, w, at)
   tallyStops(tally, w, at)
   tallyPeak(tally, at)
@@ -305,6 +318,14 @@ export function climayteTotals(
   opts: { store?: KitStore } = {},
 ): {
   tasks: number
+  /** Tasks with at least one attempt that launched a CLI (`tasks` counts every task filed). */
+  tasksRan: number
+  /** The tasks in `tasks` by status; `neverRan`: no attempt ever launched, whatever the status. */
+  tasksByStatus: { done: number; failed: number; cancelled: number; neverRan: number }
+  /** Ended attempts that never launched a CLI (not in `sessions` or `runsByOutcome`). */
+  neverLaunched: number
+  /** When the first task on record was created (epoch ms); null with none. */
+  firstAt: number | null
   /** Attempts ("runs"): every start of the CLI, retries, resumes and handoffs included. */
   sessions: number
   /** Those runs by how they ended (owner, 2026-09-30: "99 CLI sessions" read as 99 sessions when
@@ -397,6 +418,7 @@ export function climayteTotals(
     peaks: new Map<string, WindowPeak>(),
     runsByOutcome: {},
     distinct: new Set<string>(),
+    neverLaunched: 0,
   }
   for (const w of workers.values()) {
     tallyTask(tally, w)
@@ -429,8 +451,24 @@ export function climayteTotals(
         tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
       }
   }
+  let tasksRan = 0
+  let firstAt: number | null = null
+  const tasksByStatus = { done: 0, failed: 0, cancelled: 0, neverRan: 0 }
+  for (const w of workers.values()) {
+    if (firstAt === null || w.createdAt < firstAt) firstAt = w.createdAt
+    const ran = w.attempts.some((a) => a.started || a.pid !== null || !!a.runner?.pid)
+    if (ran) tasksRan++
+    if (!tally.tasksInScope.has(w.id)) continue
+    if (!ran) tasksByStatus.neverRan++
+    else if (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled')
+      tasksByStatus[w.status]++
+  }
   return {
     tasks: tally.tasksInScope.size,
+    tasksRan,
+    tasksByStatus,
+    neverLaunched: tally.neverLaunched,
+    firstAt,
     sessions: tally.sessions,
     runsByOutcome: tally.runsByOutcome,
     cliSessions: tally.distinct.size,

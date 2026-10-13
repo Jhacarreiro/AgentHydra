@@ -403,7 +403,13 @@ app.post('/api/corch/pings/read', async (c) => {
   if (!sid) return c.json({ error: 'sessionId is required' }, 400)
   return c.json(climayteUnreadPings(sid))
 })
-app.get('/api/corch/scorecard', (c) => c.json(climayteScorecard()))
+app.get('/api/corch/scorecard', (c) => {
+  const raw = c.req.query('since')
+  const since = raw ? Number(raw) : undefined
+  if (raw && (!Number.isFinite(since) || since! < 0))
+    return c.json({ error: 'since must be epoch ms' }, 400)
+  return c.json(climayteScorecard(since))
+})
 app.post('/api/corch/workers/:id/handoff', (c) => c.json(climayteHandoff(c.req.param('id'))))
 app.post('/api/corch/cancel', async (c) => {
   const body = await jsonBody(c)

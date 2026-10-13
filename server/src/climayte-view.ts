@@ -398,7 +398,7 @@ export function climaytePickModel(kind: CliMayteKind): string {
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost
  *  on average as a share of a Pro 5-hour window, and the setting an `auto` task of that kind gets
  *  next (`pick`; an exploring pick one rung cheaper is not marked). */
-export function climayteScorecard(): {
+export function climayteScorecard(since?: number): {
   unitsPerPercent: number
   rows: Array<{
     kind: string
@@ -414,6 +414,10 @@ export function climayteScorecard(): {
     score: number | null
     pctPerTask: number | null
     pick: boolean
+    /** Verdicts with no earlier fail on the same task. */
+    fresh: { pass: number; fail: number; slip: number; rework: number }
+    /** False for a null model, Haiku 4.5 and anything off the ladder: history only. */
+    onLadder: boolean
   }>
   /** How the workers' own time estimates compared with the time they took (climayte-eta.ts): every
    *  kind's, each kind's with enough samples, and the note the next brief carries. */
@@ -427,7 +431,9 @@ export function climayteScorecard(): {
   } & ReturnType<typeof etaReport>
 } {
   load()
-  const rows = scoreRows(workers.values())
+  // Picks always come from every verdict on record; `since` only narrows the rows shown.
+  const allRows = scoreRows(workers.values())
+  const rows = since ? scoreRows(workers.values(), since) : allRows
   const samples = allEtaSamples(workers.values())
   const all = etaCalibration(samples, null)
   const byBand = etaBandCalibrations(samples)
@@ -436,11 +442,11 @@ export function climayteScorecard(): {
     .map((k) => etaCalibration(samples, k))
     .filter((c): c is EtaCalibration => c?.kind != null)
   const picks = new Map<string, number>()
-  for (const r of rows) {
+  for (const r of allRows) {
     if (picks.has(r.kind)) continue
     try {
       const k = climayteKind(r.kind)
-      if (k) picks.set(r.kind, pickedRung(k, rows))
+      if (k) picks.set(r.kind, pickedRung(k, allRows))
     } catch {
       // a kind no longer on the list: shown, never picked
     }
@@ -461,6 +467,8 @@ export function climayteScorecard(): {
         failed: r.failed,
         excluded: r.excluded,
         score: scoreOf(r),
+        fresh: r.fresh,
+        onLadder: r.onLadder,
         pctPerTask: n ? Math.round((r.units / n / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
         pick:
           best !== undefined &&

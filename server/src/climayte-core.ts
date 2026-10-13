@@ -1273,6 +1273,7 @@ export function settleSpends(now: number = Date.now()): boolean {
     a.spend = spendRecord(w, a, spent)
     a.spendOpen = undefined
     a.spendReadAt = undefined
+    backfillVerdictCost(w)
     dirty.add(w.id)
     any = true
   }
@@ -1438,18 +1439,43 @@ function backfillAttemptSpend(w: CliMayteWorker): boolean {
   return any
 }
 
-/** What each verdict's work spent re-reading: the attempts it judged, those started since the
- *  verdict before it. Worked out again on every load (no file is read), so it follows the
- *  attempts' records. True when any verdict's record changed. */
-function backfillVerdictRereads(w: CliMayteWorker): boolean {
+/** What each verdict's work cost, worked out again from the attempts (no file is read): a verdict
+ *  with no `span` gets the start of the newest attempt begun by its time, so two verdicts on the same
+ *  work share one (the scorecard keeps the newest); `units` and `reread` are the attempts started
+ *  since the verdict before it, as verdictRecord writes them, and a verdict on the same span as the
+ *  one before (no attempt since) keeps that one's cost. Run on every load and after settleSpends,
+ *  so a verdict recorded while its attempt's spend was still open follows the settled figure.
+ *  True when any verdict's record changed. */
+export function backfillVerdictCost(w: CliMayteWorker): boolean {
   let any = false
-  for (const [i, v] of (w.verdicts ?? []).entries()) {
-    const since = w.verdicts?.[i - 1]?.at ?? 0
-    const reread = w.attempts
-      .filter((a) => a.startedAt >= since && a.startedAt < v.at)
-      .reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
-    if (v.reread === reread) continue
+  const vs = w.verdicts ?? []
+  for (const [i, v] of vs.entries()) {
+    if (v.span === undefined) {
+      const ran = w.attempts.filter((a) => a.startedAt <= v.at)
+      const span = ran.length ? Math.max(...ran.map((a) => a.startedAt)) : undefined
+      if (span !== undefined) {
+        v.span = span
+        any = true
+      }
+    }
+    const prev = vs[i - 1]
+    const since = prev?.at ?? 0
+    const window = w.attempts.filter((a) => a.startedAt >= since && a.startedAt < v.at)
+    let units: number
+    let reread: number
+    if (!window.length && prev && v.span !== undefined && prev.span === v.span) {
+      units = prev.units
+      reread = prev.reread ?? 0
+    } else {
+      units = window.reduce(
+        (sum, a) => sum + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),
+        0,
+      )
+      reread = window.reduce((sum, a) => sum + rereadUnits(a, w.model), 0)
+    }
+    if (v.reread === reread && v.units === units) continue
     v.reread = reread
+    v.units = units
     any = true
   }
   return any
@@ -1479,7 +1505,7 @@ function backfillTokens(): boolean {
     if (backfillAttemptPeaks(w)) mine = true
     if (backfillCeilingArrival(w)) mine = true
     if (backfillAttemptSpend(w)) mine = true
-    if (backfillVerdictRereads(w)) mine = true
+    if (backfillVerdictCost(w)) mine = true
     if (backfillWorkerTokens(w)) mine = true
     if (!mine) continue
     // A finished worker's own file is rewritten only when that worker is marked (save).
