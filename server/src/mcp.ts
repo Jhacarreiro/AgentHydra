@@ -56,6 +56,7 @@ import {
   withCallBudget,
   withDaemonWarning,
 } from './mcp-client'
+import { CORE_TOOLS } from './mcp-core'
 import { DASHBOARD_TOOLS } from './mcp-dashboards'
 import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
@@ -1983,6 +1984,7 @@ export const TOOLS: HydraTool[] = [
   ),
   ...DASHBOARD_TOOLS,
   ...MANAGER_TOOLS,
+  ...CORE_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:

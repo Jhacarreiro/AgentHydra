@@ -16,7 +16,7 @@ import { api, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
 /** Words an agent says, mapped to the words the tool texts use. */
-const SYNONYMS: Record<string, string[]> = {
+export const SYNONYMS: Record<string, string[]> = {
   workspace: ['folder', 'cwd', 'project'],
   folder: ['workspace', 'cwd', 'project'],
   project: ['folder', 'workspace'],
@@ -69,7 +69,7 @@ const STOP = new Set([
   'can',
 ])
 
-function words(text: string): string[] {
+export function words(text: string): string[] {
   return text
     .toLowerCase()
     .split(/[^a-z0-9]+/)
