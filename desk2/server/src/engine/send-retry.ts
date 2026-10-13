@@ -40,4 +40,8 @@ export function retryItemsOf(stored: unknown): RetryItem[] | undefined {
   return items.length ? items : undefined
 }
 
+/** Why a held message is not sent again by an AgentHydra that reads no request id: it could run it twice. */
+export const NOT_SENT_AGAIN =
+  'AgentHydra did not answer in time, and the AgentHydra running now cannot tell a message sent again from a new one, so this one was not sent again. It may have gone through: check this chat before you send it again. Restarting AgentHydra fixes this.'
+
 export const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms))

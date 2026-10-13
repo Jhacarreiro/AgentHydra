@@ -947,6 +947,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     },
     cancelWorker,
     sendToWorker,
+    takesRequestIds,
     canDeliverNow,
     sendToWorkerNow,
     cancelWorkerHeld,

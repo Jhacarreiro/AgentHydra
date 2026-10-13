@@ -58,7 +58,7 @@ import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
-import { RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, retryItemsOf, SERVER_ERROR_TRIES, sleep } from './send-retry'
+import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, retryItemsOf, SERVER_ERROR_TRIES, sleep } from './send-retry'
 import { mediaCache, toStoredImage } from '../media/cache'
 import { withNamedFiles, withoutNamedLines } from './system-text'
 import { SessionMetaStore } from './session-meta'
@@ -69,7 +69,7 @@ import { Timings } from './timings'
 import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -244,11 +244,12 @@ interface Entry {
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
 const squash = (s: string): string => s.replace(/\s+/g, ' ').trim()
 
-/** The stand-in a worker's own copy of a sent message replaces: the one with its text, else the oldest sent before it. */
-function standInFor(sent: UserItem[], real: UserItem): number {
+/** The stand-in a worker's own copy of a sent message replaces: the one with its text, else the oldest sent before it
+ *  that is not `held` (still being sent again: AgentHydra may not have it, so another message's copy is not its own). */
+function standInFor(sent: UserItem[], real: UserItem, held?: ReadonlySet<string>): number {
   const text = squash(real.text)
   const same = sent.findIndex((s) => text.includes(squash(withoutNamedLines(s.text))))
-  return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000)
+  return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000 && !held?.has(s.id))
 }
 
 /** An imported session's title. One nobody named (no title, or only its first words) is named from its first message, as a new chat is. */
@@ -795,8 +796,10 @@ export class ChatManager {
     while (e.starting) await e.starting
     const chat = e.chat
     if (this.chats.get(chat.id) !== e) throw new ChatError(404, `no chat ${chat.id}`)
-    if (opts.onlyIfReady && busy(chat)) throw new ChatBusyError()
-    let queued = busy(chat)
+    // Messages AgentHydra has not taken yet go first (retryHeld): this one waits behind them, in order.
+    const behind = !!e.retrying?.length
+    if (opts.onlyIfReady && (busy(chat) || behind)) throw new ChatBusyError()
+    const queued = busy(chat) || behind
     // The message shows at once: the worker's JSONL has it only once its CLI runs and the poll reads it.
     const ts = this.now()
     // A worker not started yet holds the message too: it shows as queued until the worker's own copy arrives.
@@ -804,21 +807,39 @@ export class ChatManager {
     ;(e.sent ??= []).push(standIn)
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'item.upsert', chatId: chat.id, item: withNamedFiles(standIn, mediaCache(this.store.home)) })
+    if (behind) {
+      this.holdForRetry(e, standIn, text)
+      return { queued: true }
+    }
     const sentAt = this.now()
+    const started = this.beginStart(e)
     let sent: { urgent: boolean; stoppedFor: boolean }
     try {
-      sent = await this.dispatchToWorker(e, text, queued, opts)
+      // The stand-in's id is the message's request id: sent again, AgentHydra starts or queues it once.
+      sent = await this.dispatchToWorker(e, text, queued, opts, standIn.id, started)
     } catch (err) {
-      this.dropStandIn(e, standIn)
+      // AgentHydra did not answer (busy, restarting, down) or failed on its side: kept and sent again, never dropped.
+      const hold = retryable(err) && this.chats.get(chat.id) === e
+      if (hold) this.holdForRetry(e, standIn, text)
+      else this.dropStandIn(e, standIn)
+      started?.()
+      if (hold) return { queued: true }
       // Never a 404: the chat exists, and the send queue reads a 404 as a deleted chat.
-      throw new ChatError(502,`CliMayte did not take the message: ${err instanceof Error ? err.message : String(err)}`)
+      throw new ChatError(502, `CliMayte did not take the message: ${err instanceof Error ? err.message : String(err)}`)
     }
+    started?.()
     if (this.chats.get(chat.id) !== e) return { queued }
     this.timings.workerSent(chat, this.now() - sentAt)
     e.workerLive = true
     const held = await this.settleHeld(e, standIn, text, queued, sent, opts)
-    queued = held.queued
-    if (held.gone) return { queued }
+    if (held.gone) return { queued: held.queued }
+    this.tookMessage(e, held.queued)
+    return { queued: held.queued }
+  }
+
+  /** AgentHydra took a message: the chat shows its turn starting, unless the turn running holds the message. */
+  private tookMessage(e: Entry, queued: boolean): void {
+    const chat = e.chat
     if (!queued) {
       chat.status = 'starting'
       chat.activity = 'Queued'
@@ -828,17 +849,140 @@ export class ChatManager {
     chat.updatedAt = this.now()
     this.changed(chat)
     void this.syncWorkers(chat.id)
-    return { queued }
+  }
+
+  /** The start of the chat's worker, when it has none yet: a send that comes meanwhile waits until the worker exists
+   *  (startWorkerFor calls the function it answers) or until this message is held when AgentHydra did not answer, so it never starts
+   *  a second worker or goes first. Undefined when the chat has its worker. */
+  private beginStart(e: Entry): (() => void) | undefined {
+    if (e.chat.workerId) return undefined
+    let done!: () => void
+    e.starting = new Promise<void>((r) => (done = r))
+    let open = true
+    return () => {
+      if (!open) return
+      open = false
+      e.starting = undefined
+      done()
+    }
+  }
+
+  /** A message AgentHydra did not take: kept with the chat, shown queued, and sent again until it is (retryHeld). */
+  private holdForRetry(e: Entry, standIn: UserItem, text: string): void {
+    const first = !e.retrying?.length
+    ;(e.retrying ??= []).push({ itemId: standIn.id, text, requestId: standIn.id })
+    const i = e.sent?.indexOf(standIn) ?? -1
+    if (i >= 0 && !standIn.queued) {
+      const held: UserItem = { ...standIn, queued: true }
+      e.sent![i] = held
+      this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: withNamedFiles(held, mediaCache(this.store.home)) })
+    }
+    this.store.saveChats(this.stored())
+    if (first) this.systemLine(e.chat.id, 'send-retry', 'info', 'AgentHydra did not answer in time, so this message is kept and sent again shortly. It is never sent twice.')
+    this.retryHeld(e)
+  }
+
+  /** Sends the chat's held messages again, oldest first, one loop per chat. */
+  private retryHeld(e: Entry): void {
+    if (e.retryLoop || this.closing) return
+    let ended = false
+    e.retryLoop = this.retryLoopOf(e)
+      .then(() => {
+        ended = true
+      })
+      .catch((err) => console.warn(`[desk] chat ${e.chat.id}: sending held messages again failed: ${err instanceof Error ? err.message : String(err)}`))
+      .finally(() => {
+        e.retryLoop = undefined
+        // One held while the loop was ending: a new loop sends it.
+        if (ended && e.retrying?.length && this.chats.get(e.chat.id) === e) this.retryHeld(e)
+      })
+  }
+
+  /**
+   * Each held message is sent again with its own request id, so one AgentHydra took after all (it did not answer in
+   * time, but started the worker or queued the message) is answered as taken and never runs twice. AgentHydra not
+   * answering is waited out for as long as the chat exists; its own error is tried SERVER_ERROR_TRIES times; a refusal
+   * is final. An AgentHydra too old to read request ids is not sent it again: that could run it twice.
+   */
+  private async retryLoopOf(e: Entry): Promise<void> {
+    const { firstMs, maxMs } = this.retryDelays
+    const live = () => !this.closing && this.chats.get(e.chat.id) === e
+    let wait = firstMs
+    let serverErrors = 0
+    const later = () => {
+      wait = Math.min(Math.max(wait * 2, firstMs), maxMs)
+    }
+    for (;;) {
+      await sleep(wait)
+      const item = live() ? e.retrying?.[0] : undefined
+      if (!item) return
+      const takes = await this.bridge.takesRequestIds()
+      if (!live()) return
+      if (takes === null) {
+        later()
+        continue
+      }
+      if (!takes) {
+        // Its stand-in already gone: the worker's own copy arrived, so it did go through.
+        this.retryEnded(e, item, e.sent?.some((s) => s.id === item.itemId) ? NOT_SENT_AGAIN : null)
+        wait = 0
+        continue
+      }
+      // A new worker runs it as its first turn; a worker's running turn holds it.
+      const queued = !!e.chat.workerId && busy(e.chat)
+      try {
+        await this.dispatchToWorker(e, item.text, queued, {}, item.requestId)
+      } catch (err) {
+        if (!live()) return
+        if (retryable(err) && (err.unreachable || ++serverErrors < SERVER_ERROR_TRIES)) {
+          later()
+          continue
+        }
+        this.retryEnded(e, item, `Your message was not sent: CliMayte did not take it: ${err instanceof Error ? err.message : String(err)}`)
+        wait = 0
+        continue
+      }
+      if (!live()) return
+      this.retryEnded(e, item, null)
+      wait = 0
+      serverErrors = 0
+      // Its stand-in stays until the worker's own copy arrives; it runs now unless a turn or a wait holds it.
+      const standIn = e.sent?.find((s) => s.id === item.itemId)
+      if (!(queued || e.chat.waiting)) this.unqueue(e, standIn)
+      e.workerLive = true
+      this.tookMessage(e, queued)
+    }
+  }
+
+  /** A held message leaves the list: taken (`why` null), or not to be sent, when its stand-in goes and the chat keeps
+   *  its words and says why. */
+  private retryEnded(e: Entry, item: RetryItem, why: string | null): void {
+    e.retrying = e.retrying?.filter((r) => r !== item)
+    if (!e.retrying?.length) e.retrying = undefined
+    this.store.saveChats(this.stored())
+    if (why === null) return
+    const standIn = e.sent?.find((s) => s.id === item.itemId)
+    if (standIn) this.dropStandIn(e, standIn)
+    this.systemLine(e.chat.id, `send-failed:${item.itemId}`, 'warn', `${why}\n\n${standIn?.text ?? item.text}`)
+    e.chat.lastError = why
+    this.changed(e.chat)
   }
 
   /**
    * The message to the chat's worker, or the worker started with it. `urgent`: sent as AgentHydra's urgent message;
    * `stoppedFor`: that stopped the running turn for it.
    */
-  private async dispatchToWorker(e: Entry, text: string, queued: boolean, opts: SendOptions): Promise<{ urgent: boolean; stoppedFor: boolean }> {
+  private async dispatchToWorker(
+    e: Entry,
+    text: string,
+    queued: boolean,
+    opts: SendOptions,
+    requestId?: string,
+    started?: () => void,
+  ): Promise<{ urgent: boolean; stoppedFor: boolean }> {
     const chat = e.chat
     if (!chat.workerId) {
-      await this.startWorkerFor(e, text)
+      await this.startWorkerFor(e, text, requestId, started)
       return { urgent: false, stoppedFor: false }
     }
     // The chat moved folders (cwd-move): the worker's next launch resumes its session there.
@@ -850,26 +994,21 @@ export class ChatManager {
     // A worker started before the connectors' first probe pass lands would run without their MCP servers.
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }))
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }), requestId)
     this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
 
-  private async startWorkerFor(e: Entry, text: string): Promise<void> {
+  /** The chat's worker, started with its first message; a send meanwhile waits for it (beginStart's `started`). */
+  private async startWorkerFor(e: Entry, text: string, requestId?: string, started?: () => void): Promise<void> {
     const chat = e.chat
-    let started!: () => void
-    e.starting = new Promise<void>((r) => (started = r))
-    try {
-      const connectors = connectorsPending()
-      if (connectors) await connectors
-      const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }) })
-      e.workerCwd = chat.cwd
-      chat.workerId = w.id
-      chat.sessionId = w.sessionId
-    } finally {
-      e.starting = undefined
-      started()
-    }
+    const connectors = connectorsPending()
+    if (connectors) await connectors
+    const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }), ...(requestId ? { requestId } : {}) })
+    e.workerCwd = chat.cwd
+    chat.workerId = w.id
+    chat.sessionId = w.sessionId
+    started?.()
   }
 
   /**
@@ -1230,6 +1369,7 @@ export class ChatManager {
   async rewind(id: string, at: string): Promise<ChatSummary> {
     const e = this.entry(id)
     if (e.starting) throw new ChatError(409, 'This chat is starting its worker: undo once it has started.')
+    if (e.retrying?.length) throw new ChatError(409, 'This chat is still sending a message AgentHydra did not answer: undo once it is sent.')
     const chat = e.chat
     const items = this.listItems(id)
     const index = items.findIndex((i) => i.id === at)
@@ -1601,7 +1741,7 @@ export class ChatManager {
       if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
       emitted.set(item.id, sig)
       if (item.kind === 'user' && e.sent?.length) {
-        const i = standInFor(e.sent, item)
+        const i = standInFor(e.sent, item, new Set(e.retrying?.map((r) => r.itemId)))
         if (i >= 0) this.dropStandIn(e, e.sent[i]!)
       }
       this.store.appendItem(chat.id, item)

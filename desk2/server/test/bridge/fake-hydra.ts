@@ -38,6 +38,8 @@ export interface FakeState {
   cancelHeld?: boolean
   /** false: the held message is no longer held (it was delivered or began). */
   cancelRemoves?: boolean
+  /** false: an AgentHydra from before request ids (acf1a08d), which checks a task's prompt first. */
+  requestIds?: boolean
 }
 
 /** Sessions on the other PC: the chat that started its wave, and that wave's manager. */
@@ -198,6 +200,13 @@ const json = (data: unknown, status = 200) => Response.json(data, { status })
 const stat = (answer: any) => (typeof answer === 'string' ? json({ error: answer }, 500) : json(answer))
 
 function handlePost(state: FakeState, p: string, body: any): Response {
+  if (p === '/api/corch/workers') {
+    // Only the refusals the request-id probe meets: AgentHydra checks a task's requestId before its prompt.
+    const t = body?.tasks?.[0]
+    if (state.requestIds !== false && t?.requestId !== undefined && !t.requestId) return json({ error: 'task 1: requestId must be a non-empty string of at most 200 characters' }, 400)
+    if (!t?.prompt) return json({ error: 'task 1: prompt is empty' }, 400)
+    return json({ error: 'not found' }, 404)
+  }
   if (p === '/api/corch/cancel') {
     const w = state.workers.find((x) => x.id === body?.id && ACTIVE.has(x.status))
     if (w) w.status = 'cancelled'

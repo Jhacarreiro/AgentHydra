@@ -212,6 +212,28 @@ describe('bridge', () => {
     f.state.cancelRemoves = false
     expect(await b.cancelWorkerHeld('w-00000001', 'stop and fix the build')).toMatchObject({ removed: false })
   })
+
+  test('request ids are asked once per AgentHydra run: an old one refuses the probe for its prompt, a down one is null', async () => {
+    const f = await fake()
+    f.state.requestIds = false
+    const b = createBridge({ url: f.url, now: () => NOW })
+    const probes = () => f.posts.filter((p) => p.path === '/api/corch/workers').length
+
+    expect(await b.takesRequestIds()).toBe(false)
+    expect(await b.takesRequestIds()).toBe(false)
+    expect(probes()).toBe(1)
+    // The probe is a task AgentHydra refuses before it makes anything: no prompt, no folder.
+    expect(f.posts.at(-1)?.body).toEqual({ origin: null, tasks: [{ prompt: '', cwd: '', requestId: '' }] })
+
+    // Restarted on the new code: asked again.
+    f.state.requestIds = true
+    f.state.version = '9.9.10'
+    expect(await b.takesRequestIds()).toBe(true)
+    expect(probes()).toBe(2)
+
+    await f.stop()
+    expect(await b.takesRequestIds()).toBeNull()
+  })
 })
 
 describe('poller', () => {

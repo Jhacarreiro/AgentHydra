@@ -172,19 +172,44 @@ export function fakeBridge(
     excluded: () => [] as Iterable<string> | Promise<Iterable<string>>,
     // Like the real bridge, the list answers with the marks the manager registered.
     meta: (list: ExternalSession[]) => list,
+    /** What the next starts and sends meet, oldest first: a failure, `took` when AgentHydra did it anyway and only
+     *  answered too late. Like AgentHydra, a start or send whose requestId it has seen is answered and done once. */
+    failNext: [] as { err: Error; took?: boolean }[],
+    /** Every requestId a start or a send carried, repeats included. */
+    requestIds: [] as string[],
+    /** takesRequestIds' answer: null when AgentHydra did not answer, false for one from before request ids. */
+    takesRequestIds: true as boolean | null,
   }
+  const madeFor = new Map<string, AhWorker>()
+  const sendIds = new Set<string>()
   const b: ManagerBridge = {
     startWorker: async (task) => {
+      if (task.requestId) state.requestIds.push(task.requestId)
+      const fail = state.failNext.shift()
+      if (fail && !fail.took) throw fail.err
+      const again = task.requestId ? madeFor.get(task.requestId) : undefined
+      if (again) {
+        if (fail) throw fail.err
+        return again
+      }
       state.started.push(task)
       const n = state.started.length
       const row = ahWorker({ id: `w${n}`, title: task.title, cwd: task.cwd, prompt: task.prompt, model: task.model ?? null, sessionId: `worker-session-${n}` })
       state.rows.push(row)
+      if (task.requestId) madeFor.set(task.requestId, row)
+      if (fail) throw fail.err
       return row
     },
-    sendToWorker: async (id, text, cwd, urgent) => {
-      state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}) })
+    sendToWorker: async (id, text, cwd, urgent, _desk, requestId) => {
+      if (requestId) state.requestIds.push(requestId)
+      const fail = state.failNext.shift()
+      if (fail && !fail.took) throw fail.err
+      if (!requestId || !sendIds.has(requestId)) state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}) })
+      if (requestId) sendIds.add(requestId)
+      if (fail) throw fail.err
       return urgent === true && state.nowStops
     },
+    takesRequestIds: async () => state.takesRequestIds,
     canDeliverNow: async () => state.deliverNow,
     sendToWorkerNow: async (id, text) => {
       state.sentNow.push({ id, ...(text ? { text } : {}) })
