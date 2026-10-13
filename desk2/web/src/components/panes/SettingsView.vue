@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
-import { Activity, Check, CirclePause, Hourglass } from '@lucide/vue'
-import { groupRoutines } from './routine-view'
+import { Check, Hourglass, ListChecks } from '@lucide/vue'
+import { routineCountLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
 import type { RoutinesStatus } from '@shared/routines'
@@ -69,7 +69,7 @@ const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
-const routineGroups = computed(() => groupRoutines(routines.value?.routines ?? []))
+const routineCount = computed(() => routineCountLine(routines.value?.routines ?? []))
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -684,11 +684,11 @@ onBeforeUnmount(() => {
                   <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
                   <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
                 </template>
-                <template v-for="g in routineGroups" :key="g.key">
+                <template v-if="routines.routines.length">
                   <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0">
-                    <CirclePause v-if="g.key === 'paused'" class="size-3.5 text-text-muted" aria-hidden="true" /><Activity v-else class="size-3.5 text-success" aria-hidden="true" />{{ g.title }} ({{ g.routines.length }})
+                    <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
                   </h4>
-                  <RoutineCard v-for="x in g.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
+                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
                 </template>
               </div>
             </div>

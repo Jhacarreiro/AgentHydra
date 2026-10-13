@@ -1,5 +1,5 @@
 // What the Routines list says at a glance, as pure functions: a status from the routine's state and last run, times as
-// '2 h ago' / 'in 3 h', a schedule in plain words with its time zone, and the Active / Paused groups.
+// '2 h ago' / 'in 3 h', a schedule in plain words with its time zone, and the list's count line.
 import type { Routine, RoutineOutcome } from '@shared/routines'
 
 export type RoutineStatus = 'ok' | 'failed' | 'running' | 'paused' | 'waiting' | 'new'
@@ -114,18 +114,9 @@ export function scheduleSentence(expr: string, zone: string): string {
   return `${day} at ${at}, ${tail}`
 }
 
-export interface RoutineGroup {
-  key: 'active' | 'paused'
-  title: string
-  routines: Routine[]
-}
-
-/** Active and Paused groups from the data, empty ones left out (Awaiting approval comes from the proposals). */
-export function groupRoutines(routines: Routine[]): RoutineGroup[] {
-  const paused = routines.filter((r) => routineStatus(r) === 'paused')
-  const active = routines.filter((r) => routineStatus(r) !== 'paused')
-  return [
-    { key: 'active' as const, title: 'Active', routines: active },
-    { key: 'paused' as const, title: 'Paused', routines: paused },
-  ].filter((g) => g.routines.length > 0)
+/** The list's header: '7 routines', '7 routines, 1 paused'. One list in a fixed order, so a row's own switch never
+ *  moves it out from under the pointer, as Active and Paused groups did (owner, 2026-10-12: "each toggle"). */
+export function routineCountLine(routines: Pick<Routine, 'paused'>[]): string {
+  const paused = routines.filter((r) => r.paused).length
+  return `${routines.length} ${routines.length === 1 ? 'routine' : 'routines'}${paused ? `, ${paused} paused` : ''}`
 }

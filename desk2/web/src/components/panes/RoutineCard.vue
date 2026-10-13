@@ -1,6 +1,6 @@
 <script setup lang="ts">
-// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run) that opens into its
-// schedule in words, its history and its actions: Run now, Pause or Resume, and Open chat for a prompt run's chat.
+// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, and its own on/off
+// switch) that opens into its schedule in words, its history and its actions: Run now, and Open chat for a prompt run's chat.
 import { computed, ref } from 'vue'
 import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, MessageSquare, Repeat } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
@@ -8,6 +8,7 @@ import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
 import { usePaneApi } from './api'
 import { BUTTON } from './settings-styles'
+import PaneSwitch from './PaneSwitch.vue'
 import RoutineStatusChip from './RoutineStatusChip.vue'
 import { lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
 
@@ -76,30 +77,40 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
 
 <template>
   <div class="mt-2 rounded-[var(--radius-6)] bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
-    <button
-      type="button"
-      class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-6)] p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
-      :aria-expanded="open"
-      @click="open = !open"
-    >
-      <ChevronRight class="size-4 shrink-0 text-text-muted transition-transform" :class="open ? 'rotate-90' : ''" aria-hidden="true" />
-      <component :is="KindIcon" class="size-4 shrink-0 text-text-2" aria-hidden="true" />
-      <span class="min-w-0 flex-1 truncate text-[13px] leading-5 text-text">{{ routine.name }}</span>
-      <RoutineStatusChip :status="status" />
-      <span class="flex basis-full flex-wrap items-center gap-x-4 gap-y-0.5 ps-12 text-[12px] leading-4.5 text-text-muted">
-        <span class="inline-flex items-center gap-1" :title="last ? stamp(last.endedAt) : 'never run'">
-          <CircleCheck v-if="lastOutcome === 'ok'" class="size-3.5 text-success" aria-hidden="true" />
-          <CircleAlert v-else-if="lastOutcome === 'failed'" class="size-3.5 text-danger-text" aria-hidden="true" />
-          <CircleMinus v-else-if="lastOutcome === 'busy'" class="size-3.5" aria-hidden="true" />
-          <History v-else class="size-3.5" aria-hidden="true" />
-          Last run {{ lastShort ?? 'never' }}
+    <div class="flex items-center gap-1 pe-3">
+      <button
+        type="button"
+        class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-6)] p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
+        :aria-expanded="open"
+        @click="open = !open"
+      >
+        <ChevronRight class="size-4 shrink-0 text-text-muted transition-transform" :class="open ? 'rotate-90' : ''" aria-hidden="true" />
+        <component :is="KindIcon" class="size-4 shrink-0 text-text-2" aria-hidden="true" />
+        <span class="min-w-0 flex-1 truncate text-[13px] leading-5 text-text">{{ routine.name }}</span>
+        <RoutineStatusChip :status="status" />
+        <span class="flex basis-full flex-wrap items-center gap-x-4 gap-y-0.5 ps-12 text-[12px] leading-4.5 text-text-muted">
+          <span class="inline-flex items-center gap-1" :title="last ? stamp(last.endedAt) : 'never run'">
+            <CircleCheck v-if="lastOutcome === 'ok'" class="size-3.5 text-success" aria-hidden="true" />
+            <CircleAlert v-else-if="lastOutcome === 'failed'" class="size-3.5 text-danger-text" aria-hidden="true" />
+            <CircleMinus v-else-if="lastOutcome === 'busy'" class="size-3.5" aria-hidden="true" />
+            <History v-else class="size-3.5" aria-hidden="true" />
+            Last run {{ lastShort ?? 'never' }}
+          </span>
+          <span class="inline-flex items-center gap-1" :title="routine.nextRunAt !== null ? stamp(routine.nextRunAt) : routine.reason">
+            <Clock class="size-3.5" aria-hidden="true" />
+            Next {{ nextShort }}
+          </span>
         </span>
-        <span class="inline-flex items-center gap-1" :title="routine.nextRunAt !== null ? stamp(routine.nextRunAt) : routine.reason">
-          <Clock class="size-3.5" aria-hidden="true" />
-          Next {{ nextShort }}
-        </span>
-      </span>
-    </button>
+      </button>
+      <!-- Its own on/off (owner, 2026-10-12: "each toggle"): on runs it on its schedule, off pauses it. The Routines switch
+           above is the manager's, for all of them. A routine with no kind (a file that does not check out) has nothing to pause. -->
+      <PaneSwitch
+        :model-value="!routine.paused"
+        :label="`Run ${routine.name} on its schedule`"
+        :disabled="busy || routine.kind === null"
+        @update:model-value="(on: boolean) => act(on ? { resume: routine.id } : { pause: routine.id })"
+      />
+    </div>
     <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
       <div class="flex items-start gap-1.5 text-[12px] leading-4.5 text-text-2">
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
@@ -137,8 +148,6 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
         </li>
       </ul>
       <div class="mt-3 flex flex-wrap gap-2">
-        <button v-if="routine.kind !== null && !routine.paused" type="button" :class="BUTTON" :disabled="busy" @click="act({ pause: routine.id })">Pause</button>
-        <button v-else-if="routine.kind !== null" type="button" :class="BUTTON" :disabled="busy" @click="act({ resume: routine.id })">Resume</button>
         <button type="button" :class="BUTTON" :disabled="!canRun" @click="act({ run: routine.id })">Run now</button>
         <button v-if="chatSession" type="button" :class="BUTTON" @click="openChat(chatSession)">Open chat</button>
       </div>

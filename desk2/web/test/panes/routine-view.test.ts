@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { RoutineRun } from '@shared/routines'
-import { groupRoutines, lastRunText, nextRunText, plainReason, relativeTime, routineStatus, scheduleSentence, spanOf } from '../../src/components/panes/routine-view'
+import { lastRunText, nextRunText, plainReason, relativeTime, routineStatus, scheduleSentence, spanOf } from '../../src/components/panes/routine-view'
 
 const NOW = Date.UTC(2026, 9, 12, 12, 0, 0)
 const run = (outcome: RoutineRun['outcome']): RoutineRun => ({ startedAt: NOW - 1, endedAt: NOW - 2 * 3_600_000, outcome, exitCode: 0, lastLine: '', workerId: null, sessionId: null })
@@ -55,14 +55,5 @@ describe('plainReason', () => {
       'slot Monday, October 12 at 1:00, UTC time was missed by more than 12 hours: skipped'
     )
     expect(plainReason('paused by the owner', 'America/Chicago')).toBe('paused by the owner')
-  })
-})
-
-describe('groupRoutines', () => {
-  it('splits paused from active and drops empty groups', () => {
-    const mk = (id: string, state: 'idle' | 'paused') => ({ id, state, runs: [] }) as never
-    const groups = groupRoutines([mk('a', 'idle'), mk('b', 'paused')])
-    expect(groups.map((g) => [g.title, g.routines.length])).toEqual([['Active', 1], ['Paused', 1]])
-    expect(groupRoutines([mk('a', 'idle')]).map((g) => g.title)).toEqual(['Active'])
   })
 })
