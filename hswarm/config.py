@@ -310,13 +310,20 @@ ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
 # general read 6.2 Free vs 5.8 API, decision read 6.1 vs 8.4, research web 3.8 vs 6.2 with only 4 of 10 served.
 _ROUTE_VIA_FREE_TOOLS_DEFAULT = ("read_file", "list_dir", "glob", "grep", "outline", "unfold", "fetch_output")
 ROUTE_VIA_FREE_TOOLS = _ROUTE_VIA_FREE_TOOLS_DEFAULT
-_ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general")
+# `route_via_free_web_profiles`: the profiles whose tool tasks may also be offered the web tools (FREE_WEB_TOOLS) on Free.
+FREE_WEB_TOOLS = ("read_url", "web_search")
+_ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT = ("research",)
+ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
+_ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general", "decision", "research")
 ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
 # whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
 # asks for its Claude family on whichever account is idle, which a ChatGPT account answers on Luna Instant (GPT-5.6 mini).
-_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {}
+# Decision and research go to Sonnet 5.5 on a Claude Free account only, by the same A/B's later arms: there Sonnet
+# beat the API answers 10 to 0 (1 tie) on decision read and research web, mean 7.4 vs 5.3, where GPT-5.6 mini had lost
+# them 8 to 32 over three runs and GPT-6 on a ChatGPT thread lost 1 to 10 (it read a median 3 times against the API's 20).
+_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",), "research": ("sonnet@claude",)}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 
 _CORES = os.cpu_count() or 4
@@ -507,7 +514,7 @@ def _inherit() -> None:
 def _apply_settings(doc: dict) -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
@@ -532,6 +539,9 @@ def _apply_settings(doc: dict) -> None:
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
     if isinstance(ftp, list) and all(isinstance(p, str) for p in ftp):
         ROUTE_VIA_FREE_TOOL_PROFILES = tuple(p.strip().lower() for p in ftp)
+    fwp = doc.get("route_via_free_web_profiles")
+    if isinstance(fwp, list) and all(isinstance(p, str) for p in fwp):
+        ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
     fta = doc.get("route_via_free_tool_asks")
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
@@ -563,7 +573,7 @@ _BUILTIN_DOCS = _builtins()
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS
+    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -575,6 +585,7 @@ def _reset() -> None:
     ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, None, _ROUTE_VIA_FREE_PROFILES_DEFAULT
     ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOLS_DEFAULT, _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
     ROUTE_VIA_FREE_TOOL_ASKS = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
+    ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

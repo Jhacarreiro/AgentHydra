@@ -230,11 +230,15 @@ class FreeChatClient:
 
 
 def tool_names_allowed(task: Task) -> bool:
-    """Whether every tool the task is offered is one a Free task may use (config.ROUTE_VIA_FREE_TOOLS)."""
+    """Whether every tool the task is offered is one a Free task may use (config.ROUTE_VIA_FREE_TOOLS, and the web tools
+    for a profile in config.ROUTE_VIA_FREE_WEB_PROFILES)."""
     from .toolspecs import tool_names
 
     try:
         names = set(tool_names(task.tools))
     except ValueError:
         return False
-    return bool(names) and names <= set(config.ROUTE_VIA_FREE_TOOLS)
+    allowed = set(config.ROUTE_VIA_FREE_TOOLS)
+    if task.profile in config.ROUTE_VIA_FREE_WEB_PROFILES:
+        allowed |= set(config.FREE_WEB_TOOLS)
+    return bool(names) and names <= allowed

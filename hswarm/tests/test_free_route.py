@@ -285,9 +285,9 @@ def test_a_failed_free_task_hands_the_task_back(fake):
 
 @pytest.mark.parametrize("kw,after", [
     ({"tools": "edit"}, {}),
-    # What lost the 2026-10-13 A/B to the API: decision and research work with tools, and web tools.
-    ({"tools": "read"}, {"profile": "decision"}),
+    # Web tools only for research (2026-10-13 A/B): general and decision work offered them keeps its API route.
     ({"tools": "web"}, {}),
+    ({"tools": "web"}, {"profile": "decision"}),
     ({}, {"zdr": True}),
     ({"model": "deepseek-flash"}, {}),
     ({}, {"profile": "critical"}),
@@ -354,6 +354,17 @@ def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path,
     first, after = (c["tasks"][0] for c in f.chats)
     assert {k: first.get(k) for k in ("model", "provider")} == sent
     assert after["chat_id"] == "c1" and "model" not in after and "provider" not in after
+
+
+def test_research_with_web_tools_waits_for_a_claude_account_with_room(fake):
+    # By default research may take its web tools to Free, on Sonnet on a Claude account only: a ChatGPT account idle
+    # and a Claude one near its 5-hour limit is a shortfall, not a send.
+    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
+    f = fake(accounts=[{**ACCOUNTS[0], "usage": "5h 95%, week 3%"}, chatgpt])
+    task = _task(tools="web")
+    task.profile = "research"
+    res, note = _consult(task)
+    assert res is None and note["short"] == "free" and f.chats == []
 
 
 def test_a_free_tool_run_that_fails_goes_to_its_api_route(fake, tmp_path):

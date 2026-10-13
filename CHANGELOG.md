@@ -16,8 +16,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   which is kept only if its scores go up and is undone otherwise.
 - **Free accounts now do HSwarm work that reads files.** A routine or general HSwarm task that only reads your project
   can now run on an idle Free ChatGPT or Claude account at no cost, where before only tasks with no tools could. In a
-  blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and web
-  research work stays on paid keys, where the Free answers scored lower.
+  blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and research
+  work, web research included, goes to Sonnet on a Free Claude account that has room, where it scored above the paid
+  answers; with no such account it stays on paid keys.
 - **An HSwarm job budget no longer fills up with money that was never spent.** A turn refused before anything was
   sent, or stopped while it waited out a rate limit, used to count its worst case against the job's budget. One job
   with a $6 budget cancelled 16 of its 17 tasks after spending 11 cents. Such a turn now costs nothing.
