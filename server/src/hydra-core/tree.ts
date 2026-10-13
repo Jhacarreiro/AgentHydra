@@ -101,7 +101,7 @@ const EXAMPLE: Record<Exclude<Step, 'done'>, string> = {
   q4: '`3`',
   q5: '`5`',
   q6: '`a lead who knows dashboard design`',
-  q6pick: '`2`, `person:iris-ui-design`, or `none`',
+  q6pick: '`2`, `person:ui-lead`, or `none`',
   q7: '`testing: real visitors for the signup page`, or `none`',
   q7pick: '`1 3`, `more testing`, or `none`',
   q8: '`dashboard styling`, or `none`',
