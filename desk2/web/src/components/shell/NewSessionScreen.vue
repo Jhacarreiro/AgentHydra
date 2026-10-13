@@ -11,7 +11,7 @@ import { useFirstInterestSet } from '@/lib/first-interest'
 import { createReusableTemplate } from '@vueuse/core'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
-import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
+import { focusFirstItem, MENU_CHECK_ITEM, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
@@ -205,8 +205,8 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                   </button>
                 </DropdownMenuTrigger>
                 <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-                  <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="showProjectDetails" @update:model-value="(v: boolean) => (showProjectDetails = v)">Folders and git status</DropdownMenuCheckboxItem>
-                  <DropdownMenuCheckboxItem :class="MENU_ITEM" :disabled="!hiddenCount" :model-value="showHiddenProjects" @update:model-value="(v: boolean) => (showHiddenProjects = v)">Show hidden projects ({{ hiddenCount || 'none' }})</DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :model-value="showProjectDetails" @update:model-value="(v: boolean) => (showProjectDetails = v)">Folders and git status</DropdownMenuCheckboxItem>
+                  <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :disabled="!hiddenCount" :model-value="showHiddenProjects" @update:model-value="(v: boolean) => (showHiddenProjects = v)">Show hidden projects ({{ hiddenCount || 'none' }})</DropdownMenuCheckboxItem>
                 </DropdownMenuContent>
               </DropdownMenu>
             </span>

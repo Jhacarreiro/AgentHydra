@@ -76,7 +76,7 @@ onBeforeUnmount(disarm)
       <section
         v-if="item"
         :key="item.id"
-        class="pointer-events-auto border-b border-border bg-bg-page py-2 ps-4 pe-14 shadow-(--shadow-menu-ringed)"
+        class="pointer-events-auto border-b border-border bg-bg-page px-14 py-2 shadow-(--shadow-menu-ringed)"
         role="status"
         aria-label="Previous message you sent"
         data-testid="message-peek"
@@ -84,27 +84,31 @@ onBeforeUnmount(disarm)
         @pointerleave="hold(false)"
         @keydown.esc="emit('close')"
       >
-        <div class="mb-1 flex items-center gap-2 text-[12px] text-text-muted">
-          <span>Previous message you sent</span>
-          <button
-            type="button"
-            class="rounded-(--radius-6) px-1.5 py-0.5 text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text"
-            @click="emit('go')"
-          >Go to it</button>
+        <!-- Centered in the transcript's 768px text column (owner, 2026-10-12: "center the block please. Not, left align"),
+             with the same 56px each side so it clears the step arrows on the right and stays truly centered. -->
+        <div class="mx-auto flex max-w-192 flex-col items-center">
+          <div class="mb-1 flex items-center gap-2 text-[12px] text-text-muted">
+            <span>Previous message you sent</span>
+            <button
+              type="button"
+              class="rounded-(--radius-6) px-1.5 py-0.5 text-text-2 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text"
+              @click="emit('go')"
+            >Go to it</button>
+          </div>
+          <div class="tx-bubble w-fit">
+            <p
+              ref="body"
+              class="whitespace-pre-wrap wrap-break-word"
+              :class="expanded ? 'max-h-[40vh] overflow-y-auto' : ['tx-bubble-clamped', long && 'tx-bubble-fade']"
+            >{{ item.text }}</p>
+            <button v-if="long" type="button" class="tx-bubble-more" :aria-expanded="expanded" @click="expanded = !expanded">
+              {{ expanded ? 'Read less' : 'Read more' }}
+            </button>
+          </div>
+          <p v-if="item.images?.length" class="mt-1 text-[12px] text-text-muted">
+            {{ item.images.length === 1 ? 'And 1 image' : `And ${item.images.length} images` }}
+          </p>
         </div>
-        <div class="tx-bubble w-fit">
-          <p
-            ref="body"
-            class="whitespace-pre-wrap wrap-break-word"
-            :class="expanded ? 'max-h-[40vh] overflow-y-auto' : ['tx-bubble-clamped', long && 'tx-bubble-fade']"
-          >{{ item.text }}</p>
-          <button v-if="long" type="button" class="tx-bubble-more" :aria-expanded="expanded" @click="expanded = !expanded">
-            {{ expanded ? 'Read less' : 'Read more' }}
-          </button>
-        </div>
-        <p v-if="item.images?.length" class="mt-1 text-[12px] text-text-muted">
-          {{ item.images.length === 1 ? 'And 1 image' : `And ${item.images.length} images` }}
-        </p>
       </section>
     </Transition>
   </div>

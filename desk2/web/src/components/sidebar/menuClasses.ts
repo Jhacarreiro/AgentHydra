@@ -5,6 +5,9 @@ export const MENU_CONTENT =
   'min-w-32 max-w-80 rounded-[var(--radius-10)] bg-bg-popover p-1 shadow-(--shadow-menu-ringed) ring-0'
 export const MENU_ITEM =
   'h-6 min-h-0 cursor-default gap-1.5 rounded-[var(--radius-6)] px-2 py-0 text-[13px] leading-[19px] text-text [&_svg:not([class*=size-])]:size-4'
+/** A checkbox item: the primitive draws its check at right-2 in a pe-8 gutter, which MENU_ITEM's px-2 would take away,
+ *  leaving the check over the end of a long label ('Disable cloud sessions', 2026-10-12). */
+export const MENU_CHECK_ITEM = `${MENU_ITEM} pe-8`
 export const MENU_SEPARATOR = 'mx-2 my-1 h-px bg-border'
 export const MENU_SHORTCUT = 'ms-auto pl-4 text-[13px] tracking-normal text-text-shortcut tnum'
 

@@ -3,7 +3,7 @@ import { Cloud, EllipsisVertical, Rows3, Server } from '@lucide/vue'
 import { agentHydraIcon, shellGlyphs, shellIcons } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuCheckboxItem, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuShortcut, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
-import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
+import { MENU_CHECK_ITEM, MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT, focusFirstItem } from '@/components/sidebar/menuClasses'
 import { markUpdateSeen, updateSeen, type UpdateOffer } from '@/lib/server-update'
 import { CHROME_COLLAPSED, CHROME_OPEN } from '@/components/sidebar/width'
 import type { SidebarSide } from '@/components/sidebar/side'
@@ -88,7 +88,9 @@ const BTN = `${BTN_SHAPE} text-text`
     <span class="mx-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <!-- The four view toggles (Cloud sessions, CliMayte tasks, the details, compact mode) are items here, each checked while on
          (owner, 2026-10-12). A check mark shows the state; choosing one emits what its button did, and the menu closes as the
-         other checkbox menus do. Labels are the tooltips they replace, so they name the state too. -->
+         other checkbox menus do. Labels are the tooltips they replace, so they name the state too. It opens to the right of
+         the button with a small dark shadow that shows on the dark window, where the menus' soft 24px one is lost (owner,
+         2026-10-12: "fly out to the right of the icon ... add a tiny shadow to the flyout"). -->
     <Tip label="More options">
       <span class="inline-flex">
     <DropdownMenu>
@@ -97,17 +99,17 @@ const BTN = `${BTN_SHAPE} text-text`
             <EllipsisVertical class="size-4" />
           </button>
         </DropdownMenuTrigger>
-        <DropdownMenuContent align="end" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!cloudOn" @select="emit('cloud')">
+        <DropdownMenuContent align="start" :class="[MENU_CONTENT, 'shadow-[inset_0_0_0_1px_#ffffff1a,0_2px_8px_#000000a6]']" @open-auto-focus="focusFirstItem">
+          <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :model-value="!!cloudOn" @select="emit('cloud')">
             <Cloud class="size-4" />{{ cloudOn ? 'Disable cloud sessions' : 'Enable cloud sessions' }}
           </DropdownMenuCheckboxItem>
-          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!tasksOn" @select="emit('tasks')">
+          <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :model-value="!!tasksOn" @select="emit('tasks')">
             <component :is="shellIcons.climayte" class="size-4" />{{ tasksOn ? 'Hide CliMayte tasks' : 'Show CliMayte tasks' }}
           </DropdownMenuCheckboxItem>
-          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!cleanOn" @select="emit('clean')">
+          <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :model-value="!cleanOn" @select="emit('clean')">
             <component :is="shellGlyphs.cleanSidebar" class="size-4" />{{ cleanOn ? 'Show more details' : 'Show fewer details' }}
           </DropdownMenuCheckboxItem>
-          <DropdownMenuCheckboxItem :class="MENU_ITEM" :model-value="!!compactOn" @select="emit('compact')">
+          <DropdownMenuCheckboxItem :class="MENU_CHECK_ITEM" :model-value="!!compactOn" @select="emit('compact')">
             <Rows3 class="size-4" />{{ compactOn ? 'Disable compact mode' : 'Enable compact mode' }}
           </DropdownMenuCheckboxItem>
         </DropdownMenuContent>
