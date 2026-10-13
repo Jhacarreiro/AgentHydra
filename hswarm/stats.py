@@ -64,12 +64,14 @@ def _read(db_path: Path, days: int) -> dict:
             "plan_rates": rates,
             "plan": utilization.plan_view(total, rates),
             "by_machine": [report_html.weigh_row(m, rates) for m in utilization.by_machine(c)],
-            "days": list(reversed(per_day[:days])),  # both sources are newest first; the answer is oldest first
+            "days": fill_zero_days(list(reversed(per_day[:days]))),  # both sources are newest first; the answer is oldest first
             "claude_by_family": list(reversed(report_html.claude_by_family(c, rates)[:days])),
             "accounts": report_html.account_view(c),
             "rule_check": rule_check,
             "recent": recent_rows,
-            "today": _today_data(per_day),
+            "today": _today_data(per_day, c),
+            "basis": basis(c),
+            "old_method": old_method(c),
         }
     finally:
         c.close()
@@ -99,6 +101,8 @@ def _empty() -> dict:
         "rule_check": None,
         "recent": [],
         "today": _today_data([]),
+        "basis": None,
+        "old_method": {"saved_usd": 0.0, "rows": 0},
     }
 
 
@@ -118,12 +122,69 @@ def _connect(db_path: Path) -> sqlite3.Connection:
     return c
 
 
-def _today_data(per_day: list[dict]) -> dict:
+ZERO_DAY = {"n": 0, "tasks": 0, "worker_usd": 0.0, "worker_tokens": 0, "unpriced": 0, "unsized": 0, "est_usd": 0.0, "est_low_usd": 0.0,
+            "saved_usd": 0.0, "saved_low_usd": 0.0, "est_tokens": 0, "claude_usd": None, "claude_tokens": None, "plan_cost_usd": None,
+            "plan_est_usd": None, "plan_saved_usd": None, "plan_saved_low_usd": None, "plan_claude_usd": None, "partial": False,
+            "rate": None, "machines": 0, "share": None, "token_share": None, "plan_share": None}
+
+
+def fill_zero_days(days: list[dict], today: dt.date | None = None) -> list[dict]:
+    """Oldest-first days with every missing calendar day, from the first day that has rows through today, as a ZERO day:
+    nothing ran, so exactly nothing was saved (a gap would read as 'not measured' and a 7-day window would reach back
+    past the week)."""
+    if not days:
+        return days
+    have = {d["day"]: d for d in days}
+    day = dt.date.fromisoformat(days[0]["day"])
+    end = max(today or dt.date.today(), dt.date.fromisoformat(days[-1]["day"]))
+    out = []
+    while day <= end:
+        iso = day.isoformat()
+        out.append(have.get(iso) or {**ZERO_DAY, "day": iso})
+        day += dt.timedelta(1)
+    return out
+
+
+# The label a row counts under: a decide is an ask whose label is 'decide' (grouping on the kind column cannot tell them apart).
+_LABEL_SQL = ("SELECT CASE WHEN label = 'decide' THEN 'decide' WHEN kind = 'ask' THEN 'ask' ELSE 'run' END AS bucket, "
+              "COALESCE(SUM(tasks), 0) AS tasks, COALESCE(SUM(ok), 0) AS ok FROM utilizations WHERE day = ? GROUP BY bucket")
+
+
+def by_label(c: sqlite3.Connection | None, today_iso: str) -> dict:
+    """Today's tasks and how many answered, per label (run / ask / decide). Free misses are not rows of this table (they are not tasks)."""
+    out = {k: {"tasks": 0, "ok": 0} for k in ("run", "ask", "decide")}
+    if c is not None:
+        for r in c.execute(_LABEL_SQL, (today_iso,)):
+            out[r["bucket"]] = {"tasks": int(r["tasks"]), "ok": int(r["ok"])}
+    return out
+
+
+def basis(c: sqlite3.Connection) -> dict:
+    """What 'saved' is priced against: the method, since when, and the measured sub-agent profile (list price) behind it."""
+    prof = utilization.current_profile(c)
+    row = c.execute("SELECT est_model FROM utilizations WHERE machine = ? AND method = ? AND est_model IS NOT NULL ORDER BY ts DESC LIMIT 1",
+                    (utilization.MACHINE, utilization.METHOD)).fetchone()
+    model = row["est_model"] if row else utilization.FLOOR_MODEL
+    tokens = sum(int(prof.get(k) or 0) for k in utilization.TOKEN_KEYS) if prof else None
+    return {"method": utilization.METHOD, "method_since": utilization.METHOD_SINCE, "profile_model": model,
+            "profile_usd": utilization.claude_usage.price_tokens(model, prof) if prof else None,
+            "profile_tokens": tokens, "profile_updated": prof["ts"] if prof else None}
+
+
+def old_method(c: sqlite3.Connection) -> dict:
+    """Rows still priced by an older method (another machine's, which only that machine can re-price) and what they add to 'saved'."""
+    r = c.execute("SELECT COUNT(*) AS rows, COALESCE(SUM(saved_usd), 0) AS saved_usd FROM utilizations WHERE COALESCE(method, 0) < ?",
+                  (utilization.METHOD,)).fetchone()
+    return {"saved_usd": round(r["saved_usd"], 4), "rows": r["rows"]}
+
+
+def _today_data(per_day: list[dict], c: sqlite3.Connection | None = None) -> dict:
     """The summary for today's local day, from per_day; zeros when there is none."""
     today_iso = dt.date.today().isoformat()
     row = next((d for d in per_day if d.get("day") == today_iso), None)
+    labels = by_label(c, today_iso)
     if not row:
-        return {"runs": 0, "tasks": 0, "est_usd": None, "saved_usd": None, "worker_usd": 0.0, "est_tokens": None}
+        return {"runs": 0, "tasks": 0, "est_usd": None, "saved_usd": None, "worker_usd": 0.0, "est_tokens": None, "by_label": labels}
     return {
         "runs": row.get("n", 0),
         "tasks": row.get("tasks", 0),
@@ -131,4 +192,5 @@ def _today_data(per_day: list[dict]) -> dict:
         "saved_usd": row.get("saved_usd"),
         "worker_usd": row.get("worker_usd", 0.0),
         "est_tokens": row.get("est_tokens"),
+        "by_label": labels,
     }

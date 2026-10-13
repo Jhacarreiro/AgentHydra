@@ -44,11 +44,11 @@ def test_a_large_task_is_still_capped_at_the_median_sub_agent():
     assert est["est_usd"] == round(median, 6)
 
 
-def test_a_task_with_no_token_counts_keeps_the_median():
+def test_a_task_with_no_token_counts_is_unsized_and_not_given_the_median():
     row = _row([None, [2000, 400, 100]])
-    median = claude_usage.price_tokens(MODEL, PROFILE)
     own = claude_usage.price_tokens(MODEL, {"input": 400, "cache_read": 2000, "output": 100}, prompt_tokens=2400)
 
     est = utilization.estimate(row, PROFILE)
 
-    assert est["est_usd"] == round(median + own, 6)  # the uncounted task is a whole median; the counted one is its own size
+    assert est["est_usd"] == round(own, 6)  # only the counted task is credited
+    assert est["unsized"] == 1

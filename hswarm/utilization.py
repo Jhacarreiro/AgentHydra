@@ -42,19 +42,23 @@ SYNC_BRANCH = "sync"
 MACHINE = (os.environ.get("HSWARM_MACHINE") or platform.node() or "unknown").lower()
 FLOOR_MODEL = "claude-sonnet-5"
 POOL_DAYS = 14
+METHOD = 2  # utilizations.method: NULL/1 = the median per task (old), 2 = each task capped at its own tokens, priced at the measured model mix
+METHOD_SINCE = "2026-10-09"  # the day the per-task cap went in; rows of an older method keep the old label
 MIN_POOL = 5
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
 COLUMNS = ("id", "ts", "kind", "machine", "caller_instance", "caller_session", "caller_cwd", "caller_account", "label", "orchestrator_model",
            "backend", "worker_model", "tasks", "ok", "failed", "seconds", "worker_usd", "worker_tokens",
-           "est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "basis", "profile_id", "seq", "task_tokens")
+           "est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "basis", "profile_id", "seq", "task_tokens",
+           "est_tokens", "unsized", "method")
 PROFILE_COLUMNS = ("id", "ts", "machine", "basis", "sample", "pool_days", "input", "cache_read", "cache_5m", "cache_1h", "output", "requests")
 SCHEMA = """
 CREATE TABLE IF NOT EXISTS utilizations (
   id TEXT PRIMARY KEY, ts TEXT NOT NULL, kind TEXT NOT NULL, machine TEXT NOT NULL,
   caller_instance TEXT, caller_session TEXT, caller_cwd TEXT, label TEXT, orchestrator_model TEXT,
   backend TEXT, worker_model TEXT, tasks INTEGER, ok INTEGER, failed INTEGER, seconds REAL, worker_usd REAL, worker_tokens INTEGER,
-  est_model TEXT, per_agent_usd REAL, est_usd REAL, est_low_usd REAL, saved_usd REAL, saved_low_usd REAL, basis TEXT, profile_id TEXT
+  est_model TEXT, per_agent_usd REAL, est_usd REAL, est_low_usd REAL, saved_usd REAL, saved_low_usd REAL, basis TEXT, profile_id TEXT,
+  est_tokens INTEGER, unsized INTEGER, method INTEGER
 );
 CREATE INDEX IF NOT EXISTS utilizations_ts ON utilizations(ts);
 CREATE TABLE IF NOT EXISTS profiles (
@@ -71,8 +75,9 @@ CREATE TABLE IF NOT EXISTS claude_accounts (
   tokens TEXT, plan_usd REAL,
   PRIMARY KEY (machine, day, account)
 );
+CREATE TABLE IF NOT EXISTS meta (key TEXT PRIMARY KEY, value TEXT);
 """
-SCHEMA_VERSION = 2  # PRAGMA user_version: 1 = utilizations.day plus the (machine, day) and (machine, seq) indexes; 2 = utilizations.task_tokens
+SCHEMA_VERSION = 3  # PRAGMA user_version: 1 = utilizations.day plus the (machine, day) and (machine, seq) indexes; 2 = utilizations.task_tokens; 3 = est_tokens, unsized, method
 CLAUDE_DAY_COLUMNS = ("machine", "day", "claude_usd", "sub_usd", "subagents", "partial", "by_model", "rules", "tokens", "plan_usd")
 CLAUDE_ACCOUNT_COLUMNS = ("machine", "day", "account", "tier", "usd", "requests", "sessions", "tokens", "plan_usd")
 TOKEN_KEYS = claude_usage.TOKEN_KEYS
@@ -146,6 +151,13 @@ def _migrate(c: sqlite3.Connection) -> None:
         c.execute("ALTER TABLE utilizations ADD COLUMN caller_account TEXT")
     if "task_tokens" not in cols:  # each answered task's own [cache hits, cache misses, output]: caps its estimate at its size
         c.execute("ALTER TABLE utilizations ADD COLUMN task_tokens TEXT")
+    for col, typ in (("est_tokens", "INTEGER"), ("unsized", "INTEGER"), ("method", "INTEGER")):  # per-row Claude tokens avoided, tasks given no credit, pricing method
+        if col not in cols:
+            try:
+                c.execute(f"ALTER TABLE utilizations ADD COLUMN {col} {typ}")
+            except sqlite3.OperationalError as e:
+                if "duplicate column" not in str(e).lower():
+                    raise
     day_cols = {r[1] for r in c.execute("PRAGMA table_info(claude_days)")}
     for col in ("by_model", "rules"):  # Michael, 2026-09-16: which models did the Claude work, and were the rulings followed
         if col not in day_cols:
@@ -248,9 +260,31 @@ def task_tokens(usage: dict | None) -> list[int] | None:
     return t if any(t) else None
 
 
+def via_climayte(selection) -> bool:
+    """True when the task ran on the owner's CliMayte subscription (selection.route.provider 'climayte'): its spend shows on
+    CliMayte's own card, so HSwarm credits it nothing."""
+    route = (selection or {}).get("route") if isinstance(selection, dict) else None
+    return isinstance(route, dict) and (route.get("provider") == "climayte" or route.get("via") == "climayte")
+
+
+NO_CREDIT = [0, 0, 0]  # a task_tokens entry that is credited nothing: CliMayte's work, counted on CliMayte's card
+
+
 def _answered_tokens(results: list[dict]) -> str:
-    """The JSON list of each ANSWERED task's own tokens (null where it counted none): what sizes its estimate."""
-    return json.dumps([task_tokens(r.get("usage")) for r in results if r.get("status") == "ok"])
+    """The JSON list of each ANSWERED task's own tokens (null where it counted none): what sizes its estimate.
+    A task routed to CliMayte is [0, 0, 0], credited nothing; one with no counts is null, tallied as unsized."""
+    return json.dumps([NO_CREDIT if via_climayte(r.get("selection")) else task_tokens(r.get("usage")) for r in results if r.get("status") == "ok"])
+
+
+def leg_cost(model: str | None, cost_usd, usage: dict | None) -> float:
+    """What a task's worker leg cost: its reported cost, or (a Claude-API leg reports none) its tokens at list price."""
+    if cost_usd is not None:
+        return float(cost_usd)
+    t = task_tokens(usage)
+    if not t or not model:
+        return 0.0
+    m = str(model)
+    return task_usd(m.split(":")[1] if m.startswith("rank:") and m.count(":") >= 1 else m, t) or 0.0
 
 
 def _seconds_of(created: str, finished: str, results: list[dict]) -> float:
@@ -270,7 +304,7 @@ def _build_row(job_id: str, created: str, finished: str, label: str, caller: dic
         "id": job_id, "ts": finished or now_iso(), "kind": "run", "machine": MACHINE, **_caller_fields(caller), "label": label or "",
         "backend": _mode([str(r.get("backend") or "") for r in results]), "worker_model": _mode([str(r.get("model") or "") for r in results]),
         "tasks": len(results), "ok": ok, "failed": len(results) - ok, "seconds": _seconds_of(created, finished, results),
-        "worker_usd": round(sum(float(r.get("cost_usd") or 0.0) for r in results), 6),
+        "worker_usd": round(sum(leg_cost(r.get("model"), r.get("cost_usd"), r.get("usage")) for r in results), 6),
         "worker_tokens": sum(_tokens(r.get("usage")) for r in results), "task_tokens": _answered_tokens(results),
     }
 
@@ -285,39 +319,83 @@ def ask_row(res, caller: dict | None) -> dict:
     return {
         "id": "ask-" + ts.replace(":", "").replace("+00:00", "Z") + "-" + secrets.token_hex(2), "ts": ts, "kind": "ask", "machine": MACHINE,
         **_caller_fields(caller), "label": (caller or {}).get("label") or "ask", "backend": res.backend, "worker_model": res.model,
-        "tasks": 1, "ok": int(res.status == "ok"), "failed": int(res.status != "ok"), "seconds": res.seconds, "worker_usd": round(res.cost_usd or 0.0, 6),
-        "worker_tokens": _tokens(res.usage), "task_tokens": _answered_tokens([{"status": res.status, "usage": res.usage}]),
+        "tasks": 1, "ok": int(res.status == "ok"), "failed": int(res.status != "ok"), "seconds": res.seconds, "worker_usd": round(leg_cost(res.model, res.cost_usd, res.usage), 6),
+        "worker_tokens": _tokens(res.usage),
+        "task_tokens": _answered_tokens([{"status": res.status, "usage": res.usage, "selection": getattr(res, "selection", None)}]),
     }
 
 
-def estimate(row: dict, prof: dict | None) -> dict:
-    """What `row` would have cost as Claude sub-agents on the caller's model, sized by `prof`; nothing without a profile."""
-    empty = {k: None for k in ("est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "profile_id")}
-    if not prof:
-        return empty | {"basis": "no sub-agent profile yet: `hswarm savings --record` (or --profile) prices this row once one is measured"}
+def day_mix(c: sqlite3.Connection, machine: str, day: str | None) -> dict[str, int]:
+    """The sub-agent models that actually ran on `machine` on `day` (claude_days.by_model[*].agents), {model: agents}; {} when unmeasured."""
+    if not day:
+        return {}
+    r = c.execute("SELECT by_model FROM claude_days WHERE machine = ? AND day = ?", (machine, day)).fetchone()
+    try:
+        by_model = json.loads(r["by_model"]) if r and r["by_model"] else {}
+    except (ValueError, TypeError):
+        return {}
+    return {m: int(v.get("agents") or 0) for m, v in by_model.items() if isinstance(v, dict) and int(v.get("agents") or 0) > 0}
+
+
+def _weights(row: dict, prof: dict, mix: dict[str, int] | None) -> tuple[list[tuple[str, float]], str, str]:
+    """The models a row is priced at, with weights, the label to store and why: the measured sub-agent mix of its machine and
+    day, else the caller's model, else the Sonnet floor. Only models with a list price take part."""
+    priced = {m: n for m, n in (mix or {}).items() if claude_usage.price_tokens(m, prof) is not None}
+    if priced:
+        total = sum(priced.values())
+        top = max(priced, key=lambda m: priced[m])
+        return [(m, n / total) for m, n in priced.items()], top, "the sub-agent model mix measured that day"
     model = row.get("orchestrator_model") or ""
-    est_model, why = (model, "the calling session's model") if model else (FLOOR_MODEL, "caller model unknown, priced at the Sonnet floor")
+    if model and claude_usage.price_tokens(model, prof) is not None:
+        return [(model, 1.0)], model, "the calling session's model"
+    return [(FLOOR_MODEL, 1.0)], FLOOR_MODEL, (f"no list price for {model}, priced at the Sonnet floor" if model else "caller model unknown, priced at the Sonnet floor")
+
+
+def estimate(row: dict, prof: dict | None, mix: dict[str, int] | None = None) -> dict:
+    """What `row` would have cost as Claude sub-agents, sized by `prof` and priced at the sub-agent models measured that day
+    (`mix`), else the caller's model, else the Sonnet floor; nothing without a profile."""
+    empty = {k: None for k in ("est_model", "per_agent_usd", "est_usd", "est_low_usd", "saved_usd", "saved_low_usd", "profile_id", "est_tokens")}
+    if not prof:
+        return empty | {"unsized": None, "method": METHOD,
+                        "basis": "no sub-agent profile yet: `hswarm savings --record` (or --profile) prices this row once one is measured"}
+    models, est_model, why = _weights(row, prof, mix)
     # prof is a total of many requests: a tiered model (Haiku 5.5) prices at its first tier.
-    per = claude_usage.price_tokens(est_model, prof)
-    if per is None:
-        est_model, why = FLOOR_MODEL, f"no list price for {model}, priced at the Sonnet floor"
-        per = claude_usage.price_tokens(FLOOR_MODEL, prof) or 0.0
+    per = sum(w * (claude_usage.price_tokens(m, prof) or 0.0) for m, w in models)
+    prof_tokens = sum(int(prof.get(k) or 0) for k in claude_usage.TOKEN_KEYS)
     tasks = max(1, int(row.get("tasks") or 1))
     # Only an ANSWERED task stood in for a sub-agent: a timeout or an error came back empty and its work was redone
     # on Claude, so it saved nothing and its spend is a loss. Measured 2026-09-24, job 20260924-234903-1c5b: 1 ok of
     # 24 reported "saved $17.64" while the work went to Opus. A row with no `ok` count (an old shard) is all answered.
     sized = _sized_tokens(row.get("task_tokens"))
     answered = len(sized) if sized is not None else (min(tasks, int(row["ok"])) if row.get("ok") is not None else tasks)
-    # Each answered task is credited the smaller of the median sub-agent and its own tokens at the caller's list rates
-    # (measured 2026-10-09: a 2,400-token one-call ask was credited a whole $0.34 median sub-agent). No token counts: the median.
-    est = sum(_capped(per, t, est_model) for t in sized) if sized is not None else answered * per
+    # Each answered task is credited the smaller of the median sub-agent and its own tokens at list rates (measured
+    # 2026-10-09: a 2,400-token one-call ask was credited a whole $0.34 median sub-agent). A task with no token counts is
+    # NOT given the median (it is "unsized": counted, not credited); a CliMayte task is [0, 0, 0] and credited nothing.
+    # A row with no per-task list at all (an old shard row) keeps the median per answered task.
+    unsized = 0
+    est, est_tokens = 0.0, 0
+    if sized is None:
+        est, est_tokens = answered * per, answered * prof_tokens
+    else:
+        for t in sized:
+            if t is None:
+                unsized += 1
+                continue
+            own = _own_usd(models, t)
+            if own is not None and own < per:
+                est += own
+                est_tokens += sum(t)
+            else:
+                est += per
+                est_tokens += prof_tokens
     worker = float(row.get("worker_usd") or 0.0)
     low = min(per, est) if answered else 0.0  # one sub-agent for the job, never more than the job's own tasks came to
-    cap = ("; each task capped at its own tokens at list price where smaller" if sized is not None
-           else "; no task token counts, so the median stands")
+    cap = (("; each task capped at its own tokens at list price where smaller" + (f"; {unsized} with no token counts not credited" if unsized else ""))
+           if sized is not None else "; no task token counts, so the median stands")
     return {
         "est_model": est_model, "per_agent_usd": round(per, 6), "est_usd": round(est, 6), "est_low_usd": round(low, 6),
         "saved_usd": round(est - worker, 6), "saved_low_usd": round(low - worker, 6), "profile_id": prof["id"],
+        "est_tokens": int(est_tokens), "unsized": unsized, "method": METHOD,
         "basis": (f"{answered}" + (f" answered of {tasks}" if answered != tasks else "")
                   + f" x {prof['basis']} sub-agent ({prof['sample']} measured, {prof['pool_days']}d) @ {short_model(est_model)}; {why}" + cap),
     }
@@ -330,10 +408,11 @@ def task_usd(model: str, tokens: list[int]) -> float | None:
     return claude_usage.price_tokens(model, {"input": miss, "cache_read": hit, "output": out}, prompt_tokens=hit + miss)
 
 
-def _capped(per: float, tokens: list[int] | None, model: str) -> float:
-    """One answered task's estimate: the smaller of the median sub-agent and its own tokens; the median when it has none."""
-    own = task_usd(model, tokens) if tokens else None
-    return per if own is None else min(per, own)
+def _own_usd(models: list[tuple[str, float]], tokens: list[int]) -> float | None:
+    """A task's own tokens at the weighted list price of `models`; None when none of them is priced."""
+    parts = [(w, task_usd(m, tokens)) for m, w in models]
+    parts = [(w, u) for w, u in parts if u is not None]
+    return sum(w * u for w, u in parts) / sum(w for w, _ in parts) if parts else None
 
 
 def _sized_tokens(raw) -> list[list[int] | None] | None:
@@ -354,22 +433,93 @@ def _upsert(c: sqlite3.Connection, table: str, columns: tuple, row: dict) -> Non
     c.execute(f"INSERT OR REPLACE INTO {table} ({','.join(columns)}) VALUES ({','.join('?' * len(columns))})", [row.get(k) for k in columns])
 
 
+def pending_path() -> Path:
+    return config.HOME / "utilization-pending.jsonl"
+
+
+def _priced(c: sqlite3.Connection, row: dict) -> dict:
+    """`row` with its estimate (current profile, the machine-and-day model mix) and its run number."""
+    full = row | estimate(row, current_profile(c), day_mix(c, row.get("machine") or MACHINE, local_day(row.get("ts"))))
+    full["seq"] = next_seq(c, full)
+    return full
+
+
+def _park(row: dict) -> None:
+    """Keep a row the DB would not take (locked) in the pending file, to be written by the next record() or the daily job."""
+    config.HOME.mkdir(parents=True, exist_ok=True)
+    with pending_path().open("a", encoding="utf-8") as f:
+        f.write(json.dumps(row, sort_keys=True, default=str) + "\n")
+
+
+def drain_pending(c: sqlite3.Connection | None = None) -> int:
+    """Write every parked row (INSERT OR REPLACE by id), then drop the file. Rows still unwritten (DB locked again) stay parked."""
+    p = pending_path()
+    if not p.exists():
+        return 0
+    own = c is None
+    try:
+        c = c or connect()
+        try:
+            work = p.with_suffix(".draining")
+            if work.exists():  # a drain that died half way: finish its rows too
+                with p.open("ab") as dst, work.open("rb") as src:
+                    dst.write(src.read())
+                work.unlink()
+            os.replace(p, work)
+            rows = []
+            for line in work.read_text(encoding="utf-8").splitlines():
+                try:
+                    rows.append(json.loads(line))
+                except ValueError:
+                    continue
+            n = 0
+            try:
+                for r in rows:
+                    full = r if r.get("est_usd") is not None else _priced(c, r)
+                    full["seq"] = next_seq(c, full)
+                    _upsert(c, "utilizations", COLUMNS, full)
+                    n += 1
+                c.commit()
+            except Exception:
+                c.rollback()
+                with p.open("a", encoding="utf-8") as f:
+                    f.write("".join(json.dumps(r, sort_keys=True, default=str) + "\n" for r in rows))
+                raise
+            finally:
+                if work.exists():
+                    work.unlink()
+            return n
+        finally:
+            if own:
+                c.close()
+    except Exception as e:  # noqa: BLE001
+        log(f"drain pending failed: {type(e).__name__}: {e}")
+        return 0
+
+
 def record(row: dict) -> dict:
     """Store one utilization (idempotent on id), priced against the current profile. Never raises: a
-    ledger that fails must not fail the job that produced it."""
+    ledger that fails must not fail the job that produced it, and a row the DB would not take ('database is locked')
+    is parked in the pending file and written by the next record() or the daily job, never dropped."""
+    full = row
     try:
         c = connect()
         try:
-            full = row | estimate(row, current_profile(c))
-            full["seq"] = next_seq(c, full)
+            full = _priced(c, row)
             _upsert(c, "utilizations", COLUMNS, full)
             c.commit()
         finally:
             c.close()
-        return full
     except Exception as e:  # noqa: BLE001
         log(f"record failed for {row.get('id')}: {type(e).__name__}: {e}")
-        return row
+        try:
+            _park(full if full is not row else row | {"method": METHOD})
+        except OSError as oe:
+            log(f"record could not park {row.get('id')}: {oe}")
+        return full
+    if pending_path().exists() or pending_path().with_suffix(".draining").exists():
+        drain_pending()
+    return full
 
 
 def record_job(job) -> dict:
@@ -387,7 +537,7 @@ def compact(full: dict) -> dict:
 
 def _store_priced(c: sqlite3.Connection, row: dict, prof: dict | None) -> None:
     """Price a row against the current profile, give it its run number, and write it."""
-    row = row | estimate(row, prof)
+    row = row | estimate(row, prof, day_mix(c, row.get("machine") or MACHINE, local_day(row.get("ts"))))
     row["seq"] = next_seq(c, row)
     _upsert(c, "utilizations", COLUMNS, row)
 
@@ -452,7 +602,7 @@ def backfill(jobs_dir: Path | None = None, ledger: Path | None = None) -> dict:
                     r = json.loads(line)
                 except ValueError:
                     continue
-                if r.get("job") != "ask":
+                if r.get("job") != "ask" or r.get("free_miss"):  # a Free miss is an extra row, never a task
                     continue
                 rid = _ask_id(i, r)
                 if rid in have:
@@ -475,11 +625,25 @@ def _pool_sample(day_rows: list[dict], pool_days: int) -> tuple[str, list[dict],
     by_family: dict[str, list[dict]] = {}
     for r in pool:
         for fam, agents in (r.get("agent_tokens") or {}).items():
-            by_family.setdefault(fam, []).extend(a for a in agents if isinstance(a, dict))
+            mine = [a for a in agents if isinstance(a, dict)]
+            # Each day weighs the same: one burst day of hundreds of agents must not move the median 20x.
+            by_family.setdefault(fam, []).extend({**a, "_w": 1.0 / len(mine)} for a in mine)
     sonnet = by_family.get("sonnet", [])
     every = [a for v in by_family.values() for a in v]
     basis, sample = ("Sonnet", sonnet) if len(sonnet) >= MIN_POOL else ("any-model", every)
     return (basis, sample, len(pool)) if len(sample) >= MIN_POOL else None
+
+
+def weighted_median(pairs: list[tuple[float, float]]) -> float:
+    """The value where half the total weight lies at or below it (the lower of two middles on an exact tie)."""
+    pairs = sorted(pairs)
+    half = sum(w for _, w in pairs) / 2
+    run = 0.0
+    for v, w in pairs:
+        run += w
+        if run >= half - 1e-12:
+            return v
+    return pairs[-1][0]
 
 
 def refresh_profile(day_rows: list[dict], pool_days: int = POOL_DAYS) -> dict | None:
@@ -490,7 +654,7 @@ def refresh_profile(day_rows: list[dict], pool_days: int = POOL_DAYS) -> dict | 
     if chosen is None:
         return None
     basis, sample, days = chosen
-    med = {k: int(statistics.median(int(a.get(k) or 0) for a in sample)) for k in (*claude_usage.TOKEN_KEYS, "requests")}
+    med = {k: int(weighted_median([(int(a.get(k) or 0), float(a.get("_w", 1.0))) for a in sample])) for k in (*claude_usage.TOKEN_KEYS, "requests")}
     now = dt.datetime.now(dt.timezone.utc)
     prof = {"id": f"{MACHINE}-{now:%Y%m%d-%H%M%S}", "ts": now.isoformat(timespec="seconds"), "machine": MACHINE, "basis": basis,
             "sample": len(sample), "pool_days": days, **med}
@@ -508,7 +672,7 @@ def refresh_profile(day_rows: list[dict], pool_days: int = POOL_DAYS) -> dict | 
 def _reprice(c: sqlite3.Connection, prof: dict) -> int:
     rows = [dict(r) for r in c.execute("SELECT * FROM utilizations WHERE est_usd IS NULL AND machine = ?", (MACHINE,))]
     for r in rows:
-        _upsert(c, "utilizations", COLUMNS, r | estimate(r, prof))
+        _upsert(c, "utilizations", COLUMNS, r | estimate(r, prof, day_mix(c, MACHINE, r.get("day") or local_day(r.get("ts")))))
     return len(rows)
 
 
@@ -656,26 +820,32 @@ def record_claude_days(day_rows: list[dict], partial: bool = False) -> int:
 
     routing = _routing_rows()
     res = accounts.resolver(fresh=True)
+    # The slow work (rule check, account attribution) is done BEFORE the connection opens, so the write transaction holds
+    # nothing but inserts; each day commits on its own, and a reader or another recorder never waits behind the whole run.
+    prepared = []
+    for r in day_rows:
+        day = r.get("day")
+        if not day:
+            continue
+        per_account = accounts.attribute(r.get("by_session") or {}, res)
+        prepared.append((day, r, per_account, json.dumps(rule_check(r, routing), sort_keys=True), accounts.day_plan_usd(per_account)))
     c = connect()
     try:
-        _fill_caller_accounts(c, res)
         n = 0
-        for r in day_rows:
-            day = r.get("day")
-            if not day:
-                continue
+        for day, r, per_account, rules, plan_usd in prepared:
             have = c.execute("SELECT partial FROM claude_days WHERE machine = ? AND day = ?", (MACHINE, day)).fetchone()
             if have is not None and not have["partial"] and partial:
                 continue
-            per_account = accounts.attribute(r.get("by_session") or {}, res)
             c.execute("INSERT OR REPLACE INTO claude_days (machine, day, claude_usd, sub_usd, subagents, partial, by_model, rules, tokens, plan_usd)"
                       " VALUES (?,?,?,?,?,?,?,?,?,?)",
                       (MACHINE, day, float(r.get("claude_usd") or 0.0), float(r.get("claude_sub_usd") or 0.0),
                        sum(len(v) for v in (r.get("subagent_usd") or {}).values()), int(partial),
-                       json.dumps(r.get("by_model") or {}, sort_keys=True), json.dumps(rule_check(r, routing), sort_keys=True),
-                       json.dumps(r.get("tokens") or {}, sort_keys=True), accounts.day_plan_usd(per_account)))
+                       json.dumps(r.get("by_model") or {}, sort_keys=True), rules,
+                       json.dumps(r.get("tokens") or {}, sort_keys=True), plan_usd))
             _store_accounts(c, day, per_account)
+            c.commit()
             n += 1
+        _fill_caller_accounts(c, res)
         c.commit()
     finally:
         c.close()
@@ -747,10 +917,15 @@ _CLAUDE_SQL = ("SELECT COALESCE(SUM(d.claude_usd), 0) AS claude_usd, COUNT(*) AS
                "OR EXISTS (SELECT 1 FROM utilizations u WHERE u.machine = d.machine AND u.day IS NULL AND date(u.ts, 'localtime') = d.day))")
 # What the same work would have cost in TOKENS, not dollars: one task = one measured sub-agent, so the profile's
 # buckets x tasks. A row with no profile contributes NULL (SUM skips it) and is counted as unsized instead.
-_TOKENS_SQL = ("SELECT SUM(u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)) AS est_tokens, "
+# A row's tokens are its own est_tokens (the same per-task cap as est_usd); a row not yet re-priced (another machine's, an old method)
+# falls back to tasks x the profile. The buckets split a row's tokens in the profile's own proportions.
+PROFILE_TOKENS_SQL = "(p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)"
+ROW_TOKENS_SQL = f"COALESCE(u.est_tokens, u.tasks * {PROFILE_TOKENS_SQL})"
+_BUCKET_SQL = "({col} * 1.0 * " + ROW_TOKENS_SQL + " / NULLIF(" + PROFILE_TOKENS_SQL + ", 0))"
+_TOKENS_SQL = (f"SELECT SUM({ROW_TOKENS_SQL}) AS est_tokens, "
                "SUM(p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output) AS est_low_tokens, "
-               "SUM(u.tasks * p.input) AS est_input, SUM(u.tasks * p.cache_read) AS est_cache_read, "
-               "SUM(u.tasks * (p.cache_5m + p.cache_1h)) AS est_cache_write, SUM(u.tasks * p.output) AS est_output, "
+               f"SUM({_BUCKET_SQL.format(col='p.input')}) AS est_input, SUM({_BUCKET_SQL.format(col='p.cache_read')}) AS est_cache_read, "
+               f"SUM({_BUCKET_SQL.format(col='(p.cache_5m + p.cache_1h)')}) AS est_cache_write, SUM({_BUCKET_SQL.format(col='p.output')}) AS est_output, "
                "COALESCE(SUM(u.worker_tokens), 0) AS worker_tokens, SUM(CASE WHEN p.id IS NULL THEN 1 ELSE 0 END) AS unsized "
                "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id")
 
@@ -858,7 +1033,7 @@ def _run_totals(c: sqlite3.Connection, machine: str | None, args: tuple) -> dict
     runs: dict[str, dict] = {}
     # a run whose account could not be resolved joins the same `unattributed` line as the usage
     q = ("SELECT COALESCE(NULLIF(caller_account, ''), ?) AS caller_account, COUNT(*) AS runs, COALESCE(SUM(tasks), 0) AS tasks, "
-         "SUM(est_usd) AS est_usd, COALESCE(SUM(worker_usd), 0) AS worker_usd, SUM(u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)) AS est_tokens "
+         "SUM(est_usd) AS est_usd, COALESCE(SUM(worker_usd), 0) AS worker_usd, SUM(" + ROW_TOKENS_SQL + ") AS est_tokens "
          "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id"
          + (" WHERE u.machine = ?" if machine else "") + " GROUP BY caller_account")
     for r in c.execute(q, (accounts.UNATTRIBUTED, *args)):
@@ -1035,9 +1210,13 @@ def import_shards(c: sqlite3.Connection, where: Path, include_self: bool = False
     branch is the only off-machine copy of the ledger, and a normal sync must not read it (a row deleted or
     repriced locally would come straight back), so rebuilding after a lost disk has to ask for it."""
     n = 0
+    since_commit = 0
     for p in sorted(where.glob("*.jsonl")):
         if p.stem == MACHINE and not include_self:
             continue
+        # What this DB holds of that machine already: a row that has not changed is not written again (the daily import
+        # used to rewrite all ~11k rows in one long transaction).
+        have = {r[0]: tuple(r)[1:] for r in c.execute(f"SELECT id, {','.join(COLUMNS[1:])} FROM utilizations WHERE machine = ?", (p.stem,))}
         for line in p.read_text(encoding="utf-8").splitlines():
             try:
                 obj = json.loads(line)
@@ -1045,8 +1224,14 @@ def import_shards(c: sqlite3.Connection, where: Path, include_self: bool = False
                 continue
             kind = obj.pop("row", None)
             if kind == "utilization" and obj.get("id"):
+                n += 1  # rows read, written or not
+                if have.get(obj["id"]) == tuple(obj.get(k) for k in COLUMNS[1:]):
+                    continue
                 _upsert(c, "utilizations", COLUMNS, obj)
-                n += 1
+                since_commit += 1
+                if since_commit >= 500:
+                    c.commit()
+                    since_commit = 0
             elif kind == "profile" and obj.get("id"):
                 _upsert(c, "profiles", PROFILE_COLUMNS, obj)
             elif kind == "claude_day" and obj.get("machine") and obj.get("day"):
@@ -1189,6 +1374,7 @@ def sync(push: bool = True) -> dict:
         if r.returncode:
             rep["notes"].append("pull: " + (r.stderr or r.stdout).strip()[:200])
     measure_today()  # so the share compares against today's Claude work too, not only yesterday's
+    rep["maintenance"] = daily_maintenance()
     c = connect()
     try:
         rep["imported"] = import_shards(c, t)
@@ -1209,8 +1395,211 @@ def sync(push: bool = True) -> dict:
         rep["pushed"] = r.returncode == 0
         if r.returncode:
             rep["notes"].append("push: " + (r.stderr or r.stdout).strip()[:200])
+    drain_pending()  # anything a locked DB parked while the job ran
     from . import report_html  # here, not at import: report_html imports this module
 
     rep["html"] = str(report_html.write())  # the page the owner opens instead of asking
     log(f"sync: imported {rep['imported']}, committed {rep['committed']}, pushed {rep['pushed']}" + (f", notes {rep['notes']}" if rep["notes"] else ""))
     return rep
+
+
+# ---- the daily maintenance: rows a locked DB parked, jobs it lost, history on the current method ----------------
+
+def _meta_get(c: sqlite3.Connection, key: str) -> str | None:
+    r = c.execute("SELECT value FROM meta WHERE key = ?", (key,)).fetchone()
+    return r[0] if r else None
+
+
+def _meta_set(c: sqlite3.Connection, key: str, value: str) -> None:
+    c.execute("INSERT OR REPLACE INTO meta (key, value) VALUES (?, ?)", (key, value))
+
+
+def daily_maintenance() -> dict:
+    """What the daily job does for the ledger: write the parked rows, recover the jobs a locked DB lost (the job half of
+    backfill, at most once a day), and re-price history once per METHOD. Never raises."""
+    rep: dict = {"drained": 0, "recovered_jobs": 0, "repriced": None}
+    try:
+        rep["drained"] = drain_pending()
+        c = connect()
+        try:
+            today = dt.date.today().isoformat()
+            if _meta_get(c, "jobs_recovered_day") != today:
+                _meta_set(c, "jobs_recovered_day", today)
+                c.commit()
+                rep["recovered_jobs"] = backfill_jobs()
+            if _meta_get(c, "reprice_method") != str(METHOD):
+                rep["repriced"] = reprice_history(c=c)
+        finally:
+            c.close()
+    except Exception as e:  # noqa: BLE001 - maintenance must never fail a sync
+        log(f"daily maintenance failed: {type(e).__name__}: {e}")
+    return rep
+
+
+def backfill_jobs(jobs_dir: Path | None = None) -> int:
+    """The job half of backfill alone: every finished job on disk the DB lacks (a job whose record() hit a locked DB)."""
+    jobs_dir = jobs_dir or config.JOBS_DIR
+    empty = jobs_dir / "__no_ledger__.jsonl"
+    return backfill(jobs_dir, empty)["jobs"]
+
+
+# ---- re-pricing history -----------------------------------------------------------------------------------------
+
+def _ts_key(ts) -> int | None:
+    try:
+        t = dt.datetime.fromisoformat(str(ts).replace("Z", "+00:00"))
+        return int((t if t.tzinfo else t.replace(tzinfo=dt.timezone.utc)).timestamp())
+    except ValueError:
+        return None
+
+
+def _ledger_sources(ledger: Path | None = None) -> tuple[dict, dict, dict]:
+    """(asks by row id, asks by (second, model), job tasks by (job, task)) -> ([hit, miss, out] | NO_CREDIT) from the ledger's own lines.
+    Free misses are not tasks; a line that ended not-ok has no answer to size."""
+    by_id: dict[str, list[int]] = {}
+    by_ts: dict[tuple, list[int]] = {}
+    by_task: dict[tuple, list[int]] = {}
+    ledger = ledger or config.LEDGER
+    if not (ledger.exists() or ledgerstore.archives(ledger)):
+        return by_id, by_ts, by_task
+    for i, line in enumerate(ledgerstore.iter_lines(None, ledger)):
+        try:
+            r = json.loads(line)
+        except ValueError:
+            continue
+        if r.get("free_miss"):
+            continue
+        if r.get("job") in ("ask", "decide"):  # a decide is an ask row with label 'decide'
+            tok = NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")]
+            if r.get("job") == "ask":
+                by_id[_ask_id(i, r)] = tok
+            k = _ts_key(r.get("ts"))
+            if k is not None and r.get("status") == "ok":
+                by_ts.setdefault((k, r.get("model") or ""), []).append(tok)
+        elif r.get("status") == "ok" and r.get("job") and r.get("task"):
+            tok = NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")]
+            by_task.setdefault((r["job"], r["task"]), tok)
+    return by_id, by_ts, by_task
+
+
+def _run_task_tokens(job_ids: set[str]) -> dict[str, list[tuple[str, int, int]]]:
+    """job id -> [(task id, in_tokens, out_tokens)] of its answered tasks, from history/tasks.sqlite ({} when there is none)."""
+    out: dict[str, list] = {}
+    try:
+        from . import taskstore
+
+        if not taskstore.db_path().exists():
+            return out
+        con = taskstore.connect()
+        try:
+            for job_id, task_id, i, o in con.execute("SELECT job_id, task_id, COALESCE(in_tokens, 0), COALESCE(out_tokens, 0) FROM tasks WHERE status = 'ok'"):
+                if job_id in job_ids:
+                    out.setdefault(job_id, []).append((task_id, int(i), int(o)))
+        finally:
+            con.close()
+    except Exception as e:  # noqa: BLE001
+        log(f"reprice: tasks.sqlite unreadable: {type(e).__name__}: {e}")
+    return out
+
+
+def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict) -> list:
+    """The per-task token list of one old row, rebuilt from the sources: a task with no source stays None (unsized)."""
+    ok = int(r["ok"]) if r.get("ok") is not None else int(r.get("tasks") or 0)
+    if r["kind"] == "ask":
+        tok = by_id.get(r["id"])
+        if tok is None:  # a live row: matched on its second and model, each ledger line used once
+            same = by_ts.get((_ts_key(r.get("ts")), r.get("worker_model") or ""))
+            tok = same.pop(0) if same else None
+        if tok is not None and tok != NO_CREDIT and not any(tok):
+            tok = None
+        return [tok] if ok else []
+    got = runs.get(r["id"], [])[:ok]
+    sized: list = []
+    for task_id, i, o in got:
+        tok = by_task.get((r["id"], task_id))
+        if tok is None and (i or o):
+            tok = [0, i, o]
+        sized.append(tok if tok is not None and (tok == NO_CREDIT or any(tok)) else None)
+    return sized + [None] * (ok - len(sized))
+
+
+def _merge_known(rebuilt: list, existing) -> list:
+    """Where the sources found nothing for a task, keep the count the row was recorded with."""
+    try:
+        old = _sized_tokens(existing) or []
+    except ValueError:
+        old = []
+    return [t if t is not None else (old[j] if j < len(old) else None) for j, t in enumerate(rebuilt)]
+
+
+def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, ledger: Path | None = None) -> dict:
+    """Price this machine's history by the current method (METHOD): each answered task credited the smaller of the median
+    sub-agent and its own tokens, at the sub-agent models measured on its day. Every row keeps ITS OWN stored profile (history
+    is not re-run against today's profile); task tokens are rebuilt from ledger lines (asks) and history/tasks.sqlite (runs).
+    Other machines' rows are left as their machine priced them and reported as `old_method`. `dry_run` writes nothing."""
+    own = c is None
+    c = c or connect()
+    try:
+        rows = [dict(r) for r in c.execute("SELECT * FROM utilizations WHERE machine = ? AND COALESCE(method, 0) < ?", (MACHINE, METHOD))]
+        profiles = {r["id"]: dict(r) for r in c.execute("SELECT * FROM profiles")}
+        by_id, by_ts, by_task = _ledger_sources(ledger)
+        runs = _run_task_tokens({r["id"] for r in rows if r["kind"] == "run"})
+        mixes: dict[str, dict] = {}
+        rep = {"machine": MACHINE, "rows": len(rows), "dry_run": dry_run, "method": METHOD, "unpriced": 0, "unsized_tasks": 0, "no_credit_tasks": 0,
+               "est_usd_before": 0.0, "est_usd_after": 0.0, "saved_usd_before": 0.0, "saved_usd_after": 0.0,
+               "est_tokens_before": 0, "est_tokens_after": 0}
+        batch = 0
+        for r in rows:
+            prof = profiles.get(r.get("profile_id") or "")
+            old_tokens = (r["tasks"] or 0) * sum(int((prof or {}).get(k) or 0) for k in claude_usage.TOKEN_KEYS)
+            rep["est_usd_before"] += r.get("est_usd") or 0.0
+            rep["saved_usd_before"] += r.get("saved_usd") or 0.0
+            rep["est_tokens_before"] += old_tokens
+            if prof is None:
+                rep["unpriced"] += 1
+                continue
+            day = r.get("day") or local_day(r.get("ts"))
+            mix = mixes.get(day) if day in mixes else mixes.setdefault(day, day_mix(c, MACHINE, day))
+            r["task_tokens"] = json.dumps(_merge_known(_rebuilt_tokens(r, by_id, by_ts, by_task, runs), r.get("task_tokens")))
+            new = r | estimate(r, prof, mix)
+            rep["est_usd_after"] += new["est_usd"]
+            rep["saved_usd_after"] += new["saved_usd"]
+            rep["est_tokens_after"] += new["est_tokens"]
+            rep["unsized_tasks"] += new["unsized"]
+            rep["no_credit_tasks"] += sum(1 for t in json.loads(new["task_tokens"]) if t == NO_CREDIT)
+            if not dry_run:
+                _upsert(c, "utilizations", COLUMNS, new)
+                batch += 1
+                if batch >= 500:  # short write transactions: the live recorders never wait behind the whole history
+                    c.commit()
+                    batch = 0
+        old = c.execute("SELECT COUNT(*), COALESCE(SUM(saved_usd), 0) FROM utilizations WHERE machine <> ? AND COALESCE(method, 0) < ?",
+                        (MACHINE, METHOD)).fetchone()
+        rep["old_method"] = {"rows": old[0], "saved_usd": round(old[1], 4)}
+        if not dry_run:
+            _meta_set(c, "reprice_method", str(METHOD))
+            _meta_set(c, "reprice_at", now_iso())
+            c.commit()
+            log(f"reprice: {len(rows)} row(s) to method {METHOD}: saved {rep['saved_usd_before']:.2f} -> {rep['saved_usd_after']:.2f}")
+        return {k: (round(v, 4) if isinstance(v, float) else v) for k, v in rep.items()}
+    finally:
+        if own:
+            c.close()
+
+
+def main(argv: list[str] | None = None) -> int:
+    import argparse
+
+    ap = argparse.ArgumentParser(prog="python -m hswarm.utilization", description="Maintain the utilization ledger.")
+    ap.add_argument("--reprice-history", action="store_true", help="price this machine's history by the current method (per-task cap)")
+    ap.add_argument("--dry-run", action="store_true", help="with --reprice-history: compute and print, write nothing")
+    a = ap.parse_args(argv)
+    if not a.reprice_history:
+        ap.print_help()
+        return 2
+    print(json.dumps(reprice_history(dry_run=a.dry_run), indent=2, sort_keys=True))
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

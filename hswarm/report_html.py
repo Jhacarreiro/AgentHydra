@@ -229,7 +229,7 @@ def weigh_row(r: dict, rates: dict) -> dict:
 _DAY_SQL = ("SELECT date(u.ts, 'localtime') AS day, u.machine AS machine, COUNT(*) AS n, SUM(u.tasks) AS tasks, "
             "SUM(u.worker_usd) AS worker_usd, SUM(u.est_usd) AS est_usd, SUM(u.est_low_usd) AS est_low_usd, SUM(u.saved_usd) AS saved_usd, "
             "SUM(u.saved_low_usd) AS saved_low_usd, SUM(CASE WHEN u.est_usd IS NULL THEN 1 ELSE 0 END) AS unpriced, "
-            "SUM(u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output)) AS est_tokens, "
+            f"SUM({utilization.ROW_TOKENS_SQL}) AS est_tokens, "
             "COALESCE(SUM(u.worker_tokens), 0) AS worker_tokens, SUM(CASE WHEN p.id IS NULL THEN 1 ELSE 0 END) AS unsized "
             "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id GROUP BY date(u.ts, 'localtime'), u.machine")
 
@@ -294,7 +294,7 @@ def claude_by_family(c, rates: dict) -> list[dict]:
 
 
 def all_rows(c, limit: int = MAX_ROWS) -> list[dict]:
-    q = ("SELECT u.*, u.tasks * (p.input + p.cache_read + p.cache_5m + p.cache_1h + p.output) AS est_tokens "
+    q = (f"SELECT u.*, {utilization.ROW_TOKENS_SQL} AS est_tokens "
          "FROM utilizations u LEFT JOIN profiles p ON p.id = u.profile_id ORDER BY u.ts DESC, u.id DESC LIMIT ?")
     return [dict(r) for r in c.execute(q, (limit,))]
 
