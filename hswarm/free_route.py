@@ -1,7 +1,7 @@
 """Free web accounts first: a task may be answered by one of the owner's signed-in Free claude.ai or chatgpt.com
-accounts, which AgentHydra manages, before any paid API leg is used: a tool-free task in one message, and a task offered
-only reading and web tools (config.ROUTE_VIA_FREE_TOOLS) as a thread that runs them through a text protocol
-(free_client.py). `consult` reads `free_status`, sends one `free_chat`
+accounts, which AgentHydra manages, before any paid API leg is used: a tool-free task in one message, and a routine or
+general task offered only reading tools (config.ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES) as a thread that
+runs them through a text protocol (free_client.py). `consult` reads `free_status`, sends one `free_chat`
 task and polls `free_results` over AgentHydra's MCP endpoint (POST /api/mcp, stateless JSON-RPC).
 
 Never a failure of its own: the daemon down or slow, not ready, no idle signed-in account, a refused send, a failed or
@@ -45,7 +45,8 @@ SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, 
 
 def eligible(task: Task) -> bool:
     """A text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat, offered no
-    tool or only tools a Free thread may run (config.ROUTE_VIA_FREE_TOOLS).
+    tool, or only tools a Free thread may run (config.ROUTE_VIA_FREE_TOOLS) on a profile that may use them there
+    (config.ROUTE_VIA_FREE_TOOL_PROFILES).
     A CliMayte worker's own asks qualify: the worker guard is climayte_route's (a worker must not start another worker),
     and copied here it kept every tool-free ask a worker made off the Free accounts (5,400 in 48 h, 5 of them on Free,
     2026-10-09; owner: "why you're running nothing on there")."""
@@ -53,7 +54,7 @@ def eligible(task: Task) -> bool:
         return False
     if getattr(task, "images", None) or task.zdr:
         return False
-    if task.tools != "none" and not tool_names_allowed(task):
+    if task.tools != "none" and (task.profile not in config.ROUTE_VIA_FREE_TOOL_PROFILES or not tool_names_allowed(task)):
         return False
     if task.purpose == "evaluation" or task.backend != "api":
         return False
