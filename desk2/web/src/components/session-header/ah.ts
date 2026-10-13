@@ -70,7 +70,10 @@ export async function moveSession(sessionId: string, instanceRef: string): Retur
  * a chat Codex does not list as active on its account is refused here rather than guessed at. Either account's Codex
  * app may be open: an open one archives the original itself (owner, 2026-10-13).
  */
-export async function moveCodexSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string }> {
+export async function moveCodexSession(
+  sessionId: string,
+  instanceRef: string
+): Promise<{ ok: boolean; error?: string; stoppedCommands?: string[] }> {
   const targetId = instanceRef.replace(/^codex:/, '')
   const from = (await ah.session(sessionId, 'codex')).instance_ref?.match(/^codex:(.+)$/)?.[1]
   if (!from) return { ok: false, error: 'AgentHydra does not know which Codex account this chat is on.' }

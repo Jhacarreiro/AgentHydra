@@ -289,7 +289,11 @@ showing the chat about 0.6 s later and the file was in `archived_sessions`. So t
 chat leaves Codex's active list (up to 15 s). Codex's archive moves the file unchanged (the archived
 file's SHA-256 equals the fingerprint taken at the copy), so the move then checks the archived file
 against that fingerprint. A turn that slipped in after the last check is restored to the app and
-the move reports it, both chats kept. A closed source is archived on disk as before. A process scan
+the move reports it, both chats kept. The one thing the archive itself adds is accepted: a background
+command the chat left running is stopped by the archive, which records its end (an `item_completed`
+row for the command). Measured on 2026-10-13, a job still running 2 hours after its turn finished
+got one such row, and the mover, which then took any added row for a change, restored a chat whose
+copy was complete. The move now finishes and names each command the archive stopped. A closed source is archived on disk as before. A process scan
 that cannot answer still refuses, at the start and again before the archive, since the route depends on
 it. The copy only reads the source, so an open source window, even one showing that chat, is not
 disturbed.

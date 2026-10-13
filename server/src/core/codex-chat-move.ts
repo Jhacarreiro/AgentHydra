@@ -86,6 +86,8 @@ export interface CodexMoveResult {
   transcriptPath?: string
   history?: CodexMoveHistory
   repair?: CodexMoveRepair
+  /** Background commands the original still ran, which its Codex app stopped when it archived the chat. */
+  stoppedCommands?: string[]
   error?: string
 }
 
@@ -749,12 +751,53 @@ async function setArchivedInRunningApp(
     throw new Error(`The source Codex app did not ${archived ? 'archive' : 'restore'} the chat.`)
 }
 
+/** A stopped command's text: the script a shell ran (`pwsh -Command <script>`), else its whole command line. */
+function commandText(command: unknown): string {
+  const argv = Array.isArray(command) ? command.map(String) : [String(command ?? '')]
+  return argv.length >= 3 && /^-(c|command)$/i.test(argv[1] ?? '')
+    ? (argv[2] ?? '')
+    : argv.join(' ')
+}
+
+/**
+ * The commands named by rows the app added to the transcript as it archived it, or null when any row is something else.
+ * Archiving stops a background command the chat left running and records its end: measured 2026-10-13, a pwsh job still
+ * running 2 h after its turn finished got one `item_completed` row (CommandExecution, status failed, exit -1) at the
+ * archive, and the mover restored a chat whose copy was complete (owner: "it moves just fine ... Confused as to what
+ * its problem is").
+ */
+function stoppedCommands(added: Buffer): string[] | null {
+  const stopped: string[] = []
+  for (const line of added.toString('utf8').split('\n')) {
+    if (!line.trim()) continue
+    let row: {
+      type?: string
+      payload?: { type?: string; item?: { type?: string; command?: unknown } }
+    }
+    try {
+      row = JSON.parse(line)
+    } catch {
+      return null
+    }
+    const item = row.payload?.item
+    if (
+      row.type !== 'event_msg' ||
+      row.payload?.type !== 'item_completed' ||
+      item?.type !== 'CommandExecution'
+    )
+      return null
+    stopped.push(commandText(item.command))
+  }
+  return stopped
+}
+
 /**
  * Archive the original through its account's open Codex app. A disk archive under a running app is not seen by it: the
  * window would keep listing the chat, and a message typed there would go to a file the archive had moved. The app
  * archives in the background (measured 2026-10-13: off the active list ~0.6 s later), so the move waits until Codex no
- * longer lists it, then checks the archived file is the transcript it copied (Codex's archive moves the file unchanged). A turn
- * that slipped in after the last check is restored to the app and both chats are kept.
+ * longer lists it, then checks the archived file is the transcript it copied (Codex's archive moves the file unchanged),
+ * followed by nothing but the end of each background command the archive stopped. A turn that slipped in after the last
+ * check is restored to the app and both chats are kept. Answers the commands the archive stopped.
  */
 async function archiveThroughApp(
   source: CodexRpc,
@@ -762,7 +805,8 @@ async function archiveThroughApp(
   deps: MoveDependencies,
   thread: Thread,
   fingerprint: string,
-): Promise<void> {
+  copiedBytes: number,
+): Promise<string[]> {
   await deps.setArchivedInApp(from, thread.id, true)
   const deadline = Date.now() + 15_000
   while ((await activeThreads(source)).some((row) => row.id === thread.id)) {
@@ -777,7 +821,15 @@ async function archiveThroughApp(
     includeTurns: false,
   })
   const path = archived.thread.path
-  if (path && createHash('sha256').update(readFileSync(path)).digest('hex') === fingerprint) return
+  const bytes = path ? readFileSync(path) : null
+  if (
+    bytes &&
+    bytes.length >= copiedBytes &&
+    createHash('sha256').update(bytes.subarray(0, copiedBytes)).digest('hex') === fingerprint
+  ) {
+    const stopped = stoppedCommands(bytes.subarray(copiedBytes))
+    if (stopped) return stopped
+  }
   await deps.setArchivedInApp(from, thread.id, false)
   throw new Error(
     'The source changed just before it was archived, so it was restored. Both chats were kept; review them before continuing.',
@@ -939,13 +991,20 @@ export async function moveCodexChat(
     receipt = { ...receipt, desktopVisible: true }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'shown' })
+    let stopped: string[] = []
     if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
-      await archiveThroughApp(source, from, deps, thread, fingerprint)
+      stopped = await archiveThroughApp(source, from, deps, thread, fingerprint, transcript.length)
     else await archiveSourceThread(source, from, thread, fingerprint)
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'archived' })
-    return { ok: true, destinationThreadId, history: verified, ...(repair ? { repair } : {}) }
+    return {
+      ok: true,
+      destinationThreadId,
+      history: verified,
+      ...(repair ? { repair } : {}),
+      ...(stopped.length ? { stoppedCommands: stopped } : {}),
+    }
   } catch (error) {
     return {
       ok: false,

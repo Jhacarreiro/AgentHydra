@@ -701,9 +701,12 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
   rowError.value = null
   noteRow(`Moving “${title}” to ${item.label}…`)
   try {
-    const x: { ok: boolean; error?: string; sourceStillShown?: string[] } = codex
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; stoppedCommands?: string[] } = codex
       ? await moveCodexSession(sessionId, item.value)
       : await moveSession(sessionId, item.value)
+    const stopped = x.stoppedCommands?.length
+      ? ` Archiving the original stopped ${x.stoppedCommands.length === 1 ? 'a command' : `${x.stoppedCommands.length} commands`} it still ran: ${x.stoppedCommands.map((c) => (c.length > 60 ? `${c.slice(0, 60)}…` : c)).join('; ')}.`
+      : ''
     if (!x.ok) {
       noteRow(null)
       rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
@@ -711,8 +714,8 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
       noteRow(
         x.sourceStillShown?.length
           ? `Moved to ${item.label}. An old account still lists it.`
-          : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.`,
-        8000
+          : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`,
+        stopped ? 15000 : 8000
       )
   } catch (err) {
     noteRow(null)

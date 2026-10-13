@@ -125,6 +125,8 @@ function fixture() {
     appOpen: false,
     /** A message lands in the source between the last check and the app's archive. */
     slipIn: false,
+    /** The source left a background command running: the app's archive stops it and records its end. */
+    stopsCommand: false,
     blockCopy: false,
     failResume: false,
     failArchive: false,
@@ -255,6 +257,26 @@ function fixture() {
           appendFileSync(
             thread.path,
             `${JSON.stringify({ type: 'event_msg', payload: { type: 'user_message' } })}\n`,
+          )
+        if (state.stopsCommand)
+          appendFileSync(
+            thread.path,
+            `${JSON.stringify({
+              type: 'event_msg',
+              payload: {
+                type: 'item_completed',
+                item: {
+                  type: 'CommandExecution',
+                  command: [
+                    'C:\\Program Files\\PowerShell\\7\\pwsh.exe',
+                    '-Command',
+                    'python long_job.py',
+                  ],
+                  status: 'failed',
+                  exit_code: -1,
+                },
+              },
+            })}\n`,
           )
         mkdirSync(join(sourceHome, 'archived_sessions'), { recursive: true })
         renameSync(thread.path, archivePath)
@@ -490,6 +512,20 @@ describe('Codex chat move', () => {
     expect(f.state.archived).toBe(false)
     expect(existsSync(f.thread.path)).toBe(true)
     expect(f.copies()).toHaveLength(1)
+  })
+  test('a background command the archive stops is not a change: the move finishes and names it', async () => {
+    const f = fixture()
+    f.state.appOpen = true
+    f.state.stopsCommand = true
+    const result = await moveCodexChat('0', f.request, f.deps)
+    expect(result).toEqual({
+      ok: true,
+      destinationThreadId: result.destinationThreadId,
+      history: VERIFIED,
+      stoppedCommands: ['python long_job.py'],
+    })
+    expect(f.calls).not.toContain('source-app:restore')
+    expect(f.state.archived).toBe(true)
   })
   test('an unknown process state, changed login, or same home refuses before connecting', async () => {
     const f = fixture()
