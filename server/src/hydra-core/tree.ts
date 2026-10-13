@@ -134,17 +134,33 @@ function readDoc(files: Files): HydraDoc | null {
   return existsSync(files.hydraMd) ? parseHydra(readFileSync(files.hydraMd, 'utf8')) : null
 }
 
+/** Folder entries q1 shows in full; a folder with many rules would otherwise fill the chat on every message. */
+const FOLDER_SHOWN = 3
+
+/** The knowledge for the chat's folder: its main entries (tagged `repo`) in full, the rest as a count that core_find reaches. */
 function folderKnowledge(cat: Map<string, CatalogEntry>, cwd: string) {
-  if (!cwd) return []
+  if (!cwd) return { folderKnowledge: [] }
   const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
   const here = norm(cwd)
-  return [...cat.values()]
-    .filter(
-      (e) =>
-        e.kind === 'knowledge' &&
-        (e.folders ?? []).some((f) => here === norm(f) || here.startsWith(`${norm(f)}/`)),
-    )
-    .map((e) => ({ ...matchOf(e), load: loadRef(e) }))
+  const all = [...cat.values()].filter(
+    (e) =>
+      e.kind === 'knowledge' &&
+      (e.folders ?? []).some((f) => here === norm(f) || here.startsWith(`${norm(f)}/`)),
+  )
+  const main = all.filter((e) => (e.tags ?? []).includes('repo'))
+  const shown = (main.length ? main : all).slice(0, FOLDER_SHOWN)
+  const more = all.length - shown.length
+  return {
+    folderKnowledge: shown.map((e) => ({ ...matchOf(e), load: loadRef(e) })),
+    ...(more > 0
+      ? {
+          folderMore: {
+            count: more,
+            find: 'core_find { need: "<what you are about to touch>", kind: "knowledge", chat } finds the rest of this folder\'s rules',
+          },
+        }
+      : {}),
+  }
 }
 
 export function scope(dir: string, chat: string, now = new Date()) {
@@ -175,7 +191,7 @@ export function scope(dir: string, chat: string, now = new Date()) {
       hydraMd: doc
         ? { exists: true, path: files.hydraMd, lead: leadName(doc), tier: doc.tier }
         : { exists: false, path: files.hydraMd },
-      folderKnowledge: folderKnowledge(cat, cwd),
+      ...folderKnowledge(cat, cwd),
     },
   }
 }

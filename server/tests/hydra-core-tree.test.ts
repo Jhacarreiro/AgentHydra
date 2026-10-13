@@ -1,5 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
 import { emptyDoc, renderHydra } from '../src/hydra-core/hydra-md'
 import { chatPaths } from '../src/hydra-core/paths'
 import { answer, scope } from '../src/hydra-core/tree'
@@ -91,4 +92,38 @@ test('with an existing hydra.md, q2 mid adds the picks and appends a scope line'
   expect(answer(dir, chat, { answer: 'yes: a footer' }, now)).toMatchObject({ step: 'q2' })
   expect(answer(dir, chat, { answer: 'mid' }, now)).toMatchObject({ verdict: 'go', added: [] })
   expect(readFileSync(chatPaths(dir, chat).hydraMd, 'utf8')).toContain('-> go (q1 yes; q2 mid)')
+})
+
+test("q1 offers a folder's main rules entry and counts its other rules instead of listing them", () => {
+  const repo = join(dir, 'example-repo')
+  const rule = (n: number) => ({
+    id: `knowledge:rule-example-${n}`,
+    kind: 'knowledge',
+    name: `Example rule ${n}`,
+    when: `Rule ${n} for the example repo`,
+    tags: ['rule'],
+    cost: 'free',
+    how: `read rule ${n}`,
+    folders: [repo],
+    load: { type: 'none' },
+  })
+  const main = {
+    ...rule(0),
+    id: 'knowledge:repo-example',
+    name: 'Example repo rules',
+    tags: ['repo', 'rules'],
+  }
+  writeFileSync(
+    join(dir, 'catalog', 'hand-folder.json'),
+    JSON.stringify([rule(1), rule(2), rule(3), rule(4), main]),
+  )
+  startChat(dir, chat, 'why is the signup page slow?')
+  writeFileSync(chatPaths(dir, chat).cwd, join(repo, 'web'))
+  const context = scope(dir, chat, now).context as {
+    folderKnowledge: { id: string }[]
+    folderMore?: { count: number; find: string }
+  }
+  expect(context.folderKnowledge.map((e) => e.id)).toEqual(['knowledge:repo-example'])
+  expect(context.folderMore?.count).toBe(4)
+  expect(context.folderMore?.find).toContain('core_find')
 })
