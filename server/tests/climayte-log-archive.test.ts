@@ -152,6 +152,12 @@ test("an old worker's logs move into their day archives and the status path stil
   file(second, secondText, secondEnd)
   file(join(logs, 'w-old-1.err.log'), 'a warning\n', secondEnd)
   file(join(logs, 'w-old-check-1.log'), 'check passed\n', secondEnd)
+  // A long session: more lines than the status view keeps (its newest 60).
+  const long = file(
+    join(logs, 'w-long-0.jsonl'),
+    Array.from({ length: 70 }, (_, i) => said(`step ${i}`)).join(''),
+    firstEnd,
+  )
   // Finished a day ago: inside the window.
   const recent = file(join(logs, 'w-new-0.jsonl'), said('recent'), now - DAY)
   // Still running, its log idle for ten days: an active worker's files never move.
@@ -167,6 +173,7 @@ test("an old worker's logs move into their day archives and the status path stil
           attempt(first, 'quota', firstEnd),
           attempt(second, 'done', secondEnd),
         ]),
+        worker('w-long', 'done', [attempt(long, 'done', firstEnd)]),
         worker('w-new', 'done', [attempt(recent, 'done', now - DAY)]),
         worker('w-busy', 'running', [attempt(busy, 'running', null)]),
       ],
@@ -181,8 +188,12 @@ test("an old worker's logs move into their day archives and the status path stil
   const out = (await start(
     home,
     `const pass = await c.runArchivePass({ days: 7 })
-     return { pass, events: c.climayteGet('w-old').events }`,
-  )) as { pass: { files: number; workers: number; archives: string[] }; events: string[] }
+     return { pass, events: c.climayteGet('w-old').events, long: c.climayteGet('w-long').events }`,
+  )) as {
+    pass: { files: number; workers: number; archives: string[] }
+    events: string[]
+    long: string[]
+  }
 
   const archive = join(logs, 'archive')
   const firstTar = `${day(firstEnd)}.tar`
@@ -192,7 +203,7 @@ test("an old worker's logs move into their day archives and the status path stil
     ['archive', 'daemon-notes.txt', 'w-busy-0.jsonl', 'w-new-0.jsonl'].sort(),
   )
   expect(existsSync(notOurs)).toBe(true)
-  expect(out.pass).toMatchObject({ files: 6, workers: 2 })
+  expect(out.pass).toMatchObject({ files: 7, workers: 3 })
   expect(readdirSync(archive).sort()).toEqual(
     [...new Set([firstTar, secondTar, `${day(now - 20 * DAY)}.tar`])].sort(),
   )
@@ -204,6 +215,10 @@ test("an old worker's logs move into their day archives and the status path stil
     `(log read from its day archive ${join(archive, secondTar)})`,
   ])
   expect(out.events.filter((l) => !marks.includes(l))).toEqual(before)
+  // Past the view's 60-line cut the note still shows: it ends the attempt's lines.
+  expect(out.long).toHaveLength(60)
+  expect(out.long.at(-1)).toBe(`(log read from its day archive ${join(archive, firstTar)})`)
+  expect(out.long.at(-2)).toBe('said: step 69')
 
   // Plain tar opens them: nothing is locked inside AgentHydra.
   expect(await tar(archive, '-xOf', firstTar, 'w-old-0.jsonl.zst')).toEqual(packedFirst)
