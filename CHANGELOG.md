@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Old CliMayte worker logs are archived instead of piling up.** Logs of workers that finished more than 7 days
+  ago move into one archive file per day, which any tar tool opens. Nothing is deleted, and a worker's status
+  still shows its log, saying it came from the archive.
 - **A CliMayte update wakes the Claude Desktop chat that asked for the work.** When a worker finishes, its update is
   typed into that chat and starts a turn there, even if the chat sat idle. A chat that is busy gets it as soon as it is
   free.

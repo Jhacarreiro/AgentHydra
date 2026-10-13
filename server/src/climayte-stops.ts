@@ -5,11 +5,12 @@
 // from climayte.ts on 2026-10-08 to keep each file under the Architect's 2,500-line gate; nothing
 // here imports climayte.ts.
 
-import { mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, rmSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
   accountCaps,
   acctLabel,
+  archiveOfLog,
   changed,
   freshRead,
   HANDOFFS,
@@ -20,6 +21,7 @@ import {
   liveByAccount,
   load,
   overageAllowed,
+  packedPath,
   peekLog,
   readInto,
   readIntoAsync,
@@ -535,7 +537,14 @@ function rememberFinished(path: string, recent: string[]): void {
 export function finishedLines(path: string): string[] {
   const kept = finishedRecent.get(path)
   if (kept) return kept
-  const recent = peekLog(path).recent
+  const r = peekLog(path)
+  // Where the lines came from, when it is not logs/: the retention pass moved the log into its day
+  // archive, or it is nowhere (the reader is told so instead of shown an empty attempt).
+  const recent = r.archive
+    ? [`(log read from its day archive ${r.archive})`, ...r.recent]
+    : r.offset === 0 && !existsSync(path) && !existsSync(packedPath(path))
+      ? [`(no log on disk: not in logs/ nor in ${archiveOfLog(path) ?? 'any day archive'})`]
+      : r.recent
   rememberFinished(path, recent)
   return recent
 }

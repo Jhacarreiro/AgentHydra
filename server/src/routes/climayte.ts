@@ -39,6 +39,9 @@ import {
   climayteWaves,
   climayteWaveVerify,
   killsLanded,
+  logArchiveStatus,
+  runArchivePass,
+  setLogArchiveDays,
   verdictNoteTooLong,
 } from '../climayte'
 import type { CliMayteWorkerView } from '../climayte-lib'
@@ -445,6 +448,21 @@ app.post('/api/corch/remove', async (c) => {
   // A task cancelled a moment ago may still have its CLI being killed, holding the log the remove archives.
   await killsLanded()
   return c.json(climayteRemove(ids))
+})
+
+// The log retention pass (climayte-log-archive.ts): finished workers' logs older than `days` move into
+// one tar per day under corch/logs/archive, never deleted. POST { days } changes the retention, { run:
+// true } runs a pass now and answers with it.
+app.get('/api/corch/log-archive', (c) => c.json(logArchiveStatus()))
+app.post('/api/corch/log-archive', async (c) => {
+  const body = await jsonBody(c)
+  if (body.days !== undefined) {
+    if (typeof body.days !== 'number' || !Number.isInteger(body.days) || body.days < 1)
+      return c.json({ error: 'days must be a whole number of days, 1 or more' }, 400)
+    setLogArchiveDays(body.days)
+  }
+  const pass = body.run === true ? await runArchivePass() : null
+  return c.json({ ...logArchiveStatus(), ...(pass ? { pass } : {}) })
 })
 
 // --- quick add ---------------------------------------------------------------

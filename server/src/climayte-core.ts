@@ -22,7 +22,7 @@ import {
   readFile as readFileAsync,
   stat as statAsync,
 } from 'node:fs/promises'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
 import { type CpuCounters, readCpuCounters } from './climayte-cpu'
@@ -64,6 +64,7 @@ import {
 import { newestLive } from './climayte-remote'
 import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from './climayte-scorecard'
 import { queueSideWrite, queueStoreWrite } from './climayte-store-writer'
+import { readTarEntry } from './climayte-tar'
 import { resolveClaudeExe } from './config'
 import { getCliInstance, listCliInstances } from './core/cli-instances'
 import { loginExpiryState } from './core/desktop-cli-renew'
@@ -85,6 +86,20 @@ import { allCachedUsage } from './usage-cache'
 export const ROOT = join(POINTER_DIR, 'corch')
 
 export const LOGS = join(ROOT, 'logs')
+
+/** The day archives of old workers' logs (climayte-log-archive.ts): `<YYYY-MM-DD>.tar`, one per UTC
+ *  day the attempts ended. */
+export const LOG_ARCHIVE = join(LOGS, 'archive')
+
+/** The UTC day (`YYYY-MM-DD`) of an epoch-ms time: the day archive an attempt that ended then is in. */
+export const archiveDay = (ms: number): string => new Date(ms).toISOString().slice(0, 10)
+
+export const dayArchive = (day: string): string => join(LOG_ARCHIVE, `${day}.tar`)
+
+/** The worker a file in logs/ belongs to, from its name (`w-1a2b3c4d-3.jsonl.zst`,
+ *  `w-1a2b3c4d-3.err.log`, `w-1a2b3c4d-check-2.log`); null for any other file. */
+export const workerIdOfLog = (name: string): string | null =>
+  /^(w-[^.]+?)-(?:check-)?\d+\./.exec(name)?.[1] ?? null
 
 export const PROMPTS = join(ROOT, 'prompts')
 
@@ -298,6 +313,8 @@ export interface LogRead {
   eta: { minutes: number; at: number; line: string; text: string } | null
   /** The first `ETA-REVIEW:` answer its assistant text wrote (climayte-eta.ts reviewOfEvent). */
   review: EtaReview | null
+  /** The day archive the log was read from, once the retention pass moved it out of logs/. */
+  archive?: string
 }
 
 /** Each account's newest live usage reading from any of its workers' streams (poll copies it
@@ -1020,11 +1037,41 @@ export function packLog(path: string, olderThan: number): number {
   }
 }
 
-/** A packed log's text, or null with none. */
-function packedText(path: string): string | null {
+/** A finished attempt's log that is no longer plain in logs/: packed beside it (packLog), else in its
+ *  day archive (archivedLog); `archive` names the archive. null when neither holds it. */
+function storedLog(path: string): { text: string; archive?: string } | null {
   try {
-    return zstdDecompressSync(readFileSync(packedPath(path))).toString('utf8')
+    return { text: zstdDecompressSync(readFileSync(packedPath(path))).toString('utf8') }
   } catch {
+    return archivedLog(path)
+  }
+}
+
+const packedText = (path: string): string | null => storedLog(path)?.text ?? null
+
+/** The day archive the retention pass moved an attempt's log (or error log) to: the UTC day that
+ *  attempt ended. null for a file of no known, ended attempt. */
+export function archiveOfLog(path: string): string | null {
+  const id = workerIdOfLog(basename(path))
+  const at = id
+    ? workers.get(id)?.attempts.find((a) => a.log === path || a.errLog === path)
+    : undefined
+  return at?.endedAt ? dayArchive(archiveDay(at.endedAt)) : null
+}
+
+/** An attempt's log from its day archive, plain or packed as it was in logs/; null when it is not
+ *  there. */
+function archivedLog(path: string): { text: string; archive: string } | null {
+  const archive = archiveOfLog(path)
+  if (!archive) return null
+  try {
+    const name = basename(path)
+    const plain = readTarEntry(archive, name)
+    if (plain) return { text: plain.toString('utf8'), archive }
+    const packed = readTarEntry(archive, `${name}.zst`)
+    return packed ? { text: zstdDecompressSync(packed).toString('utf8'), archive } : null
+  } catch (err) {
+    console.error(`[climayte] could not read ${basename(path)} from ${archive}:`, err)
     return null
   }
 }
@@ -1114,12 +1161,14 @@ export function readInto(path: string, r: LogRead, replay = false): LogRead {
   return r
 }
 
-/** No plain file: a finished attempt's log may be packed (packLog), and is then read whole, once. */
+/** No plain file: a finished attempt's log may be packed (packLog) or archived (archivedLog), and is
+ *  then read whole, once. */
 function feedPacked(path: string, r: LogRead): LogRead {
-  const packed = r.offset === 0 ? packedText(path) : null
-  if (packed) {
-    r.offset = packed.length
-    feedLog(packed, r, null)
+  const stored = r.offset === 0 ? storedLog(path) : null
+  if (stored) {
+    if (stored.archive) r.archive = stored.archive
+    r.offset = stored.text.length
+    feedLog(stored.text, r, null)
   }
   return r
 }

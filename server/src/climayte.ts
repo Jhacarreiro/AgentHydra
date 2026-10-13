@@ -113,6 +113,7 @@ import {
   contextTokens,
   RUNNER_NEVER_STARTED_NOTICE,
 } from './climayte-lib'
+import { archiveLogsWhenDue } from './climayte-log-archive'
 import {
   type CliMayteOrigin,
   type CliMaytePing,
@@ -224,6 +225,12 @@ export {
 } from './climayte-dispatch'
 export * from './climayte-journal'
 export * from './climayte-lib'
+export {
+  type LogArchivePass,
+  logArchiveStatus,
+  runArchivePass,
+  setLogArchiveDays,
+} from './climayte-log-archive'
 export { installBroken, settleWorker } from './climayte-settle'
 export {
   climayteAsk,
@@ -665,6 +672,8 @@ async function tick(): Promise<void> {
     // Last, so packing never stands between a running worker and its overage stop.
     packOldLogs(now)
     packColdWorkers(now)
+    // Off the thread: old workers' logs into their day archives (climayte-log-archive.ts), hourly.
+    if (packReady) archiveLogsWhenDue(now)
   } finally {
     ticking = false
     schedule()

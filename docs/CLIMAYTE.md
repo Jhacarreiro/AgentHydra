@@ -139,10 +139,30 @@ changes. A worker found in both is read from `workers.json` (a message revives a
 and its file goes once `workers.json` holds it). The first start on this layout files every
 finished worker of the old single `workers.json`. Logs live in `<CONFIG_DIR>/corch/logs/`
 as `<workerId>-<attemptIndex>.jsonl` and `.err.log`; a finished attempt's `.jsonl` is packed to
-`.jsonl.zst` (zstd) a day after it ended, and every reader takes the plain file first, else the
-packed one. The prompt of each attempt is written to
+`.jsonl.zst` (zstd) ten minutes after it ended (`PACK_AFTER_MS`), and every reader takes the plain file first, else the
+packed one, else the day archive (below). The prompt of each attempt is written to
 `<CONFIG_DIR>/corch/prompts/<workerId>-<attemptIndex>.txt` and fed to the CLI on **stdin**
 (never argv: Windows' 32k command-line limit and quoting).
+
+**Log retention** (`climayte-log-archive.ts`, `climayte-tar.ts`; 2026-10-13: nothing pruned `logs/`,
+47,188 files and 2.3 GB, 9,751 of them older than 7 days). Every hour the tick starts a pass, off the
+daemon's thread, that moves the files in `logs/` of each worker finished more than `days` ago (the
+setting `climayte_log_archive_days`, default 7) into one plain ustar file per UTC day,
+`logs/archive/<YYYY-MM-DD>.tar`, which `tar -tf` and `tar -xf` open. Nothing is deleted: a file
+leaves `logs/` only after its bytes are synced into a whole entry, and an append first cuts the archive
+back to its last whole entry, so a pass killed mid-write loses nothing (an entry already there with the
+same name and size is only removed from `logs/`). A worker stays whole in `logs/` while it is active,
+has an unsettled attempt or a check running, or any of its files was written inside the window. An
+attempt's files (its log, packed or not, its error log, runner leftovers) go to the day that attempt
+ended, so a reader finds them from the attempt alone (`archiveOfLog`); a check log goes to the day the
+worker's last attempt ended, and a file of no worker on record to the day it was last written. A pass
+moves at most 256 MB (whole workers); the rest goes a minute later. The readers (`peekLog`,
+`readInto`, the session, peak and ceiling backfills, the resume check of a revived worker) fall through
+to the archive, and `climayte_status { id }` heads an archived attempt's lines with
+`(log read from its day archive <path>)`, or says `(no log on disk: ...)` when the log is nowhere.
+`GET /api/corch/log-archive` shows the setting and the last pass; `POST` with `{ days }` changes the
+setting, with `{ run: true }` runs a pass now and answers with it. The orchestration journal
+(`climayte_log`) is `journal.jsonl`, not these files, and is untouched.
 
 Account walls (an account that hit its limit or is signed out) are kept in memory and in
 `<CONFIG_DIR>/corch/walls.json`: `{ [accountId]: { until: number, reason: string } }`.
@@ -1731,6 +1751,9 @@ the chat failed, and it looked like the account was broken. Now:
   (`killsLanded`)
 - `GET /api/corch/totals` → `climayteTotals`; `POST /api/corch/remove` `{ ids }` → `climayteRemove`, after
   any kill still landing (a task cancelled a moment ago may still hold the log the remove archives)
+- `GET /api/corch/log-archive` → `logArchiveStatus` `{ days, dir, running, nextAt, last }`; `POST` the same
+  path `{ days?, run? }` → `setLogArchiveDays` (400 unless a whole number of days, 1 or more), then
+  `runArchivePass` when `run: true`, answered with its `pass` ("Log retention" above)
 - `GET /api/corch/remote` → the other PCs' shared queues `{ enabled, pcs: [{ pc, name, at, stale,
   workers }] }` (climayte-remote.ts; "Two PCs" above); `POST /api/cli-instances/sync/queue
   { enabled }` turns the sharing on or off on this PC
