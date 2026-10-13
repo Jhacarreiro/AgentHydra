@@ -81,6 +81,11 @@ between server/ and web/.
   its items is stored in another ref or compared by identity: an item read raw from a `shallowRef` never equals the same
   object read through a deep ref's proxy. 26 were moved on 2026-10-11; the Architect's `deep-ref-replaced-whole` rule
   lists the rest, each still to be checked against those exceptions.
+- Text sizes come from each app's type scale (`web/src/style.css`: `text-3xs` 10px, `text-2xs` 11px, `text-ui-sm` 12px,
+  `text-ui` 13px, `text-ui-lg` 14px; `hydra/src/styles/kit-base.css`: `text-3xs`, `text-2xs`, `text-ui`), never a new
+  bracketed `text-[13px]`. A new step goes in the `@theme` block AND in that app's `lib/utils.ts` tailwind-merge
+  extension: tailwind-merge reads an unknown `text-*` as a colour, and `cn()` then drops the colour beside it
+  (2026-10-13); each app's `utils.test.ts` reads the theme and fails on a step it does not know.
 - `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
