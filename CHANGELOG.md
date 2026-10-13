@@ -7,6 +7,15 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **AgentHydra tells you when more free accounts would have helped.** When the Free accounts or CliMayte could have
+  done a task but had no account free, the task went to a paid key without a trace. Now AgentHydra counts those tasks
+  and, at most once a day, sends a notification such as "We would love 6 more Free ChatGPT accounts", saying how many
+  of them that many accounts would have taken. HSwarm's Overview shows the same line, only when it applies.
+- **Work with tools goes to an idle CliMayte account first.** HSwarm no longer weighs an API key's price against your
+  subscription: an idle CliMayte account always takes the task, and a paid key runs it only when none is idle. The
+  Routing page's price-split settings are gone.
+- **A task a cheaper model gives up on moves one level up, once.** When an HSwarm task's model gives up instead of
+  answering, the task goes on to an idle CliMayte account or a stronger model, once, instead of ending as failed.
 - **Idle dev servers stop themselves.** A dev server AgentHydra started that nobody has used for 30 minutes is stopped, and starts again the next time something asks for it. Settings sets the time, or turns it off.
 - **Old CliMayte worker logs are archived instead of piling up.** Logs of workers that finished more than 7 days
   ago move into one archive file per day, which any tar tool opens. Nothing is deleted, and a worker's status

@@ -142,7 +142,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   works" per kind of task and model, `OffloadStatsCard`) and lists Key health by provider most-used first, each row
   saying the tokens it used in the range (owner, 2026-10-10: it seemed "to not be, like, sorted"). Key health and
   Tokens by provider show their first eight rows and fold the rest behind "+N more" (owner: "there's no 'View
-  More.'"). Its **Model results** are one card per table or chart, each with a caption, every list the top 10
+  More.'"). Under its stat tiles, one warning-coloured line says how many tasks went to paid keys in the last day
+  with every free account busy, and how many more accounts of one kind would have taken them (`GET /api/shortfall`,
+  `hswarm/shortfall.py`); it shows only when more accounts would have helped (owner, 2026-10-13). Its **Model results** are one card per table or chart, each with a caption, every list the top 10
   with Show more (`hswarm/HSwarmModelResults.vue`): thumbs up and down per model from HSwarm's tasks and CliMayte's
   scorecard with an HSwarm / CliMayte / Both toggle, tokens per successful task, failed share, kept after 1 day and
   tasks per day, the charts bars with a trailing three-bar average (`charts/TrendBars.vue`). Tokens per successful

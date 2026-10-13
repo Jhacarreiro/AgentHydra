@@ -60,6 +60,15 @@ keys only when nothing cheaper can do the job).
    keys, then paid ones, with OpenAI and the Claude and GPT routes on other hosts (`after_climayte`) last, after
    CliMayte is offered the task once more.
 
+What the first two steps could have taken but found no account free for is counted (owner, 2026-10-13: "if we had six
+more, this would have helped"). Such a task's route note and ledger line carry `short_pool` (free or climayte) and
+`short_why`: busy, paced or resting (Free) and `accounts` (CliMayte) are what more accounts would fix; signed-out
+accounts, a `route_via_*_max` cap, and `machine` (the capacity's `held`: the PC's memory or CPU holds every start) are
+reported apart. HSwarm's `GET /api/shortfall?days=N` (`hswarm/shortfall.py`) replays the counted ones against k more
+accounts of each kind and says how many were worth having; `server/src/hswarm-shortfall.ts` reads it hourly and
+notifies at most once a day, and HSwarm's Overview shows the same line (`hswarm/README.md`, "How many more free
+accounts would help").
+
 ## Server: `server/src/climayte.ts`
 
 `climayte.ts` keeps whatever starts, stops or schedules work: `tick`, `finish`, `climayteRun`, `climayteSend`,
@@ -1687,6 +1696,8 @@ and the subscriptions; since 2026-10-13 the subscriptions go first whenever an a
 above). Before HSwarm runs a task that has tools (read, edit or all) and an absolute folder, it reads
 `GET /api/corch/capacity`; with an account free it dispatches the task here (kind `code` for edit/all, else
 `review` or `sweep`), polls it every 10 s and uses the worker's report as the task's answer (`hswarm/climayte_route.py`).
+The capacity read also says `held` while the PC's memory or CPU holds every start (`memoryShort`, `cpuShort`), so a task
+turned away then is not counted as wanting another account ("Which route first").
 Guards: a CliMayte worker's own HSwarm calls are never routed (the worker's `python -m hswarm connect`
 sends `x-hswarm-climayte-worker: 1`, since one shared HSwarm server serves every chat and its own
 environment says nothing about the caller); at most `route_via_climayte_max` (unset: as many as are idle) at once;
