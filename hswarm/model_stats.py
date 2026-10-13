@@ -153,10 +153,12 @@ def _refresh(days: int, ledger: Path, log: Path) -> dict:
             _DONE.notify_all()
 
 
-def _refresh_later(days: int, ledger: Path, log: Path) -> None:
-    """_refresh() on a daemon thread, unless one is already running for these days."""
+def _refresh_later(days: int, ledger: Path, log: Path, seen: tuple | None = None) -> None:
+    """_refresh() on a daemon thread, unless one is already running for these days or `seen`, the cache entry the caller
+    judged stale, has been replaced since: a call that read the entry just before a running refresh stored its answer
+    started a second full read of the ledger (2026-10-13: 2 of 20 runs of the refresh test read it three times)."""
     with _LOCK:
-        if days in _BUSY:
+        if days in _BUSY or (seen is not None and _CACHE.get(days) is not seen):
             return
         _BUSY.add(days)
     threading.Thread(target=_refresh, args=(days, ledger, log), name=f"model-stats-{days}", daemon=True).start()
@@ -185,5 +187,5 @@ def model_stats(days: int = 14) -> dict:
         return _refresh(days, ledger, log)
     key, at, out = hit
     if time.monotonic() - at >= MAX_AGE_S and key != _key(days, ledger, log):
-        _refresh_later(days, ledger, log)
+        _refresh_later(days, ledger, log, hit)
     return out

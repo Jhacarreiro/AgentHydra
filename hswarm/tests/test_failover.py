@@ -993,10 +993,8 @@ def test_a_pilot_that_fails_before_its_first_reply_does_not_strand_the_job(monke
 def test_a_key_whose_plan_refuses_tool_calls_keeps_serving_chat_while_tool_calls_go_to_another_key(monkeypatch):
     import httpx
 
-    from hswarm import client as client_mod
     from hswarm.client import DeepSeekClient, NoUsableKey
 
-    monkeypatch.setattr(client_mod, "_NO_TOOL_KEYS", set(), raising=False)
     chat_only, full = "sk-chatonly000xxxx", "sk-fullplan000xxxx"
     seen: list[tuple[str, bool]] = []
     tools = [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}}}]
