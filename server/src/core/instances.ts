@@ -17,6 +17,11 @@
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { basename } from 'node:path'
 import {
+  desktopLocaleForLaunch,
+  launchLocaleArgs,
+  setProfileLocale,
+} from '../claude-desktop-locale'
+import {
   assertClaudeInspectorPortAvailable,
   prepareClaudeNativeLaunch,
 } from '../claude-native-launch'
@@ -677,6 +682,20 @@ type NativeLaunchPlan = Awaited<ReturnType<typeof prepareClaudeNativeLaunch>>
  * done, and `launchStarts` is stamped only after the hooks, as before, so their own store writes are
  * not refused as racing this launch.
  */
+/**
+ * The shell's language is set in the profile before each launch (owner, 2026-10-13: English where
+ * possible). A write that fails is logged and the launch goes on: the chat matters more than a menu.
+ */
+async function applyShellLocale(normDir: string, locale: string): Promise<void> {
+  try {
+    await setProfileLocale(normDir, locale)
+  } catch (err) {
+    console.warn(
+      `[claude-desktop] could not set the shell language to ${locale} for ${basename(normDir)}: ${String(err)}`,
+    )
+  }
+}
+
 async function dispatchConfiguredLaunch(
   normDir: string,
   binary: string,
@@ -684,6 +703,7 @@ async function dispatchConfiguredLaunch(
   clock: OpenClock,
 ): Promise<CMActionResult> {
   const attempt: LaunchAttempt = { dispatched: false }
+  const locale = desktopLocaleForLaunch()
   const hooks = clock.time('hooks', () => runBeforeLaunchHooks(normDir))
   const leasing: Promise<NativeLaunchRegistryLease | null> =
     nativeConfig?.launchDebugger === true
@@ -697,10 +717,12 @@ async function dispatchConfiguredLaunch(
       attempt.nativeData = { binary: plan.binary, nativeDebugger: plan.nativeDebugger }
     const { argv, detached } = buildInstanceLaunch(process.platform, plan.binary, [
       ...plan.extraArgs,
+      ...launchLocaleArgs(locale),
       ...launchArgs(normDir),
     ])
     const lease = plan.nativeDebugger ? await leasing : null
     await hooks
+    await applyShellLocale(normDir, locale)
     launchStarts.set(pathKey(normDir, true), Date.now())
     const verified = await spawnVerifyAndRestore({
       normDir,
