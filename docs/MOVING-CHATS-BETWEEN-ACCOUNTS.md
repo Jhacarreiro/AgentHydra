@@ -272,7 +272,12 @@ A person can also move ONE Codex chat from AgentHydra's sidebar (2026-10-13): ri
 **Move to account ›**, and pick a Codex account. The click is the review: the window reads the plan
 for that chat's account at that moment, takes the one row whose id is the chat's, and sends it to
 `move-chat` unchanged, so every refusal above still applies; a chat the plan does not list is
-refused in the window without a call.
+refused in the window without a call. The mover also refuses while the source account's Codex app is
+open, which is most of the time for a chat someone just right-clicked, so the window asks first
+("Close #N's Codex app?", naming how many other chats there are working) and, on that word, closes
+it the way `move-codex-chats --close-source` does, waits for it to stop, then plans and moves. A
+chat that is itself still working is refused before anything is closed: closing would end its turn,
+and the mover refuses an unfinished turn.
 
 ### What it refuses, and what an interruption leaves behind
 
