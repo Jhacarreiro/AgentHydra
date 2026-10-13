@@ -71,6 +71,8 @@ let caller: () => { sessionId: string; path: string; home: string; how: string }
   how: 'test caller',
 })
 const realFetch = globalThis.fetch
+/** Runs after a GET has its answer and before the caller gets it: the answer's time on the wire. */
+let answered: (() => Promise<void>) | null = null
 
 beforeAll(() => {
   setCliMayteAccountsProvider(() => [])
@@ -89,7 +91,9 @@ beforeAll(() => {
     const u = new URL(String(url))
     if (init?.method === 'POST')
       posted.push({ url: u.pathname, body: init.body ? JSON.parse(String(init.body)) : null })
-    return http.fetch(new Request(`http://127.0.0.1${u.pathname}${u.search}`, init))
+    const res = await http.fetch(new Request(`http://127.0.0.1${u.pathname}${u.search}`, init))
+    if (init?.method !== 'POST' && answered) await answered()
+    return res
   }
 })
 
@@ -338,6 +342,29 @@ describe('a chat that reads or cancels its own workers is not pinged about them 
     await flushCliMayteStore()
     const filed = JSON.parse(readFileSync(join(ROOT, 'done', `${a}.json`), 'utf8'))
     expect(filed.seenAt).toBe(workers.get(a)?.seenAt)
+  })
+
+  test('a read is never stamped later than its answer was built, waiting or not', async () => {
+    // Review, 2026-10-13: stamped when the answer arrived, a worker that finished while it was on its way
+    // counted as seen, and its finished ping was dropped though the chat had only read "running".
+    const r = climayteRun({
+      tasks: [task('seen late')],
+      group: 'og-seen-late',
+      origin: { kind: 'chat', sessionId: SID, home: HOME, transcript: TRANSCRIPT, how: 'x' },
+    })
+    const a = r.workers[0].id
+    for (const wait of [{}, { wait_seconds: 1 }]) {
+      const start = Date.now()
+      let built = 0
+      answered = async () => {
+        built = Date.now()
+        await new Promise((r) => setTimeout(r, 20))
+      }
+      await bound('climayte_status').run({ id: a, ...wait })
+      answered = null
+      expect(workers.get(a)?.seenAt).toBeGreaterThanOrEqual(start)
+      expect(workers.get(a)?.seenAt).toBeLessThanOrEqual(built)
+    }
   })
 })
 

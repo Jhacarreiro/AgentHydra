@@ -336,6 +336,7 @@ async function climayteStatusRead(
   a: Record<string, unknown>,
   group: string | undefined,
   waitCap: number,
+  seenBy?: string,
 ): Promise<unknown> {
   const wait = Math.min(waitCap, Math.max(0, Number(a.wait_seconds) || 0))
   const ids = Array.isArray(a.ids) ? a.ids.map((x) => str(x)).filter(Boolean) : []
@@ -349,7 +350,7 @@ async function climayteStatusRead(
   }
   if (a.id != null && str(a.id) && a.report !== true)
     return api(
-      `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined })}`,
+      `/api/corch/workers/${encodeURIComponent(str(a.id))}${qs({ wait: wait > 0 ? wait : undefined, seen_by: seenBy })}`,
     )
   const limit =
     a.limit != null && Number.isFinite(Number(a.limit))
@@ -371,6 +372,7 @@ async function climayteStatusRead(
       report: report ? 1 : undefined,
       chars: report && Number.isFinite(chars) && chars >= 0 ? Math.floor(chars) : undefined,
       wait: wait > 0 ? wait : undefined,
+      seen_by: seenBy,
     })}`,
   )
 }
@@ -1206,9 +1208,15 @@ export const TOOLS: HydraTool[] = [
       const extra = await climayteStatusPings(a, group)
       // The watch gets only what the call has left: the pings' caller lookup can take up to
       // CALLER_ORIGIN_BUDGET_MS, and a full watch after it was an answer the call budget dropped.
+      // A waiting read is stamped by the daemon as it builds the answer (seen_by), so the trace is awaited
+      // first; the wait gets what is left. A read that answers at once is stamped after it, as of just
+      // before it: either way a worker that changes after the answer was built is not counted as seen.
+      const waits = Number(a.wait_seconds) > 0
+      const seenBy = scope && trace && waits ? (await trace).origin?.sessionId : undefined
       const left = Math.floor(CLIMAYTE_MAX_WAIT_S - (Date.now() - started) / 1000)
-      const answer = await climayteStatusRead(a, group, Math.max(0, left))
-      if (scope && trace) await within(markSeen(trace, scope, Date.now()), SEEN_WAIT_MS)
+      const asked = Date.now()
+      const answer = await climayteStatusRead(a, group, Math.max(0, left), seenBy)
+      if (scope && trace && !waits) await within(markSeen(trace, scope, asked), SEEN_WAIT_MS)
       if (!extra) return answer
       return Array.isArray(answer)
         ? { workers: answer, ...extra }

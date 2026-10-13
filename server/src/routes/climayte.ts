@@ -173,16 +173,26 @@ app.get('/api/corch/workers', async (c) => {
     all: flag(c.req.query('all')),
   }
   const wait = waitMs(c.req.query('wait'))
+  const seenBy = optStr(c.req.query('seen_by'))
   if (flag(c.req.query('report'))) {
     if (wait > 0) await climayteWait(filter, wait)
-    return c.json(climayteReports(filter, optInt(c.req.query('chars'))))
+    const reports = climayteReports(filter, optInt(c.req.query('chars')))
+    if (seenBy) seenAsAnswered(reports, seenBy)
+    return c.json(reports)
   }
   // `lean=1` (the CliMayte pane and Desk 2's server): the full rows without the long text no list
   // shows (climayteLeanWorker); it means nothing next to `brief`, which is already short.
   const lean = flag(c.req.query('lean')) && !filter.brief
   const rows = wait > 0 ? await climayteWait(filter, wait) : climayteList(filter)
+  if (seenBy) seenAsAnswered(rows as { id: string }[], seenBy)
   return c.json(lean ? (rows as CliMayteWorkerView[]).map(climayteLeanWorker) : rows)
 })
+/** `seen_by=<session id>` (climayte_status for a waiting scoped read): the caller's own workers in this
+ *  answer are stamped seen as of now, the moment it was built. A stamp taken after the answer arrived
+ *  counted a worker that finished in between as seen, and its finished ping was dropped (review, 2026-10-13). */
+function seenAsAnswered(rows: readonly { id: string }[], sessionId: string): void {
+  if (rows.length) climayteSeen({ ids: rows.map((r) => r.id) }, sessionId, Date.now())
+}
 // The other PC's CliMayte queue, as it last shared it through the login sync (core/climayte-queue-sync.ts):
 // shown apart, never part of /api/corch/workers. `stale`: that PC was not seen (its snapshot or
 // its polls of the store) for over 20 minutes.
@@ -209,6 +219,8 @@ app.get('/api/corch/workers/:id', async (c) => {
   const wait = waitMs(c.req.query('wait'))
   if (wait > 0 && climayteGet(id)) await climayteWait({ id }, wait)
   const worker = climayteGet(id, { fullPrompt: c.req.query('prompt') === 'full' })
+  const seenBy = optStr(c.req.query('seen_by'))
+  if (worker && seenBy) seenAsAnswered([{ id }], seenBy)
   return worker ? c.json(worker) : c.json({ error: 'worker not found' }, 404)
 })
 // The orchestration journal (climayte-journal.ts), oldest first, the newest `limit` (default 100).

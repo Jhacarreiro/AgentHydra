@@ -1441,8 +1441,11 @@ export function climayteCancelHeld(
   if (!w) return { ok: false, removed: false, message: 'No such worker.' }
   const want = text.trim()
   if (!want) return { ok: false, removed: false, message: 'Name the held message by its text.' }
+  // Exact, give or take the ends' whitespace: a held message is queued as it was sent (queueFollowUp), and
+  // a match on part of the text took back a different message ("check logs" gone, "please check logs
+  // tomorrow" still held).
   let i = w.pending.indexOf(text)
-  if (i < 0) i = w.pending.findIndex((p) => p.includes(want))
+  if (i < 0) i = w.pending.findIndex((p) => p.trim() === want)
   if (i < 0)
     return {
       ok: true,

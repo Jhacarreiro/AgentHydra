@@ -126,6 +126,9 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       expect(climayteCancelHeld(id, '  ')).toMatchObject({ ok: false, removed: false })
       expect(climayteCancelHeld(id, 'taken back')).toMatchObject({ ok: true, removed: true })
       expect(climayteList({ id })[0]?.pending).toEqual(['first held'])
+      // Part of another held message's text names nothing: it is not taken back in its place.
+      expect(climayteCancelHeld(id, 'held')).toMatchObject({ ok: true, removed: false })
+      expect(climayteList({ id })[0]?.pending).toEqual(['first held'])
       expect(climayteCancelHeld(id, 'taken back')).toMatchObject({ ok: true, removed: false })
       expect(climayteJournal({ id }).some((e) => e.event === 'follow-up-cancelled')).toBe(true)
 
