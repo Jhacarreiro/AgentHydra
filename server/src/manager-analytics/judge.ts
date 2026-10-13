@@ -189,7 +189,19 @@ interface ParsedItem {
   n: number
   criteria: Record<string, number>
   facet: string | null
+  facetDropped?: string
   why: string
+}
+
+/** The playbook file a judge's facet answer names: the file itself, the file without .md, or its unique number ("06"). */
+export function matchFacet(answer: string, facets: string[]): string | null {
+  const name = basename(answer.trim())
+  if (facets.includes(name)) return name
+  if (facets.includes(`${name}.md`)) return `${name}.md`
+  const num = /^(\d{1,2})(?:\D|$)/.exec(name)?.[1]
+  if (!num) return null
+  const hits = facets.filter((f) => f.startsWith(`${num.padStart(2, '0')}-`))
+  return hits.length === 1 ? hits[0] : null
 }
 
 function arrayAt(text: string, start: number): unknown[] | null {
@@ -250,11 +262,13 @@ export function parseJudgeReply(text: string, count: number, facets: string[]): 
     }
     if (!ok) continue
     seen.add(n)
-    const facet = typeof o.facet === 'string' ? basename(o.facet) : null
+    const answer = typeof o.facet === 'string' && o.facet.trim() ? o.facet : null
+    const facet = answer ? matchFacet(answer, facets) : null
     out.push({
       n,
       criteria,
-      facet: facet && facets.includes(facet) ? facet : null,
+      facet,
+      ...(answer && !facet ? { facetDropped: answer.slice(0, WHY_CHARS) } : {}),
       why: typeof o.why === 'string' ? o.why.slice(0, WHY_CHARS) : '',
     })
   }
@@ -354,6 +368,7 @@ export async function runJudgePass(opts: JudgePassOptions = {}): Promise<JudgePa
             score,
             criteria: p.criteria,
             facet: p.facet,
+            ...(p.facetDropped ? { facetDropped: p.facetDropped } : {}),
             why: p.why,
             model,
             costUsd: 0,

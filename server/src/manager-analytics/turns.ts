@@ -69,6 +69,8 @@ export interface JudgeRecord {
   score: number
   criteria: Record<string, number>
   facet: string | null
+  /** The judge's facet answer when it named no playbook file, kept so a wrong answer can be seen. */
+  facetDropped?: string
   why: string
   model: string
   costUsd: number | null

@@ -9,6 +9,7 @@ import {
   excerptOf,
   facetNamesOf,
   judgedToday,
+  matchFacet,
   parseJudgeReply,
   rubricSections,
   runJudgePass,
@@ -302,7 +303,21 @@ describe('parseJudgeReply', () => {
     const [row] = parseJudgeReply(reply, 1, FACETS)
     expect(row.criteria).toEqual({ answered: 2, lane: 0, resultFirst: 1, proof: 2, delegated: 1 })
     expect(row.facet).toBeNull()
+    expect(row.facetDropped).toBe('99-made-up.md')
     expect(row.why.length).toBe(200)
+  })
+
+  test('a facet named without .md, with its folder or by its number still finds its file', () => {
+    expect(matchFacet('02-second-facet', FACETS)).toBe(FACETS[1])
+    expect(matchFacet('playbook/01-first-facet.md', FACETS)).toBe(FACETS[0])
+    expect(matchFacet('1', FACETS)).toBe(FACETS[0])
+    expect(matchFacet('02-misspelt.md', FACETS)).toBe(FACETS[1])
+    expect(matchFacet('second facet', FACETS)).toBeNull()
+    expect(matchFacet('0', FACETS)).toBeNull()
+    const reply = `[{"n":1,"answered":2,"lane":2,"resultFirst":2,"proof":2,"delegated":2,"facet":"01-first-facet","why":"ok"}]`
+    const [row] = parseJudgeReply(reply, 1, FACETS)
+    expect(row.facet).toBe(FACETS[0])
+    expect(row.facetDropped).toBeUndefined()
   })
 
   test('garbage parses to nothing', () => {
