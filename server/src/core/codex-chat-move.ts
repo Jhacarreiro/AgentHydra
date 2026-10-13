@@ -1,5 +1,7 @@
 import { createHash, randomUUID } from 'node:crypto'
 import {
+  constants,
+  copyFileSync,
   existsSync,
   mkdirSync,
   readFileSync,
@@ -16,7 +18,9 @@ import { codexDesktopRunState } from './codex-desktop'
 import { getCodexInstance } from './codex-instances'
 import { showMigratedCodexChat } from './codex-migration-visibility'
 import { type CodexRpc, connectCodexRpc } from './codex-rpc'
+import { holdCodexWriterLock, resetCodexHistoryProjection } from './codex-thread-guard'
 import { copyCodexTranscript } from './codex-transcript-copy'
+import { type CodexHistory, readCodexHistory } from './codex-transcript-lineage'
 import {
   describeStoreRefusal,
   type JsonStoreSpec,
@@ -58,14 +62,43 @@ export interface CodexMoveRequest {
   targetAccountId: string | null
 }
 
+/** The displayed history compared before the source was archived. */
+export interface CodexMoveHistory {
+  sourceTurns: number
+  sourceItems: number
+  destinationTurns: number
+  destinationItems: number
+}
+
+/** A destination transcript rebuilt in place: the full source history, then every row the
+ * destination wrote itself (kept), with rows lost to an earlier repair restored from copies. */
+export interface CodexMoveRepair {
+  keptRows: number
+  recoveredRows: number
+  backup: string
+}
+
 export interface CodexMoveResult {
   ok: boolean
   destinationThreadId?: string
   transcriptPath?: string
+  history?: CodexMoveHistory
+  repair?: CodexMoveRepair
   error?: string
 }
 
+export type CodexMoveProgress =
+  | { step: 'read'; segments: number }
+  | { step: 'copied'; transcriptPath: string }
+  | { step: 'repaired'; repair: CodexMoveRepair }
+  | { step: 'reprojected' }
+  | { step: 'verified'; history: CodexMoveHistory }
+  | { step: 'shown' }
+  | { step: 'archived' }
+
 interface Receipt {
+  /** 'copying' names its planned destination before the file is written, so an interrupted copy
+   * resumes into that same id and path instead of making a second one. */
   phase: 'copying' | 'copied' | 'done'
   destinationThreadId?: string
   /** Where the rekeyed copy was written, so a resumed move resumes the copy it already made. */
@@ -75,6 +108,7 @@ interface Receipt {
   destination: string
   fingerprint: string
   desktopVisible?: boolean
+  verified?: CodexMoveHistory
 }
 
 interface MoveDependencies {
@@ -83,6 +117,13 @@ interface MoveDependencies {
   connect: (home: string) => Promise<CodexRpc>
   journalPath: string
   showDestination: typeof showMigratedCodexChat
+  holdWriter: typeof holdCodexWriterLock
+  resetProjection: typeof resetCodexHistoryProjection
+  /** Where a rewritten destination transcript and its dropped projection rows are kept. */
+  backupRoot: string
+  /** Earlier copies of the destination transcript, read only to restore rows a repair lost. */
+  recoverFrom: string[]
+  onProgress: (progress: CodexMoveProgress) => void
 }
 const defaults: MoveDependencies = {
   getInstance: getCodexInstance,
@@ -90,6 +131,11 @@ const defaults: MoveDependencies = {
   connect: connectCodexRpc,
   journalPath: join(CONFIG_DIR, 'codex-chat-moves.json'),
   showDestination: showMigratedCodexChat,
+  holdWriter: holdCodexWriterLock,
+  resetProjection: resetCodexHistoryProjection,
+  backupRoot: join(CONFIG_DIR, 'backups'),
+  recoverFrom: [],
+  onProgress: () => {},
 }
 
 function pair(
@@ -212,7 +258,8 @@ function claimReceipt(
       }
       if (alive) throw new Error('This chat is already being moved.')
     }
-    if (old?.phase === 'copying')
+    // A planned copy resumes into its named destination; only an unnamed one is unknowable.
+    if (old?.phase === 'copying' && !old.destinationThreadId)
       throw new Error(
         'A previous copy could not be confirmed. Check the destination before attempting another move.',
       )
@@ -324,15 +371,16 @@ function assertNoUnfinishedTurn(transcript: Buffer): void {
   }
 }
 
-async function ensureCopied(
+/** Name the destination id and path in the receipt before any file exists, so an interrupted
+ * copy resumes into them instead of creating a second chat. */
+function planCopy(
   receipt: Receipt,
   deps: MoveDependencies,
   key: string,
   to: CodexInstance,
-  thread: Thread,
-  transcript: Buffer,
-): Promise<Receipt> {
-  if (receipt.destinationThreadId) return receipt
+): Receipt {
+  if (receipt.phase !== 'copying' || (receipt.destinationThreadId && receipt.transcriptPath))
+    return receipt
   const destinationThreadId = randomUUID()
   const stamp = new Date().toISOString()
   const transcriptPath = join(
@@ -341,43 +389,287 @@ async function ensureCopied(
     ...stamp.slice(0, 10).split('-'),
     `rollout-${stamp.slice(0, 19).replaceAll(':', '-')}-${destinationThreadId}.jsonl`,
   )
-  const content = copyCodexTranscript(transcript.toString('utf8'), thread.id, destinationThreadId)
+  const planned = { ...receipt, destinationThreadId, transcriptPath }
+  saveReceipt(deps.journalPath, key, planned)
+  return planned
+}
+
+async function ensureCopied(
+  receipt: Receipt,
+  deps: MoveDependencies,
+  key: string,
+  to: CodexInstance,
+  thread: Thread,
+  history: CodexHistory,
+): Promise<Receipt> {
+  if (receipt.phase !== 'copying') return receipt
+  const planned = receipt
+  const transcriptPath = planned.transcriptPath!
+  const content = copyCodexTranscript(history.text, thread.id, planned.destinationThreadId!)
   mkdirSync(dirname(transcriptPath), { recursive: true })
   if (!isPathInside(realpathSync(to.codexHome), realpathSync(dirname(transcriptPath)))) {
     throw new Error('The destination session directory points outside this instance.')
   }
-  writeFileSync(transcriptPath, content, { flag: 'wx', mode: 0o600 })
-  const updated: Receipt = { ...receipt, phase: 'copied', destinationThreadId, transcriptPath }
+  if (!existsSync(transcriptPath))
+    writeFileSync(transcriptPath, content, { flag: 'wx', mode: 0o600 })
+  else if (readFileSync(transcriptPath, 'utf8') !== content)
+    throw new Error(
+      'An interrupted copy left a different file at its planned destination. Both were kept; review them before retrying.',
+    )
+  const updated: Receipt = { ...planned, phase: 'copied' }
   saveReceipt(deps.journalPath, key, updated)
+  deps.onProgress({ step: 'copied', transcriptPath })
   return updated
+}
+
+interface Row {
+  ordinal: number
+  line: string
+}
+
+function orderedRows(text: string, what: string): Row[] {
+  const rows: Row[] = []
+  for (const line of text.split('\n')) {
+    if (!line.trim()) continue
+    let ordinal: unknown
+    try {
+      ordinal = JSON.parse(line).ordinal
+    } catch {
+      throw new Error(`${what} ends in an unreadable row. Nothing was changed.`)
+    }
+    if (
+      !Number.isSafeInteger(ordinal) ||
+      (rows.length && (ordinal as number) <= rows.at(-1)!.ordinal)
+    )
+      throw new Error(`${what} has rows out of order. Nothing was changed.`)
+    rows.push({ ordinal: ordinal as number, line })
+  }
+  return rows
+}
+
+/** Rows `from`..`to` that an earlier repair dropped, taken from copies of this same transcript.
+ * A copy proves it is one by agreeing, row for row, with every row both of them hold. */
+function recoverRows(
+  from: number,
+  to: number,
+  files: string[],
+  known: Map<number, string>,
+): string[] {
+  const found = new Map<number, string>()
+  for (const file of files) {
+    for (const row of orderedRows(readFileSync(file, 'utf8'), `The recovery file ${file}`)) {
+      if (JSON.parse(row.line).type === 'session_meta') continue
+      if (row.ordinal >= from && row.ordinal <= to) {
+        if (found.has(row.ordinal) && found.get(row.ordinal) !== row.line)
+          throw new Error(
+            `The recovery files disagree about row ${row.ordinal}. Nothing was changed.`,
+          )
+        found.set(row.ordinal, row.line)
+      } else if (known.has(row.ordinal) && known.get(row.ordinal) !== row.line) {
+        throw new Error(
+          `${file} is not a copy of this chat (row ${row.ordinal} differs). Nothing was changed.`,
+        )
+      }
+    }
+  }
+  const rows: string[] = []
+  for (let ordinal = from; ordinal <= to; ordinal++) {
+    const line = found.get(ordinal)
+    if (!line)
+      throw new Error(
+        `Rows ${from}-${to} of the imported chat are missing and no recovery copy holds row ${ordinal}. Nothing was changed.`,
+      )
+    rows.push(line)
+  }
+  return rows
+}
+
+/** What the destination transcript must become, or null when it is already whole. It holds the
+ * copied history (complete, or only the newest file an older copier took) followed by the rows the
+ * destination wrote itself; those are kept verbatim, in order, after the complete history. */
+function plannedDestination(
+  current: Buffer,
+  complete: Buffer,
+  partial: Buffer,
+  lastOrdinal: number,
+  recoverFrom: string[],
+): { content: Buffer; keptRows: number; recoveredRows: number } | null {
+  const startsWith = (prefix: Buffer) => current.subarray(0, prefix.length).equals(prefix)
+  const whole = startsWith(complete)
+  if (whole && lastOrdinal < 0) return null // a legacy transcript has no ordinals and no lineage
+  if (!whole && !startsWith(partial))
+    throw new Error(
+      'The imported chat no longer starts with the history copied into it. Nothing was changed; review it before retrying.',
+    )
+  const tail = current.subarray((whole ? complete : partial).length)
+  const own = orderedRows(tail.toString('utf8'), 'The imported chat')
+  const first = own[0]?.ordinal ?? lastOrdinal + 1
+  if (first <= lastOrdinal)
+    throw new Error('The imported chat repeats copied rows. Nothing was changed; review it first.')
+  if (whole && first === lastOrdinal + 1) return null
+  const known = new Map(
+    [...orderedRows(complete.toString('utf8'), 'The copied history'), ...own].map((row) => [
+      row.ordinal,
+      row.line,
+    ]),
+  )
+  const recovered =
+    first > lastOrdinal + 1 ? recoverRows(lastOrdinal + 1, first - 1, recoverFrom, known) : []
+  return {
+    content: Buffer.concat([
+      complete,
+      Buffer.from(recovered.map((line) => `${line}\n`).join('')),
+      tail,
+    ]),
+    keptRows: own.length,
+    recoveredRows: recovered.length,
+  }
+}
+
+function busyWriter(): Error {
+  return new Error(
+    'The imported chat is open in Codex, which still owns its transcript. Let its turn finish and switch to another chat (Codex lets go about a minute later), then retry. Nothing was changed.',
+  )
+}
+
+/** Drop the destination's history projection under its writer lock, keeping the rows removed. */
+function reproject(deps: MoveDependencies, to: CodexInstance, threadId: string, backup: string) {
+  const lock = deps.holdWriter(to.codexHome, threadId)
+  if (!lock) throw busyWriter()
+  try {
+    mkdirSync(backup, { recursive: true })
+    const removed = deps.resetProjection(to.codexHome, threadId)
+    writeFileSync(join(backup, 'history-projection.json'), JSON.stringify(removed))
+  } finally {
+    lock.release()
+  }
+}
+
+/** Make an existing destination hold the source's complete history. Older copies took only the
+ * newest file of a split history and may since have gained the destination's own turns; the
+ * rewrite happens only while Hydra holds the thread's writer lock, so no Codex process can append
+ * to the transcript or its projection meanwhile, and the replaced file is backed up first. */
+function completeDestination(
+  deps: MoveDependencies,
+  to: CodexInstance,
+  thread: Thread,
+  receipt: Receipt,
+  history: CodexHistory,
+  transcript: Buffer,
+): CodexMoveRepair | null {
+  const path = receipt.transcriptPath
+  const id = receipt.destinationThreadId!
+  if (!path || !existsSync(path)) return null
+  const complete = Buffer.from(copyCodexTranscript(history.text, thread.id, id))
+  const partial = Buffer.from(copyCodexTranscript(transcript.toString('utf8'), thread.id, id))
+  const plan = () =>
+    plannedDestination(readFileSync(path), complete, partial, history.lastOrdinal, deps.recoverFrom)
+  if (!plan()) return null
+  const lock = deps.holdWriter(to.codexHome, id)
+  if (!lock) throw busyWriter()
+  try {
+    const rebuilt = plan()
+    if (!rebuilt) return null
+    const backup = join(deps.backupRoot, `codex-move-${id}-${Date.now()}`)
+    mkdirSync(backup, { recursive: true })
+    copyFileSync(path, join(backup, basename(path)), constants.COPYFILE_EXCL)
+    const staged = `${path}.hydra-repair`
+    writeFileSync(staged, rebuilt.content, { flag: 'wx', mode: 0o600 })
+    renameSync(staged, path)
+    const removed = deps.resetProjection(to.codexHome, id)
+    writeFileSync(join(backup, 'history-projection.json'), JSON.stringify(removed))
+    return { keptRows: rebuilt.keptRows, recoveredRows: rebuilt.recoveredRows, backup }
+  } finally {
+    lock.release()
+  }
+}
+
+interface Turn {
+  id?: string
+  items?: unknown[]
+}
+
+/** Every turn Codex displays for a chat, with full items. */
+async function displayedTurns(rpc: CodexRpc, threadId: string): Promise<Turn[]> {
+  const turns: Turn[] = []
+  const seen = new Set<string>()
+  let cursor: string | null = null
+  do {
+    const page: { data?: Turn[]; nextCursor?: string | null } = await rpc.call(
+      'thread/turns/list',
+      {
+        threadId,
+        limit: 100,
+        itemsView: 'full',
+        ...(cursor ? { cursor } : {}),
+      },
+    )
+    if (!Array.isArray(page?.data)) throw new Error('Codex did not return the chat history.')
+    turns.push(...page.data)
+    cursor = page.nextCursor ?? null
+    if (cursor && seen.has(cursor))
+      throw new Error('Codex repeated a history page. Refresh and try again.')
+    if (cursor) seen.add(cursor)
+  } while (cursor)
+  return turns
+}
+
+const itemCount = (turns: Turn[]) => turns.reduce((sum, turn) => sum + (turn.items?.length ?? 0), 0)
+
+/** The destination must display every source turn, identical and in order; turns after them are
+ * the destination's own work since the copy. Returns the reason it does not, or the counts. */
+function compareHistory(source: Turn[], destination: Turn[]): CodexMoveHistory | string {
+  if (!source.length)
+    return 'Codex shows no history for the source chat, so its copy cannot be verified.'
+  const differs = source.findIndex(
+    (turn, index) => JSON.stringify(turn) !== JSON.stringify(destination[index]),
+  )
+  if (differs >= 0)
+    return `The imported chat does not show source turn ${differs + 1} of ${source.length} (it shows ${destination.length} turns, ${itemCount(destination)} items; the source has ${itemCount(source)} items).`
+  return {
+    sourceTurns: source.length,
+    sourceItems: itemCount(source),
+    destinationTurns: destination.length,
+    destinationItems: itemCount(destination),
+  }
 }
 
 // Resume only the NEW local copy. This lets Codex build both its thread index and paginated
 // history database without consulting a source id that only exists in another CODEX_HOME.
-// A new id has no goal/queue to auto-continue, and we never issue turn/start.
+// A new id has no goal/queue to auto-continue, and we never issue turn/start. A resume also
+// rebuilds a projection Hydra dropped; if the chat is open in Codex meanwhile, Codex rebuilt it.
 async function resumeAndVerifyDestination(
   target: CodexRpc,
   to: CodexInstance,
   thread: Thread,
   receipt: Receipt,
-): Promise<string> {
+  mustResume: boolean,
+): Promise<void> {
   const destinationThreadId = receipt.destinationThreadId!
-  if (!receipt.desktopVisible) {
-    await target.call('thread/resume', {
-      threadId: destinationThreadId,
-      path: receipt.transcriptPath,
-      cwd: thread.cwd,
-      excludeTurns: true,
-      ...(thread.model ? { model: thread.model } : {}),
-      ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
-      ...(thread.reasoningEffort
-        ? { config: { model_reasoning_effort: thread.reasoningEffort } }
-        : {}),
-    })
-    await target.call('thread/name/set', {
-      threadId: destinationThreadId,
-      name: chatRow(thread).title,
-    })
+  let resumed = false
+  if (!receipt.desktopVisible || mustResume) {
+    try {
+      await target.call('thread/resume', {
+        threadId: destinationThreadId,
+        path: receipt.transcriptPath,
+        cwd: thread.cwd,
+        excludeTurns: true,
+        ...(thread.model ? { model: thread.model } : {}),
+        ...(thread.modelProvider ? { modelProvider: thread.modelProvider } : {}),
+        ...(thread.reasoningEffort
+          ? { config: { model_reasoning_effort: thread.reasoningEffort } }
+          : {}),
+      })
+      resumed = true
+    } catch (error) {
+      if (!(error instanceof Error) || !error.message.endsWith('already has an active writer'))
+        throw error
+    }
+    if (resumed && !receipt.desktopVisible)
+      await target.call('thread/name/set', {
+        threadId: destinationThreadId,
+        name: chatRow(thread).title,
+      })
   }
   const copied = await target.call<{ thread: Thread }>('thread/read', {
     threadId: destinationThreadId,
@@ -391,9 +683,7 @@ async function resumeAndVerifyDestination(
     throw new Error('The destination copy could not be verified. The source was kept.')
   }
   // Unload the new task so app-server does not leave a live session behind when it exits.
-  if (!receipt.desktopVisible)
-    await target.call('thread/unsubscribe', { threadId: destinationThreadId })
-  return destinationThreadId
+  if (resumed) await target.call('thread/unsubscribe', { threadId: destinationThreadId })
 }
 
 async function assertSourceUnchanged(
@@ -521,27 +811,65 @@ export async function moveCodexChat(
         receipt = { ...already, desktopVisible: true }
         saveReceipt(deps.journalPath, key, receipt)
       }
-      return { ok: true, destinationThreadId: already.destinationThreadId }
+      return {
+        ok: true,
+        destinationThreadId: already.destinationThreadId,
+        ...(already.verified ? { history: already.verified } : {}),
+      }
     }
 
     const thread = await findMovableThread(source, from, request)
     const before = statSync(thread.path!)
-    target = await deps.connect(to.codexHome)
     const transcript = readFileSync(thread.path!)
     assertNoUnfinishedTurn(transcript)
     const fingerprint = createHash('sha256').update(transcript).digest('hex')
+    // The whole history, earlier files included, is read before anything is claimed or copied.
+    const history = readCodexHistory(thread.path!, from.codexHome)
+    deps.onProgress({ step: 'read', segments: history.segments.length })
     receipt = claimReceipt(deps.journalPath, key, thread.updatedAt, destination, fingerprint)
-    receipt = await ensureCopied(receipt, deps, key, to, thread, transcript)
+    receipt = planCopy(receipt, deps, key, to)
+    receipt = await ensureCopied(receipt, deps, key, to, thread, history)
+    const destinationThreadId = receipt.destinationThreadId!
+    const repair = completeDestination(deps, to, thread, receipt, history, transcript)
+    if (repair) deps.onProgress({ step: 'repaired', repair })
 
-    const destinationThreadId = await resumeAndVerifyDestination(target, to, thread, receipt)
+    const sourceTurns = await displayedTurns(source, thread.id)
+    target = await deps.connect(to.codexHome)
+    await resumeAndVerifyDestination(target, to, thread, receipt, !!repair)
+    let verified = compareHistory(sourceTurns, await displayedTurns(target, destinationThreadId))
+    if (typeof verified === 'string' && !repair) {
+      // A whole transcript whose projection Codex built from an older layout: rebuild it once.
+      await target.close()
+      target = undefined
+      reproject(
+        deps,
+        to,
+        destinationThreadId,
+        join(deps.backupRoot, `codex-move-${destinationThreadId}-${Date.now()}`),
+      )
+      deps.onProgress({ step: 'reprojected' })
+      target = await deps.connect(to.codexHome)
+      await resumeAndVerifyDestination(target, to, thread, receipt, true)
+      verified = compareHistory(sourceTurns, await displayedTurns(target, destinationThreadId))
+    }
+    if (typeof verified === 'string') throw new Error(`${verified} The source was kept.`)
+    receipt = { ...receipt, verified }
+    saveReceipt(deps.journalPath, key, receipt)
+    deps.onProgress({ step: 'verified', history: verified })
+    // Our app-server holds the copy's writer lock until it exits; let the desktop own it.
+    await target.close()
+    target = undefined
+
     await deps.showDestination(to, destinationThreadId)
     receipt = { ...receipt, desktopVisible: true }
     saveReceipt(deps.journalPath, key, receipt)
+    deps.onProgress({ step: 'shown' })
     await assertSourceUnchanged(source, from, deps, thread, before)
     await archiveSourceThread(source, from, thread, fingerprint)
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
-    return { ok: true, destinationThreadId }
+    deps.onProgress({ step: 'archived' })
+    return { ok: true, destinationThreadId, history: verified, ...(repair ? { repair } : {}) }
   } catch (error) {
     return {
       ok: false,

@@ -10,16 +10,45 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import {
   type CodexMoveRequest,
   moveCodexChat,
   planCodexChatMove,
 } from '../src/core/codex-chat-move'
 import type { CodexRpc } from '../src/core/codex-rpc'
+import { copyCodexTranscript } from '../src/core/codex-transcript-copy'
 import type { CodexInstance } from '../src/types'
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/
+
+/** The history the default one-turn rollout displays, on both sides of a move. */
+const VERIFIED = { sourceTurns: 1, sourceItems: 2, destinationTurns: 1, destinationItems: 2 }
+
+interface Row {
+  ordinal?: number
+  type?: string
+  payload?: Record<string, unknown>
+}
+const rowsIn = (text: string): Row[] =>
+  text
+    .split('\n')
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line))
+
+/** What the fake Codex displays: one turn per turn id, with that turn's rows as items. Like real
+ * Codex, items do not carry the chat's id, and a destination never resolves history that lives
+ * only in another account's files. */
+function turnsOf(rows: Row[]) {
+  const turns = new Map<string, unknown[]>()
+  for (const row of rows) {
+    const id = row.payload?.turn_id
+    if (typeof id !== 'string') continue
+    const { thread_id: _, ...item } = row.payload!
+    turns.set(id, [...(turns.get(id) ?? []), item])
+  }
+  return [...turns].map(([id, items]) => ({ id, items }))
+}
 
 const roots: string[] = []
 afterEach(() => {
@@ -99,6 +128,9 @@ function fixture() {
     mutateDuringImport: false,
     failVisibility: false,
     secondPage: false,
+    writerBusy: false,
+    /** The source history Codex displays; by default the transcript's own rows. */
+    sourceRows: null as Row[] | null,
   }
   const connect = async (home: string): Promise<CodexRpc> => {
     const side = home === sourceHome ? 'source' : 'target'
@@ -166,6 +198,14 @@ function fixture() {
       },
       'thread/read': read,
       'thread/archive': archive,
+      'thread/turns/list': () => ({
+        data: turnsOf(
+          side === 'source'
+            ? (state.sourceRows ?? rowsIn(readFileSync(thread.path, 'utf8')))
+            : rowsIn(copyText()),
+        ),
+        nextCursor: null,
+      }),
     }
     return {
       close() {
@@ -189,6 +229,16 @@ function fixture() {
       calls.push('target:showDestination')
       if (state.failVisibility) throw new Error('Destination sidebar update failed')
     },
+    holdWriter: () => {
+      if (state.writerBusy) return null
+      calls.push('target:writer-held')
+      return { release: () => calls.push('target:writer-released') }
+    },
+    resetProjection: () => {
+      calls.push('target:reset-projection')
+      return {}
+    },
+    backupRoot: join(root, 'backups'),
   }
   const request: CodexMoveRequest = {
     targetId: '1',
@@ -283,6 +333,7 @@ describe('Codex chat move', () => {
     expect(await moveCodexChat('0', f.request, f.deps)).toEqual({
       ok: true,
       destinationThreadId: first.destinationThreadId,
+      history: VERIFIED,
     })
     expect(f.copies()).toHaveLength(1)
     expect(f.calls.filter((call) => call === 'target:thread/resume')).toHaveLength(1)
@@ -297,7 +348,11 @@ describe('Codex chat move', () => {
     expect(f.copies()).toHaveLength(1)
     f.state.failVisibility = false
     const second = await moveCodexChat('0', f.request, f.deps)
-    expect(second).toEqual({ ok: true, destinationThreadId: first.destinationThreadId })
+    expect(second).toEqual({
+      ok: true,
+      destinationThreadId: first.destinationThreadId,
+      history: VERIFIED,
+    })
     expect(f.copies()).toHaveLength(1)
     expect(f.calls.lastIndexOf('target:showDestination')).toBeLessThan(
       f.calls.indexOf('source:thread/archive'),
@@ -318,15 +373,24 @@ describe('Codex chat move', () => {
     expect(f.calls.filter((call) => call === 'source:thread/archive')).toHaveLength(1)
     expect(f.calls.filter((call) => call === 'target:thread/resume')).toHaveLength(1)
   })
-  test('an unconfirmed copy never archives and cannot be repeated blindly', async () => {
+  test('an interrupted copy never archives and resumes into the destination it planned', async () => {
     const f = fixture()
     f.blockCopy()
     expect((await moveCodexChat('0', f.request, f.deps)).ok).toBe(false)
     expect(f.calls).not.toContain('target:thread/resume')
-    f.unblockCopy()
-    expect((await moveCodexChat('0', f.request, f.deps)).error).toContain('previous copy')
     expect(f.state.archived).toBe(false)
-    expect(f.copies()).toHaveLength(0)
+    const planned = Object.values(JSON.parse(readFileSync(f.deps.journalPath, 'utf8'))) as {
+      phase: string
+      destinationThreadId?: string
+    }[]
+    expect(planned).toHaveLength(1)
+    expect(planned[0]?.phase).toBe('copying')
+    f.unblockCopy()
+    const resumed = await moveCodexChat('0', f.request, f.deps)
+    expect(resumed.ok).toBe(true)
+    expect(resumed.destinationThreadId).toBe(planned[0]!.destinationThreadId!)
+    expect(f.copies()).toHaveLength(1)
+    expect(f.copies()[0]).toContain(resumed.destinationThreadId!)
   })
   test('a failed import keeps the copy on disk and never archives the source', async () => {
     const f = fixture()
@@ -416,4 +480,167 @@ test('restores the unchanged rollout to the exact archive path Codex already ind
   )
   expect(f.calls).toContain('source:thread/read')
   expect(f.copies()).toHaveLength(1)
+})
+
+/** A chat whose history spans two rollouts, the way Codex splits one at a context-window
+ * rollover: the newest file's metadata points at a byte boundary inside the earlier file, and the
+ * earlier file runs on past that boundary with rows the chat abandoned. */
+function splitHistory(f: ReturnType<typeof fixture>) {
+  const id = f.thread.id
+  const row = (ordinal: number, type: string, payload: Record<string, unknown>) =>
+    JSON.stringify({ timestamp: '2024-09-11T21:00:00.000Z', ordinal, type, payload })
+  const meta = (ordinal: number, extra: Record<string, unknown> = {}) =>
+    row(ordinal, 'session_meta', {
+      id,
+      session_id: id,
+      cwd: f.root,
+      history_mode: 'paginated',
+      ...extra,
+    })
+  const turn = (start: number, turnId: string, text: string) => [
+    row(start, 'event_msg', { type: 'task_started', thread_id: id, turn_id: turnId }),
+    row(start + 1, 'response_item', {
+      type: 'message',
+      role: 'user',
+      turn_id: turnId,
+      content: [{ type: 'input_text', text }],
+    }),
+    row(start + 2, 'event_msg', { type: 'task_complete', thread_id: id, turn_id: turnId }),
+  ]
+  const kept = [meta(0), ...turn(1, 'turn-a', 'First')]
+  const boundary = Buffer.byteLength(`${kept.join('\n')}\n`)
+  writeFileSync(
+    join(f.sourceHome, 'sessions', `rollout-1-${id}.jsonl`),
+    `${[...kept, ...turn(4, 'turn-x', 'Abandoned')].join('\n')}\n`,
+  )
+  const newest = [
+    meta(4, {
+      history_base: { thread_id: id, end_ordinal_exclusive: 4, end_byte_offset: boundary },
+    }),
+    ...turn(5, 'turn-b', 'Second'),
+  ]
+  writeFileSync(f.thread.path, `${newest.join('\n')}\n`)
+  f.state.sourceRows = rowsIn(`${[...kept, ...newest].join('\n')}\n`)
+  /** Rows the destination wrote itself after the copy, continuing its ordinals. */
+  const own = (start: number, turnId: string, destinationId: string) =>
+    turn(start, turnId, `Destination work ${turnId}`).map((line) =>
+      line.replaceAll(`"thread_id":"${id}"`, `"thread_id":"${destinationId}"`),
+    )
+  return { own }
+}
+
+/** Leave a copied-but-unverified move behind, the state an interrupted move resumes from. */
+async function copiedButUnverified(f: ReturnType<typeof fixture>) {
+  f.state.failRead = true
+  const first = await moveCodexChat('0', f.request, f.deps)
+  f.state.failRead = false
+  expect(first.ok).toBe(false)
+  return {
+    id: first.destinationThreadId!,
+    copyPath: join(f.targetHome, 'sessions', f.copies()[0]!),
+  }
+}
+
+describe('Codex chat move: history split across rollouts', () => {
+  test('carries the earlier history and verifies every displayed turn before archiving', async () => {
+    const f = fixture()
+    splitHistory(f)
+    const result = await moveCodexChat('0', f.request, f.deps)
+    expect(result).toEqual({
+      ok: true,
+      destinationThreadId: result.destinationThreadId,
+      history: { sourceTurns: 2, sourceItems: 6, destinationTurns: 2, destinationItems: 6 },
+    })
+    expect(f.calls.lastIndexOf('target:thread/turns/list')).toBeLessThan(
+      f.calls.indexOf('source:thread/archive'),
+    )
+    // One self-contained file: the destination needs nothing from the source account.
+    expect(f.copies()).toHaveLength(1)
+    const rows = rowsIn(f.copyText())
+    expect(rows[0]?.payload?.history_base).toBeUndefined()
+    expect(rows.map((row) => row.ordinal)).toEqual([0, 1, 2, 3, 5, 6, 7])
+    expect(f.copyText()).not.toContain('Abandoned')
+    expect(f.copyText()).not.toContain('chat-1')
+  })
+  test('refuses before copying when the earlier history is missing', async () => {
+    const f = fixture()
+    splitHistory(f)
+    rmSync(join(f.sourceHome, 'sessions', 'rollout-1-chat-1.jsonl'))
+    const result = await moveCodexChat('0', f.request, f.deps)
+    expect(result.error).toContain('earlier history')
+    expect(f.calls).not.toContain('target:connect')
+    expect(f.copies()).toHaveLength(0)
+    expect(f.state.archived).toBe(false)
+  })
+  test('completes an older partial import under the writer lock and keeps the destination turns', async () => {
+    const f = fixture()
+    const { own } = splitHistory(f)
+    const { id, copyPath } = await copiedButUnverified(f)
+    // What the older copier left: only the newest file, rekeyed, then a turn run in the destination.
+    const partial = `${copyCodexTranscript(readFileSync(f.thread.path, 'utf8'), 'chat-1', id)}${own(8, 'turn-c', id).join('\n')}\n`
+    writeFileSync(copyPath, partial)
+
+    f.state.writerBusy = true
+    const busy = await moveCodexChat('0', f.request, f.deps)
+    expect(busy.error).toContain('open in Codex')
+    expect(readFileSync(copyPath, 'utf8')).toBe(partial)
+    expect(f.calls).not.toContain('target:reset-projection')
+    expect(f.state.archived).toBe(false)
+
+    f.state.writerBusy = false
+    const done = await moveCodexChat('0', f.request, f.deps)
+    expect(done).toMatchObject({
+      ok: true,
+      destinationThreadId: id,
+      history: { sourceTurns: 2, destinationTurns: 3 },
+      repair: { keptRows: 3, recoveredRows: 0 },
+    })
+    expect(rowsIn(readFileSync(copyPath, 'utf8')).map((row) => row.ordinal)).toEqual([
+      0, 1, 2, 3, 5, 6, 7, 8, 9, 10,
+    ])
+    expect(readFileSync(copyPath, 'utf8')).toContain('Destination work turn-c')
+    expect(readFileSync(join(done.repair!.backup, basename(copyPath)), 'utf8')).toBe(partial)
+    expect(f.calls.indexOf('target:writer-held')).toBeLessThan(
+      f.calls.indexOf('target:reset-projection'),
+    )
+    expect(f.calls.indexOf('target:reset-projection')).toBeLessThan(
+      f.calls.indexOf('target:writer-released'),
+    )
+    expect(f.copies()).toHaveLength(1)
+    expect(f.state.archived).toBe(true)
+  })
+  test('restores rows an earlier repair lost, only from a copy of the same chat', async () => {
+    const f = fixture()
+    const { own } = splitHistory(f)
+    const { id, copyPath } = await copiedButUnverified(f)
+    const complete = readFileSync(copyPath, 'utf8')
+    // A one-off repair rewrote the copy while Codex was still writing it: rows 8-10 survive only in
+    // the copy taken before it, and Codex went on appending rows 11-13 to the rewritten file.
+    const before = join(f.root, 'before-repair.jsonl')
+    const lost = own(8, 'turn-c', id)
+    const later = own(11, 'turn-d', id)
+    writeFileSync(
+      before,
+      `${copyCodexTranscript(readFileSync(f.thread.path, 'utf8'), 'chat-1', id)}${lost.join('\n')}\n`,
+    )
+    const damaged = `${complete}${later.join('\n')}\n`
+    writeFileSync(copyPath, damaged)
+
+    expect((await moveCodexChat('0', f.request, f.deps)).error).toContain('missing')
+    const stranger = join(f.root, 'other-chat.jsonl')
+    writeFileSync(stranger, readFileSync(before, 'utf8').replace('Second', 'Other'))
+    const refused = await moveCodexChat('0', f.request, { ...f.deps, recoverFrom: [stranger] })
+    expect(refused.error).toContain('not a copy')
+    expect(readFileSync(copyPath, 'utf8')).toBe(damaged)
+    expect(f.state.archived).toBe(false)
+
+    const done = await moveCodexChat('0', f.request, { ...f.deps, recoverFrom: [before] })
+    expect(done).toMatchObject({
+      ok: true,
+      history: { sourceTurns: 2, destinationTurns: 4 },
+      repair: { keptRows: 3, recoveredRows: 3 },
+    })
+    expect(readFileSync(copyPath, 'utf8')).toBe(`${complete}${[...lost, ...later].join('\n')}\n`)
+    expect(f.state.archived).toBe(true)
+  })
 })
