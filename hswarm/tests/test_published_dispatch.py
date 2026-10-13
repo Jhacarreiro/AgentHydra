@@ -282,10 +282,17 @@ def test_a_profile_out_of_keys_steps_down_to_the_next_models_instead_of_stopping
     """Owner, 2026-09-25: out of keys means the next model in the list, never a stop. Code had no usable route
     (DeepSeek spent, OpenRouter 402), so the task runs on general's models, marked below its floor."""
     t, job, seen = _setup(monkeypatch, tmp_path, [("rank:qwen3-8-27b:groq", "ok")])
-    monkeypatch.setattr(selection, "plan", lambda profile, *a, **k: _plan(["rank:qwen3-8-27b:groq"] if profile == "general" else []))
+    # 2026-10-13: "No code route had a usable key" read as HSwarm having no keys at all; the warning names each floor
+    # route's provider and why it was out, and leaves out the routes that never cleared the floors.
+    code_out = {**_plan([]), "rejected": [{"model": "rank:glm-5-3", "filter": "usable", "reason": "openrouter has no key ready"},
+                                          {"model": "rank:gpt-6-sol:openai", "filter": "tools", "reason": "no tool calling"},
+                                          {"model": "rank:kimi-k3:baseten", "filter": "floor", "reason": "below terminalbench-4-0 0.3"}]}
+    monkeypatch.setattr(selection, "plan", lambda profile, *a, **k: _plan(["rank:qwen3-8-27b:groq"]) if profile == "general" else code_out)
     res, _ = asyncio.run(dispatch.run_selected(_Mgr(), job, t, None, True))
     assert res.status == "ok" and [s["model"] for s in seen] == ["rank:qwen3-8-27b:groq"]
     assert res.selection["profile"] == "code" and res.selection["below_floor"] == "general"
+    warn = next(w for w in res.selection["warnings"] if w.startswith("No code route was live"))
+    assert "openrouter: " in warn and "openai: no tool calling" in warn and "baseten" not in warn
 
 
 class _Jev:

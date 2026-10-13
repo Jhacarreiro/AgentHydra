@@ -107,6 +107,21 @@ def _plan_here(profile, *, min_context, wake=_wake, **kw):
 _STEP_DOWN = {"critical": "code", "code": "general", "decision": "general", "research": "general", "general": "routine"}
 
 
+def _floor_routes_out(plan: dict, wake) -> str:
+    """Why the asked profile's own routes, the ones that cleared its floors, were all kept out: each provider once, with
+    its pool's state or the capability it lacks. 2026-10-13: "No code route had a usable key" read as HSwarm having no
+    keys while 6,220 were ready; the code floor's routes were on pools out of credit, on providers with no key here,
+    and on OpenAI's GPT-6, which its transport then could not give tools."""
+    why: dict[str, str] = {}
+    for r in plan.get("rejected") or ():
+        if r.get("filter") not in ("usable", "tools"):
+            continue
+        p = config.provider_of(r["model"])
+        if p not in why:
+            why[p] = _why_not(p, wake) if r["filter"] == "usable" else str(r.get("reason") or "no tool calling")
+    return "; ".join(f"{p}: {w}" for p, w in sorted(why.items()))
+
+
 def _plan(profile, *, min_context, explain=False, **kw):
     """`explain` adds `unavailable`: each route the asked profile's evidence admits that its pool keeps out of the
     plan, with why (all keys disabled, every key resting, no key here) - what hswarm_select shows and what a
@@ -120,8 +135,9 @@ def _plan(profile, *, min_context, explain=False, **kw):
         lower = _plan_here(at, min_context=min_context, wake=wake, **kw)
         if lower["candidates"]:
             plan = dict(lower, profile=profile, below_floor=at, requirements_asked=plan.get("requirements"),
-                        warnings=[f"No {profile} route had a usable key, so this ran on the {at} profile's models, "
-                                  f"below the {profile} floors: verify the answer before accepting it."] + lower.get("warnings", []))
+                        warnings=[f"No {profile} route was live ({_floor_routes_out(plan, wake) or 'none cleared its floors'}), "
+                                  f"so this ran on the {at} profile's models, below the {profile} floors: verify the answer "
+                                  "before accepting it."] + lower.get("warnings", []))
             break
     if explain:
         chosen = {c["model"] for c in plan["candidates"]}
