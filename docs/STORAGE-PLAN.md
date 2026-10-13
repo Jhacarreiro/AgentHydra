@@ -81,7 +81,7 @@ From the code (agent inventory, file:line) and the 7-minute stat sample:
 
 | Store | Size | Rate | Retention / compression |
 |---|---|---|---|
-| `corch/logs/*.jsonl` (CliMayte stream logs) | 809 MB (652 MB plain in 1,141 files + 186 MB zst in 847 files) | **~58 MB/h** in the 7-minute sample; 641 MB in the last 24 h | zstd-packed only 24 h after the attempt ends, ≤32 MiB per hourly pass, at writing. Plain files older than 2 days: 0, so packing does keep up. Since piece 6: 10 minutes after it settles, ≤128 MiB a pass (`packOldLogs` in `climayte.ts`, `planStorage` in `climayte-storage.ts`). |
+| `corch/logs/*.jsonl` (CliMayte stream logs) | 809 MB (652 MB plain in 1,141 files + 186 MB zst in 847 files) | **~58 MB/h** in the 7-minute sample; 641 MB in the last 24 h | zstd-packed only 24 h after the attempt ends, ≤32 MiB per hourly pass, at writing. Plain files older than 2 days: 0, so packing does keep up. Since piece 6: 10 minutes after it settles, ≤128 MiB a pass (`packOldLogs` in `climayte.ts`, `planStorage` in `climayte-storage.ts`). Since 2026-10-13: a worker finished over 7 days ago has its files moved into one tar per day under `corch/logs/archive/` (`climayte-log-archive.ts`). |
 | `corch/journal.jsonl` + `.1` | 0.2 + 5.2 MB | append per state change | one 5 MiB generation |
 | `corch/prompts` 13 MB / 2,164 files; `handoffs` 4.7 MB / 581; `done` 17 MB / 1,059; `hooks`, `signals` | 35 MB | several new files per attempt | **no cleanup** |
 | `corch/archive/<stamp>` | 47 MB | on remove | never deleted |
@@ -256,6 +256,13 @@ the change.
    sealed tasks stopped leaving a folder in `%TEMP%`) 14 days after its last attempt ended or the file was
    last written, whichever is later, and a removed task's `corch/archive` folder after 30 days; a dry run
    also lists what would be packed. Pinned by `server/tests/climayte-storage.test.ts`.
+   **Then the file count (2026-10-13).** Packing kept the bytes down, but nothing ever left `corch/logs`:
+   47,253 files (2.33 GB), about 9,500 more a day, and listing the folder took minutes. The hourly pass
+   in `climayte-log-archive.ts` now moves every file of a worker finished more than 7 days ago
+   (`climayte_log_archive_days`) into `corch/logs/archive/<day>.tar`, removing nothing it has not
+   written there, and every reader falls back to the archive. Its first live run moved 9,782 files
+   (615.7 MB) into 7 day archives in 43 s, leaving 37,483 files (1.72 GB). Pinned by
+   `server/tests/climayte-log-archive.test.ts`; the design is "Log retention" in `CLIMAYTE.md`.
 7. **Prune old `claude-native` builds.** Files: `server/src/claude-native-launch.ts`. Keep the build
    in use and one previous; never delete one a running Claude holds. Measure:
    `du -sh ~/.agenthydra/data/claude-native` (2.5 GB → ~1.2 GB).
