@@ -519,7 +519,7 @@ function holdForCpu(w: CliMayteWorker, short: string): void {
 const goesNow = (s: TickState, w: CliMayteWorker, acct: CliMayteAccount): boolean =>
   !readingPending(acct, s.now) &&
   !memoryShort(s.memory, s.growing) &&
-  (w.chat === true || !cpuShort(s.cpu, s.cpuRunning))
+  (w.chat === true || w.light === true || !cpuShort(s.cpu, s.cpuRunning))
 
 /** Test seam: what the scheduler asks before launching (null: the real guard, which only judges the
  *  real launcher). */
@@ -610,7 +610,8 @@ function startOn(
     holdForMemory(w, short)
     return
   }
-  const busy = w.chat ? null : cpuShort(s.cpu, s.cpuRunning)
+  // A chat is the owner's own, and a light worker runs nothing: neither waits for the CPU.
+  const busy = w.chat || w.light ? null : cpuShort(s.cpu, s.cpuRunning)
   if (busy) {
     holdForCpu(w, busy)
     return

@@ -1138,6 +1138,8 @@ export function climayteRun(input: {
     /** false: leave the changes uncommitted, the check alone judges it; true: hold it to a commit
      *  whatever its prompt says (CliMayteWorker.commit). */
     commit?: boolean
+    /** An edit-only worker: no shell, no MCP server but CliMayte's, and no wait for the CPU (CliMayteWorker.light). */
+    light?: boolean
     priority?: number
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */

@@ -159,7 +159,11 @@ def test_the_workers_kind_follows_the_task_so_read_only_work_stays_off_opus(fake
     api = _Api()
     spec = {"id": "t0", "prompt": "look at it", "cwd": str(tmp_path), "tools": tools, "model": "deepseek-flash", "timeout_s": 30, **extra}
     asyncio.run(JobManager(client=api).run_batch([Task.from_dict(spec, {}, 0)], concurrency=1))
-    assert f.dispatched[0]["tasks"][0]["kind"] == kind
+    sent = f.dispatched[0]["tasks"][0]
+    assert sent["kind"] == kind
+    # A read or edit task runs nothing, so it goes light and never waits behind CliMayte's CPU gate (2026-10-13:
+    # 43 workers waited about 50 minutes there); only an `all` task, which may build and test, goes as an ordinary worker.
+    assert sent.get("light") is (None if tools == "all" else True)
 
 
 # Only an AUTO task keeps its profile (a pinned model, as the routed tests use, drops it), so the profile half of

@@ -239,6 +239,10 @@ async def run_worker(job_id: str, task: Task, note: dict) -> Result | None:
     """Run the task as a CliMayte worker; the Result, or None when the API route should take it instead."""
     title = (task.prompt.strip().splitlines() or ["hswarm task"])[0][:80]
     spec = {"prompt": brief(task), "cwd": task.cwd, "title": title, "kind": worker_kind(task)}
+    if task.tools != "all":
+        # A read or edit task runs nothing: CliMayte starts it light (no shell, no MCP server but its own), and a
+        # light worker does not wait behind the CPU gate the way a builds-and-tests worker does (2026-10-13).
+        spec["light"] = True
     try:
         # origin None: a routed task names no dispatching chat (its job's caller stands for it), so CliMayte
         # neither traces one from this process nor pings a chat once per task.

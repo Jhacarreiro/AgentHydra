@@ -833,6 +833,11 @@ export const TOOLS: HydraTool[] = [
                 description:
                   'Whether the worker commits its own changes. `false` for a builder whose changes you land yourself: its passing `check` is a pass on its own, it is never sent back to commit, and its brief tells it not to commit, add or push. `true` holds it to a commit whatever its prompt says. Left out, a passing check also needs the changed files committed, unless the prompt or a brief file it names says not to commit (e.g. "Do NOT run git commit").',
               },
+              light: {
+                type: 'boolean',
+                description:
+                  'true for a worker that only reads and edits files (a builder that runs no build or test): it has no shell and no MCP server but climayte_ask, and it starts at once on a busy machine instead of waiting for the CPU. Its `check`, if any, is still run by CliMayte after it reports.',
+              },
               size: {
                 type: 'string',
                 description:

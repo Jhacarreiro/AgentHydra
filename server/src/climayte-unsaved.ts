@@ -208,12 +208,14 @@ async function briefText(path: string): Promise<string | null> {
   }
 }
 
-/** True when a passing check is its pass without a commit: `commit: false`; or, with no `commit`,
- *  the prompt or a brief file it names says not to commit (NO_COMMIT). `commit: true` holds it to a
- *  commit whatever its words say. Briefs are read off the daemon's thread, like the git facts. */
+/** True when a passing check is its pass without a commit: a `light` worker (it has no shell to commit with) or
+ *  `commit: false`; or, with no `commit`, the prompt or a brief file it names says not to commit (NO_COMMIT).
+ *  `commit: true` holds it to a commit whatever its words say. Briefs are read off the daemon's thread, like the
+ *  git facts. */
 export async function saysNoCommit(
-  w: Pick<CliMayteWorker, 'prompt' | 'cwd' | 'commit'>,
+  w: Pick<CliMayteWorker, 'prompt' | 'cwd' | 'commit' | 'light'>,
 ): Promise<boolean> {
+  if (w.light) return true
   if (typeof w.commit === 'boolean') return !w.commit
   if (NO_COMMIT.test(w.prompt)) return true
   for (const path of briefPaths(w.prompt, w.cwd)) {

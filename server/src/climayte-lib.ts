@@ -260,6 +260,10 @@ export interface CliMayteWorker {
    *  needs its changed files committed, whatever its prompt says. Absent: that too, unless the prompt
    *  or a brief file it names says not to commit (climayte-unsaved.ts saysNoCommit). */
   commit?: boolean
+  /** An edit-only worker (HSwarm hands its `read` and `edit` tasks over this way): it reads and edits files and runs
+   *  nothing, so it starts without waiting for the CPU (climayte-cpu.ts), and its CLI has no Bash or PowerShell and no
+   *  MCP server but CliMayte's own (LIGHT_BRIEF, climayte-launch.ts). Absent: an ordinary worker. */
+  light?: boolean
   /** How many times `check` has run. */
   checkRuns?: number
   /** The check running now, under a runner outside the daemon like an attempt's CLI (climayte.ts
@@ -689,6 +693,10 @@ export const WORKER_BRIEF =
  *  changed" would otherwise order the opposite of what the orchestrator wants. */
 export const NO_COMMIT_BRIEF =
   'This task leaves its changes uncommitted: do not run git commit, git add or git push; the orchestrator lands them.'
+
+/** Added to WORKER_BRIEF for a `light` worker, whose CLI has no shell: it must not plan on running anything. */
+export const LIGHT_BRIEF =
+  'This task only reads and edits files: you have no shell, so run no build, test, install or git command; end your report with the command the orchestrator should run to check your change.'
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'

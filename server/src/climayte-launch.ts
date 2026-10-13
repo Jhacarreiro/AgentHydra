@@ -50,6 +50,7 @@ import {
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   keepReport,
+  LIGHT_BRIEF,
   NO_COMMIT_BRIEF,
   newestTranscript,
   PAUSED_PROMPT,
@@ -473,10 +474,14 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
   const deny = w.chat ? { names: [], paths: [] } : { names: WORKER_DENIED_MCP, paths: [MCP_PATH] }
   // A Desk chat's connector servers join them, the owner's own of the same name winning (as in
   // desk2's chat-runtime).
-  const servers: Record<string, unknown> = {
-    ...w.desk?.mcpServers,
-    ...(ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}),
-  }
+  // A light worker only reads and edits files: none of the owner's servers (each a process per worker), only the
+  // climayte_ask endpoint below.
+  const servers: Record<string, unknown> = w.light
+    ? {}
+    : {
+        ...w.desk?.mcpServers,
+        ...(ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}),
+      }
 
   // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
   // is only the preferred one and the daemon hops off it when it is busy.
@@ -493,6 +498,7 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
   if (
     ownerClaudeDir &&
     !w.chat &&
+    !w.light &&
     (!('browser' in servers) || isAgenthydraBrowserEntry(servers.browser))
   ) {
     servers.browser = {
@@ -688,8 +694,19 @@ function briefArgs(w: CliMayteWorker): string[] {
       samples,
       etaBandCalibrations(samples),
     )
-    const brief = w.commit === false ? `${WORKER_BRIEF} ${NO_COMMIT_BRIEF}` : WORKER_BRIEF
-    return ['--append-system-prompt', note ? `${brief} ${note}` : brief]
+    const brief = [
+      WORKER_BRIEF,
+      w.commit === false ? NO_COMMIT_BRIEF : '',
+      w.light ? LIGHT_BRIEF : '',
+      note,
+    ]
+      .filter(Boolean)
+      .join(' ')
+    // A light worker runs nothing: no shell, and no MCP server but its config's (writeWorkerMcp: CliMayte's own),
+    // so it starts none of the stdio servers every other worker spawns. --disallowedTools is variadic: the option
+    // after it ends its list.
+    const light = w.light ? ['--strict-mcp-config', '--disallowedTools', 'Bash', 'PowerShell'] : []
+    return [...light, '--append-system-prompt', brief]
   }
   const home = ownerHome()
   // --add-dir is variadic: the option after it ends its list.

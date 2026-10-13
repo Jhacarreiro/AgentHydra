@@ -13,6 +13,11 @@
 // single quiet sample does not start it. Nothing running is stopped or slowed. A machine whose CPU
 // cannot be read never holds work.
 //
+// Two kinds of worker never wait here: a chat (the owner's own) and a `light` worker, which only
+// reads and edits files, with no shell and no MCP server but CliMayte's (climayte-launch.ts). On
+// 2026-10-13 43 workers sat in this queue for about 50 minutes while a bare screenshot fleet (40
+// headless Chromes) held the CPU, builders that would only have edited files among them.
+//
 // Each scheduler tick takes os.cpus() counters (cumulative idle and total ms per core, no subprocess)
 // and keeps a small ring of them; the busy share is read from the counter deltas across the window.
 

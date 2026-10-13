@@ -580,8 +580,9 @@ describe('a task waits while running workers peg the CPU, and starts once it is 
   }, 60_000)
 })
 
-describe('a chat starts on a busy machine, and an ordinary task waits there', () => {
+describe('a chat and a light worker start on a busy machine, and an ordinary task waits there', () => {
   // 2026-10-12: 12-19 background workers held the PC at 98-100% CPU, and the owner's chat waited 8.5 minutes.
+  // 2026-10-13: 43 workers waited about 50 minutes, edit-only builders among them; a light worker runs nothing.
   const root = mkdtempSync(join(tmpdir(), 'ah-climayte-chat-cpu-'))
   const cwd = join(root, 'work')
   const acctDir = join(root, 'acct')
@@ -599,7 +600,7 @@ describe('a chat starts on a busy machine, and an ordinary task waits there', ()
     rmSync(root, { recursive: true, force: true })
   })
 
-  test('a chat launches while the CPU is at 100%; an ordinary queued task stays held', async () => {
+  test('a chat and a light worker launch while the CPU is at 100%; an ordinary queued task stays held', async () => {
     setCliMayteClaudeCommand([process.execPath, join(import.meta.dir, 'mocks', 'fake-claude.ts')])
     resetCpuRing()
     let total = 0
@@ -631,7 +632,7 @@ describe('a chat starts on a busy machine, and an ordinary task waits there', ()
       const seen = ticks
       await until(() => ticks >= seen + 2)
     }
-    const run = (tasks: Array<{ title: string; chat?: boolean }>) => {
+    const run = (tasks: Array<{ title: string; chat?: boolean; light?: boolean }>) => {
       const r = climayteRun({
         model: 'sonnet',
         effort: 'medium',
@@ -642,6 +643,7 @@ describe('a chat starts on a busy machine, and an ordinary task waits there', ()
           cwd,
           title: t.title,
           chat: t.chat,
+          light: t.light,
         })),
       })
       groups.push(r.group)
@@ -665,10 +667,16 @@ describe('a chat starts on a busy machine, and an ordinary task waits there', ()
     await Bun.sleep(3_000)
     await aTick()
     const [chat] = run([{ title: 'the owner chat', chat: true }])
+    const [light] = run([{ title: 'the light edit', light: true }])
     const [ordinary] = run([{ title: 'the ordinary task' }])
-    await until(() => status(chat as string)?.status === 'running')
+    await until(
+      () =>
+        status(chat as string)?.status === 'running' &&
+        status(light as string)?.status === 'running',
+    )
     await aTick()
     expect(status(chat as string)?.status).toBe('running')
+    expect(status(light as string)?.status).toBe('running')
     expect(status(ordinary as string)?.status).toBe('queued')
     expect(status(ordinary as string)?.error).toContain('Waiting for CPU: 100% busy')
   }, 60_000)

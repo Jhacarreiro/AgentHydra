@@ -19,7 +19,7 @@ import {
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
 import { CHAT_NOTE, cliArgv, writeWorkerMcp } from '../src/climayte-launch'
-import { WORKER_BRIEF } from '../src/climayte-lib'
+import { LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -185,5 +185,28 @@ describe('chat workers', () => {
       '--append-system-prompt',
       WORKER_BRIEF,
     ])
+  })
+
+  // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light
+  // worker runs nothing, and starts none of the owner's MCP servers (each a process per worker).
+  test("a light worker launches with no shell and no MCP server but CliMayte's own", () => {
+    writeFileSync(
+      join(HOME, '.claude.json'),
+      JSON.stringify({ mcpServers: { heavy: { command: 'node', args: ['server.js'] } } }),
+    )
+    const w = dispatch({ title: 'an edit', light: true })
+    const file = writeWorkerMcp(w) ?? ''
+    expect(Object.keys(JSON.parse(readFileSync(file, 'utf8')).mcpServers)).toEqual([
+      'climayte-worker',
+    ])
+    const argv = cliArgv(w, 'sid', false, 'hooks.json', file)
+    expect(argv).toContain('--strict-mcp-config')
+    const at = argv.indexOf('--disallowedTools')
+    expect(argv.slice(at, at + 3)).toEqual(['--disallowedTools', 'Bash', 'PowerShell'])
+    expect(argv[at + 3]?.startsWith('--')).toBe(true) // the variadic list ends at an option
+    expect(valueAfter(argv, '--append-system-prompt')).toContain(LIGHT_BRIEF)
+    expect(() => dispatch({ title: 'x', light: true, chat: true })).toThrow(/not a chat/)
+    expect(() => dispatch({ title: 'x', light: true, commit: true })).toThrow(/no shell to commit/)
+    rmSync(join(HOME, '.claude.json'))
   })
 })

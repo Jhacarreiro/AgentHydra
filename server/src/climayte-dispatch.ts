@@ -168,6 +168,14 @@ function assertRunnable(t: RunTask, i: number): void {
     throw new Error(`task ${i + 1}: commit must be true or false`)
   if (t.chat !== undefined && typeof t.chat !== 'boolean')
     throw new Error(`task ${i + 1}: chat must be true or false`)
+  if (t.light !== undefined && t.light !== null && typeof t.light !== 'boolean')
+    throw new Error(`task ${i + 1}: light must be true or false`)
+  if (t.light === true && (t.chat === true || t.sealed))
+    throw new Error(`task ${i + 1}: light is for a delegated worker, not a chat or a sealed task`)
+  if (t.light === true && t.commit === true)
+    throw new Error(
+      `task ${i + 1}: a light worker has no shell to commit with; leave commit out or false`,
+    )
   if (t.desk !== undefined && t.desk !== null) {
     const why = deskProblem(t.desk, t.chat === true)
     if (why) throw new Error(`task ${i + 1}: ${why}`)
@@ -349,6 +357,7 @@ export function newWorker(
     ...(t.sealed ? { sealed: sealedOf(t.sealed) } : {}),
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(typeof t.commit === 'boolean' ? { commit: t.commit } : {}),
+    ...(t.light === true ? { light: true } : {}),
     ...(size ? { size } : {}),
     priority: setting?.priority ?? 0,
     accounts: accounts?.length ? accounts : null,
