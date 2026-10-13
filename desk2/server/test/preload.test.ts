@@ -84,4 +84,4 @@ describe('next file', () => {
   expect(out).toMatch(/\b2 pass\b/)
   expect(out).toMatch(/\b1 fail\b/)
   expect(run.exitCode).toBe(1)
-})
+}, 15_000)

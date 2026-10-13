@@ -6,9 +6,9 @@ touched, so capture and restore (about 3.5s a chat, measured 2026-10-12) are ski
 """
 
 import sys
+import unittest
 from pathlib import Path
-
-import pytest
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
@@ -23,32 +23,34 @@ def _settings(mode):
     return {DIR.lower(): {"port": 19311, "mode": mode, "launchDebugger": True}}
 
 
-@pytest.mark.parametrize(
-    ("mode", "expected"),
-    [("native-only", True), ("prefer-native", False)],
-)
-def test_guard_is_skipped_only_for_native_only(monkeypatch, mode, expected):
-    monkeypatch.setattr(hydralib, "api_get", lambda path: _settings(mode))
-    assert migrate_chat._native_only_target({"dir": DIR}) is expected
+class NativeImportGuardTests(unittest.TestCase):
+    def test_guard_is_skipped_only_for_native_only(self):
+        for mode, expected in [("native-only", True), ("prefer-native", False)]:
+            with self.subTest(mode=mode):
+                with mock.patch.object(hydralib, "api_get", lambda path, m=mode: _settings(m)):
+                    self.assertIs(migrate_chat._native_only_target({"dir": DIR}), expected)
+
+    def test_native_only_import_never_enters_the_window_guard(self):
+        guarded = []
+
+        def guard(instance):
+            guarded.append(instance)
+            raise AssertionError("the window guard must not run for a native-only target")
+
+        posted = {}
+
+        def post(path, body=None, timeout=None):
+            posted["path"] = path
+            return {"ok": True, "titled": True}
+
+        with mock.patch.object(hydralib, "api_get", lambda path: _settings("native-only")), \
+                mock.patch.object(windowlib, "keep_placement", guard), \
+                mock.patch.object(hydralib, "api_post", post):
+            result = migrate_chat._post_import_or_raise("sid-1", {"dir": DIR, "name": "moarz"}, {})
+        self.assertEqual(result, {"ok": True, "titled": True})
+        self.assertEqual(guarded, [])
+        self.assertEqual(posted["path"], "/api/sessions/sid-1/import-desktop")
 
 
-def test_native_only_import_never_enters_the_window_guard(monkeypatch):
-    monkeypatch.setattr(hydralib, "api_get", lambda path: _settings("native-only"))
-    guarded = []
-
-    def guard(instance):
-        guarded.append(instance)
-        raise AssertionError("the window guard must not run for a native-only target")
-
-    monkeypatch.setattr(windowlib, "keep_placement", guard)
-    posted = {}
-
-    def post(path, body=None, timeout=None):
-        posted["path"] = path
-        return {"ok": True, "titled": True}
-
-    monkeypatch.setattr(hydralib, "api_post", post)
-    result = migrate_chat._post_import_or_raise("sid-1", {"dir": DIR, "name": "moarz"}, {})
-    assert result == {"ok": True, "titled": True}
-    assert guarded == []
-    assert posted["path"] == "/api/sessions/sid-1/import-desktop"
+if __name__ == "__main__":
+    unittest.main()
