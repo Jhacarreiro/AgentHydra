@@ -17,8 +17,9 @@ import { cleanSidebar } from './clean'
 import { dimText } from './rowClasses'
 import RowAge from '@/lib/RowAge.vue'
 import { MENU_CONTENT, focusFirstItem, runShortcut } from './menuClasses'
+import ManagerAvatar from './ManagerAvatar.vue'
 
-// One session row: 26px, r6, status dot in a 24px leading slot, title with a right fade, and on hover
+// One session row: 26px, r6, status dot in a 24px leading slot, the manager's avatar, title with a right fade, and on hover
 // the "More options" button. The three-dot menu and the right-click menu are the same list.
 const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null; /** The dot in place of the chat's own: Sidebar.vue's, with the row's running sub-tasks counted. */ dot?: StatusGlyph }>(), {
   selected: false,
@@ -38,6 +39,8 @@ const clock = useClock()
 const timed = computed(() => props.chat.status === 'working' || props.chat.status === 'starting' || props.chat.status === 'limited')
 const tooltip = computed(() => rowTooltip(props.chat, timed.value ? clock.value : Date.now()))
 const menuOpen = ref(false)
+// The manager's card (ManagerAvatar.vue): the row's own tooltip stays hidden while it is open.
+const cardOpen = ref(false)
 // A row nobody touched draws its content and its trigger buttons only; its context menu and dropdown menu mount on the
 // first hover or focus and stay (lib/first-interest.ts). Both menus share one row body, so it is written once.
 const { seen, listeners } = useFirstInterest()
@@ -96,7 +99,7 @@ defineExpose({ startRename })
 
 <template>
   <!-- The Tip wraps the whole context menu from outside: a Tip between the menu root and its trigger leaves the menu's popper unplaced (it opens off-screen). -->
-  <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
+  <Tip :label="renaming || menuOpen || cardOpen ? '' : tooltip" side="right" align="start">
     <span class="block" v-on="listeners">
       <DefineBody>
           <span class="flex size-6 shrink-0 items-center justify-center">
@@ -105,6 +108,8 @@ defineExpose({ startRename })
               <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
             </span>
           </span>
+          <!-- The manager the chat is on, left of its title (owner, 2026-10-13): its photo or initial; a click opens its card, not the chat. -->
+          <ManagerAvatar v-if="chat.manager" v-model:open="cardOpen" :manager="chat.manager" />
 
           <input
             v-if="renaming"
@@ -118,7 +123,6 @@ defineExpose({ startRename })
             @blur="commitRename"
           />
           <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
-          <span v-if="chat.manager" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted" :title="`Manager: ${chat.manager.name}`">{{ chat.manager.name }}</span>
 
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->

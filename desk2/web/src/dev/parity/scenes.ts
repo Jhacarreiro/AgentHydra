@@ -23,6 +23,7 @@ import {
   WINDOW_GIT,
   harvestChats,
   harvestItems,
+  managerChats,
   parityAccounts,
   popoverAccounts,
   sidebarUserChats,
@@ -108,6 +109,8 @@ export const PARITY_SCENES: Record<string, ParityScene> = {
   'dashboard-empty': { ...whole, dashboard: emptyDashboardFixture },
   window: { layout: 'frame', chats: windowChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT, history: [{ kind: 'chat', id: 'avg' }] },
   'sidebar-user': { layout: 'frame', chats: sidebarUserChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT },
+  // Rows on managers, with a photo and with an initial, for e2e/manager-avatar.e2e.ts.
+  'manager-avatar': { layout: 'frame', chats: managerChats, items: windowItems, view: { kind: 'chat', id: 'ccd' }, git: WINDOW_GIT, suggestion: WINDOW_DRAFT },
   'headless-audio': headlessAudio,
   'whole-window': whole,
   'new-session': { ...whole, view: { kind: 'new', cwd: CWD }, suggestion: undefined },

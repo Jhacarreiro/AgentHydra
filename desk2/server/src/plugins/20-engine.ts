@@ -584,6 +584,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
   ctx.deps.chatSessions = (chatId: string): string[] => manager.browserSessions(chatId)
   // The headless audio plugin (67) names the chat that owns a Claude Code session.
   ctx.deps.chatForSession = (sessionId: string): string | null => manager.chatForSession(sessionId)
+  // The manager avatar plugin (37) re-sends the chats on a manager whose photo it changed.
+  ctx.deps.managerChanged = (slug: string): void => manager.managerChanged(slug)
   const queue = buildQueue(ctx, manager, toQueue)
 
   ctx.registerHello(async () => {

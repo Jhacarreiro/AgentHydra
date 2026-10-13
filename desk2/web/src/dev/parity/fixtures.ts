@@ -74,6 +74,21 @@ export const sidebarUserChats = (): ChatSummary[] =>
     ['stem', 'Audio stem isolation model', P, 'idle']
   ])
 
+/** The sidebar with chats on managers (sidebar/ManagerAvatar.vue, e2e/manager-avatar.e2e.ts): Ada has a photo, which the e2e
+ *  serves from its own managers folder, and is on two chats; Bo has none and draws an initial. Invented names. */
+export const MANAGER_ADA = { slug: 'ada-design', name: 'Ada', title: 'Head of Design', oneLiner: 'Owns how every screen, row and card looks and works, and decides by the recorded rulings.', photo: 1760000000000, statsLine: '41 turns · 98% answered · judge 7.6 · 3 corrections' }
+export const MANAGER_BO = { slug: 'bo-backend', name: 'Bo', title: 'Backend Engineer', oneLiner: 'Owns the server: its routes, storage and the data each screen reads.', photo: null }
+export const managerChats = (): ChatSummary[] =>
+  chats([
+    ['ahs', 'Agent Hydra subprocess issue', C, 'working', { manager: MANAGER_BO }],
+    ['mkt', 'Plugin marketplace onboarding UX review', C, 'idle', { manager: MANAGER_ADA }],
+    ['ccd', 'Desktop client rewrite plan', C, 'idle'],
+    ['nvw', 'Native vs web design trade-offs', C, 'idle', { manager: MANAGER_ADA }],
+    ['store', 'Storefront landing page review', C, 'needs_you'],
+    ['sui', 'Screen UI polish', N, 'idle', { manager: MANAGER_BO }],
+    ['stem', 'Audio stem isolation model', P, 'idle']
+  ])
+
 /** whole-window.png, sidebar.png and the composer/menu captures taken with it. */
 export const harvestChats = (): ChatSummary[] =>
   chats([

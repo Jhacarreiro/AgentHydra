@@ -68,7 +68,7 @@ import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
 import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
-import { currentManager, MANAGER_SLUG } from './managers'
+import { currentManager, forgetManager, MANAGER_SLUG } from './managers'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -499,7 +499,7 @@ export class ChatManager {
       }
       const e = entryOf(fromStored(row as StoredChat) as StoredRecord)
       this.chats.set(e.chat.id, e)
-      this.emitEvent({ type: 'chat.upsert', chat: { ...e.chat } })
+      this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
       imported.push(row.id)
     }
     if (imported.length) this.store.saveChats(this.stored())
@@ -1846,7 +1846,7 @@ export class ChatManager {
       const n = chat.climayteActive
       if (grew) dirty = true
       if (n === before) {
-        if (grew) this.emitEvent({ type: 'chat.upsert', chat: { ...chat } })
+        if (grew) this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
         continue
       }
       // The background work of a chat that already replied finished: unread again, so it is seen as done
@@ -1856,7 +1856,7 @@ export class ChatManager {
         chat.unread = true
         dirty = true
       }
-      this.emitEvent({ type: 'chat.upsert', chat: { ...chat } })
+      this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
     }
     if (dirty) this.store.saveChats(this.stored())
   }
@@ -2174,7 +2174,7 @@ export class ChatManager {
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
       this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
-      this.emitEvent({ type: 'chat.upsert', chat: { ...e.chat } })
+      this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
       return
     }
     if ((event.type === 'item.upsert' || event.type === 'item.delta' || event.type === 'notify') && !this.chats.has(event.chatId)) return
@@ -2239,6 +2239,15 @@ export class ChatManager {
   private changed(chat: ChatSummary): void {
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
+  }
+
+  /** A manager's photo or persona changed: every chat on it is sent again with the new label. */
+  managerChanged(slug: string): void {
+    forgetManager(slug)
+    for (const e of this.chats.values()) {
+      const chat = this.view(e.chat)
+      if (chat.manager?.slug === slug) this.emitEvent({ type: 'chat.upsert', chat })
+    }
   }
 
   private view(chat: ChatSummary): ChatSummary {

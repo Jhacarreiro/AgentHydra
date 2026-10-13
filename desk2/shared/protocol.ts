@@ -77,8 +77,12 @@ export interface ChatSummary {
   parentId?: string | null
   /** The manager this chat is pinned to: its Claude process runs with AGENTHYDRA_MANAGER set to it. */
   managerSlug?: string | null
-  /** The manager the chat is on now: its pin, else the one its Claude session's state names. Left out when neither has a persona. */
-  manager?: { slug: string; name: string } | null
+  /**
+   * The manager the chat is on now: its pin, else the one its Claude session's state names. Left out when neither has a persona.
+   * title and oneLiner come from its persona.json; photo is its avatar file's mtime in whole ms (a cache-buster), null with no avatar.
+   * statsLine is the manager's analytics in one line to show as is ('41 turns · 98% answered'), absent or null before there is data.
+   */
+  manager?: { slug: string; name: string; title: string | null; oneLiner: string | null; photo: number | null; statsLine?: string | null } | null
 }
 
 // Transcript items: the normalized form of the SDK's message stream (and of AgentHydra transcripts)
