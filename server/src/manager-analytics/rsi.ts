@@ -3,7 +3,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
 import type { MergedTurn } from './collect'
-import { buildStats } from './stats'
+import { buildStats, facetsOf } from './stats'
 import {
   analyticsDir,
   analyticsPath,
@@ -180,8 +180,8 @@ function weakestFacet(
   judged: Judged[],
 ): { facet: string; judgeAvg: number; judged: number } | null {
   let weakest: { facet: string; judgeAvg: number; judged: number } | null = null
-  for (const facet of new Set(judged.flatMap((t) => t.facetsRead))) {
-    const ts = judged.filter((t) => t.facetsRead.includes(facet))
+  for (const facet of new Set(judged.flatMap(facetsOf))) {
+    const ts = judged.filter((t) => facetsOf(t).includes(facet))
     if (ts.length < MIN_FACET_JUDGED) continue
     const avg = round2(mean(ts.map((t) => t.judge.score)))
     if (!weakest || avg < weakest.judgeAvg) weakest = { facet, judgeAvg: avg, judged: ts.length }
@@ -294,7 +294,7 @@ export async function next(deps: RsiDeps = {}) {
   const [slug, m] = top
   const judged = judgedIn(turns, slug, now - WINDOW_MS, now)
   const facet = weakestFacet(judged)
-  const scope = facet ? judged.filter((t) => t.facetsRead.includes(facet.facet)) : judged
+  const scope = facet ? judged.filter((t) => facetsOf(t).includes(facet.facet)) : judged
   return {
     ok: true as const,
     manager: slug,
@@ -360,7 +360,7 @@ export async function start(input: { manager: string; facet?: string }, deps: Rs
     )
   }
   const facet = basename(entry.file)
-  const scope = judged.filter((t) => t.facetsRead.includes(facet))
+  const scope = judged.filter((t) => facetsOf(t).includes(facet))
   const pattern = patternOf(scope)
   if (!pattern) {
     return refuse(

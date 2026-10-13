@@ -176,4 +176,26 @@ describe('buildStats', () => {
       'beta',
     ])
   })
+
+  test('a turn the judge filed under a facet counts for that facet without a facet file read', () => {
+    const judge = {
+      v: 1,
+      type: 'judge',
+      turn: 's1:p1',
+      score: 6,
+      criteria: {},
+      facet: '02-example.md',
+      why: 'example reason',
+      model: 'example-model',
+      costUsd: null,
+      at: T0,
+    } as never
+    const all = new Map<string, MergedTurn>([['s1:p1', turn({ id: 's1:p1', judge })]])
+    expect(buildStats(all, { now: NOW, days: 7 }).managers.alpha.facets).toEqual([
+      { facet: '02-example.md', turns: 1, judgeAvg: 6, correctionRate: null },
+    ])
+    expect(
+      Object.keys(buildStats(all, { now: NOW, days: 7, facet: '02-example.md' }).managers),
+    ).toEqual(['alpha'])
+  })
 })

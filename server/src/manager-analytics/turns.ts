@@ -226,7 +226,8 @@ export function promptOf(ref: LineRef): PromptInfo | null {
   const ts = Date.parse(e.timestamp ?? '')
   if (!Number.isFinite(ts)) return null
   let trigger: Trigger = 'owner'
-  if (/<task-notification>/.test(text)) trigger = 'notification'
+  // A daemon wake ("[AgentHydra · CliMayte] Not from the user. Ping ...") is a notification too.
+  if (/<task-notification>/.test(text) || /^\[AgentHydra\b/.test(text)) trigger = 'notification'
   else if (text.startsWith('<')) trigger = 'system'
   return { offset: ref.offset, ts, uuid: e.uuid ?? null, text, trigger }
 }
@@ -268,6 +269,8 @@ interface ToolUse {
 
 const WORKER_ID = /\bw-[a-z0-9]{8}\b/g
 const USAGE_LIMIT = /usage limit|rate limit|limit reached|limit resets?|resets? (at|in) /i
+/** What a chat ends a turn with when a new message cut it short or a wake needed nothing: not an answer. */
+const NO_RESPONSE = /^No response requested\.?$/i
 
 function chatKey(input: Record<string, unknown> | undefined): string {
   const v = input?.chat ?? input?.chatId ?? input?.chat_id
@@ -312,9 +315,10 @@ function addEntry(
     if (textOf(blocks).includes('[Request interrupted by user')) d.cancelled = true
     for (const b of blocks) {
       if (b.type !== 'tool_result' || !b.tool_use_id) continue
+      const body = resultText(b.content)
+      if (body.startsWith('[Tool call interrupted')) d.cancelled = true
       const use = uses.get(b.tool_use_id)
       if (!use) continue
-      const body = resultText(b.content)
       if (use.name === 'climayte_run' || use.name === 'climayte_manage') {
         for (const m of body.match(WORKER_ID) ?? []) d.workers.add(m)
       } else if (use.name === 'manager_open') {
@@ -375,7 +379,7 @@ function outcomeOf(d: Draft, stuck: boolean): Outcome {
   if (d.cancelled) return 'cancelled'
   if (d.usageLimit) return 'usage_limit'
   if (d.apiError) return 'error'
-  if (d.finalText) return 'replied'
+  if (d.finalText && !NO_RESPONSE.test(d.finalText.trim())) return 'replied'
   return 'silent'
 }
 

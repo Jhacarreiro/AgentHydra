@@ -136,6 +136,17 @@ describe('next', () => {
     const r = await next({ now: NOW, turns: turnsOf(baseline(7, 4)) })
     expect(r.ok).toBe(false)
   })
+
+  test('takes the facet from the judge when the turns read no facet file', async () => {
+    const filed = baseline(8, 4).map(
+      (t) =>
+        ({ ...t, facetsRead: [], judge: { ...t.judge, facet: FACET } }) as unknown as MergedTurn,
+    )
+    const r = await next({ now: NOW, turns: turnsOf(filed) })
+    expect(r.ok).toBe(true)
+    if (!r.ok) return
+    expect(r.facet?.facet).toBe(FACET)
+  })
 })
 
 describe('start', () => {

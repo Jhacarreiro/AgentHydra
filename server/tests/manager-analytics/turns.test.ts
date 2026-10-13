@@ -243,6 +243,52 @@ describe('repeat across passes', () => {
   })
 })
 
+describe('turns that are not answers', () => {
+  const usage = { input_tokens: 1, output_tokens: 1 }
+
+  test('a turn that ends with "No response requested." is silent, and cancelled when a tool call was interrupted', () => {
+    const interrupted: LineRef = {
+      offset: 260,
+      entry: {
+        type: 'user',
+        timestamp: iso(T0 + 3_000),
+        message: {
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: 'tu-1',
+              content: '[Tool call interrupted: the session ended before this call finished.]',
+            },
+          ],
+        },
+      },
+    }
+    const lines: LineRef[] = [
+      prompt('p1', 'check the example group', T0, 0),
+      reply('a1', 'No response requested.', T0 + 2_000, 100, 'msg-1', usage),
+      prompt('p2', 'check the example group again', T0 + 60_000, 200),
+      reply('a2', 'Waiting on the example group.', T0 + 61_000, 250, 'msg-2', usage),
+      interrupted,
+      reply('a3', 'No response requested.', T0 + 64_000, 300, 'msg-3', usage),
+      prompt('p3', 'and the third part', T0 + 120_000, 400),
+    ]
+    const [first, second] = walkTranscript(lines, 500, ctx(), null).finals
+    expect(first.outcome).toBe('silent')
+    expect(second.outcome).toBe('cancelled')
+  })
+
+  test('a daemon wake prompt is a notification, not an owner message', () => {
+    const lines: LineRef[] = [
+      prompt('p1', '[AgentHydra · CliMayte] Not from the user. Ping 2, 1 update.', T0, 0),
+      reply('a1', 'The example worker passed.', T0 + 2_000, 100, 'msg-1', usage),
+      prompt('p2', 'now the second part', T0 + 60_000, 200),
+    ]
+    const [first] = walkTranscript(lines, 300, ctx(), null).finals
+    expect(first.trigger).toBe('notification')
+    expect(first.outcome).toBe('replied')
+  })
+})
+
 describe('mergeTurns', () => {
   test('signals and judge rows attach to their turn by id', () => {
     const rows = [

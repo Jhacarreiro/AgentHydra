@@ -2,6 +2,14 @@ import type { MergedTurn } from './collect'
 import type { OpenTurn } from './store'
 import { IDLE_FINAL_MS, type Outcome, type Picked } from './turns'
 
+/** The playbook facets a turn falls under: the facet files it read, plus the one the judge filed it under
+ *  (managers carry the playbook index in their prompt and seldom open a facet file, so the judge's call is
+ *  usually the only one). */
+export function facetsOf(t: Pick<MergedTurn, 'facetsRead' | 'judge'>): string[] {
+  const facet = t.judge?.facet
+  return facet && !t.facetsRead.includes(facet) ? [...t.facetsRead, facet] : t.facetsRead
+}
+
 export interface StatsOptions {
   now: number
   days: number | 'all'
@@ -175,9 +183,9 @@ function statsFor(
   }
   const costs = turns.map((t) => t.costUsd).filter((c): c is number => c !== null)
 
-  const facetNames = new Set(turns.flatMap((t) => t.facetsRead))
+  const facetNames = new Set(turns.flatMap(facetsOf))
   const facets: FacetRow[] = [...facetNames].sort().map((facet) => {
-    const ts = turns.filter((t) => t.facetsRead.includes(facet))
+    const ts = turns.filter((t) => facetsOf(t).includes(facet))
     const sig = ts.flatMap((t) => t.signals.filter((s) => s.from === 'owner'))
     const judgedHere = ts
       .filter((t) => t.judge)
@@ -276,7 +284,7 @@ export function buildStats(all: Map<string, MergedTurn>, opts: StatsOptions): St
   const bySlug = new Map<string, MergedTurn[]>()
   for (const t of turns) {
     if (opts.manager && t.manager !== opts.manager) continue
-    if (opts.facet && !t.facetsRead.includes(opts.facet)) continue
+    if (opts.facet && !facetsOf(t).includes(opts.facet)) continue
     const list = bySlug.get(t.manager) ?? []
     list.push(t)
     bySlug.set(t.manager, list)
