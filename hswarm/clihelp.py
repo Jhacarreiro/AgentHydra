@@ -75,6 +75,7 @@ META: dict[str, dict] = {
                  "two days into the history (one xz archive a day, never deleted; --keep-days N deletes jobs past N days), records savings, "
                  "syncs and pushes the sync branch. --no-push keeps it local."},
     "cost": {"effect": READ, "guide": "Ledger totals plus one free balance GET; --no-balance stays offline."},
+    "backfill-free-misses": {"effect": WRITE, "guide": "Appends a free_miss ledger row (model free:<model>, status error or timeout) for each Free try a finished job's route note records and the ledger lacks; --dry-run only counts. Idempotent."},
     "savings": {"effect": WRITE, "guide": "Every run rewrites ~/.hswarm/hswarm.html; --record, --backfill-jobs, --remeasure and --profile write the utilization DB; "
                 "--sync also pushes. --list N is the lightest read."},
     "sync": {"effect": WRITE, "guide": "Pushes this machine's shard to the repo's sync branch; --no-push stays local. --restore rebuilds a lost ledger."},

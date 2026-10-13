@@ -27,6 +27,7 @@ const gunzipAsync = promisify(gunzip)
 export const HSWARM_INGEST_VERSION = 2
 /** Meta key: the ingest version whose one-time raw-row drop has run (ids changed from ordinals in 2). */
 const HSWARM_DROPPED = 'hswarm_ingest_dropped'
+const HSWARM_DROP_CUT = 'hswarm_ingest_drop_cut'
 const BATCH = 500
 const CHUNK = 2 * 1024 * 1024
 
@@ -164,7 +165,18 @@ export async function ingestHswarm(
   const seen = new Map<string, number>()
   const migrating = store.getMeta(HSWARM_DROPPED) !== String(HSWARM_INGEST_VERSION)
   let skipBefore: number | null = null
-  if (migrating) skipBefore = await dropHswarmRows(store)
+  if (migrating) {
+    // The raw cut of the FIRST drop, saved before it runs: lines under it were settled under the old ordinal ids. A
+    // sweep that died after its drop comes back here with its cursors already at this version and raw_cut maybe
+    // raised by a prune since; it drops again and must re-read every file from byte 0 with the first cut, or the
+    // archives it had read are skipped and their rows stay deleted (hswarm_review, 2026-10-13). Lines it settled
+    // under the new ids in between are kept from counting twice by settleOld's first claim.
+    const cutKey = `${HSWARM_DROP_CUT}_v${HSWARM_INGEST_VERSION}`
+    if (store.getMeta(cutKey) === null) store.setMeta(cutKey, String(store.rawCut() ?? ''))
+    await dropHswarmRows(store)
+    const first = store.getMeta(cutKey)
+    skipBefore = first ? Number(first) : null
+  }
   const archived = new Set(
     hswarmArchivePaths(path).map((p) => ARCHIVE.exec(basename(p))?.[2] ?? ''),
   )
@@ -180,7 +192,13 @@ export async function ingestHswarm(
     }
     const mtime = Math.floor(st.mtimeMs)
     const cur = store.getCursor(ap)
-    if (cur && cur.version === HSWARM_INGEST_VERSION && cur.size === st.size && cur.mtime === mtime)
+    if (
+      !migrating &&
+      cur &&
+      cur.version === HSWARM_INGEST_VERSION &&
+      cur.size === st.size &&
+      cur.mtime === mtime
+    )
       continue
     let data: Buffer
     try {
@@ -213,6 +231,7 @@ export async function ingestHswarm(
   }
   const cur = store.getCursor(path)
   if (
+    !migrating &&
     !archivesRead &&
     cur &&
     cur.version === HSWARM_INGEST_VERSION &&
@@ -221,7 +240,7 @@ export async function ingestHswarm(
   )
     return changed ? written : null
   let offset = cur && cur.version === HSWARM_INGEST_VERSION ? cur.offset : 0
-  if (offset > size || archivesRead) offset = 0 // shrank (rotated), or an archive just changed
+  if (offset > size || archivesRead || migrating) offset = 0 // shrank (rotated), an archive just changed, or the drop
 
   let end = offset
   const fh = await open(path, 'r')
@@ -249,10 +268,10 @@ export async function ingestHswarm(
 
 /**
  * One-time (per ingest version) clear of the stored raw hswarm rows, whose ordinal ids the line ids replace; their
- * hours are marked dirty so the rollup rebuilds them. Returns the raw cut: the re-read skips older lines, which
- * are settled (usage_hour and the ledger) and would be counted twice. Null when nothing was ever pruned.
+ * hours are marked dirty so the rollup rebuilds them. The re-read skips lines under the first drop's raw cut, which
+ * are settled (usage_hour and the ledger) and would be counted twice.
  */
-async function dropHswarmRows(store: KitStore): Promise<number | null> {
+async function dropHswarmRows(store: KitStore): Promise<void> {
   const db = store.db
   const span = db
     .query("select min(ts) as lo, max(ts) as hi from usage_event where source = 'hswarm'")
@@ -273,7 +292,6 @@ async function dropHswarmRows(store: KitStore): Promise<number | null> {
     }))
       await yieldLoop()
   }
-  return store.rawCut()
 }
 
 /** Parses the whole lines of `data` into usage events. `consumed` is the bytes up to the last newline. */

@@ -317,4 +317,28 @@ describe('HSwarm ledger ingest', () => {
     expect(await ingestHswarm(store, path)).toBeNull()
     store.close()
   })
+
+  test('an upgrade that died after its drop re-reads every file on the next sweep', async () => {
+    const path = join(root, 'crash.jsonl')
+    const lastMonth = new Date(NOW)
+    lastMonth.setUTCDate(1)
+    lastMonth.setUTCHours(0, 0, 0, 0)
+    lastMonth.setTime(lastMonth.getTime() - 3_600_000)
+    const month = iso(lastMonth.getTime()).slice(0, 7).replace('-', '')
+    const archived = [
+      line('t1', { ts: iso(lastMonth.getTime()) }),
+      line('t2', { ts: iso(lastMonth.getTime() + 1000) }),
+    ]
+    writeFileSync(join(root, `crash-${month}.jsonl.gz`), gzipSync(jl(archived)))
+    writeFileSync(path, jl([line('t3')]))
+    const store = new KitStore(':memory:')
+    await ingestHswarm(store, path)
+    expect(kitTotals(store, 0).calls).toBe(3)
+    // The sweep died after its drop and its cursors, before it could mark the upgrade done.
+    store.setMeta('hswarm_ingest_dropped', '1')
+    await ingestHswarm(store, path)
+    expect(kitTotals(store, 0).calls).toBe(3)
+    expect(await ingestHswarm(store, path)).toBeNull()
+    store.close()
+  })
 })
