@@ -98,7 +98,7 @@ async function withRig(fn) {
 const UI_BRIEF = "FIXTURE-BRIEF-ALPHA";
 const BACKEND_BRIEF = "FIXTURE-BRIEF-BETA";
 
-test("Jev answers swap the session from the UI manager to the backend manager", async () => {
+test("Jev answers swap the session from the UI manager to the backend manager", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     mkdirSync(path.join(rig.managers, "broken"));
     writeFileSync(path.join(rig.managers, "broken", "persona.json"), "{ nope");
@@ -132,7 +132,7 @@ test("Jev answers swap the session from the UI manager to the backend manager", 
   });
 });
 
-test("every twelfth message re-injects the full brief, the others get one reminder line", async () => {
+test("every twelfth message re-injects the full brief, the others get one reminder line", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     mkdirSync(rig.managers + "/sessions", { recursive: true });
     writeFileSync(
@@ -170,7 +170,7 @@ test("a Jev timeout falls back to keywords and names the reason in the output", 
   });
 });
 
-test("a Jev that answers every item with an error (a spent key) falls back to keywords and names Jev's error", async () => {
+test("a Jev that answers every item with an error (a spent key) falls back to keywords and names Jev's error", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     rig.stub.respond = (items) =>
       items.map((item) => ({ id: item.id, answer: null, source: "none", jev: { error: "every key is out of credit" } }));
@@ -182,7 +182,7 @@ test("a Jev that answers every item with an error (a spent key) falls back to ke
   });
 });
 
-test("a closed Jev port falls back to keywords and names the port", async () => {
+test("a closed Jev port falls back to keywords and names the port", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const port = await freePort();
     const result = await runRouter(
@@ -196,7 +196,7 @@ test("a closed Jev port falls back to keywords and names the port", async () => 
   });
 });
 
-test("AGENTHYDRA_MANAGER pins the manager without a Jev call, and the pin holds in the session", async () => {
+test("AGENTHYDRA_MANAGER pins the manager without a Jev call, and the pin holds in the session", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const pinned = await runRouter(
       { session_id: "sess-pin", prompt: "the button layout on the screen" },
@@ -216,7 +216,7 @@ test("AGENTHYDRA_MANAGER pins the manager without a Jev call, and the pin holds 
   });
 });
 
-test("an unknown AGENTHYDRA_MANAGER is named in the output and the log", async () => {
+test("an unknown AGENTHYDRA_MANAGER is named in the output and the log", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "sess-bad-pin", prompt: "hello" }, rig.env({ AGENTHYDRA_MANAGER: "nobody" }));
     assert.equal(result.code, 0, result.stderr);
@@ -226,7 +226,7 @@ test("an unknown AGENTHYDRA_MANAGER is named in the output and the log", async (
   });
 });
 
-test("a CliMayte worker session is skipped without output or state", async () => {
+test("a CliMayte worker session is skipped without output or state", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "sess-worker", prompt: "the button layout on the screen" }, rig.env({ AGENTHYDRA_CLIMAYTE_WORKER: "1" }));
     assert.equal(result.code, 0);
@@ -236,7 +236,7 @@ test("a CliMayte worker session is skipped without output or state", async () =>
   });
 });
 
-test("a Desk chat, a CliMayte chat with the worker flag, is still routed", async () => {
+test("a Desk chat, a CliMayte chat with the worker flag, is still routed", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     rig.stub.respond = answersFor(["domain:alpha-ui"]);
     const result = await runRouter(
@@ -248,7 +248,7 @@ test("a Desk chat, a CliMayte chat with the worker flag, is still routed", async
   });
 });
 
-test("a message opening with @Name picks that manager without a Jev call", async () => {
+test("a message opening with @Name picks that manager without a Jev call", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "sess-at", prompt: "@ben is the button layout on the screen right?" }, rig.env());
     assert.equal(JSON.parse(result.stdout).systemMessage, "Now: Ben, Backend Engineer");
@@ -257,7 +257,7 @@ test("a message opening with @Name picks that manager without a Jev call", async
   });
 });
 
-test("a slash command is skipped without output or state", async () => {
+test("a slash command is skipped without output or state", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "sess-slash", prompt: "/help" }, rig.env());
     assert.equal(result.code, 0);
@@ -267,7 +267,7 @@ test("a slash command is skipped without output or state", async () => {
   });
 });
 
-test("no personas gives no output and writes nothing", async () => {
+test("no personas gives no output and writes nothing", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     rmSync(rig.managers, { recursive: true, force: true });
     mkdirSync(rig.managers);
@@ -279,7 +279,7 @@ test("no personas gives no output and writes nothing", async () => {
   });
 });
 
-test("an unusable session id is named as an error", async () => {
+test("an unusable session id is named as an error", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "../evil", prompt: "the button layout on the screen" }, rig.env());
     assert.equal(JSON.parse(result.stdout).systemMessage, "Manager Hydra error: hook input has no usable session_id");
@@ -293,7 +293,7 @@ const analyticsLines = (rig) =>
     .split("\n")
     .map((line) => JSON.parse(line));
 
-test("each routed message writes one analytics line for a pin, a pinned stay, an @name swap and a continuation stay", async () => {
+test("each routed message writes one analytics line for a pin, a pinned stay, an @name swap and a continuation stay", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const transcript = path.join(rig.root, "transcripts", "sess-pin.jsonl");
     const cwd = path.join(rig.root, "work");
@@ -350,7 +350,7 @@ test("each routed message writes one analytics line for a pin, a pinned stay, an
   });
 });
 
-test("an analytics line holds the prompt length and never the prompt text", async () => {
+test("an analytics line holds the prompt length and never the prompt text", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const secret = "FIXTURE-SECRET-PHRASE the api endpoint writes to the database";
     await runRouter({ session_id: "sess-text", prompt: `@ben ${secret}` }, rig.env());
@@ -360,7 +360,7 @@ test("an analytics line holds the prompt length and never the prompt text", asyn
   });
 });
 
-test("transcriptPath lands in the session file and the existing session fields are kept", async () => {
+test("transcriptPath lands in the session file and the existing session fields are kept", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     const transcript = path.join(rig.root, "transcripts", "sess-t.jsonl");
     await runRouter({ session_id: "sess-t", prompt: "@ben the api endpoint", transcript_path: transcript }, rig.env());
@@ -375,7 +375,7 @@ test("transcriptPath lands in the session file and the existing session fields a
   });
 });
 
-test("an unwritable analytics folder is named in the output and the log, and routing still happens", async () => {
+test("an unwritable analytics folder is named in the output and the log, and routing still happens", { timeout: 20000 }, async () => {
   await withRig(async (rig) => {
     writeFileSync(path.join(rig.managers, "analytics"), "not a folder");
     const result = await runRouter({ session_id: "sess-blocked", prompt: "@ben the api endpoint" }, rig.env());
