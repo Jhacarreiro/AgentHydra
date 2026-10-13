@@ -54,6 +54,21 @@ describe('pickFreeAccount', () => {
     expect(pickFreeAccount(INSTANCES, new Set(), { account: 3 })).toBeNull()
   })
 
+  test('a thinking model goes to a paid ChatGPT plan before a Free-plan one; an instant model does not care', () => {
+    const plan = (i: FreeInstance, p: string) => ({
+      ...i,
+      usage: { ...usage(null, null, true), plan: p },
+    })
+    const accounts = [
+      plan({ ...INSTANCES[1], id: 'f', num: 5 }, 'free'),
+      plan({ ...INSTANCES[1], id: 'g', num: 6, lastActiveAt: Date.now() }, 'go'),
+    ]
+    expect(pickFreeAccount(accounts, new Set(), { model: 'luna-thinking' })?.num).toBe(6)
+    expect(pickFreeAccount(accounts, new Set(), { model: 'gpt-6-t-mini' })?.num).toBe(6)
+    expect(pickFreeAccount(accounts, new Set(), { model: 'gpt-instant' })?.num).toBe(5)
+    expect(pickFreeAccount(accounts, new Set(['g']), { model: 'luna-thinking' })?.num).toBe(5)
+  })
+
   test('a rate-limited account with a spent 5-hour window rests until it resets, not 30 minutes', () => {
     resetFreeHealth()
     const now = Date.UTC(2026, 9, 8, 12)

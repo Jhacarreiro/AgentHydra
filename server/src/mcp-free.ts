@@ -320,20 +320,30 @@ export function eligibleAccounts(
   )
 }
 
+// A thinking model by name: the role and pinned names (gpt-thinking, luna-thinking, gpt-6-thinking) or a slug of
+// ChatGPT's reasoning line (gpt-6-t-mini, gpt-5-6-t-mini).
+const isThinkingModel = (m?: string) => !!m && (/thinking$/.test(m) || /^gpt-.*-t-/.test(m))
+// A ChatGPT Free-plan account runs out of thinking within the day and then fails the turn with a bare `error: true`:
+// on 2026-10-13 all 10 such failures of 30 Luna Thinking threads came from two of the 3 Free-plan accounts, none
+// from the 13 Go accounts, which carried the same load.
+const freePlan = (i: FreeInstance) => (i.provider === 'chatgpt' && i.usage?.plan === 'free' ? 1 : 0)
+
 /** The idle account with the most room (roomBand), the one used (or tried) longest ago first so work
  *  spreads over every account and both providers, then Claude before ChatGPT, then the lowest number;
- *  null while every eligible account is busy. */
+ *  null while every eligible account is busy. A thinking model goes to a paid ChatGPT plan first. */
 export function pickFreeAccount(
   instances: FreeInstance[],
   busy: ReadonlySet<string>,
-  want: { account?: number; provider?: Provider },
+  want: { account?: number; provider?: Provider; model?: string },
 ): FreeInstance | null {
+  const thinking = isThinkingModel(want.model)
   // A paced account is busy until its next send, not ineligible: the task waits for that send, never fails for it.
   const free = eligibleAccounts(instances, want).filter(
     (i) => !busy.has(i.id) && (want.account != null || !pacedOut(i)),
   )
   free.sort(
     (a, b) =>
+      (thinking ? freePlan(a) - freePlan(b) : 0) ||
       roomBand(a) - roomBand(b) ||
       lastUse(a) - lastUse(b) ||
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
