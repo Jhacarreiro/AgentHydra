@@ -1106,6 +1106,25 @@ async function nativeImport(env: any, found: any, request: any, settled: any, st
 }
 
 /**
+ * The permission class the CLI's cross-session inbound gate compares a peer message's asserted
+ * `fromMode` with: 'bypass' for a chat in bypassPermissions, or in plan mode when bypass was
+ * available at its spawn (the CLI's own rule), else 'prompting'. The gate HOLDS a message into a
+ * bypass chat that asserts no mode ('no-mode-asserted') and one whose mode differs from the chat's
+ * ('mode-mismatch'); a held message never runs, and the app settles it as undelivered 45 s later
+ * (2026-10-12: both live sends into an idle bypass chat were lost this way, while a cold start,
+ * which takes the message as the engine's first prompt, had worked). Input from the app's stdin is
+ * host-injected, so the CLI takes the mode the origin asserts: the send asserts the chat's own class,
+ * never a wider one.
+ */
+function nativeModeClass(session: any): 'bypass' | 'prompting' {
+  const mode = session?.permissionMode
+  return mode === 'bypassPermissions' ||
+    (mode === 'plan' && session?.bypassAvailableAtSpawn === true)
+    ? 'bypass'
+    : 'prompting'
+}
+
+/**
  * Sends a message into a chat the way one of the app's chats messages another (its SendMessage
  * tool): the app's own peerMessageDelivery.sendPeerMessage, wrapped in the same
  * <cross-session-message> envelope, with a peer origin. The app starts the chat's engine itself
@@ -1159,7 +1178,12 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
   const sent = await Promise.race([
     manager.sendPeerMessage(session.sessionId, wrapped, {
       messageId,
-      origin: { kind: 'peer', from: 'agenthydra', name: String(request.fromName) },
+      origin: {
+        kind: 'peer',
+        from: 'agenthydra',
+        name: String(request.fromName),
+        fromMode: nativeModeClass(session),
+      },
     }),
     new Promise((resolve) => {
       timer = setTimeout(() => resolve({ delivery: 'sent' }), 35_000)
@@ -1247,6 +1271,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeCheckIdentity,
     nativeStartingIds,
     nativeChatBusy,
+    nativeModeClass,
     nativePendingInput,
     nativeLineageIds,
     nativeSnapshot,

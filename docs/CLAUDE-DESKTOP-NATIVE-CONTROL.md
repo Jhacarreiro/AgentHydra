@@ -438,8 +438,15 @@ source row still shows is reported as unfinished, never as OK (`source_unsettled
 `nativeProgram({ action: 'send', pid, profileDir, cliSessionId, text, fromName })` sends `text`
 into the chat holding that CLI session the way one of the app's chats messages another: the
 manager's own `sendPeerMessage`, the `<cross-session-message from=... name=...>` envelope the
-app's SendMessage tool builds, and a peer origin (`{ kind: 'peer', from: 'agenthydra', name }`).
-The app's `sendMessage` treats only an origin-less or `human` message as the person's, so a peer
+app's SendMessage tool builds, and a peer origin (`{ kind: 'peer', from: 'agenthydra', name, fromMode }`).
+`fromMode` is the chat's own permission class (`bypass` for `bypassPermissions`, or `plan` with
+`bypassAvailableAtSpawn`; else `prompting`). The app writes the message to the warm engine's stdin
+unchanged, the CLI marks stdin input host-injected, and its cross-session inbound gate then HOLDS a
+message into a bypass chat that asserts no mode (`no-mode-asserted`) or another mode
+(`mode-mismatch`). A held message never runs and draws no acknowledgement, so the app settles it
+`undelivered` 45 s later. That is how both live sends into an idle bypass chat were lost on
+2026-10-12 (app log: no acknowledgement in 45000 ms, then the undelivered input settled), while a
+cold start, which takes the message as the engine's first prompt, worked. The app's `sendMessage` treats only an origin-less or `human` message as the person's, so a peer
 message never counts as the person, and the app keeps its own refusals. The program also refuses
 before sending a chat that is archived or `stoppedUntilPersonSends`. When the chat has no engine,
 the app's delivery retries once "through the cold-start path" and starts one itself, so nothing is

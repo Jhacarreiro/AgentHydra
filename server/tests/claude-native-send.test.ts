@@ -31,7 +31,10 @@ function desktop(session: Record<string, unknown>, reply: { delivery: string; re
     sendPeerMessage: async (
       id: string,
       text: string,
-      opts: { messageId: string; origin: { kind: string; from: string; name: string } },
+      opts: {
+        messageId: string
+        origin: { kind: string; from: string; name: string; fromMode: string }
+      },
     ) => {
       calls.push({ id, text, opts })
       return reply
@@ -90,7 +93,21 @@ test("a native send goes in as another session's message through the app's own p
     kind: 'peer',
     from: 'agenthydra',
     name: 'AgentHydra · babysitter',
+    fromMode: 'prompting',
   })
+
+  // The CLI holds, and never runs, a peer message into a bypass chat that asserts no mode or another
+  // mode than the chat's: the send asserts the chat's own class, by the CLI's rule.
+  for (const [session, fromMode] of [
+    [{ permissionMode: 'bypassPermissions' }, 'bypass'],
+    [{ permissionMode: 'plan', bypassAvailableAtSpawn: true }, 'bypass'],
+    [{ permissionMode: 'plan' }, 'prompting'],
+    [{ permissionMode: 'acceptEdits', bypassAvailableAtSpawn: true }, 'prompting'],
+  ] as const) {
+    const moded = desktop(session, { delivery: 'delivered' })
+    await moded.send('x y')
+    expect(moded.calls[0]!.opts.origin.fromMode).toBe(fromMode)
+  }
   expect(ok.calls[0]!.text).toBe(
     '<cross-session-message from="agenthydra" name="AgentHydra · babysitter">\nContinue where you left off.\n</cross-session-message>',
   )
