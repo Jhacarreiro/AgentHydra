@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The sidebar lists every unarchived Codex chat.** With Codex picked in the sidebar's filter, only a chat written
+  in the last ten minutes was listed, so ten open Codex chats showed as one. Now every chat each Codex app shows is
+  listed, however old; archived chats and Codex's own helper threads stay out.
+- **Moving a Codex chat that left a command running no longer fails.** Archiving the original stops a background
+  command it still ran, and Codex records that, which the move took for a change to the chat: it kept both chats
+  and said the move failed. The move now finishes and says which command was stopped.
 - **An HSwarm task running on CliMayte no longer looks stalled, and a silent one moves on.** While one of your Claude
   accounts worked an HSwarm task, the task's status kept the name of the paid model it would otherwise have used, with
   no turns and no progress, so it was listed as stalled and two finished or nearly finished reviews were cancelled by

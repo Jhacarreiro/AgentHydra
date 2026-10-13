@@ -242,7 +242,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   the Codex accounts (owner, 2026-10-13): AgentHydra's Codex move reads the chat's plan at the click and
   copies it, checks the copy, then archives the original (`moveCodexSession` in `session-header/ah.ts`;
   docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md). Either account's Codex app may be open: an open one archives
-  the original itself, so nothing is closed. Opening a session from a search while the
+  the original itself, so nothing is closed; a background command the original still ran is stopped by
+  that archive, and the line under the list names it. The list holds every unarchived Codex chat on this
+  PC however old, as each Codex app shows them (AgentHydra's `GET /api/codex-chats`; owner, 2026-10-13: it
+  had shown one of ten, only those written in the last 10 minutes). Opening a session from a search while the
   session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
   it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
