@@ -105,7 +105,9 @@ describe('chat workers', () => {
     const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
     expect(prompt.split('Desk text.').length).toBe(2)
     expect(prompt.split(media).length).toBe(2)
-    expect(prompt.indexOf('main agent')).toBeLessThan(prompt.indexOf('Desk text.'))
+    expect(prompt.indexOf('the manager the owner talks to')).toBeLessThan(
+      prompt.indexOf('Desk text.'),
+    )
     expect(prompt.indexOf('Desk text.')).toBeLessThan(prompt.indexOf(OWNER_RULES))
     rmSync(join(HOME, '.claude.json'))
   })

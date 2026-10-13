@@ -23,13 +23,13 @@ describe('continuationPrompt', () => {
     string[],
   ]
   const from = { sameAccount: true, why: 'context' as const }
-  test('a chat heir is the main agent; any other continuation is unchanged', () => {
+  test('a chat successor is the manager; any other continuation is unchanged', () => {
     const chat = continuationPrompt(...args, { ...from, chat: true })
-    expect(chat).toContain("main agent of the owner's Desk chat")
+    expect(chat).toContain('the manager the owner talks to in this Desk chat')
     expect(chat).toContain('he reads every reply')
     expect(chat).toContain('commit with that message verbatim')
     const plain = continuationPrompt(...args, from)
-    expect(plain).not.toContain('main agent')
+    expect(plain).not.toContain('the manager the owner talks to')
     expect(plain).toContain(
       'An earlier session already worked on this task on this account and handed off because its conversation had grown large. Continue from its handoff below',
     )

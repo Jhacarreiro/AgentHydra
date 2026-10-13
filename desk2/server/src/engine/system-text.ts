@@ -239,8 +239,9 @@ export function noteOf(text: string): { from: string; text: string } | null {
 /** The note AgentHydra's continuationPrompt (server/src/climayte-lib.ts) puts between the task and the rest. */
 const CONTINUED = /\n\n---\nAn earlier session already worked on this task (on this account|on another account) and ([^.\n]*)\. Continue from its handoff below/
 const HANDOFF_MARK = '\n\n--- HANDOFF ---\n'
-/** Only a CliMayte chat's continuation says this: its first line is the owner's message (climayte-lib continuationPrompt). */
-const CHAT_HEIR = "That session was this chat's main agent before you:"
+/** Only a CliMayte chat's continuation says this: its first line is the owner's message (climayte-lib continuationPrompt).
+ *  Sessions continued before 2026-10-13 say "main agent", and their transcripts are still read. */
+const CHAT_HEIR = /That session was this chat's (?:manager|main agent) before you:/
 /** The messages that session did not get to, `- <message>` each. */
 const CONTINUED_MESSAGES = /\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n([\s\S]*?)\n\n--- HANDOFF ---\n/
 const CONTINUED_WHY: [RegExp, string][] = [
@@ -266,7 +267,7 @@ export function continuationOf(text: string): { said: string | null; messages: s
   const where = m[1] === 'on another account' ? ' on another account' : ''
   // A chat's continuation opens with the owner's message it answers, then the same note.
   const lead = text.slice(0, m.index).trim()
-  const said = text.includes(CHAT_HEIR, m.index) && lead && !CONTINUED.test(lead) ? lead : null
+  const said = CHAT_HEIR.test(text.slice(m.index)) && lead && !CONTINUED.test(lead) ? lead : null
   return { said, messages: messages || null, line: `${CONTINUED_LINE}${where}${why ? `: ${why}` : ''}.` }
 }
 

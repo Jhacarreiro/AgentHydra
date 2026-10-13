@@ -429,10 +429,10 @@ describe("a handoff's continuation prompt", () => {
     expect(userTurn(user(quoted), null)).toEqual(user(quoted))
   })
 
-  test("a chat's continuation, with the main-agent sentence, is still a continuation and not the person's message", () => {
+  test("a chat's continuation, with the manager sentence, is still a continuation and not the person's message", () => {
     const chat = continued({ messages: ['why did it stop?'] }).replace(
       'Do not redo steps it reports finished.',
-      "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+      "That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
     )
     expect(continuationOf(chat)?.line).toBe('Continued in a fresh session: the conversation had grown long.')
     expect(userTurn(user(chat), null)).toMatchObject({ kind: 'user', text: 'why did it stop?' })
@@ -442,7 +442,7 @@ describe("a handoff's continuation prompt", () => {
     const chat = (messages?: string[]) =>
       continued({ messages }).replace(
         'Do not redo steps it reports finished.',
-        "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+        "That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
       )
     expect(userTurns(user(chat()), null)).toEqual([
       { kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null },
@@ -455,10 +455,18 @@ describe("a handoff's continuation prompt", () => {
     ])
   })
 
+  test("a chat continued before the manager wording, with the old main-agent sentence, still shows the owner's message as his bubble", () => {
+    const chat = continued({}).replace(
+      'Do not redo steps it reports finished.',
+      "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+    )
+    expect(userTurns(user(chat), null)[0]).toEqual({ kind: 'user', id: 'u9', ts: 7, text: 'Please tidy the example garden plan.', parentToolUseId: null })
+  })
+
   test("a chat's carried list splits like a handoff's: each ping a note, the owner's message a bubble, ids by position, never :listed", () => {
     const chat = continued({ messages: [PING, 'why did it stop?'] }).replace(
       'Do not redo steps it reports finished.',
-      "That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
+      "That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him. Do not redo steps it reports finished.",
     )
     const out = userTurns(user(chat), null)
     expect(out.map((i) => [i.kind, i.id])).toEqual([

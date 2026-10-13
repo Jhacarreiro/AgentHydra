@@ -1018,10 +1018,10 @@ export function continuationPrompt(
       : from.why === 'request'
         ? 'handed off when the orchestrator asked it to'
         : 'wound down before its usage limit'
-  // A chat's heir is told who it is right after the note Hydra Desk reads (continuationOf), which
+  // A chat's successor is told who it is right after the note Hydra Desk reads (continuationOf), which
   // stays as it is.
   const main = from.chat
-    ? " That session was this chat's main agent before you: you continue as the main agent of the owner's Desk chat, he reads every reply you write, and you orchestrate the work and report to him."
+    ? " That session was this chat's manager before you: you continue as the manager the owner talks to in this Desk chat, he reads every reply you write, and you orchestrate the work and report to him."
     : ''
   return `${task}\n\n---\nAn earlier session already worked on this task ${account} and ${ended}. Continue from its handoff below (also saved at ${handoffPath}).${main}${where} Do not redo steps it reports finished. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers. If it gives a commit message for work in progress, commit with that message verbatim.${more}\n\n--- HANDOFF ---\n${handoff}`
 }
