@@ -31,7 +31,7 @@ export const SIGNAL_HOOK_TIMEOUT_S = 3
 export const RUN_IF_PRESENT =
   "import os,runpy,sys;p=sys.argv[1];sys.path[0:0]=[os.path.dirname(p)];os.path.isfile(p) and runpy.run_path(p,run_name='__main__')"
 
-type Hook =
+export type Hook =
   | { type: 'command'; command: string; args?: string[]; timeout?: number }
   | { type: 'http'; url: string; timeout?: number }
 export interface HookGroup {
@@ -39,6 +39,7 @@ export interface HookGroup {
   hooks: Hook[]
 }
 export interface WorkerHooks {
+  UserPromptSubmit?: Array<{ hooks: Hook[] }>
   PreToolUse?: HookGroup[]
   PostToolUse: HookGroup[]
   Stop?: Array<{ hooks: Hook[] }>
@@ -65,6 +66,8 @@ export const STOP_HOOK_TIMEOUT_S = 10
  *    owner's hooks, and a worker running with permissions skipped ran `git clean -fd` in a shared
  *    checkout (2026-10-07). Same exec form and launcher as edit_claims, so a missing script does
  *    nothing and an exit 2 from a guard denies the call.
+ *  - UserPromptSubmit, the `promptHooks` given: a chat's Manager Hydra router (ownerRouterHooks), which the
+ *    owner's own sessions run from his settings and an account folder's settings never had.
  *  - Stop, when `stopUrl` is given (an ordinary worker, not a chat or a sealed one): an http hook the
  *    DAEMON answers, unlike the signal. It asks a worker whose estimate missed by more than
  *    REVIEW_BAND why, in the same turn (climayte-eta.ts stopDecision, climayteStopHook). It must be
@@ -75,6 +78,7 @@ export function workerHooks(opts: {
   claims: string | null
   guards?: string[]
   stopUrl?: string | null
+  promptHooks?: Array<{ hooks: Hook[] }>
 }): WorkerHooks {
   const guards = opts.guards ?? []
   const preToolUse: HookGroup[] = [
@@ -108,6 +112,7 @@ export function workerHooks(opts: {
       : []),
   ]
   return {
+    ...(opts.promptHooks?.length ? { UserPromptSubmit: opts.promptHooks } : {}),
     ...(opts.stopUrl
       ? {
           Stop: [

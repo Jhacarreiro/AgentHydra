@@ -401,7 +401,7 @@ export interface StartWorker {
   effort?: string
   modelWhy?: string
   /** The chat's system-prompt append and connector MCP servers (`chatAddOns`); AgentHydra keeps them for every launch. */
-  desk?: { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string }
+  desk?: { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string; chatId?: string }
   /** This start's own id: the same start sent again answers the worker it made (an older AgentHydra ignores it). */
   requestId?: string
 }

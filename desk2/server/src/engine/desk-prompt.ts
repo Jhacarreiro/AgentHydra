@@ -57,9 +57,15 @@ export function chatAddOns(
   delegate: boolean,
   self?: DeskSelf,
   manager?: string | null,
-): { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string } {
+): { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string; chatId?: string } {
   const { mcpServers, prompts } = connectorsForChat(cwd, self?.id)
   const move = self ? ` ${moveLine(self)}` : ''
-  // A sub-manager chat's manager rides along so a CliMayte launch pins it too (AGENTHYDRA_MANAGER).
-  return { append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''), mcpServers, ...(manager ? { manager } : {}) }
+  // A sub-manager chat's manager rides along so a CliMayte launch pins it too (AGENTHYDRA_MANAGER), and the chat's own id
+  // so its agenthydra server knows which Desk chat calls it (manager_open, desk_chat), as an in-process chat's does.
+  return {
+    append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''),
+    mcpServers,
+    ...(manager ? { manager } : {}),
+    ...(self ? { chatId: self.id } : {}),
+  }
 }

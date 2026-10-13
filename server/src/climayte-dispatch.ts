@@ -213,6 +213,9 @@ const DESK_APPEND_MAX = 20_000
 
 /** Why `d` cannot be a chat's add-ons (CliMayteWorker.desk), or null when it can: a chat task's and
  *  every message to a chat's (climayteSend), so a chat started before them gets them too. */
+/** A Desk chat id: a UUID today; letters, digits and dashes. */
+const DESK_CHAT_ID = /^[A-Za-z0-9][A-Za-z0-9-]{0,79}$/
+
 export function deskProblem(d: unknown, chat: boolean): string | null {
   const desk = d as Partial<NonNullable<CliMayteWorker['desk']>>
   if (!chat) return 'desk is only for a chat task (chat: true)'
@@ -225,6 +228,11 @@ export function deskProblem(d: unknown, chat: boolean): string | null {
     !(typeof desk.manager === 'string' && MANAGER_SLUG.test(desk.manager))
   )
     return 'desk.manager must be a manager slug (lowercase letters, digits and dashes)'
+  if (
+    desk.chatId !== undefined &&
+    !(typeof desk.chatId === 'string' && DESK_CHAT_ID.test(desk.chatId))
+  )
+    return 'desk.chatId must be a Desk chat id (letters, digits and dashes)'
   return null
 }
 

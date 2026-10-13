@@ -59,7 +59,7 @@ import {
   transcriptHandoff,
   WORKER_BRIEF,
 } from './climayte-lib'
-import { ownerMcpServers, syncOwnerClaude } from './climayte-owner-sync'
+import { ownerMcpServers, ownerRouterHooks, syncOwnerClaude, urlPath } from './climayte-owner-sync'
 import { launchRunner } from './climayte-runner'
 import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
@@ -67,6 +67,7 @@ import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
+import { DESK_CHAT_HEADER } from './mcp-find'
 import {
   deskBrowserMcpUrl,
   isAgenthydraBrowserEntry,
@@ -488,6 +489,16 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
         ...(ownerClaudeDir ? ownerMcpServers(ownerClaudeDir, deny) : {}),
       }
 
+  // A Desk chat's agenthydra server (this daemon's endpoint, under any name) is told which Desk chat calls it, as
+  // desk2's withDeskChatId does for an in-process chat: manager_open, desk_chat and the dashboard tools act on it.
+  const deskChat = w.chat ? w.desk?.chatId : undefined
+  if (deskChat)
+    for (const [name, entry] of Object.entries(servers)) {
+      const e = entry as { type?: unknown; url?: unknown; headers?: Record<string, string> }
+      if (typeof e.url === 'string' && urlPath(e.url) === MCP_PATH.toLowerCase())
+        servers[name] = { ...e, headers: { ...e.headers, [DESK_CHAT_HEADER]: deskChat } }
+    }
+
   // The port this daemon actually bound (index.ts tells the orchestrator module at boot); PORT
   // is only the preferred one and the daemon hops off it when it is busy.
   const base = getOrchestratorDaemonUrl() ?? `http://127.0.0.1:${PORT}`
@@ -545,7 +556,7 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  The owner's Bash guards (destructive_guard, push_force_guard, drive_root_guard) run on Bash and PowerShell calls for
  *  every worker and chat that is not sealed, the same as edit_claims: the owner's chats have them.
  *  Returns the settings file, with any signal left from an earlier attempt removed. */
-function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
+export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
   mkdirSync(HOOKS, { recursive: true })
   const hookFile = workerFiles(w.id)[0]
   // The owner's edit_claims hook, when installed: before an edit it records the file under this
@@ -575,6 +586,8 @@ function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): string {
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
         guards,
+        // A chat is the owner's own: Manager Hydra's router picks its manager every message.
+        promptHooks: w.chat && ownerClaudeDir && !w.sealed ? ownerRouterHooks(ownerClaudeDir) : [],
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed
@@ -802,6 +815,7 @@ function startRunner(
             ? {
                 AGENTHYDRA_CLIMAYTE_CHAT: '1',
                 ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
+                ...(w.desk?.chatId ? { HYDRA_DESK_CHAT_ID: w.desk.chatId } : {}),
               }
             : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
           CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),

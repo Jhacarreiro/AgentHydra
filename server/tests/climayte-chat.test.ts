@@ -18,8 +18,8 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
-import { CHAT_NOTE, cliArgv, writeWorkerMcp } from '../src/climayte-launch'
-import { LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
+import { CHAT_NOTE, cliArgv, writeWorkerMcp, writeWorkerSettings } from '../src/climayte-launch'
+import { type CliMayteAccount, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -187,6 +187,58 @@ describe('chat workers', () => {
       '--append-system-prompt',
       WORKER_BRIEF,
     ])
+  })
+
+  // 2026-10-13: manager_open and desk_chat answered "this process is not a Desk chat" in a Desk chat run as a CliMayte
+  // chat: the owner's agenthydra entry (HTTP) won over the Desk's and carried no chat id.
+  test("a Desk chat's agenthydra server is told which Desk chat calls it", () => {
+    writeFileSync(
+      join(HOME, '.claude.json'),
+      JSON.stringify({
+        mcpServers: {
+          agenthydra: { type: 'http', url: 'http://127.0.0.1:3747/api/mcp' },
+          other: { type: 'http', url: 'http://other.example.test/mcp' },
+        },
+      }),
+    )
+    const desk = { append: 'Desk text.', mcpServers: {}, chatId: 'desk-chat-1' }
+    const w = dispatch({ title: 'a desk chat with an id', chat: true, desk })
+    const servers = JSON.parse(readFileSync(writeWorkerMcp(w) ?? '', 'utf8')).mcpServers
+    expect(servers.agenthydra.headers).toEqual({ 'x-hydra-desk-chat': 'desk-chat-1' })
+    expect(servers.other.headers).toBeUndefined()
+
+    const plain = dispatch({ title: 'a chat with no Desk', chat: true })
+    const own = JSON.parse(readFileSync(writeWorkerMcp(plain) ?? '', 'utf8')).mcpServers
+    expect(own.agenthydra.headers).toBeUndefined()
+    rmSync(join(HOME, '.claude.json'))
+  })
+
+  // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
+  // account folder has settings of its own, and the launch carried only the guards.
+  test("a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
+    // As managers/install.mjs writes it on Windows.
+    const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
+    writeFileSync(
+      join(OWNER, 'settings.json'),
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [
+            { hooks: [{ type: 'command', command: 'python other_hook.py' }] },
+            { hooks: [router] },
+          ],
+        },
+      }),
+    )
+    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
+    const prompts = (file: string) =>
+      JSON.parse(readFileSync(file, 'utf8')).hooks.UserPromptSubmit as unknown
+    const chat = dispatch({ title: 'a routed chat', chat: true })
+    expect(prompts(writeWorkerSettings(chat, acct))).toEqual([{ hooks: [router] }])
+    const worker = dispatch({ title: 'a task' })
+    expect(prompts(writeWorkerSettings(worker, acct))).toBeUndefined()
+    rmSync(join(OWNER, 'settings.json'))
+    const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
+    expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
   })
 
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light

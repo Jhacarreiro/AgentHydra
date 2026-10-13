@@ -247,7 +247,7 @@ export interface CliMayteWorker {
   /** A Desk chat's add-ons (only with `chat`): its appended system text, connector MCP servers and, for a
    *  sub-manager chat, the Manager Hydra manager it is pinned to (launched as AGENTHYDRA_MANAGER).
    *  Every launch of the worker, continuations and account moves included, carries them. */
-  desk?: { append: string; mcpServers: Record<string, object>; manager?: string }
+  desk?: { append: string; mcpServers: Record<string, object>; manager?: string; chatId?: string }
   /** The caller's id for the request that made it (a task's `requestId`): the same request sent
    *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
    *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */
