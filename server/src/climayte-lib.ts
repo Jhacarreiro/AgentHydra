@@ -244,9 +244,10 @@ export interface CliMayteWorker {
    *  launched like his own `claude` in the folder, with no worker brief, his full instructions and
    *  skills, and Opus xhigh unless the task names its own. Absent: an ordinary delegated worker. */
   chat?: boolean
-  /** A Desk chat's add-ons (only with `chat`): its appended system text and connector MCP servers.
+  /** A Desk chat's add-ons (only with `chat`): its appended system text, connector MCP servers and, for a
+   *  sub-manager chat, the Manager Hydra manager it is pinned to (launched as AGENTHYDRA_MANAGER).
    *  Every launch of the worker, continuations and account moves included, carries them. */
-  desk?: { append: string; mcpServers: Record<string, object> }
+  desk?: { append: string; mcpServers: Record<string, object>; manager?: string }
   /** The caller's id for the request that made it (a task's `requestId`): the same request sent
    *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
    *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */

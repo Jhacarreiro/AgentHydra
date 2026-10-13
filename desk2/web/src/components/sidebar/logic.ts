@@ -64,7 +64,8 @@ export type SidebarEntry = (
   | { kind: 'chat'; id: string; at: number; chat: ChatSummary }
   | { kind: 'external'; id: string; at: number; session: ExternalSession }
 ) & {
-  under?: string // a nested row (nestChildren): the entryKey of the row it sits under, one step in
+  under?: string // a nested row (nestChildren): the entryKey of the top row it sits under
+  depth?: number // a nested row's generations below that top row: 1 for a child, 2 for a grandchild
 }
 
 export interface ChatGroup {
@@ -199,34 +200,35 @@ export function groupChats(
   })
 }
 
-/** A row's key for nesting: a Desk chat answers to its session id, an outside session to its own id (the parentId an outside session carries). */
-const sessionKeyOf = (e: SidebarEntry): string | null => (e.kind === 'chat' ? e.chat.sessionId : e.session.id)
+/** The keys a row answers to for nesting: a Desk chat by its id and its session id, an outside session by its own id. */
+const nestKeysOf = (e: SidebarEntry): string[] => (e.kind === 'chat' ? [e.chat.id, e.chat.sessionId] : [e.session.id]).filter((k): k is string => !!k)
+/** The key of the row a row sits under: an outside session's parentId, a Desk chat's parentId (its parent's Desk id). */
+const parentKeyOf = (e: SidebarEntry): string | undefined => (e.kind === 'chat' ? e.chat.parentId : e.session.parentId) || undefined
 /** A row's key in a list (as the template keys it), which `under` names. */
 export const entryKey = (e: SidebarEntry): string => `${e.kind}:${e.id}`
 
 /**
  * Chats started from another chat's chip sit under it, as in the newest Claude Desktop (owner, 2026-10-09). A row whose
  * parentId names a row shown in the same section (both live or both archived) moves into the parent's group, right after
- * the parent and the parent's earlier children; a grandchild goes under the top of its chain, one step in. A pinned row
+ * the parent and the parent's earlier children; a grandchild goes under the top of its chain, one level deeper (`depth`). A pinned row
  * stays in Pinned; a child whose parent is not shown (archived, filtered out, hidden, another list) stays an ordinary row
  * where it is. Runs on the groups as built, so search, filters and Hide already decided what is shown.
  */
 export function nestChildren(groups: SidebarGroups): SidebarGroups {
   const all = [groups.pinned, ...groups.folders, groups.archived].flatMap((g) => (g ? [g] : []))
   const byKey = new Map<string, SidebarEntry>()
-  for (const g of all) for (const e of g.entries) {
-    const key = sessionKeyOf(e)
-    if (key) byKey.set(key, e)
-  }
+  for (const g of all) for (const e of g.entries) for (const key of nestKeysOf(e)) byKey.set(key, e)
   const parentOf = (e: SidebarEntry): SidebarEntry | undefined => {
-    if (e.kind !== 'external' || !e.session.parentId || marksOf(e).pinned) return undefined
-    const parent = byKey.get(e.session.parentId)
+    const parentKey = parentKeyOf(e)
+    if (!parentKey || marksOf(e).pinned) return undefined
+    const parent = byKey.get(parentKey)
     return parent && parent !== e && marksOf(parent).archived === marksOf(e).archived ? parent : undefined
   }
-  // Each child's top row (its chain's last shown ancestor). A chain that loops back on itself stays ordinary rows.
-  const under = new Map<string, SidebarEntry>()
+  // Each child's top row (its chain's last shown ancestor) and how many generations below it. A chain that loops back on itself stays ordinary rows.
+  const under = new Map<string, { top: SidebarEntry; depth: number }>()
   for (const g of all) for (const e of g.entries) {
     let top = e
+    let depth = 0
     const seen = new Set<SidebarEntry>([e])
     let cyclic = false
     for (let p = parentOf(top); p; p = parentOf(top)) {
@@ -236,19 +238,20 @@ export function nestChildren(groups: SidebarGroups): SidebarGroups {
       }
       seen.add(p)
       top = p
+      depth += 1
     }
-    if (top !== e && !cyclic) under.set(entryKey(e), top)
+    if (top !== e && !cyclic) under.set(entryKey(e), { top, depth })
   }
   if (!under.size) return groups
 
   // The children of each top, in the order the lists showed them (groups in order, each as its group lists them).
   const kids = new Map<string, SidebarEntry[]>()
   for (const g of all) for (const e of g.entries) {
-    const top = under.get(entryKey(e))
-    if (!top) continue
-    const topKey = entryKey(top)
+    const nest = under.get(entryKey(e))
+    if (!nest) continue
+    const topKey = entryKey(nest.top)
     const list = kids.get(topKey)
-    const child: SidebarEntry = { ...e, under: topKey }
+    const child: SidebarEntry = { ...e, under: topKey, depth: nest.depth }
     if (list) list.push(child)
     else kids.set(topKey, [child])
   }
@@ -636,7 +639,7 @@ export function onlyActive(groups: ChatGroup[], glyphOf: (e: SidebarEntry) => St
     const active = g.entries.filter((e) => isActive(glyphOf(e)))
     // A nested row whose parent is not active any more shows as an ordinary row (nestChildren).
     const shown = new Set(active.map(entryKey))
-    const entries = active.map((e): SidebarEntry => (e.under && !shown.has(e.under) ? { ...e, under: undefined } : e))
+    const entries = active.map((e): SidebarEntry => (e.under && !shown.has(e.under) ? { ...e, under: undefined, depth: undefined } : e))
     return entries.length ? [{ ...g, entries }] : []
   })
 }

@@ -73,6 +73,12 @@ export interface ChatSummary {
   workerIds?: string[]
   /** The CliMayte worker this chat runs as; absent = an SDK chat run in this process; null = not started yet. */
   workerId?: string | null
+  /** The Desk chat this one was opened from (a sub-manager chat): the sidebar nests it directly below that chat. */
+  parentId?: string | null
+  /** The manager this chat is pinned to: its Claude process runs with AGENTHYDRA_MANAGER set to it. */
+  managerSlug?: string | null
+  /** The manager the chat is on now: its pin, else the one its Claude session's state names. Left out when neither has a persona. */
+  manager?: { slug: string; name: string } | null
 }
 
 // Transcript items: the normalized form of the SDK's message stream (and of AgentHydra transcripts)
@@ -554,6 +560,8 @@ export interface CreateChatRequest {
   effort?: Effort | null
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
+  parentId?: string // the Desk chat this one sits under (a sub-manager chat)
+  managerSlug?: string // the manager this chat runs as: its Claude process gets AGENTHYDRA_MANAGER
 }
 
 export interface SendMessageRequest {

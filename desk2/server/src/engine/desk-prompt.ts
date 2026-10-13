@@ -52,8 +52,14 @@ export function moveLine(self: DeskSelf): string {
 }
 
 /** What a chat in `cwd` gets beyond Claude Code's own prompt and tools, in-process or as a CliMayte worker: the one place that decides it. */
-export function chatAddOns(cwd: string, delegate: boolean, self?: DeskSelf): { append: string; mcpServers: Record<string, McpServerConfig> } {
+export function chatAddOns(
+  cwd: string,
+  delegate: boolean,
+  self?: DeskSelf,
+  manager?: string | null,
+): { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string } {
   const { mcpServers, prompts } = connectorsForChat(cwd, self?.id)
   const move = self ? ` ${moveLine(self)}` : ''
-  return { append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''), mcpServers }
+  // A sub-manager chat's manager rides along so a CliMayte launch pins it too (AGENTHYDRA_MANAGER).
+  return { append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''), mcpServers, ...(manager ? { manager } : {}) }
 }

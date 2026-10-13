@@ -1156,7 +1156,7 @@ export function climayteRun(input: {
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
     chat?: boolean
     /** A Desk chat's add-ons, only with `chat` (CliMayteWorker.desk). */
-    desk?: { append: string; mcpServers: Record<string, object> }
+    desk?: { append: string; mcpServers: Record<string, object>; manager?: string }
     /** The caller's id for this request (CliMayteWorker.requestId): sent again, it answers the worker
      *  the first one made, marked `repeat`, even with `copies`. */
     requestId?: string

@@ -721,3 +721,25 @@ describe('a chat started from another chat nests under it', () => {
     expect(rows(foldChildren(folders(), new Set(['external:p']), (e) => e.id === 'g'))).toEqual(['external:p', 'external:g <- external:p', 'external:x'])
   })
 })
+
+describe('a Desk chat started from a manager chat nests under it, indented per depth', () => {
+  const deskRows = (gs: SidebarGroups) => [gs.pinned, ...gs.folders, gs.archived].flatMap((x) => (x ? x.entries.map((e) => `${entryKey(e)}${e.under ? ` <- ${e.under}` : ''}`) : []))
+  const tree = () =>
+    groupChats(
+      [chat('p', { updatedAt: 30 }), chat('c', { parentId: 'p', updatedAt: 20 }), chat('g', { parentId: 'c', updatedAt: 15 }), chat('x', { updatedAt: 10 })],
+      { external: [] }
+    )
+
+  it('a child sits directly below its parent, and a grandchild one level deeper under the same top', () => {
+    expect(deskRows(tree())).toEqual(['chat:p', 'chat:c <- chat:p', 'chat:g <- chat:p', 'chat:x'])
+    const byId = new Map([...tree().folders].flatMap((g) => g.entries).map((e) => [e.id, e] as const))
+    expect(byId.get('c')?.depth).toBe(1)
+    expect(byId.get('g')?.depth).toBe(2)
+    expect(byId.get('p')?.depth).toBeUndefined()
+  })
+
+  it('folding the parent hides its children and grandchildren, and the other chats stay', () => {
+    expect(childrenByRow(tree().folders).get('chat:p')?.map((e) => e.id)).toEqual(['c', 'g'])
+    expect(deskRows({ ...tree(), folders: foldChildren(tree().folders, new Set(['chat:p']), () => false) })).toEqual(['chat:p', 'chat:x'])
+  })
+})

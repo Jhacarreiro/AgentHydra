@@ -1077,6 +1077,7 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               :key="`${entry.kind}:${src.rowKeyOf?.(entry.id) ?? entry.id}`"
               :data-search-cursor="cursorKey === `${entry.kind}:${entry.id}` || undefined"
               :class="[cursorKey === `${entry.kind}:${entry.id}` ? 'rounded-(--radius-6) bg-fill-hover' : '', entry.under && 'ms-2.75 border-s border-border ps-1', rowDrag.line(entry.id)]"
+              :style="entry.under && entry.depth ? { marginInlineStart: `${entry.depth * 0.6875}rem` } : undefined"
               :draggable="rowsDraggable(group)"
               @dragstart="rowsDraggable(group) && rowDrag.start($event, group.key, entry.id)"
               @dragover="rowsDraggable(group) && rowDrag.onOver($event, group.key, entry.id)"

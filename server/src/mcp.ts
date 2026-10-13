@@ -60,6 +60,7 @@ import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
+import { MANAGER_TOOLS } from './mcp-managers'
 import { withOutputShaping } from './mcp-output'
 import { ROUTINES_TOOLS } from './mcp-routines'
 import {
@@ -1925,6 +1926,7 @@ export const TOOLS: HydraTool[] = [
     () => LISTED_TOOLS,
   ),
   ...DASHBOARD_TOOLS,
+  ...MANAGER_TOOLS,
   {
     name: 'archive_desktop_chat',
     description:

@@ -384,6 +384,8 @@ export class ChatRuntime {
     const env: Record<string, string | undefined> = { ...this.baseEnv, ...SESSION_STATE_ENV }
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
     else delete env.CLAUDE_CONFIG_DIR
+    if (chat.managerSlug) env.AGENTHYDRA_MANAGER = chat.managerSlug
+    else delete env.AGENTHYDRA_MANAGER
     pinHaikuModel(env)
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const options: Options = {

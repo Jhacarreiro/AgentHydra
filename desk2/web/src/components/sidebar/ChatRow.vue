@@ -118,6 +118,7 @@ defineExpose({ startRename })
             @blur="commitRename"
           />
           <span v-else class="row-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'row-title-open': menuOpen, 'row-title-audio': speaker }">{{ chat.title }}</span>
+          <span v-if="chat.manager" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted" :title="`Manager: ${chat.manager.name}`">{{ chat.manager.name }}</span>
 
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->

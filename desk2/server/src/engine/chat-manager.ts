@@ -68,6 +68,7 @@ import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
 import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
+import { currentManager, MANAGER_SLUG } from './managers'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -374,13 +375,13 @@ export class ChatManager {
 
   /** Every chat, newest activity first. */
   list(o: { archived?: boolean } = {}): ChatSummary[] {
-    const all = [...this.chats.values()].map((e) => ({ ...e.chat }))
+    const all = [...this.chats.values()].map((e) => this.view(e.chat))
     const list = o.archived ? all : all.filter((c) => !c.archived)
     return list.sort((a, b) => b.updatedAt - a.updatedAt)
   }
 
   get(id: string): ChatSummary {
-    return { ...this.entry(id).chat }
+    return this.view(this.entry(id).chat)
   }
 
   /**
@@ -597,6 +598,7 @@ export class ChatManager {
 
   private async openNew(req: CreateChatRequest, messageId?: string): Promise<{ chat: ChatSummary; firstSend: Promise<string | null> }> {
     const cwd = checkCwd(req.cwd)
+    if (req.parentId && !this.chats.has(req.parentId)) throw new ChatError(400, 'parentId names no Desk chat')
     if (this.newChats === 'climayte') return this.open(req, cwd, { account: { ...CLIMAYTE_ACCOUNT }, auto: true, note: null }, messageId, true)
     return this.open(req, cwd, await this.resolveAccount(req.accountId ?? this.settingsOf().defaultAccountId), messageId)
   }
@@ -621,6 +623,8 @@ export class ChatManager {
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
       delegateToCliMayte: req.delegateToCliMayte ?? settings.delegateToCliMayte,
+      ...(req.parentId ? { parentId: req.parentId } : {}),
+      ...(req.managerSlug ? { managerSlug: req.managerSlug } : {}),
       status: 'closed',
       activity: null,
       turnStartedAt: null,
@@ -1008,7 +1012,7 @@ export class ChatManager {
     // A worker started before the connectors' first probe pass lands would run without their MCP servers.
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }), requestId)
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId)
     this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
@@ -1018,7 +1022,7 @@ export class ChatManager {
     const chat = e.chat
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }), ...(requestId ? { requestId } : {}) })
+    const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), ...(requestId ? { requestId } : {}) })
     e.workerCwd = chat.cwd
     chat.workerId = w.id
     chat.sessionId = w.sessionId
@@ -2234,7 +2238,11 @@ export class ChatManager {
 
   private changed(chat: ChatSummary): void {
     this.store.saveChats(this.stored())
-    this.emitEvent({ type: 'chat.upsert', chat: { ...chat } })
+    this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
+  }
+
+  private view(chat: ChatSummary): ChatSummary {
+    return { ...chat, manager: currentManager(chat.managerSlug, chat.sessionId) }
   }
 
   private stored(): ChatSummary[] {
@@ -2596,6 +2604,13 @@ export function parseCreate(body: unknown): CreateChatRequest {
   if (mode) req.permissionMode = mode
   const delegate = optBool(b, 'delegateToCliMayte')
   if (delegate !== undefined) req.delegateToCliMayte = delegate
+  const parentId = optString(b, 'parentId')
+  if (parentId !== undefined) req.parentId = parentId
+  const managerSlug = optString(b, 'managerSlug')
+  if (managerSlug !== undefined) {
+    if (!MANAGER_SLUG.test(managerSlug)) throw new ChatError(400, 'managerSlug is not a manager slug')
+    req.managerSlug = managerSlug
+  }
   return req
 }
 

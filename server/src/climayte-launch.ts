@@ -797,8 +797,12 @@ function startRunner(
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
           // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
+          // A sub-manager chat runs pinned to its manager.
           ...(w.chat
-            ? { AGENTHYDRA_CLIMAYTE_CHAT: '1' }
+            ? {
+                AGENTHYDRA_CLIMAYTE_CHAT: '1',
+                ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
+              }
             : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
           CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
