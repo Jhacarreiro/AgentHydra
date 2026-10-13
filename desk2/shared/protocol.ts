@@ -630,6 +630,18 @@ export interface SendNowResult {
   message?: string
 }
 
+/** POST /api/chats/:id/cancel-queued: takes a queued message back before it is sent; `itemId` is its bubble. */
+export interface CancelQueuedRequest {
+  itemId: string
+}
+
+/** Its answer: `cancelled` is false when the message already went into the turn; `message` says so in the words the bubble shows. */
+export interface CancelQueuedResult {
+  ok: true
+  cancelled: boolean
+  message: string
+}
+
 export interface SlashCommandInfo {
   name: string // without the leading slash
   description: string

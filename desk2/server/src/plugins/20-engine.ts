@@ -35,6 +35,7 @@ import {
   parsePlan,
   parseQuestion,
   parseRewind,
+  parseCancelQueued,
   parseSendNow,
   parseSend,
   parseSessionMeta,
@@ -300,6 +301,12 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
       // The stop only hands the queued message its turn: the send queue's own messages to this chat are not held by it.
       if (!held) queue.resume(id)
       return r
+    }),
+  )
+  app.post('/api/chats/:id/cancel-queued', (c) =>
+    answer(c, async () => {
+      const { itemId } = parseCancelQueued(await optionalBody(c))
+      return manager.cancelQueued(c.req.param('id'), itemId)
     }),
   )
   app.post('/api/chats/:id/interrupt', (c) =>

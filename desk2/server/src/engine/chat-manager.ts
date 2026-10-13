@@ -32,6 +32,8 @@ import type {
   PlanDecision,
   QuestionAnswer,
   RewindChatRequest,
+  CancelQueuedRequest,
+  CancelQueuedResult,
   SendNowRequest,
   SendNowResult,
   ServerEvent,
@@ -56,6 +58,7 @@ import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
+import { RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, retryItemsOf, SERVER_ERROR_TRIES, sleep } from './send-retry'
 import { mediaCache, toStoredImage } from '../media/cache'
 import { withNamedFiles, withoutNamedLines } from './system-text'
 import { SessionMetaStore } from './session-meta'
@@ -66,7 +69,7 @@ import { Timings } from './timings'
 import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -101,6 +104,8 @@ export interface ChatManagerOptions {
   newChats?: 'climayte' | 'sdk'
   /** Names a new chat from its first message; null = never. Default: a Sonnet query (none when queryImpl is faked). */
   titleGenerator?: TitleGenerator | null
+  /** How long a CliMayte chat's message AgentHydra did not take waits before it is sent again (send-retry.ts). */
+  retryDelays?: RetryDelays
 }
 
 /** A request the manager refuses, with the HTTP status the route answers. */
@@ -225,6 +230,11 @@ interface Entry {
   workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile; kept with the chat record, never in the Desk's items file. */
   sent?: UserItem[]
+  /** A CliMayte chat: the messages AgentHydra has not taken yet (it did not answer), oldest first, each sent again
+   *  with its own request id until it is (retryHeld); a later message waits behind them. Kept with the chat record. */
+  retrying?: RetryItem[]
+  /** The one loop sending `retrying`, while it runs. */
+  retryLoop?: Promise<void>
   /** The ledger id of the chat's latest failure: a move to another account marks it recovered. */
   lastFailure?: string
   /** A CliMayte chat: the worker error already in the ledger, so a re-read of the same failure adds no row. */
@@ -276,7 +286,7 @@ interface ResolvedAccount {
 }
 
 /** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown; sent?: unknown }
+type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown; sent?: unknown; retrying?: unknown }
 
 export class ChatManager {
   readonly store: ChatStore
@@ -313,6 +323,7 @@ export class ChatManager {
   /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
   private closing = false
   private readonly titleGen: TitleGenerator | null
+  private readonly retryDelays: RetryDelays
 
   /** The projects folder of a config folder (null: the default one), under the given home so every read and seed agree on it. */
   private root(configDir: string | null): string {
@@ -342,10 +353,13 @@ export class ChatManager {
     this.newChats = o.newChats ?? 'climayte'
     // A test that fakes the query gets no title queries unless it fakes the generator too.
     this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env, undefined, () => claudeCodeBinaryFor(o.home).path())) : o.titleGenerator
+    this.retryDelays = o.retryDelays ?? RETRY_DELAYS
     for (const stored of this.store.loadChats()) {
       const e = entryOf(stored as StoredRecord)
       this.chats.set(e.chat.id, e)
     }
+    // Messages AgentHydra had not taken when the server stopped are sent again, in order, with their own ids.
+    for (const e of this.chats.values()) if (e.retrying?.length) this.retryHeld(e)
     // Our own chats are not "Elsewhere".
     this.bridge.setExcludeSessionIds(() => [...this.sessionIds(), ...this.sessionMeta.tombstoned()])
     this.bridge.setExtraWorkerIds(() => this.workerIdsOfChats())
@@ -917,6 +931,31 @@ export class ChatManager {
     if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false, message: 'Nothing was stopped: the message had already gone on.' }
     await e.runtime.interrupt()
     return { ok: true, stopped: true }
+  }
+
+  /** Takes a queued message back before it is sent: the CLI never runs it, and its bubble leaves the transcript. */
+  async cancelQueued(id: string, itemId: string): Promise<CancelQueuedResult> {
+    const e = this.entry(id)
+    const tooLate = { ok: true as const, cancelled: false, message: 'Too late to cancel: it already went into this turn.' }
+    if (e.chat.workerId) return this.cancelHeld(e, itemId, tooLate)
+    if (!e.runtime?.running || !(await e.runtime.cancelQueued(itemId))) return tooLate
+    this.store.keepItems(id, new Set(this.listItems(id).map((i) => i.id).filter((x) => x !== itemId)))
+    this.emitEvent({ type: 'item.removed', chatId: id, itemId })
+    this.changed(e.chat)
+    return { ok: true, cancelled: true, message: 'Taken back: it is not sent.' }
+  }
+
+  private async cancelHeld(e: Entry, itemId: string, tooLate: CancelQueuedResult): Promise<CancelQueuedResult> {
+    const standIn = e.sent?.find((s) => s.id === itemId && s.queued)
+    if (!standIn) return tooLate
+    if (!standIn.text.trim()) return { ok: true, cancelled: false, message: 'This message has no text to name it by, so it cannot be taken back.' }
+    const r = await this.bridge.cancelWorkerHeld(e.chat.workerId as string, standIn.text)
+    if (!r.removed) return tooLate
+    this.dropStandIn(e, standIn)
+    e.chat.queuedCount = e.sent?.filter((s) => s.queued).length ?? 0
+    this.changed(e.chat)
+    await this.syncWorkers(e.chat.id)
+    return { ok: true, cancelled: true, message: 'Taken back: CliMayte will not send it.' }
   }
 
   /**
@@ -2011,13 +2050,14 @@ export class ChatManager {
 
   private stored(): ChatSummary[] {
     return [...this.chats.values()].map((e) => {
-      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions && e.workerCwd === undefined && !e.sent?.length) return e.chat
+      if (!e.forkAt && e.ranIn === undefined && !e.pastSessions && e.workerCwd === undefined && !e.sent?.length && !e.retrying?.length) return e.chat
       const record: StoredRecord = { ...e.chat }
       if (e.forkAt) record.forkAt = e.forkAt
       if (e.ranIn !== undefined) record.ranIn = e.ranIn
       if (e.pastSessions) record.pastSessions = e.pastSessions
       if (e.workerCwd !== undefined) record.workerCwd = e.workerCwd
       if (e.sent?.length) record.sent = e.sent
+      if (e.retrying?.length) record.retrying = e.retrying
       return record
     })
   }
@@ -2229,7 +2269,7 @@ const UNDO_NOT_FOUND = 'Could not find this message in its session file, so ther
 
 /** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
 function entryOf(stored: StoredRecord): Entry {
-  const { forkAt, ranIn, pastSessions, workerCwd, sent, ...chat } = stored
+  const { forkAt, ranIn, pastSessions, workerCwd, sent, retrying, ...chat } = stored
   return {
     chat,
     runtime: null,
@@ -2239,6 +2279,7 @@ function entryOf(stored: StoredRecord): Entry {
     pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
     workerCwd: typeof workerCwd === 'string' ? workerCwd : undefined,
     sent: Array.isArray(sent) && sent.length ? (sent as UserItem[]) : undefined,
+    retrying: retryItemsOf(retrying),
   }
 }
 
@@ -2522,6 +2563,12 @@ export function parseImport(body: unknown): ImportSessionRequest {
 export function parseSendNow(body: unknown): SendNowRequest {
   const itemId = optString(obj(body), 'itemId')
   return itemId?.trim() ? { itemId: itemId.trim() } : {}
+}
+
+export function parseCancelQueued(body: unknown): CancelQueuedRequest {
+  const itemId = optString(obj(body), 'itemId')
+  if (!itemId?.trim()) throw new ChatError(400, 'itemId is required')
+  return { itemId: itemId.trim() }
 }
 
 /** A fork's request: an empty body forks the whole chat. */

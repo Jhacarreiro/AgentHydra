@@ -88,11 +88,13 @@ import {
   assertKnownAccounts,
   deskProblem,
   hex,
+  madeFor,
   newWorker,
   type RunReply,
   type RunSetting,
   type RunTask,
   repeatOf,
+  requestIdProblem,
   runDefaultsOf,
   runReply,
   sealedTask,
@@ -1155,6 +1157,9 @@ export function climayteRun(input: {
     chat?: boolean
     /** A Desk chat's add-ons, only with `chat` (CliMayteWorker.desk). */
     desk?: { append: string; mcpServers: Record<string, object> }
+    /** The caller's id for this request (CliMayteWorker.requestId): sent again, it answers the worker
+     *  the first one made, marked `repeat`, even with `copies`. */
+    requestId?: string
     /** Launch sealed (CliMayteSealed, sealedOf); `prompt` here stands in for an empty task prompt,
      *  and the task's `cwd` is not read. */
     sealed?: CliMayteSealed & { prompt?: string }
@@ -1189,10 +1194,12 @@ export function climayteRun(input: {
   if (!Number.isInteger(cap) || cap < 1 || cap > 4) throw new Error('perAccount must be 1..4')
   assertKnownAccounts(input.accounts)
   const now = Date.now()
-  // Only a named group can repeat: an unnamed one is new by definition.
+  // Only a named group can repeat: an unnamed one is new by definition. A request sent again (its
+  // requestId) is always the worker it made, copies or not.
   const named = input.group?.trim()
-  const repeats = input.tasks.map((t) =>
-    named && input.copies !== true ? repeatOf(t, named, now) : null,
+  const repeats = input.tasks.map(
+    (t) =>
+      madeFor(t.requestId) ?? (named && input.copies !== true ? repeatOf(t, named, now) : null),
   )
   const fresh = input.tasks.flatMap((_, i) => (repeats[i] ? [] : [i]))
   // Sized and made: only the tasks no earlier dispatch made.
@@ -1285,6 +1292,12 @@ function sendUrgent(
   return null
 }
 
+/** How many message request ids a worker keeps (CliMayteWorker.sendIds): a caller retries a message
+ *  within seconds, so the newest few are enough. */
+const SEND_IDS_KEPT = 50
+/** What a message sent again (the same requestId) is answered: it was taken the first time. */
+const TAKEN_ALREADY = 'Already taken: this message arrived before, so it was not queued again.'
+
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
  *  follow it, in order. Without it, a running worker gets the message when its task ends. */
@@ -1298,6 +1311,9 @@ export function climayteSend(
     cwd?: string
     desk?: unknown
     ping?: true
+    /** The caller's id for this message (CliMayteWorker.sendIds): sent again, it is answered as
+     *  taken and queued once. */
+    requestId?: string
   } = {},
 ): {
   ok: boolean
@@ -1310,6 +1326,10 @@ export function climayteSend(
   const w = workers.get(id)
   if (!w) return { ok: false, message: 'No such worker.' }
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
+  const badId = requestIdProblem(opts.requestId)
+  if (badId) return { ok: false, message: badId }
+  if (opts.requestId && w.sendIds?.includes(opts.requestId))
+    return { ok: true, message: TAKEN_ALREADY, model: w.model, effort: w.effort }
   const setting = sendSetting(w, opts)
   if (typeof setting === 'string') return { ok: false, message: setting }
   // A Desk chat's add-ons as they are now replace the kept ones from the next launch on.
@@ -1319,6 +1339,8 @@ export function climayteSend(
     w.desk = opts.desk as CliMayteWorker['desk']
   }
   applySendSetting(w, setting)
+  // Every path from here takes the message, so its id is kept now; each path saves it with the worker.
+  if (opts.requestId) w.sendIds = [...(w.sendIds ?? []), opts.requestId].slice(-SEND_IDS_KEPT)
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
   // A stopped worker stays stopped for a ping: its text waits with the owner's next message.
   if (opts.ping && w.status === 'cancelled') {
@@ -1406,6 +1428,30 @@ export function climayteDeliverNow(
     stopped: false,
     message: 'It had just finished: this message leads its next turn.',
   }
+}
+
+/** Takes back a held message (Hydra Desk 2's Cancel): the worker never runs it. `text` names which one. */
+export function climayteCancelHeld(
+  id: string,
+  text: string,
+): { ok: boolean; removed: boolean; message: string } {
+  load()
+  const w = workers.get(id)
+  if (!w) return { ok: false, removed: false, message: 'No such worker.' }
+  const want = text.trim()
+  if (!want) return { ok: false, removed: false, message: 'Name the held message by its text.' }
+  let i = w.pending.indexOf(text)
+  if (i < 0) i = w.pending.findIndex((p) => p.includes(want))
+  if (i < 0)
+    return {
+      ok: true,
+      removed: false,
+      message: 'That message is not held any more: it was delivered, or its turn has begun.',
+    }
+  w.pending.splice(i, 1)
+  journal(w, 'follow-up-cancelled', { pending: w.pending.length })
+  changed(w)
+  return { ok: true, removed: true, message: 'Taken back: the worker will not run it.' }
 }
 
 /** Ends a running worker's turn so the same session continues at once with what it holds (an urgent

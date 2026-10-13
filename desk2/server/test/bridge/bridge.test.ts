@@ -197,6 +197,21 @@ describe('bridge', () => {
     expect(probes()).toBe(3)
     expect(await b.sendToWorkerNow('w-00000001', 'stop and fix the build')).toMatchObject({ stopped: true })
   })
+
+  test('cancel-held takes back a held message; an AgentHydra without the route says it needs its update', async () => {
+    const f = await fake()
+    f.state.version = '1.11.0'
+    f.state.cancelHeld = false
+    const b = createBridge({ url: f.url, now: () => NOW })
+    const old = await b.cancelWorkerHeld('w-00000001', 'stop and fix the build').catch((e) => e)
+    expect(old.message).toBe('This AgentHydra cannot take back a held message yet: it needs its update')
+
+    f.state.cancelHeld = true
+    expect(await b.cancelWorkerHeld('w-00000001', 'stop and fix the build')).toEqual({ removed: true, message: 'Taken back: the worker will not run it.' })
+    expect(f.posts.at(-1)).toEqual({ path: '/api/corch/workers/w-00000001/cancel-held', body: { text: 'stop and fix the build' } })
+    f.state.cancelRemoves = false
+    expect(await b.cancelWorkerHeld('w-00000001', 'stop and fix the build')).toMatchObject({ removed: false })
+  })
 })
 
 describe('poller', () => {

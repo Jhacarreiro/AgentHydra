@@ -200,6 +200,7 @@ export function hostedOf(q: unknown): HostedQuery | null {
 /** Query's control methods (SDK 0.3.288): each one is a call into the host. */
 const CALLS = new Set([
   'interrupt',
+  'cancelAsyncMessage',
   'setPermissionMode',
   'setMcpPermissionModeOverride',
   'setModel',

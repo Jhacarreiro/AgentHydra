@@ -276,6 +276,29 @@ describe('chat routes', () => {
     expect(queue.body.items.find((i) => i.id === later.body.id)?.state).not.toBe('held')
   })
 
+  test('Cancel on a queued message: the CLI never runs it, its bubble leaves the transcript, and too late once it went into the turn', async () => {
+    const t = await boot()
+    const { events } = await listen(t.desk)
+    const { chat, fake } = await working(t, temp('desk-cwd-'))
+    await call(t.desk, 'POST', `/api/chats/${chat.id}/messages`, { text: 'take this back' })
+    await waitFor(() => chatEvents(events, chat.id).at(-1)?.queuedCount === 1)
+    const held = (await call<TranscriptItem[]>(t.desk, 'GET', `/api/chats/${chat.id}/items`)).body.find((i) => i.kind === 'user' && i.text === 'take this back')!
+
+    const cancel = await call(t.desk, 'POST', `/api/chats/${chat.id}/cancel-queued`, { itemId: held.id })
+    expect(cancel.body).toEqual({ ok: true, cancelled: true, message: 'Taken back: it is not sent.' })
+    expect(fake.calls.cancelled).toEqual([held.id])
+    await waitFor(() => events.some((e) => e.type === 'item.removed' && e.itemId === held.id))
+    expect((await call<TranscriptItem[]>(t.desk, 'GET', `/api/chats/${chat.id}/items`)).body.some((i) => i.id === held.id)).toBe(false)
+    expect((await call<ChatSummary>(t.desk, 'GET', `/api/chats/${chat.id}`)).body.queuedCount).toBe(0)
+
+    await call(t.desk, 'POST', `/api/chats/${chat.id}/messages`, { text: 'too late by then' })
+    await waitFor(() => chatEvents(events, chat.id).at(-1)?.queuedCount === 1)
+    const late = (await call<TranscriptItem[]>(t.desk, 'GET', `/api/chats/${chat.id}/items`)).body.find((i) => i.kind === 'user' && i.text === 'too late by then')!
+    fake.cancelAnswer = false
+    expect((await call(t.desk, 'POST', `/api/chats/${chat.id}/cancel-queued`, { itemId: late.id })).body).toEqual({ ok: true, cancelled: false, message: 'Too late to cancel: it already went into this turn.' })
+    expect((await call<TranscriptItem[]>(t.desk, 'GET', `/api/chats/${chat.id}/items`)).body.some((i) => i.id === late.id)).toBe(true)
+  })
+
   test('a permission round trip over HTTP', async () => {
     const t = await boot()
     const { events } = await listen(t.desk)

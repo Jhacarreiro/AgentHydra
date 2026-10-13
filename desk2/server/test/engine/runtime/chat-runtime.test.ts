@@ -46,6 +46,12 @@ class FakeQuery {
   private done = false
   private error: unknown = null
   sent: SDKUserMessage[] = []
+  cancelAnswer = true
+  cancelled: string[] = []
+  async cancelAsyncMessage(uuid: string) {
+    this.cancelled.push(uuid)
+    return this.cancelAnswer
+  }
   calls = { interrupt: 0, close: 0, setPermissionMode: [] as string[], setModel: [] as (string | undefined)[], applyFlagSettings: [] as unknown[] }
   contextUsage: { percentage?: number; totalTokens?: number; maxTokens?: number } = { percentage: 42 }
   /** A mode the CLI refuses, as it refuses Bypass to a process not launched for it. */
@@ -833,6 +839,35 @@ describe('ChatRuntime: errors and limits', () => {
       'Rate limit hit, resets in 30 seconds',
     ])
       expect(isUsageLimitText(s)).toBe(false)
+  })
+})
+
+describe('ChatRuntime: cancel a queued message', () => {
+  test('the CLI drops it and it leaves the queue; a second cancel finds nothing', async () => {
+    const t = setup()
+    t.rt.send('first')
+    t.fake().push(hand.init(), state('running'))
+    await settle()
+    expect(t.rt.send('second')).toEqual({ queued: true })
+    await settle()
+    const id = t.fake().sent[1]!.uuid!
+    expect(await t.rt.cancelQueued(id)).toBe(true)
+    expect(t.fake().cancelled).toEqual([id])
+    expect(t.rt.chat.queuedCount).toBe(0)
+    expect(await t.rt.cancelQueued(id)).toBe(false)
+  })
+
+  test('too late: the CLI already took it into the turn, so it stays queued', async () => {
+    const t = setup()
+    t.rt.send('first')
+    t.fake().push(hand.init(), state('running'))
+    await settle()
+    t.rt.send('second')
+    await settle()
+    const id = t.fake().sent[1]!.uuid!
+    t.fake().cancelAnswer = false
+    expect(await t.rt.cancelQueued(id)).toBe(false)
+    expect(t.rt.chat.queuedCount).toBe(1)
   })
 })
 

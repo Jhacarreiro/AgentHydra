@@ -34,6 +34,10 @@ export interface FakeState {
   version?: string
   /** false: an AgentHydra from before deliver-now (v1.10.0), whose route answers its own 404 page. */
   deliverNow?: boolean
+  /** false: an AgentHydra from before cancel-held, whose route answers its own 404 page. */
+  cancelHeld?: boolean
+  /** false: the held message is no longer held (it was delivered or began). */
+  cancelRemoves?: boolean
 }
 
 /** Sessions on the other PC: the chat that started its wave, and that wave's manager. */
@@ -219,6 +223,12 @@ function handlePost(state: FakeState, p: string, body: any): Response {
     const w = state.workers.find((x) => x.id === decodeURIComponent(now[1]))
     if (!w) return json({ ok: false, message: 'No such worker.' })
     return json({ ok: true, stopped: w.status === 'running', message: 'sent now' })
+  }
+  const cancel = /^\/api\/corch\/workers\/([^/]+)\/cancel-held$/.exec(p)
+  if (cancel) {
+    if (state.cancelHeld === false) return new Response('404 Not Found', { status: 404 })
+    const removed = state.cancelRemoves !== false
+    return json({ ok: true, removed, message: removed ? 'Taken back: the worker will not run it.' : 'That message is not held any more: it was delivered, or its turn has begun.' })
   }
   return json({ error: 'not found' }, 404)
 }

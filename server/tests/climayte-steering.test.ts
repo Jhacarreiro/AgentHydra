@@ -9,6 +9,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
   climayteCancel,
+  climayteCancelHeld,
   climayteDeliverNow,
   climayteGet,
   climayteJournal,
@@ -111,6 +112,27 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       const events = climayteJournal({ id }).map((e) => e.event)
       expect(events.filter((e) => e === 'follow-up-delivered')).toHaveLength(2)
       expect(climayteJournal({ id }).find((e) => e.urgent)?.event).toBe('follow-up-queued')
+    },
+    3 * ATTEMPT_MS + 10_000,
+  )
+
+  test(
+    'cancel a held message: it is taken back, is never run, and a second cancel finds nothing',
+    async () => {
+      const id = await start('cancel-held', 'slow-1')
+      climayteSend(id, 'first held')
+      climayteSend(id, 'taken back')
+      expect(climayteCancelHeld('no-such-worker', 'x')).toMatchObject({ ok: false })
+      expect(climayteCancelHeld(id, '  ')).toMatchObject({ ok: false, removed: false })
+      expect(climayteCancelHeld(id, 'taken back')).toMatchObject({ ok: true, removed: true })
+      expect(climayteList({ id })[0]?.pending).toEqual(['first held'])
+      expect(climayteCancelHeld(id, 'taken back')).toMatchObject({ ok: true, removed: false })
+      expect(climayteJournal({ id }).some((e) => e.event === 'follow-up-cancelled')).toBe(true)
+
+      const w = await settle(id, 2 * ATTEMPT_MS)
+      expect(w?.status).toBe('done')
+      expect(w?.pending).toEqual([])
+      expect(w?.attempts.map((a) => a.notice ?? '').join(' | ')).not.toContain('taken back')
     },
     3 * ATTEMPT_MS + 10_000,
   )
@@ -270,7 +292,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       expect(climayteList({ id })[0]?.pending).toEqual(['first', 'second'])
 
       climayteSend(id, 'third')
-      const w = await settle(id, 3 * ATTEMPT_MS) // one turn per kept message
+      const w = await settle(id, 5 * ATTEMPT_MS) // one 30 s fake-slow turn per kept message
       expect(w?.status).toBe('done')
       expect(w?.pending).toEqual([])
       expect(climayteJournal({ id }).filter((e) => e.event === 'follow-up-delivered')).toHaveLength(
@@ -281,7 +303,7 @@ describe('integration: steering a running worker (field notes 10 and 11)', () =>
       expect(climayteGet(id)?.reports?.map((r) => r.message)).toEqual(['first', 'second'])
       expect(climayteGet(id)?.reports?.every((r) => r.results.length > 0)).toBe(true)
     },
-    4 * ATTEMPT_MS + 10_000,
+    6 * ATTEMPT_MS + 10_000,
   )
 
   // 2026-10-02: three cancels 87-209 ms after launch found no pid file yet, marked the attempt

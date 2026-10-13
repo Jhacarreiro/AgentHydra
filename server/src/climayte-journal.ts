@@ -25,6 +25,7 @@ export type CliMayteJournalEvent =
   | 'follow-up-queued' // climayte_send queued a message
   | 'cwd-changed' // climayte_send asked for another folder (`cwd`, `from`; `pending`), or the launch moved there (`copied`)
   | 'follow-up-delivered' // an attempt started with that message
+  | 'follow-up-cancelled' // the human took back a held message before it was delivered (`pending`: messages still held)
   | 'asked' // the worker asked a question (climayte_ask; `said`: its first line); the answer is climayte_send
   | 'retry' // the API was overloaded, or the next attempt could not start: tried again later
   | 'interrupted' // the CLI was killed from outside (a daemon restart); resumed
@@ -325,6 +326,8 @@ const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
   'handoff-resumed': (_e, p) => `resumed from its handoff${p.on} ${p.pick}${p.runs}`,
   'follow-up-queued': (e, p) => describeFollowUpQueuedLine(e, p.runs),
   'follow-up-delivered': (_e, p) => `follow-up delivered${p.on} ${p.pick}${p.runs}`,
+  'follow-up-cancelled': (e, p) =>
+    `held message taken back, not sent${p.on}${e.pending ? `; ${e.pending} still held` : ''}`,
   asked: (e, p) => `asked${p.on}${e.said ? `: ${e.said}` : ''}`,
   retry: (e, p) => describeRetryLine(e, p.on),
   cleaned: (e, p) => describeShortLine(e, p.on, 'cleaned'),

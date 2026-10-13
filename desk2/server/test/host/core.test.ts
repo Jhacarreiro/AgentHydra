@@ -155,3 +155,19 @@ test("a server's last word reaches the host while the host is sending (Bun drops
     server.stop(true)
   }
 })
+
+test('a send the CLI cancels is dropped from the journal, so a restarted server does not replay it', async () => {
+  const { core, state } = host()
+  const a = link()
+  core.attach(a)
+  core.receive({ type: 'input', msg: input('u1') }, a)
+  core.receive({ type: 'input', msg: input('u2') }, a)
+  await tick()
+  core.receive({ type: 'call', rpcId: 7, method: 'cancelAsyncMessage', args: ['u2'] }, a)
+  await tick()
+  expect(state.fake.calls.cancelled).toEqual(['u2'])
+
+  const b = link()
+  core.attach(b)
+  expect(replayed(b).map((e) => (e.kind === 'input' ? (e.msg.uuid as string) : e.kind))).toEqual(['u1'])
+})

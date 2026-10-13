@@ -9,6 +9,9 @@ export const DEFAULT_HYDRA_URL = 'http://127.0.0.1:7787'
 export const REQUEST_TIMEOUT_MS = 4000
 /** A message into a Claude Desktop chat: AgentHydra confirms it from the transcript within 45 s. */
 const DELIVERY_TIMEOUT_MS = 50_000
+/** Starting a chat's worker or sending it a message. A busy AgentHydra answered after 4 s and had done it
+ *  (2026-10-13); each carries a requestId, so a call that still runs out is retried without doing it twice. */
+const WORKER_WRITE_TIMEOUT_MS = 30_000
 /** A transcript search may scan for up to 7 s before AgentHydra's index is built (session-search.ts budget). */
 export const SEARCH_TIMEOUT_MS = 10_000
 
@@ -399,6 +402,8 @@ export interface StartWorker {
   modelWhy?: string
   /** The chat's system-prompt append and connector MCP servers (`chatAddOns`); AgentHydra keeps them for every launch. */
   desk?: { append: string; mcpServers: Record<string, McpServerConfig> }
+  /** This start's own id: the same start sent again answers the worker it made (an older AgentHydra ignores it). */
+  requestId?: string
 }
 
 export function createClient(opts: HydraClientOptions = {}) {
@@ -433,8 +438,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     }
     if (!res.ok) {
       // A refused delivery answers `detail` (no `error`): its reason is there.
-      const body = data as { error?: unknown; detail?: unknown }
-      const reason = typeof body?.error === 'string' ? body.error : body?.detail
+      // A refused CliMayte message answers `message` (climayteSend's own shape).
+      const body = data as { error?: unknown; detail?: unknown; message?: unknown }
+      const reason = typeof body?.error === 'string' ? body.error : typeof body?.detail === 'string' ? body.detail : body?.message
       throw new BridgeError(
         'http',
         `AgentHydra ${method} ${path} failed (${res.status}): ${typeof reason === 'string' ? reason : 'no reason given'}`,
@@ -452,7 +458,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     url,
     get,
     post,
-    health: () => get<{ ok: boolean; version?: string }>('/api/health'),
+    health: () => get<{ ok: boolean; version?: string; pid?: number; runningCode?: { bootCommit?: string | null } }>('/api/health'),
     agentStatus: () => get<AhAgentStatus[]>('/api/agent-status'),
     liveSessions: async () => (await get<{ count: number; sessions: AhLiveSession[] }>('/api/sessions/live')).sessions,
     /** The unarchived chats; `include` adds the archived ones (newest 1000 in all), for a job whose chat was archived since. */
@@ -492,29 +498,41 @@ export function createClient(opts: HydraClientOptions = {}) {
       get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1`),
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
-      post<{ group: string; workers: AhWorker[] }>('/api/corch/workers', {
+      request<{ group: string; workers: AhWorker[] }>('POST', '/api/corch/workers', {
         // A Desk chat run as a worker is the user's own chat: no chat dispatched it, so nothing is traced or pinged.
         origin: null,
-        tasks: [{ prompt: task.prompt, cwd: task.cwd, title: task.title, chat: true, ...(task.desk ? { desk: task.desk } : {}) }],
+        tasks: [{
+          prompt: task.prompt,
+          cwd: task.cwd,
+          title: task.title,
+          chat: true,
+          ...(task.desk ? { desk: task.desk } : {}),
+          ...(task.requestId ? { requestId: task.requestId } : {}),
+        }],
         group: task.group,
         ...(task.model ? { model: task.model, modelWhy: task.modelWhy } : {}),
         ...(task.effort ? { effort: task.effort } : {}),
         copies: true,
-      }),
+      }, WORKER_WRITE_TIMEOUT_MS),
     /** `cwd`: the folder the chat moved to; the worker's next launch copies its session there and resumes there.
      *  `urgent`: a running worker is stopped and the same session continues at once with this message first
      *  (`urgent: true` in the answer when it stopped; every AgentHydra with CliMayte has it).
-     *  `desk`: the chat's add-ons now (`chatAddOns`), which replace what AgentHydra keeps from the next launch on. */
-    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk']) =>
-      post<{ ok: boolean; message: string; urgent?: boolean }>(`/api/corch/workers/${enc(id)}/send`, {
+     *  `desk`: the chat's add-ons now (`chatAddOns`), which replace what AgentHydra keeps from the next launch on.
+     *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it). */
+    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string) =>
+      request<{ ok: boolean; message: string; urgent?: boolean }>('POST', `/api/corch/workers/${enc(id)}/send`, {
         text,
         ...(cwd ? { cwd } : {}),
         ...(desk ? { desk } : {}),
         ...(urgent ? { urgent: true } : {}),
-      }),
+        ...(requestId ? { requestId } : {}),
+      }, WORKER_WRITE_TIMEOUT_MS),
     /** Send now on a message the worker holds (`text` names it, else its oldest): its turn stops and the same session continues with it first. */
     deliverNow: (id: string, text?: string) =>
       post<{ ok: boolean; stopped?: boolean; message: string }>(`/api/corch/workers/${enc(id)}/deliver-now`, text ? { text } : {}),
+    /** Takes back the held message `text` names (the worker never runs it); `removed` false when it is not held any more. */
+    cancelHeld: (id: string, text: string) =>
+      post<{ ok: boolean; removed?: boolean; message: string }>(`/api/corch/workers/${enc(id)}/cancel-held`, { text }),
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
     // AgentHydra answers once the chat's transcript shows the message, which takes seconds and may take its 45 s
     // confirm window: the 4 s every other call gets gave up on deliveries that went through.

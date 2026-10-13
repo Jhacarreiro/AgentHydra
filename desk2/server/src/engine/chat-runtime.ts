@@ -781,6 +781,19 @@ ${swap.real}` }
     return true
   }
 
+  /** Takes a queued send back before the CLI runs it; false when it already went into the turn. */
+  async cancelQueued(itemId: string): Promise<boolean> {
+    const sent = this.unanswered.find((s) => s.uuid === itemId)
+    if (!this.queued.has(itemId) || !sent || !this.q) return false
+    // The SDK's typings omit cancelAsyncMessage; the runtime Query and the host proxy both have it.
+    const cancels = this.q as unknown as { cancelAsyncMessage(uuid: string): Promise<boolean> }
+    if (!(await cancels.cancelAsyncMessage(itemId))) return false
+    this.queued.delete(itemId)
+    this.unanswered = this.unanswered.filter((s) => s !== sent)
+    this.syncQueuedCount()
+    return true
+  }
+
   /** The manager could not carry a limit it took over: the next limit is announced again. */
   rearmLimit(): void {
     this.limitAnnounced = false

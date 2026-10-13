@@ -33,6 +33,8 @@ import type {
   QueueReorder,
   QueueSettingsPatch,
   QueueState,
+  CancelQueuedRequest,
+  CancelQueuedResult,
   SendNowRequest,
   SendNowResult,
   ExternalBranchRequest,
@@ -1083,6 +1085,24 @@ export function useDesk() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ itemId } satisfies SendNowRequest)
       })
+    },
+
+    /** Cancel on a message held behind a turn: it is never sent, and its text and pictures come back to the box. */
+    async cancelQueued(chatId: string, itemId: string, message: { text: string; images?: DraftImage[] }): Promise<CancelQueuedResult> {
+      const result = await fetchJson<CancelQueuedResult>(`/chats/${chatId}/cancel-queued`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ itemId } satisfies CancelQueuedRequest)
+      })
+      if (!result.cancelled) return result
+      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
+      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+      if (!back.taken) {
+        const storage = typeof localStorage === 'undefined' ? null : localStorage
+        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
+        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
+      }
+      return result
     },
 
     async respondPermission(

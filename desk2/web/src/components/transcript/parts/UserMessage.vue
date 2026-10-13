@@ -58,6 +58,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import MessageActions from './MessageActions.vue'
+import { boxImages } from './image-bytes'
 import UserAttachments from './UserAttachments.vue'
 
 const props = defineProps<{ id?: string; text: string; ts: number; images?: ImageRef[]; queued?: boolean; sendFailed?: string }>()
@@ -96,6 +97,28 @@ async function sendNow() {
     sendNowError.value = err instanceof Error ? err.message : String(err)
     sendNowState.value = 'failed'
     setTimeout(() => (sendNowState.value = 'idle'), 4000)
+  }
+}
+
+const canCancel = computed(() => !ctx.readOnly.value && !!ctx.chatId.value && !!props.id)
+const cancelling = ref(false)
+
+async function cancelQueued() {
+  if (cancelling.value) return
+  cancelling.value = true
+  try {
+    const r = await desk.cancelQueued(ctx.chatId.value, props.id ?? '', { text: props.text, images: await boxImages(props.images) })
+    if (!r.cancelled) {
+      sendNowNote.value = r.message
+      clearTimeout(noteTimer)
+      noteTimer = setTimeout(() => (sendNowNote.value = ''), 10_000)
+    }
+  } catch (err) {
+    sendNowNote.value = `Cancel failed: ${err instanceof Error ? err.message : String(err)}`
+    clearTimeout(noteTimer)
+    noteTimer = setTimeout(() => (sendNowNote.value = ''), 10_000)
+  } finally {
+    cancelling.value = false
   }
 }
 
@@ -188,6 +211,19 @@ watch(() => props.text, () => nextTick(fit))
               @click="sendNow"
             >
               {{ sendNowState === 'sending' ? 'Sending…' : 'Send now' }}
+            </button>
+          </Tip>
+        </template>
+        <template v-if="canCancel">
+          <span aria-hidden="true">·</span>
+          <Tip label="Take this message back before it is sent">
+            <button
+              type="button"
+              class="cursor-pointer hover:text-text disabled:cursor-default disabled:opacity-60"
+              :disabled="cancelling"
+              @click="cancelQueued"
+            >
+              Cancel
             </button>
           </Tip>
         </template>

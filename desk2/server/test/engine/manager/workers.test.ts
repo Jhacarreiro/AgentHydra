@@ -211,6 +211,38 @@ test('Send now on a queued message has CliMayte deliver that one now, and its bu
   expect(m.sendNow(chat.id, first.id)).rejects.toThrow(/CliMayte did not send it now: .*needs its update/)
 })
 
+test('Cancel on a held message takes it back from the worker: never run, gone from the bubbles, and too late once taken', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-workers-'))
+  temps.push(home)
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const m = newManager(home, b)
+  const chat = await m.create({ cwd: home, prompt: 'hi' })
+  while (!m.get(chat.id).workerId) await new Promise((r) => setTimeout(r, 5))
+  Object.assign(b.state.rows[0]!, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  expect(await m.send(chat.id, 'first, check the build')).toEqual({ queued: true })
+  expect(await m.send(chat.id, 'stop and do this')).toEqual({ queued: true })
+  const queued = () => m.listItems(chat.id).filter((i) => i.kind === 'user' && i.queued).map((i) => i.kind === 'user' && i.text)
+  const second = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'stop and do this')!
+
+  expect(await m.cancelQueued(chat.id, second.id)).toEqual({ ok: true, cancelled: true, message: 'Taken back: CliMayte will not send it.' })
+  expect(b.state.heldCancels).toEqual([{ id: 'w1', text: 'stop and do this' }])
+  expect(b.state.sentNow).toEqual([])
+  expect(queued()).toEqual(['first, check the build'])
+  expect(m.get(chat.id).queuedCount).toBe(1)
+
+  b.state.cancelRemoves = false
+  const first = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'first, check the build')!
+  expect(await m.cancelQueued(chat.id, first.id)).toEqual({ ok: true, cancelled: false, message: 'Too late to cancel: it already went into this turn.' })
+  expect(queued()).toEqual(['first, check the build'])
+
+  b.state.cancelHeldRoute = false
+  b.state.cancelRemoves = true
+  expect(m.cancelQueued(chat.id, first.id)).rejects.toThrow(/cannot take back a held message yet: it needs its update/)
+  expect(queued()).toEqual(['first, check the build'])
+})
+
 // 2026-10-06: a worker that handed off waited 36 minutes for an account; its held message's Send now went
 // "Sending…" and back to "Send now" each click, saying nothing, under a "Starting…" that never said why.
 test('Send now while the worker waits for an account says no turn runs and why; the chat shows the wait, not Starting', async () => {

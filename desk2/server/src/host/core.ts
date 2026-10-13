@@ -310,6 +310,8 @@ export class HostCore {
     if (method === 'interrupt') this.record({ kind: 'interrupt' })
     try {
       const value = await (fn as (...a: unknown[]) => unknown).apply(q, args)
+      // A taken-back send must not come back on a replay: the journal drops its input.
+      if (method === 'cancelAsyncMessage' && value === true) this.journal = this.journal.filter((e) => e.kind !== 'input' || e.msg.uuid !== args[0])
       this.link?.send({ type: 'reply', rpcId, ok: true, value: value ?? null })
     } catch (err) {
       this.link?.send({ type: 'reply', rpcId, ok: false, error: err instanceof Error ? err.message : String(err) })

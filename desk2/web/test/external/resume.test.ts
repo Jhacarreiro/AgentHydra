@@ -112,7 +112,9 @@ g.fetch = async (path: string, init?: RequestInit) => {
             ? { id: 'fork-1' }
             : path.endsWith('/meta')
               ? { title: 'Renamed here', pinned: true, archived: false, unread: false, group: 'Ops' }
-              : path.endsWith('/items')
+              : path.endsWith('/cancel-queued')
+                ? { cancelled: true }
+                : path.endsWith('/items')
                 ? []
                 : { ok: true }
   return new Response(JSON.stringify(out), { status: 200 })
@@ -302,6 +304,27 @@ describe('the row menu through the store', () => {
       { path: '/api/chats/c1/send-now', method: 'POST', body: { itemId: 'u-9:0' } },
       { path: '/api/chats/c1/send-now', method: 'POST', body: {} }
     ])
+  })
+
+  test('Cancel on a queued message posts its id to the cancel-queued route', async () => {
+    calls.length = 0
+    const r = await desk.cancelQueued('c1', 'u-9:0', { text: 'hold this' })
+    expect(calls).toEqual([{ path: '/api/chats/c1/cancel-queued', method: 'POST', body: { itemId: 'u-9:0' } }])
+    expect(r.cancelled).toBe(true)
+  })
+
+  test('Cancel that arrives too late reports the server answer and keeps the message', async () => {
+    const stub = g.fetch as (path: string, init?: RequestInit) => Promise<Response>
+    g.fetch = async (path: string, init?: RequestInit) =>
+      path.endsWith('/cancel-queued')
+        ? new Response(JSON.stringify({ ok: true, cancelled: false, message: 'Too late to cancel: it already went into this turn.' }), { status: 200 })
+        : stub(path, init)
+    try {
+      const r = await desk.cancelQueued('c1', 'u-9:0', { text: 'too late' })
+      expect(r).toEqual({ ok: true, cancelled: false, message: 'Too late to cancel: it already went into this turn.' })
+    } finally {
+      g.fetch = stub
+    }
   })
 
   test("an outside session's marks go to its meta route and show at once", async () => {

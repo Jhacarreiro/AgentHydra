@@ -825,8 +825,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     return items
   }
 
-  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk']): Promise<boolean> {
-    const r = await client.sendToWorker(id, text, cwd, urgent, desk)
+  /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). */
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string): Promise<boolean> {
+    const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()
@@ -854,6 +855,43 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
     deliverNowIn = { version, ok: true }
     return true
+  }
+
+  /** Whether the AgentHydra running now (its version, process and boot commit) takes requestId. */
+  let requestIdsIn: { key: string; ok: boolean } | null = null
+
+  /** Whether AgentHydra takes a worker start or a message sent again once (their requestId), so Desk may send one it
+   *  did not answer again. Asked once per AgentHydra process, with a task holding an empty requestId and nothing else:
+   *  an AgentHydra that reads it refuses it for that, an older one for its empty prompt, and neither makes anything.
+   *  Null: AgentHydra did not answer. */
+  async function takesRequestIds(): Promise<boolean | null> {
+    const h = await client.health().catch(() => null)
+    if (!h) return null
+    const key = `${h.version ?? ''}|${h.pid ?? ''}|${h.runningCode?.bootCommit ?? ''}`
+    if (requestIdsIn?.key === key) return requestIdsIn.ok
+    let ok = false
+    try {
+      await client.post('/api/corch/workers', { origin: null, tasks: [{ prompt: '', cwd: '', requestId: '' }] })
+    } catch (err) {
+      if (!(err instanceof BridgeError) || err.unreachable) return null
+      ok = err.kind === 'http' && /requestId/.test(err.message)
+    }
+    requestIdsIn = { key, ok }
+    return ok
+  }
+
+  /** Takes back a message the worker holds. An AgentHydra without the route (before its update) refuses it, as Send now does. */
+  async function cancelWorkerHeld(id: string, text: string): Promise<{ removed: boolean; message: string }> {
+    let r: Awaited<ReturnType<typeof client.cancelHeld>>
+    try {
+      r = await client.cancelHeld(id, text)
+    } catch (err) {
+      if (noDeliverNow(err)) throw new BridgeError('http', 'This AgentHydra cannot take back a held message yet: it needs its update', 404)
+      throw err
+    }
+    if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused to cancel ${id}'s message`, /no such worker/i.test(r.message) ? 404 : 400)
+    workersChanged()
+    return { removed: r.removed === true, message: r.message ?? '' }
   }
 
   /** Send now on a message the worker holds: `stopped` when its running turn was stopped for it, else AgentHydra's why. */
@@ -911,6 +949,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     sendToWorker,
     canDeliverNow,
     sendToWorkerNow,
+    cancelWorkerHeld,
     startWorker,
     workersByIds,
     workerItems,

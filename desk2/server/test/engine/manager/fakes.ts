@@ -20,7 +20,10 @@ export class FakeQuery {
     applyFlagSettings: [] as unknown[],
     toggleMcpServer: [] as [string, boolean][],
     stopTask: [] as string[],
+    cancelled: [] as string[],
   }
+  /** What the process answers to a cancel: false once the message is already in the turn. */
+  cancelAnswer = true
   /** What the process does when asked to stop a task (a real one answers with its task_notification). */
   onStopTask: ((taskId: string) => void) | null = null
   mcp: McpServerStatus[] = []
@@ -80,6 +83,10 @@ export class FakeQuery {
   }
   async applyFlagSettings(s: unknown) {
     this.calls.applyFlagSettings.push(s)
+  }
+  async cancelAsyncMessage(uuid: string) {
+    this.calls.cancelled.push(uuid)
+    return this.cancelAnswer
   }
   async stopTask(taskId: string) {
     this.calls.stopTask.push(taskId)
@@ -153,6 +160,10 @@ export function fakeBridge(
     /** Whether this AgentHydra has deliver-now (v1.10.0 has not). */
     deliverNow: true,
     cancelled: [] as string[],
+    /** Take back a held message: whether this AgentHydra has the cancel route (before its update it has not), and what it took back. */
+    cancelHeldRoute: true,
+    cancelRemoves: true,
+    heldCancels: [] as { id: string; text: string }[],
     rows: [] as AhWorker[],
     /** What workerItems answers, by session id. */
     workerItems: {} as Record<string, TranscriptItem[]>,
@@ -182,6 +193,13 @@ export function fakeBridge(
       return state.nowStops
         ? { stopped: true, message: 'Stopped its running work; the same session continues now with this message.' }
         : { stopped: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' }
+    },
+    cancelWorkerHeld: async (id, text) => {
+      if (!state.cancelHeldRoute) throw new Error('This AgentHydra cannot take back a held message yet: it needs its update')
+      state.heldCancels.push({ id, text })
+      return state.cancelRemoves
+        ? { removed: true, message: 'Taken back: the worker will not run it.' }
+        : { removed: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' }
     },
     cancelWorker: async (id) => {
       state.cancelled.push(id)

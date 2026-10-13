@@ -10,6 +10,7 @@ import {
   CliMayteSplitNeeded,
   climayteAdopt,
   climayteCancel,
+  climayteCancelHeld,
   climayteCapacity,
   climayteDeliverNow,
   climayteGet,
@@ -288,6 +289,8 @@ app.post('/api/corch/workers/:id/send', async (c) => {
     effort: body.effort as string | undefined,
     cwd: body.cwd as string | undefined,
     desk: body.desk,
+    // Validated by climayteSend: a message sent again with it is taken once (Hydra Desk's retry).
+    requestId: body.requestId as string | undefined,
   })
   return c.json(r, r.ok || (!body.cwd && body.desk === undefined) ? 200 : 400)
 })
@@ -298,6 +301,14 @@ app.post('/api/corch/workers/:id/deliver-now', async (c) => {
   if (body.text !== undefined && typeof body.text !== 'string')
     return c.json({ error: 'text must be a string' }, 400)
   return c.json(climayteDeliverNow(c.req.param('id'), body.text as string | undefined))
+})
+// Cancel on a held message (Hydra Desk 2): the worker never runs it; `text` names which held message.
+app.post('/api/corch/workers/:id/cancel-held', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.text !== 'string' || !body.text.trim())
+    return c.json({ error: 'text is required' }, 400)
+  const r = climayteCancelHeld(c.req.param('id'), body.text)
+  return c.json(r, r.ok ? 200 : 400)
 })
 // A task's priority: queued and waiting work starts highest first (climayte_priority).
 app.post('/api/corch/workers/:id/priority', async (c) => {

@@ -24,6 +24,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import { undoCount } from '../lib/undo-count'
+import { boxImages, withBytes } from './image-bytes'
 
 const props = defineProps<{
   text: string
@@ -126,25 +127,6 @@ async function copy() {
   }
 }
 
-/** History keeps a picture as a URL; a send needs its bytes. */
-async function withBytes(img: ImageRef): Promise<ImageRef> {
-  if (img.dataBase64 || !img.url) return { mediaType: img.mediaType, dataBase64: img.dataBase64, name: img.name }
-  const res = await fetch(img.url)
-  if (!res.ok) throw new Error(`a picture could not be loaded (${res.status})`)
-  const bytes = new Uint8Array(await res.arrayBuffer())
-  let bin = ''
-  for (let i = 0; i < bytes.length; i += 0x8000) bin += String.fromCharCode(...bytes.subarray(i, i + 0x8000))
-  return { mediaType: img.mediaType, dataBase64: btoa(bin), name: img.name }
-}
-
-/** The message's pictures as a box holds them. */
-async function boxImages(): Promise<DraftImage[]> {
-  const refs = props.resend?.images?.length ? await Promise.all(props.resend.images.map(withBytes)) : []
-  return refs.flatMap(({ name, mediaType, dataBase64 }) =>
-    dataBase64 ? [{ id: crypto.randomUUID(), name: name ?? 'Image', mediaType, dataBase64, url: `data:${mediaType};base64,${dataBase64}` }] : []
-  )
-}
-
 /** Undo asks first when it takes out more than your last message; otherwise it goes straight through. */
 function askOrUndo() {
   if ((undoTakes.value?.yours ?? 0) > 1) askUndo.value = true
@@ -163,7 +145,7 @@ async function undo() {
   if (!r || !at || undoState.value === 'undoing') return
   undoState.value = 'undoing'
   try {
-    await desk.rewind(ctx.chatId.value, at, { text: r.text, images: await boxImages() })
+    await desk.rewind(ctx.chatId.value, at, { text: r.text, images: await boxImages(props.resend?.images) })
     undoState.value = 'idle'
   } catch (err) {
     undoError.value = err instanceof Error ? err.message : String(err)
@@ -193,7 +175,7 @@ async function forkBefore(at: string, text: string) {
   if (forkState.value === 'forking') return
   forkState.value = 'forking'
   try {
-    await desk.forkAt(ctx.chatId.value, at, { text, images: await boxImages() })
+    await desk.forkAt(ctx.chatId.value, at, { text, images: await boxImages(props.resend?.images) })
     forkState.value = 'idle'
   } catch (err) {
     forkError.value = err instanceof Error ? err.message : String(err)
