@@ -4,9 +4,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ConnectorStatus } from '../../../shared/connectors'
 import { createRegistry, loadDefs } from '../../src/connectors/registry'
-import factory from '../../src/connectors/defs/rea'
+import factory from '../../src/connectors/defs/teardown'
 
-const root = mkdtempSync(join(tmpdir(), 'rea-conn-'))
+const root = mkdtempSync(join(tmpdir(), 'teardown-conn-'))
 const home = join(root, 'desk')
 const DEFS = join(import.meta.dir, '..', '..', 'src', 'connectors', 'defs')
 const savedEnv = { hydra: process.env.HYDRA_URL, path: process.env.PATH, pathext: process.env.PATHEXT }
@@ -20,7 +20,7 @@ beforeAll(() => {
     hostname: '127.0.0.1',
     fetch: (req) => {
       const path = new URL(req.url).pathname
-      if (req.method === 'POST' && path === '/api/mcp/shared/rea' && hubServes) return Response.json({ jsonrpc: '2.0', id: 1, result: {} })
+      if (req.method === 'POST' && path === '/api/mcp/shared/teardown' && hubServes) return Response.json({ jsonrpc: '2.0', id: 1, result: {} })
       return new Response('no', { status: 404 })
     },
   })
@@ -46,8 +46,8 @@ afterAll(() => {
 })
 
 const def = () => factory({ home })
-const sharedUrl = () => `http://127.0.0.1:${daemon?.port}/api/mcp/shared/rea`
-const status = (over: Partial<ConnectorStatus>): ConnectorStatus => ({ id: 'rea', state: 'running', url: null, version: null, enabled: true, givesChats: true, checkedAt: 0, ...over })
+const sharedUrl = () => `http://127.0.0.1:${daemon?.port}/api/mcp/shared/teardown`
+const status = (over: Partial<ConnectorStatus>): ConnectorStatus => ({ id: 'teardown', state: 'running', url: null, version: null, enabled: true, givesChats: true, checkedAt: 0, ...over })
 
 function putRea(dir: string): void {
   mkdirSync(dir, { recursive: true })
@@ -55,7 +55,7 @@ function putRea(dir: string): void {
 }
 
 describe('detect', () => {
-  test('running at the hub URL when the shared hub serves an entry named rea', async () => {
+  test('running at the hub URL when the shared hub serves an entry named teardown', async () => {
     hubServes = true
     expect(await def().detect()).toEqual({ state: 'running', url: sharedUrl(), version: null })
   })
@@ -79,30 +79,30 @@ describe('chat', () => {
   test('the hub entry as an http server, with the prompt', async () => {
     hubServes = true
     const got = def().chat!('C:/Users/me/proj', status({ url: sharedUrl() }))
-    expect(got?.mcpServers).toEqual({ rea: { type: 'http', url: sharedUrl() } })
-    expect(got?.prompt).toContain('mcp__rea__analyze_web_bundle')
+    expect(got?.mcpServers).toEqual({ teardown: { type: 'http', url: sharedUrl() } })
+    expect(got?.prompt).toContain('mcp__teardown__analyze_web_bundle')
     expect(got?.prompt).toContain('Never run `rea setup` or `rea update`')
   })
 
   test('the PATH command as a stdio server', async () => {
     putRea(join(root, 'empty'))
     const got = def().chat!('C:/Users/me/proj', status({}))
-    expect(got?.mcpServers).toEqual({ rea: { type: 'stdio', command: 'rea', args: ['mcp'] } })
+    expect(got?.mcpServers).toEqual({ teardown: { type: 'stdio', command: 'rea', args: ['mcp'] } })
   })
 
-  test('nothing when REA is not running', async () => {
+  test('nothing when Teardown is not running', async () => {
     expect(def().chat!('C:/Users/me/proj', status({ state: 'absent', givesChats: false }))).toBeNull()
   })
 })
 
 describe('registry', () => {
-  test('the connector file loads and the list carries rea with its install line', async () => {
+  test('the connector file loads and the list carries teardown with its install line', async () => {
     const defs = await loadDefs(DEFS, home)
-    expect(defs.map((d) => d.info.id)).toContain('rea')
-    const registry = createRegistry({ home, defs: defs.filter((d) => d.info.id === 'rea'), pollMs: 60_000 })
+    expect(defs.map((d) => d.info.id)).toContain('teardown')
+    const registry = createRegistry({ home, defs: defs.filter((d) => d.info.id === 'teardown'), pollMs: 60_000 })
     await registry.refresh()
-    const rea = registry.list().find((v) => v.id === 'rea')
-    expect(rea).toMatchObject({ name: 'REA', homepage: 'https://github.com/morluto/rea', installable: false, pane: false, state: 'absent' })
+    const teardown = registry.list().find((v) => v.id === 'teardown')
+    expect(teardown).toMatchObject({ name: 'Teardown', homepage: 'https://github.com/morluto/rea', installable: false, pane: false, state: 'absent' })
     registry.stop()
   })
 })
