@@ -814,7 +814,7 @@ class JobManager:
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
-        # Before the plan's own route runs: an agentic task may be cheaper on the owner's Claude subscription (climayte_route.py).
+        # Before the plan's own route runs: an agentic task goes to an idle CliMayte account first, at no extra cost (climayte_route.py).
         served, route_note = await climayte_route.consult(job.id, task)
         if served is not None:
             return served, None

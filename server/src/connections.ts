@@ -108,11 +108,9 @@ export const PREF_KEYS = [
   'notify_smtp_port',
   'notify_smtp_secure',
   'notify_smtp_user',
-  // Cost routing (docs/COST-MODEL.md): the API/subscription split, bulk-rate discounts and plan
+  // Cost routing (docs/COST-MODEL.md): the on/off switch, bulk-rate discounts and plan
   // prices describe the owner's accounts, not a PC, so they travel.
   'routing_enabled',
-  'routing_api_preference_pct',
-  'routing_close_ratio',
   'routing_session_overhead_pct',
   'routing_discounts',
   'routing_price_pro',

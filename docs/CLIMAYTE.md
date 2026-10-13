@@ -38,21 +38,27 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
 
 ## Which route first
 
-Free accounts, then CliMayte, then HSwarm's paid API (owner, 2026-10-07: "the free ones are actually free").
+Free first, then the cheapest key quite certain to finish the job, paid keys last (owner, 2026-10-07: "the free ones
+are actually free"; 2026-10-13: the CliMayte accounts are free too, so they go first when available, and Claude or GPT
+keys only when nothing cheaper can do the job).
 
 1. **Free accounts** take tool-free work at no cost. HSwarm tries them first when `route_via_free` is on and the
    task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step.
-2. **CliMayte** takes tasks with tools on the subscription, or what free could not take, when the cost comparison
-   (`docs/COST-MODEL.md`) puts the subscription side clearly cheaper (beyond `closeRatio`). A task whose own HSwarm
-   plan misses its bar skips the comparison (2026-10-09, `floor_miss` in `hswarm/climayte_route.py`): the plan
-   stepped down below the task's profile (`below_floor`), has no live leg, or the task's pinned model has no key that
-   can serve now. Claude on the subscription meets the bar, so such a task goes to CliMayte, waiting up to
-   `route_via_climayte_start_s` for a slot when the cap is full. Sessions had been sending this work to Opus
-   sub-agents on their own quota instead (9 "critical has no live key" bypasses in 3 days). If CliMayte does not
-   take it (the routing switch off, or no slot), it runs on its stepped-down plan, or is refused, pointing at
-   `climayte_run`, when no route can serve it at all. HSwarm's submit no longer refuses a task CliMayte could take.
-3. **The paid API** takes the rest. When the costs are close, only `routing_api_preference_pct` (default 20) of
-   the calls go to the API, so that arm stays measured.
+2. **CliMayte** takes every task with tools that an idle account can start now: HSwarm reads `GET /api/corch/capacity`
+   (idle accounts, less the workers queued there and its own sends of the last 2 s) and asks no price question
+   (`hswarm/climayte_route.py`). With no account idle the task runs on its API route at once, never queued here. Until
+   2026-10-13 a price test (`POST /api/routing/decide`) decided this, and a paid key a little cheaper than the plan's
+   share of list price won: 46 tool tasks in 3 days went to API keys by price while 16 of 35 accounts sat idle.
+   A task whose own HSwarm plan misses its bar (2026-10-09, `floor_miss`): the plan stepped down below the task's
+   profile (`below_floor`), has no live leg, or the task's pinned model has no key that can serve now. Claude on the
+   subscription meets the bar, so such a task waits up to `route_via_climayte_start_s` for an account to come free.
+   Sessions had been sending this work to Opus sub-agents on their own quota instead (9 "critical has no live key"
+   bypasses in 3 days). If CliMayte does not take it (the routing switch off, or no account in time), it runs on its
+   stepped-down plan, or is refused, pointing at `climayte_run`, when no route can serve it at all. HSwarm's submit no
+   longer refuses a task CliMayte could take.
+3. **The API** takes the rest, cheapest first among the models whose published scores meet the task's bar: free-tier
+   keys, then paid ones, with OpenAI and the Claude and GPT routes on other hosts (`after_climayte`) last, after
+   CliMayte is offered the task once more.
 
 ## Server: `server/src/climayte.ts`
 
@@ -1673,19 +1679,17 @@ desktop? ... to save me from having to do both individually."
 
 ## Tasks that arrive from HSwarm (owner, 2026-10-05)
 
-The owner asked for HSwarm and CliMayte to act as one tool, with a cost-aware split between API keys and
-the subscriptions ("if the cost is even remotely close ... I generally prefer to push things into API
-keys"). Before HSwarm runs a task that has tools (read, edit or all) and an absolute folder, it asks
-`POST /api/routing/decide` (`server/src/routing-cost.ts`, `docs/COST-MODEL.md`) with the task's estimated
-cost on its planned API leg; on "subscription" it dispatches the task here (kind `code` for edit/all, else
-`review`), polls it every 10 s and uses the worker's report as the task's answer (`hswarm/climayte_route.py`).
+The owner asked for HSwarm and CliMayte to act as one tool. First that was a cost-aware split between API keys
+and the subscriptions; since 2026-10-13 the subscriptions go first whenever an account is idle ("Which route first"
+above). Before HSwarm runs a task that has tools (read, edit or all) and an absolute folder, it reads
+`GET /api/corch/capacity`; with an account free it dispatches the task here (kind `code` for edit/all, else
+`review` or `sweep`), polls it every 10 s and uses the worker's report as the task's answer (`hswarm/climayte_route.py`).
 Guards: a CliMayte worker's own HSwarm calls are never routed (the worker's `python -m hswarm connect`
 sends `x-hswarm-climayte-worker: 1`, since one shared HSwarm server serves every chat and its own
-environment says nothing about the caller); at most `route_via_climayte_max` (4) routed tasks at once;
+environment says nothing about the caller); at most `route_via_climayte_max` (unset: as many as are idle) at once;
 a worker not running within `route_via_climayte_start_s` (90 s) is cancelled (`POST /api/corch/cancel`) and
 the task runs on its API route once, as does a worker that fails; a cancelled HSwarm task cancels its
-worker. A free planned leg (an NVIDIA or other $0 model) always stays on the API. These workers show in
-the CliMayte view like any other, under the chat that called HSwarm.
+worker. These workers show in the CliMayte view like any other, under the chat that called HSwarm.
 
 ## A broken Claude Code install holds work: `server/src/claude-install-guard.ts` (2026-10-06)
 

@@ -2,10 +2,10 @@
 // The cost routing section of HSwarm's Routing page: where a task runs, on an API key (HSwarm) or on a
 // Claude subscription (CliMayte). One Routing item holds both (owner, 2026-10-05: "Routing should be an
 // option under the HSwarm in the sidebar"): HSwarm's own routing above (HSwarmRouting.vue), this below,
-// and this alone while HSwarm is down, since it is AgentHydra's and not HSwarm's. The preference split,
-// the close band, the on/off switch and the bulk-rate discounts are saved on change (lib/routing-cost.ts,
-// debounced); the plan and model tables are the daemon's cost model. Its data is the warm kind 'routing'
-// (lib/warm-data.ts). What each control means is behind its info mark.
+// and this alone while HSwarm is down, since it is AgentHydra's and not HSwarm's. The on/off switch and the
+// bulk-rate discounts are saved on change (lib/routing-cost.ts, debounced); the plan and model tables are the
+// daemon's cost model. Its data is the warm kind 'routing' (lib/warm-data.ts). What each control means is
+// behind its info mark. HSwarm picks the route itself, so no split or close band is kept here.
 import { computed } from 'vue'
 import { Input } from '@/components/ui/input'
 import { Switch } from '@/components/ui/switch'
@@ -21,18 +21,6 @@ import InfoHint from '@/shell/InfoHint.vue'
 
 const { model, settings, error, loading, saving, saveError } = useRoutingCost()
 
-const apiPct = computed(() => Math.round(settings.value?.apiPreferencePct ?? 0))
-
-function num(e: Event): number {
-  return Number((e.target as HTMLInputElement).value)
-}
-function onSplit(e: Event) {
-  saveRouting({ apiPreferencePct: num(e) })
-}
-function onRatio(e: Event) {
-  const n = num(e)
-  if (Number.isFinite(n) && n >= 1) saveRouting({ closeRatio: n })
-}
 function onDiscount(key: DiscountKey, e: Event) {
   const raw = (e.target as HTMLInputElement).value
   const n = Number(raw)
@@ -78,43 +66,6 @@ const modelRows = computed(() => (model.value?.models ?? []).map((m) => ({ m, ce
           :aria-label="$t('routingCost.enabled')"
           @update:model-value="(v: boolean) => saveRouting({ enabled: v })"
         />
-      </div>
-
-      <div class="rounded-lg border bg-card px-3 py-2">
-        <div class="mb-1 flex items-center gap-1.5 text-xs font-semibold">
-          {{ $t('routingCost.splitTitle') }}
-          <InfoHint :text="$t('routingCost.splitNote', { ratio: settings.closeRatio })" />
-        </div>
-        <div class="flex items-center gap-3 text-xs">
-          <span class="w-24 shrink-0 text-muted-foreground">{{ $t('routingCost.splitApi') }}</span>
-          <input
-            type="range"
-            min="0"
-            max="100"
-            step="1"
-            class="min-w-0 flex-1 accent-primary"
-            :value="apiPct"
-            :aria-label="$t('routingCost.splitAria')"
-            @input="onSplit"
-          />
-          <span class="w-24 shrink-0 text-end text-muted-foreground">{{ $t('routingCost.splitSubscription') }}</span>
-        </div>
-        <div class="mt-1 text-center text-base font-semibold tabular-nums">{{ apiPct }} / {{ 100 - apiPct }}</div>
-        <div class="mt-2 flex items-center gap-2 border-t border-border/50 pt-2 text-xs">
-          <label class="font-semibold" for="routing-close-ratio">{{ $t('routingCost.closeRatio') }}</label>
-          <Input
-            id="routing-close-ratio"
-            type="number"
-            min="1"
-            step="0.5"
-            variant="numeric"
-            text-size="xs"
-            class="h-7 w-20"
-            :model-value="settings.closeRatio"
-            @change="onRatio"
-          />
-          <InfoHint :text="$t('routingCost.closeRatioNote')" />
-        </div>
       </div>
 
       <div class="rounded-lg border bg-card px-3 py-2">

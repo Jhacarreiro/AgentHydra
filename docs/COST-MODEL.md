@@ -1,9 +1,9 @@
 # Cost model: API keys or a Claude subscription
 
 HSwarm sends work to API-key models (DeepSeek, the Anthropic API, OpenRouter). CliMayte sends it to Claude Code
-workers on the owner's Pro, Max 5x and Max 20x subscriptions. `server/src/routing-cost.ts` compares what the same
-work costs on each side and picks one. The research numbers below are a dated snapshot (measured 2026-10-05); the
-live figures come from `GET /api/routing/cost-model`.
+workers on the owner's Pro, Max 5x and Max 20x subscriptions. `server/src/routing-cost.ts` works out what the same
+work costs on each side, for the Routing page's tables. It no longer picks the route (2026-10-13, below). The research
+numbers below are a dated snapshot (measured 2026-10-05); the live figures come from `GET /api/routing/cost-model`.
 
 ## The research
 
@@ -35,78 +35,49 @@ Sonnet's list price, the same order as a subscription, and that is where the spl
   subscription costs as a share of list at full use.
 - **Fleet fraction** weights the three plans by how many signed-in CLI instances each has.
 
-## How a decision works
+## How the route is chosen
 
-`decideRoute({ key, listUsd, api, subscriptionRoom })`:
+Not by price. The subscription costs nothing extra once paid for, so HSwarm sends a task with tools to an idle
+CliMayte account first, and to the cheapest API key that meets the task's bar only when no account is idle
+(owner, 2026-10-13: the free accounts first when available, then the cheapest key quite certain to finish the job,
+paid keys last, Claude and GPT keys only when nothing cheaper can do it). HSwarm reads the idle accounts itself
+(`GET /api/corch/capacity`, `hswarm/climayte_route.py`); AgentHydra's routing switch (`routing_enabled`) still turns
+it off.
 
-- Subscription cost = `listUsd` x fleet fraction + the session overhead (a share of a Pro window, converted the
-  same way). API cost = the API's list dollars less the provider's discount.
-- Work on a signed-in account is priced at the plan's rate for the model it really runs on, never at another
-  model's list price (owner, 2026-10-07: CliMayte gets the plan's discounted rate, and so does Haiku run inside an
-  account). A caller that sends the task's `kind` and `tokens` (`{ input, output }`, HSwarm does) gets `listUsd`
-  computed here, at the model CliMayte's scorecard picks for that kind now (Haiku 5.5 while its trial runs), and the
-  answer names it as `subscriptionModel`. Free claude.ai accounts cost nothing, so HSwarm sends tool-free work to
-  them before it asks this question at all (docs/CLIMAYTE.md, "Which route first").
-- Routing off, no subscription room or no `listUsd`: the API. No API model fits: the subscription.
-- If the dearer side costs more than `routing_close_ratio` times the cheaper, the cheaper wins.
-- Otherwise the call is close. The key is hashed into 0..99; below `routing_api_preference_pct` it goes to the API.
-  The same key always lands on the same side.
-
-The split (`routing_api_preference_pct`) applies only inside the close band; outside it the cheaper side always wins.
-The same key always lands on the same side. `subscriptionUsd` is not a bill: it is the list value of the quota the task
-would use (list cost x fleet fraction + session overhead), for comparison with API dollars.
-
-The answer carries the route, a one-sentence reason, both dollar figures and whether the call was close.
+Until then `POST /api/routing/decide` compared the API leg's dollars with the subscription's share of list price and
+split close calls by `routing_api_preference_pct` (20) inside a `routing_close_ratio` (3) band. A paid key a little
+cheaper than that share won: in the 3 days to 2026-10-13, 46 tool tasks went to API keys by price (35 of them "the API
+is more than 3x cheaper") while 16 of the 35 CliMayte accounts sat idle. The endpoint and both settings are gone.
 
 ## Settings
 
 | Setting | Default | Meaning |
 | --- | --- | --- |
 | `routing_enabled` | true | Off sends everything to the API. |
-| `routing_api_preference_pct` | 20 | Share of close calls sent to the API (0 to 100). |
-| `routing_close_ratio` | 3 | Two costs within this factor are close. |
 | `routing_session_overhead_pct` | 1 | % of a Pro window every subscription task pays to start a session. |
 | `routing_discounts` | all 0 | JSON `{ anthropic, deepseek, openrouter, hosted, other }`, percent off list. `hosted` is the paid hosts of open models (Baseten, Together, xAI, OpenAI, Chutes, Fireworks, Moonshot, Nebius, DashScope; `HOSTED_PROVIDERS` in `routing-cost.ts`), `other` the free-tier pools and anything unnamed. |
 | `routing_price_pro` / `_max5` / `_max20` | 20 / 100 / 200 | Monthly plan prices in USD. |
 
 The owner's bulk API rate goes into `routing_discounts`: list prices overstate what the owner pays, so enter the
-percent off per provider and the API side of every comparison drops by it.
-
-How to choose it: a free-tier key is 100% off, and its allowance comes back, so spending it costs nothing later.
-Credit that runs out and is never refilled is not free in the same way: every dollar spent now is one the pool no
-longer has when the subscriptions are full. Leave such a provider at 0, so a tool task goes to a subscription (whose
-weekly quota is lost if it is not used) and falls back to the key only when no account can start it in time.
-
-The owner's setting since 2026-10-06: `other` 100 and `openrouter` 100 (the free-tier pools: Gemini, NVIDIA,
-Mistral, Zhipu, Cohere, Hugging Face, Cerebras; every paid OpenRouter key is spent, so only `:free` models run
-there), `anthropic` 0 and `deepseek` 0 (given credit that is never topped up: 34 of 45 Anthropic keys had run out of
-credit that day, and the DeepSeek balance was below zero). A free-tier tool task now stays on its free key; a task
-whose API leg is a Claude model goes to a subscription, about 50 times cheaper than list.
-
-`hosted` was split out of `other` on 2026-10-09 and starts at 0: Baseten, Together and xAI are paid credit too, and
-inside `other` at 100 their legs priced at $0, so no tool task on them ever went to a subscription. That week the
-Anthropic keys ran dry ($1,784 of HSwarm's $2,335 went to them) and the work moved to Baseten, Together and xAI
-($237 on 2026-10-09 alone) while the CLI accounts sat at 30% of their week.
+percent off per provider and the Routing page's "your rate" prices drop by it. Since 2026-10-13 that is all they do.
+Before, they priced the API side of every routing comparison: `other` and `openrouter` at 100 (the free-tier pools)
+kept a free-tier tool task on its key, and `hosted` was split out of `other` on 2026-10-09 because paid Baseten,
+Together and xAI legs priced at $0 inside it, so no tool task on them ever went to a subscription.
 
 ## Endpoints
 
 - `GET /api/routing/cost-model`: measured numbers with sample sizes and fallback flags, the plan table, a model
   table (Claude and DeepSeek from `hswarm/data/prices.json` through `pricing.ts`) and the settings.
-- `PUT /api/routing/settings`: validated and clamped; send any of `enabled`, `apiPreferencePct`, `closeRatio`,
-  `sessionOverheadPct`, `discounts`, `planPrices`.
-- `POST /api/routing/decide`: the body of `decideRoute`, plus `kind` and `tokens` to price the subscription side at
-  CliMayte's pick; answers `{ route, why, apiUsd, subscriptionUsd, close, subscriptionModel }` (`subscriptionModel`
-  null when no `kind` was sent). An unknown `kind`, or a `kind` without both token counts, is a 400.
+- `PUT /api/routing/settings`: validated and clamped; send any of `enabled`, `sessionOverheadPct`, `discounts`,
+  `planPrices`.
 
 ## Where to change it
 
 Hydra Desk 2: AgentHydra pane, HSwarm tab, Routing page. Or `PUT /api/routing/settings`. The settings are synced to
 the other PC by login sync. The endpoint accepts numbers or numeric strings only: percents are clamped to 0..100,
-`closeRatio` to 1..100, plan prices to 0..10000. A junk value leaves that field unchanged and the answer is a 400 naming
-it. `POST /api/routing/decide` answers 400 when `api.usd` is not a finite number >= 0; a `listUsd` that is not one counts
-as no list cost.
+plan prices to 0..10000. A junk value leaves that field unchanged and the answer is a 400 naming it.
 
 ## Forcing a route
 
-- All API: `enabled` false, or `apiPreferencePct` 100.
-- More subscription: `apiPreferencePct` 0 and a higher `closeRatio` (more calls count as close, so the split decides them).
+- All API: `enabled` false here, or `route_via_climayte = false` in HSwarm's `settings.toml` on one machine.
+- Fewer tasks on CliMayte at once: `route_via_climayte_max` in HSwarm's `settings.toml` (unset: as many as are idle).

@@ -1,9 +1,17 @@
 """One tool with CliMayte: an agentic task may run as a Claude Code CLI worker on the owner's Claude subscription
-instead of on its API route. Before a task runs, `consult` asks AgentHydra (POST /api/routing/decide, which weighs the
-task's API cost against the subscription room); on 'subscription' the task is dispatched to CliMayte
-(POST /api/corch/workers), polled (GET /api/corch/workers/:id) and its report is the answer.
+instead of on its API route. The subscription costs nothing extra, so it goes first whenever it can take the task now
+(owner, 2026-10-13: the free accounts first when they are available, then the cheapest API key quite certain to finish
+the job, paid keys last). Before a task runs, `consult` reads AgentHydra's idle CliMayte accounts
+(GET /api/corch/capacity); with one free the task is dispatched to CliMayte (POST /api/corch/workers), polled
+(GET /api/corch/workers/:id) and its report is the answer. With none free it runs on its API route at once, never
+queued behind CliMayte. A task its own plan cannot run at its bar (floor_miss), or whose plan has only legs kept for after
+CliMayte (climayte_first), waits up to ROUTE_VIA_CLIMAYTE_START_S for an idle account first.
 
-Never a failure of its own: AgentHydra down, slow (over DECIDE_TIMEOUT_S), or answering anything but 200 keeps the
+This replaced a price test (AgentHydra's POST /api/routing/decide) that priced the subscription at its share of list
+price: a paid key a little cheaper than that share won, so in 3 days to 2026-10-13, 46 tool tasks went to API keys by
+price (35 of them "the API is more than 3x cheaper") while AgentHydra showed 16 of its 35 accounts idle.
+
+Never a failure of its own: AgentHydra down, slow (over READ_TIMEOUT_S), or answering anything but 200 keeps the
 task's own route, logged once per job. A worker that fails or is cancelled hands the task back to the API route once.
 The route taken is on the result (`selection["route"]`) and its ledger line (provider `climayte`)."""
 from __future__ import annotations
@@ -16,22 +24,25 @@ import urllib.error
 import time
 import urllib.request
 
-from . import config, prices, shared
+from . import config, shared
 from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.climayte")
 
 DEFAULT_URL = "http://127.0.0.1:7787"
-DECIDE_TIMEOUT_S = 2.0
+READ_TIMEOUT_S = 2.0
 POLL_S = 10.0
 WORKER_ENV = "AGENTHYDRA_CLIMAYTE_WORKER"
-LIST_MODEL = "claude-sonnet-5-5"  # the list price a non-Claude task is compared against
-# What an agentic task is sized at when nothing better is known: tokens read (prompt, files and tool results across
-# turns) and written. The decision only needs the order of magnitude: it compares two prices of the same work.
-EST_IN_TOKENS, EST_OUT_TOKENS = 40_000, 4_000
+FREE_FIRST = "an idle CliMayte account costs nothing extra, so it goes before any API key"
+NO_ROOM = "no CliMayte account was idle"
 _ELIGIBLE_TOOLS = ("read", "edit", "all")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks routed to CliMayte right now, across every job of this process (route_via_climayte_max)
+# When this process sent each task still in CliMayte's hands, as free_route keeps it: the capacity read shows a sent task
+# once its worker exists (queued, then running), so a task sent moments before a read asked is subtracted from the idle
+# count until UNSEEN_S has passed. A task's stamp leaves the list when the task ends.
+_SENT: list[float] = []
+UNSEEN_S = 2.0
 _ASKED: set[tuple[str, str]] = set()  # (job, task) CliMayte was asked to run: before_last_resort does not ask twice
 _WAITED: set[tuple[str, str]] = set()  # (job, task) whose wait for a CliMayte slot ran out: a later ask takes a free slot, never waits again
 _SWITCH = {"at": -1e9, "on": True}  # AgentHydra's own routing on/off, read at most once per SWITCH_TTL_S
@@ -115,60 +126,6 @@ def _say(job_id: str, msg: str) -> None:
         log.warning("job %s: %s", job_id, msg)
 
 
-def _tokens() -> dict:
-    return {"input": EST_IN_TOKENS, "output": EST_OUT_TOKENS}
-
-
-class _Unpriced(Exception):
-    pass
-
-
-def _usd(model: str) -> float | None:
-    """USD of the estimated tokens on a model id as the registry names it: a leg is `rank:claude-opus-5-5-high:direct`,
-    an effort or host variant of a model whose price is under its `api_id` (prices.json knows `claude-opus-5-5`)."""
-    usd = prices.cost(model, _tokens())
-    if usd is not None:
-        return usd
-    try:
-        spec = config.MODELS[config.resolve_model(model)]
-    except (ValueError, KeyError):
-        return None
-    for ref in (spec.get("api_id"), spec.get("price_ref")):
-        if ref and (usd := prices.cost(str(ref), _tokens())) is not None:
-            return usd
-    p = spec.get("price")  # the registry's own rates ($ per million: hit, miss, out), for a model prices.json lacks
-    if isinstance(p, dict) and "miss" in p and "out" in p:
-        return (EST_IN_TOKENS * float(p["miss"]) + EST_OUT_TOKENS * float(p["out"])) / 1_000_000
-    return None
-
-
-def _api_leg(task: Task) -> dict | None:
-    """{provider, model, usd} of the route the plan chose for this task, or None when it has none."""
-    model = task.model
-    if task.profile and task.route:
-        from .dispatch import _legs, plan_for
-
-        cands = _legs(plan_for(task), task)
-        if not cands:
-            return None
-        model = cands[0]["model"]
-    if not model or model == config.AUTO:
-        return None
-    usd = _usd(model)
-    if usd is None:
-        raise _Unpriced(model)  # never guessed at: the leg's benchmark_cost_usd is a different quantity
-    try:
-        provider = config.provider_of(model)
-    except (ValueError, KeyError):
-        provider = ""
-    return {"provider": provider, "model": model, "usd": round(float(usd), 6)}
-
-
-def _list_usd(api: dict | None) -> float:
-    model = api["model"] if api and str(api["model"]).lower().startswith("claude") and _usd(api["model"]) is not None else LIST_MODEL
-    return round(_usd(model) or 0.0, 6)
-
-
 def _request(method: str, path: str, body: dict | None, timeout: float) -> tuple[int, dict]:
     data = None if body is None else json.dumps(body).encode()
     req = urllib.request.Request(base_url() + path, data=data, method=method, headers={"Content-Type": "application/json"})
@@ -190,7 +147,7 @@ async def switch_on() -> bool:
         return _SWITCH["on"]
     _SWITCH["at"] = time.monotonic()
     try:
-        status, doc = await asyncio.wait_for(_call("GET", "/api/routing/cost-model", None, DECIDE_TIMEOUT_S), DECIDE_TIMEOUT_S + 0.5)
+        status, doc = await asyncio.wait_for(_call("GET", "/api/routing/cost-model", None, READ_TIMEOUT_S), READ_TIMEOUT_S + 0.5)
     except (OSError, ValueError, asyncio.TimeoutError):
         return _SWITCH["on"]
     enabled = (doc.get("settings") or {}).get("enabled") if status == 200 else None
@@ -199,27 +156,26 @@ async def switch_on() -> bool:
     return _SWITCH["on"]
 
 
-async def decide(job_id: str, task: Task) -> dict | None:
-    """AgentHydra's answer for this task, or None (and a log line) when it does not give one in time."""
-    try:
-        api = _api_leg(task)
-    except _Unpriced as e:
-        _say(job_id, f"{e} has no price in data/prices.json, so there is nothing to compare; tasks keep their own route")
-        return None
-    # kind and tokens let AgentHydra price the subscription side at the model CliMayte would run this task on (the
-    # plan's share of that model's list price, owner 2026-10-07), in place of listUsd.
-    body = {"key": f"{job_id}:{task.id}", "listUsd": _list_usd(api), "kind": worker_kind(task), "tokens": _tokens(),
-            "api": api, "subscriptionRoom": True}
+async def _room(job_id: str, asked: float) -> int | None:
+    """How many more tasks CliMayte can start now, or None (and a log line) when AgentHydra does not say in time.
+    AgentHydra's idle accounts (room under their usage ceiling, no worker running), less the workers already queued or
+    waiting for room there (each will take one) and the tasks this process sent since `asked` - UNSEEN_S; 0 at
+    route_via_climayte_max. Everything after the read is free of awaits, so consult claims the room it returns before
+    any other task can read it."""
     try:
         # to_thread cannot stop a socket early, so the wait is bounded here as well as on the socket
-        status, doc = await asyncio.wait_for(_call("POST", "/api/routing/decide", body, DECIDE_TIMEOUT_S), DECIDE_TIMEOUT_S + 0.5)
+        status, doc = await asyncio.wait_for(_call("GET", "/api/corch/capacity", None, READ_TIMEOUT_S), READ_TIMEOUT_S + 0.5)
     except (OSError, ValueError, asyncio.TimeoutError) as e:
-        _say(job_id, f"routing decision unavailable ({type(e).__name__}); tasks keep their own route")
+        _say(job_id, f"CliMayte capacity unavailable ({type(e).__name__}); tasks keep their own route")
         return None
-    if status != 200 or doc.get("route") not in ("api", "subscription"):
-        _say(job_id, f"routing decision answered HTTP {status}; tasks keep their own route")
+    idle, waiting = doc.get("idle"), doc.get("waiting")
+    if status != 200 or not isinstance(idle, int) or not isinstance(waiting, int):
+        _say(job_id, f"CliMayte capacity answered HTTP {status}; tasks keep their own route")
         return None
-    return doc
+    if config.ROUTE_VIA_CLIMAYTE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+        return 0
+    unseen = sum(1 for t in _SENT if t > asked - UNSEEN_S)
+    return idle - waiting - unseen
 
 
 def brief(task: Task) -> str:
@@ -343,35 +299,49 @@ def _result(task: Task, w: dict, note: dict, started: str, job_id: str) -> Resul
 
 
 async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Result | None, dict | None]:
-    """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note being
-    the decision to carry on its result; (None, None) when nobody was asked. A task whose own route misses its bar
-    (floor_miss) and that CliMayte did not serve carries `floor_miss` on its note, so jobs can refuse it at once when
-    that route cannot serve at all, instead of running it there. `first` (before_last_resort), a floor miss, or a plan
-    left with only routes kept for after CliMayte (climayte_first) sends the task to CliMayte with no price question."""
+    """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note saying
+    why; (None, None) when nobody was asked. An eligible task goes to CliMayte whenever an account can start it now
+    (_room), and to its API route at once when none can. `first` (before_last_resort), a floor miss, or a plan left with
+    only routes kept for after CliMayte (climayte_first) makes the task wait up to ROUTE_VIA_CLIMAYTE_START_S for an
+    account instead. A task whose own route misses its bar (floor_miss) and that CliMayte did not serve carries
+    `floor_miss` on its note, so jobs can refuse it at once when that route cannot serve at all, instead of running it
+    there."""
     global _ACTIVE
     if not eligible(task):
         return None, None
     missed = None if first else floor_miss(task)
     first = first or missed or climayte_first(task)
     unserved = {"via": "api", "floor_miss": missed} if missed else None
-    if not await switch_on():  # read before any wait: a slot is no use with the owner's switch off
+    if not await switch_on():  # read before any wait: an idle account is no use with the owner's switch off
         return None, unserved
-    if first and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and (job_id, task.id) not in _WAITED:
-        # Its own route is below its bar or kept for after CliMayte: worth a wait for a slot, as long as a queued worker is given to start.
-        until = asyncio.get_running_loop().time() + config.ROUTE_VIA_CLIMAYTE_START_S
-        while _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and asyncio.get_running_loop().time() < until:
+    loop = asyncio.get_running_loop()
+    asked = time.monotonic()
+    room = await _room(job_id, asked)
+    if first and room is not None and room <= 0 and (job_id, task.id) not in _WAITED:
+        # Its own route is below its bar or kept for after CliMayte: worth a wait for an account to come free.
+        until = loop.time() + config.ROUTE_VIA_CLIMAYTE_START_S
+        while room is not None and room <= 0 and loop.time() < until:
             await asyncio.sleep(POLL_S)
-    if _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+            asked = time.monotonic()
+            room = await _room(job_id, asked)
+    if room is None:
+        return None, unserved
+    if room <= 0:
         if first:
             # It waited its turn once. Not an ask: CliMayte never saw it, so the walk still offers it before its last legs
-            # (a slot may be free by then), only without waiting again (2026-10-13: recorded as an ask, it skipped CliMayte).
+            # (an account may be free by then), only without waiting again (2026-10-13: recorded as an ask, it skipped CliMayte).
             _remember(_WAITED, job_id, task)
-        return None, unserved
-    _ACTIVE += 1  # taken with no await since the cap check, held to the worker's end: the cap is on tasks in CliMayte's hands
+            return None, unserved
+        return None, {"via": "api", "decided": "api", "why": NO_ROOM}
+    now = time.monotonic()
+    _SENT.append(now)
+    _ACTIVE += 1  # both taken with no await since the room read, held to the worker's end
     try:
-        return await _consult(job_id, task, first, missed)
+        return await _consult(job_id, task, first or FREE_FIRST, missed)
     finally:
         _ACTIVE -= 1
+        if now in _SENT:  # its account is free again, however recently it was sent
+            _SENT.remove(now)
 
 
 def _remember(seen: set, job_id: str, task: Task) -> None:
@@ -380,16 +350,8 @@ def _remember(seen: set, job_id: str, task: Task) -> None:
     seen.add((job_id, task.id))
 
 
-async def _consult(job_id: str, task: Task, first: str | None = None, missed: str | None = None) -> tuple[Result | None, dict | None]:
-    if first:
-        note = {"provider": "climayte", "decided": "subscription", "why": first}
-    else:
-        doc = await decide(job_id, task)
-        if doc is None:
-            return None, None
-        note = {"provider": "climayte", "decided": doc["route"], "why": doc.get("why", "")}
-        if doc["route"] != "subscription":
-            return None, {"via": "api", "decided": "api", "why": note["why"]}
+async def _consult(job_id: str, task: Task, why: str, missed: str | None = None) -> tuple[Result | None, dict | None]:
+    note = {"provider": "climayte", "decided": "subscription", "why": why}
     _remember(_ASKED, job_id, task)
     res = await run_worker(job_id, task, note)
     if res is not None:

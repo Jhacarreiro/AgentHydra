@@ -133,8 +133,6 @@ export interface Discounts {
 
 export interface RoutingSettings {
   enabled: boolean
-  apiPreferencePct: number
-  closeRatio: number
   discounts: Discounts
   sessionOverheadPct: number
   planPrices: Record<Plan, number>
@@ -171,10 +169,6 @@ export function readRoutingSettings(): RoutingSettings {
   const enabledRaw = getSetting('routing_enabled').trim().toLowerCase()
   return {
     enabled: !['0', 'false', 'off', 'no'].includes(enabledRaw),
-    // Free first, then CliMayte, then the paid API (owner, 2026-10-07). Not 0: a fifth of the close calls keep
-    // the API arm measured.
-    apiPreferencePct: clamp(num(getSetting('routing_api_preference_pct'), 20), 0, 100),
-    closeRatio: Math.max(1, num(getSetting('routing_close_ratio'), 3)),
     discounts,
     sessionOverheadPct: clamp(num(getSetting('routing_session_overhead_pct'), 1), 0, 100),
     planPrices: {
@@ -313,110 +307,4 @@ export function atYourRate(
 /** True when any provider group has a discount set. */
 export function anyDiscount(discounts: Discounts = readRoutingSettings().discounts): boolean {
   return Object.values(discounts).some((d) => d > 0)
-}
-
-// --- the decision -------------------------------------------------------------
-
-export interface RoutingContext {
-  enabled: boolean
-  apiPreferencePct: number
-  closeRatio: number
-  discounts: Discounts
-  sessionOverheadPct: number
-  dollarsPerProWindow: number
-  fleetFraction: number
-}
-
-export function currentContext(): RoutingContext {
-  const m = costModel()
-  return {
-    enabled: m.settings.enabled,
-    apiPreferencePct: m.settings.apiPreferencePct,
-    closeRatio: m.settings.closeRatio,
-    discounts: m.settings.discounts,
-    sessionOverheadPct: m.settings.sessionOverheadPct,
-    dollarsPerProWindow: m.dollarsPerProWindow.value,
-    fleetFraction: m.fleetFraction,
-  }
-}
-
-export interface RouteInput {
-  key: string
-  listUsd?: number | null
-  api: { provider: string; model: string; usd: number } | null
-  subscriptionRoom: boolean
-}
-
-export interface RouteDecision {
-  route: 'api' | 'subscription'
-  why: string
-  apiUsd: number | null
-  subscriptionUsd: number | null
-  close: boolean
-}
-
-/** FNV-1a of the key, 0..99: the same key always lands on the same side of the split. */
-export function bucketOf(key: string): number {
-  let h = 0x811c9dc5
-  for (let i = 0; i < key.length; i++) {
-    h ^= key.charCodeAt(i)
-    h = Math.imul(h, 0x01000193) >>> 0
-  }
-  return h % 100
-}
-
-const usd = (n: number) => `$${n < 0.01 ? n.toFixed(4) : n.toFixed(2)}`
-
-export function decideRoute(
-  input: RouteInput,
-  ctx: RoutingContext = currentContext(),
-): RouteDecision {
-  const hasList =
-    typeof input.listUsd === 'number' && Number.isFinite(input.listUsd) && input.listUsd >= 0
-  const apiUsd = input.api
-    ? input.api.usd * (1 - (ctx.discounts[providerGroup(input.api.provider)] ?? 0) / 100)
-    : null
-  const subscriptionUsd = hasList
-    ? (input.listUsd as number) * ctx.fleetFraction +
-      (ctx.sessionOverheadPct / 100) * ctx.dollarsPerProWindow * ctx.fleetFraction
-    : null
-  const done = (route: 'api' | 'subscription', why: string, close = false): RouteDecision => ({
-    route,
-    why,
-    apiUsd,
-    subscriptionUsd,
-    close,
-  })
-  if (!input.api)
-    return done(
-      'subscription',
-      input.subscriptionRoom
-        ? 'No API model fits, and a subscription has room.'
-        : 'No API model fits and no subscription has room; sending it to the subscription queue.',
-    )
-  if (!ctx.enabled) return done('api', 'Cost routing is off, so work goes to the API.')
-  if (!input.subscriptionRoom) return done('api', 'No subscription account has room right now.')
-  if (subscriptionUsd === null)
-    return done('api', 'No list cost to compare, so it goes to the API.')
-  const api = apiUsd as number
-  const hi = Math.max(api, subscriptionUsd)
-  const lo = Math.min(api, subscriptionUsd)
-  const close = hi === 0 || hi / lo <= ctx.closeRatio
-  if (!close) {
-    return api < subscriptionUsd
-      ? done(
-          'api',
-          `The API (${usd(api)}) is more than ${ctx.closeRatio}x cheaper than the subscription (${usd(subscriptionUsd)}).`,
-        )
-      : done(
-          'subscription',
-          `The subscription (${usd(subscriptionUsd)}) is more than ${ctx.closeRatio}x cheaper than the API (${usd(api)}).`,
-        )
-  }
-  const apiSide = bucketOf(input.key) < ctx.apiPreferencePct
-  return done(
-    apiSide ? 'api' : 'subscription',
-    `Costs are close (API ${usd(api)}, subscription ${usd(subscriptionUsd)}); the ${ctx.apiPreferencePct}% API preference put this key on the ${apiSide ? 'API' : 'subscription'} side.`,
-    true,
-  )
 }

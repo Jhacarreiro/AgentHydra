@@ -1,22 +1,13 @@
 /**
- * Cost routing: /api/routing/cost-model, /api/routing/settings (PUT), /api/routing/decide (POST).
- * What the numbers mean and how the choice is made: docs/COST-MODEL.md.
+ * Cost routing: /api/routing/cost-model (GET) and /api/routing/settings (PUT).
+ * What the numbers mean: docs/COST-MODEL.md. HSwarm picks the route itself from /api/corch/capacity.
  */
 
 import priceFile from '../../../hswarm/data/prices.json'
-import { climaytePickModel } from '../climayte'
-import { type CliMayteKind, climayteKind } from '../climayte-scorecard'
 import { setSetting } from '../db'
 import { app } from '../http-app'
-import { priceFor, pricesAsOf, priceTokens } from '../pricing'
-import {
-  clampDiscounts,
-  costModel,
-  currentContext,
-  decideRoute,
-  providerGroup,
-  readRoutingSettings,
-} from '../routing-cost'
+import { priceFor, pricesAsOf } from '../pricing'
+import { clampDiscounts, costModel, providerGroup, readRoutingSettings } from '../routing-cost'
 
 async function body(c: {
   req: { json: () => Promise<unknown> }
@@ -89,9 +80,7 @@ app.put('/api/routing/settings', async (c) => {
     if (typeof b.enabled === 'boolean') writes.push(['routing_enabled', b.enabled ? '1' : '0'])
     else bad.push('enabled')
   }
-  field('apiPreferencePct', 'routing_api_preference_pct', 0, 100)
   field('sessionOverheadPct', 'routing_session_overhead_pct', 0, 100)
-  field('closeRatio', 'routing_close_ratio', 1, 100)
   if (b.discounts !== undefined) {
     if (b.discounts && typeof b.discounts === 'object' && !Array.isArray(b.discounts)) {
       const d = b.discounts as Record<string, unknown>
@@ -124,58 +113,4 @@ app.put('/api/routing/settings', async (c) => {
   for (const [key, value] of writes) setSetting(key, value)
   if (bad.length) return c.json({ error: `invalid value for: ${bad.join(', ')}`, fields: bad }, 400)
   return c.json(readRoutingSettings())
-})
-
-app.post('/api/routing/decide', async (c) => {
-  const b = await body(c)
-  if (typeof b.key !== 'string' || !b.key) return c.json({ error: 'key is required' }, 400)
-  let api: { provider: string; model: string; usd: number } | null = null
-  if (b.api !== null && b.api !== undefined) {
-    const a = b.api as Record<string, unknown>
-    if (
-      !a ||
-      typeof a !== 'object' ||
-      typeof a.provider !== 'string' ||
-      typeof a.model !== 'string'
-    )
-      return c.json({ error: 'api must be null or { provider, model, usd }' }, 400)
-    const usd = numeric(a.usd)
-    if (usd === null || usd < 0)
-      return c.json({ error: 'api.usd must be a finite number >= 0' }, 400)
-    api = { provider: a.provider, model: a.model, usd }
-  }
-  let list = numeric(b.listUsd)
-  // Work on a signed-in account costs the plan's share of what the model CliMayte runs it on lists at (owner,
-  // 2026-10-07): a caller that names the task's kind and size gets that model priced here, not its own guess.
-  let subscriptionModel: string | null = null
-  if (b.kind !== undefined) {
-    let kind: CliMayteKind | null
-    try {
-      kind = climayteKind(b.kind)
-    } catch (error) {
-      return c.json({ error: (error as Error).message }, 400)
-    }
-    const t = (b.tokens && typeof b.tokens === 'object' ? b.tokens : {}) as Record<string, unknown>
-    const input = numeric(t.input)
-    const output = numeric(t.output)
-    if (!kind || input === null || output === null || input < 0 || output < 0)
-      return c.json({ error: 'kind needs tokens: { input, output }, numbers >= 0' }, 400)
-    subscriptionModel = climaytePickModel(kind)
-    const none = { cacheRead: 0, cacheCreation5m: 0, cacheCreation1h: 0 }
-    list = priceTokens(
-      { [subscriptionModel]: { input, output, ...none } },
-      Date.now(),
-      input,
-    ).costUsd
-  }
-  const decision = decideRoute(
-    {
-      key: b.key,
-      listUsd: list !== null && list >= 0 ? list : null,
-      api,
-      subscriptionRoom: b.subscriptionRoom === true,
-    },
-    currentContext(),
-  )
-  return c.json({ ...decision, subscriptionModel })
 })

@@ -3,23 +3,16 @@
 export default {
   title: 'API keys or subscriptions',
   subtitle:
-    'Where a task runs: on an API key (HSwarm) or on a Claude subscription (CliMayte), by what each would cost.',
+    'A task that reads or edits files runs on an idle CliMayte account first. The costs below show what each route would cost.',
   loadFailed: 'Could not load the cost model',
   saveFailed: 'Could not save: {reason}',
   saving: 'Saving…',
-  refresh: 'Refresh',
   enabled: 'Routing',
-  enabledNote: 'Off sends every task to the API keys.',
-  splitTitle: 'Preference when the cost is close',
-  splitApi: 'API keys',
-  splitSubscription: 'Subscriptions',
-  splitAria: 'Share of close calls sent to API keys',
-  splitNote: 'Used when the two costs are within {ratio}x of each other; otherwise the cheaper one wins.',
-  closeRatio: 'Close band',
-  closeRatioNote: 'Two costs within this factor count as close.',
+  enabledNote:
+    'When this is on, an HSwarm task that reads or edits files goes to an idle CliMayte account first, since the subscription costs nothing extra; with no idle account it runs on the cheapest API key that meets its bar. Paid Claude and GPT keys come last.',
   discountsTitle: 'Bulk-rate discount',
   discountsNote:
-    'Percent off list prices that you pay per provider; it lowers the API side of every comparison. A free-tier key is 100% off; paid credit that is never refilled is best left at 0, so a Claude subscription, whose weekly quota is lost if unused, goes first.',
+    'Percent off list prices that you pay per provider; it lowers the "your rate" prices below. A free-tier key is 100% off. It no longer decides where a task runs.',
   discountAnthropic: 'Anthropic',
   discountDeepseek: 'DeepSeek',
   discountOpenrouter: 'OpenRouter',

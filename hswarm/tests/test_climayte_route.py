@@ -1,5 +1,5 @@
-"""Offline: an agentic task asks AgentHydra where to run (climayte_route.py), against a fake AgentHydra on a free
-local port. Nothing here reaches the real daemon on 7787: conftest blanks AGENTHYDRA_URL for every test."""
+"""Offline: an agentic task goes to an idle CliMayte account first (climayte_route.py), against a fake AgentHydra on a
+free local port. Nothing here reaches the real daemon on 7787: conftest blanks AGENTHYDRA_URL for every test."""
 from __future__ import annotations
 
 import asyncio
@@ -35,14 +35,14 @@ class _Api:
 
 
 class _Fake:
-    """A fake AgentHydra: /api/routing/decide, POST /api/corch/workers, GET /api/corch/workers/:id."""
+    """A fake AgentHydra: GET /api/corch/capacity, POST /api/corch/workers, GET /api/corch/workers/:id."""
 
-    def __init__(self, route="subscription", worker=None, delay=0.0, decide_status=200, enabled=True, running_for=0.0):
-        self.route, self.delay, self.decide_status, self.enabled = route, delay, decide_status, enabled
+    def __init__(self, idle=8, waiting=0, worker=None, delay=0.0, capacity_status=200, enabled=True, running_for=0.0):
+        self.idle, self.waiting, self.delay, self.capacity_status, self.enabled = idle, waiting, delay, capacity_status, enabled
         self.running_for, self.t0 = running_for, time.monotonic()
         self.cancelled: list[str] = []
         self.worker = worker or {"status": "done", "result": "worker report", "reportedModel": "claude-sonnet-5-5"}
-        self.decides: list[dict] = []
+        self.reads = 0
         self.dispatched: list[dict] = []
         fake = self
 
@@ -60,10 +60,6 @@ class _Fake:
 
             def do_POST(self):
                 body = json.loads(self.rfile.read(int(self.headers.get("Content-Length") or 0)) or b"{}")
-                if self.path == "/api/routing/decide":
-                    fake.decides.append(body)
-                    time.sleep(fake.delay)
-                    return self._send(fake.decide_status, {"route": fake.route, "why": "cheaper on the plan", "apiUsd": 1, "subscriptionUsd": 0.1, "close": False})
                 if self.path == "/api/corch/workers":
                     fake.dispatched.append(body)
                     return self._send(200, {"group": body.get("group"), "workers": [{"id": "w1"}]})
@@ -75,6 +71,10 @@ class _Fake:
             def do_GET(self):
                 if self.path == "/api/routing/cost-model":
                     return self._send(200, {"settings": {"enabled": fake.enabled}})
+                if self.path == "/api/corch/capacity":
+                    fake.reads += 1
+                    time.sleep(fake.delay)
+                    return self._send(fake.capacity_status, {"idle": fake.idle, "accounts": 35, "running": 0, "waiting": fake.waiting})
                 if self.path == "/api/corch/workers/w1":
                     if time.monotonic() - fake.t0 < fake.running_for:
                         return self._send(200, {"id": "w1", "status": "running"})
@@ -100,6 +100,7 @@ def fake(monkeypatch, tmp_path):
     monkeypatch.setattr(climayte_route, "POLL_S", 0.01)
     monkeypatch.setattr(climayte_route, "_LOGGED", set())
     monkeypatch.setattr(climayte_route, "_ACTIVE", 0)
+    monkeypatch.setattr(climayte_route, "_SENT", [])
     monkeypatch.setattr(climayte_route, "_SWITCH", {"at": -1e9, "on": True})
     made: list[_Fake] = []
 
@@ -128,21 +129,40 @@ def _run(tmp_path, tools="read", schema=None, timeout_s=30, n=1):
     return job, job.results["t0"], api
 
 
-def test_an_eligible_task_routed_to_the_subscription_returns_the_workers_report(fake, tmp_path):
+# Contract: an eligible task goes to an idle CliMayte account before its API route, with no price question, and the
+# worker's report is its answer. Regression: 2026-10-13, a price test (POST /api/routing/decide) sent tool tasks to
+# paid keys a little cheaper than the plan's share of list price while 16 of 35 accounts sat idle; the owner wants the
+# CliMayte accounts, which cost nothing extra, tried first whenever they are available.
+def test_an_eligible_task_goes_to_an_idle_climayte_account_with_no_price_question(fake, tmp_path):
     f = fake()
     job, res, api = _run(tmp_path, tools="edit")
     assert res.status == "ok" and res.answer == "worker report" and api.calls == 0
     assert res.model == "claude-sonnet-5-5"
-    assert res.selection["route"] == {"provider": "climayte", "decided": "subscription", "why": "cheaper on the plan", "worker": "w1", "via": "climayte"}
+    assert res.selection["route"] == {"provider": "climayte", "decided": "subscription", "why": climayte_route.FREE_FIRST, "worker": "w1", "via": "climayte"}
     sent = f.dispatched[0]["tasks"][0]
     assert sent["kind"] == "code" and sent["cwd"] == str(tmp_path) and "look at it" in sent["prompt"]
-    d = f.decides[0]
-    assert d["key"] == f"{job.id}:t0" and d["subscriptionRoom"] is True and d["listUsd"] > 0
-    # AgentHydra prices the plan side at CliMayte's own pick for this kind and size (owner, 2026-10-07).
-    assert d["kind"] == "code" and d["tokens"]["input"] > 0 and d["tokens"]["output"] > 0
-    assert d["api"]["model"] == "deepseek-flash" and d["api"]["provider"] == "deepseek"
     row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
-    assert row["provider"] == "climayte" and row["climayte_worker"] == "w1" and row["route_why"] == "cheaper on the plan"
+    assert row["provider"] == "climayte" and row["climayte_worker"] == "w1" and row["route_why"] == climayte_route.FREE_FIRST
+
+
+# Contract: with no account idle (or every idle one already spoken for by a queued worker), the task runs on its API
+# route at once, never queued behind CliMayte, and its route says why.
+@pytest.mark.parametrize("idle,waiting", [(0, 0), (3, 3)])
+def test_with_no_idle_account_the_task_runs_on_its_api_route_at_once(fake, tmp_path, idle, waiting):
+    f = fake(idle=idle, waiting=waiting)
+    t0 = time.monotonic()
+    _, res, api = _run(tmp_path)
+    assert f.dispatched == [] and api.calls == 1 and time.monotonic() - t0 < 5
+    assert res.selection["route"] == {"via": "api", "decided": "api", "why": climayte_route.NO_ROOM}
+
+
+# Contract: a burst of tasks that read one idle count takes only that many accounts: a task sent moments before a read
+# is subtracted from it, so the rest run on their API route instead of queueing in CliMayte.
+def test_a_burst_takes_only_the_idle_accounts(fake, tmp_path):
+    f = fake(idle=2, running_for=0.5)
+    job, _, api = _run(tmp_path, n=5)
+    assert len(f.dispatched) == 2 and api.calls == 3
+    assert sorted(r.answer for r in job.results.values()).count("api route") == 3
 
 
 @pytest.mark.parametrize("extra,tools,kind", [
@@ -182,21 +202,21 @@ def test_a_schema_task_gets_the_workers_report_parsed(fake, tmp_path):
 def test_a_tool_free_task_never_asks(fake, tmp_path):
     f = fake()
     _, res, api = _run(tmp_path, tools="none")
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+    assert f.reads == 0 and f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
 
 def test_inside_a_climayte_worker_it_never_asks(fake, tmp_path, monkeypatch):
     f = fake()
     monkeypatch.setenv("AGENTHYDRA_CLIMAYTE_WORKER", "w9")
     _, res, api = _run(tmp_path)
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+    assert f.reads == 0 and f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
 
 def test_the_setting_off_never_asks(fake, tmp_path, monkeypatch):
     f = fake()
     monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE", False)
     _, res, api = _run(tmp_path)
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+    assert f.reads == 0 and f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
 
 def test_the_setting_reads_from_settings_toml(tmp_path):
@@ -206,16 +226,16 @@ def test_the_setting_reads_from_settings_toml(tmp_path):
     assert config.ROUTE_VIA_CLIMAYTE is True
 
 
-def test_a_decide_that_times_out_keeps_the_api_route(fake, tmp_path, monkeypatch):
-    monkeypatch.setattr(climayte_route, "DECIDE_TIMEOUT_S", 0.2)
+def test_a_capacity_read_that_times_out_keeps_the_api_route(fake, tmp_path, monkeypatch):
+    monkeypatch.setattr(climayte_route, "READ_TIMEOUT_S", 0.2)
     f = fake(delay=1.0)
     _, res, api = _run(tmp_path)
-    assert len(f.decides) == 1 and f.dispatched == []
+    assert f.reads == 1 and f.dispatched == []
     assert res.status == "ok" and res.answer == "api route" and api.calls == 1
 
 
-def test_a_decide_that_errors_keeps_the_api_route(fake, tmp_path):
-    f = fake(decide_status=500)
+def test_a_capacity_read_that_errors_keeps_the_api_route(fake, tmp_path):
+    f = fake(capacity_status=500)
     _, res, api = _run(tmp_path)
     assert f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
@@ -228,13 +248,6 @@ def test_a_failed_worker_falls_back_to_the_api_route_once(fake, tmp_path):
     assert res.selection["route"]["via"] == "api" and res.selection["route"]["climayte_failed"] == "w1"
 
 
-def test_an_api_decision_runs_the_api_route_and_says_so(fake, tmp_path):
-    f = fake(route="api")
-    _, res, api = _run(tmp_path)
-    assert f.dispatched == [] and api.calls == 1
-    assert res.selection["route"] == {"via": "api", "decided": "api", "why": "cheaper on the plan"}
-
-
 def test_a_request_carrying_the_worker_header_is_never_routed(fake, tmp_path):
     from hswarm import shared
 
@@ -244,14 +257,14 @@ def test_a_request_carrying_the_worker_header_is_never_routed(fake, tmp_path):
         _, res, api = _run(tmp_path)
     finally:
         shared.REQUEST.reset(tok)
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+    assert f.reads == 0 and f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
 
 def test_over_the_cap_a_task_takes_its_api_route_without_asking(fake, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_MAX", 4)
     f = fake(running_for=0.5)
     job, _, api = _run(tmp_path, n=5)
-    assert len(f.decides) == 4 and len(f.dispatched) == 4 and api.calls == 1
+    assert len(f.dispatched) == 4 and api.calls == 1
     assert sorted(r.answer for r in job.results.values()).count("api route") == 1
 
 
@@ -263,25 +276,18 @@ def test_a_worker_still_queued_at_the_start_deadline_is_cancelled_and_the_task_f
     assert res.answer == "api route" and res.selection["route"]["climayte_not_started"] == "w1"
 
 
-def test_an_unpriced_model_never_asks(fake, tmp_path, monkeypatch):
-    monkeypatch.setattr(climayte_route, "_usd", lambda model: None)
-    f = fake()
-    _, res, api = _run(tmp_path)
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
-
-
-def test_agenthydras_switch_off_means_no_decide_call(fake, tmp_path):
+def test_agenthydras_switch_off_means_no_capacity_read(fake, tmp_path):
     f = fake(enabled=False)
     _, res, api = _run(tmp_path)
-    assert f.decides == [] and res.answer == "api route" and api.calls == 1
+    assert f.reads == 0 and f.dispatched == [] and res.answer == "api route" and api.calls == 1
 
 
-def test_a_task_whose_plan_is_below_its_floor_goes_to_climayte_without_a_price_question(fake, tmp_path, monkeypatch):
-    # No live route meets its bar, so the API side has nothing to weigh: Claude on the subscription takes it.
+def test_a_task_whose_plan_is_below_its_floor_goes_to_climayte_and_says_why(fake, tmp_path, monkeypatch):
+    # No live route meets its bar: Claude on the subscription takes it, and its route names the floor miss.
     monkeypatch.setattr(climayte_route, "floor_miss", lambda task: "no live route meets profile critical")
-    f = fake(route="api")
+    f = fake()
     _, res, api = _run(tmp_path)
-    assert f.decides == [] and len(f.dispatched) == 1 and api.calls == 0
+    assert len(f.dispatched) == 1 and api.calls == 0
     assert res.answer == "worker report"
     assert res.selection["route"]["decided"] == "subscription" and res.selection["route"]["why"] == "no live route meets profile critical"
 
@@ -342,16 +348,15 @@ def test_a_below_floor_task_whose_worker_failed_runs_its_live_route_and_says_so(
 def test_a_task_whose_slot_wait_ran_out_is_still_offered_to_climayte_before_its_last_legs(fake, tmp_path, monkeypatch):
     monkeypatch.setattr(config, "ROUTE_VIA_CLIMAYTE_START_S", 0.6)
     monkeypatch.setattr(climayte_route, "_ASKED", set())
-    f = fake()
+    f = fake(idle=0)  # every account busy
     t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="critical", max_turns=10, max_cost_usd=1.0)
-    monkeypatch.setattr(climayte_route, "_ACTIVE", config.ROUTE_VIA_CLIMAYTE_MAX)  # every slot taken
     t0 = time.monotonic()
     assert asyncio.run(climayte_route.consult("j-wait", t, first="only anthropic routes are left")) == (None, None)
     assert time.monotonic() - t0 >= 0.6 and f.dispatched == []  # it waited its turn
     t0 = time.monotonic()
     assert asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"])) == (None, None)
     assert time.monotonic() - t0 < 0.3 and f.dispatched == []  # still full: no second wait
-    monkeypatch.setattr(climayte_route, "_ACTIVE", 0)  # a slot came free
+    f.idle = 1  # an account came free
     res, _ = asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"]))
     assert res is not None and res.answer == "worker report" and len(f.dispatched) == 1
 
@@ -401,10 +406,10 @@ def test_a_task_whose_cheaper_legs_fail_over_goes_to_climayte_before_an_openai_l
         return Result(id=task.id, backend="api", model=task.model, status="ok", answer="openai answer", cost_usd=0.1), []
 
     monkeypatch.setattr(agent, "run_api_task", fake_run)
-    f = fake(route="api", **({"worker": worker} if worker else {}))
+    f = fake(**({"worker": worker} if worker else {}))
     t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="code", max_turns=10, max_cost_usd=1.0)
     job = Job(id="j", tasks=[t])
     job.results[t.id] = Result(id=t.id, backend="api", model=t.model)
     res, _ = asyncio.run(dispatch.run_selected(_Mgr(), job, t, None, True))
-    assert seen == ran and res.answer == answer and f.decides == [] and len(f.dispatched) == 1
+    assert seen == ran and res.answer == answer and len(f.dispatched) == 1
     assert "openai" in res.selection["route"]["why"] and res.cost_usd >= 0.01  # the dead leg's spend rides on the answer

@@ -206,26 +206,29 @@ A `wait: false` job (or a `wait_s` that ran out) pings the chat that started it 
 
 ## One tool with CliMayte
 
-Before an agentic task runs, HSwarm asks AgentHydra (`POST /api/routing/decide`, at `AGENTHYDRA_URL`, default
-`http://127.0.0.1:7787`) whether the owner's Claude subscription is the cheaper route. The task is asked about when it
-has an absolute `cwd`, tools `read`, `edit` or `all`, no `writable` globs, receipts, scripted diff or runtime, and is
-not already inside a CliMayte worker (`AGENTHYDRA_CLIMAYTE_WORKER`). On `subscription` it runs as a CliMayte worker
-(kind `code` for edit/all, else `review`), polled every 10 s up to the task's `timeout_s`; the worker's report is the
-answer. No answer within 2 s, any error, or a failed or cancelled worker keeps the API route (a failed worker falls back
-once). The route and the decision's reason are in the result's `selection.route`; the ledger line says provider
-`climayte`.
+The owner's Claude subscription costs nothing extra, so an agentic task goes there first whenever CliMayte can start it
+now (owner, 2026-10-13: the free accounts first when available, then the cheapest API key quite certain to finish the
+job, paid keys last). Before the task runs, HSwarm reads AgentHydra's idle CliMayte accounts (`GET /api/corch/capacity`,
+at `AGENTHYDRA_URL`, default `http://127.0.0.1:7787`), less the workers queued there and the tasks it sent in the last
+2 s. A task may go when it has an absolute `cwd`, tools `read`, `edit` or `all`, no `writable` globs, receipts, scripted
+diff or runtime, and is not already inside a CliMayte worker (`AGENTHYDRA_CLIMAYTE_WORKER`). With an account free it
+runs as a CliMayte worker (kind `code` for edit/all, else `review` or `sweep`), polled every 10 s up to the task's
+`timeout_s`; the worker's report is the answer. With none free it runs on its API route at once and its
+`selection.route` says `no CliMayte account was idle`; it is never queued behind CliMayte. No answer within 2 s, any
+error, or a failed or cancelled worker keeps the API route (a failed worker falls back once). The ledger line of a
+served task says provider `climayte`.
 
-A task whose own plan misses its bar is not priced at all (2026-10-09, `floor_miss`): its plan stepped down below its
-profile (`below_floor`) or has no live leg, or its pinned model has no key that can serve now. It goes to CliMayte,
-which meets the bar, waiting up to `route_via_climayte_start_s` for a slot when `route_via_climayte_max` is full; its
+A task whose own plan misses its bar (2026-10-09, `floor_miss`): its plan stepped down below its profile
+(`below_floor`) or has no live leg, or its pinned model has no key that can serve now. It goes to CliMayte, which meets
+the bar, waiting up to `route_via_climayte_start_s` for an account to come free when none is; its
 `selection.route` says `decided: subscription` and why. If CliMayte does not take it, it runs on its stepped-down plan,
 or errors (pointing at `climayte_run`) when no route can serve it at all. `hswarm_run` refuses up front only the tasks
 CliMayte could not take either.
 
-The decision is AgentHydra's cost model (`docs/COST-MODEL.md`), changed on Hydra Desk 2's Routing page (AgentHydra
-pane, HSwarm tab, Routing) or with `PUT /api/routing/settings`. AgentHydra's routing switch is the main one;
-`route_via_climayte = false` in `settings.toml` (default on) is a local opt-out on this machine. Two more settings
-bound it: `route_via_climayte_max` (default 4) caps the routed tasks running at once, and `route_via_climayte_start_s`
+AgentHydra's routing switch (Hydra Desk 2's Routing page: AgentHydra pane, HSwarm tab, Routing, or
+`PUT /api/routing/settings`) is the main one; `route_via_climayte = false` in `settings.toml` (default on) is a local
+opt-out on this machine. Two more settings bound it: `route_via_climayte_max` (default unset: as many as are idle) caps
+the routed tasks running at once, and `route_via_climayte_start_s`
 (default 90) cancels a routed worker that has not started and falls back to the API. A CliMayte worker's own calls
 are never routed (header `x-hswarm-climayte-worker`). The plan prices behind the monthly cost figures are read from
 AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes); the built-in list prices and

@@ -17,8 +17,6 @@ export const DISCOUNT_KEYS: readonly DiscountKey[] = ['anthropic', 'deepseek', '
 
 export interface RoutingSettings {
   enabled: boolean
-  apiPreferencePct: number
-  closeRatio: number
   discounts: RoutingDiscounts
   sessionOverheadPct: number
   planPrices: Record<string, number>

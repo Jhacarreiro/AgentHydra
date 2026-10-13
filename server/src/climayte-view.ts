@@ -46,8 +46,6 @@ import {
 import type { OriginLookup } from './climayte-origin'
 import { roomNow, tickState } from './climayte-schedule'
 import {
-  CLIMAYTE_LADDER,
-  type CliMayteKind,
   climayteKind,
   ladderIndex,
   ladderModel,
@@ -385,14 +383,6 @@ export function climayteHandoff(id: string): { ok: boolean; message: string } {
     message:
       'Asked to wrap up after its current step and write a handoff; the task then continues in a fresh session.',
   }
-}
-
-/** The model an auto task of `kind` runs on now (the scorecard's pick, the Haiku trial's while it runs). The
- *  cost router prices CliMayte work at it: work on a signed-in account costs the plan's share of what that model
- *  lists at, never another model's list price (owner, 2026-10-07: CliMayte gets the plan's discounted rate). */
-export function climaytePickModel(kind: CliMayteKind): string {
-  load()
-  return CLIMAYTE_LADDER[pickedRung(kind, scoreRows(workers.values()))]!.model
 }
 
 /** What works, per kind of task: every verdict on record summed by setting, with what a task cost

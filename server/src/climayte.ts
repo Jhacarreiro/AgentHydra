@@ -261,7 +261,6 @@ export {
   climayteLeanWave,
   climayteLeanWorker,
   climayteList,
-  climaytePickModel,
   climayteReports,
   climayteScorecard,
   climayteWait,

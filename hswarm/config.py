@@ -283,13 +283,14 @@ REFERENCE_MIX = {"hit": 0.651, "miss": 0.318, "out": 0.031}
 # NOT named ROUTING: that is already this module's path to routing.jsonl, the agent_routing_gate's log.
 _PRICE_ROUTING_DEFAULT = (os.environ.get("HSWARM_PRICE_ROUTING") or "on").strip().lower() not in ("0", "off", "false", "no")
 PRICE_ROUTING = _PRICE_ROUTING_DEFAULT
-# `route_via_climayte` in settings.toml: ask AgentHydra (POST /api/routing/decide) whether an agentic task should run as a
-# CliMayte worker on the owner's Claude subscription instead of its API route (climayte_route.py). On by default.
+# `route_via_climayte` in settings.toml: an agentic task runs as a CliMayte worker on the owner's Claude subscription,
+# which costs nothing extra, whenever an account is idle, and on its API route when none is (climayte_route.py). On by default.
 # A LOCAL opt-out ANDed with AgentHydra's own routing switch (settings.enabled of /api/routing/cost-model): both must be on.
 ROUTE_VIA_CLIMAYTE = True
 # `route_via_climayte_max`: tasks routed to CliMayte at once across the server process; a task over it takes its API route
-# without asking. `route_via_climayte_start_s`: a worker not running by then is cancelled and the task runs on its API route.
-ROUTE_VIA_CLIMAYTE_MAX = 4
+# without asking. Unset, as many as CliMayte has idle accounts (a fixed 4 left 12 of 16 idle accounts unused on 2026-10-13).
+# `route_via_climayte_start_s`: a worker not running by then is cancelled and the task runs on its API route.
+ROUTE_VIA_CLIMAYTE_MAX: int | None = None
 ROUTE_VIA_CLIMAYTE_START_S = 90.0
 # `route_via_free` in settings.toml: a TOOL-FREE task of an ordinary profile is first sent to the owner's signed-in Free
 # claude.ai and chatgpt.com accounts through AgentHydra (free_route.py), at no cost, before any paid API leg. On by default.
@@ -543,7 +544,7 @@ def _reset() -> None:
     # Reset with everything else: a settings file that says nothing about routing must not leave a
     # `routing = false` from a PREVIOUS read standing (it did until 2026-09-17).
     PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD = _PRICE_ROUTING_DEFAULT, _LOAD_BIAS_DEFAULT, None
-    ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, 4, 90.0
+    ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, None, 90.0
     ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, None, _ROUTE_VIA_FREE_PROFILES_DEFAULT
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)

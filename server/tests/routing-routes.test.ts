@@ -7,8 +7,8 @@ import { app } from '../src/http-app'
 import { PLAN_SIZE } from '../src/plans'
 import '../src/routes/routing'
 
-const saved = getSetting('routing_api_preference_pct')
-afterAll(() => setSetting('routing_api_preference_pct', saved))
+const saved = getSetting('routing_session_overhead_pct')
+afterAll(() => setSetting('routing_session_overhead_pct', saved))
 
 // A private copy, never the shared app (queue-patch-guard.test.ts has the why): a request on `app`
 // builds its router, and every routes/*.ts a later file imports then dies at import with "Can not
@@ -23,59 +23,15 @@ const send = (method: string, path: string, body: unknown) =>
     body: JSON.stringify(body),
   })
 
-const decide = (api: unknown, listUsd: unknown = 1) =>
-  send('POST', '/api/routing/decide', { key: 'k', listUsd, api, subscriptionRoom: true })
-
-test('decide refuses an api.usd that is null, empty or negative, and accepts a numeric string', async () => {
-  const api = (usd: unknown) => ({ provider: 'deepseek', model: 'm', usd })
-  for (const usd of [null, '', -1, 'abc']) {
-    const r = await decide(api(usd))
-    expect(r.status).toBe(400)
-    expect(((await r.json()) as { error: string }).error).toContain('api.usd')
-  }
-  expect((await decide(api('0.5'))).status).toBe(200)
-})
-
-test('decide treats a junk listUsd as no list cost', async () => {
-  const r = await decide({ provider: 'deepseek', model: 'm', usd: 1 }, '')
-  expect(r.status).toBe(200)
-  expect(((await r.json()) as { subscriptionUsd: number | null }).subscriptionUsd).toBeNull()
-})
-
-test("decide prices CliMayte work at its own pick's list price, not the caller's, given a kind and size", async () => {
-  // Owner, 2026-10-07: work on a signed-in account gets the plan's rate for the model it really runs on.
-  const priced = async (listUsd: number) => {
-    const r = await send('POST', '/api/routing/decide', {
-      key: 'k',
-      listUsd,
-      kind: 'sweep',
-      tokens: { input: 40_000, output: 4_000 },
-      api: { provider: 'deepseek', model: 'm', usd: 1 },
-      subscriptionRoom: true,
-    })
-    expect(r.status).toBe(200)
-    return (await r.json()) as { subscriptionUsd: number; subscriptionModel: string }
-  }
-  const [low, high] = [await priced(0), await priced(1000)]
-  expect(low.subscriptionModel).toStartWith('claude-')
-  expect(high.subscriptionUsd).toBe(low.subscriptionUsd)
-  const bad = await send('POST', '/api/routing/decide', {
-    key: 'k',
-    kind: 'nap',
-    tokens: { input: 1, output: 1 },
-  })
-  expect(bad.status).toBe(400)
-})
-
 test('PUT settings leaves a field alone when its value is junk, and names it', async () => {
-  setSetting('routing_api_preference_pct', '37')
-  const r = await send('PUT', '/api/routing/settings', { apiPreferencePct: false })
+  setSetting('routing_session_overhead_pct', '7')
+  const r = await send('PUT', '/api/routing/settings', { sessionOverheadPct: false })
   expect(r.status).toBe(400)
-  expect(((await r.json()) as { fields: string[] }).fields).toEqual(['apiPreferencePct'])
-  expect(getSetting('routing_api_preference_pct')).toBe('37')
-  const ok = await send('PUT', '/api/routing/settings', { apiPreferencePct: '250' })
+  expect(((await r.json()) as { fields: string[] }).fields).toEqual(['sessionOverheadPct'])
+  expect(getSetting('routing_session_overhead_pct')).toBe('7')
+  const ok = await send('PUT', '/api/routing/settings', { sessionOverheadPct: '250' })
   expect(ok.status).toBe(200)
-  expect(getSetting('routing_api_preference_pct')).toBe('100')
+  expect(getSetting('routing_session_overhead_pct')).toBe('100')
 })
 
 test('planFactor and PLAN_SIZE agree', () => {
