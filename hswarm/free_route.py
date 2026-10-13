@@ -251,7 +251,7 @@ async def _serve_tools(job_id: str, task: Task, accounts: list | None = None) ->
 
     family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
     client = FreeChatClient(job_id, task, family, call=_call)
-    leg = dataclasses.replace(task, model="free:" + family, timeout_s=min(task.timeout_s, TOOL_CAP_S))
+    leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, TOOL_CAP_S))
     res, _ = await run_api_task(client, leg, user_tag=job_id)
     one = {"account": client.account, "model": client.model, "chat_id": client.chat_id}
     if res.status != "ok":

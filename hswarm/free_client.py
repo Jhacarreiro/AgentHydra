@@ -34,8 +34,9 @@ PROTOCOL = """# Tools you have in this chat
 
 This chat is connected to a program on my machine that works on a project folder for you. It reads every reply you \
 write, runs the tools listed below, and sends their results back in its next message inside <tool_result> tags. The \
-tools are really available here, though they are not the chat app's own features: you use one by writing a line that \
-holds only
+tools are really available here, though they are not the chat app's own features: never call one through the app's \
+own tool or function feature, which does not know them and answers "not found". You use one by writing, in your reply, \
+a line that holds only
 
 <tool_call>{"name": "TOOL", "arguments": {...}}</tool_call>
 
@@ -50,6 +51,10 @@ START = "Reply now with the <tool_call> line(s) for what you need first."
 NUDGE = ("The tools are available: I am the program that runs them, on my machine, as soon as you write the <tool_call> "
          "lines. Write the line(s) for what you need first now, and nothing else.")
 NUDGES = 2
+# After a note the loop sends mid-thread (the api route's own nudges, such as "call submit_result now"), which a chat model
+# took for its app's function feature: GPT-5.6 mini answered "submit_result ... is not available to me in this chat",
+# and Sonnet 5.5 called it there and got "Tool 'submit_result' not found" (2026-10-13).
+REMIND = "(As before: call a tool, submit_result included, by writing its <tool_call> line in your reply.)"
 
 # A call written inside a fence is how chat models often show JSON; toolcall_repair rightly takes a fenced call for an
 # example, so a fence whose whole body is one call (or a list of them) to an offered tool is unwrapped first.
@@ -138,7 +143,7 @@ class FreeChatClient:
             if m.get("role") == "tool":
                 parts.append(f'<tool_result name="{names.get(m.get("tool_call_id")) or "tool"}">\n{_content(m)}\n</tool_result>')
             elif m.get("role") == "user":
-                parts.append(_content(m).strip())
+                parts.append(_content(m).strip() + ("\n\n" + REMIND if tools else ""))
         if not tools:
             parts.append("Tools are closed now: write no <tool_call> line.")
         return self._fit("\n\n".join(p for p in parts if p))
