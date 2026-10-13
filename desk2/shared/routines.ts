@@ -77,9 +77,11 @@ export interface RoutineRun {
   sessionId: string | null
 }
 
-/** A run going on now: when it started, the process it is (or null), and the chat it is (or null). */
+/** A run going on now: when it started, what it runs (kept from its start: the routine's file may change meanwhile), the
+ *  process it is (or null), and the chat it is (or null). */
 export interface RoutineRunning {
   startedAt: number
+  kind: 'command' | 'prompt'
   pid: number | null
   workerId: string | null
   sessionId: string | null

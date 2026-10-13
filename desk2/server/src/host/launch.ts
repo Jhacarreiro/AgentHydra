@@ -49,8 +49,11 @@ const psLiteral = (s: string) => `'${s.replace(/'/g, "''")}'`
 
 /**
  * The command that starts argv outside our process tree, hidden. Windows: a powershell asking WMI, with
- * Start-Process as the fallback when WMI refuses (a leaked handle beats a chat that never starts). Every
- * argument goes in as data: single-quoted for powershell, then quoted for CommandLineToArgvW.
+ * Start-Process as the fallback when WMI refuses (a leaked handle beats a chat that never starts). The fallback
+ * still outlives Desk: Bun's job ends only its own children, and lets theirs go (measured 2026-10-13: a
+ * Start-Process child of a bun's powershell ran on after the bun exited and after it was killed); it stays in
+ * any job above Desk's, as a chat's or fairjob's. When both refuse, the powershell says why on stderr and exits 1.
+ * Every argument goes in as data: single-quoted for powershell, then quoted for CommandLineToArgvW.
  */
 export function detachedCommand(platform: NodeJS.Platform, argv: string[]): { argv: string[]; detached: boolean } {
   if (platform !== 'win32') return { argv: [...argv], detached: true }
@@ -60,12 +63,42 @@ export function detachedCommand(platform: NodeJS.Platform, argv: string[]): { ar
   const startProcess = `Start-Process -FilePath ${psLiteral(argv[0]!)}${rest.length ? ` -ArgumentList @(${rest.join(', ')})` : ''} -WindowStyle Hidden`
   const ps = [
     "$ErrorActionPreference = 'Stop'",
-    '$rc = 1',
-    `try { $rc = (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments ${wmiArguments}).ReturnValue } catch { $rc = 1 }`,
-    `if ($rc -ne 0) { ${startProcess} }`,
+    '$why = $null',
+    `try { $rc = (Invoke-CimMethod -ClassName Win32_Process -MethodName Create -Arguments ${wmiArguments}).ReturnValue; if ($rc -ne 0) { $why = "WMI refused it (Win32_Process.Create returned $rc)" } } catch { $why = "WMI failed: $($_.Exception.Message)" }`,
+    `if ($null -ne $why) { try { ${startProcess} } catch { [Console]::Error.WriteLine("$why, and Start-Process failed: $($_.Exception.Message)"); exit 1 } }`,
     'exit 0',
   ].join('; ')
   return { argv: ['powershell', '-NoProfile', '-NonInteractive', '-Command', ps], detached: false }
+}
+
+/**
+ * Starts argv outside our process tree, hidden (detachedCommand), and hands `failed` the reason when that could not
+ * happen: the launcher did not start, or (Windows) it exited saying WMI and Start-Process both refused. A start that
+ * happened says nothing; whether the program then runs is the caller's to watch. Off Windows the launcher is the
+ * program itself, so only a failed spawn counts, and nothing of it is piped (a pipe would break at Desk's restart).
+ */
+export function startDetached(argv: string[], failed: (reason: string) => void, platform: NodeJS.Platform = process.platform): void {
+  const plan = detachedCommand(platform, argv)
+  let told = false
+  const fail = (reason: string): void => {
+    if (told) return
+    told = true
+    failed(reason)
+  }
+  const windows = platform === 'win32'
+  const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: ['ignore', 'ignore', windows ? 'pipe' : 'ignore'], windowsHide: true, detached: plan.detached })
+  let err = ''
+  child.stderr?.setEncoding('utf8').on('data', (text: string) => {
+    if (err.length < 4096) err += text
+  })
+  child.on('error', (e) => fail(e.message))
+  // On failure nothing was started, so nothing holds the pipe and close comes at once. (A Start-Process child may keep
+  // it open after a start that worked, which is never waited for.)
+  if (windows)
+    child.on('close', (code) => {
+      if (code !== 0 && code !== null) fail(err.split(/\r?\n/).map((l) => l.trim()).filter(Boolean).at(-1) ?? `its launcher exited ${code}`)
+    })
+  child.unref()
 }
 
 function validHostFile(file: HostFile | null, chatId: string): HostFile | null {
@@ -231,19 +264,20 @@ export async function launchHost(spec: HostSpec, o: LaunchOptions = {}): Promise
   const tmp = `${specPath}.${process.pid}.tmp`
   writeFlushed(tmp, JSON.stringify(spec))
   renameOver(tmp, specPath)
-  const plan = detachedCommand(o.platform ?? process.platform, [o.bun ?? process.execPath, HOST_ENTRY, '--spec', specPath])
+  let failure: string | null = null
   try {
     // The powershell itself is a console program: hidden. It exits once WMI has started the host.
-    const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
-    child.on('error', () => {}) // a failed start shows as no host file in time
-    child.unref()
+    startDetached([o.bun ?? process.execPath, HOST_ENTRY, '--spec', specPath], (reason) => (failure = reason), o.platform ?? process.platform)
   } catch (err) {
-    rmSync(specPath, { force: true })
-    throw new Error(`could not start the chat process: ${(err as Error).message}`)
+    failure = (err as Error).message
   }
   const deadline = Date.now() + (o.timeoutMs ?? 30_000)
   // Looked at every 50 ms at first, then more slowly: a cold start takes seconds.
   for (let tries = 0; Date.now() < deadline; tries++) {
+    if (failure !== null) {
+      rmSync(specPath, { force: true })
+      throw new Error(`could not start the chat process: ${failure}`)
+    }
     const file = await readHostFileAsync(spec.dir, spec.chatId)
     if (file?.token === spec.token) return file
     await Bun.sleep(Math.min(200, 50 + tries * 25))

@@ -7,7 +7,6 @@
 // and a prompt run's chat both outlive Desk) and never starts a slot twice. A proposal (routines/proposed) is listed and
 // never run. No model is asked here: a prompt routine is a Desk chat that runs its prompt.
 
-import { spawn } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { Hono } from 'hono'
@@ -28,7 +27,7 @@ import type { AhWorker, StartWorker } from '../bridge/client'
 import { isActiveWorkerStatus } from '../bridge/climayte'
 import { callerKind } from '../caller'
 import { chatAddOns } from '../engine/desk-prompt'
-import { detachedCommand, killHostTree, pidAlive, recordedPidOwner } from '../host/launch'
+import { killHostTree, pidAlive, recordedPidOwner, startDetached } from '../host/launch'
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
 import { kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
 import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
@@ -134,7 +133,9 @@ function load(file: string): Record<string, Memory> {
       if (m?.running && Number.isFinite(m.running.startedAt)) {
         const workerId = typeof m.running.workerId === 'string' ? m.running.workerId : null
         const pid = typeof m.running.pid === 'number' ? m.running.pid : null
-        mem.running = { startedAt: m.running.startedAt, pid: workerId ? null : pid, workerId, sessionId: null }
+        // A run kept without its kind (a Desk before 2026-10-13) is a prompt run when it has its chat, else a command run.
+        const kind = m.running.kind === 'prompt' || workerId ? 'prompt' : 'command'
+        mem.running = { startedAt: m.running.startedAt, kind, pid: workerId ? null : pid, workerId, sessionId: null }
       }
       return [id, mem]
     }),
@@ -254,25 +255,56 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       timeoutMs: (def.timeoutMinutes ?? TIMEOUT_DEFAULT) * 60_000 * timeoutScale,
       log,
     }
+    const notStarted = (why: string): void =>
+      finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: `its runner could not start: ${why}`.slice(0, LINE_CHARS), workerId: null, sessionId: null })
     try {
       for (const f of [paths.spec, paths.taken, paths.run, paths.result]) rmSync(f, { force: true })
       writeJson(paths.spec, spec)
-      const plan = detachedCommand(process.platform, [process.execPath, RUNNER_ENTRY, '--spec', paths.spec])
-      // The powershell is a console program (hidden); it exits once WMI has started the runner.
-      const child = spawn(plan.argv[0]!, plan.argv.slice(1), { stdio: 'ignore', windowsHide: true, detached: plan.detached })
-      child.on('error', () => {}) // a failed start shows as no runner file in time
-      child.unref()
+      // The powershell is a console program (hidden); it exits once WMI has started the runner. When it could not, the
+      // run fails at once with its reason, the spec taken back as settleCommands takes back one no runner came for.
+      startDetached([process.execPath, RUNNER_ENTRY, '--spec', paths.spec], (why) => {
+        if (mem.running?.startedAt !== startedAt || !takeBack(paths.spec)) return
+        notStarted(why)
+      })
     } catch (err) {
       rmSync(paths.spec, { force: true })
-      finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: `its runner could not start: ${message(err)}`.slice(0, LINE_CHARS), workerId: null, sessionId: null })
+      notStarted(message(err))
+    }
+  }
+
+  /** Takes a spec back from a runner that has not come for it: false when the runner took it first. */
+  function takeBack(spec: string): boolean {
+    try {
+      renameSync(spec, `${spec}.cancelled`)
+    } catch {
+      return false
+    }
+    try {
+      rmSync(`${spec}.cancelled`, { force: true })
+    } catch {
+      // Held for a moment: the routine's next start clears its files.
+    }
+    return true
+  }
+
+  /** Off Windows a command leads its own process group, which its runner's end does not end: once the runner is gone or
+   *  ended, its group is ended too, when its leader is proven to be the command still (by its start). On Windows the
+   *  runner's end ended its command (Bun ends its children). */
+  async function endCommandGroup(runner: RunFile): Promise<void> {
+    if (process.platform === 'win32' || runner.commandPid === null || typeof runner.commandStartedAt !== 'number') return
+    if ((await recordedPidOwner(runner.commandPid, runner.commandStartedAt)) !== 'ours') return
+    try {
+      process.kill(-runner.commandPid, 'SIGKILL')
+    } catch {
+      // Its group has ended.
     }
   }
 
   /** The runs a look cannot watch from outside, read from their runners' files (routines/runner.ts): a command run whose
    *  runner wrote how it ended is recorded; one whose runner is gone without a word, interrupted; one past its timeout that
    *  its runner did not end is ended here; one whose runner never came for its spec, not started. A prompt run that never
-   *  got its chat (Desk stopped as it started one) is interrupted. One reading at a time, so no run is recorded twice; a
-   *  run is recorded, and on disk, before its files go. */
+   *  got its chat (Desk stopped as it started one) is interrupted. Each by the kind it started as, whatever its routine's
+   *  file says now. One reading at a time, so no run is recorded twice; a run is recorded, and on disk, before its files go. */
   function settleCommands(): Promise<void> {
     settling ??= (async () => {
       for (const [id, mem] of Object.entries(memory)) {
@@ -281,7 +313,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         const key = `${id}@${running.startedAt}`
         const def = seen.find((s) => s.entry.id === id)?.entry.def
         const t = clock()
-        if (def?.prompt !== undefined) {
+        if (running.kind === 'prompt') {
           if (!startingPrompts.has(key))
             finishRun(mem, { startedAt: running.startedAt, endedAt: t, outcome: 'interrupted', exitCode: null, lastLine: 'AgentHydra restarted before its chat started', workerId: null, sessionId: null })
           continue
@@ -317,23 +349,25 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
             running.pid = runner.pid
             save()
           }
-          if (pidAlive(runner.pid) && (await recordedPidOwner(runner.pid, runner.pidStartedAt)) !== 'foreign') {
+          const owner = pidAlive(runner.pid) ? await recordedPidOwner(runner.pid, runner.pidStartedAt) : 'foreign'
+          if (owner !== 'foreign') {
             const minutes = def?.timeoutMinutes ?? TIMEOUT_DEFAULT
             if (t - running.startedAt < minutes * 60_000 * timeoutScale + RUNNER_GRACE_MS) continue
-            // Its runner ends the command at the timeout; one still going hangs. A pid not proven to be it is left alone,
-            // and the run stays running: closing it would let a second run start beside the first.
-            if (!(await killHostTree(runner.pid, runner.pidStartedAt))) continue
-            if (process.platform !== 'win32' && runner.commandPid !== null) {
-              try {
-                process.kill(-runner.commandPid, 'SIGKILL')
-              } catch {
-                // Its group has ended.
-              }
+            // Its runner ends the command at the timeout and then itself; one still going hangs, and is ended here. A pid
+            // whose start cannot be read is never killed: it is most likely a process that took the number since, one
+            // this user cannot read. Nothing would ever end that run, so it is closed, its process left alone.
+            if (owner === 'unknown') {
+              if (!ended()) record({ endedAt: t, outcome: 'interrupted', lastLine: `its runner could not be checked past its ${minutes}-minute timeout, so Desk stopped watching it and ended nothing` })
+              continue
             }
+            if (!(await killHostTree(runner.pid, runner.pidStartedAt))) continue
+            await endCommandGroup(runner)
             if (!ended()) record({ endedAt: t, outcome: 'timed-out', lastLine: `timed out after ${minutes} minutes; its runner did not end it, so Desk did` })
             continue
           }
           // Gone. Its result may have landed after the read above.
+          if (ended()) continue
+          await endCommandGroup(runner)
           if (!ended()) record({ endedAt: t, outcome: 'interrupted', lastLine: 'its runner ended without saying how the run ended' })
           continue
         }
@@ -349,16 +383,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         const specAge = ageMs(paths.spec)
         if (specAge !== null) {
           if (specAge < RUNNER_START_MS) continue
-          try {
-            renameSync(paths.spec, `${paths.spec}.cancelled`)
-          } catch {
-            continue // The runner took it just now.
-          }
-          try {
-            rmSync(`${paths.spec}.cancelled`, { force: true })
-          } catch {
-            // Held for a moment: the routine's next start clears its files.
-          }
+          if (!takeBack(paths.spec)) continue // The runner took it just now.
           record({ endedAt: t, outcome: 'failed', lastLine: `its runner did not start within ${RUNNER_START_MS / 1000} seconds` })
           continue
         }
@@ -391,7 +416,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         group: `routine-${def.id}-${groupStamp(startedAt)}`,
         desk: chatAddOns(def.cwd ?? '', false),
       })
-      mem.running = { startedAt, pid: null, workerId: w.id, sessionId: w.sessionId }
+      mem.running = { startedAt, kind: 'prompt', pid: null, workerId: w.id, sessionId: w.sessionId }
       save()
     } catch (err) {
       finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: message(err).slice(0, LINE_CHARS), workerId: null, sessionId: null })
@@ -404,7 +429,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
    *  It starts at the clock's now, not at its look's: the status commands a look reads first can take a minute. */
   function startRun(def: RoutineDefinition, mem: Memory, slot: number | null): void {
     const t = clock()
-    mem.running = { startedAt: t, pid: null, workerId: null, sessionId: null }
+    mem.running = { startedAt: t, kind: def.prompt !== undefined ? 'prompt' : 'command', pid: null, workerId: null, sessionId: null }
     if (slot !== null) mem.lastSlot = slot
     save()
     if (def.prompt !== undefined) void startPrompt(def, mem, t)

@@ -6,7 +6,7 @@ import { spawn } from 'node:child_process'
 import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { detachedCommand } from '../../src/host/launch'
+import { detachedCommand, startDetached } from '../../src/host/launch'
 
 const temps: string[] = []
 afterEach(() => {
@@ -31,4 +31,14 @@ test.skipIf(process.platform !== 'win32')('a host starts outside our process tre
   // WMI's provider host is its parent, not this process (nor the powershell this process started).
   expect(got.ppid).not.toBe(process.pid)
   expect(got.ppid).not.toBe(child.pid)
+}, 30_000)
+
+// When WMI refuses and so does the fallback, the launcher says why (2026-10-13): a chat host and a routine's runner then
+// fail at once with that reason, instead of waiting out their start window to report a timeout.
+test.skipIf(process.platform !== 'win32')('a start that cannot happen says why', async () => {
+  const dir = mkdtempSync(join(tmpdir(), 'desk launch '))
+  temps.push(dir)
+  const reason = await new Promise<string>((done) => startDetached([join(dir, 'no such program.exe')], done))
+  expect(reason).toContain('WMI refused it')
+  expect(reason).toContain('Start-Process failed')
 }, 30_000)

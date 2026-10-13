@@ -12,6 +12,8 @@ import { nextSlot, parseCron, previousSlot } from '../../src/routines/cron'
 import { checkDefinition, untilEndOf, type Entry } from '../../src/routines/manifest'
 import { emptyMemory, judge, MIN_GAP_MS, MISSED_MS, type Memory, type Reading, type Seen } from '../../src/routines/decide'
 import { parseTaskReadings, readTasks, type TaskReading } from '../../src/routines/wintask'
+import type { RunFile } from '../../src/routines/runner'
+import { pidAlive, recordedPidOwner } from '../../src/host/launch'
 import { loadSettings, settingsPath } from '../../src/settings'
 import plugin, { type RoutinesOptions, type RoutineTasks, type RoutineWorkers } from '../../src/plugins/73-routines'
 
@@ -189,7 +191,7 @@ describe('judging (routines/decide.ts)', () => {
   })
 
   test('a running routine is not started again', () => {
-    const j = judge(seenOf(sched), memWith({ lastSlot: at(2026, 10, 11, 9, 0), running: { startedAt: NOW, pid: null, workerId: null, sessionId: null } }), NOW, true, false)
+    const j = judge(seenOf(sched), memWith({ lastSlot: at(2026, 10, 11, 9, 0), running: { startedAt: NOW, kind: 'command', pid: null, workerId: null, sessionId: null } }), NOW, true, false)
     expect(j).toMatchObject({ state: 'running', start: false })
   })
 
@@ -383,6 +385,15 @@ async function settle(app: Hono, done: (s: RoutinesStatus) => boolean): Promise<
 
 const ticks = (file: string): number => (existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter((l) => l === 'tick').length : 0)
 
+/** A run's runner file, or null while there is none. */
+const readRun = (file: string): RunFile | null => {
+  try {
+    return JSON.parse(readFileSync(file, 'utf8')) as RunFile
+  } catch {
+    return null
+  }
+}
+
 describe('the plugin', () => {
   test('a run routine runs once on its slot, a second look does not run it again, and a run now runs it at once', async () => {
     const d = desk()
@@ -433,6 +444,74 @@ describe('the plugin', () => {
     expect(ended.routines[0].runs[0]).toMatchObject({ outcome: 'ok', exitCode: 0, lastLine: 'done after the restart' })
     expect(ended.routines[0].running).toBeNull()
   }, 60_000)
+
+  // On Windows Bun ends a killed runner's command with it; elsewhere the command leads its own process group, which the next
+  // look ends once it finds the runner gone (2026-10-13). Off Windows this is unrun on the PC that wrote it.
+  test('a runner killed hard leaves no command running, and its run is recorded interrupted', async () => {
+    const d = desk()
+    d.routine('example-killed', { name: 'Example killed', askedBy, schedule: '0 9 * * *', run: d.argv('wait'), timeoutMinutes: 5 })
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-killed' })).status).toBe(200)
+    const runFile = join(d.home, 'routines', 'runs', 'example-killed.run.json')
+    const until = Date.now() + 20_000
+    let said = readRun(runFile)
+    while (!said?.commandPid && Date.now() < until) {
+      await Bun.sleep(50)
+      said = readRun(runFile)
+    }
+    const commandPid = said?.commandPid ?? 0
+    expect(commandPid).toBeGreaterThan(0)
+    process.kill(said!.pid, 'SIGKILL')
+
+    const ended = await settle(d.app, (s) => s.routines[0].runs.length === 1)
+    expect(ended.routines[0].runs[0]).toMatchObject({ outcome: 'interrupted', lastLine: 'its runner ended without saying how the run ended' })
+    // Gone, or its number since taken by a process that started later.
+    const stillIt = async () => pidAlive(commandPid) && (await recordedPidOwner(commandPid, said!.commandStartedAt!)) === 'ours'
+    const gone = Date.now() + 10_000
+    while ((await stillIt()) && Date.now() < gone) await Bun.sleep(50)
+    expect(await stillIt()).toBe(false)
+  }, 60_000)
+
+  // A run is settled by the kind it started as (2026-10-13): a command run whose routine had become a prompt routine was
+  // closed as a prompt run that never got its chat while its command ran on, so a second run could start beside it.
+  test('a command run stays a command run when its routine is rewritten into a prompt routine meanwhile', async () => {
+    const noChats: RoutineWorkers = { start: async () => Promise.reject(new Error('no chats in this test')), read: async () => null, cancel: async () => {} }
+    const d = desk({ workers: noChats })
+    const base = { name: 'Example changed', askedBy, schedule: '0 9 * * *', timeoutMinutes: 5 }
+    d.routine('example-changed', { ...base, run: d.argv('wait') })
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-changed' })).status).toBe(200)
+    await settle(d.app, (s) => typeof s.routines[0].running?.pid === 'number')
+
+    d.routine('example-changed', { ...base, prompt: 'Example task', cwd: d.home })
+    const after = await get(d.app, true)
+    expect(after.routines[0]).toMatchObject({ state: 'running', runs: [] })
+    writeFileSync(`${d.count}.go`, '')
+    const ended = await settle(d.app, (s) => s.routines[0].runs.length === 1)
+    expect(ended.routines[0].runs[0]).toMatchObject({ outcome: 'ok', exitCode: 0 })
+  }, 60_000)
+
+  // Regression (2026-10-13): a launcher that could not start was ignored, so the run read "running" for a minute and then
+  // "did not start within 60 seconds", its reason lost. Windows only: elsewhere the runner is started directly.
+  test.skipIf(process.platform !== 'win32')("a run whose runner cannot be launched fails at once, with the launcher's reason", async () => {
+    const d = desk()
+    d.routine('example-unlaunched', { name: 'Example unlaunched', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5 })
+    await get(d.app, true)
+    // No powershell on the path: the launcher cannot start.
+    const path = process.env.PATH
+    process.env.PATH = join(d.home, 'no-programs-here')
+    try {
+      expect((await post(d.app, { run: 'example-unlaunched' })).status).toBe(200)
+    } finally {
+      process.env.PATH = path
+    }
+    const s = await settle(d.app, (x) => x.routines[0].runs.length === 1)
+    expect(s.routines[0].runs[0]).toMatchObject({ outcome: 'failed' })
+    expect(s.routines[0].runs[0].lastLine).toStartWith('its runner could not start: ')
+    expect(s.routines[0].runs[0].lastLine).toContain('powershell')
+    expect(existsSync(join(d.home, 'routines', 'runs', 'example-unlaunched.spec.json'))).toBe(false)
+    expect(ticks(d.count)).toBe(0)
+  }, 30_000)
 
   // A prompt run is marked running before its chat starts. When Desk stops in that moment, no chat id was kept: nothing
   // would ever watch it, so the routine read "running" for good (a review of the runner change, 2026-10-12).

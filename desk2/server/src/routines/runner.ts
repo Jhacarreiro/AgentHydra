@@ -6,8 +6,10 @@
 // (the environment travels in it: WMI starts the runner with the user's default one), appends the command's output to the
 // routine's log, ends the command past its timeout, and writes how it ended to <id>.result.json, whole, before it goes. At
 // every moment one of those files is there; Desk deletes them once it has recorded the run. A Desk that starts meanwhile
-// reads them and goes on watching the run. Bun ends a process's children when it ends, however it ends (measured
-// 2026-10-12), so a runner that is killed takes its command with it.
+// reads them and goes on watching the run. On Windows Bun ends a process's own children when it ends, however it ends
+// (measured 2026-10-12), so a runner that is killed takes its command with it (not what the command started in turn: that
+// leaves Bun's job, measured 2026-10-13). Elsewhere the command leads its own process group, which Desk ends once it finds
+// the runner gone.
 
 import { createWriteStream, readFileSync, renameSync, rmSync, utimesSync } from 'node:fs'
 import { dirname, join } from 'node:path'
@@ -34,12 +36,14 @@ export interface RunSpec {
 }
 
 /** <id>.run.json: the runner's pid for the run `startedAt`, when the runner started (the proof that pid is still it), and
- *  the command's pid once it runs (off Windows it leads its own process group, which the runner's death does not end). */
+ *  the command's pid once it runs, with a time it had started by (off Windows it leads its own process group, which the
+ *  runner's death does not end). */
 export interface RunFile {
   startedAt: number
   pid: number
   pidStartedAt: number
   commandPid: number | null
+  commandStartedAt: number | null
 }
 
 /** <id>.result.json: how the run `startedAt` ended. */
@@ -103,7 +107,7 @@ async function main(): Promise<void> {
     process.exit(2)
   }
   const paths = runPaths(dirname(specPath), spec.id)
-  const said: RunFile = { startedAt: spec.startedAt, pid: process.pid, pidStartedAt: Date.now(), commandPid: null }
+  const said: RunFile = { startedAt: spec.startedAt, pid: process.pid, pidStartedAt: Date.now(), commandPid: null, commandStartedAt: null }
   writeJson(paths.run, said)
   remove(taken)
   const out = createWriteStream(spec.log, { flags: 'a' })
@@ -117,7 +121,7 @@ async function main(): Promise<void> {
     timeoutMs: spec.timeoutMs,
     onStart: (child) => {
       try {
-        if (child.pid !== undefined) writeJson(paths.run, { ...said, commandPid: child.pid } satisfies RunFile)
+        if (child.pid !== undefined) writeJson(paths.run, { ...said, commandPid: child.pid, commandStartedAt: Date.now() } satisfies RunFile)
       } catch {
         // The command still gets its timeout and its log; only Desk's backstop loses its pid.
       }
