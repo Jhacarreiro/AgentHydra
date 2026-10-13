@@ -131,6 +131,8 @@ function fixture() {
     writerBusy: false,
     /** The source history Codex displays; by default the transcript's own rows. */
     sourceRows: null as Row[] | null,
+    /** An older row Codex lists for the same chat: the earlier file of a split history. */
+    staleRow: null as Record<string, unknown> | null,
   }
   const connect = async (home: string): Promise<CodexRpc> => {
     const side = home === sourceHome ? 'source' : 'target'
@@ -144,7 +146,10 @@ function fixture() {
         data:
           state.archived || (state.staleArchivePath && existsSync(archivePath))
             ? []
-            : [{ ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) }],
+            : [
+                ...(state.staleRow && !params?.cursor ? [state.staleRow] : []),
+                { ...thread, ...(params?.cursor ? { id: 'chat-2' } : {}) },
+              ],
         nextCursor: null,
       }
     }
@@ -509,10 +514,9 @@ function splitHistory(f: ReturnType<typeof fixture>) {
   ]
   const kept = [meta(0), ...turn(1, 'turn-a', 'First')]
   const boundary = Buffer.byteLength(`${kept.join('\n')}\n`)
-  writeFileSync(
-    join(f.sourceHome, 'sessions', `rollout-1-${id}.jsonl`),
-    `${[...kept, ...turn(4, 'turn-x', 'Abandoned')].join('\n')}\n`,
-  )
+  const earlier = join(f.sourceHome, 'sessions', `rollout-1-${id}.jsonl`)
+  f.state.staleRow = { ...f.thread, path: earlier, updatedAt: f.thread.updatedAt - 50 }
+  writeFileSync(earlier, `${[...kept, ...turn(4, 'turn-x', 'Abandoned')].join('\n')}\n`)
   const newest = [
     meta(4, {
       history_base: { thread_id: id, end_ordinal_exclusive: 4, end_byte_offset: boundary },
@@ -545,6 +549,8 @@ describe('Codex chat move: history split across rollouts', () => {
   test('carries the earlier history and verifies every displayed turn before archiving', async () => {
     const f = fixture()
     splitHistory(f)
+    const plan = await planCodexChatMove('0', '1', f.deps)
+    expect(plan.chats.map((chat) => [chat.id, chat.updatedAt])).toEqual([['chat-1', 100]])
     const result = await moveCodexChat('0', f.request, f.deps)
     expect(result).toEqual({
       ok: true,

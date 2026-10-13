@@ -176,7 +176,13 @@ async function activeThreads(rpc: CodexRpc): Promise<Thread[]> {
       throw new Error('Codex repeated a chat-list page. Refresh and try again.')
     if (cursor) seen.add(cursor)
   } while (cursor)
-  return threads
+  // A chat whose history spans rollouts is listed once per file, the earlier files as older rows
+  // with the same id; only the newest row is the chat (its path holds the latest history).
+  const newest = new Map<string, Thread>()
+  for (const thread of threads)
+    if ((newest.get(thread.id)?.updatedAt ?? -Infinity) < thread.updatedAt)
+      newest.set(thread.id, thread)
+  return [...newest.values()]
 }
 
 function chatRow(thread: Thread): CodexMoveChat {
@@ -589,7 +595,9 @@ interface Turn {
   items?: unknown[]
 }
 
-/** Every turn Codex displays for a chat, with full items. */
+/** Every turn Codex displays for a chat, oldest first (Codex pages newest first unless asked),
+ * with full items. It reads Codex's projection only: resuming a source just to read it would
+ * append a settings row to the transcript being moved. */
 async function displayedTurns(rpc: CodexRpc, threadId: string): Promise<Turn[]> {
   const turns: Turn[] = []
   const seen = new Set<string>()
@@ -601,6 +609,7 @@ async function displayedTurns(rpc: CodexRpc, threadId: string): Promise<Turn[]> 
         threadId,
         limit: 100,
         itemsView: 'full',
+        sortDirection: 'asc',
         ...(cursor ? { cursor } : {}),
       },
     )
