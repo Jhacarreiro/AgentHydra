@@ -500,8 +500,13 @@ answers `held: true` with `queued: true` for a held message, and `delivered` sta
 transcript or the app's `delivered` confirms it.
 
 Callers that use it: CliMayte's pings and HSwarm job pings to a chat Desk 2 does not run
-(`server/src/climayte.ts` passes `sendOrHold` as the ping's `native` step, after Desk's route and before
-the peer pipe; `server/src/climayte-ping.ts`). The orchestrator's nudge to an outside session posts
+(`server/src/climayte.ts` passes `sendOrHoldToChat` as the ping's `native` step, after Desk's route and
+before the peer pipe; `server/src/climayte-ping.ts`). A ping knows its chat by the engine's config home,
+which for a desktop chat is the default `~/.claude`, while native control is set per desktop profile, so
+`sendOrHoldToChat` sends to the profile whose app holds the chat (`desktopHomeFor`, the app's chat index,
+as the message route finds it) and answers unavailable for a chat no desktop holds. Until 2026-10-12 the
+ping passed the config home, every desktop ping was refused as "not configured", and the pipe's note sat
+unread in the idle chat. The orchestrator's nudge to an outside session posts
 `/api/external/sessions/:id/message`, which the bridge sends as `peer_only`, so it reaches the same
 native-first route. A native send the app took and refused is journalled and surfaced in the chat's
 next `climayte_status`, never sent again. Nothing here types into the window.

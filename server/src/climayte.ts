@@ -1982,10 +1982,11 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
 }
 
 /** The app's native send for a chat Desk 2 does not run (claude-native-send.ts): it starts the chat's turn
- *  through the running app, and the pipe is tried only when nothing reached the app. Sent as CliMayte. */
+ *  through the running app that holds the chat, and the pipe is tried only when nothing reached the app.
+ *  Sent as CliMayte. */
 const native: NonNullable<CliMaytePingDeps['native']> = async (o, text) => {
-  const { sendOrHold } = await import('./claude-native-send')
-  return sendOrHold(o.home, o.sessionId, text, 'CliMayte')
+  const { sendOrHoldToChat } = await import('./claude-native-send')
+  return sendOrHoldToChat(o.sessionId, text, 'CliMayte')
 }
 
 /** Desk 2's own route for a chat it runs (desk2 plugins/20-engine.ts POST /api/sessions/:id/ping): a

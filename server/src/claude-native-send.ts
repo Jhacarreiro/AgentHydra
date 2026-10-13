@@ -188,3 +188,20 @@ export async function sendOrHold(
   holdFor().hold({ profileDir, cliSessionId, text, fromName })
   return { ok: true, unavailable: false, delivery: 'held' }
 }
+
+/** sendOrHold for a chat known only by its CLI session id, sent to the desktop profile whose app holds
+ *  it (the app's chat index, as the message route finds it). Never the engine's config home: a desktop
+ *  chat's engine runs on ~/.claude while native control is set per desktop profile, so on 2026-10-12
+ *  every CliMayte ping to a desktop chat was refused as "not configured" and fell to the pipe, which
+ *  only queues a note in an idle chat. */
+export async function sendOrHoldToChat(
+  cliSessionId: string,
+  text: string,
+  fromName: string,
+): Promise<NativeSendOutcome> {
+  const { desktopHomeFor } = await import('./session-launch')
+  const profileDir = await desktopHomeFor(cliSessionId).catch(() => null)
+  if (!profileDir)
+    return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
+  return sendOrHold(profileDir, cliSessionId, text, fromName)
+}
