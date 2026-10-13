@@ -399,12 +399,17 @@ function launchText(
  *  hswarm stays too: a worker hands wide, cheap work to it. */
 const WORKER_DENIED_MCP: readonly string[] = [MCP_SERVER_KEY, 'magnific']
 
-/** AgentHydra's own endpoint on any host, port and scheme, as a `deniedMcpServers` URL pattern:
+/** AgentHydra's own endpoint on any host, port and scheme, as `deniedMcpServers` URL patterns:
  *  the CLI (2.1.286, its settings schema and matcher) takes `*` as any scheme and, in the host, any
- *  host and port; in the path `*` is any run of characters, so `/api/mcp/` and a query match too.
- *  A name deny cannot reach the account's own `.claude.json` listing a second PC's daemon under
- *  another name (2026-10-02). */
-const WORKER_DENIED_MCP_URL = `*://*${MCP_PATH}*`
+ *  host and port; in the path `*` is any run of characters. So the path is spelled out: bare, with a
+ *  trailing slash, with a query. `${MCP_PATH}*` also took every server the MCP hub shares under
+ *  `${MCP_PATH}/shared/` from every worker (2026-10-13). A name deny cannot reach the account's own
+ *  `.claude.json` listing a second PC's daemon under another name (2026-10-02). */
+const WORKER_DENIED_MCP_URLS: readonly string[] = [
+  `*://*${MCP_PATH}`,
+  `*://*${MCP_PATH}/`,
+  `*://*${MCP_PATH}?*`,
+]
 
 /** A worker's files here: its settings (writeWorkerSettings), its MCP servers (writeWorkerMcp) and,
  *  for a chat, its appended prompt (writeChatPrompt). */
@@ -531,7 +536,7 @@ export function writeWorkerMcp(w: CliMayteWorker): string | null {
  *  otherwise. Written here as a `cat` command; the worker's runner turns it into an http hook it
  *  answers itself, so a tool call starts no process for it (climayte-signal.ts). The edit_claims
  *  hook is in exec form for the same reason. The denied MCP servers (WORKER_DENIED_MCP) and
- *  AgentHydra's endpoint under any name (WORKER_DENIED_MCP_URL), whichever scope lists them.
+ *  AgentHydra's endpoint under any name (WORKER_DENIED_MCP_URLS), whichever scope lists them.
  *  And no skills synced from claude.ai (docx, pptx, xlsx, computer-use, chrome-browser, ...: 14 of
  *  them, each listed with its description in every request); `syncClaudeAiSkills: false` given
  *  through --settings hides them
@@ -598,7 +603,7 @@ const QUIET_SETTINGS = {
 const WORKER_ONLY_SETTINGS = {
   deniedMcpServers: [
     ...WORKER_DENIED_MCP.map((serverName) => ({ serverName })),
-    { serverUrl: WORKER_DENIED_MCP_URL },
+    ...WORKER_DENIED_MCP_URLS.map((serverUrl) => ({ serverUrl })),
   ],
   ...QUIET_SETTINGS,
 }

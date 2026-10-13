@@ -957,6 +957,8 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
     magnific: { type: 'http', url: 'https://mcp.magnific.com' },
     hswarm: { ...local(7793), headersHelper: 'python -m hswarm connect' },
     'connections-local': { ...local(7791), headersHelper: 'node loader.mjs --connect' },
+    // A server the daemon's MCP hub shares: under the daemon's address, not its own endpoint.
+    shared: local(7787, '/api/mcp/shared/shared'),
   }
   const keyed = { ...local(7792), headers: { Authorization: 'Bearer not-a-real-token' } }
   writeFileSync(
@@ -967,7 +969,14 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
   // name deny cannot reach it, the settings' URL deny does.
   writeFileSync(
     join(seededDir, '.claude.json'),
-    JSON.stringify({ mcpServers: { ...seeded, 'hydra-elsewhere': local(7787, '/api/mcp') } }),
+    JSON.stringify({
+      mcpServers: {
+        ...seeded,
+        'hydra-elsewhere': local(7787, '/api/mcp'),
+        'hydra-slash': local(7787, '/api/mcp/'),
+        'hydra-query': local(7787, '/api/mcp?from=elsewhere'),
+      },
+    }),
   )
   writeFileSync(join(bareDir, '.claude.json'), JSON.stringify({ numStartups: 3 }))
   const groups: string[] = []
@@ -1024,10 +1033,12 @@ describe("integration: a worker has the owner's MCP servers, whatever its accoun
         prompt: 'call connections_execute',
       })
       expect(status).toBe('done')
-      // `browser` is Desk's browser tools, which every worker that is not a chat gets.
+      // `browser` is Desk's browser tools, which every worker that is not a chat gets. `shared`
+      // is under the daemon's address too, and a deny on its whole path prefix took it from every
+      // worker (2026-10-13).
       expect([id, servers]).toEqual([
         id,
-        ['browser', 'climayte-worker', 'connections-local', 'hswarm'],
+        ['browser', 'climayte-worker', 'connections-local', 'hswarm', 'shared'],
       ])
       // 440 settings files and 18 MCP files were left behind on the owner's machine (2026-10-02).
       expect([
