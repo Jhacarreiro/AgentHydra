@@ -16,6 +16,7 @@ const row = (path: string, name: string, sources: ProjectEntry['sources'], hidde
   icon: null,
   sources,
   hidden,
+  pinned: false,
   git: null,
   lastCommitAt: null,
   lastChatAt: null,
@@ -27,7 +28,7 @@ const projects: ProjectEntry[] = [
   row('C:/Projects/copper-kettle', 'copper-kettle', ['chats']),
   row('C:/Projects/old-garden', 'old-garden', ['projecthydra'], true),
 ]
-const choices: ProjectChoices = { folders: [], roots: [], hidden: ['C:/Projects/old-garden'] }
+const choices: ProjectChoices = { folders: [], roots: [], hidden: ['C:/Projects/old-garden'], pinned: [] }
 const managing = ref(false)
 </script>
 

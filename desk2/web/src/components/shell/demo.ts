@@ -284,6 +284,7 @@ function demoProjects(): ProjectsResponse {
     icon: null,
     sources,
     hidden: false,
+    pinned: false,
     git: g,
     lastCommitAt: null,
     lastChatAt: null,
@@ -299,7 +300,7 @@ function demoProjects(): ProjectsResponse {
       row('C:/Users/me/Desktop/shader-lab', 'shader-lab', null, ['recent'], git({}))
     ],
     hydra: { found: true, root: null, placed: 1, problem: null },
-    choices: { folders: [], roots: [], hidden: [] },
+    choices: { folders: [], roots: [], hidden: [], pinned: [] },
     pending: false
   }
 }

@@ -106,7 +106,7 @@ describe('ProjectList', () => {
       recent: () => [],
       chats: () => [],
       git: async () => null,
-      choices: () => ({ folders: [], roots: [], hidden: [app] }),
+      choices: () => ({ folders: [], roots: [], hidden: [app], pinned: [] }),
       tempDir: resolve(base, 'scratch'),
     })
 
@@ -119,6 +119,38 @@ describe('ProjectList', () => {
     expect(byName.get('App')?.hidden).toBe(true)
     expect(byName.get('Other')?.hidden).toBe(false)
     expect(all.choices.hidden).toEqual([app])
+  })
+
+  test('pinned projects come first, in the order they were pinned, ahead of one with open chats; hidden beats pinned', async () => {
+    const [busy, first, second, gone] = ['busy', 'first', 'second', 'gone'].map((name) => resolve(base, name))
+    for (const dir of [busy!, first!, second!, gone!]) mkdirSync(dir)
+    const list = new ProjectList({
+      findHydra: () => ({ python: 'python', ph: join(base, 'ph.py'), root: base }),
+      readHydra: async () => ({
+        problem: null,
+        projects: [
+          { key: 'busy', path: busy!, name: 'Busy', group: null, iconFile: null },
+          { key: 'first', path: first!, name: 'First', group: null, iconFile: null },
+          { key: 'second', path: second!, name: 'Second', group: null, iconFile: null },
+          { key: 'gone', path: gone!, name: 'Gone', group: null, iconFile: null },
+        ],
+      }),
+      recent: () => [],
+      chats: () => [{ cwd: busy!, updatedAt: 5_000 }],
+      git: async () => null,
+      choices: () => ({ folders: [], roots: [], hidden: [gone!], pinned: [second!, gone!, first!] }),
+      tempDir: resolve(base, 'scratch'),
+    })
+
+    const res = await list.list({ wait: true })
+    expect(res.projects.map((p) => [p.name, p.pinned])).toEqual([
+      ['Second', true],
+      ['First', true],
+      ['Busy', false],
+    ])
+    expect(res.choices.pinned).toEqual([second!, gone!, first!])
+    const all = await list.list({ wait: true, hidden: true })
+    expect(all.projects.find((p) => p.name === 'Gone')).toMatchObject({ hidden: true, pinned: true })
   })
 
   const facts = (behind: number): GitFacts => ({ git: { branch: 'main', upstream: 'origin/main', ahead: 0, behind, dirty: 0, fetchedAt: null }, lastCommitAt: null })

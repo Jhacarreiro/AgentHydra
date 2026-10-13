@@ -71,7 +71,7 @@ export interface ProjectDeps {
   transcript?(sessionId: string, cwd: string): string | null
   /** Puts a chat in a sidebar group. Default: chats are placed on the grid, never filed. */
   file?(chat: ChatRef, group: string): unknown
-  /** The folders the user added, the folders of projects and the hidden projects. Default: none. */
+  /** The folders the user added, the folders of projects, and the hidden and pinned projects. Default: none. */
   choices?(): ProjectChoices
   /** A checkout's git state, or null when it is not one; `prev` is the last one read. Default: readGit. */
   git?(path: string, prev: GitFacts | null): Promise<GitFacts | null>
@@ -475,7 +475,7 @@ export class ProjectList {
   private build(read: HydraRead | null, outside: OutsideChat[]): Grid {
     const rows = new Map<string, Row>()
     const hydra = hydraEntries(read, rows)
-    const choices = this.deps.choices?.() ?? { folders: [], roots: [], hidden: [] }
+    const choices = this.deps.choices?.() ?? { folders: [], roots: [], hidden: [], pinned: [] }
     addChoices(rows, choices)
     const places = placesOf(rows, hydra, folderKey(this.deps.tempDir ?? tmpdir()) + sep)
 
@@ -543,6 +543,8 @@ export class ProjectList {
 
     const { choices } = grid
     const hidden = new Set(choices.hidden.map(folderKey))
+    // A pinned project's place among the pins: the order they were pinned in.
+    const pinned = new Map(choices.pinned.map((path, i) => [folderKey(path), i] as const))
     const list = [...grid.rows.values()].filter((row) => opts.hidden || !hidden.has(folderKey(row.path)))
     const keys = list.map((row) => folderKey(row.path))
     this.listed = new Set(keys)
@@ -559,6 +561,7 @@ export class ProjectList {
         icon: row.icon,
         sources: [...row.sources],
         hidden: hidden.has(folderKey(row.path)),
+        pinned: pinned.has(folderKey(row.path)),
         git: f?.git ?? null,
         lastCommitAt: f?.lastCommitAt ?? null,
         lastChatAt: row.lastChatAt ? new Date(row.lastChatAt).toISOString() : null,
@@ -566,10 +569,12 @@ export class ProjectList {
       }
     })
     const newest = (p: ProjectEntry) => Math.max(p.lastChatAt ? Date.parse(p.lastChatAt) : 0, p.lastCommitAt ? Date.parse(p.lastCommitAt) : 0)
-    projects.sort((a, b) => Number(b.openChats > 0) - Number(a.openChats > 0) || newest(b) - newest(a) || a.name.localeCompare(b.name))
+    const pinAt = (p: ProjectEntry) => pinned.get(folderKey(p.path)) ?? Infinity
+    const byPin = (a: ProjectEntry, b: ProjectEntry) => (a.pinned && b.pinned ? pinAt(a) - pinAt(b) : Number(b.pinned) - Number(a.pinned))
+    projects.sort((a, b) => byPin(a, b) || Number(b.openChats > 0) - Number(a.openChats > 0) || newest(b) - newest(a) || a.name.localeCompare(b.name))
     return {
       projects,
-      choices: { folders: choices.folders, roots: choices.roots, hidden: choices.hidden },
+      choices: { folders: choices.folders, roots: choices.roots, hidden: choices.hidden, pinned: choices.pinned },
       hydra: { found: !!location, root: location?.root ?? null, placed: grid.hydraPlaced, problem: read?.problem ?? null },
       pending: !!this.hydraLoading || !!this.outsideLoading || this.placing.size > 0 || keys.some((key) => this.gitReads.has(key)),
     }

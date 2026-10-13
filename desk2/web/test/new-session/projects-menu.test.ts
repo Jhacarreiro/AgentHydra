@@ -6,6 +6,8 @@ import { addProjectFolder, type ProjectMenuApi, projectActions, runProjectAction
 function recorder(): { api: ProjectMenuApi; calls: string[] } {
   const calls: string[] = []
   const api: ProjectMenuApi = {
+    pin: async (path) => void calls.push(`pin ${path}`),
+    unpin: async (path) => void calls.push(`unpin ${path}`),
     reveal: async (path) => void calls.push(`reveal ${path}`),
     newChat: (path) => void calls.push(`newChat ${path}`),
     dashboard: (path) => void calls.push(`dashboard ${path}`),
@@ -17,19 +19,28 @@ function recorder(): { api: ProjectMenuApi; calls: string[] } {
 }
 
 describe('project tile menu', () => {
-  test('lists the actions in order, Open dashboard after New chat here', () => {
-    expect(projectActions(false).map((a) => a.label)).toEqual(['Open file location', 'New chat here', 'Open dashboard', 'Copy path', 'Hide from Projects'])
+  test('lists the actions in order: Pin to top first, Open dashboard after New chat here', () => {
+    expect(projectActions(false).map((a) => a.label)).toEqual(['Pin to top', 'Open file location', 'New chat here', 'Open dashboard', 'Copy path', 'Hide from Projects'])
+  })
+
+  test('a pinned project offers Unpin where Pin to top was; a hidden one offers no pin', () => {
+    expect(projectActions(false, true)[0]).toEqual({ action: 'unpin', label: 'Unpin' })
+    expect(projectActions(true).map((a) => a.action)).not.toContain('pin')
+    expect(projectActions(true, true).map((a) => a.action)).not.toContain('unpin')
   })
 
   test('each action runs its own call with the tile path', async () => {
     const { api, calls } = recorder()
     for (const { action } of projectActions(false)) await runProjectAction(action, 'C:/Users/me/Desktop/Project/app', api)
+    await runProjectAction('unpin', 'C:/Users/me/Desktop/Project/app', api)
     expect(calls).toEqual([
+      'pin C:/Users/me/Desktop/Project/app',
       'reveal C:/Users/me/Desktop/Project/app',
       'newChat C:/Users/me/Desktop/Project/app',
       'dashboard C:/Users/me/Desktop/Project/app',
       'copy C:/Users/me/Desktop/Project/app',
       'hide C:/Users/me/Desktop/Project/app',
+      'unpin C:/Users/me/Desktop/Project/app',
     ])
   })
 })

@@ -352,10 +352,10 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
   app.get('/api/models', (c) => answer(c, () => manager.models()))
 }
 
-/** The project list, its folders, roots and hidden choices, and each project's icon. */
+/** The project list, its folders, roots, hidden and pinned choices, and each project's icon. */
 function projectRoutes(app: Hono, ctx: ServerContext, projects: ProjectList): void {
   app.get('/api/projects', (c) => answer(c, () => projects.list({ wait: c.req.query('wait') === '1', hidden: c.req.query('hidden') === '1' })))
-  const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects' } as const
+  const choiceFields = { folders: 'projectFolders', roots: 'projectRoots', hidden: 'hiddenProjects', pinned: 'pinnedProjects' } as const
   for (const kind of Object.keys(choiceFields) as (keyof typeof choiceFields)[]) {
     const field = choiceFields[kind]
     app.post(`/api/projects/${kind}`, (c) =>
@@ -475,6 +475,7 @@ function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFo
       folders: ctx.settings().projectFolders,
       roots: ctx.settings().projectRoots,
       hidden: ctx.settings().hiddenProjects,
+      pinned: ctx.settings().pinnedProjects,
     }),
     cacheFile: join(ctx.home, 'projects.json'),
   })

@@ -1274,7 +1274,7 @@ export function useDesk() {
       return res.path
     },
 
-    /** Adds (`on`) or removes a folder on the New screen's grid: folders, roots (folders of projects) or hidden. */
+    /** Adds (`on`) or removes a folder on the New screen's grid: folders, roots (folders of projects), hidden or pinned. */
     async changeProjectChoice(kind: ProjectChoiceKind, path: string, on: boolean): Promise<unknown> {
       if (!on) return fetchJson(`/projects/${kind}?path=${encodeURIComponent(path)}`, { method: 'DELETE' })
       return fetchJson(`/projects/${kind}`, {

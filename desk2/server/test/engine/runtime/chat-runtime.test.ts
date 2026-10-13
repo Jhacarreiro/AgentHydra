@@ -34,6 +34,7 @@ const SETTINGS: DeskSettings = {
   projectFolders: [],
   projectRoots: [],
   hiddenProjects: [],
+  pinnedProjects: [],
   babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off',
 }
 

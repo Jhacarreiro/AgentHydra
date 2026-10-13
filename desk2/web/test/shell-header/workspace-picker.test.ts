@@ -15,6 +15,7 @@ const project = (over: Partial<ProjectEntry> & Pick<ProjectEntry, 'name' | 'path
   icon: null,
   sources: ['chats'],
   hidden: false,
+  pinned: false,
   git: null,
   lastCommitAt: null,
   lastChatAt: null,

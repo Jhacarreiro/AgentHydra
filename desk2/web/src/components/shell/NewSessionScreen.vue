@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
-import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare } from '@lucide/vue'
+import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare, Pin } from '@lucide/vue'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
 import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
 import { hasSite } from '@/components/dashboard/logic'
@@ -34,7 +34,7 @@ const loading = ref(false)
 const problem = ref<string | null>(null)
 const actionProblem = ref<string | null>(null)
 const managing = ref(false)
-const NO_CHOICES: ProjectChoices = { folders: [], roots: [], hidden: [] }
+const NO_CHOICES: ProjectChoices = { folders: [], roots: [], hidden: [], pinned: [] }
 const choices = computed(() => answer.value?.choices ?? NO_CHOICES)
 
 function fail(err: unknown): void {
@@ -118,6 +118,14 @@ const [DefineTile, ReuseTile] = createReusableTemplate<{ p: ProjectEntry }>()
 const tileClass = (p: ProjectEntry) => [TILE, picked(p) ? TILE_PICKED : TILE_BG, p.hidden ? 'opacity-60' : '', showProjectDetails.value ? 'flex-col p-3' : 'items-center px-2.5 py-1.5']
 
 const menuApi: ProjectMenuApi = {
+  pin: async (path) => {
+    await src.changeProjectChoice?.('pinned', path, true)
+    load()
+  },
+  unpin: async (path) => {
+    await src.changeProjectChoice?.('pinned', path, false)
+    load()
+  },
   reveal: (path) => src.revealFolder(path),
   newChat: (path) => src.select({ kind: 'new', cwd: path }),
   dashboard: (path) => openDashboard(path),
@@ -236,6 +244,9 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                 <Folder :class="folderSize" aria-hidden="true" />
               </span>
               <span class="truncate text-ui font-semibold leading-4.75 text-text">{{ p.name }}</span>
+              <Tip v-if="p.pinned" label="Pinned to the top">
+                <span class="inline-flex shrink-0 text-text-muted"><Pin class="size-3" aria-label="Pinned" /></span>
+              </Tip>
               <Tip v-if="p.hidden" label="Hidden from Projects">
                 <span class="inline-flex shrink-0 text-text-muted"><EyeOff class="size-3" aria-hidden="true" /></span>
               </Tip>
@@ -280,7 +291,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
                 </button>
               </ContextMenuTrigger>
               <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
-                <ContextMenuItem v-for="item in projectActions(p.hidden)" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
+                <ContextMenuItem v-for="item in projectActions(p.hidden, p.pinned)" :key="item.action" :class="MENU_ITEM" @select="runAction(item.action, p.path)">
                   {{ item.label }}
                 </ContextMenuItem>
               </ContextMenuContent>

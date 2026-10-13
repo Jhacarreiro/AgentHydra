@@ -254,6 +254,7 @@ describe('a chat without the binary', () => {
     projectFolders: [],
     projectRoots: [],
     hiddenProjects: [],
+    pinnedProjects: [],
     babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off',
   }
 

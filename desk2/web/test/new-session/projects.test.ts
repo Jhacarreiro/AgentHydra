@@ -4,7 +4,7 @@ import { filterProjects, projectActions, projectSourceGroups, shownProjects, syn
 
 const git = (over: Partial<ProjectGit>): ProjectGit => ({ branch: 'main', upstream: 'origin/main', ahead: 0, behind: 0, dirty: 0, fetchedAt: null, ...over })
 
-const project = (name: string, path: string, over: Partial<ProjectEntry> = {}): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null, openChats: 0, hidden: false, ...over })
+const project = (name: string, path: string, over: Partial<ProjectEntry> = {}): ProjectEntry => ({ path, name, group: null, icon: null, sources: ['chats'], git: null, lastCommitAt: null, lastChatAt: null, openChats: 0, hidden: false, pinned: false, ...over })
 
 describe('syncLabel', () => {
   it('says a clean, level checkout is up to date, and nothing for a folder that is no repo', () => {
@@ -59,10 +59,11 @@ describe('projectSourceGroups', () => {
 })
 
 describe('projectActions', () => {
-  it('offers Hide for a shown project and Unhide for a hidden one, after the same three actions', () => {
+  it('offers Hide for a shown project and Unhide for a hidden one, after the same actions; only a shown one can be pinned', () => {
     const shown = projectActions(false)
     const hidden = projectActions(true)
-    expect(shown.map((a) => a.action)).toEqual(['reveal', 'newChat', 'dashboard', 'copy', 'hide'])
+    expect(shown.map((a) => a.action)).toEqual(['pin', 'reveal', 'newChat', 'dashboard', 'copy', 'hide'])
+    expect(projectActions(false, true).map((a) => a.action)).toEqual(['unpin', 'reveal', 'newChat', 'dashboard', 'copy', 'hide'])
     expect(hidden.map((a) => a.action)).toEqual(['reveal', 'newChat', 'dashboard', 'copy', 'unhide'])
     expect(hidden[4]?.label).toBe('Unhide')
   })

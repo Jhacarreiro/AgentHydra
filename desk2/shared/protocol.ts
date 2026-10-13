@@ -528,6 +528,8 @@ export interface DeskSettings {
   projectRoots: string[]
   /** Projects taken off the New screen's grid (absolute paths). */
   hiddenProjects: string[]
+  /** Projects pinned to the top of the New screen's grid, in the order they were pinned (absolute paths). */
+  pinnedProjects: string[]
   /** The babysitter continues chats a usage limit stopped once the limit resets (shared/babysitter.ts). */
   babysitter: boolean
   /** The orchestrator, armed: it continues chats an error stopped and its foreman peeks at running ones (shared/orchestrator.ts). Off by default. */
@@ -893,6 +895,7 @@ export interface ProjectChoices {
   folders: string[]
   roots: string[]
   hidden: string[]
+  pinned: string[]
 }
 
 export type ProjectChoiceKind = keyof ProjectChoices
@@ -907,6 +910,8 @@ export interface ProjectEntry {
   sources: ProjectSource[]
   /** Taken off the New screen with Hide. Listed only by GET /api/projects?hidden=1 (Show hidden projects). */
   hidden: boolean
+  /** Pinned to the top of the grid with Pin to top (owner, 2026-10-13: "right-click on one to favorite it or pin it"). */
+  pinned: boolean
   /** null when the folder is not a git checkout. */
   git: ProjectGit | null
   lastCommitAt: string | null
@@ -917,7 +922,8 @@ export interface ProjectEntry {
 }
 
 export interface ProjectsResponse {
-  /** The ones with open chats first, then newest of lastChatAt and lastCommitAt first. */
+  /** The pinned ones first, in the order they were pinned; then the ones with open chats, then newest of lastChatAt
+   * and lastCommitAt first. */
   projects: ProjectEntry[]
   /** `found` false: Project Hydra is not installed here. `problem`: it is, but could not be read. */
   hydra: { found: boolean; root: string | null; placed: number; problem: string | null }

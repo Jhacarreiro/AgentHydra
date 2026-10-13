@@ -38,11 +38,15 @@ export function pickedFolder(selected: View, path: string): boolean {
   return selected.kind === 'new' && !!selected.cwd && sameFolder(selected.cwd, path)
 }
 
-export type ProjectAction = 'reveal' | 'newChat' | 'dashboard' | 'copy' | 'hide' | 'unhide'
+export type ProjectAction = 'pin' | 'unpin' | 'reveal' | 'newChat' | 'dashboard' | 'copy' | 'hide' | 'unhide'
 
-/** A project tile's right-click menu, in order: Hide, or Unhide for a hidden one. */
-export function projectActions(hidden: boolean): { action: ProjectAction; label: string }[] {
+/** A project tile's right-click menu, in order: Pin to top (Unpin for a pinned one) first, the reason most people open
+ * it (owner, 2026-10-13: "right-click on one to favorite it or pin it"); a hidden one has no pin. Last, Hide, or Unhide
+ * for a hidden one. */
+export function projectActions(hidden: boolean, pinned = false): { action: ProjectAction; label: string }[] {
+  const pin: { action: ProjectAction; label: string }[] = hidden ? [] : [pinned ? { action: 'unpin', label: 'Unpin' } : { action: 'pin', label: 'Pin to top' }]
   return [
+    ...pin,
     { action: 'reveal', label: 'Open file location' },
     { action: 'newChat', label: 'New chat here' },
     { action: 'dashboard', label: 'Open dashboard' },
@@ -52,6 +56,8 @@ export function projectActions(hidden: boolean): { action: ProjectAction; label:
 }
 
 export interface ProjectMenuApi {
+  pin(path: string): Promise<unknown>
+  unpin(path: string): Promise<unknown>
   reveal(path: string): Promise<unknown>
   newChat(path: string): void
   dashboard(path: string): void
@@ -62,6 +68,10 @@ export interface ProjectMenuApi {
 
 export function runProjectAction(action: ProjectAction, path: string, api: ProjectMenuApi): Promise<unknown> {
   switch (action) {
+    case 'pin':
+      return api.pin(path)
+    case 'unpin':
+      return api.unpin(path)
     case 'reveal':
       return api.reveal(path)
     case 'newChat':
