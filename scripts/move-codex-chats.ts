@@ -4,17 +4,13 @@ import { join } from 'node:path'
 import { parseArgs } from 'node:util'
 import { CONFIG_DIR } from '../server/src/config'
 import { moveCodexChat, planCodexChatMove } from '../server/src/core/codex-chat-move'
-import { codexDesktopRunState } from '../server/src/core/codex-desktop'
-import {
-  getCodexInstance,
-  listCodexInstances,
-  quitCodexDesktopInstance,
-} from '../server/src/core/codex-instances'
+import { getCodexInstance, listCodexInstances } from '../server/src/core/codex-instances'
 import { normalizeInstancePath } from '../server/src/core/paths'
 
 // One explicit account drain, or one chat (--chat <thread id>), through the production mover.
 // Rerunning resumes an interrupted move into the destination it already made. --recover-from names
 // earlier copies of the destination transcript, read only to restore rows a past repair lost.
+// Either account's Codex app may be open: an open source app archives each original itself.
 // No model turns or archive sweep. Prints one JSON line per step.
 const { values } = parseArgs({
   args: process.argv.slice(2),
@@ -24,7 +20,6 @@ const { values } = parseArgs({
     chat: { type: 'string' },
     'recover-from': { type: 'string', multiple: true, default: [] },
     'all-active': { type: 'boolean', default: false },
-    'close-source': { type: 'boolean', default: false },
   },
 })
 if (!values.from) throw new Error('Specify --from <account name, email, number or id>.')
@@ -58,7 +53,7 @@ function resolveAccount(selector: string) {
 }
 const source = resolveAccount(values.from)
 const target = resolveAccount(values.to!)
-let plan = await planCodexChatMove(source.id, target.id)
+const plan = await planCodexChatMove(source.id, target.id)
 console.log(JSON.stringify({ from: source.name, to: target.name, chats: plan.chats.length }))
 if (values.chat && !plan.chats.some((chat) => chat.id === values.chat))
   throw new Error(`Chat ${values.chat} is not an active chat of ${source.name}.`)
@@ -71,21 +66,6 @@ mkdirSync(runDir, { recursive: true })
 const reportPath = join(runDir, 'report.json')
 const report = { sourceId: source.id, targetId: target.id, plan, results: [] as unknown[] }
 const save = () => writeFileSync(reportPath, `${JSON.stringify(report, null, 2)}\n`)
-save()
-let state = await codexDesktopRunState(source)
-if (state.state === 'running' && values['close-source']) {
-  const stopped = await quitCodexDesktopInstance(source.id)
-  if (!stopped.ok) throw new Error(stopped.message ?? 'Could not close the source desktop.')
-  const deadline = Date.now() + 30_000
-  do {
-    state = await codexDesktopRunState(source)
-    if (state.state !== 'running') break
-    await Bun.sleep(500)
-  } while (Date.now() < deadline)
-}
-if (state.state !== 'stopped') throw new Error('Close the source account before moving its chats.')
-plan = await planCodexChatMove(source.id, target.id)
-report.plan = plan
 save()
 const chats = values.chat ? plan.chats.filter((chat) => chat.id === values.chat) : plan.chats
 if (!chats.length) throw new Error(`Chat ${values.chat} is no longer active.`)

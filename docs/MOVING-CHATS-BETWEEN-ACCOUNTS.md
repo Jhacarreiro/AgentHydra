@@ -217,15 +217,15 @@ tray icon and the fair share first), then reading two working chats' pids out of
 To transfer an account's active Codex chats in one command from a source checkout:
 
 ```powershell
-bun scripts/move-codex-chats.ts --from "source account" --to here --all-active --close-source
+bun scripts/move-codex-chats.ts --from "source account" --to here --all-active
 ```
 
 The account selector must identify one managed instance; `here` resolves the caller's
 `CODEX_HOME`. Omit `--all-active` to print the plan without moving anything. The command
 uses the production mover for each chat, saves its plan and results under AgentHydra's
 local backups, and stops on a refusal. Re-running continues saved copies rather than
-creating duplicates. `--close-source` closes only the selected source desktop. Archived
-chats are excluded, and the original is archived only after its copy and sidebar
+creating duplicates. Either account's Codex app may be open (see "The source app may stay open"
+below). Archived chats are excluded, and the original is archived only after its copy and sidebar
 membership verify. Destination pipe discovery is reused across the batch, with the
 destination process identity still checked before every native call.
 
@@ -272,12 +272,27 @@ A person can also move ONE Codex chat from AgentHydra's sidebar (2026-10-13): ri
 **Move to account ›**, and pick a Codex account. The click is the review: the window reads the plan
 for that chat's account at that moment, takes the one row whose id is the chat's, and sends it to
 `move-chat` unchanged, so every refusal above still applies; a chat the plan does not list is
-refused in the window without a call. The mover also refuses while the source account's Codex app is
-open, which is most of the time for a chat someone just right-clicked, so the window asks first
-("Close #N's Codex app?", naming how many other chats there are working) and, on that word, closes
-it the way `move-codex-chats --close-source` does, waits for it to stop, then plans and moves. A
-chat that is itself still working is refused before anything is closed: closing would end its turn,
-and the mover refuses an unfinished turn.
+refused in the window without a call. A chat that is still working is refused there too, since the
+mover refuses an unfinished turn.
+
+### The source app may stay open (2026-10-13)
+
+Until 2026-10-13 the mover refused while the source account's Codex app was open, and the sidebar asked
+to close it first. The reason: the original was archived by AgentHydra's own Codex process, on disk,
+and a running app never sees that. It keeps listing the chat from memory, and a message typed there
+goes to a file the archive has moved.
+
+Now an open source app archives the original itself, through its own app tools
+(`set_thread_archived`, the same pipe the destination's sidebar step uses), so its window drops the
+chat at once. The app archives in the background: measured on 2026-10-13, Codex's list stopped
+showing the chat about 0.6 s later and the file was in `archived_sessions`. So the move waits until the
+chat leaves Codex's active list (up to 15 s). Codex's archive moves the file unchanged (the archived
+file's SHA-256 equals the fingerprint taken at the copy), so the move then checks the archived file
+against that fingerprint. A turn that slipped in after the last check is restored to the app and
+the move reports it, both chats kept. A closed source is archived on disk as before. A process scan
+that cannot answer still refuses, at the start and again before the archive, since the route depends on
+it. The copy only reads the source, so an open source window, even one showing that chat, is not
+disturbed.
 
 ### What it refuses, and what an interruption leaves behind
 

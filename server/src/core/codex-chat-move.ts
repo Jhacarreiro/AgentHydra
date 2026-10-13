@@ -15,6 +15,7 @@ import {
 import { basename, dirname, join, relative, toNamespacedPath } from 'node:path'
 import { CONFIG_DIR } from '../config'
 import type { CodexInstance } from '../types'
+import { connectCodexAppTools } from './codex-app-tools'
 import { codexDesktopRunState } from './codex-desktop'
 import { getCodexInstance } from './codex-instances'
 import { showMigratedCodexChat } from './codex-migration-visibility'
@@ -118,6 +119,8 @@ interface MoveDependencies {
   connect: (home: string) => Promise<CodexRpc>
   journalPath: string
   showDestination: typeof showMigratedCodexChat
+  /** Archives (or, false, restores) a chat through its account's own open Codex app. */
+  setArchivedInApp: typeof setArchivedInRunningApp
   holdWriter: typeof holdCodexWriterLock
   resetProjection: typeof resetCodexHistoryProjection
   /** Where a rewritten destination transcript and its dropped projection rows are kept. */
@@ -132,6 +135,7 @@ const defaults: MoveDependencies = {
   connect: connectCodexRpc,
   journalPath: join(CONFIG_DIR, 'codex-chat-moves.json'),
   showDestination: showMigratedCodexChat,
+  setArchivedInApp: setArchivedInRunningApp,
   holdWriter: holdCodexWriterLock,
   resetProjection: resetCodexHistoryProjection,
   backupRoot: join(CONFIG_DIR, 'backups'),
@@ -306,14 +310,12 @@ function assertAccountsMatch(
   }
 }
 
-async function assertSourceReady(from: CodexInstance, deps: MoveDependencies): Promise<void> {
-  const state = await deps.runState(from)
-  if (state.state !== 'stopped')
-    throw new Error(
-      state.state === 'running'
-        ? 'Close the source Codex desktop and its CLI sessions before moving chats.'
-        : 'Could not verify whether the source Codex desktop is stopped. Try again.',
-    )
+/** The source's Codex app may be open or closed (owner, 2026-10-13: a move no longer closes it); the archive at the
+ *  end goes through the app when it is open. A state the OS would not report is refused, since that route depends on
+ *  it. */
+async function assertSourceKnown(from: CodexInstance, deps: MoveDependencies): Promise<void> {
+  if ((await deps.runState(from)).state === 'unknown')
+    throw new Error('Could not tell whether the source Codex desktop is open. Try again.')
 }
 
 function moveKey(from: CodexInstance, request: CodexMoveRequest): string {
@@ -703,18 +705,18 @@ async function resumeAndVerifyDestination(
   if (resumed) await target.call('thread/unsubscribe', { threadId: destinationThreadId })
 }
 
+/** The source is as it was copied; answers whether its Codex app is open now, which decides how it is archived. */
 async function assertSourceUnchanged(
   source: CodexRpc,
   from: CodexInstance,
   deps: MoveDependencies,
   thread: Thread,
   before: Stats,
-): Promise<void> {
+): Promise<'running' | 'stopped'> {
   const after = statSync(thread.path!)
   const latest = (await activeThreads(source)).find((row) => row.id === thread.id)
-  const stopped = await deps.runState(from)
+  const app = await deps.runState(from)
   if (
-    stopped.state !== 'stopped' ||
     !latest ||
     latest.updatedAt !== thread.updatedAt ||
     after.size !== before.size ||
@@ -724,6 +726,62 @@ async function assertSourceUnchanged(
       'The source changed during the copy. Both chats were kept; review them before continuing.',
     )
   }
+  if (app.state === 'unknown')
+    throw new Error(
+      'Could not tell whether the source Codex desktop is open, so the original was not archived. Both chats were kept; move it again to finish.',
+    )
+  return app.state
+}
+
+async function setArchivedInRunningApp(
+  from: CodexInstance,
+  threadId: string,
+  archived: boolean,
+): Promise<void> {
+  const app = await connectCodexAppTools(from, threadId)
+  const answer = await app.call<{ threadId?: string; archived?: boolean }>('set_thread_archived', {
+    threadId,
+    hostId: 'local',
+    source: 'codex',
+    archived,
+  })
+  if (answer.threadId !== threadId || answer.archived !== archived)
+    throw new Error(`The source Codex app did not ${archived ? 'archive' : 'restore'} the chat.`)
+}
+
+/**
+ * Archive the original through its account's open Codex app. A disk archive under a running app is not seen by it: the
+ * window would keep listing the chat, and a message typed there would go to a file the archive had moved. The app
+ * archives in the background (measured 2026-10-13: off the active list ~0.6 s later), so the move waits until Codex no
+ * longer lists it, then checks the archived file is the transcript it copied (Codex's archive moves the file unchanged). A turn
+ * that slipped in after the last check is restored to the app and both chats are kept.
+ */
+async function archiveThroughApp(
+  source: CodexRpc,
+  from: CodexInstance,
+  deps: MoveDependencies,
+  thread: Thread,
+  fingerprint: string,
+): Promise<void> {
+  await deps.setArchivedInApp(from, thread.id, true)
+  const deadline = Date.now() + 15_000
+  while ((await activeThreads(source)).some((row) => row.id === thread.id)) {
+    if (Date.now() > deadline)
+      throw new Error(
+        'The source Codex app did not confirm the archive. Both chats were kept; move it again to finish.',
+      )
+    await Bun.sleep(250)
+  }
+  const archived = await source.call<{ thread: Thread }>('thread/read', {
+    threadId: thread.id,
+    includeTurns: false,
+  })
+  const path = archived.thread.path
+  if (path && createHash('sha256').update(readFileSync(path)).digest('hex') === fingerprint) return
+  await deps.setArchivedInApp(from, thread.id, false)
+  throw new Error(
+    'The source changed just before it was archived, so it was restored. Both chats were kept; review them before continuing.',
+  )
 }
 
 async function archiveSourceThread(
@@ -813,7 +871,7 @@ export async function moveCodexChat(
   try {
     const [from, to] = pair(fromId, request.targetId, deps)
     assertAccountsMatch(from, to, request)
-    await assertSourceReady(from, deps)
+    await assertSourceKnown(from, deps)
     source = await deps.connect(from.codexHome)
     key = moveKey(from, request)
     const destination = destinationKey(to, request)
@@ -881,8 +939,9 @@ export async function moveCodexChat(
     receipt = { ...receipt, desktopVisible: true }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'shown' })
-    await assertSourceUnchanged(source, from, deps, thread, before)
-    await archiveSourceThread(source, from, thread, fingerprint)
+    if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
+      await archiveThroughApp(source, from, deps, thread, fingerprint)
+    else await archiveSourceThread(source, from, thread, fingerprint)
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'archived' })

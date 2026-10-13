@@ -788,7 +788,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
         </DialogTitle>
         <DialogDescription class="sr-only">{{ $t('codexInstances.moveDescription') }}</DialogDescription>
       </DialogHeader>
-      <p class="text-sm text-muted-foreground">{{ $t('codexInstances.moveCloseSource') }}</p>
+      <p class="text-sm text-muted-foreground">{{ $t('codexInstances.moveOpenApps') }}</p>
       <ul class="max-h-64 space-y-2 overflow-auto text-sm">
         <li v-for="chat in moveJob?.plan.chats" :key="chat.id">
           <div class="font-medium">{{ chat.title }}</div>

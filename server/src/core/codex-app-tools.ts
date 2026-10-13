@@ -85,7 +85,7 @@ export function callCodexAppPipe<T>(
 /** Select pipes by their OS-reported server PID. An inherited pipe is only a discovery hint. */
 export async function codexAppPipesForPid(pid: number): Promise<string[]> {
   if (process.platform !== 'win32' || !Number.isSafeInteger(pid) || pid <= 0) {
-    throw new Error('Automatic Codex sidebar updates require a supported Windows desktop.')
+    throw new Error('Talking to an open Codex app needs a supported Windows desktop.')
   }
   const cached = verifiedPipes.get(pid)
   if (cached) return cached
@@ -144,7 +144,7 @@ ConvertTo-Json -InputObject @($hydraPipeMatches) -Compress
   const timer = setTimeout(() => child.kill(), 10_000)
   try {
     const [stdout, exitCode] = await Promise.all([new Response(child.stdout).text(), child.exited])
-    if (exitCode !== 0) throw new Error('Could not identify the destination Codex app connection.')
+    if (exitCode !== 0) throw new Error('Could not identify the Codex app connection.')
     const pipes: unknown = JSON.parse(stdout)
     if (!Array.isArray(pipes) || !pipes.every((pipe) => typeof pipe === 'string'))
       throw new Error('Invalid Codex app connection inventory.')
@@ -199,7 +199,7 @@ function appToolsClient(
       // another connection after a timeout or ambiguous reply.
       const current = await codexDesktopRunState(target)
       if (current.state !== 'running' || current.runtime.pid !== pid)
-        throw new Error('The destination Codex desktop changed during migration.')
+        throw new Error('The Codex desktop changed during the move.')
       const response = await callCodexAppPipe<{
         success: boolean
         contentItems: { type: string; text?: string }[]
@@ -216,11 +216,11 @@ function appToolsClient(
         .filter((item) => item.type === 'inputText')
         .map((item) => item.text ?? '')
         .join('\n')
-      if (!response.success) throw new Error(`Codex sidebar update refused: ${text}`)
+      if (!response.success) throw new Error(`The Codex app refused ${tool}: ${text}`)
       try {
         return JSON.parse(text) as T
       } catch {
-        throw new Error('Codex app returned an unreadable sidebar result.')
+        throw new Error(`The Codex app returned an unreadable ${tool} result.`)
       }
     },
   }
@@ -231,7 +231,7 @@ export async function connectCodexAppTools(
   callerThreadId: string,
 ): Promise<CodexAppTools> {
   const state = await codexDesktopRunState(target)
-  if (state.state !== 'running') throw new Error('The destination Codex desktop is not available.')
+  if (state.state !== 'running') throw new Error("That account's Codex desktop is not open.")
   const pid = state.runtime.pid
   // A process appears before its app-tools server finishes startup. Only discovery is retried.
   const deadline = Date.now() + 15_000
@@ -242,5 +242,5 @@ export async function connectCodexAppTools(
     if (Date.now() >= deadline) break
     await Bun.sleep(500)
   } while (Date.now() < deadline)
-  throw new Error('The destination Codex app-tools connection could not be found.')
+  throw new Error('The Codex app-tools connection could not be found.')
 }

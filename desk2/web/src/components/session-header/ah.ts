@@ -50,8 +50,6 @@ export const ah = {
   exportUrl: (row: AhSessionRow, format: 'markdown' | 'html') => `${BASE}/sessions/${sid(row)}/export${where(row)}&format=${format}`,
   fileUrl: (row: AhSessionRow) => `${BASE}/sessions/${sid(row)}/file${where(row)}`,
   codexInstances: () => call<AhCodexInstance[]>('/codex-instances'),
-  /** Closes a Codex account's desktop app (gracefully, then forced after 5 s): whatever runs in it ends. */
-  quitCodexDesktop: (id: string) => call<{ ok: boolean; message?: string }>(`/codex-instances/${encodeURIComponent(id)}/desktop/quit`, { method: 'POST' }),
   /** Every active chat of one Codex account, as the move to `targetId` would take it; moves nothing. */
   codexMovePlan: (fromId: string, targetId: string) =>
     call<AhCodexMovePlan>(`/codex-instances/${encodeURIComponent(fromId)}/move-chats?targetId=${encodeURIComponent(targetId)}`),
@@ -69,33 +67,14 @@ export async function moveSession(sessionId: string, instanceRef: string): Retur
  * Move to account for a Codex chat (`codex:<instance id>`): a Codex thread cannot be re-homed, so AgentHydra copies it,
  * verifies the copy and archives the original (docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md). The move takes only a chat that
  * came back from a plan, with its updatedAt and both accounts, so the plan is read first, at the moment of the click:
- * a chat Codex does not list as active on its account is refused here rather than guessed at.
- *
- * The mover refuses while the chat's own account has its Codex app open (it would race the app's writes). That
- * answers `sourceOpen` with the account's ref and moves nothing; `closeSource` is the person's word to close that app
- * first (as `move-codex-chats --close-source`), which ends whatever else runs in it, so the plan is read after it is
- * closed.
+ * a chat Codex does not list as active on its account is refused here rather than guessed at. Either account's Codex
+ * app may be open: an open one archives the original itself (owner, 2026-10-13).
  */
-export async function moveCodexSession(
-  sessionId: string,
-  instanceRef: string,
-  closeSource = false
-): Promise<{ ok: boolean; error?: string; sourceOpen?: string }> {
+export async function moveCodexSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string }> {
   const targetId = instanceRef.replace(/^codex:/, '')
   const from = (await ah.session(sessionId, 'codex')).instance_ref?.match(/^codex:(.+)$/)?.[1]
   if (!from) return { ok: false, error: 'AgentHydra does not know which Codex account this chat is on.' }
   if (from === targetId) return { ok: false, error: 'It is already on that account.' }
-  const open = async () => (await ah.codexInstances()).find((i) => i.id === from)?.isDesktopRunning === true
-  if (await open()) {
-    if (!closeSource) return { ok: false, sourceOpen: `codex:${from}` }
-    const quit = await ah.quitCodexDesktop(from)
-    if (!quit.ok) return { ok: false, error: quit.message ?? 'Codex did not close.' }
-    const deadline = Date.now() + 30_000
-    while (await open()) {
-      if (Date.now() > deadline) return { ok: false, error: 'Its Codex app was still open 30 s after it was asked to close.' }
-      await new Promise((r) => setTimeout(r, 1000))
-    }
-  }
   const plan = await ah.codexMovePlan(from, targetId)
   const chat = plan.chats.find((c) => c.id === sessionId)
   if (!chat) return { ok: false, error: 'Codex does not list it as an active chat on its account.' }

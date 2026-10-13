@@ -684,39 +684,27 @@ function noteRow(text: string | null, forMs = 0) {
   if (text && forMs) rowNoteTimer = setTimeout(() => (rowNote.value = null), forMs)
 }
 onBeforeUnmount(() => rowNoteTimer && clearTimeout(rowNoteTimer))
-/** A Codex move waiting on the person's word to close the chat's account's Codex app first (moveCodexSession). */
-const closingFor = ref<{ sessionId: string; title: string; item: RowMenuItem; account: string; busy: number } | null>(null)
 const codexBusy = (s: ExternalSession) => s.source === 'codex' && (s.status === 'working' || s.status === 'needs_you')
-function confirmClose() {
-  const c = closingFor.value
-  closingFor.value = null
-  if (c) void moveToAccount(c.sessionId, c.title, c.item, true)
-}
-async function moveToAccount(sessionId: string, title: string, item: RowMenuItem, closeSource = false) {
+async function moveToAccount(sessionId: string, title: string, item: RowMenuItem) {
   if (!item.value) return
   if (moving.value) {
     rowError.value = 'Another move is still running. Try again when it ends.'
     return
   }
   const codex = item.value.startsWith('codex:')
-  // Closing its app first would end the turn, and the mover refuses a chat with an unfinished turn anyway.
+  // The mover refuses a chat with an unfinished turn; this says so before any call.
   if (codex && src.external.value.some((s) => s.id === sessionId && codexBusy(s))) {
     rowError.value = 'Move failed: it is still working in Codex. Let the turn finish, then move it.'
     return
   }
   moving.value = true
   rowError.value = null
-  noteRow(closeSource ? `Closing its Codex app, then moving “${title}” to ${item.label}…` : `Moving “${title}” to ${item.label}…`)
+  noteRow(`Moving “${title}” to ${item.label}…`)
   try {
-    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; sourceOpen?: string } = codex
-      ? await moveCodexSession(sessionId, item.value, closeSource)
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[] } = codex
+      ? await moveCodexSession(sessionId, item.value)
       : await moveSession(sessionId, item.value)
-    if (x.sourceOpen) {
-      noteRow(null)
-      const from = codexAccountChoices.value?.find((a) => a.ref === x.sourceOpen)
-      const busy = from?.tag ? src.external.value.filter((s) => s.instance === from.tag && s.id !== sessionId && codexBusy(s)).length : 0
-      closingFor.value = { sessionId, title, item, account: from ? `#${from.num} ${from.name}` : 'its account', busy }
-    } else if (!x.ok) {
+    if (!x.ok) {
       noteRow(null)
       rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
     } else
@@ -1291,20 +1279,6 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
         <div class="flex justify-end gap-2 pt-1">
           <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="deleting = null">Cancel</button>
           <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-ui font-medium text-white hover:brightness-110" @click="confirmDelete">Delete</button>
-        </div>
-      </DialogContent>
-    </Dialog>
-
-    <Dialog :open="closingFor !== null" @update:open="(o: boolean) => !o && (closingFor = null)">
-      <DialogContent :show-close-button="false" class="gap-3 rounded-(--radius-12) p-4 shadow-(--shadow-popover) ring-0 sm:max-w-90">
-        <DialogTitle class="text-ui-lg font-semibold leading-5 text-text">Close {{ closingFor?.account }}’s Codex app?</DialogTitle>
-        <DialogDescription class="text-ui leading-4.75 text-text-2">
-          Codex moves “{{ closingFor?.title }}” only while that account’s Codex app is closed. Closing it stops anything running
-          there<template v-if="closingFor?.busy">: {{ closingFor?.busy }} other {{ closingFor?.busy === 1 ? 'chat is' : 'chats are' }} working now</template>.
-        </DialogDescription>
-        <div class="flex justify-end gap-2 pt-1">
-          <button type="button" class="h-7 rounded-(--radius-6) bg-(--fill-secondary) px-3 text-ui text-text hover:bg-(--fill-secondary-hover)" @click="closingFor = null">Cancel</button>
-          <button type="button" class="h-7 rounded-(--radius-6) bg-danger px-3 text-ui font-medium text-white hover:brightness-110" @click="confirmClose">Close it and move</button>
         </div>
       </DialogContent>
     </Dialog>

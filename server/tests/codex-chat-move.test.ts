@@ -6,6 +6,7 @@ import {
   mkdtempSync,
   readdirSync,
   readFileSync,
+  renameSync,
   rmSync,
   writeFileSync,
 } from 'node:fs'
@@ -118,7 +119,12 @@ function fixture() {
   const imported: Record<string, unknown> = {}
   const state = {
     archived: false,
+    /** The process scan cannot answer (state 'unknown'). */
     running: false,
+    /** The source account's Codex app is open: it archives the original itself. */
+    appOpen: false,
+    /** A message lands in the source between the last check and the app's archive. */
+    slipIn: false,
     blockCopy: false,
     failResume: false,
     failArchive: false,
@@ -227,12 +233,33 @@ function fixture() {
     runState: async () =>
       state.running
         ? { state: 'unknown' as const, reason: 'unavailable' }
-        : { state: 'stopped' as const },
+        : state.appOpen
+          ? {
+              state: 'running' as const,
+              runtime: { pid: 1, desktopUserDataDir: sourceHome } as never,
+            }
+          : { state: 'stopped' as const },
     connect,
     journalPath: join(root, 'moves.json'),
     showDestination: async () => {
       calls.push('target:showDestination')
       if (state.failVisibility) throw new Error('Destination sidebar update failed')
+    },
+    // The open app archives as Codex does: the transcript moves, unchanged, to archived_sessions.
+    setArchivedInApp: async (_from: CodexInstance, id: string, archived: boolean) => {
+      expect(id).toBe(thread.id)
+      calls.push(archived ? 'source-app:archive' : 'source-app:restore')
+      const archivePath = join(sourceHome, 'archived_sessions', 'chat.jsonl')
+      if (archived) {
+        if (state.slipIn)
+          appendFileSync(
+            thread.path,
+            `${JSON.stringify({ type: 'event_msg', payload: { type: 'user_message' } })}\n`,
+          )
+        mkdirSync(join(sourceHome, 'archived_sessions'), { recursive: true })
+        renameSync(thread.path, archivePath)
+      } else renameSync(archivePath, thread.path)
+      state.archived = archived
     },
     holdWriter: () => {
       if (state.writerBusy) return null
@@ -433,6 +460,36 @@ describe('Codex chat move', () => {
     expect((await moveCodexChat('0', f.request, f.deps)).error).toContain('source changed')
     expect(f.state.archived).toBe(false)
     expect((await moveCodexChat('0', f.request, f.deps)).error).toContain('source chat changed')
+  })
+  test('an open source app archives the original itself, once the copy is verified and shown', async () => {
+    const f = fixture()
+    f.state.appOpen = true
+    const result = await moveCodexChat('0', f.request, f.deps)
+    expect(result).toEqual({
+      ok: true,
+      destinationThreadId: result.destinationThreadId,
+      history: VERIFIED,
+    })
+    // A disk archive under a running app is one it never sees: the app archives it.
+    expect(f.calls).not.toContain('source:thread/archive')
+    expect(f.calls.indexOf('target:showDestination')).toBeLessThan(
+      f.calls.indexOf('source-app:archive'),
+    )
+    expect(f.state.archived).toBe(true)
+    expect(f.copies()).toHaveLength(1)
+  })
+  test('a message that lands just before the open app archives it is restored, both chats kept', async () => {
+    const f = fixture()
+    f.state.appOpen = true
+    f.state.slipIn = true
+    const result = await moveCodexChat('0', f.request, f.deps)
+    expect(result.error).toContain('changed just before it was archived')
+    expect(f.calls.indexOf('source-app:restore')).toBeGreaterThan(
+      f.calls.indexOf('source-app:archive'),
+    )
+    expect(f.state.archived).toBe(false)
+    expect(existsSync(f.thread.path)).toBe(true)
+    expect(f.copies()).toHaveLength(1)
   })
   test('an unknown process state, changed login, or same home refuses before connecting', async () => {
     const f = fixture()

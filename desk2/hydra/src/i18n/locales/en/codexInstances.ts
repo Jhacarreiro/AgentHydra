@@ -4,8 +4,8 @@ export default {
     'This account does not report a main five-hour limit. Separate model limits are listed below when available.',
   moveDescription:
     'Copy each active local chat into the destination account, keeping its conversation and working folder. Archive each original after its copy is verified. Archived chats stay on the source. This does not transfer cloud chats or start a new turn.',
-  moveCloseSource:
-    'Close the source Codex desktop and its CLI sessions before moving. You can keep the destination open; refresh or reopen it to see the moved chats.',
+  moveOpenApps:
+    'Both Codex apps can stay open: an open source app archives each original itself, and the destination shows each copy under Migrated chats. A chat still mid-reply is skipped.',
   /** An OPENAI_API_KEY login: a valid Codex auth, but no ChatGPT subscription and so no plan
    *  or quota to report. */
   authApiKey: 'API key',
