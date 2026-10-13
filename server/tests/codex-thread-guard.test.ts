@@ -34,6 +34,9 @@ test('the writer lock has one holder at a time, as Codex requires', () => {
 test('resetting a thread’s history projection removes only that thread’s rows', () => {
   const codexHome = home()
   const db = new Database(join(codexHome, 'thread_history_1.sqlite'))
+  // One commit for the whole fixture: each autocommit is a journal fsync, and nine of them outran
+  // the 5 s limit on the Windows runner (5243 ms).
+  db.exec('begin')
   db.exec(`
     CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT);
     CREATE TABLE thread_items (thread_id TEXT, item_id TEXT);
@@ -44,6 +47,7 @@ test('resetting a thread’s history projection removes only that thread’s row
     db.query('INSERT INTO thread_items VALUES (?, ?)').run(id, `${id}-item`)
     db.query('INSERT INTO thread_history_projection_state VALUES (?, 42)').run(id)
   }
+  db.exec('commit')
   db.close()
   const removed = resetCodexHistoryProjection(codexHome, THREAD)
   expect(removed.thread_turns).toEqual([{ thread_id: THREAD, turn_id: `${THREAD}-turn` }])
