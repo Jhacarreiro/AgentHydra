@@ -30,6 +30,7 @@ import type {
   EffortLevel,
   ExtraUsageOffResult,
   FleetUsageHistory,
+  HelpersView,
   Incident,
   IncidentState,
   InstanceColorKey,
@@ -516,6 +517,12 @@ export const resolveIncident = (id: string) =>
 // --- live agent status (server/src/agent-status.ts) --------------------------
 // Working / waiting on you / done per session, as Claude Code's hooks reported it. Read as written.
 export const getAgentStatuses = () => j<AgentStatus[]>('/api/agent-status')
+
+export const getHelpers = () => j<HelpersView>('/api/helpers')
+export const restartHelper = (id: string) =>
+  j<HelpersView>(`/api/helpers/${encodeURIComponent(id)}/restart`, { method: 'POST' })
+export const stopHelpers = () => j<HelpersView>('/api/helpers/stop', { method: 'POST' })
+export const startHelpers = () => j<HelpersView>('/api/helpers/start', { method: 'POST' })
 
 // --- scheduler --------------------------------------------------------------
 export const getScheduler = () => j<SchedulerState>('/api/scheduler')

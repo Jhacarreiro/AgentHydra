@@ -20,11 +20,11 @@ the updater (2026-10-10).
 | Tray (`misc\AgentHydra-Tray.exe AgentHydra-Tray.json`) | `live/` | Its config is relative (`appRoot ".."`), so only the shortcut moves. A tray still running under its old name, `lunarwerx-tray.exe`, is the old setup: it restarts the daemon from `app/`. |
 | Desk 2, the window (`desk2\server` on 7798, `launcher\HydraDesk2.exe`) | `live\desk2` | The AgentHydra shortcuts run `live\desk2\launcher\start.vbs`. `-Apply` installs and builds it there. |
 | Desk 2's dev-servers service | the Desk that started it | It outlives a Desk restart. Once its code differs from Desk's and it runs no server, Desk replaces it on the next `/dw/api/*` request. With servers running it is left alone, and `GET /dw/status` says `stale`. |
-| Switch-card watchers (`approve_switch_card.ps1`, one per instance) | `live\orchestrator\scripts\actuator` | Started by the `AgentHydra-SwitchCardWatchers` task's wrapper. A watcher that is already running keeps the path it started with. |
+| Always-on helpers: the servers and watchers in `<CONFIG_DIR>\helpers.json` (on the owner's PC the switch-card watcher, `approve_switch_card.ps1`, one for every account, and the orchestrator dashboard on 7799) | the paths in the list; `{APP_ROOT}` there is `live\` | The daemon starts each one nothing runs, adopts one already running, and restarts one that exits or passes its memory cap ([server/src/helpers.ts](../server/src/helpers.ts)). The window's header lists them. A helper keeps running across a daemon restart, with the path it started with. |
 | HSwarm: the `hswarm` command (`pip install -e`) and every chat's MCP connect step (`headersHelper` in the `mcpServers` map, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)) | `live\hswarm` | Not moved by `-Apply` (step 6 below). The shared MCP server on 7793 runs its own copy of the committed code, in `~\.hswarm\code`. |
 | `AgentHydra Daemon Supervisor`, `AgentHydra Daemon Watchdog` tasks | `live\misc\Supervisor-Tick.vbs`, `live\scripts\watchdog.vbs` | Same `wscript` switches, same triggers. |
-| `Orchestrator-*` tasks and the dashboard (7799) | the job wrappers in the state dir, which run `live\orchestrator\...` | Wrappers are rewritten by text, not regenerated. |
-| Anything not on `origin/main` (for example an uncommitted switch-card watcher) | stays on `app/` | `-Plan` warns about each one. Push it, then rerun `-Apply`. |
+| `Orchestrator-*` tasks (the dashboard's only where `jobs.dashboard.enabled` is on; elsewhere it is a helper) | the job wrappers in the state dir, which run `live\orchestrator\...` | Wrappers are rewritten by text, not regenerated. |
+| Anything not on `origin/main` (for example an uncommitted script) | stays on `app/` | `-Plan` warns about each one. Push it, then rerun `-Apply`. |
 | Orchestrator state | `%USERPROFILE%\.agenthydra\orchestrator\state`, one place, or the working checkout's own folder with `-StateDir` ([below](#keeping-the-state-where-it-is)) | `app\orchestrator\state` and `live\orchestrator\state` are junctions to it, and `ORCHESTRATOR_STATE_DIR` is set for the user. |
 | Daemon data, HSwarm state | `~\.agenthydra\data`, `~\.hswarm` | Already outside both checkouts. Nothing moves. |
 
@@ -45,7 +45,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File <workspace>\live\misc\Restar
 
 The state move needs a moment when no process holds a file in the old state folder. If one does (the
 dashboard keeps its log open), `-Apply` stops before the move, names the process and prints the
-`Stop-Process` line. The dashboard's task starts it again within 5 minutes. Rerun `-Apply` after that.
+`Stop-Process` line. Its helper (or, where it is still a task, its task) starts it again. Rerun `-Apply` after that.
 
 ## How code reaches the running app
 
@@ -75,8 +75,8 @@ order, while no CliMayte runner (`climayte-runner-*.exe`) is working, since a da
 3. Desk 2: restart it to update, from the window's Menu > Restart to update or, as an agent, with
    `POST http://127.0.0.1:7798/api/server/restart` once `/api/server/update` reads `stale: true` (`desk2/AGENTS.md`).
    Chats keep running in their hosts and the open window reconnects.
-4. Switch-card watchers: stop the ones whose command line names `app\`, then run the
-   `AgentHydra-SwitchCardWatchers` task. It starts them again from `live\`.
+4. Always-on helpers: stop the ones whose command line names `app\`. The daemon starts them again from
+   `live\` within 15 seconds.
 5. Dev-servers service: once `GET http://127.0.0.1:7798/dw/status` shows `running: 0`, any `/dw/api/*` request
    (for example `GET /dw/api/settings`) makes Desk replace it from `live\`.
 6. HSwarm: `python -m pip install -e <workspace>\live\hswarm`, then `python -m hswarm install` (add

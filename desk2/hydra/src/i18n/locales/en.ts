@@ -8,6 +8,7 @@ import climayte from './en/climayte'
 import codexInstances from './en/codexInstances'
 import dshInstances from './en/dshInstances'
 import freeInstances from './en/freeInstances'
+import helpers from './en/helpers'
 import hswarm from './en/hswarm'
 import incidents from './en/incidents'
 import instances from './en/instances'
@@ -29,6 +30,7 @@ export default {
   climayte,
   dshInstances,
   freeInstances,
+  helpers,
   hswarm,
   incidents,
   instances,

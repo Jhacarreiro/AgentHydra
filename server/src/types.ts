@@ -1822,3 +1822,31 @@ export interface MonitorView {
   /** account_id → enabled (absent = follows the global switch). */
   accounts: Record<string, boolean>
 }
+
+/** One always-on helper (server/src/helpers.ts), as /api/helpers lists it. */
+export type HelperState = 'running' | 'starting' | 'waiting' | 'stopped'
+
+export interface HelperRow {
+  id: string
+  label: string
+  state: HelperState
+  pid: number | null
+  port: number | null
+  memoryMB: number | null
+  /** When this pid was first seen running (ISO). */
+  since: string | null
+  restarts: number
+  /** Found already running rather than started by this daemon. */
+  adopted: boolean
+  lastError: string | null
+  /** Run by its own module (HSwarm), so restart and stop-all leave it alone. */
+  managed?: boolean
+}
+
+export interface HelpersView {
+  /** Stop-all is in force: no helper starts until start-all. */
+  paused: boolean
+  configPath: string
+  configError: string | null
+  helpers: HelperRow[]
+}

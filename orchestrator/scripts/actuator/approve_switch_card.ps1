@@ -1,12 +1,20 @@
 # approve_switch_card.ps1 - answer Claude Desktop's "Allow Claude to switch ..." permission card,
-# unattended, in a loop.
+# unattended, in a loop, for every running Claude Desktop account from ONE process.
 #
 # WHY THIS EXISTS (owner, 2026-10-03: "everything I'm doing gets stuck ... automated task
 # orchestration while I sleep"). A manager chat that calls set_session_permission_mode stops on
 # the app's permission card and nothing restarts it but a click. approve_prompt.ps1 answers that
 # card too, but it is driven per-chat from unblock_prompts.py (transcript scan, verdict, target
 # JSON, tray arm) - a batch lane, not a resident watcher. This is the resident watcher: it hangs
-# on ONE named instance's window and presses the card's own Allow once the moment it appears.
+# on each account's window and presses the card's own Allow once the moment it appears.
+#
+# ONE WATCHER, NOT ONE PER ACCOUNT (owner, 2026-10-12: "all this could probably be better
+# integrated ... instead of just being random PowerShells that sit on their own"). It was one
+# pwsh per account (3 on the owner's PC, ~110-150 MB each, each growing to 400 MB a day), kept
+# alive by a Task Scheduler supervisor every 5 minutes. Now this one process finds the running
+# accounts itself (every ~60 s, and at once when one it watched goes away), keeps each one's
+# window and card state, and AgentHydra's helpers list (server/src/helpers.ts) starts it,
+# restarts it when it exits or outgrows its memory cap, and shows it in the window's header.
 #
 # REUSED WHOLESALE FROM approve_prompt.ps1:
 #   * instance resolution - exact --user-data-dir for a path-shaped -Instance, exact leaf-folder
@@ -29,13 +37,15 @@
 #      ancestor with several such buttons is ambiguous and refused, not guessed;
 #   3. it never touches a Deny/Cancel/Reject - the button name allow-list below has none in it;
 #   4. it LOOPS every -IntervalSecs (default 2), and every detection and every press (with the
-#      card text and the button label) is appended to a log file.
+#      account, the card text and the button label) is appended to one log file.
 #
-# RUN HIDDEN (the way it is meant to run):
-#   pwsh -NoProfile -File approve_switch_card.ps1 -Instance blaarrrggghhh -Hidden
-# -Hidden starts THIS script again through Start-Process -WindowStyle Hidden (no console stays
-# open) and returns immediately; the detached child does the looping. The log path is printed
-# on start and defaults to <orchestrator>/state/logs/approve-switch-card-<instance>.log.
+# ACCOUNTS: every running account whose profile leaf matches exactly one main claude.exe (the
+# default profile, whose bare claude.exe CLI processes share the leaf 'Claude', is skipped and
+# logged). -Instance narrows it to one: an exact --user-data-dir for a path, an exact leaf for a
+# bare name. The log defaults to <orchestrator>/state/logs/approve-switch-card.log.
+#
+# HOW IT RUNS: as an AgentHydra helper (the owner's helpers.json), which starts it hidden. By hand:
+#   pwsh -NoProfile -File approve_switch_card.ps1 -Once
 #
 # FOREVER-WATCH GUARDS: a card that will not clear is pressed at most 3 times, then only reported
 # ("gave up ... still watching") so a wedged window cannot be clicked every 2s all night. The
@@ -43,9 +53,10 @@
 # is shown with SW_SHOWNOACTIVATE at most, so the desk the owner left is not rearranged.
 #
 # Exit: 0 ran (with -Once: pressed) - 3 with -Once, no card was showing - 6 with -Once, a card was
-#       showing but its Allow once was missing/disabled/ambiguous - 1 error/no instance.
+#       showing but its Allow once was missing/disabled/ambiguous - 1 error/no account (-Once).
 param(
-  [Parameter(Mandatory = $true)][string]$Instance,
+  # Only this account (a full profile directory, or its exact leaf). Default: every running account.
+  [string]$Instance = '',
   [string]$CardText = 'Allow Claude to switch',
   # The wording Claude Desktop 2.19675.0 actually renders for this card (see header). '' disables it.
   [string]$CardTextAlso = 'This one switches',
@@ -54,10 +65,6 @@ param(
   [string]$LogPath = '',
   # One scan then exit - for a person testing it at the desk instead of an all-night watcher.
   [switch]$Once,
-  # Start this same script detached and windowless through Start-Process -WindowStyle Hidden.
-  [switch]$Hidden,
-  # Internal marker the hidden child carries; never needed by hand.
-  [switch]$Detached,
   # Rarely needed: grab the foreground for this window before each scan. InvokePattern does not
   # require it, so the default leaves the owner's focus alone.
   [switch]$Steal
@@ -116,8 +123,9 @@ function TryPattern($e, $pat) { try { return $e.GetCurrentPattern($pat) } catch 
 # that keeps no element alive; the full walk runs when one starts with an Allow name, while a card
 # is up, and every FULL_SCAN_EVERY ticks so a card with no enabled Allow is still reported.
 $FULL_SCAN_EVERY = 30
-# A watcher whose private memory passes this starts a fresh copy of itself and exits.
-$MAX_PRIVATE_MB = 400
+# The running accounts are looked up again this often (and at once when a watched one goes away):
+# one WMI query for claude.exe, so not every tick.
+$DISCOVER_EVERY = [math]::Max(1, [int](60 / $IntervalSecs))
 function Test-AllowButton($roots) {
   $cr = New-Object System.Windows.Automation.CacheRequest
   $cr.Add([System.Windows.Automation.AutomationElement]::NameProperty)
@@ -137,13 +145,11 @@ function Test-AllowButton($roots) {
 }
 
 # ---- Logging -------------------------------------------------------------------------------
-# Default: <orchestrator>/state/logs/approve-switch-card-<instance>.log. Falls back to %TEMP% if
-# the state dir is not writable, because a watcher that cannot log must still watch.
+# Default: <orchestrator>/state/logs/approve-switch-card.log, one file for every account (each
+# line names its account). Falls back to %TEMP% if the state dir is not writable, because a
+# watcher that cannot log must still watch.
 if (-not $LogPath) {
-  $leaf = Split-Path -Leaf ($Instance.TrimEnd('\'))
-  if (-not $leaf) { $leaf = 'claude' }
-  $safe = ($leaf -replace '[^\w.\-]', '_')
-  $name = "approve-switch-card-$safe.log"
+  $name = 'approve-switch-card.log'
   try {
     $stateRoot = Join-Path (Split-Path (Split-Path $PSScriptRoot -Parent) -Parent) 'state'
     $dir = Join-Path $stateRoot 'logs'
@@ -153,71 +159,46 @@ if (-not $LogPath) {
     $LogPath = Join-Path $env:TEMP $name
   }
 }
-function Write-Log([string]$msg) {
-  $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $Instance, $msg
-  Write-Output $line
+function Write-Log([string]$who, [string]$msg) {
+  $line = '{0} [{1}] {2}' -f (Get-Date).ToString('yyyy-MM-dd HH:mm:ss'), $who, $msg
+  # Not Write-Output: Get-Accounts and Scan-Account log mid-function, and a pipeline line would
+  # become part of what they return.
+  [Console]::Out.WriteLine($line)
   try { Add-Content -LiteralPath $LogPath -Value $line -Encoding UTF8 } catch { }
 }
 
-# ---- Start hidden --------------------------------------------------------------------------
-# CommandLineToArgvW quoting, so a spaced instance dir / log path survives Start-Process's
-# space-join of -ArgumentList (same hazard detached-spawn.mjs documents).
-function Quote-WinArg([string]$a) {
-  if ($a -eq '') { return '""' }
-  if ($a -notmatch '[\s"]') { return $a }
-  $out = '"'; $slashes = 0
-  foreach ($ch in $a.ToCharArray()) {
-    if ($ch -eq '\') { $slashes++; continue }
-    if ($ch -eq '"') { $out += ('\' * ($slashes * 2 + 1)); $out += '"'; $slashes = 0; continue }
-    if ($slashes -gt 0) { $out += ('\' * $slashes); $slashes = 0 }
-    $out += $ch
+# Account resolution is approve_prompt.ps1's rail 1/1b. Every main claude.exe (no --type=) and the profile it runs. An account is watched only when its
+# leaf (or, for a path-shaped -Instance, its exact directory) names exactly ONE such process: two
+# processes on one profile cannot be told apart, and a guess could press another account's card.
+$script:SkipNote = @{}
+function Get-Accounts {
+  $procs = @(Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
+    Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
+    ForEach-Object {
+      $m = [regex]::Match($_.CommandLine, '"--user-data-dir=([^"]+)"')
+      if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir=(\S+)') }
+      $d = if ($m.Success) { $m.Groups[1].Value.Trim() } else { Join-Path $env:APPDATA 'Claude' }
+      [pscustomobject]@{ ProcId = [int]$_.ProcessId; Dir = $d.TrimEnd('\'); Leaf = (Split-Path -Leaf $d.TrimEnd('\')) }
+    })
+  if ($Instance -match '[\\/]') {
+    $procs = @($procs | Where-Object { $_.Dir -eq $Instance.TrimEnd('\') })
+  } elseif ($Instance) {
+    $procs = @($procs | Where-Object { $_.Leaf.Equals($Instance, [System.StringComparison]::OrdinalIgnoreCase) })
   }
-  $out += ('\' * ($slashes * 2))
-  return $out + '"'
-}
-function Start-HiddenWatcher {
-  $exe = (Get-Process -Id $PID).Path
-  $raw = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', $PSCommandPath,
-           '-Instance', $Instance, '-IntervalSecs', "$IntervalSecs",
-           '-CardText', $CardText, '-CardTextAlso', $CardTextAlso, '-AllowName', $AllowName,
-           '-LogPath', $LogPath, '-Detached')
-  if ($Once) { $raw += '-Once' }
-  if ($Steal) { $raw += '-Steal' }
-  $quoted = @($raw | ForEach-Object { Quote-WinArg $_ })
-  Start-Process -FilePath $exe -ArgumentList $quoted -WindowStyle Hidden
-}
-if ($Hidden -and -not $Detached) {
-  Start-HiddenWatcher
-  Write-Log "started hidden watcher (child of pid $PID)"
-  exit 0
-}
-
-# ---- Find THIS instance's window (approve_prompt.ps1's rail 1/1b, verbatim in spirit) -------
-$procs = Get-CimInstance Win32_Process -Filter "Name = 'claude.exe'" |
-  Where-Object { $_.CommandLine -and $_.CommandLine -notmatch '--type=' } |
-  ForEach-Object {
-    $m = [regex]::Match($_.CommandLine, '"--user-data-dir=([^"]+)"')
-    if (-not $m.Success) { $m = [regex]::Match($_.CommandLine, '--user-data-dir=(\S+)') }
-    $dir = if ($m.Success) { $m.Groups[1].Value.Trim() } else { Join-Path $env:APPDATA 'Claude' }
-    [pscustomobject]@{ ProcId = $_.ProcessId; Dir = $dir }
+  $out = @()
+  foreach ($g in ($procs | Where-Object { $_.Leaf } | Group-Object Leaf)) {
+    if ($g.Count -ne 1) {
+      if ($script:SkipNote[$g.Name] -ne $g.Count) {
+        Write-Log $g.Name "skipped: $($g.Count) claude.exe main processes carry this profile (the watcher needs exactly 1)"
+        $script:SkipNote[$g.Name] = $g.Count
+      }
+      continue
+    }
+    $script:SkipNote.Remove($g.Name)
+    $out += $g.Group[0]
   }
-if (-not $Instance -or $Instance.Trim() -eq '') {
-  Write-Log 'FAIL: -Instance is blank - refusing to act without a positively identified window'
-  exit 1
+  return $out
 }
-$allDirs = @($procs | ForEach-Object { $_.Dir } | Sort-Object -Unique)
-if ($Instance -match '[\\/]') {
-  $procs = @($procs | Where-Object { $_.Dir.TrimEnd('\') -eq $Instance.TrimEnd('\') })
-} else {
-  $procs = @($procs | Where-Object {
-    (Split-Path -Leaf $_.Dir.TrimEnd('\')).Equals($Instance, [System.StringComparison]::OrdinalIgnoreCase)
-  })
-}
-if ($procs.Count -ne 1) {
-  Write-Log "FAIL: '$Instance' matches $($procs.Count) running instances; candidates: $($allDirs -join '; ')"
-  exit 1
-}
-$proc = $procs | Select-Object -First 1
 
 function Window-Inventory([int]$procId) {
   $out = @()
@@ -249,14 +230,6 @@ function Find-Window([int]$procId) {
             Sort-Object Area -Descending) | Select-Object -First 1
   if ($best) { return [IntPtr]$best.Hwnd }
   return [IntPtr]::Zero
-}
-
-# The pid and its start time name the instance: a pid Windows hands to another process later is not it.
-$started = (Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue).StartTime
-$hwnd = Find-Window $proc.ProcId
-if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
-  Write-Log "FAIL: that instance has no window (pid $($proc.ProcId))"
-  exit 1
 }
 
 # The MSAA poke (approve_prompt.ps1's Wake, reused): switches Electron's lazy accessibility tree
@@ -372,140 +345,179 @@ function Find-Card($root, $phrases) {
   return $last
 }
 
-# ---- The loop ------------------------------------------------------------------------------
-$script:CardVisible = $false
-$script:Attempts = 0
-$script:LastPressAt = [DateTime]::MinValue
-$script:LoggedDisabled = $false
-$script:GaveUpLogged = $false
-$script:LastRefusal = ''
-
-Write-Log ("watcher start: pid $($proc.ProcId) hwnd $hwnd, every ${IntervalSecs}s, card text " +
-           ($CARD_PHRASES | ForEach-Object { "'$_'" }) + ", button '" + ($ALLOW_NAMES -join "'/'") + "', log '$LogPath'" + $(if ($Once) { ' (once)' } else { '' }))
-
+# One watch per account, keyed by its pid. The pid and its start time name the instance: a pid
+# Windows hands to another process later is not it.
+$script:Watches = @{}
+$script:NoWindowNote = @{}
 $script:OncePressed = $false
 $script:OnceCardSeen = $false
 $script:OnceUnpressable = ''
-$script:Tick = 0
+
+function Sync-Watches {
+  $accounts = @(Get-Accounts)
+  $live = @{}
+  foreach ($a in $accounts) {
+    $live[$a.ProcId] = $true
+    if ($script:Watches.ContainsKey($a.ProcId)) { continue }
+    $p = Get-Process -Id $a.ProcId -ErrorAction SilentlyContinue
+    if (-not $p) { continue }
+    $hwnd = Find-Window $a.ProcId
+    if (-not $hwnd -or $hwnd -eq [IntPtr]::Zero) {
+      if (-not $script:NoWindowNote.ContainsKey($a.ProcId)) {
+        Write-Log $a.Leaf "pid $($a.ProcId) has no window yet - looking again at the next pass"
+        $script:NoWindowNote[$a.ProcId] = $true
+      }
+      continue
+    }
+    $script:NoWindowNote.Remove($a.ProcId)
+    $script:Watches[$a.ProcId] = [pscustomobject]@{
+      Leaf = $a.Leaf; ProcId = $a.ProcId; Started = $p.StartTime; Hwnd = $hwnd; Tick = 0
+      CardVisible = $false; Attempts = 0; LastPressAt = [DateTime]::MinValue
+      LoggedDisabled = $false; GaveUpLogged = $false; LastRefusal = ''
+    }
+    Write-Log $a.Leaf "watching: pid $($a.ProcId) hwnd $hwnd"
+  }
+  foreach ($procId in @($script:Watches.Keys)) {
+    if (-not $live.ContainsKey($procId)) {
+      Write-Log $script:Watches[$procId].Leaf "stopped watching: pid $procId is no longer a running account"
+      $script:Watches.Remove($procId)
+    }
+  }
+}
+
+# One scan of one account's windows. Returns $false when the account is gone (its pid exited, or
+# was reused, or it has no window left), so the caller drops it and looks for accounts again.
+function Scan-Account($w) {
+  try {
+    if ([Approve.Inv]::IsIconic($w.Hwnd)) {
+      [void][Approve.Inv]::ShowWindow($w.Hwnd, 4)   # SW_SHOWNOACTIVATE - render, do not steal focus
+      Start-Sleep -Milliseconds 400
+    }
+    if ($Steal) { [void][Approve.Inv]::Foreground($w.Hwnd); Start-Sleep -Milliseconds 150 }
+    [void](Wake $w.Hwnd 0)
+    $card = $null
+    $roots = @(Get-Roots $w.ProcId $w.Hwnd)
+    $full = $Once -or $w.CardVisible -or ($w.Tick % $FULL_SCAN_EVERY -eq 0) -or (Test-AllowButton $roots)
+    $w.Tick++
+    if ($full) {
+      foreach ($root in $roots) {
+        $card = Find-Card $root $CARD_PHRASES
+        if ($card -and $card.Button) { break }
+      }
+    }
+
+    if (-not $card -or -not $card.Button) {
+      if ($w.CardVisible) {
+        Write-Log $w.Leaf 'card cleared'
+        $w.CardVisible = $false; $w.Attempts = 0
+        $w.LoggedDisabled = $false; $w.GaveUpLogged = $false
+      }
+      if ($card -and $card.Why -eq 'ambiguous') {
+        $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' holds more than one Allow button - refused"
+        if (-not $w.CardVisible) { Write-Log $w.Leaf "REFUSED: '$($card.Header)' is a container with more than one Allow button - not guessing" }
+      } elseif ($card -and $card.Why -eq 'too-wide') {
+        $script:OnceCardSeen = $true; $script:OnceUnpressable = "'$($card.Header)' reached a container of $($card.Count) buttons before any Allow - refused"
+        $msg = "REFUSED: '$($card.Header)' reached a container of $($card.Count) buttons (over $CARD_MAX_BUTTONS) before any Allow - chat text, not a card"
+        if ($msg -ne $w.LastRefusal) { Write-Log $w.Leaf $msg; $w.LastRefusal = $msg }
+      } elseif ($card -and $card.Why -eq 'no-button') {
+        $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' has no enabled Allow once"
+        if (-not $w.CardVisible) { Write-Log $w.Leaf "card '$($card.Header)' is showing but no enabled '$AllowName' is inside it" }
+      }
+      return $true
+    }
+
+    $header = $card.Header
+    $btn = $card.Button
+    try { $label = [string]$btn.Current.Name } catch { $label = $AllowName }
+    $script:OnceCardSeen = $true
+    if (-not $w.CardVisible) {
+      Write-Log $w.Leaf "card showing: '$header' -> '$label'"
+      $w.CardVisible = $true; $w.Attempts = 0
+      $w.LoggedDisabled = $false; $w.GaveUpLogged = $false
+    }
+    $enabled = $false
+    try { $enabled = [bool]$btn.Current.IsEnabled } catch { $enabled = $false }
+    if (-not $enabled) {
+      if (-not $w.LoggedDisabled) { Write-Log $w.Leaf "card '$header' is up but '$label' is disabled - waiting"; $w.LoggedDisabled = $true }
+      $script:OnceUnpressable = "'$label' on '$header' was disabled"
+    } elseif ($w.Attempts -ge 3) {
+      if (-not $w.GaveUpLogged) { Write-Log $w.Leaf "gave up on '$header' after 3 presses - it is not clearing; still watching"; $w.GaveUpLogged = $true }
+      $script:OnceUnpressable = "'$header' did not clear after 3 presses"
+    } elseif (((Get-Date) - $w.LastPressAt).TotalSeconds -ge 5) {
+      $inv = TryPattern $btn ([System.Windows.Automation.InvokePattern]::Pattern)
+      if (-not $inv) {
+        Write-Log $w.Leaf "REFUSED: '$label' on '$header' exposes no InvokePattern"
+        $script:OnceUnpressable = "'$label' exposes no InvokePattern"
+      } else {
+        try {
+          $inv.Invoke()
+          $w.LastPressAt = Get-Date
+          $w.Attempts++
+          $script:OncePressed = $true
+          Write-Log $w.Leaf "APPROVED '$label' on '$header' (press #$($w.Attempts))"
+        } catch {
+          Write-Log $w.Leaf "invoke failed on '$label' on '$header': $($_.Exception.Message)"
+          $script:OnceUnpressable = "invoke failed: $($_.Exception.Message)"
+        }
+      }
+    }
+    return $true
+  } catch {
+    Write-Log $w.Leaf "scan error: $($_.Exception.Message)"
+    # The window is cached when the watch starts. When the instance quits (an app restart gives it
+    # a new pid), every scan would fail on the dead window forever: drop the watch, and the next
+    # look for accounts picks up the new process. A recreated window is followed in place, found
+    # the way the watch found it; a pid reused by another process is not followed, since its
+    # windows are some other app's and the next scan would press an Allow there.
+    $live = Get-Process -Id $w.ProcId -ErrorAction SilentlyContinue
+    if (-not $live -or $live.StartTime -ne $w.Started) {
+      Write-Log $w.Leaf "pid $($w.ProcId) is gone - dropping its watch"
+      return $false
+    }
+    $found = Find-Window $w.ProcId
+    if ($found -eq [IntPtr]::Zero) {
+      Write-Log $w.Leaf "pid $($w.ProcId) has no window - dropping its watch"
+      return $false
+    }
+    if ($found -ne $w.Hwnd) {
+      Write-Log $w.Leaf "window changed: $($w.Hwnd) -> $found"
+      $w.Hwnd = $found
+    }
+    return $true
+  }
+}
+
+Sync-Watches
+Write-Log '*' ("watcher start: $($script:Watches.Count) account(s), every ${IntervalSecs}s, card text " +
+               ($CARD_PHRASES | ForEach-Object { "'$_'" }) + ", button '" + ($ALLOW_NAMES -join "'/'") + "', log '$LogPath'" + $(if ($Once) { ' (once)' } else { '' }))
+if ($Once -and $script:Watches.Count -eq 0) {
+  Write-Log '*' 'FAIL: no running account to watch'
+  exit 1
+}
+
+$tick = 0
 try {
   while ($true) {
-    try {
-      if ([Approve.Inv]::IsIconic($hwnd)) {
-        [void][Approve.Inv]::ShowWindow($hwnd, 4)   # SW_SHOWNOACTIVATE - render, do not steal focus
-        Start-Sleep -Milliseconds 400
-      }
-      if ($Steal) { [void][Approve.Inv]::Foreground($hwnd); Start-Sleep -Milliseconds 150 }
-      $el = Wake $hwnd 0
-      $card = $null
-      $roots = @(Get-Roots $proc.ProcId $hwnd)
-      $full = $Once -or $script:CardVisible -or ($script:Tick % $FULL_SCAN_EVERY -eq 0) -or (Test-AllowButton $roots)
-      $script:Tick++
-      if ($full) {
-        foreach ($root in $roots) {
-          $card = Find-Card $root $CARD_PHRASES
-          if ($card -and $card.Button) { break }
-        }
-      }
-
-      if (-not $card -or -not $card.Button) {
-        if ($script:CardVisible) {
-          Write-Log "card cleared"
-          $script:CardVisible = $false; $script:Attempts = 0
-          $script:LoggedDisabled = $false; $script:GaveUpLogged = $false
-        }
-        if ($card -and $card.Why -eq 'ambiguous') {
-          $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' holds more than one Allow button - refused"
-          if (-not $script:CardVisible) { Write-Log "REFUSED: '$($card.Header)' is a container with more than one Allow button - not guessing" }
-        } elseif ($card -and $card.Why -eq 'too-wide') {
-          $script:OnceCardSeen = $true; $script:OnceUnpressable = "'$($card.Header)' reached a container of $($card.Count) buttons before any Allow - refused"
-          $msg = "REFUSED: '$($card.Header)' reached a container of $($card.Count) buttons (over $CARD_MAX_BUTTONS) before any Allow - chat text, not a card"
-          if ($msg -ne $script:LastRefusal) { Write-Log $msg; $script:LastRefusal = $msg }
-        } elseif ($card -and $card.Why -eq 'no-button') {
-          $script:OnceCardSeen = $true; $script:OnceUnpressable = "the card '$($card.Header)' has no enabled Allow once"
-          if (-not $script:CardVisible) { Write-Log "card '$($card.Header)' is showing but no enabled '$AllowName' is inside it" }
-        }
-      } else {
-        $header = $card.Header
-        $btn = $card.Button
-        try { $label = [string]$btn.Current.Name } catch { $label = $AllowName }
-        $script:OnceCardSeen = $true
-        if (-not $script:CardVisible) {
-          Write-Log "card showing: '$header' -> '$label'"
-          $script:CardVisible = $true; $script:Attempts = 0
-          $script:LoggedDisabled = $false; $script:GaveUpLogged = $false
-        }
-        $enabled = $false
-        try { $enabled = [bool]$btn.Current.IsEnabled } catch { $enabled = $false }
-        if (-not $enabled) {
-          if (-not $script:LoggedDisabled) { Write-Log "card '$header' is up but '$label' is disabled - waiting"; $script:LoggedDisabled = $true }
-          $script:OnceUnpressable = "'$label' on '$header' was disabled"
-        } elseif ($script:Attempts -ge 3) {
-          if (-not $script:GaveUpLogged) { Write-Log "gave up on '$header' after 3 presses - it is not clearing; still watching"; $script:GaveUpLogged = $true }
-          $script:OnceUnpressable = "'$header' did not clear after 3 presses"
-        } elseif (((Get-Date) - $script:LastPressAt).TotalSeconds -ge 5) {
-          $inv = TryPattern $btn ([System.Windows.Automation.InvokePattern]::Pattern)
-          if (-not $inv) {
-            Write-Log "REFUSED: '$label' on '$header' exposes no InvokePattern"
-            $script:OnceUnpressable = "'$label' exposes no InvokePattern"
-          } else {
-            try {
-              $inv.Invoke()
-              $script:LastPressAt = Get-Date
-              $script:Attempts++
-              $script:OncePressed = $true
-              Write-Log "APPROVED '$label' on '$header' (press #$($script:Attempts))"
-            } catch {
-              Write-Log "invoke failed on '$label' on '$header': $($_.Exception.Message)"
-              $script:OnceUnpressable = "invoke failed: $($_.Exception.Message)"
-            }
-          }
-        }
-      }
-    } catch {
-      Write-Log "scan error: $($_.Exception.Message)"
-      # The window is cached at start. When the instance quits (an app restart gives it a new pid), every
-      # scan fails on the dead window forever, and while this runs the supervisor counts the instance as
-      # watched, so no fresh watcher starts (six of eight, 2026-10-04 to 10-07). Exit instead; the
-      # supervisor's next run starts one on the new process. A recreated window is followed in place,
-      # found the way the start found it; a pid reused by another process is not followed, since its
-      # windows are some other app's and the next scan would press an Allow there.
-      $live = Get-Process -Id $proc.ProcId -ErrorAction SilentlyContinue
-      if (-not $live -or $live.StartTime -ne $started) {
-        Write-Log "instance pid $($proc.ProcId) is gone - exiting so the supervisor starts a fresh watcher"
-        break
-      }
-      $found = Find-Window $proc.ProcId
-      if ($found -eq [IntPtr]::Zero) {
-        Write-Log "instance pid $($proc.ProcId) has no window - exiting so the supervisor starts a fresh watcher"
-        break
-      }
-      if ($found -ne $hwnd) {
-        Write-Log "window changed: $hwnd -> $found"
-        $hwnd = $found
-      }
+    $lost = $false
+    foreach ($w in @($script:Watches.Values)) {
+      if (-not (Scan-Account $w)) { $script:Watches.Remove($w.ProcId); $lost = $true }
     }
     if ($Once) { break }
+    $tick++
+    if ($lost -or ($tick % $DISCOVER_EVERY -eq 0)) { Sync-Watches }
     # The UIA wrappers are tiny managed objects pinning native ones, so the GC never feels the
-    # pressure on its own: collect each tick, and recycle a watcher that grows anyway.
-    $roots = $null; $card = $null; $el = $null
+    # pressure on its own: collect each tick. A watcher that grows anyway is restarted by its
+    # helper entry's memory cap.
     [System.GC]::Collect(); [System.GC]::WaitForPendingFinalizers()
-    if ($script:Tick % $FULL_SCAN_EVERY -eq 0) {
-      $mb = [math]::Round((Get-Process -Id $PID).PrivateMemorySize64 / 1MB)
-      if ($mb -gt $MAX_PRIVATE_MB) {
-        Write-Log "recycling: $mb MB private (over $MAX_PRIVATE_MB MB) - a fresh watcher takes over"
-        Start-HiddenWatcher
-        exit 0
-      }
-    }
     Start-Sleep -Seconds $IntervalSecs
   }
 } finally {
-  Write-Log 'watcher stopped'
+  Write-Log '*' 'watcher stopped'
 }
 
 if ($Once) {
   if ($script:OncePressed) { exit 0 }
   if (-not $script:OnceCardSeen) { exit 3 }
-  if ($script:OnceUnpressable) { Write-Log "not pressed: $($script:OnceUnpressable)" }
+  if ($script:OnceUnpressable) { Write-Log '*' "not pressed: $($script:OnceUnpressable)" }
   exit 6
 }

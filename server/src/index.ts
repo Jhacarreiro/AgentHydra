@@ -87,6 +87,7 @@ import {
   ensureBunBeforeRelaunch,
   missingComponents,
 } from './github-updater'
+import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { app } from './http-app'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
@@ -867,6 +868,7 @@ await import('./routes/versions')
 await import('./routes/box-doctor')
 await import('./routes/climayte')
 await import('./routes/hswarm')
+await import('./routes/helpers')
 await import('./routes/routing')
 await import('./routes/dashboards')
 await import('./routes/fourman')
@@ -1633,6 +1635,10 @@ startResetWatch({
 // On by default; AGENTHYDRA_HSWARM_ENABLED=0 switches it off. Runs in the
 // background with automatic restart on crash (exponential backoff).
 void startHSwarm({ logDir: join(DATA_DIR, 'logs') })
+
+// The owner's always-on helpers (<CONFIG_DIR>/helpers.json; server/src/helpers.ts). A side-run never
+// starts or ends them: they are the machine's, and the primary daemon owns them.
+if (IS_PRIMARY_INSTALL) startHelpers()
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon

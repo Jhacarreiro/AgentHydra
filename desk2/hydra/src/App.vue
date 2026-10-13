@@ -13,6 +13,7 @@ import {
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import PageSettingsDialog from '@/components/PageSettingsDialog.vue'
+import HelpersStatus from '@/components/HelpersStatus.vue'
 import SchedulerStatus from '@/components/SchedulerStatus.vue'
 import ShortcutSheet from '@/components/ShortcutSheet.vue'
 import { Button } from '@/components/ui/button'
@@ -391,6 +392,8 @@ onUnmounted(stopAvailabilityPolling)
       <div class="ms-auto flex items-center gap-2">
         <!-- always-on "is it working?" indicator: scheduler state + live run / next-run -->
         <SchedulerStatus />
+        <!-- the always-on helpers the daemon runs (servers, watchers): count, memory, restart, stop all -->
+        <HelpersStatus />
         <!-- The queue button is gone from the bar (owner, 2026-10-05); the queue drawer itself stays. -->
         <!-- Only when the daemon is serving older code than its folder (a commit or pull without a
              restart): new routes and tools are missing until it restarts, and nothing else on
