@@ -217,7 +217,6 @@ export const MANAGER_TOOLS: HydraTool[] = [
   },
   {
     name: 'manager_stats',
-    listed: true,
     description:
       'Manager Hydra turn statistics from the collector: per manager, answered rate, latency, judge score, owner corrections, sub-manager asks, CliMayte worker verdicts, tokens and cost, facets, router picks by source, the worst turns with their Desk chat titles, and the open turns (open, stuckNow, openTurns). Read-only; answers from the collector output as of its last pass.',
     inputSchema: S({
@@ -245,7 +244,6 @@ export const MANAGER_TOOLS: HydraTool[] = [
   },
   {
     name: 'manager_rsi',
-    listed: true,
     description:
       'Recursive self-improvement of Manager Hydra managers. action "next" picks the weakest manager and its failing pattern (read-only). action "list" shows every trial and its status (read-only). action "status" shows whether the daily automatic run is on, when it last ran and what it did, and every trial (read-only). action "settle" checks open trials now. action "start" MUTATES: it backs up the manager\'s brief and weakest facet, dispatches a docs worker to edit them, and records a trial; pass manager and optionally facet. Refused while a trial for that manager is still open.',
     inputSchema: S({

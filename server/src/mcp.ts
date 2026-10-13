@@ -750,7 +750,6 @@ export const TOOLS: HydraTool[] = [
   // --- CLI instances (Feature A) ------------------------------------------------
   {
     name: 'list_cli_instances',
-    listed: true,
     description:
       'Lists CLI instances (one CLAUDE_CONFIG_DIR per account, logged in once) with their permanent instance number, login state, associated account and last usage snapshot. Read-only.',
     inputSchema: S(),
