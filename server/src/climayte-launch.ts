@@ -796,7 +796,10 @@ function startRunner(
         // more than 5 minutes away.
         env: {
           ...scrubbedEnv(acct.configDir, w.id),
-          ...(w.chat ? {} : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+          // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
+          ...(w.chat
+            ? { AGENTHYDRA_CLIMAYTE_CHAT: '1' }
+            : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
           CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
           CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
           TERM: 'dumb',
