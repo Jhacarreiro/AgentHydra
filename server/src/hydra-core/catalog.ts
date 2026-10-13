@@ -5,8 +5,26 @@ export const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill'] as
 export type Kind = (typeof KINDS)[number]
 export const MODES = ['become', 'consult', 'hire'] as const
 const COSTS = ['free', 'low', 'medium', 'high']
-const TIERS = ['employee', 'manager', 'c-suite', 'founder', 'board']
+/** The company ladder, lowest first: 1 intern, 2 employee, 3 manager, 4 owner. Tier 5, the real Jacob, is a rule, never an entry. */
+export const TIERS = ['intern', 'employee', 'manager', 'owner'] as const
+/** Where a person comes from; every persona on the PC is one of these. */
+export const FAMILIES = [
+  'intern',
+  'manager',
+  'board',
+  'expert',
+  'dredd-seat',
+  'sue',
+  'ape',
+  'art',
+  'you-sue',
+  'creator',
+] as const
 const ID = /^(person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
+
+/** A tier's rung on the ladder, 1 (intern) to 4 (owner); 0 for no tier. */
+export const tierRank = (tier: string | undefined): number =>
+  (TIERS as readonly string[]).indexOf(tier ?? '') + 1
 
 export type Load =
   | { type: 'file'; path: string }
@@ -20,6 +38,10 @@ export interface CatalogEntry {
   name: string
   title?: string
   tier?: string
+  family?: string
+  /** The person this one answers to on the org chart; none means the president. */
+  reportsTo?: string
+  division?: string
   when: string
   tags: string[]
   modes?: string[]
@@ -95,12 +117,21 @@ export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: strin
   if (folders.length) entry.folders = folders
   if (typeof o.source === 'string') entry.source = o.source
   if (kind === 'person') {
-    if (!TIERS.includes(o.tier as string)) return { why: 'a person needs a tier' }
+    if (!tierRank(o.tier as string))
+      return { why: 'a person needs a tier: intern, employee, manager or owner' }
+    if (!(FAMILIES as readonly string[]).includes(o.family as string))
+      return { why: `a person needs a family from ${FAMILIES.join(', ')}` }
     const modes = texts(o.modes)
     if (!modes?.length || !modes.every((m) => (MODES as readonly string[]).includes(m)))
       return { why: 'a person needs modes from become, consult, hire' }
+    if (o.reportsTo !== undefined && !(text(o.reportsTo) ?? '').startsWith('person:'))
+      return { why: 'reportsTo must be a person id' }
+    if (o.division !== undefined && !text(o.division)) return { why: 'division must be a name' }
     entry.tier = o.tier as string
+    entry.family = o.family as string
     entry.modes = modes
+    if (o.reportsTo !== undefined) entry.reportsTo = text(o.reportsTo) as string
+    if (o.division !== undefined) entry.division = text(o.division) as string
   }
   return { entry }
 }

@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { checkEntry, loadCatalog } from '../src/hydra-core/catalog'
+import { checkEntry, loadCatalog, tierRank } from '../src/hydra-core/catalog'
 import { scratch } from './hydra-core-fixture'
 
 let dir = ''
@@ -35,15 +35,49 @@ test('an id whose prefix does not match the kind is refused', () => {
   })
 })
 
-test('a person needs a tier and modes from become, consult or hire', () => {
+test('a person needs a tier, a family and modes from become, consult or hire', () => {
   const person = { ...base, id: 'person:oscar-ops', kind: 'person', tags: [] }
-  expect(checkEntry(person)).toEqual({ why: 'a person needs a tier' })
-  expect(checkEntry({ ...person, tier: 'manager', modes: ['boss'] })).toEqual({
-    why: 'a person needs modes from become, consult, hire',
+  expect(checkEntry(person)).toEqual({
+    why: 'a person needs a tier: intern, employee, manager or owner',
+  })
+  expect(checkEntry({ ...person, tier: 'board' })).toEqual({
+    why: 'a person needs a tier: intern, employee, manager or owner',
   })
   expect(checkEntry({ ...person, tier: 'manager', modes: ['become'] })).toMatchObject({
-    entry: { modes: ['become'] },
+    why: expect.stringContaining('a person needs a family'),
   })
+  const manager = { ...person, tier: 'manager', family: 'manager' }
+  expect(checkEntry({ ...manager, modes: ['boss'] })).toEqual({
+    why: 'a person needs modes from become, consult, hire',
+  })
+  expect(checkEntry({ ...manager, modes: ['become'] })).toMatchObject({
+    entry: { tier: 'manager', family: 'manager', modes: ['become'] },
+  })
+})
+
+test('a person may name who it reports to and its division', () => {
+  const manager = {
+    ...base,
+    id: 'person:oscar-ops',
+    kind: 'person',
+    tier: 'manager',
+    family: 'manager',
+    modes: ['become'],
+  }
+  expect(checkEntry({ ...manager, reportsTo: 'oscar' })).toEqual({
+    why: 'reportsTo must be a person id',
+  })
+  expect(
+    checkEntry({ ...manager, reportsTo: 'person:paige', division: 'technical' }),
+  ).toMatchObject({
+    entry: { reportsTo: 'person:paige', division: 'technical' },
+  })
+})
+
+test('tierRank orders the ladder from intern to owner', () => {
+  expect(['intern', 'employee', 'manager', 'owner', 'board', undefined].map(tierRank)).toEqual([
+    1, 2, 3, 4, 0, 0,
+  ])
 })
 
 test('a when of 160 characters or more is refused', () => {
