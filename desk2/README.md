@@ -906,7 +906,7 @@ allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
 
 ChatGPT messages use **GPT-5.6 Luna Instant** (`gpt-5-6-mini`) unless a new chat asks otherwise: a job's
 `model` of `gpt-6` or `luna-thinking` (Luna's Thinking mini) is used when the account lists it for Temporary
-Chats, else Luna Instant; a continued chat stays on Luna. Luna Instant stays the default: a 2026-10-08 A/B
+Chats, else Luna Instant; a continued chat stays on the model its thread answered on. Luna Instant stays the default: a 2026-10-08 A/B
 of the three on HSwarm's decisions kept it. Its usage check reads the account
 plan and available models over HTTP. When it verifies Free access to this model, the table shows
 **Unlimited** for everyday text, as described in [OpenAI's Free plan](https://chatgpt.com/pricing/).

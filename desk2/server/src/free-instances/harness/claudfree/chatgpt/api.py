@@ -8,7 +8,7 @@ from ..api import Client
 from ..errors import ClaudeError
 from ..registry import chat_lock, valid_name
 from ..results import brief_result, export_results
-from .http import TEXT_MODEL, connection, visible_messages
+from .http import TEXT_MODEL, connection, thread_model, visible_messages
 from .registry import ChatGPTRegistry
 from .state import ChatGPTState
 
@@ -169,8 +169,8 @@ class ChatGPTClient(Client):
                 body = http.read(server_id) if server_id else None
                 if command in {"read", "track"}:
                     return self._read_or_track(registry, args, entry, server_id, body)
-                # A preference picks a NEW chat's model; a continued chat is sent on Luna as before.
-                model = http.model_for(args.prefer) if body is None else TEXT_MODEL
+                # A preference picks a NEW chat's model; a continued chat stays on the model its thread answered on.
+                model = http.model_for(args.prefer) if body is None else thread_model(body)
                 return self._send(http, registry, pool, args.prompt, entry, server_id, body, model)
         finally:
             registry.close()

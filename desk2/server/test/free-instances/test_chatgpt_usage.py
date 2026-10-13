@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL, TEXT_MODEL_NAME
+from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL, TEXT_MODEL_NAME, thread_model
 from claudfree.errors import ClaudeError
 from claudfree.http import account_label
 
@@ -113,6 +113,22 @@ class ChatGPTUsageTests(unittest.TestCase):
             http.send("Synthetic smoke message", model="gpt-6-1")
         self.assertEqual(refused.exception.code, "invalid_model")
         self.assertEqual(http._request.call_count, 1)
+
+    def test_a_continued_chat_stays_on_the_model_its_thread_answered_on(self):
+        def thread(*models):
+            mapping, parent = {"root": {"parent": None, "message": None}}, "root"
+            for k, slug in enumerate(models):
+                for role, meta in (("user", {}), ("assistant", {"model_slug": slug} if slug else {})):
+                    node = f"{role}{k}"
+                    mapping[node] = {"parent": parent, "message": {"id": node, "author": {"role": role},
+                                     "content": {"content_type": "text", "parts": ["Synthetic text"]}, "metadata": meta}}
+                    parent = node
+            return {"conversation_id": "11111111-2222-4333-8444-555555555555", "current_node": parent, "mapping": mapping}
+        cases = [(("gpt-6",), "gpt-6"), ((TEXT_MODEL, "gpt-5-6-t-mini"), "gpt-5-6-t-mini"), (("gpt-6", TEXT_MODEL), TEXT_MODEL),
+                 (("gpt-5-5",), TEXT_MODEL), ((None,), TEXT_MODEL), ((), TEXT_MODEL)]
+        for models, expected in cases:
+            with self.subTest(models=models):
+                self.assertEqual(thread_model(thread(*models)), expected)
 
     def test_new_and_resumed_messages_default_to_luna_and_remain_temporary(self):
         chat = "11111111-2222-4333-8444-555555555555"

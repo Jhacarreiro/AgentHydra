@@ -19,9 +19,10 @@ BASE = "https://chatgpt.com"
 TEXT_MODEL = "gpt-5-6-mini"
 TEXT_MODEL_NAME = "GPT-5.6 Luna"
 UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include everything in Free
-# What --prefer may ask a NEW chat for, when the account offers it (owner, 2026-10-08: "Run whatever trials you want"):
-# Free accounts list GPT-6 as their Instant default since about 2026-10-08, Go accounts not yet, and every plan lists
-# Luna's Thinking mini. Only Luna's Instant is the verified unlimited text, so it stays the default.
+# What --prefer may ask a NEW chat for, when the account offers it (owner, 2026-10-08: "Run whatever trials you want").
+# On 2026-10-13 the usage check's model list read the same on a Go and a Free account: GPT-6 (and its Thinking mini and
+# mini), GPT-5.6 Luna (and its Thinking mini), GPT-5.5 and older minis. Only Luna's Instant is the verified unlimited
+# text, so it stays the default.
 PREFERRED_MODELS = {"gpt-6": "gpt-6", "luna-thinking": "gpt-5-6-t-mini"}
 # ChatGPT sets conv_key_<uuid> (30 days) and history_off_<uuid> (7 days) on every Temporary Chat. Kept and sent
 # back, ~370 chats made each account's jar ~62 KB and ChatGPT refused every request in 0.1 s (2026-10-07: all
@@ -54,6 +55,17 @@ def visible_messages(conversation):
             if visible:
                 result.append(visible)
     return result
+
+
+def thread_model(conversation):
+    """The model a continued chat is sent on: the one its latest reply came from, when it is one AgentHydra sends, else
+    Luna Instant. Before 2026-10-13 every continued message went to Luna Instant, so a thread started on GPT-6 answered
+    only its first message there: a Free tool task, whose every tool result is a continued message, ran on Luna mini."""
+    for message in reversed(visible_messages(conversation)):
+        if message["role"] == "assistant" and message.get("model"):
+            sent = message["model"]
+            return sent if sent == TEXT_MODEL or sent in PREFERRED_MODELS.values() else TEXT_MODEL
+    return TEXT_MODEL
 
 
 def _branch(conversation):
