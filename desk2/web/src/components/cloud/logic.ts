@@ -257,10 +257,22 @@ export function deskOnPcs<C, E extends Pick<CloudSession, 'fromPc'>>(
   chats: C[],
   external: E[],
   pcs: readonly string[] | null,
-  thisPc: string
+  thisPc: string,
+  cloudOn = true
 ): { chats: C[]; external: E[] } {
+  // Cloud off looks as if the other PCs' chats did not exist (owner, 2026-10-10): the chat sync's rows leave first.
+  if (!cloudOn) external = external.filter((s) => !otherPc(s, thisPc))
   if (pcs === null) return { chats, external }
   return { chats: pcs.includes(thisPc) ? chats : [], external: external.filter((s) => pcKept(s, pcs, thisPc)) }
+}
+
+/** Cloud off: another PC's chat is not there (owner, 2026-10-10); the one rule deskOnPcs and the search hits share. */
+export const otherPc = (r: Pick<CloudSession, 'fromPc'>, thisPc: string): boolean => !!r.fromPc && r.fromPc !== thisPc
+
+/** Search hits (they carry no PC) without the chats of another PC, known by session id from the rows that name their PC. */
+export function hitsOnThisPc<H extends { sessionId: string }>(hits: H[], rows: readonly (Pick<CloudSession, 'id' | 'fromPc'>)[], thisPc: string): H[] {
+  const away = new Set(rows.filter((r) => otherPc(r, thisPc)).map((r) => r.id))
+  return hits.filter((h) => !away.has(h.sessionId))
 }
 
 export interface CloudGroup {

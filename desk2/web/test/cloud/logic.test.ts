@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
 import type { CloudSession, ExternalSession } from '@shared/protocol'
-import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, localOnly, parseScopes, pcKept, pickApp, remoteSessions, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
+import { DEFAULT_SCOPES, type CloudScopes, cloudOnlyKeys, cloudQuery, deskOnPcs, deskPlaces, effectiveScopes, groupCloud, hitsOnThisPc, localOnly, parseScopes, pcKept, pickApp, remoteSessions, type RowLead, rowLead, ahSource, appShown } from '../../src/components/cloud/logic'
 import { dropHidden, groupChats, groupOrderKey, recordCloudOrder, recordDeskOrder, type SidebarOrder } from '../../src/components/sidebar/logic'
 
 // The cloud list asks AgentHydra's GET /api/sessions (through Desk's /api/cloud/sessions) in AgentHydra's
@@ -292,6 +292,22 @@ describe('groupCloud', () => {
     expect(ids(local)).toEqual(['here'])
     // Ticking the other PC too, in Computer, is both PCs again, not local.
     expect(localOnly({ ...all, pcs: ['PC', 'OTHER-PC'] }, 'PC')).toBe(false)
+  })
+
+  // Owner, 2026-10-10: cloud off must look exactly as if cloud chats do not exist (a synced chat showed as a child row).
+  test('cloud off drops the synced chats of another PC from the desk list, cloud on keeps them', () => {
+    const chats = [deskChat('chat-1', 'chat-session')]
+    const external = [outside('here'), outside('synced-child', { fromPc: 'OTHER-PC', parentId: 'chat-session' } as never)]
+    const ids = (cloudOn: boolean, pcs: string[] | null = null) => {
+      const kept = deskOnPcs(chats, external, pcs, 'PC', cloudOn)
+      return [...kept.chats.map((c) => c.id), ...kept.external.map((s) => s.id)]
+    }
+    expect(ids(false)).toEqual(['chat-1', 'here'])
+    expect(ids(false, ['PC', 'OTHER-PC'])).toEqual(['chat-1', 'here'])
+    expect(ids(true)).toEqual(['chat-1', 'here', 'synced-child'])
+    // The search's hits carry no PC: the rows that name it say which are another PC's.
+    const hits = [{ sessionId: 'here' }, { sessionId: 'synced-child' }]
+    expect(hitsOnThisPc(hits, external, 'PC').map((h) => h.sessionId)).toEqual(['here'])
   })
 
   // Owner, 2026-10-05: "show only local, which should mean this PC" did nothing to the desk list.

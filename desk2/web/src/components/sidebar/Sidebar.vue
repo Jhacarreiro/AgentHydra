@@ -13,7 +13,7 @@ const CloudList = lazyPanel(() => import('@/components/cloud/CloudList.vue'))
 const DevServersList = lazyPanel(() => import('@/components/servers/DevServersList.vue'))
 import { useDevServers } from '@/components/servers/store'
 import { useCloud } from '@/components/cloud/store'
-import { ahSource, appShown, deskOnPcs, remoteSessions } from '@/components/cloud/logic'
+import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/components/cloud/logic'
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
@@ -245,7 +245,7 @@ watch(selected, () => {
 // Show only local (the Filter menu's Computer filter) narrows this list as it does the cloud list, once the cloud
 // store knows this PC's name (it asks with the cloud off too): another PC's synced chats leave it.
 const deskPcs = computed(() => (cloud.loaded.value ? cloud.scopes.value.pcs : null))
-const onPcs = computed(() => deskOnPcs(src.chats.value, src.external.value, deskPcs.value, cloud.thisPc.value))
+const onPcs = computed(() => deskOnPcs(src.chats.value, src.external.value, deskPcs.value, cloud.thisPc.value, cloud.on.value))
 const groups = computed(() =>
   groupChats(onPcs.value.chats, {
     query: query.value,
@@ -483,9 +483,9 @@ const addedState = (id: string) => {
   return a ? addedStatus(a) : null
 }
 /** The cloud list's rows that run: the ones the desk knows as running, and the added rows whose worker runs (one that is a job counts with the jobs). */
-const runningSessions = computed(() => runningSessionIds(src.chats.value, src.external.value))
+const runningSessions = computed(() => runningSessionIds(src.chats.value, onPcs.value.external))
 const sessionRunning = (id: string) => runningSessions.value.has(id) || (addedState(id) === 'working' && !jobRow(addedRows.value.get(id)))
-const deskDots = computed(() => deskGlyphs(src.chats.value, src.external.value))
+const deskDots = computed(() => deskGlyphs(src.chats.value, onPcs.value.external))
 /**
  * An added row's dot, in both lists: a session's dot for its state (addedStatus), save that a row that is itself a
  * running HSwarm job pulses blue as the job's line does, blue being HSwarm's alone (owner, 2026-10-05). Undefined
@@ -602,7 +602,7 @@ function toggleGroup(key: string) {
 // move through both lists, Enter opens, Escape clears the box and then closes it.
 const search = ref<SearchState>(IDLE_SEARCH)
 const runner = createSearchRunner({ run: (q) => src.search(q), onChange: (s) => (search.value = s) })
-const everywhere = computed(() => everywhereRows(search.value.hits, src.chats.value, shownSessionIds(groupList.value, collapsed.value)))
+const everywhere = computed(() => everywhereRows(cloud.on.value ? search.value.hits : hitsOnThisPc(search.value.hits, [...cloud.sessions.value, ...src.external.value], cloud.thisPc.value), src.chats.value, shownSessionIds(groupList.value, collapsed.value)))
 const targets = computed(() => (searchOpen.value ? searchTargets(drawnList.value, collapsed.value, everywhere.value) : []))
 // The cursor is its row (kind and id) and the place it was last at, for when that row goes away.
 const cursor = ref<{ key: string | null; at: number }>({ key: null, at: -1 })
@@ -639,7 +639,7 @@ function onSearchKey(e: KeyboardEvent) {
 // session's are Hydra Desk's overlay on it (its own files are never touched, so it has no Delete).
 type Row = { kind: 'chat'; chat: ChatSummary } | { kind: 'external'; session: ExternalSession }
 const deleting = ref<ChatSummary | null>(null)
-const groupNames = computed(() => groupChoices(src.chats.value, src.external.value))
+const groupNames = computed(() => groupChoices(src.chats.value, onPcs.value.external))
 const stateOf = (row: Row): RowState => (row.kind === 'chat' ? chatRow(row.chat) : externalRow(row.session))
 // A row action that failed says so under the list, with the server's reason, until the next one.
 const rowError = actionError
