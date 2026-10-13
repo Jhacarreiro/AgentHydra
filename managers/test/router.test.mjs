@@ -246,6 +246,15 @@ test("a Desk chat, a CliMayte chat with the worker flag, is still routed", async
   });
 });
 
+test("a message opening with @Name picks that manager without a Jev call", async () => {
+  await withRig(async (rig) => {
+    const result = await runRouter({ session_id: "sess-at", prompt: "@ben is the button layout on the screen right?" }, rig.env());
+    assert.equal(JSON.parse(result.stdout).systemMessage, "Now: Ben, Backend Engineer");
+    assert.equal(rig.readSession("sess-at").manager, "beta-backend");
+    assert.equal(rig.stub.calls.length, 0);
+  });
+});
+
 test("a slash command is skipped without output or state", async () => {
   await withRig(async (rig) => {
     const result = await runRouter({ session_id: "sess-slash", prompt: "/help" }, rig.env());

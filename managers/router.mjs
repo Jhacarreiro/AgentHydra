@@ -82,6 +82,14 @@ export function loadPersonas(root) {
   return { personas, skipped };
 }
 
+/** The manager a message opens with `@Name` or `@slug` names, or null: the owner's own pick, no Jev call. */
+export function mentionedManager(prompt, personas) {
+  const m = /^\s*@([A-Za-z][\w-]*)/.exec(String(prompt));
+  if (!m) return null;
+  const word = m[1].toLowerCase();
+  return personas.find((p) => p.slug.toLowerCase() === word || p.name.toLowerCase() === word) ?? null;
+}
+
 export function isContinuation(prompt) {
   const words = String(prompt).toLowerCase().replace(/'/g, "").split(/[^a-z0-9]+/).filter(Boolean);
   return words.length <= 4 && words.every((w) => FILLER.has(w));
@@ -266,6 +274,7 @@ export async function run(input, env = process.env) {
   const current = personas.some((p) => p.slug === state.manager) ? state.manager : null;
   const messages = state.messages + 1;
   const envPin = (env.AGENTHYDRA_MANAGER ?? "").trim();
+  const mentioned = mentionedManager(prompt, personas);
 
   let decision;
   let source = "router";
@@ -275,6 +284,8 @@ export async function run(input, env = process.env) {
     decision = { slug: envPin, why: "pinned by AGENTHYDRA_MANAGER", p: null };
   } else if (state.pinned && current) {
     decision = { slug: current, why: "pinned in session", p: null };
+  } else if (mentioned) {
+    decision = { slug: mentioned.slug, why: `@${mentioned.name} in the message`, p: null };
   } else if (current && isContinuation(prompt)) {
     decision = { slug: current, why: "continuation", p: null };
   } else {
