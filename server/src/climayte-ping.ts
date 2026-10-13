@@ -720,12 +720,24 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     return true
   }
 
+  /** The pending lines this box may hand over now. A worker origin mid-turn takes no held result: its
+   *  follow-up queue delivers the line without checking it again (2026-10-13), so it waits for the turn's end. */
+  const sendable = (box: OriginBox): QueuedPing[] => {
+    const o = box.origin
+    const busy =
+      o.kind === 'worker' &&
+      deps.workers().some((x) => x.id === o.workerId && x.status === 'running')
+    return busy ? box.pending.filter((p) => !HELD_KINDS.has(p.kind)) : box.pending
+  }
+
   /** When this box's batch is due, or null when it has none. */
   const dueAt = (box: OriginBox): number | null => {
     if (!box.pending.length) return null
     if (box.busyUntil != null && box.busyUntil > clock.now()) return box.busyUntil
     if (box.retry) return box.retry.nextAt
-    const waking = box.pending.filter((p) => !INFO_KINDS.has(p.kind))
+    const pending = sendable(box)
+    if (!pending.length) return null
+    const waking = pending.filter((p) => !INFO_KINDS.has(p.kind))
     if (waking.length) {
       if (box.urgentAt != null) return box.urgentAt + SETTLED_FLUSH_MS
       // A finish is held while the origin has other work live: it goes with the next line that wakes
@@ -736,7 +748,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       const ats = waker.map((p) => p.at)
       return Math.min(Math.max(...ats) + QUIET_FLUSH_MS, Math.min(...ats) + MAX_BATCH_MS)
     }
-    return Math.min(...box.pending.map((p) => p.at)) + INFO_ALONE_MS
+    return Math.min(...pending.map((p) => p.at)) + INFO_ALONE_MS
   }
 
   const settle = (box: OriginBox, batch: QueuedPing[]) => {
@@ -918,7 +930,11 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       arm()
       return
     }
-    const batch = [...box.pending]
+    const batch = [...sendable(box)]
+    if (!batch.length) {
+      if (gone.length) save()
+      return
+    }
     const text = pingMessage(batch, group)
     const o = box.origin
     // Deferred one microtask, so the entry is in `inflight` before a synchronous send's

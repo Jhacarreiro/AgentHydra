@@ -865,6 +865,51 @@ describe('the outbox', () => {
     h.ping.stop()
   })
 
+  test('a finished line is held while its worker origin runs, and a verdict made meanwhile makes it stale', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { origin: undefined })
+    const a = running('w-a', { origin: mgr })
+    const b = running('w-b', { origin: mgr })
+    const h = harness({ workers: [manager, a, b] })
+    h.change({
+      ...a,
+      status: 'done',
+      check: 'bun test',
+      verdicts: [{ verdict: 'pass', by: 'check' }],
+    })
+    await h.ping.flushNow()
+    expect(h.workerSends).toHaveLength(0)
+    h.change({
+      ...a,
+      status: 'done',
+      check: 'bun test',
+      verdicts: [
+        { verdict: 'pass', by: 'check' },
+        { verdict: 'pass', by: 'orchestrator', at: T0 + 70_000 },
+      ],
+    })
+    h.change({ ...manager, status: 'done' })
+    await h.at(120_000)
+    expect(h.workerSends).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('a question still reaches a running worker origin at once', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { origin: undefined })
+    const a = running('w-a', { origin: mgr })
+    const h = harness({ workers: [manager, a] })
+    h.change({
+      ...a,
+      status: 'waiting',
+      question: { at: T0 + 5_000, text: 'Which account?', options: [] },
+    })
+    await h.at(20_000)
+    expect(h.workerSends).toHaveLength(1)
+    expect(h.workerSends[0][1]).toContain('asks: Which account?')
+    h.ping.stop()
+  })
+
   test('a worker without an origin is never pinged', async () => {
     const a = running('w-a', { origin: undefined })
     const h = harness({ workers: [a] })
