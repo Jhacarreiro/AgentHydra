@@ -10,6 +10,7 @@ from __future__ import annotations
 import datetime as dt
 import json
 import re
+import subprocess
 import time
 from pathlib import Path
 
@@ -26,6 +27,8 @@ HUB_PAGES = ("command-a-plus", "claude-opus-5-5")
 USER_AGENT = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
 TTL_S = 24 * 3600
 INDEX = Path(__file__).resolve().parent / "data" / "published-models.json"
+# The branch of the live checkout, the worktree the running app loads (docs/LIVE-CHECKOUT.md).
+LIVE_BRANCH = "live"
 CACHE_NAME = "aa-cache.json"
 CHUNK = re.compile(r'self\.__next_f\.push\(\[1,"(.*?)"\]\)</script>', re.S)
 # How far back from a benchmark key to look for the object that names its model; a model object is never this large.
@@ -161,13 +164,39 @@ def pool() -> dict[str, dict]:
     return out
 
 
-def _read_index() -> dict:
-    return json.loads(INDEX.read_text(encoding="utf-8"))
+def index_path() -> Path:
+    """The index file `add` and `refresh` rewrite: this package's own, unless the package is the live checkout.
+
+    The installed `hswarm` command runs from live/, a worktree on branch `live` that only moves by
+    `git pull --ff-only` (docs/LIVE-CHECKOUT.md), and a file edited there stops that updater. On 2026-10-13
+    `hswarm index add` wrote 16 points into live/. From live/ the rewrite goes to the same file in git's main
+    worktree, the working checkout, where it is committed and reaches live/ through the updater."""
+    def git(*args: str) -> str | None:
+        try:
+            out = subprocess.run(["git", "-C", str(INDEX.parent), *args], capture_output=True, text=True, timeout=30)
+        except (OSError, subprocess.TimeoutExpired):
+            return None
+        return out.stdout.strip() if out.returncode == 0 else None
+
+    if git("rev-parse", "--abbrev-ref", "HEAD") != LIVE_BRANCH:
+        return INDEX
+    top, listed = git("rev-parse", "--show-toplevel"), git("worktree", "list", "--porcelain")
+    if not top or not listed:
+        raise RuntimeError(f"{INDEX} is in the live checkout, which is never edited, and git did not name the working one")
+    main = Path(listed.splitlines()[0].removeprefix("worktree "))
+    target = main / INDEX.resolve().relative_to(Path(top).resolve())
+    if not target.is_file():
+        raise RuntimeError(f"{INDEX} is in the live checkout, which is never edited, and the working checkout has no {target}")
+    return target
 
 
-def _write_index(doc: dict) -> None:
+def _read_index(path: Path) -> dict:
+    return json.loads(path.read_text(encoding="utf-8"))
+
+
+def _write_index(doc: dict, path: Path) -> None:
     # The file is committed with CRLF line endings; a round trip through json reproduces it byte for byte.
-    INDEX.write_bytes((json.dumps(doc, indent=2, ensure_ascii=False) + "\n").replace("\n", "\r\n").encode("utf-8"))
+    path.write_bytes((json.dumps(doc, indent=2, ensure_ascii=False) + "\n").replace("\n", "\r\n").encode("utf-8"))
 
 
 def _write_scope(doc: dict, tail: str) -> None:
@@ -182,7 +211,8 @@ def refresh() -> dict:
     only until AA publishes the model) becomes AA's point once AA scores it in full: on 2026-10-07 claude-haiku-5-5 kept
     its vendor estimate after AA had scored it, so its effort routes stayed unrankable. A point AA does not score in full
     is kept as it is and reported."""
-    doc = _read_index()
+    path = index_path()
+    doc = _read_index(path)
     hub = pool()
     updated, upgraded, kept = [], [], []
     for i, item in enumerate(doc["points"]):
@@ -204,13 +234,14 @@ def refresh() -> dict:
     if upgraded:
         doc["scope"] += f" {', '.join(upgraded)} sourced from Artificial Analysis from {today}."
     _write_scope(doc, f" Numbers refreshed {today} from Artificial Analysis's model pages.")
-    _write_index(doc)
-    return {"updated": updated, "upgraded": upgraded, "kept": kept}
+    _write_index(doc, path)
+    return {"updated": updated, "upgraded": upgraded, "kept": kept, "index": str(path)}
 
 
 def add(slugs: list[str]) -> dict:
     """Appends each slug's scored point, sourced from its AA page, and records the date in the index's scope."""
-    doc = _read_index()
+    path = index_path()
+    doc = _read_index(path)
     have = {p["slug"] for p in doc["points"]}
     added, refused = [], {}
     for slug in dict.fromkeys(slugs):
@@ -228,8 +259,8 @@ def add(slugs: list[str]) -> dict:
         today = dt.date.today().isoformat()
         _write_scope(doc, f" {', '.join(added)} added {today} from Artificial Analysis's model pages.")
         doc["as_of_utc"] = dt.datetime.now(dt.timezone.utc).isoformat()
-        _write_index(doc)
-    return {"added": added, "refused": refused}
+        _write_index(doc, path)
+    return {"added": added, "refused": refused, "index": str(path)}
 
 
 def scored_unindexed(providers: dict[str, dict]) -> list[dict]:

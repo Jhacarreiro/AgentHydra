@@ -925,6 +925,7 @@ async def cmd_index(a) -> int:
             print(f"index refreshed: {len(out['updated'])} points updated from Artificial Analysis; now sourced there "
                   f"instead of a vendor's estimate: {', '.join(out['upgraded']) or '-'}; kept as they were "
                   f"(not scored in full there): {', '.join(out['kept']) or '-'}")
+            print(f"wrote {out['index']}: commit it there")
         return 0
     out = await asyncio.to_thread(aa_index.add, a.slugs)
     if a.json:
@@ -934,6 +935,8 @@ async def cmd_index(a) -> int:
             print(f"added {slug}")
         for slug, why in out["refused"].items():
             print(f"not added {slug}: {why}")
+        if out["added"]:
+            print(f"wrote {out['index']}: commit it there")
     return 1 if out["refused"] else 0
 
 

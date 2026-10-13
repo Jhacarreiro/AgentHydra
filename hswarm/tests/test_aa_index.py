@@ -3,6 +3,8 @@ payload of example models, never a saved copy of Artificial Analysis's page."""
 from __future__ import annotations
 
 import json
+import subprocess
+from pathlib import Path
 
 from hswarm import aa_index
 
@@ -92,3 +94,31 @@ def test_refresh_replaces_a_vendor_estimate_once_aa_scores_the_model_and_keeps_o
     assert (a["score"], a["scores"]["humanitys-last-exam"], a["cached_input"]) == (40.5, 0.2, 0.01)
     assert not {"evidence", "evidence_note", "cost_estimated"} & a.keys()
     assert b == unscored
+
+
+# Contract: run from the live checkout (a worktree on branch `live`, which only moves by `git pull --ff-only`), add()
+# rewrites the working checkout's index and leaves live/'s file as it was. Regression: 2026-10-13, the installed
+# `hswarm index add` runs from live/ and wrote 16 points there, which stops live/'s updater (docs/LIVE-CHECKOUT.md).
+def test_add_run_from_the_live_checkout_writes_the_working_checkouts_index(tmp_path, monkeypatch):
+    app, live, rel = tmp_path / "app", tmp_path / "live", Path("hswarm") / "data" / "published-models.json"
+    (app / rel).parent.mkdir(parents=True)
+    (app / rel).write_text(json.dumps({"scope": "0 selected exact configurations; not an exhaustive catalogue. All 0 "
+                                                "component scores sourced.", "points": []}), encoding="utf-8")
+
+    def git(*args: str) -> None:
+        subprocess.run(["git", "-c", "user.name=Example Owner", "-c", "user.email=owner@example.test", "-c",
+                        "commit.gpgsign=false", "-C", str(app), *args], check=True, capture_output=True)
+
+    git("init", "-q", "-b", "main")
+    git("add", ".")
+    git("commit", "-q", "-m", "index")
+    git("worktree", "add", "-q", "-b", "live", str(live))
+    before = (live / rel).read_bytes()
+    monkeypatch.setattr(aa_index, "INDEX", live / rel)
+    monkeypatch.setattr(aa_index, "point", lambda slug: aa_index.parse(_page(_model(slug)))[slug])
+
+    out = aa_index.add(["example-model-a"])
+
+    assert (live / rel).read_bytes() == before
+    assert [p["slug"] for p in json.loads((app / rel).read_text(encoding="utf-8"))["points"]] == ["example-model-a"]
+    assert out["added"] == ["example-model-a"] and Path(out["index"]).resolve() == (app / rel).resolve()
