@@ -21,6 +21,9 @@
 base_url = "https://api.anthropic.com/v1"
 transport = "anthropic"  # the api backend posts to anthropic_url + /v1/messages, not base_url's /chat/completions
 sticky_keys = true  # one key per task for its whole life: round-robin would send each turn to another org's cache
+# Behind every other route, after CliMayte (owner, 2026-10-13): CliMayte runs Claude on his subscriptions, so the paid API
+# for the same models is the last resort, as OpenAI's is (openai.toml).
+after_climayte = true
 about = "Anthropic's own API: Claude Opus, Sonnet, Fable and Haiku, paid per token, no third-party host in between."
 key_url = "https://console.anthropic.com/settings/keys"  # where a person makes an API key
 website = "https://www.anthropic.com"  # the company's site; the console shows its favicon

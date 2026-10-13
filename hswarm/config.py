@@ -727,12 +727,17 @@ def free_tier(model: str) -> bool:
 
 
 def after_climayte(model: str) -> bool:
-    """True when `model`'s provider file says `after_climayte = true`: the owner reaches it only after his CliMayte
-    accounts (OpenAI, 2026-10-13), so its legs sort behind every other capable route."""
+    """True when the owner reaches `model` only after his CliMayte accounts, so its legs sort behind every other capable
+    route: its own `after_climayte` when it says (a Claude or GPT model on a router), else its provider file's (OpenAI's
+    and Anthropic's own APIs). Owner, 2026-10-13: OpenAI's keys are the last resort behind CliMayte, which runs Claude
+    on his subscriptions, so an API that sells the same models comes after it."""
     try:
-        return bool(PROVIDERS.get(provider_of(model), {}).get("after_climayte"))
+        spec = MODELS[resolve_model(model)]
     except (KeyError, ValueError):  # a model not in the registry (a test fake) has no provider terms to go by
         return False
+    if "after_climayte" in spec:
+        return bool(spec["after_climayte"])
+    return bool(PROVIDERS.get(spec.get("provider", ""), {}).get("after_climayte"))
 
 
 def billed_of(model: str) -> bool | None:

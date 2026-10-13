@@ -185,6 +185,12 @@ TPM_KEEP_S = 86400.0
 # 4.7 h since 2026-09-30. It is raised at once as a 429 (the leg cannot serve this call; the next leg can), never as a
 # 413: the prompt is not what is too large, so it must not end in PromptTooLarge.
 _TOO_LARGE_429 = re.compile(r"Request too large", re.I)
+# A key whose account's PLAN refuses tool calls while it serves plain chat: Inworld answers HTTP 400 "Tool calling is
+# currently restricted on your plan" on three of its six live keys (2026-10-13). Not a dead key (it still serves every
+# tool-free call) and not a bad request (another key takes it): a tool call skips that key for the life of the process
+# (_NO_TOOL_KEYS), and only when no live key is left for it does the leg fail over (NoUsableKey).
+_TOOLS_REFUSED_400 = re.compile(r"Tool calling is (?:currently )?restricted on your plan", re.I)
+_NO_TOOL_KEYS: set[str] = set()
 
 
 def _until_quota_reset(now: dt.datetime | None = None, hour: int = QUOTA_RESET_UTC_HOUR) -> float:
@@ -1376,12 +1382,17 @@ class ChatClient:
         model_id = str(body.get("model") or "")
         # What this request weighs against a key's account limit: four bytes a token until a 413 says the provider's own count.
         need = len(payload) // 4
+        tooled = bool(body.get("tools"))
         while True:
             skip = self._too_small(model_id, need, too_small)
             if skip and not self.pool.live_besides(skip, free=free):
                 # Every key that could take it is known too small (_LIMIT_413): nothing is sent, and the leg fails over.
                 raise ApiError(413, f"Request too large for model `{model_id}`: about {need} tokens, over the account limit "
                                     f"of every {self.provider} key that could take it; not sent", self.provider)
+            if tooled and (no_tools := skip | (_NO_TOOL_KEYS & set(self.pool.keys))) != skip:
+                if not self.pool.live_besides(no_tools, free=free):
+                    raise NoUsableKey(f"NoUsableKey: no live {self.provider} key's plan allows tool calls (_TOOLS_REFUSED_400); not sent")
+                skip = no_tools
             attempt += 1
             self.calls += 1
             transport_failed = False
@@ -1437,6 +1448,10 @@ class ChatClient:
                     self.rotations += 1
                     continue
                 raise ApiError(r.status_code, r.text, self.provider)
+            if r.status_code == 400 and tooled and _TOOLS_REFUSED_400.search(r.text or ""):
+                _NO_TOOL_KEYS.add(key)  # see _TOOLS_REFUSED_400: the key keeps serving tool-free calls
+                self.rotations += 1
+                continue  # the loop's top skips it, and fails the leg over once no key is left
             if r.status_code == 429 and _TOO_LARGE_429.search(r.text or ""):
                 # See _TOO_LARGE_429: the key is not rested, the gate is not halved, no other key is tried.
                 _note_rate_wait(limited_since)

@@ -60,7 +60,10 @@ def test_without_the_overlay_the_builtins_stand():
     #   Inkling Small) and Qwen3.8 2.4T on Together (2026-10-10)
     # + 13 ranked routes on OpenRouter: Haiku 5.5 at five efforts, GPT-6.1 Sol, Kimi K3, Grok 4.7, Qwen3.8 2.4T,
     #   MiMo V2.6 Flash, Inkling Small, Hy3, Granite 4.2 8B (2026-10-10)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 140
+    # + 35 ranked routes on Inworld's router: Claude 5.5 at four efforts each, GLM 5.3/5.3 Flash/5.2, DeepSeek V4.1 Flash,
+    #   V4 Flash (and both free tiers), V4 Pro, Kimi K3, Qwen3.8 27B, Grok 4.5-4.7, Gemini 3.8 Flash and 3.1 Pro, gpt-oss-120b,
+    #   GPT-6 Sol/6.1 Sol/Astra/Luna (2026-10-13)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 175
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
         "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",

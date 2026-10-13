@@ -1247,6 +1247,251 @@
    "cache_read": 0.015,
    "source": "https://openrouter.ai/api/v1/models",
    "verified_at": "2026-10-10"
+  },
+  "inworld/rank:claude-opus-5-5-xhigh:inworld": {
+   "input": 4.0,
+   "output": 20.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-opus-5-5-high:inworld": {
+   "input": 4.0,
+   "output": 20.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-opus-5-5-medium:inworld": {
+   "input": 4.0,
+   "output": 20.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-opus-5-5-low:inworld": {
+   "input": 4.0,
+   "output": 20.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-sonnet-5-5-xhigh:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-sonnet-5-5-high:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-sonnet-5-5-medium:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-sonnet-5-5-low:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-haiku-5-5-xhigh:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-haiku-5-5-high:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-haiku-5-5-medium:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:claude-haiku-5-5-low:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:glm-5-3:inworld": {
+   "input": 1.4,
+   "output": 4.4,
+   "cache_read": 0.26,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:glm-5-3-flash:inworld": {
+   "input": 0.15,
+   "output": 0.5,
+   "cache_read": 0.03,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:glm-5-2:inworld": {
+   "input": 1.2,
+   "output": 4.1,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:deepseek-v4-1-flash:inworld": {
+   "input": 0.3,
+   "output": 1.2,
+   "cache_read": 0.006,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:deepseek-v4-1-flash:inworld-free": {
+   "input": 0.0,
+   "output": 0.0,
+   "cache_read": 0.0,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:deepseek-v4-flash:inworld": {
+   "input": 0.1,
+   "output": 0.2,
+   "cache_read": 0.02,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:deepseek-v4-flash:inworld-free": {
+   "input": 0.0,
+   "output": 0.0,
+   "cache_read": 0.0,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:deepseek-v4-pro:inworld": {
+   "input": 1.32,
+   "output": 3.96,
+   "cache_read": 0.044,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:kimi-k3:inworld": {
+   "input": 2.85,
+   "output": 14.25,
+   "cache_read": 0.285,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:qwen3-8-27b:inworld": {
+   "input": 0.4,
+   "output": 3.0,
+   "cache_read": 0.04,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:grok-4-7:inworld": {
+   "input": 2.0,
+   "output": 6.0,
+   "cache_read": 0.5,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:grok-4-6:inworld": {
+   "input": 2.0,
+   "output": 6.0,
+   "cache_read": 0.5,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:grok-4-5:inworld": {
+   "input": 2.0,
+   "output": 6.0,
+   "cache_read": 0.5,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gemini-3-8-flash:inworld": {
+   "input": 0.75,
+   "output": 3.75,
+   "cache_read": 0.075,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gemini-3-1-pro-preview:inworld": {
+   "input": 2.0,
+   "output": 12.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-oss-120b:inworld": {
+   "input": 0.15,
+   "output": 0.6,
+   "cache_read": 0.075,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-sol:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-sol-high:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.2,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-1-sol:inworld": {
+   "input": 2.0,
+   "output": 10.0,
+   "cache_read": 0.1,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-astra:inworld": {
+   "input": 10.0,
+   "output": 50.0,
+   "cache_read": 1.0,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-astra-high:inworld": {
+   "input": 10.0,
+   "output": 50.0,
+   "cache_read": 1.0,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-luna:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
+  },
+  "inworld/rank:gpt-6-luna-high:inworld": {
+   "input": 0.1,
+   "output": 0.5,
+   "cache_read": 0.01,
+   "source": "https://api.inworld.ai/llm/v1alpha/models",
+   "verified_at": "2026-10-13"
   }
  }
 }

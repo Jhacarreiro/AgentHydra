@@ -235,17 +235,19 @@ def test_a_backup_serves_when_every_tested_route_is_down(user_toml):
 
 
 # Contract: in the order dispatch walks a code plan (plan, then rebias), every route the owner keeps for after CliMayte
-# (`after_climayte`: OpenAI) comes behind every other evaluated route that meets the floors, cheaper or not.
-# Regression: 2026-10-13, OpenAI's GPT-6 routes gained tool calling and GPT-6.1 Sol, cheaper than GLM-5.3 on Baseten,
-# became the second code leg; the owner wants OpenAI's keys as the last resort, after his CliMayte accounts.
-def test_openai_routes_go_behind_every_other_route_that_meets_the_floors():
+# (`after_climayte`: OpenAI's and Anthropic's own APIs, and the Claude and GPT routes a router sells) comes behind every
+# other evaluated route that meets the floors, cheaper or not. Regression: 2026-10-13, OpenAI's GPT-6 routes gained tool
+# calling and GPT-6.1 Sol, cheaper than GLM-5.3 on Baseten, became the second code leg; the owner wants OpenAI's keys
+# as the last resort, after his CliMayte accounts.
+def test_routes_kept_for_after_climayte_go_behind_every_other_route_that_meets_the_floors():
     everywhere = lambda p: True  # noqa: E731
     order = [c for c in selection.rebias(selection.plan("code", tools="edit", usable=everywhere)["candidates"], lambda p: 0.0)
              if not c.get("unevidenced")]
-    last = [c for c in order if c["provider"] == "openai"]
-    others = [c for c in order if c["provider"] != "openai"]
-    assert last and others and all(c.get("after_climayte") for c in last)
-    assert order == others + last
+    last = [c for c in order if c.get("after_climayte")]
+    others = [c for c in order if not c.get("after_climayte")]
+    assert others and order == others + last
+    assert {"openai", "anthropic"} <= {c["provider"] for c in last}
+    assert all(c in last for c in order if c["provider"] in ("openai", "anthropic"))
     assert min(c["benchmark_cost_usd"] for c in last) < max(c["benchmark_cost_usd"] for c in others)  # not the cost order
 
 

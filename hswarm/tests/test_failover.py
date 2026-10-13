@@ -984,3 +984,48 @@ def test_a_pilot_that_fails_before_its_first_reply_does_not_strand_the_job(monke
     job = asyncio.run(go())
     statuses = sorted(r.status for r in job.results.values())
     assert statuses == ["error", "ok", "ok"], statuses
+
+
+# Contract: a tool call that lands on a key whose plan refuses tool calls (Inworld's HTTP 400 "Tool calling is currently
+# restricted on your plan") is served by another key at once, later tool calls skip that key, its tool-free calls still
+# go through, and with no key left whose plan allows tools the leg fails over (NoUsableKey). Regression: 2026-10-13,
+# three of Inworld's six live keys answer that 400 while serving plain chat; a tool task landing on one failed outright.
+def test_a_key_whose_plan_refuses_tool_calls_keeps_serving_chat_while_tool_calls_go_to_another_key(monkeypatch):
+    import httpx
+
+    from hswarm import client as client_mod
+    from hswarm.client import DeepSeekClient, NoUsableKey
+
+    monkeypatch.setattr(client_mod, "_NO_TOOL_KEYS", set(), raising=False)
+    chat_only, full = "sk-chatonly000xxxx", "sk-fullplan000xxxx"
+    seen: list[tuple[str, bool]] = []
+    tools = [{"type": "function", "function": {"name": "read_file", "parameters": {"type": "object", "properties": {}}}}]
+
+    def handler(request):
+        import json as _json
+
+        key, tooled = request.headers["Authorization"].removeprefix("Bearer "), bool(_json.loads(request.content).get("tools"))
+        seen.append((key, tooled))
+        if key == chat_only and tooled:
+            return httpx.Response(400, json={"error": {"message": "Tool calling is currently restricted on your plan. Setup a valid "
+                                                                  "billing method (subscription or on-demand payment) and add credits"}})
+        return httpx.Response(200, json={"choices": [{"message": {"role": "assistant", "content": "done"}, "finish_reason": "stop"}],
+                                         "usage": {"prompt_tokens": 10, "completion_tokens": 1}, "model": "deepseek-flash"})
+
+    c = DeepSeekClient(api_keys=[chat_only, full])
+    c._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
+    ask = [{"role": "user", "content": "x"}]
+
+    async def go():
+        for _ in range(3):
+            assert (await c.chat(ask, model="deepseek-flash", tools=tools)).message["content"] == "done"
+        for _ in range(4):
+            await c.chat(ask, model="deepseek-flash")
+
+    asyncio.run(go())
+    assert [k for k, t in seen if t] == [chat_only, full, full, full]  # refused once, then skipped
+    assert (chat_only, False) in seen and c.pool.available() == 2  # still serves tool-free calls: neither rested nor disabled
+    only = DeepSeekClient(api_keys=[chat_only])
+    only._http = httpx.AsyncClient(base_url="https://api.test", transport=httpx.MockTransport(handler))
+    with pytest.raises(NoUsableKey):
+        asyncio.run(only.chat(ask, model="deepseek-flash", tools=tools))

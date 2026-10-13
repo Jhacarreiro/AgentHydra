@@ -34,10 +34,10 @@ def test_every_export_service_has_a_canonical_pool_and_real_capabilities():
         if name != "inworld":
             assert spec["transport"] == "service" and not config.provider_chat(name)
         assert spec.get("models_path") is None
-        if name != "inworld":
+        if name != "inworld":  # Inworld is a chat router as well as a speech service: its ranked routes are chat models
             assert not spec.get("passthrough")
+            assert not [m for m in config.MODELS.values() if m["provider"] == name]
         assert spec["operations"]
-        assert not [m for m in config.MODELS.values() if m["provider"] == name]
         for operation in spec["operations"].values():
             assert operation["capability"] in spec["capabilities"]
             assert operation["method"] in ("GET", "POST")
