@@ -21,6 +21,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Routines read at a glance, and each one has its own switch.** Settings > Managers shows each routine as one row with
   its status, last run and next run, which opens for its schedule in plain words, its recent runs and Run now. A row's
   switch pauses or resumes that routine; the switch beside the title still turns them all off.
+- **Restarting AgentHydra no longer stops a routine that is running.** A routine's command now runs on its own, so an
+  update or restart leaves it going, and AgentHydra records how it ended once it is back. A routine or chat that cannot
+  start says why straight away instead of after a wait.
 - **Build tools are updated past three security advisories.** nanoid, postcss and source-map-js, which run only while
   AgentHydra's pages are built, moved to their fixed versions.
 - **AgentHydra keeps your always-on helpers running, one copy each.** List the background servers and watchers you

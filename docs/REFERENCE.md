@@ -167,9 +167,13 @@ One file per routine, `<desk home>/routines/<id>.json`, the id is the file name 
   task, e.g. `"\\Example nightly job"`; Windows runs it, the manager shows it and can run, pause and resume it; Windows only).
 - WHAT, for `schedule` and `status` routines, exactly one of: `run` (argv, run hidden with no shell by a runner outside
   Desk's process tree, so a Desk restart leaves the run going and the next Desk goes on watching it: exit 0 is `ok`, 75 is
-  `busy`, any other exit is `failed`, past the timeout the tree is killed and recorded `timed-out`, a runner that has not
-  started within 60 s is `failed` (Desk takes its spec back, so it never runs late), a run whose runner ended without a word
-  is `interrupted`; the output goes to the log and its last line is kept), or `prompt` (an AI run: a Desk chat is started the way a new chat starts, titled
+  `busy`, any other exit is `failed`, past the timeout the tree is killed and recorded `timed-out`, a runner its launcher
+  could not start is `failed` at once with the launcher's reason, one that has not started within 60 s is `failed` (Desk
+  takes its spec back, so it never runs late), a run whose runner ended without a word is `interrupted` (off Windows its
+  command's process group is ended first, when its leader is proven by its start time; on Windows the runner's end took its
+  command), and a runner still alive 2 minutes past the timeout whose process cannot be read is `interrupted` and left
+  alone; a run is settled as the kind it started as, whatever its file says by then; the output goes to the log and its
+  last line is kept), or `prompt` (an AI run: a Desk chat is started the way a new chat starts, titled
   `Routine: <name>`, in group `routine-<id>-<YYYYMMDDHHmm>`, in `cwd`, which a prompt needs). A `windowsTask` routine has
   neither. The old field `tick` is refused: `run` replaces it.
 - `cwd` is required for `prompt`, optional otherwise. `timeoutMinutes` is 5 to 360, 120 by default. `until` (`YYYY-MM-DD`)
@@ -189,7 +193,8 @@ next run); its paused state is Windows' Disabled state. Run now starts an idle o
 Data: the memory is `<desk home>/routines.json` (each routine's last 30 runs, its running run, its last slot and paused);
 the logs are `<desk home>/routines/logs/<id>.log` (moved to `.log.1` past 2 MB); a command run's files are in
 `<desk home>/routines/runs/`: `<id>.spec.json` (what to run, with Desk's environment; the runner deletes it once it runs),
-`<id>.run.json` (the runner's pid) and `<id>.result.json` (how it ended), which Desk deletes once it has recorded the run;
+`<id>.run.json` (the runner's pid and start, and its command's pid with a time it had started by) and `<id>.result.json`
+(how it ended), which Desk deletes once it has recorded the run;
 proposals wait in
 `<desk home>/routines/proposed/<id>.json`. The agents and memory of earlier builds of this manager are not read.
 
@@ -204,7 +209,8 @@ into `routines/<id>.json` without `why`, discard deletes it.
 
 `GET /api/routines` answers the last look (`?fresh=1` looks first): `enabled`, `everyMs`, `checkedAt`, `nextCheckAt`, each
 routine's state, reason, kind, schedule in its own words, `askedBy`, `paused`, `headline`, `totals`, `settings`, last run,
-`nextRunAt`, the run going on, and its last 30 runs, plus `proposals` and `error`. `POST /api/routines` takes one action per call:
+`nextRunAt`, the run going on (`kind` `command` or `prompt`, its runner's `pid` or its chat), and its last 30 runs, plus
+`proposals` and `error`. `POST /api/routines` takes one action per call:
 `{ enabled?: boolean }` (window only), or one of `{ run, pause, resume, approve, discard }` (an id; `resume`, `approve` and
 `discard` are window only), or `{ propose: { id, why, ...contract } }`. Anything else answers 400 with the expected shape.
 

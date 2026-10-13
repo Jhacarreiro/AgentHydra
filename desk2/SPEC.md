@@ -223,7 +223,9 @@ import, a fork, a chat stored before CliMayte workers; worker chats run in Agent
 this) runs its Agent SDK query in a **chat host**: a small bun process (`host/chat-host.ts`) born outside
 the server's process tree (Windows: WMI `Win32_Process.Create`, as AgentHydra's `detached-spawn.mjs` does;
 hidden, inheriting no handle), so restarting or killing the server leaves the chat and its Claude Code
-running.
+running. When WMI refuses, Start-Process starts it instead, which still outlives the server (Bun's job ends
+only the server's own children); when both refuse, the start fails at once with their reason
+(`host/launch.ts` `startDetached`, which a routine's runner starts through too).
 
 - **What runs where.** The host only pumps the SDK: sends in, messages out, permission and elicitation
   calls forwarded under the SDK's `requestId`, the Query's control calls (`interrupt`, `setModel`...)
