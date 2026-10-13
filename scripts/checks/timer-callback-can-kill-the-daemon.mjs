@@ -13,8 +13,14 @@
 // THE RULE: a setInterval callback must not be able to throw out of itself. It satisfies this by
 //   (a) being an inline function whose body opens with `try {`,
 //   (b) being an inline expression that ends in `.catch(...)`, or
-//   (c) naming a function declared in the same file whose body opens with `try {`.
+//   (c) naming a function declared in the same file whose body opens with `try {`, or a
+//       `const tick = () => ...` arrow, judged exactly as (a) and (b) judge it written inline.
+// Only statements that cannot throw may sit above the `try`: a plain `let` initialiser, and the
+// re-entrancy guard every overlapping tick needs (`if (running) return`, `running = true`).
 // A tick that fails must be a tick SKIPPED. The next one is a poll interval away.
+//
+// The arrow form and the re-entrancy guard were added 2026-10-13: four safe timers written that
+// way (manager-analytics collect, judge and rsi, hswarm-shortfall) read as unguarded and held CI red.
 //
 // DELIBERATELY NOT FLAGGED:
 //   · setTimeout. A one-shot is usually inside a function that already has a caller to catch it,
@@ -125,7 +131,7 @@ function argsOf(src, from) {
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
 /** Does this function body open with a try block (ignoring `let`/`const` declarations, which
- *  cannot throw when they are plain initialisers)? */
+ *  cannot throw when they are plain initialisers, and a re-entrancy guard on a plain flag)? */
 function opensWithTry(body) {
   const stripped = body
     .replace(/^\s*\{/, '')
@@ -135,17 +141,15 @@ function opensWithTry(body) {
   for (const line of stripped) {
     if (/^(let|const|var)\s+\w+(\s*=\s*(null|false|true|0|''|""|\[\]|\{\}))?\s*;?$/.test(line))
       continue
+    if (/^if\s*\(\s*!?[A-Za-z_$][\w$]*\s*\)\s*return\s*;?$/.test(line)) continue
+    if (/^[A-Za-z_$][\w$]*\s*=\s*(true|false|null|0)\s*;?$/.test(line)) continue
     return line.startsWith('try')
   }
   return false
 }
 
-/** The body text of `function NAME(...)` declared in this source, or null. */
-function namedFunctionBody(src, name) {
-  const m = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`).exec(src)
-  if (!m) return null
-  const openBrace = src.indexOf('{', m.index + m[0].length)
-  if (openBrace < 0) return null
+/** The balanced `{...}` block that opens at `openBrace`, or null. */
+function blockAt(src, openBrace) {
   let depth = 0
   for (let i = openBrace; i < src.length; i++) {
     if (src[i] === '{') depth++
@@ -155,6 +159,40 @@ function namedFunctionBody(src, name) {
     }
   }
   return null
+}
+
+/** An arrow's expression body from `start`: up to the first `;` or line end outside brackets. */
+function expressionAt(src, start) {
+  let depth = 0
+  let seen = false
+  for (let i = start; i < src.length; i++) {
+    const c = src[i]
+    if ('([{'.includes(c)) depth++
+    else if (')]}'.includes(c)) {
+      if (depth === 0) return src.slice(start, i)
+      depth--
+    } else if (depth === 0 && seen && (c === ';' || c === '\n')) return src.slice(start, i)
+    if (!/\s/.test(c)) seen = true
+  }
+  return src.slice(start)
+}
+
+/** The callback `NAME` this source declares: `{ body: function body text, arrow }`, or null.
+ *  `arrow` is true for `const NAME = (...) => ...`, which is judged as it would be written inline. */
+function namedCallback(src, name) {
+  const fn = new RegExp(`(?:async\\s+)?function\\s+${name}\\s*\\(`).exec(src)
+  if (fn) {
+    const openBrace = src.indexOf('{', fn.index + fn[0].length)
+    const body = openBrace < 0 ? null : blockAt(src, openBrace)
+    return body ? { body, arrow: false } : null
+  }
+  const arrow = new RegExp(
+    `(?:const|let|var)\\s+${name}\\s*=\\s*(?:async\\s+)?(?:\\([^)]*\\)(?:\\s*:\\s*[^=;{]+?)?|[A-Za-z_$][\\w$]*)\\s*=>\\s*`,
+  ).exec(src)
+  if (!arrow) return null
+  const start = arrow.index + arrow[0].length
+  const body = src[start] === '{' ? blockAt(src, start) : expressionAt(src, start)
+  return body ? { body, arrow: true } : null
 }
 
 function walk(dir, out = []) {
@@ -181,8 +219,8 @@ export function findViolations(text) {
     // (c) a bare named callback: setInterval(tick, ms)
     const named = /^\(\s*([A-Za-z_$][\w$]*)\s*,/.exec(args)
     if (named) {
-      const body = namedFunctionBody(code, named[1])
-      guarded = body ? opensWithTry(body) : false
+      const cb = namedCallback(code, named[1])
+      guarded = cb ? opensWithTry(cb.body) || (cb.arrow && /\.catch\s*\(/.test(cb.body)) : false
     } else {
       // (a) inline function whose body opens with try, or (b) an expression ending .catch(...)
       guarded = /\.catch\s*\(/.test(args)

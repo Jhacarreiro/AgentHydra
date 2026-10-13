@@ -485,8 +485,54 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
         timer = setInterval(() => void tick(defaultDeps), MONITOR_POLL_MS)
       }
       `,
+      // monitor.ts's shape again, written as a const arrow: resolving the arrow must still judge it,
+      // never pass it because it is an arrow.
+      `
+      const tick = async () => {
+        if (getSetting('monitor_enabled') !== '1') return
+        try {
+          await processRateLimited(defaultDeps)
+        } catch (err) {
+          console.error('monitor tick error:', err)
+        }
+      }
+      export function startMonitor() {
+        timer = setInterval(tick, MONITOR_POLL_MS)
+      }
+      `,
     ],
     fixed: [
+      // manager-analytics collect.ts and judge.ts as they shipped 2026-10-13: a const async arrow whose
+      // re-entrancy guard (a plain flag, which cannot throw) sits above the try that holds the rest.
+      `
+      let running = false
+      const tick = async () => {
+        if (running) return
+        running = true
+        try {
+          await runPass({ verdictsOf })
+        } catch (e) {
+          console.error('pass failed:', e)
+        } finally {
+          running = false
+        }
+      }
+      setTimeout(() => {
+        tick()
+        setInterval(tick, PASS_EVERY_MS)
+      }, FIRST_PASS_MS)
+      `,
+      // hswarm-shortfall.ts and manager-analytics rsi.ts: a const arrow that is the promise and its
+      // .catch(), exactly what rule (b) accepts written inline.
+      `
+      const tick = () =>
+        void checkShortfall().catch((err) => console.warn('check failed:', err))
+      timer = setInterval(tick, CHECK_MS)
+      const settle = () => {
+        settleTrials().catch((e) => console.error('settle failed:', e))
+      }
+      setTimeout(() => setInterval(settle, SETTLE_EVERY_MS), SETTLE_FIRST_MS)
+      `,
       // The shape scheduler.ts ships today: the callback is a thin guarded wrapper.
       `
       function tick() {
