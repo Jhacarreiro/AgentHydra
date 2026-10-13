@@ -149,7 +149,7 @@ def test_failover_errors_sit_beside_failover():
 
 
 def test_backfill_adds_each_old_note_once(monkeypatch):
-    job = config.JOBS_DIR / "20261012-100000-aaaa"
+    job = config.JOBS_DIR / dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S-aaaa")
     job.mkdir(parents=True)
     now = dt.datetime.now(dt.timezone.utc).isoformat()
     line = {"id": "t1", "status": "ok", "started": now,
@@ -161,3 +161,26 @@ def test_backfill_adds_each_old_note_once(monkeypatch):
     assert commands.backfill_free_misses(30)["rows"] == 1
     again = commands.backfill_free_misses(30)
     assert again["rows"] == 0 and again["existing"] == 1 and len(_ledger()) == 1
+
+
+def test_backfill_reads_a_cold_day_in_one_pass(monkeypatch):
+    # 2026-10-13: read job by job, every packed job re-read its day's tar.xz up to it; a 30-day dry run ran 10+ min.
+    from hswarm import archive, history
+
+    day = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=9)).strftime("%Y%m%d")
+    line = {"id": "t1", "status": "ok", "started": f"{day[:4]}-{day[4:6]}-{day[6:]}T10:00:00+00:00",
+            "selection": {"profile": "routine", "route": {"via": "api", "fallback": "free account timed out", "account": "gpt-1"}}}
+    for jid in (f"{day}-100000-cccc", f"{day}-100001-dddd"):
+        job = config.JOBS_DIR / jid
+        job.mkdir(parents=True)
+        (job / "job.json").write_text(json.dumps({"summary": {"job_id": jid, "state": "done", "tasks": 1}}), encoding="utf-8")
+        (job / "results.jsonl").write_text(json.dumps(line) + "\n", encoding="utf-8")
+    archive.archive_old(hours=0, apply=True)
+    assert history.pack_jobs()["jobs"] == 2
+    passes, real = [], history._members
+    monkeypatch.setattr(history, "_members", lambda path: passes.append(path) or real(path))
+
+    out = commands.backfill_free_misses(30, dry_run=True)
+
+    assert out["rows"] == 2 and out["by_model"] == {"free:" + free_route.GPT_MODEL: 2}
+    assert len(passes) == 1

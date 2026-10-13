@@ -460,7 +460,7 @@ async def cmd_history(a) -> int:
 import datetime as _dt  # noqa: E402
 import json as _json  # noqa: E402
 
-from . import archive  # noqa: E402
+from . import archive, history  # noqa: E402
 from .free_route import CLAUDE_MODELS, GPT_MODEL, HAIKU_PROFILES  # noqa: E402
 from .ledger import append_row, free_miss_row, ledger_rows  # noqa: E402
 
@@ -498,12 +498,33 @@ def _notes(job_id: str):
             yield r, note
 
 
+def _jobs_since(since: _dt.datetime):
+    """The job ids that may hold a note after `since`, a cold day's jobs read in ONE pass of its archive
+    (history.each_cold_job). 2026-10-13: read one by one, each cold job re-read its day's tar.xz up to it, and a
+    30-day dry run was still going after 10 minutes. A job started over two days before `since` is skipped unread."""
+    floor = (since - _dt.timedelta(days=2)).strftime("%Y%m%d")
+    cold = history.cold_jobs()
+    by_day: dict[str, set[str]] = {}
+    for job_id in archive.job_ids():
+        if job_id[:8].isdigit() and job_id[:8] < floor:
+            continue
+        if job_id in cold and not archive.job_dir(job_id).is_dir() and not archive.archive_path(job_id).is_file():
+            by_day.setdefault(cold[job_id], set()).add(job_id)
+        else:
+            yield job_id
+    for day in sorted(by_day, reverse=True):
+        try:
+            yield from history.each_cold_job(day, by_day[day])  # each one is in the cold cache as it comes
+        except history.READ_ERRORS:
+            continue
+
+
 def backfill_free_misses(days: float = 30.0, dry_run: bool = False) -> dict:
     """Append the missing rows; returns {"rows": n, "existing": n, "by_model": {model: n}, "dry_run": bool}."""
     have = {(r.get("job"), r.get("task"), r.get("ts")) for r in ledger_rows(days + 2) if r.get("free_miss")}
     since = _dt.datetime.now(_dt.timezone.utc) - _dt.timedelta(days=days)
     out = {"rows": 0, "existing": 0, "by_model": {}, "dry_run": dry_run}
-    for job_id in archive.job_ids():
+    for job_id in _jobs_since(since):
         for r, note in _notes(job_id):
             ts = note.get("ts") or r.get("started") or r.get("finished")
             try:
