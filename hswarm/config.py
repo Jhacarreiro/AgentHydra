@@ -302,6 +302,13 @@ ROUTE_VIA_FREE = True
 ROUTE_VIA_FREE_MAX: int | None = None
 _ROUTE_VIA_FREE_PROFILES_DEFAULT = ("routine", "general", "research", "decision")
 ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
+# `route_via_free_tools`: the tools a TOOL task may be offered and still go to a Free account, which runs them through a
+# text tool protocol (free_client.py); a task offered any other tool takes its API route. Reading and web tools only by
+# default: a Free leg that fails falls back to the API, and an edit it had already made would be left behind it.
+# Off (empty) until the A/B against the API route on real tasks says the Free answers hold up.
+FREE_READ_TOOLS = ("read_file", "list_dir", "glob", "grep", "outline", "unfold", "read_url", "web_search", "fetch_output")
+_ROUTE_VIA_FREE_TOOLS_DEFAULT: tuple[str, ...] = ()
+ROUTE_VIA_FREE_TOOLS = _ROUTE_VIA_FREE_TOOLS_DEFAULT
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -490,7 +497,7 @@ def _inherit() -> None:
 
 def _apply_settings(doc: dict) -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
-    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES
+    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
@@ -510,6 +517,9 @@ def _apply_settings(doc: dict) -> None:
         ROUTE_VIA_FREE_MAX = fmx
     if isinstance(fpr, list) and all(isinstance(p, str) for p in fpr):
         ROUTE_VIA_FREE_PROFILES = tuple(p.strip().lower() for p in fpr)
+    ftl = doc.get("route_via_free_tools")
+    if isinstance(ftl, list) and all(isinstance(t, str) for t in ftl):
+        ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
     bias = doc.get("load_bias")
     if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
         LOAD_BIAS = float(bias)
@@ -536,7 +546,7 @@ _BUILTIN_DOCS = _builtins()
 
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
-    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES
+    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -546,6 +556,7 @@ def _reset() -> None:
     PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD = _PRICE_ROUTING_DEFAULT, _LOAD_BIAS_DEFAULT, None
     ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, None, 90.0
     ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, None, _ROUTE_VIA_FREE_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_TOOLS = _ROUTE_VIA_FREE_TOOLS_DEFAULT
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

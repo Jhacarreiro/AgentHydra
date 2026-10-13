@@ -14,7 +14,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 
-from hswarm import config, free_route  # noqa: E402
+from hswarm import config, free_client, free_route  # noqa: E402
 from hswarm.client import ChatResult, Usage  # noqa: E402
 from hswarm.jobs import JobManager  # noqa: E402
 from hswarm.spec import Task  # noqa: E402
@@ -81,7 +81,9 @@ class _Fake:
         threading.Thread(target=self.server.serve_forever, daemon=True).start()
 
     def batch(self):
-        one = {"task": 0, "state": self.state, "account": "a1", "chat_id": "c1", "response": self.reply, "model": "gpt-5-6-mini", "seconds": 1.0}
+        # A list of replies answers each sent message in turn: a tool task's thread is several messages long.
+        reply = self.reply[min(len(self.chats), len(self.reply)) - 1] if isinstance(self.reply, list) else self.reply
+        one = {"task": 0, "state": self.state, "account": "a1", "chat_id": "c1", "response": reply, "model": "gpt-5-6-mini", "seconds": 1.0}
         return {"batch": "b1", "finished": self.state == "done", "done": 1, "tasks": [one]}
 
     @property
@@ -282,7 +284,7 @@ def test_a_failed_free_task_hands_the_task_back(fake):
 
 
 @pytest.mark.parametrize("kw,after", [
-    ({"tools": "read"}, {}),
+    ({"tools": "edit"}, {}),
     ({}, {"zdr": True}),
     ({"model": "deepseek-flash"}, {}),
     ({}, {"profile": "critical"}),
@@ -295,3 +297,43 @@ def test_an_ineligible_task_is_never_sent(fake, kw, after):
         setattr(task, k, v)
     assert _consult(task) == (None, None)
     assert f.chats == []
+
+
+@pytest.fixture
+def tool_route(monkeypatch):
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOLS", config.FREE_READ_TOOLS)
+
+
+def _read_task(tmp_path, **kw):
+    (tmp_path / "notes.txt").write_bytes(b"the answer is 42\n")
+    return _task(prompt="What is the answer in notes.txt?", tools="read", cwd=str(tmp_path), timeout_s=60, **kw)
+
+
+def test_a_read_task_runs_its_tools_on_a_free_thread(fake, tmp_path, tool_route):
+    # As GPT-5.6 mini did on real tasks (2026-10-13): the first reply says it has no tools, the nudge gets the call, shown
+    # in a fence as chat models do, and the last reply answers from the tool result.
+    f = fake(reply=["FAILED: the project tools are unavailable in this chat.",
+                    '```json\n{"name": "read_file", "arguments": {"path": "notes.txt"}}\n```', "It is 42."])
+    res, note = _consult(_read_task(tmp_path))
+    assert note is None and res.status == "ok" and res.answer == "It is 42." and res.cost_usd == 0.0
+    assert res.model == "free:gpt-5-6-mini" and res.selection["route"]["via"] == "free"
+    first, nudge, third = (c["tasks"][0] for c in f.chats)
+    assert first["prompt"].startswith("# Tools you have in this chat") and "## read_file" in first["prompt"] and "chat_id" not in first
+    assert nudge == {"prompt": free_client.NUDGE, "chat_id": "c1"}
+    # The thread already holds the brief and the task: the next message is only the tool's result.
+    assert third["chat_id"] == "c1" and third["prompt"].startswith('<tool_result name="read_file">')
+    assert "the answer is 42" in third["prompt"] and "# Your brief" not in third["prompt"]
+
+
+def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake, tmp_path, tool_route):
+    fake(reply=['<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>',
+                '<tool_call>{"name": "submit_result", "arguments": {"n": 42}}</tool_call>'])
+    schema = {"type": "object", "properties": {"n": {"type": "integer"}}, "required": ["n"]}
+    res, note = _consult(_read_task(tmp_path, schema=schema))
+    assert note is None and res.status == "ok" and res.data == {"n": 42}
+
+
+def test_a_free_tool_run_that_fails_goes_to_its_api_route(fake, tmp_path, tool_route):
+    fake(state="failed")
+    res, note = _consult(_read_task(tmp_path))
+    assert res is None and note["free_miss"] and note["free_kind"] == "unavailable" and note["via"] == "api"

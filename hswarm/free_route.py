@@ -1,14 +1,17 @@
-"""Free web accounts first: a TOOL-FREE task may be answered by one of the owner's signed-in Free claude.ai or chatgpt.com
-accounts, which AgentHydra manages, before any paid API leg is used. `consult` reads `free_status`, sends one `free_chat`
+"""Free web accounts first: a task may be answered by one of the owner's signed-in Free claude.ai or chatgpt.com
+accounts, which AgentHydra manages, before any paid API leg is used: a tool-free task in one message, and a task offered
+only reading and web tools (config.ROUTE_VIA_FREE_TOOLS) as a thread that runs them through a text protocol
+(free_client.py). `consult` reads `free_status`, sends one `free_chat`
 task and polls `free_results` over AgentHydra's MCP endpoint (POST /api/mcp, stateless JSON-RPC).
 
 Never a failure of its own: the daemon down or slow, not ready, no idle signed-in account, a refused send, a failed or
 timed-out task, or an answer that is not the JSON the schema asks for keeps the task on its API route, logged once per job.
 The route taken is on the result (`selection["route"]`) and its ledger line (provider `free`, cost 0). A free account only
-answers text: no tools, no system-prompt field, so the system text rides in the prompt."""
+answers text: no tool field, no system-prompt field, so the system text rides in the prompt."""
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import time
@@ -18,6 +21,7 @@ from collections import Counter
 
 from . import config
 from .climayte_route import base_url
+from .free_client import FreeChatClient, tool_names_allowed
 from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.free")
@@ -26,6 +30,7 @@ STATUS_TIMEOUT_S = 5.0  # 2 s sent every task to the API while the daemon stalle
 MAX_PROMPT_CHARS = 100_000
 WAIT_S = 40  # the daemon waits at most 45 s per call
 WAIT_CAP_S = 240  # the longest a free account may hold a task before it goes back to its API route, whatever its timeout_s
+TOOL_CAP_S = 600  # the longest a tool task may run on a Free thread before it goes back to its API route
 HAIKU_PROFILES = ("routine", "general")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks on a free account right now, across every job of this process (route_via_free_max)
@@ -39,13 +44,16 @@ SCHEMA_LINE = "Answer with only one JSON value that satisfies this JSON Schema, 
 
 
 def eligible(task: Task) -> bool:
-    """A tool-free, text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat.
+    """A text-only, auto-routed API task of an ordinary profile that no rule keeps off a third-party chat, offered no
+    tool or only tools a Free thread may run (config.ROUTE_VIA_FREE_TOOLS).
     A CliMayte worker's own asks qualify: the worker guard is climayte_route's (a worker must not start another worker),
     and copied here it kept every tool-free ask a worker made off the Free accounts (5,400 in 48 h, 5 of them on Free,
     2026-10-09; owner: "why you're running nothing on there")."""
     if not config.ROUTE_VIA_FREE or not base_url():
         return False
-    if task.tools != "none" or getattr(task, "images", None) or task.zdr:
+    if getattr(task, "images", None) or task.zdr:
+        return False
+    if task.tools != "none" and not tool_names_allowed(task):
         return False
     if task.purpose == "evaluation" or task.backend != "api":
         return False
@@ -235,6 +243,29 @@ async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple
             return None, _miss(task, "free results unavailable", "error", "unavailable", one, accounts)
 
 
+async def _serve_tools(job_id: str, task: Task, accounts: list | None = None) -> tuple[Result | None, dict | None]:
+    """A tool task on one Free thread: the API loop itself (agent.run_api_task) with a FreeChatClient for its wire, so the
+    sandbox, receipts, schema check, loop guard and wall are the API route's own. Anything short of an ok result goes to
+    its API route, which starts over; its tools only read, so the Free try left nothing behind."""
+    from .agent import run_api_task
+
+    family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
+    client = FreeChatClient(job_id, task, family, call=_call)
+    leg = dataclasses.replace(task, model="free:" + family, timeout_s=min(task.timeout_s, TOOL_CAP_S))
+    res, _ = await run_api_task(client, leg, user_tag=job_id)
+    one = {"account": client.account, "model": client.model, "chat_id": client.chat_id}
+    if res.status != "ok":
+        error = (res.error or res.status)[:200]
+        _say(job_id, f"a tool task on a Free account ended {res.status} ({error}); it runs on its API route")
+        kind = "timeout" if res.status == "timeout" else "unavailable" if error.startswith("free ") else "model"
+        return None, _miss(task, f"free tool run {res.status}", "timeout" if kind == "timeout" else "error", kind, one, accounts, error)
+    res.model = miss_model(task, one, accounts)  # the model that answered, as a Free miss would name it
+    res.backend, res.cost_usd = task.backend, 0.0
+    res.selection = {**(res.selection or {}), "route": {"via": "free", "account": client.account, "chat_id": client.chat_id,
+                                                         "why": "tool task on a Free account through the text tool protocol, no API cost"}}
+    return res, None
+
+
 async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when a free account served the task; (None, note) when the API route runs and the
     note says why (a try that failed, or no account free to take it); (None, None) when nobody was asked or nothing is
@@ -263,7 +294,8 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below
     try:
-        return await _serve(job_id, task, status.get("accounts"))
+        serve = _serve if task.tools == "none" else _serve_tools
+        return await serve(job_id, task, status.get("accounts"))
     finally:
         _ACTIVE -= 1
         if now in _SENT:  # a finished task's account is free again, however recently it was sent
