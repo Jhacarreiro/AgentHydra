@@ -316,7 +316,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const pinged = await post(`/api/sessions/${encodeURIComponent(c.id)}/ping`, { text })
       if (pinged === null) return null
     }
-    if (c.source !== 'desk') return post(`/api/external/sessions/${encodeURIComponent(c.id)}/message`, { text })
+    // A note held for a busy chat is not sent once the next peek is due: that peek judges the chat afresh. Held
+    // with no limit, one waited 6 hours and would have arrived as news (2026-10-13).
+    if (c.source !== 'desk')
+      return post(`/api/external/sessions/${encodeURIComponent(c.id)}/message`, { text, holdSecs: PEEK_MS / 1000 })
     const id = encodeURIComponent(c.id)
     const error = await post('/api/queue', { kind: 'message', chatId: c.id, text })
     return error ?? (c.kind === 'error' ? await post(`/api/queue/chats/${id}/resume`) : null)

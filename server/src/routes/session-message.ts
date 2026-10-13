@@ -91,7 +91,19 @@ app.post('/api/sessions/:id/message', async (c) => {
       typeof body.from === 'string' && body.from.trim()
         ? body.from.trim().slice(0, 80)
         : 'AgentHydra'
-    const native = await sendOrHold(inst.dir, sessionId, text, fromName)
+    // hold_secs: how long a held note stays worth sending (the sender's next note comes after it). Clamped
+    // to a minute to a day; absent or not a positive number, the note waits as long as the hold's expiry.
+    const holdSecs =
+      typeof body.hold_secs === 'number' && body.hold_secs > 0
+        ? Math.min(Math.max(body.hold_secs, 60), 86_400)
+        : undefined
+    const native = await sendOrHold(
+      inst.dir,
+      sessionId,
+      text,
+      fromName,
+      holdSecs === undefined ? undefined : holdSecs * 1000,
+    )
     if (native.ok)
       return c.json({
         ok: true,

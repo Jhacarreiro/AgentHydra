@@ -39,16 +39,18 @@ async function guarded(c: Context, b: Bridge, run: () => Promise<Response>): Pro
 
 // A message for a Claude Desktop chat that is working: AgentHydra queues it in the chat itself.
 async function desktopMessage(c: Context, b: Bridge): Promise<Response> {
-  let text: unknown
+  let req: Partial<DesktopMessageRequest> | null
   try {
-    text = ((await c.req.json()) as Partial<DesktopMessageRequest> | null)?.text
+    req = (await c.req.json()) as Partial<DesktopMessageRequest> | null
   } catch {
     return c.json({ error: 'the body must be JSON: { "text": "..." }' }, 400)
   }
+  const text = req?.text
   if (typeof text !== 'string' || !text.trim()) return c.json({ error: 'text is required' }, 400)
+  const holdSecs = typeof req?.holdSecs === 'number' && req.holdSecs > 0 ? req.holdSecs : undefined
   try {
     const id = c.req.param('id') ?? ''
-    const r = await b.client.sendToDesktopChat(id, text.trim())
+    const r = await b.client.sendToDesktopChat(id, text.trim(), holdSecs)
     if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
     return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
   } catch (err) {

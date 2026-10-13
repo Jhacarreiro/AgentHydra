@@ -33,6 +33,8 @@ export interface NativeSendOutcome {
   delivery?: 'delivered' | 'queued' | 'sent' | 'held' | null
   /** The chat was busy and nothing was sent to the app; unavailable is true, so the caller may hold it. */
   busy?: boolean
+  /** The app refused the send before sending (archived, stopped until a person sends): final, never retried. */
+  refused?: boolean
   reason?: string
 }
 
@@ -105,6 +107,7 @@ export async function tryNativeSend(
       ok: false,
       unavailable: result?.dispatch === 'not-sent',
       busy: result?.busy === true,
+      ...(result?.refused === true ? { refused: true } : {}),
       delivery: result?.delivery ?? null,
       reason: String(result?.reason ?? 'the app did not confirm the message'),
     }
@@ -159,6 +162,7 @@ function holdFor(): ReturnType<typeof createNativeSendHold> {
         ok: r.ok,
         unavailable: r.unavailable,
         busy: r.busy,
+        refused: r.refused,
         delivery: r.delivery,
         reason: r.reason,
       }
@@ -176,16 +180,18 @@ export function resumeHeldNativeSends(): void {
 }
 
 /** The native send for a caller that must reach the chat. A busy chat is journalled and sent once it
- *  is idle (claude-native-send-hold.ts); the app is never handed a message for a busy chat. */
+ *  is idle (claude-native-send-hold.ts); the app is never handed a message for a busy chat. `holdLimitMs`:
+ *  the held note is not sent once that old, for a note that stops being news (unset: the hold's expiry). */
 export async function sendOrHold(
   profileDir: string,
   cliSessionId: string,
   text: string,
   fromName: string,
+  holdLimitMs?: number,
 ): Promise<NativeSendOutcome> {
   const result = await tryNativeSend(profileDir, cliSessionId, text, fromName)
   if (!result.busy) return result
-  holdFor().hold({ profileDir, cliSessionId, text, fromName })
+  holdFor().hold({ profileDir, cliSessionId, text, fromName }, holdLimitMs)
   return { ok: true, unavailable: false, delivery: 'held' }
 }
 

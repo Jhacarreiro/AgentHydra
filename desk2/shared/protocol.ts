@@ -292,6 +292,8 @@ export interface ExternalLimit {
 /** POST /api/external/sessions/:id/message: text for a Claude Desktop chat that is working; AgentHydra queues it in the chat. Errors answer { error } with the daemon's reason. */
 export interface DesktopMessageRequest {
   text: string
+  /** How long the message stays worth sending while the chat is busy (a note sent on a clock: its cadence). */
+  holdSecs?: number
 }
 export interface DesktopMessageResult {
   ok: true

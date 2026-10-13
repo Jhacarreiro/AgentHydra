@@ -53,16 +53,20 @@ export interface HeldSend {
   sentAt?: number
   /** Sends made so far: one, plus at most one resend after the transcript showed no ref. */
   attempts: number
+  /** When a held note stops being news: the sender's limit from hold(), else the 24 h expiry. */
+  staleAt?: number
   reason?: string
 }
 
 /** What the sender answers. `busy`: nothing was sent, the chat is busy. `delivered`: a turn started,
  *  done. Anything else (`queued`, `sent`, or no answer) means the app took it and the transcript must
- *  decide. `unavailable` without `busy`: nothing reached the app. */
+ *  decide. `unavailable` without `busy`: nothing reached the app. `refused`: the app refused it before
+ *  sending (archived, stopped until a person sends): final, never sent again. */
 export interface HoldSendResult {
   ok: boolean
   unavailable: boolean
   busy?: boolean
+  refused?: boolean
   delivery?: 'delivered' | 'queued' | 'sent' | 'held' | null
   reason?: string
 }
@@ -183,11 +187,24 @@ export function createNativeSendHold(deps: HoldDeps) {
     }
   }
 
-  /** Journals a message for a busy chat. The app is not called until the chat is idle. */
-  function hold(req: { profileDir: string; cliSessionId: string; text: string; fromName: string }) {
+  /** Journals a message for a busy chat. The app is not called until the chat is idle. `limitMs`: the
+   *  note is not sent once it is that old (the sender knows how long it stays news); unset, the expiry. */
+  function hold(
+    req: { profileDir: string; cliSessionId: string; text: string; fromName: string },
+    limitMs?: number,
+  ) {
     const at = now()
     const id = newId()
-    const entry: HeldSend = { id, ...req, state: 'held', createdAt: at, updatedAt: at, attempts: 0 }
+    const staleAt = at + (limitMs ?? expiryMs)
+    const entry: HeldSend = {
+      id,
+      ...req,
+      state: 'held',
+      createdAt: at,
+      updatedAt: at,
+      attempts: 0,
+      staleAt,
+    }
     entries.push(entry)
     save()
     ensureTimer()
@@ -222,7 +239,10 @@ export function createNativeSendHold(deps: HoldDeps) {
         fromName: e.fromName,
       })
       .catch((err): HoldSendResult => ({ ok: false, unavailable: true, reason: String(err) }))
-    if (r.busy || (!r.ok && r.unavailable)) {
+    if (r.refused) {
+      // The app refused it before sending: the refusal is the answer, so the note is not retried.
+      setState(e, 'not-arrived', r.reason ?? 'the app refused it')
+    } else if (r.busy || (!r.ok && r.unavailable)) {
       // Nothing reached the app: the message stays held, and is sent when the chat is idle.
       releaseAttempt(deps.journalPath, e.id, n)
       e.attempts -= 1
@@ -268,8 +288,12 @@ export function createNativeSendHold(deps: HoldDeps) {
           sync()
           const e = entries.find((x) => x.id === id)
           if (!e || (e.state !== 'held' && e.state !== 'unconfirmed')) continue
-          if (e.state === 'held' && now() - e.createdAt > expiryMs) {
-            setState(e, 'expired', 'the chat stayed busy for 24 hours; this message was never sent')
+          if (e.state === 'held' && now() > (e.staleAt ?? e.createdAt + expiryMs)) {
+            setState(
+              e,
+              'expired',
+              'the chat stayed busy past the time this note was worth sending; it was never sent',
+            )
             continue
           }
           if (e.state === 'held') await sendOnce(e)

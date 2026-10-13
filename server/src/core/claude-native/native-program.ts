@@ -79,7 +79,7 @@ export const NATIVE_EFFORTS: readonly string[] = Object.freeze([
  */
 
 function nativeRefuse(why: string): never {
-  throw new Error(`NATIVE_REFUSAL: ${why}`)
+  throw Object.assign(new Error(`NATIVE_REFUSAL: ${why}`), { refusal: true })
 }
 
 /**
@@ -1250,6 +1250,8 @@ async function nativeRuntime(request: any, pin: any): Promise<any> {
       dispatch: state.dispatch,
       action: request.action,
       reason: error instanceof Error ? error.message : String(error),
+      // A nativeRefuse: the app declined the action on purpose (a refusal is final, not "unavailable").
+      ...((error as any)?.refusal === true ? { refused: true } : {}),
     }
   }
 }

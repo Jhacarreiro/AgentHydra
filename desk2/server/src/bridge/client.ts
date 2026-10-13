@@ -536,8 +536,11 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Queues `text` in a working Claude Desktop chat's own input queue (peer channel only: never typed into its window); it runs when the current turn ends. */
     // AgentHydra answers once the chat's transcript shows the message, which takes seconds and may take its 45 s
     // confirm window: the 4 s every other call gets gave up on deliveries that went through.
-    sendToDesktopChat: (sessionId: string, text: string) =>
-      request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true }, DELIVERY_TIMEOUT_MS),
+    // `holdSecs`: how long the note stays worth sending if its chat is busy. A caller that sends on a clock
+    // passes its own cadence (Desk's orchestrator peeks each running chat every 10 min, foreman.ts PEEK_MS);
+    // unset, a held note waits up to the 24 h expiry, as a person's note does.
+    sendToDesktopChat: (sessionId: string, text: string, holdSecs?: number) =>
+      request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true, ...(holdSecs ? { hold_secs: holdSecs } : {}) }, DELIVERY_TIMEOUT_MS),
     /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
     branchSession: (sessionId: string, uuid: string, title: string) =>
       post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),

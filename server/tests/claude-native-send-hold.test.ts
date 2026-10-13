@@ -141,6 +141,34 @@ describe('native send hold', () => {
     a.stop()
   })
 
+  it('never sends a note held past its own time limit, long before the 24 h expiry', async () => {
+    const a = app([])
+    a.hold(req, 10 * 60 * 1000)
+    a.state.clock += 11 * 60 * 1000
+    await a.drain()
+    expect(a.sent).toHaveLength(0)
+    expect(a.list()[0].state).toBe('expired')
+    a.stop()
+  })
+
+  it('settles a note the app refused as final, and never sends it again', async () => {
+    const a = app([
+      {
+        ok: false,
+        unavailable: true,
+        refused: true,
+        reason: 'NATIVE_REFUSAL: the chat is archived',
+      },
+    ])
+    a.hold(req)
+    await a.drain()
+    expect(a.list()[0].state).toBe('not-arrived')
+    expect(a.list()[0].reason).toBe('NATIVE_REFUSAL: the chat is archived')
+    await a.drain()
+    expect(a.sent).toHaveLength(1)
+    a.stop()
+  })
+
   it('sends a message held by an earlier daemon once its chat is idle, with no new hold', async () => {
     const dir = mkdtempSync(join(tmpdir(), 'native-hold-'))
     const journalPath = join(dir, 'held-sends.json')
