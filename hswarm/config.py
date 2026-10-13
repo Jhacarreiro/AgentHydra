@@ -312,6 +312,12 @@ _ROUTE_VIA_FREE_TOOLS_DEFAULT = ("read_file", "list_dir", "glob", "grep", "outli
 ROUTE_VIA_FREE_TOOLS = _ROUTE_VIA_FREE_TOOLS_DEFAULT
 _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general")
 ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
+# `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
+# and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
+# whose provider has an idle account with room is asked; with none, the task takes its API route. A profile not listed
+# asks for its Claude family on whichever account is idle, which a ChatGPT account answers on Luna Instant (GPT-5.6 mini).
+_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {}
+ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 
 _CORES = os.cpu_count() or 4
 # Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
@@ -501,6 +507,7 @@ def _inherit() -> None:
 def _apply_settings(doc: dict) -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS
     cap = doc.get("daily_cap_usd")
     if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
         DAILY_CAP_USD = float(cap)
@@ -525,6 +532,10 @@ def _apply_settings(doc: dict) -> None:
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
     if isinstance(ftp, list) and all(isinstance(p, str) for p in ftp):
         ROUTE_VIA_FREE_TOOL_PROFILES = tuple(p.strip().lower() for p in ftp)
+    fta = doc.get("route_via_free_tool_asks")
+    if isinstance(fta, dict):
+        ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
+                                    if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
     bias = doc.get("load_bias")
     if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
         LOAD_BIAS = float(bias)
@@ -552,6 +563,7 @@ _BUILTIN_DOCS = _builtins()
 def _reset() -> None:
     global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS
     for table in (PROVIDERS, MODELS, ALIASES, ROUTES, ROUTES_CC, DISABLED_MODELS, PRIORITY, ROLES):
         table.clear()
     ROLES.update(_ROLES_DEFAULT)
@@ -562,6 +574,7 @@ def _reset() -> None:
     ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S = True, None, 90.0
     ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES = True, None, _ROUTE_VIA_FREE_PROFILES_DEFAULT
     ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOLS_DEFAULT, _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
+    ROUTE_VIA_FREE_TOOL_ASKS = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
     for name, doc in _BUILTIN_DOCS:
         _add_provider(name, doc, user=False)
 

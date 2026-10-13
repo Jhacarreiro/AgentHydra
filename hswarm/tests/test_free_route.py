@@ -332,6 +332,30 @@ def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake,
     assert note is None and res.status == "ok" and res.data == {"n": 42}
 
 
+@pytest.mark.parametrize("claude_usage, asks, sent", [
+    ("5h 40%, week 3%", ("sonnet@claude", "gpt-6"), {"model": "sonnet", "provider": "claude"}),
+    ("5h 95%, week 3%", ("sonnet@claude", "gpt-6"), {"model": "gpt-6", "provider": "chatgpt"}),
+    ("5h 95%, week 3%", ("sonnet@claude",), None),
+])
+def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path, monkeypatch, claude_usage, asks, sent):
+    # A Claude account near the end of its 5-hour window is passed over: a thread of several messages there hits its limit.
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_PROFILES", ("general", "decision"))
+    monkeypatch.setattr(config, "ROUTE_VIA_FREE_TOOL_ASKS", {"decision": asks})
+    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
+    f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt],
+             reply=['<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>', "It is 42."])
+    task = _read_task(tmp_path)
+    task.profile = "decision"
+    res, note = _consult(task)
+    if sent is None:
+        assert res is None and note["short"] == "free" and f.chats == []
+        return
+    assert note is None and res.status == "ok" and res.answer == "It is 42."
+    first, after = (c["tasks"][0] for c in f.chats)
+    assert {k: first.get(k) for k in ("model", "provider")} == sent
+    assert after["chat_id"] == "c1" and "model" not in after and "provider" not in after
+
+
 def test_a_free_tool_run_that_fails_goes_to_its_api_route(fake, tmp_path):
     fake(state="failed")
     res, note = _consult(_read_task(tmp_path))

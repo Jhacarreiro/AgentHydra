@@ -112,9 +112,10 @@ class FreeChatClient:
     """One task's Free thread. `chat` has the provider client's shape (agent._call_turn's keywords); every keyword
     a web chat cannot honour (max_tokens, thinking, temperature) is accepted and ignored."""
 
-    def __init__(self, job_id: str, task: Task, family: str | None = None, call=None):
+    def __init__(self, job_id: str, task: Task, family: str | None = None, call=None, provider: str | None = None):
         self.job_id, self.task = job_id, task
-        self.family = family  # a new thread's model: "haiku" or "sonnet" (a ChatGPT account ignores it)
+        self.family = family  # a new thread's model: "haiku", "sonnet" (a ChatGPT account ignores both), "gpt-6", ...
+        self.provider = provider  # the provider a new thread must run on, else whichever account is idle
         self.call = call  # free_route._call: one tool call on AgentHydra's MCP endpoint
         self.chat_id: str | None = None
         self.account = None
@@ -196,6 +197,8 @@ class FreeChatClient:
             item["name"] = f"hswarm {self.job_id} {self.task.id}" + (f" r{self.fresh + 1}" if self.fresh else "")
             if self.family:
                 item["model"] = self.family
+            if self.provider:
+                item["provider"] = self.provider
         else:
             item["chat_id"] = self.chat_id
         deadline = time.monotonic() + TURN_CAP_S

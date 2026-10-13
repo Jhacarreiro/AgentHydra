@@ -14,6 +14,7 @@ import asyncio
 import dataclasses
 import json
 import logging
+import re
 import time
 import urllib.error
 import urllib.request
@@ -106,14 +107,45 @@ async def _call(name: str, arguments: dict, timeout: float) -> dict:
 _ERRORS = (OSError, ValueError, KeyError, IndexError, TypeError, asyncio.TimeoutError)
 
 
-def _idle(status: dict) -> int:
+def _idle(status: dict, provider: str | None = None) -> int:
     """Signed-in accounts neither busy, resting after a failed send (mcp-free.ts restingFor) nor paced out of
-    new chats for now (mcp-free.ts pacedOut)."""
+    new chats for now (mcp-free.ts pacedOut); with a provider, only that provider's accounts with room (_room)."""
     if not status.get("ready"):
         return 0
     return sum(1 for a in status.get("accounts") or []
                if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting")
-               and not a.get("paced"))
+               and not a.get("paced") and (provider is None or (a.get("provider") == provider and _room(a))))
+
+
+CHATGPT_MODELS = ("gpt-6", "luna-thinking")  # free_chat's ChatGPT models (mcp-free.ts CHATGPT_MODELS)
+CLAUDE_FULL_PCT = 80  # a Claude account this far into its 5-hour window is not asked for a thread (mcp-free.ts roomBand 3)
+
+
+def _room(account: dict) -> bool:
+    """Whether a Claude account's 5-hour window has room for a thread of several messages ("5h 43%, week 19%" in
+    free_status); ChatGPT's everyday text has no window, and a Claude account with no reading yet counts as room."""
+    m = re.search(r"\b5h (\d+)%", str(account.get("usage") or ""))
+    return account.get("provider") != "claude" or not m or int(m.group(1)) < CLAUDE_FULL_PCT
+
+
+def _ask(ask: str) -> tuple[str, str | None]:
+    """A route_via_free_tool_asks entry as free_chat's (model, provider): "sonnet@claude", or "gpt-6" (ChatGPT's)."""
+    model, _, provider = ask.partition("@")
+    return model, provider or ("chatgpt" if model in CHATGPT_MODELS else None)
+
+
+def _pick(task: Task, status: dict, unseen: int) -> tuple[str, str | None] | None:
+    """The (model, provider) a task's Free thread asks for, or None when no account can take it now: a tool task of a
+    profile with asks (config.ROUTE_VIA_FREE_TOOL_ASKS) takes the first whose provider has an idle account with room;
+    any other task asks for its Claude family on whichever account is idle."""
+    asks = config.ROUTE_VIA_FREE_TOOL_ASKS.get(task.profile or "") if task.tools != "none" else None
+    if not asks:
+        family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
+        return (family, None) if _idle(status) - unseen > 0 else None
+    for model, provider in map(_ask, asks):
+        if _idle(status, provider) - unseen > 0:
+            return model, provider
+    return None
 
 
 def _short(status: dict, capped: bool) -> dict | None:
@@ -244,14 +276,15 @@ async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple
             return None, _miss(task, "free results unavailable", "error", "unavailable", one, accounts)
 
 
-async def _serve_tools(job_id: str, task: Task, accounts: list | None = None) -> tuple[Result | None, dict | None]:
+async def _serve_tools(job_id: str, task: Task, accounts: list | None = None,
+                       ask: tuple[str, str | None] | None = None) -> tuple[Result | None, dict | None]:
     """A tool task on one Free thread: the API loop itself (agent.run_api_task) with a FreeChatClient for its wire, so the
     sandbox, receipts, schema check, loop guard and wall are the API route's own. Anything short of an ok result goes to
     its API route, which starts over; its tools only read, so the Free try left nothing behind."""
     from .agent import run_api_task
 
-    family = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
-    client = FreeChatClient(job_id, task, family, call=_call)
+    model, provider = ask or ("haiku" if task.profile in HAIKU_PROFILES else "sonnet", None)
+    client = FreeChatClient(job_id, task, model, call=_call, provider=provider)
     leg = dataclasses.replace(task, model="free:web", timeout_s=min(task.timeout_s, TOOL_CAP_S))
     res, _ = await run_api_task(client, leg, user_tag=job_id)
     one = {"account": client.account, "model": client.model, "chat_id": client.chat_id}
@@ -289,14 +322,16 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
     if not isinstance(status, dict):
         return None, None
-    if _idle(status) - unseen <= 0 or capped:
+    ask = None if capped else _pick(task, status, unseen)
+    if ask is None:
         return None, _short(status, capped)
     now = time.monotonic()
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below
     try:
-        serve = _serve if task.tools == "none" else _serve_tools
-        return await serve(job_id, task, status.get("accounts"))
+        if task.tools == "none":
+            return await _serve(job_id, task, status.get("accounts"))
+        return await _serve_tools(job_id, task, status.get("accounts"), ask)
     finally:
         _ACTIVE -= 1
         if now in _SENT:  # a finished task's account is free again, however recently it was sent
