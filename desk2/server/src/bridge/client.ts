@@ -185,6 +185,10 @@ export interface AhWorker {
   origin?: { kind: 'chat'; sessionId: string } | { kind: 'worker'; workerId: string }
   /** The wave it belongs to: a task of it, or (kind 'manage') the wave's manager. */
   wave?: string | null
+  /** A manager held while its wave runs. */
+  hold?: 'wave' | null
+  /** What it asked with climayte_ask and waits on. */
+  question?: { text: string; options?: string[]; at: number }
   /** Its current message's own estimate (climayte-eta.ts); `tookS`/`doneAt` once that message ended done.
    *  Absent before 2026-10-05 and when it gave none. */
   eta?: { minutes: number; at: number; attempt: number; tookS?: number; doneAt?: number }

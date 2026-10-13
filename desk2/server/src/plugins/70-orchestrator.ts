@@ -12,9 +12,9 @@
 // no act. Own page only, and GET /api/orchestrator/model says which model the judge asks.
 // README "What Desk 2 adds", the orchestrator.
 
-import { readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import type { Hono } from 'hono'
 import type { AccountInfo, ChatSummary, CliMayteWorker, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
@@ -40,6 +40,7 @@ import {
 } from '../orchestrator/judge'
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank, WAIT_MS } from '../orchestrator/plan'
+import { stuckWorkers } from '../orchestrator/stuck'
 import { notOwnPage } from '../own-page'
 
 const WHAT = "the orchestrator's plan"
@@ -58,6 +59,8 @@ const TICK_MS = 60_000
 /** Acts kept for the page. */
 const ACTS_KEPT = 50
 const HOUR_MS = 3_600_000
+/** The wait before a stuck worker's failed nudge or cancel is tried again: after the first failure, the second, then each later one. */
+const STUCK_BACKOFF_MS = [10 * 60_000, 30 * 60_000, 2 * HOUR_MS]
 /** A job or worker still running this long after a chat began waiting on it is overdue, and its chat is judged anyway. */
 const WAIT_OVERDUE_MS = 6 * HOUR_MS
 /** Judgments kept for the page. */
@@ -136,6 +139,30 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const sends = new Map<string, { at: number; kind: 'note' | 'continue' }[]>()
   /** Chat id -> the things it waited on that got their one nudge (a waiting chat's waitingOn, joined). */
   const nudged = new Map<string, Set<string>>()
+  /** "<worker id>|<reason>" -> already acted on (a nudge or a cancel), kept in a file so a restart does not repeat it. */
+  const stuckFile = typeof ctx.home === 'string' ? join(ctx.home, 'orchestrator-stuck.json') : null
+  /** "<worker id>|<reason>" -> failed attempts so far and the earliest time of the next one. */
+  const stuckRetry = new Map<string, { fails: number; next: number }>()
+  const stuckDone = new Set<string>()
+  try {
+    const saved = stuckFile ? (JSON.parse(readFileSync(stuckFile, 'utf8')) as { done?: string[]; retry?: Record<string, { fails: number; next: number }> } | string[]) : null
+    if (Array.isArray(saved)) for (const k of saved) stuckDone.add(k)
+    else if (saved) {
+      for (const k of saved.done ?? []) stuckDone.add(k)
+      for (const [k, v] of Object.entries(saved.retry ?? {})) stuckRetry.set(k, v)
+    }
+  } catch {
+    /* no record yet */
+  }
+  const saveStuck = (): void => {
+    try {
+      if (!stuckFile) return
+      mkdirSync(dirname(stuckFile), { recursive: true })
+      writeFileSync(stuckFile, JSON.stringify({ done: [...stuckDone], retry: Object.fromEntries(stuckRetry) }))
+    } catch {
+      /* kept in memory for this run */
+    }
+  }
   /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
   let resolved: { setting: string; model: string } | null = null
 
@@ -463,6 +490,48 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return candidates
   }
 
+  /** Every CliMayte worker stuck past STUCK_MS (orchestrator/stuck.ts) gets one act per reason: its origin chat is
+   *  nudged, or with no such chat the worker is cancelled (its result and question stay on record). */
+  async function stuckPass(now: number): Promise<void> {
+    const workers = await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
+    const stuck = (workers ? stuckWorkers(workers, now) : []).filter((s) => !stuckDone.has(`${s.worker.id}|${s.reason}`) && now >= (stuckRetry.get(`${s.worker.id}|${s.reason}`)?.next ?? 0))
+    if (!stuck.length) return
+    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), get<ExternalSession[]>('/api/external/sessions')])
+    for (const s of stuck) {
+      if (!armed()) return
+      const w = s.worker
+      const sid = w.originSessionId
+      const desk = sid ? (own ?? []).find((ch) => ch.sessionId === sid && !ch.archived) : undefined
+      const outside = sid && !desk ? (others ?? []).find((x) => x.id === sid && !x.archived && x.source === 'desktop') : undefined
+      const mins = Math.round((now - s.since) / 60_000)
+      const how = mins >= 120 ? `${Math.round(mins / 6) / 10} h` : `${mins} min`
+      const base = { at: now, id: w.id, title: w.title, detail: s.why }
+      const key = `${w.id}|${s.reason}`
+      let error: string | null
+      let did: OrchestratorAct['did']
+      if (desk || outside) {
+        const text = `[${ORCHESTRATOR_FROM}] Not from the user.
+CliMayte worker ${w.id} (${w.title}) has sat stuck for ${how}: ${s.why}. Answer it with climayte_send ${w.id}, decide it yourself if you can, or cancel it with climayte_cancel ${w.id}.`
+        const chat = desk ?? outside!
+        error = await send({ id: chat.id, title: chat.title, source: desk ? 'desk' : 'desktop', kind: 'waiting' } as Candidate, text)
+        did = 'nudged'
+      } else {
+        error = await post(`/api/climayte/workers/${encodeURIComponent(w.id)}/cancel`, { reason: `stuck ${how} (${s.why}) and no chat of its origin is left to answer` })
+        did = 'flagged'
+      }
+      acts.unshift({ ...base, move: 'watch', did, ...(error ? { error } : {}) })
+      if (!error) {
+        stuckDone.add(key)
+        stuckRetry.delete(key)
+      } else {
+        // A failed act is retried after 10 min, then 30 min, then every 2 h.
+        const fails = (stuckRetry.get(key)?.fails ?? 0) + 1
+        stuckRetry.set(key, { fails, next: now + STUCK_BACKOFF_MS[Math.min(fails - 1, STUCK_BACKOFF_MS.length - 1)]! })
+      }
+      saveStuck()
+    }
+  }
+
   function tick(): Promise<void> {
     ticking ??= (async () => {
       if (!armed()) return
@@ -478,6 +547,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
           if (armed()) await judgeOne(c)
         })
         for (const [id, j] of judgments) if (now - j.at > JUDGED_KEPT_MS) judgments.delete(id)
+        if (armed()) await stuckPass(Date.now())
       }
       acts.splice(ACTS_KEPT)
     })()

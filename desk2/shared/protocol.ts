@@ -408,6 +408,13 @@ export interface CliMayteWorker {
    * nothing here can cancel it or send to it: the window keeps it apart from this PC's workers.
    */
   pc?: string | null
+  /** What it asked with climayte_ask and waits on (absent: nothing). `at` is epoch ms. */
+  question?: { text: string; at: number }
+  /** ISO time a waiting worker is expected to start (a usage wall); absent when not known. */
+  waitUntil?: string | null
+  /** The wave it belongs to (a task of it, or its manager) and 'wave' for a manager held on a live wave. */
+  wave?: string | null
+  hold?: 'wave' | null
 }
 
 /**

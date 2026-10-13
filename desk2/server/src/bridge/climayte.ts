@@ -98,6 +98,10 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, manag
     verdict: w.verdicts?.at(-1)?.verdict ?? null,
     error: w.error ?? null,
     eta: w.eta ? { minutes: w.eta.minutes, at: w.eta.at, tookS: w.eta.tookS ?? null } : null,
+    ...(w.question ? { question: { text: w.question.text, at: w.question.at } } : {}),
+    ...(w.waitUntil ? { waitUntil: w.waitUntil } : {}),
+    ...(w.wave ? { wave: w.wave } : {}),
+    ...(w.hold ? { hold: w.hold } : {}),
   }
 }
 
