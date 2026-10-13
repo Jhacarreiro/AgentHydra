@@ -207,7 +207,7 @@ import { cliAuthStatus } from './core/cli-quick-add'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { POINTER_DIR } from './instance'
-import { type SwarmJobPing, startSwarmJobPing } from './swarm-job-ping'
+import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
 
 export {
   setCliMayteAccountsProvider,
@@ -2034,6 +2034,8 @@ const desk: NonNullable<CliMaytePingDeps['desk']> = {
 }
 
 let swarmPing: SwarmJobPing | null = null
+const swarmJobsDir = (): string =>
+  join(process.env.HSWARM_HOME || join(homedir(), '.hswarm'), 'jobs')
 
 function startPing(): void {
   if (ping) return
@@ -2046,13 +2048,15 @@ function startPing(): void {
     composer,
     desk,
     native,
+    // A job line goes only to a chat that has not read how the job ended (hswarm's seen.json).
+    swarmJobSeen: (id, sid) => seenByChat(swarmJobsDir(), id, sid),
     ...pingOverrides,
   })
   // The real daemon only: a test never looks at the owner's jobs or pings a real chat.
   if (!pingOverrides && process.env.NODE_ENV !== 'test') {
     const outbox = ping
     swarmPing = startSwarmJobPing({
-      jobsDir: join(process.env.HSWARM_HOME || join(homedir(), '.hswarm'), 'jobs'),
+      jobsDir: swarmJobsDir(),
       emit: (o, events) => outbox.emit(o, events),
       off: () => existsSync(PING_OFF),
     })

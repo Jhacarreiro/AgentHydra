@@ -195,6 +195,7 @@ function harness(
     desk?: { ok: boolean; reason: string; notDesk?: boolean }
     native?: NativeAnswer | ((n: number, text: string) => NativeAnswer)
     send?: (id: string, text: string) => { ok: boolean; message: string }
+    swarmJobSeen?: CliMaytePingDeps['swarmJobSeen']
     start?: number
   } = {},
 ) {
@@ -274,6 +275,7 @@ function harness(
       return opts.send ? opts.send(id, text) : { ok: true, message: 'queued' }
     },
     journal: (line) => journal.push(line),
+    swarmJobSeen: opts.swarmJobSeen,
   }
   const ping = startCliMaytePing(deps)
   const change = (w: PingWorker) => {
@@ -1006,6 +1008,119 @@ describe('stale lines are dropped when the outbox flushes', () => {
     await h.at(HOLD_FINISHED_MS + 1000)
     expect(h.sent).toHaveLength(1)
     expect(h.sent[0].text).toContain('check passed')
+    h.ping.stop()
+  })
+
+  test('a sent-back line is left out once the same worker has newer news', async () => {
+    // 2026-10-13: a chat busy for hours got one ping per sent-back round of the same worker, then its failure.
+    const a = running('w-a', { check: 'bun test' })
+    const fail = (n: number) =>
+      Array.from({ length: n }, (_, i) => ({
+        verdict: 'fail' as const,
+        by: 'check',
+        at: T0 + i + 1,
+      }))
+    const delivered: string[] = []
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: (n, text) => {
+        if (n < 5) return { ok: false, unavailable: false, busy: true }
+        delivered.push(text)
+        return { ok: true, unavailable: false }
+      },
+    })
+    h.change({ ...a, status: 'queued', verdicts: fail(1) })
+    await h.at(60_000)
+    h.change({ ...a, status: 'queued', verdicts: fail(2), attempts: [attempt(35), attempt(35)] })
+    await h.at(2 * 60_000)
+    h.change({
+      ...a,
+      status: 'failed',
+      error: 'The check still failed after every round.',
+      verdicts: fail(3),
+      attempts: [attempt(35), attempt(35), attempt(35)],
+    })
+    await h.at(30 * 60_000)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toContain(
+      'w-a "Task w-a": failed: its check still failed after every round',
+    )
+    expect(delivered[0]).not.toContain('check failed')
+    expect(pendingIn(h.dir)).toBe(0)
+    h.ping.stop()
+  })
+
+  test('a sent-back line stays when the newer line is a question answered since', async () => {
+    // A question supersedes nothing: answered, it is dropped too, and the round would be lost (review, 2026-10-13).
+    const a = running('w-a', { check: 'bun test' })
+    const delivered: string[] = []
+    let free = false
+    const h = harness({
+      workers: [a],
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: (_n, text) => {
+        if (!free) return { ok: false, unavailable: false, busy: true }
+        delivered.push(text)
+        return { ok: true, unavailable: false }
+      },
+    })
+    const sentBack = {
+      ...a,
+      status: 'queued' as const,
+      verdicts: [{ verdict: 'fail' as const, by: 'check', at: T0 + 1 }],
+    }
+    h.change(sentBack)
+    await h.at(60_000)
+    h.change({ ...sentBack, status: 'done', question: { text: 'Which bucket?', at: T0 + 2 } })
+    await h.at(2 * 60_000)
+    h.change({ ...sentBack, status: 'running' })
+    free = true
+    await h.at(30 * 60_000)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toContain('w-a "Task w-a": check failed, sent back.')
+    expect(delivered[0]).not.toContain('asks:')
+    h.ping.stop()
+  })
+
+  test('an HSwarm job line its chat has read since is left out', async () => {
+    let seen = false
+    const delivered: string[] = []
+    const asked: Array<[string, string]> = []
+    const h = harness({
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      native: (n, text) => {
+        if (n < 3) return { ok: false, unavailable: false, busy: true }
+        delivered.push(text)
+        return { ok: true, unavailable: false }
+      },
+      swarmJobSeen: (id, sid) => {
+        asked.push([id, sid])
+        return seen
+      },
+    })
+    const job = (id: string) => ({
+      key: `swarm:${id}`,
+      kind: 'swarm-job' as const,
+      workerId: null,
+      group: '',
+      at: T0,
+      line: `HSwarm job ${id} done: 1 ok, 0 error, 0 cancelled, $0.01. Read it with hswarm_results('${id}').`,
+    })
+    h.ping.emit(CHAT, [job('20261013-085650-d353')])
+    await h.at(2 * 60_000) // the chat is busy: the line waits
+    expect(delivered).toHaveLength(0)
+    seen = true // the chat read the job meanwhile
+    await h.at(30 * 60_000)
+    expect(delivered).toHaveLength(0)
+    expect(asked.at(-1)).toEqual(['20261013-085650-d353', SID])
+    expect(pendingIn(h.dir)).toBe(0)
+    // A job the chat has not read still goes.
+    seen = false
+    h.ping.emit(CHAT, [job('20261013-090000-beef')])
+    await h.at(60 * 60_000)
+    expect(delivered).toHaveLength(1)
+    expect(delivered[0]).toContain('20261013-090000-beef')
     h.ping.stop()
   })
 

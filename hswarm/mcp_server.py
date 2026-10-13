@@ -27,7 +27,8 @@ try:  # mcp >= 2
 except ImportError:  # mcp 1.x
     from mcp.server.fastmcp import FastMCP
 
-from . import archive, batching, blobs, booking, config, dispatch, health, mcp_policy, model_watch, proposals, review, shared, utilization, verdict
+from . import archive, batching, blobs, booking, caller, config, dispatch, health, mcp_policy, model_watch, proposals, review, shared, utilization, verdict
+from .job import mark_seen
 from .jobs import JobManager, manager
 from .ledger import usage_report
 from .results import brief_summary, job_payload, results_from_disk
@@ -227,6 +228,16 @@ async def hswarm_run(
     return payload
 
 
+async def _saw(job_id: str, state: str | None) -> None:
+    """The calling chat now knows how this job ended (job.mark_seen), so the daemon's job ping never tells it again."""
+    if not state or state == "running":
+        return
+    try:
+        await asyncio.to_thread(mark_seen, job_id, caller.session_id())
+    except Exception:  # noqa: BLE001 - a stamp never fails the read it rides on; the cost is one ping too many
+        return
+
+
 @_served
 @_returns_errors
 async def hswarm_status(job_id: str, verbose: bool = False) -> dict:
@@ -241,6 +252,7 @@ async def hswarm_status(job_id: str, verbose: bool = False) -> dict:
     except KeyError:
         # Off the loop: reading a big record (0.5 s on job cf71) stalled every chat on the shared server.
         full = await asyncio.to_thread(JobManager.summary_on_disk, job_id)
+    await _saw(job_id, full.get("state"))
     return full if verbose else brief_summary(full)
 
 
@@ -279,6 +291,7 @@ async def hswarm_results(job_id: str, ids: list[str] | None = None, status: str 
         # whether the job is still a folder or has aged into its archive.
         for r in out["results"]:
             r["transcript"] = archive.transcript(job_id, r["id"])
+    await _saw(job_id, (out.get("summary") or {}).get("state"))
     return out
 
 
@@ -311,9 +324,11 @@ async def hswarm_cancel(job_id: str) -> dict:
     within ~10 s; a job nothing runs any more (a killed `python -m hswarm run`) is marked cancelled on disk.
     Answers like hswarm_status: state, counts, cost and what needs a look."""
     try:
-        return brief_summary(manager().cancel(job_id).summary())
+        out = brief_summary(manager().cancel(job_id).summary())
     except KeyError:
-        return brief_summary(await asyncio.to_thread(JobManager.cancel_on_disk, job_id))
+        out = brief_summary(await asyncio.to_thread(JobManager.cancel_on_disk, job_id))
+    await _saw(job_id, "cancelled")  # its answer shows how the job ended, as hswarm_status does: no ping needed
+    return out
 
 
 # Frontier loops started in this server process: loop id -> (the loop, its asyncio task). A loop outlives the tool

@@ -26,9 +26,12 @@ const NOW = Date.UTC(2026, 9, 12, 21, 0, 0)
 function job(
   jobs: string,
   id: string,
-  o: { returnedAt?: number; state?: string; climayteWorker?: boolean } = {},
+  o: { returnedAt?: number; state?: string; climayteWorker?: boolean; seenBy?: string[] } = {},
 ) {
   mkdirSync(join(jobs, id), { recursive: true })
+  // hswarm's stamp for each chat that read the job once it ended, or cancelled it (hswarm/job.py mark_seen).
+  if (o.seenBy) mkdirSync(join(jobs, id, 'seen'), { recursive: true })
+  for (const s of o.seenBy ?? []) writeFileSync(join(jobs, id, 'seen', s), String(NOW - 60_000))
   const doc = {
     state: o.state ?? 'done',
     finished: '2026-10-12T21:00:00+00:00',
@@ -135,6 +138,23 @@ describe('HSwarm job pings', () => {
     await later.scan()
     later.stop()
     expect(later.sent).toEqual([])
+  })
+
+  test('a job its chat already read once it ended, or cancelled, never pings; a read by another chat does not count', async () => {
+    // 2026-10-13: a chat that had read one job's results and cancelled another was pinged about both an hour later.
+    const dir = scratch()
+    const jobs = scratch()
+    job(jobs, '20261012-203000-abcd', { returnedAt: NOW - 3_000_000, seenBy: [SID] })
+    job(jobs, '20261012-203100-abce', {
+      returnedAt: NOW - 3_000_000,
+      seenBy: ['0b6f2b0e-2222-4c4c-9a9a-123456789abc'],
+    })
+    const d = daemon(dir, jobs)
+    await d.scan()
+    d.stop()
+    expect(d.sent).toHaveLength(1)
+    expect(d.sent[0]).toContain('20261012-203100-abce')
+    expect(d.sent[0]).not.toContain('20261012-203000-abcd')
   })
 
   test('a job created more than a day ago never pings', async () => {

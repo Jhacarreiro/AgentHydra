@@ -12,11 +12,16 @@
  * once by the outbox, which a daemon restart replays. Only jobs created in the last 24 h are looked
  * at, found by the date in the folder's name; a job.json is read in full only once it is final.
  * A caller that is itself a CliMayte worker is not pinged (its stamp holds no worker id).
+ *
+ * Nor is a chat that has seen how the job ended: hswarm writes `<jobs>/<id>/seen/<session id>` (epoch ms) when
+ * a chat reads a final job's status or results, or cancels it (hswarm/job.py mark_seen). On 2026-10-13 a chat that had
+ * read one job and cancelled another was pinged about both an hour later. The outbox asks again (seenByChat) before a
+ * line that waited on a busy chat goes out.
  */
 import { closeSync, existsSync, openSync, readdirSync, readFileSync, readSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import type { CliMayteOrigin, PingEvent } from './climayte-ping'
+import { type CliMayteOrigin, type PingEvent, SWARM_KEY } from './climayte-ping'
 
 export const SWARM_POLL_MS = 30_000
 export const SWARM_MAX_AGE_MS = 24 * 3_600_000
@@ -76,6 +81,11 @@ function peek(file: string): { state: string; returnedAt: number } | null {
 
 const n = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 
+/** Whether this chat has seen how the job ended: hswarm's stamp `seen/<session id>` is beside the job. */
+export function seenByChat(jobsDir: string, id: string, sessionId: string): boolean {
+  return UUID.test(sessionId) && existsSync(join(jobsDir, id, 'seen', sessionId))
+}
+
 export function startSwarmJobPing(deps: SwarmJobPingDeps): SwarmJobPing {
   const now = deps.now ?? Date.now
   const setIv =
@@ -106,7 +116,11 @@ export function startSwarmJobPing(deps: SwarmJobPingDeps): SwarmJobPing {
     }
     const caller = (doc.caller ?? {}) as Record<string, unknown>
     const sessionId = typeof caller.session_id === 'string' ? caller.session_id : ''
-    if (!UUID.test(sessionId) || caller.climayte_worker === true) {
+    if (
+      !UUID.test(sessionId) ||
+      caller.climayte_worker === true ||
+      seenByChat(deps.jobsDir, id, sessionId)
+    ) {
       settled.add(id)
       return
     }
@@ -130,7 +144,7 @@ export function startSwarmJobPing(deps: SwarmJobPingDeps): SwarmJobPing {
       `${n(counts.error)} error, ${n(counts.cancelled)} cancelled, $${cost.toFixed(2)}. ` +
       `Read it with hswarm_results('${id}').`
     const queued = deps.emit(origin, [
-      { key: `swarm:${id}`, kind: 'swarm-job', workerId: null, group: '', at: now(), line },
+      { key: `${SWARM_KEY}${id}`, kind: 'swarm-job', workerId: null, group: '', at: now(), line },
     ])
     // Not queued: the outbox has this key already, or pings are switched off (looked at again).
     if (queued || !deps.off?.()) settled.add(id)

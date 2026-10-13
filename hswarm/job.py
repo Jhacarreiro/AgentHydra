@@ -19,6 +19,28 @@ WEB_HINT = ("these hosts were not fetched: allow once by re-running the tasks wi
             "always with hswarm_web(allow=[host]) or `hswarm web --allow HOST`; leave them out to deny")
 
 
+SEEN_DIR = "seen"  # <job>/seen/<session id>: epoch ms, one file per chat that saw how the job ended (mark_seen)
+
+
+def mark_seen(job_id: str, session_id: str) -> None:
+    """Records that this chat has seen how the job ended: it read the job's status or results once it was final, or
+    cancelled it. The AgentHydra daemon's job ping (server/src/swarm-job-ping.ts seenByChat) looks for the file and
+    never tells that chat about the job again; on 2026-10-13 a chat that had read one job and cancelled another was
+    pinged about both an hour later. One file per chat, written by exclusive create: two chats reading at once never
+    drop each other's stamp, and job.json (seconds to restamp when large) is never touched. Best effort: a stamp that
+    cannot be written only costs one ping too many."""
+    folder = config.JOBS_DIR / job_id
+    safe = lambda s: bool(s) and s.replace("-", "").replace("_", "").isalnum()  # noqa: E731 - names, never paths
+    if not safe(session_id) or not safe(job_id) or not folder.is_dir():
+        return
+    try:
+        (folder / SEEN_DIR).mkdir(exist_ok=True)
+        with open(folder / SEEN_DIR / session_id, "x", encoding="utf-8") as f:
+            f.write(str(int(dt.datetime.now(dt.timezone.utc).timestamp() * 1000)))
+    except OSError:  # FileExistsError: stamped already
+        return
+
+
 def new_job_id() -> str:
     # Timestamp first so the jobs directory sorts chronologically; a hex tail keeps two jobs in one second apart.
     return dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S") + "-" + secrets.token_hex(2)

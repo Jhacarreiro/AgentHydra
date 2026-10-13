@@ -199,20 +199,10 @@ async function desktopProfileOf(cliSessionId: string): Promise<string | null> {
   return desktopHomeFor(cliSessionId).catch(() => null)
 }
 
-/** sendOrHold for a chat known only by its CLI session id, sent to the desktop profile whose app holds it. */
-export async function sendOrHoldToChat(
-  cliSessionId: string,
-  text: string,
-  fromName: string,
-): Promise<NativeSendOutcome> {
-  const profileDir = await desktopProfileOf(cliSessionId)
-  if (!profileDir)
-    return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
-  return sendOrHold(profileDir, cliSessionId, text, fromName)
-}
-
-/** tryNativeSend for a chat known only by its CLI session id (the same profile lookup as sendOrHoldToChat).
- *  Nothing is journalled: a busy chat answers `busy: true` and the caller keeps the message until it is idle. */
+/** tryNativeSend for a chat known only by its CLI session id, sent to the desktop profile whose app holds it.
+ *  Nothing is journalled: a busy chat answers `busy: true` and the caller keeps the message until it is idle.
+ *  (CliMayte's pings once went through the hold queue here; a chat busy for hours then got each stale ping
+ *  separately, one per idle moment, 2026-10-13. The outbox keeps them now and sends what is still news.) */
 export async function tryNativeSendToChat(
   cliSessionId: string,
   text: string,

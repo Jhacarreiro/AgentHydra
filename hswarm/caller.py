@@ -147,6 +147,17 @@ def detect(label: str = "", argv: list[str] | None = None) -> dict:
     }
 
 
+def session_id() -> str:
+    """The calling chat's session id alone, as detect() finds it but without its transcript read: the request's on the
+    shared server, else this process's environment. "" when nothing names one."""
+    if shared.ACTIVE:
+        r = shared.REQUEST.get() or {}
+        if r.get("session"):
+            return str(r["session"])
+        return str((desktop_chat(r["chat"]) if r.get("chat") else {}).get("session") or "")
+    return os.environ.get("CLAUDE_CODE_SESSION_ID") or ""
+
+
 def key(caller: dict | None) -> str:
     """The grouping key the usage report prints: account, then the chat, then where it ran."""
     c = caller or {}

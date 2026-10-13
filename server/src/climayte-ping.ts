@@ -136,6 +136,17 @@ export type PingKind =
 const INFO_KINDS: ReadonlySet<PingKind> = new Set(['limited-moved', 'stuck'])
 /** Results the chat can read on its next look: held while the same origin still has live workers. */
 const HELD_KINDS: ReadonlySet<PingKind> = new Set(['finished', 'needs-verdict'])
+/** Where a worker stands after a round: a newer one of these supersedes a queued sent-back line of the same worker.
+ *  Never a question: answered, it is dropped too, and the round would be lost. */
+const OUTCOME_KINDS: ReadonlySet<PingKind> = new Set([
+  'check-failed',
+  'finished',
+  'needs-verdict',
+  'failed',
+  'cancelled',
+])
+/** An HSwarm job's event key is this and its job id (swarm-job-ping.ts). */
+export const SWARM_KEY = 'swarm:'
 const TERMINAL: ReadonlySet<CliMayteStatus> = new Set(['done', 'failed', 'cancelled'])
 
 export interface PingEvent {
@@ -483,6 +494,8 @@ export interface CliMaytePingDeps {
   toast?(n: { title: string; body: string }): Promise<unknown>
   /** One line per failed delivery; appended to `<dir>/pings-journal.jsonl` by default. */
   journal?(line: Record<string, unknown>): void
+  /** Whether the chat has seen how an HSwarm job ended (swarm-job-ping.ts seenByChat): its line is no news then. */
+  swarmJobSeen?(jobId: string, sessionId: string): boolean
 }
 
 export interface CliMaytePing {
@@ -811,10 +824,27 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   }
 
   /** Is this queued line still news? Read against the workers as they are now: a result the chat
-   *  judged while the ping waited, a failure that was sent back, a question that was answered. */
-  const stale = (e: QueuedPing, queued: QueuedPing[], group: PingWorker[]): boolean => {
+   *  judged while the ping waited, a failure that was sent back, a question that was answered, an
+   *  HSwarm job the chat has read. A sent-back line is history once the same worker has a newer outcome
+   *  waiting: a chat busy for hours got one line per round (2026-10-13). A move to another account stays. */
+  const stale = (
+    e: QueuedPing,
+    queued: QueuedPing[],
+    group: PingWorker[],
+    origin: CliMayteOrigin,
+  ): boolean => {
     const w = e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
+    if (
+      e.kind === 'check-failed' &&
+      queued.some((p) => p.workerId === e.workerId && p.seq > e.seq && OUTCOME_KINDS.has(p.kind))
+    )
+      return true
     switch (e.kind) {
+      case 'swarm-job':
+        return (
+          origin.kind === 'chat' &&
+          (deps.swarmJobSeen?.(e.key.slice(SWARM_KEY.length), origin.sessionId) ?? false)
+        )
       case 'needs-verdict':
         return !!w && w.status === 'done' && verdictCoversNewestWork(w)
       case 'finished': // its own check's verdict is why it was sent: only a later one counts
@@ -855,7 +885,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     const k = originKey(box.origin)
     if (inflight.has(k) || !box.pending.length) return
     const group = workersOf(box.origin)
-    const gone = box.pending.filter((e) => stale(e, box.pending, group))
+    const gone = box.pending.filter((e) => stale(e, box.pending, group, box.origin))
     if (gone.length) {
       // Settled while it waited: never sent, never queued again.
       const keys = new Set(gone.map((e) => e.key))

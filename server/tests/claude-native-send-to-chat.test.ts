@@ -41,16 +41,16 @@ afterAll(() => {
   mock.module('../src/core/process', () => realProcess)
 })
 
-const { sendOrHoldToChat } = await import('../src/claude-native-send')
+const { tryNativeSendToChat } = await import('../src/claude-native-send')
 
 test('a send by CLI session id reaches the native control of the desktop profile that holds the chat, and a chat no desktop holds is refused before any app is asked', async () => {
   // The holding profile is configured, so the send gets as far as looking for its app: not running here.
-  expect(await sendOrHoldToChat(HELD, 'Group settled.', 'CliMayte')).toEqual({
+  expect(await tryNativeSendToChat(HELD, 'Group settled.', 'CliMayte')).toEqual({
     ok: false,
     unavailable: true,
     reason: 'the app is not running',
   })
-  expect(await sendOrHoldToChat(NOWHERE, 'Group settled.', 'CliMayte')).toEqual({
+  expect(await tryNativeSendToChat(NOWHERE, 'Group settled.', 'CliMayte')).toEqual({
     ok: false,
     unavailable: true,
     reason: 'no desktop chat holds this session',
