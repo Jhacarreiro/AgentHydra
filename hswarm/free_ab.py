@@ -9,8 +9,11 @@ The four commands, in order (all state lives under ~/.hswarm/free-ab/<run>/, nev
       -> candidates.jsonl: recent tasks of that profile whose tools are all Free-allowed, that the API route
          answered ok, each with its API answer (duplicate prompts dropped, fixed-seed sample).
   python -m hswarm.free_ab arm    --run NAME --model luna-thinking [--provider chatgpt|claude] [--check-reads 8] [--conc 20]
-      -> arm_<model>.jsonl: each candidate through the Free tool route, every new thread asking for that model
-         (any free_chat name: gpt-instant, gpt-thinking, gpt-auto, luna-thinking, or a slug).
+                                  [--check] [--label NAME]
+      -> arm_<label or model>.jsonl: each candidate through the Free tool route, every new thread asking for that model
+         (any free_chat name: gpt-instant, gpt-thinking, gpt-auto, luna-thinking, or a slug). --check asks every ChatGPT
+         thread that answers early to check its claims (the claim check route_via_free_check_profiles turns on per
+         profile); without it the profile's own setting applies. --label names the arm, to run one model twice.
   python -m hswarm.free_ab judge  --run NAME --arm luna-thinking [--budget 20]
       -> judge_tasks_<model>.json, then `hswarm run` on it: a blind critical-profile worker with the task's own
          tools grades the two answers, shown in random order as A/B.
@@ -136,7 +139,7 @@ def cmd_pick(a) -> int:
 
 # ---- arm ----
 
-async def _arm_one(run: str, model: str, i: int, r: dict, stamp: str) -> dict:
+async def _arm_one(run: str, model: str, i: int, r: dict, stamp: str, label: str | None = None) -> dict:
     from . import free_route
     from .spec import Task
     task = Task.from_dict(dict(r["task"]), {}, 0)
@@ -153,7 +156,7 @@ async def _arm_one(run: str, model: str, i: int, r: dict, stamp: str) -> dict:
             break
         await asyncio.sleep(15)
         waited += 15
-    out = {"i": i, "arm": model, "job": r["job"], "id": r["task"]["id"], "profile": task.profile, "tools": r["task"]["tools"],
+    out = {"i": i, "arm": label or model, "job": r["job"], "id": r["task"]["id"], "profile": task.profile, "tools": r["task"]["tools"],
            "wall_s": round(time.monotonic() - t0 - waited, 1), "waited_s": waited, "note": note, "api": r["api"]}
     if res is not None:
         out["free"] = {"status": res.status, "model": res.model, "answer": res.answer, "data": res.data, "turns": res.turns,
@@ -172,6 +175,8 @@ async def _arm(a) -> list[dict]:
     config.ROUTE_VIA_FREE_TOOL_PROFILES = every
     config.ROUTE_VIA_FREE_PROFILES = every
     config.ROUTE_VIA_FREE_TOOL_ASKS = {}
+    if a.check:
+        config.ROUTE_VIA_FREE_CHECK_PROFILES = every
     orig = free_route._call
 
     async def _call(name: str, arguments: dict, timeout: float) -> dict:
@@ -192,7 +197,7 @@ async def _arm(a) -> list[dict]:
 
         async def gated(i, r):
             async with gate:
-                return await _arm_one(a.run, a.model, i, r, stamp)
+                return await _arm_one(a.run, a.model, i, r, stamp, a.label)
         return list(await asyncio.gather(*(gated(i, r) for i, r in enumerate(rows))))
     finally:
         free_route._call = orig
@@ -201,10 +206,10 @@ async def _arm(a) -> list[dict]:
 def cmd_arm(a) -> int:
     logging.basicConfig(level=logging.WARNING, stream=sys.stderr, format="%(asctime)s %(message)s")
     outs = asyncio.run(_arm(a))
-    path = run_dir(a.run) / f"arm_{_slug(a.model)}.jsonl"
+    path = run_dir(a.run) / f"arm_{_slug(a.label or a.model)}.jsonl"
     _write_jsonl(path, outs)
     ok = [o for o in outs if "free" in o]
-    print(f"DONE {a.model}: {len(ok)} of {len(outs)} served on Free; models "
+    print(f"DONE {a.label or a.model}: {len(ok)} of {len(outs)} served on Free; models "
           f"{dict(Counter(o['free']['model'] for o in ok))} -> {path}")
     return 0
 
@@ -360,6 +365,8 @@ def main(argv: list[str] | None = None) -> int:
     s.add_argument("--provider", choices=("chatgpt", "claude"))
     s.add_argument("--check-reads", type=int, default=8)
     s.add_argument("--conc", type=int, default=20)
+    s.add_argument("--check", action="store_true")
+    s.add_argument("--label")
     s.set_defaults(fn=cmd_arm)
     s = sub.add_parser("judge")
     s.add_argument("--run", required=True)
