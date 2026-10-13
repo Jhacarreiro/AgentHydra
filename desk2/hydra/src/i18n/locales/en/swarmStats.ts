@@ -1,11 +1,16 @@
 // Swarm stats card — compact summary of work delegated to HSwarm (ZSwarm's history included).
 export default {
   title: 'Swarm',
-  savedToday: 'Saved today',
-  saved7d: 'Saved 7 days',
-  savedAllTime: 'All-time saved',
-  tasksToday: 'Tasks today',
+  savedToday: 'Kept off Claude · today',
+  saved7d: 'Kept off Claude · 7 days',
+  savedAllTime: 'Kept off Claude · all time',
+  tasksToday: 'Answered tasks today',
   tokensKept: 'Tokens kept off today',
+  basisHint:
+    'Claude list-price value kept off, not money spent or saved: each answered task is priced against the measured {model} sub-agent profile, rules since {since}.',
+  basisHintBare: 'Claude list-price value kept off, not money spent or saved.',
+  oldMethodHint: '{usd} of this total ({rows} rows) is still on the old pricing method.',
+  tasksHint: 'Answered run and ask tasks; {decides} decides and {failed} failed tasks are not counted.',
   fromZswarm: 'from ZSwarm history',
   fromHswarm: 'from HSwarm',
   hswarmTitle: 'HSwarm',

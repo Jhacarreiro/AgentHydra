@@ -12,7 +12,23 @@ export interface SwarmStatsData {
   total: { saved_usd: number | null; est_tokens?: number | null }
   /** Oldest first, as the server sends it. */
   days: SwarmStatsDay[]
-  today: { saved_usd: number | null; tasks: number; est_tokens: number | null }
+  today: {
+    saved_usd: number | null
+    tasks: number
+    est_tokens: number | null
+    by_label?: Partial<Record<'run' | 'ask' | 'decide', { tasks: number; ok: number }>>
+  }
+  /** What "saved" is priced against (list price of the measured sub-agent profile), and since when. */
+  basis?: {
+    method?: number
+    method_since?: string | null
+    profile_model?: string | null
+    profile_usd?: number | null
+    profile_tokens?: number | null
+    profile_updated?: string | null
+  } | null
+  /** Rows still on an older pricing method, and what they add to the total. */
+  old_method?: { saved_usd: number | null; rows: number } | null
   accounts?: { rows: SwarmAccountRow[]; worked?: number; open?: number }
 }
 

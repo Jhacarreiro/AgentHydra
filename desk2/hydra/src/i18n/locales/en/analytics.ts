@@ -37,7 +37,7 @@ export default {
     'Everything sent and received, cache reads included. On a 30-day or all-time window it is the newest 7 days, compared with the 7 before.',
   leadCost: 'Cost at API rates',
   leadAtRate: '{cost} at your rate',
-  leadSaved: 'Saved by HSwarm',
+  leadSaved: 'Kept off Claude by HSwarm',
   leadSavedOpen: 'Open HSwarm',
   leadModel: 'Busiest model',
   leadModelNote:
