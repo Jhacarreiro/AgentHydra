@@ -894,19 +894,70 @@ describe('the outbox', () => {
     h.ping.stop()
   })
 
-  test('a question still reaches a running worker origin at once', async () => {
+  test('a question to a running worker origin goes once its turn ends', async () => {
     const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
     const manager = running('w-manager', { origin: undefined })
     const a = running('w-a', { origin: mgr })
     const h = harness({ workers: [manager, a] })
+    await h.at(5_000)
     h.change({
       ...a,
       status: 'waiting',
       question: { at: T0 + 5_000, text: 'Which account?', options: [] },
     })
     await h.at(20_000)
+    expect(h.workerSends).toHaveLength(0)
+    h.change({ ...manager, status: 'done' })
+    await h.at(40_000)
     expect(h.workerSends).toHaveLength(1)
     expect(h.workerSends[0][1]).toContain('asks: Which account?')
+    h.ping.stop()
+  })
+
+  test('a question answered while the origin runs is dropped when its turn ends', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { origin: undefined })
+    const a = running('w-a', { origin: mgr })
+    const h = harness({ workers: [manager, a] })
+    await h.at(5_000)
+    h.change({
+      ...a,
+      status: 'waiting',
+      question: { at: T0 + 5_000, text: 'Which account?', options: [] },
+    })
+    await h.at(20_000)
+    h.change({ ...a, status: 'running', question: undefined })
+    h.change({ ...manager, status: 'done' })
+    await h.at(60_000)
+    expect(h.workerSends).toHaveLength(0)
+    h.ping.stop()
+  })
+
+  test('a one-worker group finished mid-turn is held, and a verdict made meanwhile leaves no ping', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { origin: undefined })
+    const a = running('w-a', { origin: mgr })
+    const h = harness({ workers: [manager, a] })
+    h.change({
+      ...a,
+      status: 'done',
+      check: 'bun test',
+      verdicts: [{ verdict: 'pass', by: 'check' }],
+    })
+    await h.at(20_000)
+    expect(h.workerSends).toHaveLength(0)
+    h.change({
+      ...a,
+      status: 'done',
+      check: 'bun test',
+      verdicts: [
+        { verdict: 'pass', by: 'check' },
+        { verdict: 'pass', by: 'orchestrator', at: T0 + 30_000 },
+      ],
+    })
+    h.change({ ...manager, status: 'done' })
+    await h.at(60_000)
+    expect(h.workerSends).toHaveLength(0)
     h.ping.stop()
   })
 

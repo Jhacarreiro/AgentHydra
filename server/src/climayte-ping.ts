@@ -720,14 +720,14 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     return true
   }
 
-  /** The pending lines this box may hand over now. A worker origin mid-turn takes no held result: its
-   *  follow-up queue delivers the line without checking it again (2026-10-13), so it waits for the turn's end. */
+  /** The pending lines this box may hand over now. A worker origin mid-turn takes none: its follow-up queue
+   *  delivers a line without checking it again (2026-10-13), so each waits for the turn's end. */
   const sendable = (box: OriginBox): QueuedPing[] => {
     const o = box.origin
     const busy =
       o.kind === 'worker' &&
       deps.workers().some((x) => x.id === o.workerId && x.status === 'running')
-    return busy ? box.pending.filter((p) => !HELD_KINDS.has(p.kind)) : box.pending
+    return busy ? [] : box.pending
   }
 
   /** When this box's batch is due, or null when it has none. */
