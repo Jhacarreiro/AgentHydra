@@ -28,10 +28,12 @@ describe('toolsForCaller', () => {
     const bound = toolsForCaller(async () => CALLER_PID)
     const rebound = bound.filter((t, i) => t !== TOOLS[i]).map((t) => t.name)
     // history_search / history_read resolve the CALLER's own transcript, so they are bound too.
-    // The climayte_* tools resolve the calling chat as the origin a ping goes back to.
+    // The climayte_* tools resolve the calling chat as the origin a ping goes back to; climayte_cancel
+    // tells the daemon the calling chat knows what it stopped.
     // hydra_run passes the binding on to an identity tool it runs.
     expect(rebound.sort()).toEqual([
       'check_my_usage',
+      'climayte_cancel',
       'climayte_manage',
       'climayte_run',
       'climayte_status',

@@ -302,6 +302,39 @@ describe('climayte_status {group, ping: true} adopts a running group', () => {
   })
 })
 
+describe('a chat that reads or cancels its own workers is not pinged about them again', () => {
+  // 2026-10-13: a chat busy for six hours was sent 104 lines in one ping about workers it had read or cancelled.
+  test("a scoped climayte_status and a climayte_cancel stamp seenAt on the caller's own workers only", async () => {
+    const mine = {
+      kind: 'chat' as const,
+      sessionId: SID,
+      home: HOME,
+      transcript: TRANSCRIPT,
+      how: 'x',
+    }
+    const r = climayteRun({
+      tasks: [task('seen a'), task('seen b')],
+      group: 'og-seen',
+      origin: mine,
+    })
+    const [a, b] = r.workers.map((w) => w.id)
+    const wb = workers.get(b)
+    if (wb) wb.origin = { ...mine, sessionId: '0f0f0f0f-0000-4000-8000-000000000000' }
+    const before = Date.now()
+    await bound('climayte_status').run({ group: 'og-seen' })
+    const read = workers.get(a)?.seenAt ?? 0
+    expect(read).toBeGreaterThanOrEqual(before)
+    expect(workers.get(b)?.seenAt).toBeUndefined()
+    // An unscoped list is not a look at any one worker.
+    workers.get(a)!.seenAt = undefined
+    await bound('climayte_status').run({})
+    expect(workers.get(a)?.seenAt).toBeUndefined()
+    await bound('climayte_cancel').run({ id: a })
+    expect(workers.get(a)?.status).toBe('cancelled')
+    expect(workers.get(a)?.seenAt).toBeGreaterThanOrEqual(read)
+  })
+})
+
 describe('startCliMayte runs the ping outbox', () => {
   test('a finished worker, limited and moved on the way, is one delivery to its chat', async () => {
     startCliMayte()

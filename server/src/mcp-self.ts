@@ -109,7 +109,9 @@ export type CallerPidSource = () => Promise<number | null>
 export const CALLER_PID_ARG = 'callerPid'
 // history_search / history_read are here because "my own transcript" is a caller identity too.
 // climayte_run / climayte_manage / climayte_status record or adopt the CALLING chat as the origin
-// CliMayte pings when the work settles (callerOrigin; owner, 2026-10-03).
+// CliMayte pings when the work settles (callerOrigin; owner, 2026-10-03). climayte_status and
+// climayte_cancel also tell the daemon what the calling chat has looked at, so it is not pinged
+// about that again (mcp.ts markSeen, 2026-10-13).
 export const CALLER_AWARE_TOOLS = new Set([
   'whoami',
   'check_my_usage',
@@ -120,6 +122,7 @@ export const CALLER_AWARE_TOOLS = new Set([
   'climayte_run',
   'climayte_manage',
   'climayte_status',
+  'climayte_cancel',
 ])
 
 /** The HTTP caller's pid; null when the route bound a caller but the lookup named nobody (or

@@ -119,6 +119,8 @@ export interface PingWorker {
   kind?: string | null
   /** The question it waits on (climayteAsk): while set, its ended turn is no finish. */
   question?: { text: string; options?: string[]; at: number }
+  /** When its origin chat last read it or cancelled it itself (climayte.ts climayteSeen). */
+  seenAt?: number
 }
 
 export type PingKind =
@@ -249,6 +251,16 @@ const WORKER_ANSWERED: Partial<Record<PingKind, (w: PingWorker) => boolean>> = {
   asking: (w) => !w.question,
   stuck: (w) => w.status !== 'waiting',
 }
+
+/** Lines a look by the origin chat answers: a scoped climayte_status read, or its own climayte_cancel (climayte.ts
+ *  climayteSeen). 2026-10-13: a chat busy for six hours was sent 104 lines in one ping, 16 of them workers it had
+ *  cancelled itself and the rest groups it had read and landed hours before; only a verdict answered a finished
+ *  line, never a read. A question is not here: it needs an answer, not a look. */
+const SEEN_ANSWERS: ReadonlySet<PingKind> = new Set([...OUTCOME_KINDS, 'limited-moved', 'stuck'])
+
+/** The origin chat looked at the worker at or after the moment the line was queued. */
+const seenSince = (w: PingWorker | undefined, e: QueuedPing): boolean =>
+  w?.seenAt != null && w.seenAt >= e.at
 
 const cut = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s)
 
@@ -860,8 +872,9 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
 
   /** Is this queued line still news? Read against the workers as they are now: a result the chat
    *  judged while the ping waited, a failure that was sent back, a question that was answered, an
-   *  HSwarm job the chat has read. A sent-back line is history once the same worker has a newer outcome
-   *  waiting: a chat busy for hours got one line per round (2026-10-13). A move to another account stays. */
+   *  HSwarm job the chat has read, a worker the chat read or cancelled itself since (SEEN_ANSWERS). A
+   *  sent-back line is history once the same worker has a newer outcome waiting: a chat busy for hours
+   *  got one line per round (2026-10-13). A move to another account stays unless the chat looked since. */
   const stale = (
     e: QueuedPing,
     queued: QueuedPing[],
@@ -874,9 +887,16 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
         origin.kind === 'chat' &&
         (deps.swarmJobSeen?.(e.key.slice(SWARM_KEY.length), origin.sessionId) ?? false)
       )
-    if (e.kind === 'group-done') return groupReported(e, queued, group)
+    if (e.kind === 'group-done') {
+      const members = group.filter((x) => x.group === e.group)
+      return (
+        groupReported(e, queued, group) ||
+        (members.length > 0 && members.every((x) => seenSince(x, e)))
+      )
+    }
+    const w = e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
+    if (SEEN_ANSWERS.has(e.kind) && seenSince(w, e)) return true
     const answered = WORKER_ANSWERED[e.kind]
-    const w = answered && e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
     return !!answered && !!w && answered(w)
   }
 

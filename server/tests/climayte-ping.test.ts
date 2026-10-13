@@ -1124,6 +1124,42 @@ describe('stale lines are dropped when the outbox flushes', () => {
     h.ping.stop()
   })
 
+  test('a result its chat read since the line was queued is left out; one that ended after the read still goes', async () => {
+    // 2026-10-13: a chat busy for six hours was sent 104 lines in one ping about groups it had read and landed
+    // hours before; only a verdict answered a finished line, never a read.
+    const ws = ['w-a', 'w-b', 'w-live'].map((id) => running(id))
+    const h = harness({ workers: ws })
+    h.change(doneOf(ws[0]))
+    await h.at(60_000)
+    // The chat reads the group (a scoped climayte_status): w-a has ended, w-b still runs.
+    h.change({ ...doneOf(ws[0]), seenAt: T0 + 60_000 })
+    h.change({ ...ws[1], seenAt: T0 + 60_000 })
+    await h.at(120_000)
+    h.change({ ...doneOf(ws[1]), seenAt: T0 + 60_000 })
+    await h.at(HOLD_FINISHED_MS + 180_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('w-b')
+    expect(h.sent[0].text).not.toContain('w-a')
+    h.ping.stop()
+  })
+
+  test('workers its own chat cancelled are left out, with their group line; a cancel it did not make still goes', async () => {
+    // 2026-10-13: 16 of those 104 lines were workers the chat had cancelled itself (climayte_cancel stamps seenAt).
+    const ws = [running('w-a', { group: 'g-mine' }), running('w-b', { group: 'g-mine' })]
+    const other = running('w-c', { group: 'g-other' })
+    const h = harness({ workers: [...ws, other] })
+    for (const w of ws) h.change({ ...w, status: 'cancelled' })
+    for (const w of ws) h.change({ ...w, status: 'cancelled', seenAt: T0 })
+    h.change({ ...other, status: 'cancelled' })
+    await h.at(3_600_000)
+    expect(h.sent).toHaveLength(1)
+    expect(h.sent[0].text).toContain('w-c "Task w-c": cancelled.')
+    expect(h.sent[0].text).not.toContain('w-a')
+    expect(h.sent[0].text).not.toContain('g-mine')
+    expect(pendingIn(h.dir)).toBe(0)
+    h.ping.stop()
+  })
+
   test('the header is the prefix the desk2 note card reads and nothing more', () => {
     expect(PING_HEADER).toBe('[AgentHydra · CliMayte] Not from the user.')
   })

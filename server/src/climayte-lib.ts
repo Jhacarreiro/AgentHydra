@@ -259,6 +259,9 @@ export interface CliMayteWorker {
   sealed?: CliMayteSealed
   /** Each judgement of its result, oldest first (climayteVerdict). */
   verdicts?: CliMayteVerdict[]
+  /** When its origin chat last read how it stood (a scoped climayte_status) or cancelled it itself (climayteSeen):
+   *  a ping line queued before then is no news to that chat (climayte-ping.ts stale). Absent: never. */
+  seenAt?: number
   /** A shell command that proves the task is done (exit 0). CliMayte runs it in `cwd` after the worker
    *  reports, records the verdict itself and sends a fail back one rung up (climayte.ts startCheck). */
   check?: string | null

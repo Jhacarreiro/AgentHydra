@@ -26,6 +26,7 @@ import {
   climayteReports,
   climayteRun,
   climayteScorecard,
+  climayteSeen,
   climayteSend,
   climayteSetPriority,
   climayteTotals,
@@ -408,6 +409,20 @@ app.post('/api/corch/adopt', async (c) => {
   if (!origin) return c.json({ error: why ?? 'origin is required' }, 400)
   const r = climayteAdopt(group, origin)
   return c.json({ ...r, ping: pingReply(r.origin, null) })
+})
+// A chat read or cancelled these workers (climayte_status / climayte_cancel): its pings about them are no news.
+// A stamp is never set in the future.
+app.post('/api/corch/seen', async (c) => {
+  const body = await jsonBody(c)
+  const sessionId = optStr(body.sessionId)
+  const group = optStr(body.group)
+  const ids = Array.isArray(body.ids)
+    ? body.ids.filter((x: unknown): x is string => typeof x === 'string' && x !== '')
+    : undefined
+  const at = Number(body.at)
+  if (!sessionId || (!group && !ids?.length) || !Number.isFinite(at))
+    return c.json({ error: 'sessionId, at, and ids or group are required' }, 400)
+  return c.json(climayteSeen({ ids, group }, sessionId, Math.min(at, Date.now())))
 })
 // Which chats hold pings no channel delivered; POST .../read answers one chat's and marks them read.
 app.get('/api/corch/pings', (c) => c.json({ unread: climayteUnreadSessions() }))

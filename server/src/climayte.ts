@@ -2172,3 +2172,25 @@ export function climayteAdopt(
   if (adopted) save()
   return { adopted, owned, live, origin: o }
 }
+
+/** A chat read these workers (a scoped climayte_status) or cancelled them itself (climayte_cancel): stamp
+ *  `seenAt` on the ones it is the origin of, so the pings queued about them before `at` are left out
+ *  (climayte-ping.ts stale). Only the origin's own look counts, and a stamp never moves back. */
+export function climayteSeen(
+  scope: { ids?: string[]; group?: string },
+  sessionId: string,
+  at: number,
+): { seen: number } {
+  load()
+  let seen = 0
+  for (const w of workers.values()) {
+    const inScope =
+      (scope.ids?.includes(w.id) ?? false) || (!!scope.group && w.group === scope.group)
+    if (!inScope || w.origin?.kind !== 'chat' || w.origin.sessionId !== sessionId) continue
+    if ((w.seenAt ?? 0) >= at) continue
+    w.seenAt = at
+    seen++
+  }
+  if (seen) save()
+  return { seen }
+}
