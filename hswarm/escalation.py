@@ -118,6 +118,20 @@ def trace(messages: list | None, res: Result) -> str:
     return _defang(body)
 
 
+def stronger_leg(task: Task, failed: str) -> str | None:
+    """One level up from the leg that gave up: the first leg of the task's own plan, in the order it walks them (free
+    first, then by cost, the legs kept for after CliMayte last), whose published score is above that leg's. Never a leg
+    at the same score or below: the same tier again doubles the spend for the same answer. None when the plan has none,
+    or the leg that gave up is not in it or has no score to compare."""
+    from .dispatch import _legs, plan_for
+
+    legs = _legs(plan_for(task), task)
+    base = next((c.get("score") for c in legs if c["model"] == failed), None)
+    if base is None:
+        return None
+    return next((c["model"] for c in legs if c["model"] != failed and (c.get("score") or 0) > base), None)
+
+
 def teacher_task(task: Task, why: str, trace_text: str) -> Task:
     """The same task on the teacher model, told what failed. It routes like any task and never escalates again."""
     note = TEACHER_NOTE.format(why=_defang(why), guard=GUARD, trace=trace_text)

@@ -110,3 +110,33 @@ def test_escalate_is_refused_where_it_cannot_work(tmp_path):
     with pytest.raises(ValueError, match="stronger model"):
         Task.from_dict({"prompt": "x", "cwd": str(tmp_path), "model": "deepseek-flash", "escalate": "flash"})
 
+
+# Contract: an auto task whose leg GAVE UP is re-run once on the cheapest leg of its own plan that scores above that
+# leg, never on one at the same score, and banks no skill. Regression: 2026-10-13, a give-up stepped up only when the
+# caller named an `escalate` model, which no caller did (no step-up in 108,495 ledger rows over 7 days); the owner
+# wants a model that fails to hand the task one level up.
+def test_an_auto_task_that_gave_up_steps_up_to_the_cheapest_stronger_leg(monkeypatch, tmp_path):
+    from hswarm import dispatch
+
+    legs = [("deepseek-flash", "deepseek", 30), ("rank:glm-5-3-flash:baseten", "baseten", 30),
+            ("deepseek-v4-pro", "deepseek", 40), ("rank:gpt-6-sol:openai", "openai", 50)]
+    plan = {"profile": "general", "candidates": [{"model": n, "provider": p, "benchmark_slug": n, "score": s} for n, p, s in legs]}
+    monkeypatch.setattr(dispatch, "_plan", lambda *a, **k: plan)
+    seen: list[str] = []
+
+    async def run_legs(job, task, warm, is_pilot):  # the walk itself reads this machine's keys, so it is stubbed here
+        seen.append(task.model)
+        if task.model == "deepseek-v4-pro":
+            return Result(id=task.id, backend="api", model=task.model, status="ok", answer="4: a, b, c, d", cost_usd=0.01, turns=1), []
+        return Result(id=task.id, backend="api", model="deepseek-flash", status="error", error="FAILED: I could not find the module",
+                      cost_usd=0.001, turns=1), []
+
+    m = JobManager(client=object())
+    monkeypatch.setattr(m, "_run_legs", run_legs)
+    r = _run(m, Task.from_dict({"prompt": "count the uncalled functions in the parser module", "profile": "general"}))
+    assert len(seen) == 2 and seen[1] == "deepseek-v4-pro"
+    assert r.status == "ok" and r.answer == "4: a, b, c, d"
+    assert r.escalation["from"] == "deepseek-flash" and r.escalation["to"] == "deepseek-v4-pro" and r.escalation["skill"] is None
+    assert abs(r.cost_usd - 0.011) < 1e-9 and not list(config.SKILLS_DIR.glob("*.md"))
+    row = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines()][-1]
+    assert row["escalated"] == "deepseek-v4-pro:teacher" and row["escalated_from"] == "deepseek-flash"

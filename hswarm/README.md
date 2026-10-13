@@ -234,6 +234,15 @@ are never routed (header `x-hswarm-climayte-worker`). The plan prices behind the
 AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes); the built-in list prices and
 `~/.hswarm/plan.json` are the offline fallback and the override.
 
+**A give-up steps up one level, once** (owner, 2026-10-13). When an auto task's API leg gives up (`FAILED:`, a turn
+budget spent with no answer, a reply that asks instead of answering, its last three tool calls all errors), the task
+goes one level up: an idle CliMayte account first, waiting up to `route_via_climayte_start_s` for one, for a task
+CliMayte takes (the worker is told a cheaper model tried, not what it said); else the cheapest leg of the task's own
+plan whose published score is above the leg that gave up, run with the failed trace behind the `UNTRUSTED_TRACE`
+guard. Never the same tier again, never more than once, never for a leg that could not serve (that is failover's) and
+never for a pinned model. Both runs' spend lands on the result; `escalation` and the ledger's `escalated` record it.
+A task that names its own `escalate` model keeps that path, which also banks a skill.
+
 ## Isolation
 
 - All state is isolated under `HSWARM_HOME` (default `~/.hswarm`)

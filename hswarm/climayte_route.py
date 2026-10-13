@@ -17,6 +17,7 @@ The route taken is on the result (`selection["route"]`) and its ledger line (pro
 from __future__ import annotations
 
 import asyncio
+import dataclasses
 import json
 import logging
 import os
@@ -35,6 +36,8 @@ POLL_S = 10.0
 WORKER_ENV = "AGENTHYDRA_CLIMAYTE_WORKER"
 FREE_FIRST = "an idle CliMayte account costs nothing extra, so it goes before any API key"
 NO_ROOM = "no CliMayte account was idle"
+STEPPED_UP = ("\n\nA cheaper model already tried this task and gave up. Any changes it made are still in the files: check "
+              "their current state before you start.")
 _ELIGIBLE_TOOLS = ("read", "edit", "all")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks routed to CliMayte right now, across every job of this process (route_via_climayte_max)
@@ -117,6 +120,18 @@ async def before_last_resort(job_id: str, task: Task, providers: list[str]) -> t
     if (job_id, task.id) in _ASKED:
         return None, None
     return await consult(job_id, task, first=f"its other routes failed over and only {', '.join(providers)} is left, kept for after CliMayte")
+
+
+async def step_up(job_id: str, task: Task, why: str) -> Result | None:
+    """A cheaper API leg gave up on the task (jobs._step_up): CliMayte takes it as the next level up when an account
+    is idle or comes free within ROUTE_VIA_CLIMAYTE_START_S, told that a cheaper model tried first. None when the task
+    is not one CliMayte takes, was already asked (CliMayte failed it first), or no account came free. The worker is
+    not shown the failed model's words, only that it gave up: they can quote files written by anyone."""
+    if (job_id, task.id) in _ASKED:
+        return None
+    told = dataclasses.replace(task, prompt=task.prompt.rstrip() + STEPPED_UP)
+    res, _ = await consult(job_id, told, first=f"stepped up: its API leg gave up ({why})")
+    return res
 
 
 def _say(job_id: str, msg: str) -> None:

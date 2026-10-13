@@ -413,3 +413,32 @@ def test_a_task_whose_cheaper_legs_fail_over_goes_to_climayte_before_an_openai_l
     res, _ = asyncio.run(dispatch.run_selected(_Mgr(), job, t, None, True))
     assert seen == ran and res.answer == answer and len(f.dispatched) == 1
     assert "openai" in res.selection["route"]["why"] and res.cost_usd >= 0.01  # the dead leg's spend rides on the answer
+
+
+# Contract: an auto task whose API leg gave up steps up to CliMayte once an account is free, and the worker is told only
+# that a cheaper model tried, never the failed model's words; the failed run's spend rides on the answer. Regression:
+# 2026-10-13, a give-up stepped up only for a task naming an `escalate` model, which no caller did.
+def test_an_auto_task_whose_api_leg_gave_up_steps_up_to_climayte(fake, tmp_path, monkeypatch):
+    from hswarm import dispatch
+    from hswarm.spec import Result
+
+    plan = {"profile": "code", "candidates": [
+        {"model": "rank:glm-5-3-flash:baseten", "provider": "baseten", "benchmark_slug": "glm-5-3-flash", "score": 30}]}
+    monkeypatch.setattr(dispatch, "_plan", lambda *a, **k: plan)
+    monkeypatch.setattr(climayte_route, "_ASKED", set())
+    f = fake(idle=0)  # every account busy when the task starts, so it runs on its API leg
+    m = JobManager(client=_Api())
+
+    async def gave_up(job, task, warm, is_pilot):  # the API walk itself reads this machine's keys, so it is stubbed here
+        f.idle = 1  # an account comes free while the API leg works
+        return Result(id=task.id, backend="api", model="rank:glm-5-3-flash:baseten", status="error",
+                      error="FAILED: could not find the parser module", cost_usd=0.01), []
+
+    monkeypatch.setattr(m, "_run_legs_api", gave_up)
+    t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="code", max_turns=10, max_cost_usd=1.0)
+    res = asyncio.run(m.run_batch([t], concurrency=1)).results["t"]
+    assert res.status == "ok" and res.answer == "worker report" and len(f.dispatched) == 1
+    assert res.escalation["from"] == "rank:glm-5-3-flash:baseten" and res.escalation["to"] == "climayte"
+    assert abs(res.cost_usd - 0.01) < 1e-9
+    sent = f.dispatched[0]["tasks"][0]["prompt"]
+    assert "gave up" in sent and "parser module" not in sent

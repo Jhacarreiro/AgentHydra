@@ -457,6 +457,19 @@ def unservable(tasks: list[Task]) -> str | None:
     return no_route_left([t for t in tasks if not climayte_route.can_take(t)])
 
 
+def _merge_spend(kept: Result, other: Result) -> None:
+    """Add `other`'s spend, tokens, turns and time to `kept`: the run that comes back carries every run of the task."""
+    if other.cost_usd is not None and kept.cost_usd is not None:
+        kept.cost_usd += other.cost_usd
+    elif other.cost_usd is None:
+        kept.cost_usd = None  # an unpriced run makes the whole task unmeasured, never cheaper
+    for k, v in (other.usage or {}).items():
+        kept.usage[k] = kept.usage.get(k, 0) + v
+    kept.turns += other.turns
+    kept.seconds = round(kept.seconds + other.seconds, 3)
+    kept.api_seconds = round(kept.api_seconds + other.api_seconds, 3)
+
+
 def no_route_left(tasks: list[Task]) -> str | None:
     """unservable's refusal, CliMayte aside."""
     from .dispatch import unreachable
@@ -1070,11 +1083,38 @@ class JobManager:
         """What a status read says: the job's summary and, while it runs, the pools its tasks sit on. The one
         composition hswarm_status returns and every checkpoint writes, so a reader in another process sees it too."""
         return {**job.summary(), **(self.pool_report(job) if job.state == "running" else {})}
-    async def _escalate(self, job: Job, task: Task, res: Result, transcript: object, warm: asyncio.Event) -> tuple[Result, object]:
+    async def _step_up(self, job: Job, task: Task, res: Result, transcript: object, warm: asyncio.Event) -> tuple[Result, object]:
+        """An auto task's leg GAVE UP (escalation.gave_up): the task goes one level up, once, never to the same tier again
+        (owner, 2026-10-13: while we learn which models can do what, a model that fails hands the task up a level rather
+        than leaving it failed). First an idle CliMayte account for a task it takes (Claude on the subscription, at no
+        extra cost; it climbs its own ladder if that fails too), else the cheapest leg of the task's plan that scores
+        above the one that gave up, run as _escalate's teacher with the failed trace. Both runs' spend lands on the
+        result, `escalation` says what happened and the ledger's `escalated` keeps it.
+
+        Before this a give-up was stepped up only when the caller named an `escalate` model, which no caller did:
+        `escalated` was empty on every one of 108,495 ledger rows in the 7 days to 2026-10-13."""
+        messages = transcript if isinstance(transcript, list) else []
+        why = None if leg_unavailable(res) else escalation.gave_up(res, messages)
+        if not why:
+            return res, transcript
+        served = await climayte_route.step_up(job.id, task, why)
+        if served is not None:
+            _merge_spend(served, res)
+            served.failover = res.failover + [f for f in served.failover if f not in res.failover]
+            served.escalation = {"from": res.model, "to": "climayte", "why": why, "teacher_status": served.status,
+                                 "teacher_cost_usd": 0.0, "kept": "teacher", "skill": None}
+            return served, None
+        if not (up := escalation.stronger_leg(task, res.model)):
+            return res, transcript
+        return await self._escalate(job, dataclasses.replace(task, escalate=up), res, transcript, warm, bank=False)
+
+    async def _escalate(self, job: Job, task: Task, res: Result, transcript: object, warm: asyncio.Event,
+                        bank: bool = True) -> tuple[Result, object]:
         """The worker GAVE UP (escalation.gave_up) on a task that named a stronger `escalate` model: run it once more
         there, with the failed trace behind the UNTRUSTED_TRACE guard. The teacher's answer is kept only when it
         passes the same check, and only then is a skill banked; otherwise the worker's result stands. Either way
-        both runs' spend lands on the result that comes back, and `escalation` says what happened.
+        both runs' spend lands on the result that comes back, and `escalation` says what happened. `bank` False (an
+        automatic step-up, _step_up) banks no skill: skills are read only by tasks that name an `escalate` model.
 
         Never on a leg that could not serve: that is failover's job, and the route already walked every leg."""
         messages = transcript if isinstance(transcript, list) else []
@@ -1092,18 +1132,11 @@ class JobManager:
             kept, other, kept_transcript = res, t_res, transcript
         else:
             kept, other, kept_transcript = t_res, res, t_transcript  # the teacher's system prompt carries the worker's trace
-            record["skill"] = await self._bank_skill(job, teacher, why, trace, t_res, student=res.model)
+            if bank:
+                record["skill"] = await self._bank_skill(job, teacher, why, trace, t_res, student=res.model)
             if record["skill"] and record["skill"].get("cost_usd") is not None:
                 kept.cost_usd = None if kept.cost_usd is None else kept.cost_usd + record["skill"]["cost_usd"]
-        if other.cost_usd is not None and kept.cost_usd is not None:
-            kept.cost_usd += other.cost_usd
-        elif other.cost_usd is None:
-            kept.cost_usd = None  # an unpriced run makes the whole task unmeasured, never cheaper
-        for k, v in (other.usage or {}).items():
-            kept.usage[k] = kept.usage.get(k, 0) + v
-        kept.turns += other.turns
-        kept.seconds = round(kept.seconds + other.seconds, 3)
-        kept.api_seconds = round(kept.api_seconds + other.api_seconds, 3)
+        _merge_spend(kept, other)
         kept.failover = res.failover + [f for f in t_res.failover if f not in res.failover]
         kept.escalation = record
         return kept, kept_transcript
@@ -1495,6 +1528,8 @@ class JobManager:
         r, tr = await self._rerun_dead(job, t, r, tr, warm, is_pilot, slot, row)
         if t.backend == "api" and t.escalate:
             r, tr = await self._escalate(job, t, r, tr, warm)
+        elif t.backend == "api" and t.profile and t.route:
+            r, tr = await self._step_up(job, t, r, tr, warm)
         return r, tr
 
     async def _rerun_dead(self, job: Job, t: Task, r: Result, tr: object, warm: asyncio.Event, is_pilot: bool,
@@ -1593,6 +1628,9 @@ class JobManager:
                 "files_changed": len(res.files_changed) or None,
                 "cached": res.cached_from or None,  # reused from that job's journal: no call made, no spend
                 "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
+                # The leg that gave up: the row's own model is the one that answered, so without this the ledger
+                # could not say which models give up on which profiles (the learning the owner asked for, 2026-10-13).
+                "escalated_from": res.escalation.get("from") if res.escalation else None,
                 "liveness": res.liveness or None,
                 "taint": res.taint or None,
                 **({} if res.cached_from else billed_fields(res)),
