@@ -1091,19 +1091,33 @@ async function windowsPortOwner(port: number): Promise<number | null> {
   return rows === null ? null : tcpOwnerPid(rows, port)
 }
 
+/** Unix: lsof, reading each connection's name as well as its pid. `-iTCP:PORT` matches the port at
+ *  EITHER end, so a loopback call lists the caller (whose LOCAL port it is) and the server it called
+ *  (whose REMOTE port it is): measured with lsof 4.95 on 2026-10-12, `p<server>` with
+ *  `n127.0.0.1:60313->127.0.0.1:38296` and `p<caller>` with `n127.0.0.1:38296->127.0.0.1:60313`.
+ *  Reading pids alone saw two owners and answered null for every HTTP caller off Windows. Only a name
+ *  whose local side (before `->`) ends in the port counts. */
 async function unixPortOwner(port: number): Promise<number | null> {
   const stdout = await runCaptureStdout([
     'lsof',
     '-nP',
     `-iTCP:${port}`,
     '-sTCP:ESTABLISHED',
-    '-Fp',
+    '-Fpn',
   ])
   if (stdout === null) return null
   const pids = new Set<number>()
-  for (const line of stdout.split(/\r?\n/)) {
-    const m = /^p(\d+)$/.exec(line.trim())
-    if (m) pids.add(Number(m[1]))
+  let pid: number | null = null
+  for (const raw of stdout.split(/\r?\n/)) {
+    const line = raw.trim()
+    const p = /^p(\d+)$/.exec(line)
+    if (p) pid = Number(p[1])
+    else if (
+      pid !== null &&
+      line.startsWith('n') &&
+      line.slice(1).split('->')[0]!.endsWith(`:${port}`)
+    )
+      pids.add(pid)
   }
   return pids.size === 1 ? [...pids][0]! : null
 }
