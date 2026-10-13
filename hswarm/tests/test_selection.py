@@ -30,8 +30,10 @@ def test_candidates_are_free_first_then_cheapest_and_meet_every_floor():
     evaluated = [c for c in cands if not c.get("unevidenced")]
     assert [c["free"] for c in evaluated] == sorted((c["free"] for c in evaluated), reverse=True)  # every free route first
     assert any(c["free"] for c in evaluated) and not all(c["free"] for c in evaluated)
-    for free in (True, False):
-        costs = [c["benchmark_cost_usd"] for c in evaluated if c["free"] is free]
+    # cheapest first among the free routes and among the paid ones; a paid route kept for after CliMayte (OpenAI,
+    # 2026-10-13) goes behind the other paid ones, so the cost order holds within each of those groups
+    for group in ((True, False), (False, False), (False, True)):
+        costs = [c["benchmark_cost_usd"] for c in evaluated if (c["free"], bool(c.get("after_climayte"))) == group]
         assert costs == sorted(costs)
     for c in cands:
         for k, v in selection.PROFILES["general"].items():
@@ -230,6 +232,21 @@ def test_a_backup_serves_when_every_tested_route_is_down(user_toml):
     assert [c["model"] for c in legs] == ["command-a"] and legs[0]["unevidenced"] and legs[0]["backup"]
     assert _p("critical", tools="read", usable=lambda p: p == "cohere") == []
     assert not any(c.get("backup") for c in _p("code", tools="read", usable=lambda p: p != "cohere"))
+
+
+# Contract: in the order dispatch walks a code plan (plan, then rebias), every route the owner keeps for after CliMayte
+# (`after_climayte`: OpenAI) comes behind every other evaluated route that meets the floors, cheaper or not.
+# Regression: 2026-10-13, OpenAI's GPT-6 routes gained tool calling and GPT-6.1 Sol, cheaper than GLM-5.3 on Baseten,
+# became the second code leg; the owner wants OpenAI's keys as the last resort, after his CliMayte accounts.
+def test_openai_routes_go_behind_every_other_route_that_meets_the_floors():
+    everywhere = lambda p: True  # noqa: E731
+    order = [c for c in selection.rebias(selection.plan("code", tools="edit", usable=everywhere)["candidates"], lambda p: 0.0)
+             if not c.get("unevidenced")]
+    last = [c for c in order if c["provider"] == "openai"]
+    others = [c for c in order if c["provider"] != "openai"]
+    assert last and others and all(c.get("after_climayte") for c in last)
+    assert order == others + last
+    assert min(c["benchmark_cost_usd"] for c in last) < max(c["benchmark_cost_usd"] for c in others)  # not the cost order
 
 
 def test_a_crawling_free_model_goes_behind_every_route_that_is_not_crawling():

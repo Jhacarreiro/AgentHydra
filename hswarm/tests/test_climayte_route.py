@@ -334,3 +334,57 @@ def test_a_below_floor_task_whose_worker_failed_runs_its_live_route_and_says_so(
     _, res, api = _run(tmp_path)
     assert api.calls == 1 and res.answer == "api route"
     assert res.selection["route"]["floor_miss"] == "no live route meets profile critical" and res.selection["route"]["climayte_failed"] == "w1"
+
+
+class _Mgr:
+    """The manager surface dispatch.run_selected reads, with no gates."""
+
+    def client_for(self, leg):
+        from types import SimpleNamespace
+
+        return SimpleNamespace(pool=None)
+
+    async def _park_broke_keys(self, c):
+        pass
+
+    def _gate_for(self, leg, c):
+        return None
+
+    async def _gated(self, job, gate, run):
+        return await run
+
+
+# Contract: a code task whose cheaper legs fail over is offered to CliMayte before its walk steps onto an OpenAI leg
+# (`after_climayte`), with no price question, and runs that leg only when CliMayte cannot serve it. Regression:
+# 2026-10-13, Baseten's one live key failed over and code tasks landed on paid GPT-6 while the owner's CLI accounts
+# sat idle; the owner wants OpenAI's keys as the last resort, after his CliMayte accounts.
+@pytest.mark.parametrize("worker,ran,answer", [
+    (None, ["rank:glm-5-3-flash:baseten"], "worker report"),
+    ({"status": "failed", "result": None}, ["rank:glm-5-3-flash:baseten", "rank:gpt-6-sol:openai"], "openai answer"),
+])
+def test_a_task_whose_cheaper_legs_fail_over_goes_to_climayte_before_an_openai_leg(fake, tmp_path, monkeypatch, worker, ran, answer):
+    from hswarm import agent, dispatch
+    from hswarm.job import Job
+    from hswarm.spec import Result
+
+    plan = {"profile": "code", "candidates": [
+        {"model": "rank:glm-5-3-flash:baseten", "provider": "baseten", "benchmark_slug": "glm-5-3-flash"},
+        {"model": "rank:gpt-6-sol:openai", "provider": "openai", "benchmark_slug": "gpt-6-sol", "after_climayte": True}]}
+    monkeypatch.setattr(dispatch, "_plan", lambda *a, **k: plan)
+    monkeypatch.setattr(climayte_route, "_ASKED", set())
+    seen = []
+
+    async def fake_run(client, task, **kw):
+        seen.append(task.model)
+        if task.model.endswith(":baseten"):
+            return Result(id=task.id, backend="api", model=task.model, status="error", error="API Error: 503 no endpoints", cost_usd=0.01), []
+        return Result(id=task.id, backend="api", model=task.model, status="ok", answer="openai answer", cost_usd=0.1), []
+
+    monkeypatch.setattr(agent, "run_api_task", fake_run)
+    f = fake(route="api", **({"worker": worker} if worker else {}))
+    t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="code", max_turns=10, max_cost_usd=1.0)
+    job = Job(id="j", tasks=[t])
+    job.results[t.id] = Result(id=t.id, backend="api", model=t.model)
+    res, _ = asyncio.run(dispatch.run_selected(_Mgr(), job, t, None, True))
+    assert seen == ran and res.answer == answer and f.decides == [] and len(f.dispatched) == 1
+    assert "openai" in res.selection["route"]["why"] and res.cost_usd >= 0.01  # the dead leg's spend rides on the answer

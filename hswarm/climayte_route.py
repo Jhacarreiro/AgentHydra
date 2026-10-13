@@ -32,6 +32,7 @@ EST_IN_TOKENS, EST_OUT_TOKENS = 40_000, 4_000
 _ELIGIBLE_TOOLS = ("read", "edit", "all")
 _LOGGED: set[str] = set()
 _ACTIVE = 0  # tasks routed to CliMayte right now, across every job of this process (route_via_climayte_max)
+_ASKED: set[tuple[str, str]] = set()  # (job, task) CliMayte was asked to run: before_last_resort does not ask twice
 _SWITCH = {"at": -1e9, "on": True}  # AgentHydra's own routing on/off, read at most once per SWITCH_TTL_S
 SWITCH_TTL_S = 60.0
 
@@ -82,6 +83,28 @@ def floor_miss(task: Task) -> str | None:
     if not plan.get("candidates"):
         return f"no live route can take profile {task.profile}"
     return None
+
+
+def climayte_first(task: Task) -> str | None:
+    """Why CliMayte goes before the task's own route with no price question, or None: every leg its plan has left is
+    one the owner keeps for after CliMayte (`after_climayte`, OpenAI; owner 2026-10-13: OpenAI's keys are the last resort,
+    after his CliMayte accounts)."""
+    if not task.route or not task.profile:
+        return None
+    from .dispatch import plan_for
+
+    legs = plan_for(task).get("candidates") or []
+    if legs and all(c.get("after_climayte") for c in legs):
+        return f"only {', '.join(sorted({c['provider'] for c in legs}))} routes are left for profile {task.profile}, kept for after CliMayte"
+    return None
+
+
+async def before_last_resort(job_id: str, task: Task, providers: list[str]) -> tuple[Result | None, dict | None]:
+    """consult, once more, as a task's walk reaches its first `after_climayte` leg (its cheaper legs failed over): CliMayte
+    is asked to run it before that leg is. A task CliMayte was already asked to run is not asked again."""
+    if (job_id, task.id) in _ASKED:
+        return None, None
+    return await consult(job_id, task, first=f"its other routes failed over and only {', '.join(providers)} is left, kept for after CliMayte")
 
 
 def _say(job_id: str, msg: str) -> None:
@@ -318,35 +341,45 @@ def _result(task: Task, w: dict, note: dict, started: str, job_id: str) -> Resul
     return res
 
 
-async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
+async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note being
     the decision to carry on its result; (None, None) when nobody was asked. A task whose own route misses its bar
     (floor_miss) and that CliMayte did not serve carries `floor_miss` on its note, so jobs can refuse it at once when
-    that route cannot serve at all, instead of running it there."""
+    that route cannot serve at all, instead of running it there. `first` (before_last_resort), a floor miss, or a plan
+    left with only routes kept for after CliMayte (climayte_first) sends the task to CliMayte with no price question."""
     global _ACTIVE
     if not eligible(task):
         return None, None
-    missed = floor_miss(task)
+    missed = None if first else floor_miss(task)
+    first = first or missed or climayte_first(task)
     unserved = {"via": "api", "floor_miss": missed} if missed else None
     if not await switch_on():  # read before any wait: a slot is no use with the owner's switch off
         return None, unserved
-    if missed and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
-        # Its own route is below its bar: worth a wait for a slot, as long as a queued worker is given to start.
+    if first and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+        # Its own route is below its bar or kept for after CliMayte: worth a wait for a slot, as long as a queued worker is given to start.
         until = asyncio.get_running_loop().time() + config.ROUTE_VIA_CLIMAYTE_START_S
         while _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX and asyncio.get_running_loop().time() < until:
             await asyncio.sleep(POLL_S)
     if _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
+        if first:
+            _asked(job_id, task)  # it waited its turn once; the walk does not wait again before its last legs
         return None, unserved
     _ACTIVE += 1  # taken with no await since the cap check, held to the worker's end: the cap is on tasks in CliMayte's hands
     try:
-        return await _consult(job_id, task, missed)
+        return await _consult(job_id, task, first, missed)
     finally:
         _ACTIVE -= 1
 
 
-async def _consult(job_id: str, task: Task, missed: str | None = None) -> tuple[Result | None, dict | None]:
-    if missed:
-        note = {"provider": "climayte", "decided": "subscription", "why": missed}
+def _asked(job_id: str, task: Task) -> None:
+    if len(_ASKED) > 20_000:  # a long-running server: the ids are only needed for the walk of a task still running
+        _ASKED.clear()
+    _ASKED.add((job_id, task.id))
+
+
+async def _consult(job_id: str, task: Task, first: str | None = None, missed: str | None = None) -> tuple[Result | None, dict | None]:
+    if first:
+        note = {"provider": "climayte", "decided": "subscription", "why": first}
     else:
         doc = await decide(job_id, task)
         if doc is None:
@@ -354,6 +387,7 @@ async def _consult(job_id: str, task: Task, missed: str | None = None) -> tuple[
         note = {"provider": "climayte", "decided": doc["route"], "why": doc.get("why", "")}
         if doc["route"] != "subscription":
             return None, {"via": "api", "decided": "api", "why": note["why"]}
+    _asked(job_id, task)
     res = await run_worker(job_id, task, note)
     if res is not None:
         return res, None

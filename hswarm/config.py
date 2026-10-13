@@ -726,6 +726,15 @@ def free_tier(model: str) -> bool:
         return False
 
 
+def after_climayte(model: str) -> bool:
+    """True when `model`'s provider file says `after_climayte = true`: the owner reaches it only after his CliMayte
+    accounts (OpenAI, 2026-10-13), so its legs sort behind every other capable route."""
+    try:
+        return bool(PROVIDERS.get(provider_of(model), {}).get("after_climayte"))
+    except (KeyError, ValueError):  # a model not in the registry (a test fake) has no provider terms to go by
+        return False
+
+
 def billed_of(model: str) -> bool | None:
     """Does a call to `model` take money from an account? True: paid per use. False: free or trial (a provider whose
     calls cost nothing, an OpenRouter `:free` model, or a provider file that says its key pool is free tier with

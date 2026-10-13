@@ -231,13 +231,16 @@ def plan(profile="general", *, tools="none", backend="api", usable=None, reasoni
                            "benchmark_slug": p["slug"], "score": p.get("score"), "benchmark_cost_usd": p["cost"]*factor,
                            "source": p["source"], "scores": {k: p["scores"][k] for k in floors},
                            "rates": config.price(name), "provider": entry["provider"], "configuration": p["name"],
-                           "free": config.billed_of(name) is False})
+                           "free": config.billed_of(name) is False,
+                           **({"after_climayte": True} if config.after_climayte(name) else {})})
     # A route whose calls take no money serves first: `free_calls` (NVIDIA's trial keys), a free-tier key pool
     # (`key_billing = "free"`: Gemini, Cerebras, Groq) or an OpenRouter `:free` model. Until 2026-10-09 only `free_calls`
     # counted, so a general task ran on paid Baseten DeepSeek ahead of a free-tier Gemini key that met the same floor
     # (2,776 tool-free tasks in 36 h). Among free routes, and among paid ones, the cheapest capable model still goes
     # first, so a free route never means a bigger model than needed; a rate-limited free key is moved back by note_speed.
-    candidates.sort(key=lambda c: (priority_rank(c["model"]), not c["free"], c["benchmark_cost_usd"], -(c["score"] or 0), c["model"]))
+    # A route the owner keeps for after CliMayte (`after_climayte`, OpenAI) goes behind every other one, cheaper or not.
+    candidates.sort(key=lambda c: (priority_rank(c["model"]), bool(c.get("after_climayte")), not c["free"], c["benchmark_cost_usd"],
+                                   -(c["score"] or 0), c["model"]))
     last = _last_resort(candidates, excluded=excluded, usable=usable, min_context=min_context, profile=profile,
                         tools=tools, backend=backend, vision=vision, strict=reasoning_effort is not None or bool(min_scores),
                         purpose=purpose, schema=schema)
@@ -403,7 +406,8 @@ def rebias(candidates, pressure_of):
     """Re-rank by benchmark cost x (1 + LOAD_BIAS x pressure). Each keeps its unbiased benchmark_cost_usd and says
     the bias it was ranked with; the sort is stable, so with no load the plan's own order stands. Unevidenced
     siblings (_last_resort) stay behind every evaluated candidate, starred or not: a star orders, it never admits.
-    A routine image plan's paid routes (`after_free`, plan) stay behind every free one, siblings included."""
+    A routine image plan's paid routes (`after_free`, plan) stay behind every free one, siblings included. A route kept
+    for after CliMayte (`after_climayte`) stays behind every other evaluated one that is not crawling."""
     from . import config
 
     out = [{**c, "load_bias": round(config.LOAD_BIAS * pressure_of(c["provider"]), 4) if c.get("provider") else 0.0}
@@ -414,6 +418,7 @@ def rebias(candidates, pressure_of):
     # Crawling before free: a marked model goes behind every healthy route, paid ones included (owner: free routes
     # first, but a crawling model last). Free-first above it put a marked NVIDIA model at the head of every task:
     # 6,393 NVIDIA first legs served 308 times (4.8%) in the week to 2026-10-02, 205 task-hours on legs that failed over.
-    out.sort(key=lambda c: (bool(c.get("after_free")), bool(c.get("unevidenced")), priority_rank(c["model"]), bool(c.get("crawling")), not c.get("free"),
+    out.sort(key=lambda c: (bool(c.get("after_free")), bool(c.get("unevidenced")), priority_rank(c["model"]), bool(c.get("crawling")),
+                            bool(c.get("after_climayte")), not c.get("free"),
                             (c.get("benchmark_cost_usd") or 0.0) * (1 + c["load_bias"]), -(c.get("score") or 0)))
     return out

@@ -65,6 +65,7 @@ def test_a_misspelled_argument_is_refused_with_the_nearest_name_and_nothing_is_s
 def test_server_behind_is_a_sentence_once_per_chat_then_a_flag(monkeypatch):
     class Job:
         id = "j1"
+        state = "done"  # finished inside the call, so hswarm_run stamps no returned_at
 
     class Mgr:
         _gates = {}
@@ -72,7 +73,7 @@ def test_server_behind_is_a_sentence_once_per_chat_then_a_flag(monkeypatch):
         def submit(self, parsed, **kw):
             return Job()
 
-    sentence = "this hswarm process (pid 1, 0.0.0, code from 2026-10-01T00:00:00Z) runs the code it loaded, and 13 source file(s) changed on disk since"
+    sentence ="this hswarm process (pid 1, 0.0.0, code from 2026-10-01T00:00:00Z) runs the code it loaded, and 13 source file(s) changed on disk since"
     monkeypatch.setattr(mcp_server, "manager", lambda: Mgr())
     monkeypatch.setattr(mcp_server, "job_payload", lambda *a, **k: {"summary": {}, "results": []})
     monkeypatch.setattr(dispatch, "route_outlook", lambda *a, **k: None)

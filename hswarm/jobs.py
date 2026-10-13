@@ -832,8 +832,8 @@ class JobManager:
         self._book_free_miss(free_note, job.id, task.id, job.caller)
         route_note = route_note or free_note
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
-        if route_note and isinstance(res, Result):
-            res.selection = {**(res.selection or {}), "route": route_note}
+        if route_note and isinstance(res, Result):  # a later offer to CliMayte in the walk (dispatch._climayte_before) is newer
+            res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or route_note}
         return res, transcript
 
     async def _run_legs_api(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:

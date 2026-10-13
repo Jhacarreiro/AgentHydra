@@ -479,6 +479,8 @@ class _Run:
     served: object = None
     tripped: bool = False
     own_only: bool = False  # the current leg's full gate was serving when last asked: rescue legs are no way out of its queue
+    climayte_asked: bool = False  # CliMayte was offered the task before its first `after_climayte` leg
+    route: dict | None = None  # that offer's route note, carried onto the result the walk ends with
 
 
 def _legs(plan, task):
@@ -699,6 +701,18 @@ def _unsent(res):
     return res.status == "error" and not res.turns and res.cost_usd == 0 and "C" in (res.taint or "")
 
 
+async def _climayte_before(run, i):
+    """The task as CliMayte ran it, or None: offered before the walk's first leg kept for after CliMayte (an OpenAI leg;
+    owner 2026-10-13: OpenAI's keys are the last resort, after his CliMayte accounts), so a task whose
+    cheaper legs failed over reaches the owner's subscription before that paid route."""
+    from . import climayte_route
+
+    providers = sorted({c["provider"] for c in run.candidates[i:] if c.get("after_climayte")})
+    served, note = await climayte_route.before_last_resort(run.job.id, run.task, providers)
+    run.route = (served.selection or {}).get("route") if served is not None else note
+    return served
+
+
 async def _walk_legs(run):
     """Run the legs in order until one serves, fails for a reason another leg cannot fix, or a budget is spent.
     The task's clock is its RUN time: the seconds its legs actually ran (Result.seconds). Waiting on a
@@ -718,6 +732,11 @@ async def _walk_legs(run):
             run.attempts.append(res)
             break
         candidate, last = run.candidates[i], i == len(run.candidates) - 1
+        if candidate.get("after_climayte") and not run.climayte_asked:
+            run.climayte_asked = True
+            if (served := await _climayte_before(run, i)) is not None:
+                run.attempts.append(served)
+                return served
         # a crawling leg fails over only while a closed leg follows it
         res = await _try_leg(run, candidate, i < run.terminal, used, run.candidates[i + 1:])
         if _requeue(run, res, candidate["model"], last):
@@ -754,6 +773,8 @@ async def run_selected(mgr, job, task, warm, is_pilot):
                terminal=terminal,
                budget=getattr(mgr, "_budgets", {}).get(job.id))  # the job's budget_usd ceiling, reserved against before every api turn
     res = _fold(await _walk_legs(run), run.attempts, run.plan)
+    if run.route:
+        res.selection["route"] = run.route
     rescued = (res.selection.get("selected") or {}).get("rescue")
     if rescued and res.status == "ok":
         res.selection["below_floor"] = rescued

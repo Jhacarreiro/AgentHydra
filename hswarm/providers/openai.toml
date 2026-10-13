@@ -10,6 +10,10 @@ models_path = "/models"
 passthrough = ["openai:"]
 options = ["reasoning_effort"]
 anthropic_url = "facade"
+# Owner, 2026-10-13: OpenAI's keys are the last resort, after his CliMayte accounts. Its routes sort
+# behind every other route that meets a task's floors, and a task CliMayte can take goes there before it steps onto
+# one (climayte_route.climayte_first, dispatch._walk_legs); only when CliMayte cannot serve does an OpenAI leg run.
+after_climayte = true
 # The catalog includes non-chat models. Choose a Chat Completions-capable model explicitly.
 
 # Ranked routes (owner, 2026-10-07): the benchmarked GPT-6 models on OpenAI's own API. Prices and the 1,050,000-token
