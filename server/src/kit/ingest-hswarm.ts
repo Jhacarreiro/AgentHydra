@@ -11,18 +11,22 @@
 //  * A file smaller than the saved offset was rotated: the cursor starts again from byte 0.
 //  * HSwarm moves finished months into ledger-YYYYMM.jsonl.gz beside it; each archive is read once (cursor per
 //    archive path, skipped while its size+mtime are unchanged), so nothing appended before a rotation is lost.
+
+import { createHash } from 'node:crypto'
 import { readdirSync, statSync } from 'node:fs'
 import { open, readFile } from 'node:fs/promises'
 import { basename, dirname, join } from 'node:path'
 import { promisify } from 'node:util'
 import { gunzip } from 'node:zlib'
 import { hswarmHome } from '../hswarm'
-import { type KitStore, type UsageEventInput, yieldLoop } from './store'
+import { eventSlices, hourStart, type KitStore, type UsageEventInput, yieldLoop } from './store'
 
 const gunzipAsync = promisify(gunzip)
 
 /** Bump to make the cursor read the ledger again (a parser fix that changes what is extracted). */
-export const HSWARM_INGEST_VERSION = 1
+export const HSWARM_INGEST_VERSION = 2
+/** Meta key: the ingest version whose one-time raw-row drop has run (ids changed from ordinals in 2). */
+const HSWARM_DROPPED = 'hswarm_ingest_dropped'
 const BATCH = 500
 const CHUNK = 2 * 1024 * 1024
 
@@ -48,15 +52,45 @@ interface LedgerLine {
   caller_account?: string
   caller_instance?: string
   caller_session?: string
+  id?: string
+  error_kind?: string
+  unjudged?: string
+  free_miss?: boolean
 }
 
 const int = (v: unknown): number => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
 const str = (v: unknown): string | null => (typeof v === 'string' && v ? v : null)
 
+/**
+ * The event id: the line's own `id` when it has one, else a hash of its content (so it never depends on the
+ * rows already stored) plus `dup`, the count of byte-identical lines before it in the same read.
+ */
+function ledgerEventId(r: LedgerLine, dup: number): string {
+  if (typeof r.id === 'string' && r.id) return `hswarm:${r.id}`
+  const h = createHash('sha1').update(JSON.stringify(r)).digest('hex').slice(0, 16)
+  return `hswarm:${r.job}/${r.task}/${h}${dup ? `.${dup}` : ''}`
+}
+
+/** true = a pass, false = the model's failure, null = not judged (cancelled, budget, a dead key). */
+function ledgerOk(r: LedgerLine): boolean | null {
+  if (r.status === 'ok') return true
+  if (r.unjudged) return null
+  if (r.error_kind === 'cancelled' || r.error_kind === 'job_budget') return null
+  if (r.error_kind === undefined) {
+    if (r.status === 'cancelled') return null
+    if (
+      r.provider === 'typesafe' &&
+      int(r.in_miss) + int(r.in_hit) + int(r.in_write) + int(r.out) === 0
+    )
+      return null
+  }
+  return false
+}
+
 /** One ledger line as a usage_event; null for a line that is not a counted call. */
 export function ledgerEvent(
   r: LedgerLine,
-  attempt: number,
+  dup: number,
   pc: string | null,
   priceVer: string | null = null,
 ): UsageEventInput | null {
@@ -65,7 +99,7 @@ export function ledgerEvent(
   const cost = typeof r.cost_usd === 'number' ? r.cost_usd : null
   const ref = `${r.job}/${r.task}`
   return {
-    id: `hswarm:${ref}/${attempt}`,
+    id: ledgerEventId(r, dup),
     ts,
     pc,
     account: str(r.caller_account),
@@ -82,7 +116,7 @@ export function ledgerEvent(
     list_usd: cost,
     billed_usd: r.billed === true ? cost : r.billed === false ? 0 : null,
     price_ver: priceVer,
-    ok: r.status === 'ok',
+    ok: ledgerOk(r),
     seconds: typeof r.seconds === 'number' ? r.seconds : null,
     ref,
   }
@@ -128,6 +162,9 @@ export async function ingestHswarm(
   opts: { pc?: string | null } = {},
 ): Promise<number | null> {
   const seen = new Map<string, number>()
+  const migrating = store.getMeta(HSWARM_DROPPED) !== String(HSWARM_INGEST_VERSION)
+  let skipBefore: number | null = null
+  if (migrating) skipBefore = await dropHswarmRows(store)
   const archived = new Set(
     hswarmArchivePaths(path).map((p) => ARCHIVE.exec(basename(p))?.[2] ?? ''),
   )
@@ -151,7 +188,7 @@ export async function ingestHswarm(
     } catch {
       continue // unreadable now (being replaced); the cursor is not set, so the next sweep reads it
     }
-    const r = await consume(store, data, 0, seen, opts.pc ?? null, null)
+    const r = await consume(store, data, seen, opts.pc ?? null, null, skipBefore)
     written += r.written
     store.setCursor({
       path: ap,
@@ -171,6 +208,7 @@ export async function ingestHswarm(
     size = s.size
     mtime = Math.floor(s.mtimeMs)
   } catch {
+    if (migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
     return changed ? written : null
   }
   const cur = store.getCursor(path)
@@ -196,7 +234,7 @@ export async function ingestHswarm(
       if (n === 0) break
       pos += n
       const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
-      const r = await consume(store, data, offset, seen, opts.pc ?? null, archived)
+      const r = await consume(store, data, seen, opts.pc ?? null, archived, skipBefore)
       written += r.written
       end += r.consumed
       carry = Buffer.from(data.subarray(r.consumed)) // a line still being written waits for the next sweep
@@ -205,33 +243,48 @@ export async function ingestHswarm(
     await fh.close()
   }
   store.setCursor({ path, size, mtime, offset: end, version: HSWARM_INGEST_VERSION })
+  if (migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
   return written
+}
+
+/**
+ * One-time (per ingest version) clear of the stored raw hswarm rows, whose ordinal ids the line ids replace; their
+ * hours are marked dirty so the rollup rebuilds them. Returns the raw cut: the re-read skips older lines, which
+ * are settled (usage_hour and the ledger) and would be counted twice. Null when nothing was ever pruned.
+ */
+async function dropHswarmRows(store: KitStore): Promise<number | null> {
+  const db = store.db
+  const span = db
+    .query("select min(ts) as lo, max(ts) as hi from usage_event where source = 'hswarm'")
+    .get() as { lo: number | null; hi: number | null }
+  if (span.lo !== null && span.hi !== null) {
+    const hours = db.prepare('insert or ignore into dirty_hour (hour) values (?)')
+    const drop = db.prepare(
+      "delete from usage_event where source = 'hswarm' and ts >= $a and ts < $b",
+    )
+    const sel = db.prepare(
+      "select distinct ts - (((ts % 3600000) + 3600000) % 3600000) as h from usage_event where source = 'hswarm' and ts >= $a and ts < $b",
+    )
+    for (const _ of eventSlices(db, span.lo, span.hi + 1, (a, b) => {
+      db.transaction(() => {
+        for (const row of sel.all({ $a: a, $b: b }) as { h: number }[]) hours.run(hourStart(row.h))
+        drop.run({ $a: a, $b: b })
+      })()
+    }))
+      await yieldLoop()
+  }
+  return store.rawCut()
 }
 
 /** Parses the whole lines of `data` into usage events. `consumed` is the bytes up to the last newline. */
 async function consume(
   store: KitStore,
   data: Buffer,
-  offset: number,
   seen: Map<string, number>,
   pc: string | null,
   skipMonths: Set<string> | null,
+  skipBefore: number | null,
 ): Promise<{ written: number; consumed: number }> {
-  const lastAttempt = store.db.prepare(
-    'select count(*) as n from usage_event where id >= $lo and id < $hi',
-  )
-  const nextAttempt = (r: LedgerLine): number => {
-    if (typeof r.attempt === 'number') return r.attempt
-    const ref = `${r.job}/${r.task}`
-    let n = seen.get(ref)
-    if (n === undefined && offset === 0) n = 0 // reading from the start: the same ids are rewritten, not added to
-    if (n === undefined) {
-      const prefix = `hswarm:${ref}/`
-      n = (lastAttempt.get({ $lo: prefix, $hi: `${prefix.slice(0, -1)}0` }) as { n: number }).n
-    }
-    seen.set(ref, n + 1)
-    return n
-  }
   let written = 0
   let batch: UsageEventInput[] = []
   const flush = async () => {
@@ -261,7 +314,14 @@ async function consume(
     // A month with an archive is final there: a live line of it is a rotation whose file swap has not gone
     // through yet (the archive is written first). Reading it too would give it a second ordinal, a second id.
     if (skipMonths?.size && skipMonths.has(lineMonth(r) ?? '')) continue
-    const ev = ledgerEvent(r, nextAttempt(r), pc)
+    if (skipBefore !== null) {
+      const t = typeof r.ts === 'string' ? Date.parse(r.ts) : Number.NaN
+      if (Number.isFinite(t) && t < skipBefore) continue // settled already; counting it again would double it
+    }
+    const key = r.id ? '' : JSON.stringify(r)
+    const dup = key ? (seen.get(key) ?? 0) : 0
+    if (key) seen.set(key, dup + 1)
+    const ev = ledgerEvent(r, dup, pc)
     if (ev) batch.push(ev)
     if (batch.length >= BATCH) await flush()
   }

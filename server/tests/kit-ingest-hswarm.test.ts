@@ -75,7 +75,7 @@ describe('HSwarm ledger ingest', () => {
       unknown
     >[]
     expect(rows[0]).toMatchObject({
-      id: 'hswarm:job-a/t1/0',
+      id: expect.stringMatching(/^hswarm:job-a\/t1\/[0-9a-f]{16}$/),
       source: 'hswarm',
       pc: 'pc1',
       account: 'acct-0123abcd',
@@ -134,17 +134,12 @@ describe('HSwarm ledger ingest', () => {
     const torn = JSON.stringify(line('t3'))
     appendFileSync(path, `${torn.slice(0, 40)}`)
     expect(await ingestHswarm(store, path)).toBe(0)
-    appendFileSync(path, `${torn.slice(40)}\n${JSON.stringify(line('t1'))}\n`)
+    appendFileSync(path, `${torn.slice(40)}\n${JSON.stringify(line('t1', { cost_usd: 0.125 }))}\n`)
     expect(await ingestHswarm(store, path)).toBe(2)
-    const ids = (
-      store.db.query('select id from usage_event order by id').all() as { id: string }[]
-    ).map((r) => r.id)
-    expect(ids).toEqual([
-      'hswarm:job-a/t1/0',
-      'hswarm:job-a/t1/1',
-      'hswarm:job-a/t2/0',
-      'hswarm:job-a/t3/0',
-    ])
+    const refs = (
+      store.db.query('select ref from usage_event order by ref').all() as { ref: string }[]
+    ).map((r) => r.ref)
+    expect(refs).toEqual(['job-a/t1', 'job-a/t1', 'job-a/t2', 'job-a/t3'])
     store.close()
   })
 
@@ -176,10 +171,10 @@ describe('HSwarm ledger ingest', () => {
     const fresh = Array.from({ length: 6 }, (_, i) => line(`n${i}`, { job: 'job-b' }))
     writeFileSync(path, jl(fresh))
     expect(await ingestHswarm(store, path)).toBe(9) // 3 from the archive, 6 from the live file
-    const ids = (store.db.query('select id from usage_event').all() as { id: string }[]).map(
-      (r) => r.id,
+    const ids = (store.db.query('select ref from usage_event').all() as { ref: string }[]).map(
+      (r) => r.ref,
     )
-    expect(ids).toContain('hswarm:job-a/t3/0')
+    expect(ids).toContain('job-a/t3')
     expect(ids).toHaveLength(9) // t1 and t2 were already there under the same ids: not counted twice
     expect(kitTotals(store, 0).calls).toBe(9)
 
@@ -217,6 +212,109 @@ describe('HSwarm ledger ingest', () => {
     writeFileSync(path, jl([fresh])) // the swap goes through later
     await ingestHswarm(store, path)
     expect(kitTotals(store, 0).calls).toBe(3)
+    store.close()
+  })
+
+  test('a line with an id keeps it; legacy ids do not depend on the rows already stored', async () => {
+    const path = join(root, 'ids.jsonl')
+    writeFileSync(path, jl([line('t1', { id: 'abc123' }), line('t2'), line('t2', { cost_usd: 2 })]))
+    const store = new KitStore(':memory:')
+    await ingestHswarm(store, path)
+    const ids = (store.db.query('select id from usage_event').all() as { id: string }[]).map(
+      (r) => r.id,
+    )
+    expect(ids).toContain('hswarm:abc123')
+    expect(new Set(ids).size).toBe(3)
+    // A store with other rows of the same task already in it (e.g. after a raw prune) gives the same id.
+    const other = new KitStore(':memory:')
+    other.upsertEvents([
+      { id: 'hswarm:job-a/t2/0', ts: NOW - 5000, source: 'hswarm', model: 'm', ref: 'job-a/t2' },
+    ] as never)
+    const path2 = join(root, 'ids2.jsonl')
+    writeFileSync(path2, jl([line('t2', { cost_usd: 2 })]))
+    await ingestHswarm(other, path2)
+    const same = ids.filter((i) => i.startsWith('hswarm:job-a/t2/'))
+    expect(same.some((i) => other.db.query('select 1 from usage_event where id = ?').get(i))).toBe(
+      true,
+    )
+    store.close()
+    other.close()
+  })
+
+  test('a cancelled call, a job budget stop and an unjudged down are not model failures', async () => {
+    const path = join(root, 'ok.jsonl')
+    writeFileSync(
+      path,
+      jl([
+        line('a', { status: 'error', error_kind: 'cancelled' }),
+        line('b', { status: 'error', error_kind: 'job_budget' }),
+        line('c', { status: 'error', error_kind: 'model', unjudged: 'key' }),
+        line('d', { status: 'cancelled' }),
+        line('e', {
+          status: 'error',
+          provider: 'typesafe',
+          in_miss: 0,
+          in_hit: 0,
+          in_write: 0,
+          out: 0,
+        }),
+        line('f', { status: 'error', error_kind: 'model' }),
+        line('g', { status: 'error', error_kind: 'key' }),
+        line('h', {
+          status: 'error',
+          provider: 'free',
+          model: 'free:x',
+          free_miss: true,
+          error_kind: 'unavailable',
+        }),
+        line('i'),
+      ]),
+    )
+    const store = new KitStore(':memory:')
+    await ingestHswarm(store, path)
+    const ok = Object.fromEntries(
+      (
+        store.db.query('select ref, ok from usage_event').all() as {
+          ref: string
+          ok: number | null
+        }[]
+      ).map((r) => [r.ref.split('/')[1], r.ok]),
+    )
+    expect(ok).toEqual({ a: null, b: null, c: null, d: null, e: null, f: 0, g: 0, h: 0, i: 1 })
+    store.close()
+  })
+
+  test('the upgrade re-read replaces ordinal-id rows and does not double a settled hour', async () => {
+    const path = join(root, 'migrate.jsonl')
+    const old = line('t1', { ts: iso(NOW - 3 * 86_400_000) })
+    const recent = line('t2')
+    writeFileSync(path, jl([old, recent]))
+    const store = new KitStore(':memory:')
+    // State as the old ingest left it: ordinal-id raw rows, a cursor at the old version.
+    store.upsertEvents([
+      {
+        id: 'hswarm:job-a/t1/0',
+        ts: Date.parse(old.ts),
+        source: 'hswarm',
+        model: 'm',
+        ref: 'job-a/t1',
+      },
+      {
+        id: 'hswarm:job-a/t2/0',
+        ts: Date.parse(recent.ts),
+        source: 'hswarm',
+        model: 'm',
+        ref: 'job-a/t2',
+      },
+    ] as never)
+    store.setCursor({ path, size: 1, mtime: 1, offset: 1, version: 1 })
+    await ingestHswarm(store, path)
+    const rows = store.db.query("select id from usage_event where source = 'hswarm'").all() as {
+      id: string
+    }[]
+    expect(rows).toHaveLength(2)
+    expect(rows.some((r) => /\/0$/.test(r.id))).toBe(false)
+    expect(await ingestHswarm(store, path)).toBeNull()
     store.close()
   })
 })
