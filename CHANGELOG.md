@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A long Codex chat moves to another account with all of its history.** A chat that had rolled over to a new
+  context window used to arrive missing its earlier turns. Now the whole history moves, and the original is archived
+  only after the copy shows every turn it had. A copy that is open in Codex is never rewritten, and a move that was
+  interrupted picks up where it stopped instead of making a second copy.
 - **AgentHydra tells you when more free accounts would have helped.** When the Free accounts or CliMayte could have
   done a task but had no account free, the task went to a paid key without a trace. Now AgentHydra counts those tasks
   and, at most once a day, sends a notification such as "We would love 6 more Free ChatGPT accounts", saying how many

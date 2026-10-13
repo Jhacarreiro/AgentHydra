@@ -229,6 +229,14 @@ chats are excluded, and the original is archived only after its copy and sidebar
 membership verify. Destination pipe discovery is reused across the batch, with the
 destination process identity still checked before every native call.
 
+`--chat <thread id>` moves one chat from the plan instead of all of them, and is also how an
+interrupted or refused move is finished: its saved receipt continues into the same destination
+chat, so no second copy is made. `--recover-from <file>` (repeatable) names an earlier copy of the
+same chat, such as a backup of the destination transcript, to fill rows the destination lost; a
+file whose rows differ from this chat's is refused. Each step prints one JSON line (`read`,
+`copied`, `repaired`, `reprojected`, `verified`, `shown`, `archived`) and the last line is the
+result, with turn and item counts at both ends.
+
 `move_chat` and `move_chats` are CLAUDE. A Codex chat cannot move that way, and the reason is not
 an omission: a Codex thread belongs to the home it was written in, and Codex has no verb that
 re-homes one. AgentHydra does it by copy, verify, then archive, driven from the Codex instances
@@ -268,6 +276,7 @@ Every refusal happens at planning time, before anything connects:
 - an unknown process state, or a login that changed under the plan;
 - a destination that is the same home as the source;
 - a transcript that is archived, edited since the plan, or outside the home;
+- a chat whose earlier history file is missing from its home, or matched by more than one file;
 - a corrupt move history, which prevents any copy rather than being quietly repaired.
 
 The ORDER of the remaining steps is chosen so an interruption is readable rather than lossy:
@@ -276,7 +285,14 @@ The ORDER of the remaining steps is chosen so an interruption is readable rather
 - a failed archive retries the SAVED copy instead of copying again, so a repeat cannot create a
   duplicate;
 - an edit during the import keeps both chats and refuses the stale retry;
+- a copy interrupted mid-write resumes into the destination id it saved before writing, and a
+  half-written staging file left behind is replaced, never appended to;
 - failed destination verification preserves the original untouched.
+
+The destination transcript is rewritten only while AgentHydra holds Codex's own writer lock for
+that chat (`thread-writer-locks/<id>.lock`, the lock Codex Desktop holds while the chat is open
+and for about a minute after you switch away). While Codex holds it the move refuses and changes
+nothing; it never races a live writer.
 
 The worst case is two readable chats. It is never zero.
 
@@ -286,6 +302,30 @@ The worst case is two readable chats. It is never zero.
 paginated ordinals and `item-completed` events across untouched. Downgrading `history_mode` would
 be simpler and is wrong: Codex silently drops the displayed items while the model messages sit
 intact on disk, so the moved chat opens LOOKING empty and reads as a failed move.
+
+**A long chat's history can span several files.** When Codex rolls a chat over to a new context
+window it starts a new rollout whose `session_meta` carries `history_base`: the earlier rollout's
+thread id, ordinal and byte boundary. Another home cannot resolve that link, so copying only the
+newest file imported 5 of 7 turns (2026-10-13). The mover follows the chain inside the source home,
+accepts a file only when its own id matches and its row ending at the named byte has the named
+ordinal, and writes one self-contained transcript: the newest metadata without the link, every
+earlier row up to its boundary, then the newest rows. Ordinal gaps where earlier metadata stood are
+fine (measured: 7 of 7 turns, 517 of 517 items, identical to the source). The plan shows such a chat
+once, although `thread/list` lists its earlier file as a second, older row.
+
+**The source is archived only after the displayed history matches.** The mover reads the source's
+turns without resuming it (a resume appends a settings row), resumes the destination, reads its
+turns oldest first (`thread/turns/list` with `sortDirection: 'asc'`; the default is newest first),
+and requires every source turn, items included, to be identical and in the same place at the start
+of the destination.
+Turns the destination added after the copy are allowed. A destination whose transcript is whole
+but whose history projection is stale is reprojected once, under the writer lock, and checked again.
+
+**A destination that already has new work is completed, not replaced.** If an earlier version
+copied only the newest file and the chat was then used in the destination, the mover keeps every
+row the destination wrote itself, verbatim and in order, after the complete history, fills any rows
+between them from `--recover-from` copies, backs up the transcript and the removed projection rows,
+and lets Codex rebuild the projection on the next resume.
 
 ## Reviving a chat Claude Code deleted (`migrate_chat.py --revive`)
 
