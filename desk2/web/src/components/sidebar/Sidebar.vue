@@ -318,6 +318,8 @@ const remoteRows = computed(() => {
 })
 const cloudSearching = computed(() => cloud.on.value && cloud.searching.value && cloud.search.value.trim() !== '')
 const cloudListShown = computed(() => cloudSearching.value || (cloud.on.value && cloud.selectMode.value))
+/** The CloudList is what the sidebar draws: the template's chain puts Hydra's tree and the dev servers first. */
+const cloudShown = computed(() => cloudListShown.value && !hydraModel.value && !devServers.on.value)
 
 // The HSwarm jobs seen so far, kept across polls (tasks.ts SeenJobs): a task HSwarm sent stays under the chat its job
 // named while HSwarm's list lacks the job, instead of turning into a row of its own and back (owner, 2026-10-09). A
@@ -1204,8 +1206,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
           </div>
         </section>
         </template>
-        <p v-if="cloud.on.value && !hydraModel && rowNote" role="status" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-2">{{ rowNote }}</p>
-        <p v-if="cloud.on.value && !hydraModel && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-ui-sm leading-4 text-danger-text">
+        <!-- Only under the CloudList: with the cloud on but not selecting, the grouped list above draws these itself, and a
+             second copy here showed every note twice (2026-10-13). -->
+        <p v-if="cloudShown && rowNote" role="status" class="px-1.5 pt-3 text-ui-sm leading-4 text-text-2">{{ rowNote }}</p>
+        <p v-if="cloudShown && rowError" role="alert" class="flex items-start gap-1 px-1.5 pt-3 text-ui-sm leading-4 text-danger-text">
           <span class="min-w-0 flex-1">{{ rowError }}</span>
           <button type="button" aria-label="Dismiss" class="shrink-0 rounded-sm px-1 text-text-muted hover:bg-fill-hover hover:text-text" @click="rowError = null">
             <component :is="icons.dismiss" class="size-3" />
