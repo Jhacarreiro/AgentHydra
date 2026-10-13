@@ -614,7 +614,10 @@ parameters as AgentHydra's `GET /api/sessions`) and `GET /api/cloud/instances`.
 **A project dashboard** is a small static website per project, which its chats write. A chat builds it with
 `dashboard_write` on the agenthydra MCP (any HTML, CSS, JavaScript or data), and the daemon hosts it at
 `http://<id>.localhost:<port>/` for that project. The page opens from the chat header's dashboard button, a project
-tile's "Open dashboard", or the sidebar project menu, and slides in beside the chat like Hydra and Dev servers do. It
+tile's "Open dashboard", the sidebar project menu, or the dashboard icon beside the project's New session +, and slides
+in beside the chat like Hydra and Dev servers do. The icon shows only for a site that records its project folder, which
+`dashboard_write` and `POST /api/dashboards/workspace` do; files copied straight into the site folder record none, so
+that project gets no icon (owner, 2026-10-12: "where's my icon"). It
 frames the site in a sandboxed iframe and reloads it when a file changes; a project with no site shows the prompt to
 copy. It polls only while it is on screen.
 
