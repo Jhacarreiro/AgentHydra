@@ -1,6 +1,7 @@
 // DESK_APPEND (SPEC "The engine"): the text every chat's claude_code system prompt gets appended.
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import { connectorsForChat } from '../connectors/registry'
+import { coreModeOn } from './hydra-core-mode'
 
 const FIRST =
   "You are running inside Hydra Desk, Jacob's own desktop for Claude Code."
@@ -60,10 +61,13 @@ export function chatAddOns(
 ): { append: string; mcpServers: Record<string, McpServerConfig>; manager?: string; chatId?: string } {
   const { mcpServers, prompts } = connectorsForChat(cwd, self?.id)
   const move = self ? ` ${moveLine(self)}` : ''
+  // Core mode keeps the connector servers attached but drops their prompt texts and the orchestration paragraphs.
+  const core = coreModeOn()
+  const base = core ? `${FIRST} ${MEDIA}` : deskAppend(delegate)
   // A sub-manager chat's manager rides along so a CliMayte launch pins it too (AGENTHYDRA_MANAGER), and the chat's own id
   // so its agenthydra server knows which Desk chat calls it (manager_open, desk_chat), as an in-process chat's does.
   return {
-    append: deskAppend(delegate) + move + prompts.map((p) => `\n\n${p}`).join(''),
+    append: base + move + (core ? '' : prompts.map((p) => `\n\n${p}`).join('')),
     mcpServers,
     ...(manager ? { manager } : {}),
     ...(self ? { chatId: self.id } : {}),

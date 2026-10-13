@@ -41,6 +41,7 @@ import type {
 import { contextPct } from './describe'
 import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
+import { coreChatExcludes } from './hydra-core-mode'
 import { pinHaikuModel, withoutOldHaiku } from './haiku-pin'
 import { mainMcpOption } from './mcp-servers'
 import { InputQueue, type QueuedInput } from './input-queue'
@@ -422,7 +423,8 @@ export class ChatRuntime {
     }
     const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
     const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
-    if (swap || hooks) options.settings = { ...(swap ? { claudeMdExcludes: swap.excludes } : {}), ...(hooks ? { hooks } : {}) }
+    const claudeMdExcludes = [...(swap?.excludes ?? []), ...coreChatExcludes()]
+    if (claudeMdExcludes.length || hooks) options.settings = { ...(claudeMdExcludes.length ? { claudeMdExcludes } : {}), ...(hooks ? { hooks } : {}) }
     if (swap) {
       options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}
 

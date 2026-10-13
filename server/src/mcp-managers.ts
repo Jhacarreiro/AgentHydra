@@ -3,6 +3,7 @@
 import { readFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
+import { coreModeOn } from './hydra-core-mode'
 import { loadMerged, openTurnsOf, readDeskIndex, titlesOf } from './manager-analytics/collect'
 import {
   list as rsiList,
@@ -15,6 +16,9 @@ import { buildStats } from './manager-analytics/stats'
 import { readState } from './manager-analytics/store'
 import { type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
+
+const CORE_MODE_REFUSAL =
+  'Core mode: sub-manager chats are off. Use core_use { chat, id, mode: "consult" | "hire" } to ask or hire a hidden copy.'
 
 const MANAGER_SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/
 const DEFAULT_WAIT = 30
@@ -140,6 +144,7 @@ export const MANAGER_TOOLS: HydraTool[] = [
       ['manager', 'prompt'],
     ),
     run: async (a: Record<string, unknown>) => {
+      if (coreModeOn()) throw new Error(CORE_MODE_REFUSAL)
       const parentRef = str(a.deskChat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
       if (!parentRef)
         throw new Error(
@@ -184,6 +189,7 @@ export const MANAGER_TOOLS: HydraTool[] = [
       ['chat', 'message'],
     ),
     run: async (a: Record<string, unknown>) => {
+      if (coreModeOn()) throw new Error(CORE_MODE_REFUSAL)
       const message = str(a.message).trim()
       if (!message) throw new Error('message is required')
       const chat = pickDeskChat(await deskChats(), str(a.chat))
@@ -211,6 +217,7 @@ export const MANAGER_TOOLS: HydraTool[] = [
       ['chat'],
     ),
     run: async (a: Record<string, unknown>) => {
+      if (coreModeOn()) throw new Error(CORE_MODE_REFUSAL)
       const chat = pickDeskChat(await deskChats(), str(a.chat))
       return replyWhenDone(chat, null, waitSeconds(a))
     },

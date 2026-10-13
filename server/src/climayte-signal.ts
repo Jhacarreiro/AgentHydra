@@ -40,6 +40,7 @@ export interface HookGroup {
 }
 export interface WorkerHooks {
   UserPromptSubmit?: Array<{ hooks: Hook[] }>
+  SessionStart?: Array<{ hooks: Hook[] }>
   PreToolUse?: HookGroup[]
   PostToolUse: HookGroup[]
   Stop?: Array<{ hooks: Hook[] }>
@@ -79,6 +80,7 @@ export function workerHooks(opts: {
   guards?: string[]
   stopUrl?: string | null
   promptHooks?: Array<{ hooks: Hook[] }>
+  sessionStartHooks?: Array<{ hooks: Hook[] }>
 }): WorkerHooks {
   const guards = opts.guards ?? []
   const preToolUse: HookGroup[] = [
@@ -113,6 +115,7 @@ export function workerHooks(opts: {
   ]
   return {
     ...(opts.promptHooks?.length ? { UserPromptSubmit: opts.promptHooks } : {}),
+    ...(opts.sessionStartHooks?.length ? { SessionStart: opts.sessionStartHooks } : {}),
     ...(opts.stopUrl
       ? {
           Stop: [

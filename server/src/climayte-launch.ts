@@ -65,8 +65,9 @@ import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
 import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
-import { PORT } from './config'
+import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
+import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
   deskBrowserMcpUrl,
@@ -586,8 +587,15 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
         guards,
-        // A chat is the owner's own: Manager Hydra's router picks its manager every message.
-        promptHooks: w.chat && ownerClaudeDir && !w.sealed ? ownerRouterHooks(ownerClaudeDir) : [],
+        // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode: Hydra Core's hook).
+        promptHooks:
+          w.chat && ownerClaudeDir && !w.sealed
+            ? coreModeOn()
+              ? coreHookGroups()
+              : ownerRouterHooks(ownerClaudeDir)
+            : [],
+        sessionStartHooks:
+          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed
@@ -626,7 +634,18 @@ const WORKER_ONLY_SETTINGS = {
  *  chat skips it (`claudeMdExcludes` applies to the User memory type, CLI 2.1.286, measured
  *  2026-10-04) and gets the owner's own CLAUDE.md instead (chatPromptText). */
 function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
-  return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md'))] }
+  return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md')), ...coreChatExcludes()] }
+}
+
+/** Core mode's chat hook: Hydra Core's hook.mjs, given for the prompt and the session start in place of the router. */
+export function coreHookGroups(): Array<{ hooks: Array<{ type: 'command'; command: string }> }> {
+  return [
+    {
+      hooks: [
+        { type: 'command', command: `node "${slashed(join(APP_ROOT, 'hydra-core', 'hook.mjs'))}"` },
+      ],
+    },
+  ]
 }
 
 /** What a chat is told on top of the CLI's own prompt: it is the manager the owner talks to in his
@@ -642,6 +661,8 @@ const CHAT_NOTE_BASE =
   " Manager Hydra names which manager you are on each message (a deep persona such as the Head of Advertising or the Structural Backend Engineer). Act as that manager. When a question crosses into another manager's field, open them as a sub-manager chat below yours with manager_open and ask with manager_ask; your workers are your employees." +
   ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
 export const CHAT_NOTE = `${CHAT_NOTE_BASE} ${CHAT_MEDIA}`
+const CORE_CHAT_NOTE =
+  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered, and your process ends when your turn ends.'
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
@@ -655,6 +676,7 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
  *  the media sentence, so CHAT_NOTE's own is left out), then the owner's global CLAUDE.md unless
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
 export function chatPromptText(w: CliMayteWorker): string {
+  if (coreModeOn()) return w.desk ? `${CORE_CHAT_NOTE}\n\n${w.desk.append}` : CORE_CHAT_NOTE
   const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
