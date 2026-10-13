@@ -305,7 +305,7 @@ _ROUTE_VIA_FREE_PROFILES_DEFAULT = ("routine", "general", "research", "decision"
 ROUTE_VIA_FREE_PROFILES = _ROUTE_VIA_FREE_PROFILES_DEFAULT
 # `route_via_free_tools`: the tools a TOOL task may be offered and still go to a Free account, which runs them through a
 # text tool protocol (free_client.py); a task offered any other tool takes its API route. `route_via_free_tool_profiles`:
-# the profiles such a tool task may have (critical included: see its ask below). Never edit or shell tools: a Free leg that fails falls back to the API, and an
+# the profiles such a tool task may have (critical and code included: see their asks below). Never edit or shell tools: a Free leg that fails falls back to the API, and an
 # edit it had already made would be left behind it. The defaults are what held up in a blind A/B on 30 real tasks
 # against the API answers they had got (2026-10-13, Opus/GPT-6 judges with the task's own tools, mean score of 10):
 # general read 6.2 Free vs 5.8 API, decision read 6.1 vs 8.4, research web 3.8 vs 6.2 with only 4 of 10 served.
@@ -315,7 +315,7 @@ ROUTE_VIA_FREE_TOOLS = _ROUTE_VIA_FREE_TOOLS_DEFAULT
 FREE_WEB_TOOLS = ("read_url", "web_search")
 _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT = ("research",)
 ROUTE_VIA_FREE_WEB_PROFILES = _ROUTE_VIA_FREE_WEB_PROFILES_DEFAULT
-_ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general", "decision", "research", "critical")
+_ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT = ("routine", "general", "decision", "research", "critical", "code")
 ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # `route_via_free_tool_asks`: per profile, the models a Free tool task's thread asks for, best first: free_chat's `model`
 # and, after "@", the provider it must run on ("sonnet@claude"; "gpt-6" and "luna-thinking" are ChatGPT's). The first
@@ -331,9 +331,11 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # Critical read work goes to Luna Thinking (GPT-5.6 Thinking mini) on a ChatGPT account: over 29 real critical read
 # tasks it won 13, lost 15 and tied 1 against the API answers, mean 5.6 vs 5.5, with 19 judged errors to the API's 42 and
 # half its time (2026-10-13). About a third of its threads fail at once (generation_error) and take their API route.
+# Code read work (reviews, investigations with read tools only) goes there too: 7 to 5 over 12 real code read tasks,
+# mean 5.9 vs 5.0, 16 judged errors to the API's 53, where GPT-5.6 mini with the claim check drew 7 to 7, mean 4.4 vs 4.9.
 _ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",),
                                                                  "research": ("sonnet@claude", "@chatgpt"),
-                                                                 "critical": ("luna-thinking",)}
+                                                                 "critical": ("luna-thinking",), "code": ("luna-thinking",)}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 # `route_via_free_check_profiles`: the profiles whose tool tasks on a ChatGPT thread are asked once, before they finish
 # on fewer than free_client.CHECK_READS tool results, to check their claims with their tools (free_client.CHECK). A
