@@ -30,7 +30,6 @@ import re
 import platform
 import secrets
 import sqlite3
-import statistics
 import subprocess
 from pathlib import Path
 
@@ -42,7 +41,7 @@ SYNC_BRANCH = "sync"
 MACHINE = (os.environ.get("HSWARM_MACHINE") or platform.node() or "unknown").lower()
 FLOOR_MODEL = "claude-sonnet-5"
 POOL_DAYS = 14
-METHOD = 3  # utilizations.method: NULL/1 = the median per task (old), 2 = each task capped at its own tokens (old), 3 = as 2 with a job's tasks taken from the ledger's own ok lines when tasks.sqlite does not hold the job
+METHOD = 4  # utilizations.method: NULL/1 = the median per task (old), 2 = each task capped at its own tokens (old), 3 = as 2 with a job's tasks taken from the ledger's own ok lines when tasks.sqlite does not hold the job (old), 4 = as 3 with each answered leg that reported no cost priced at its route's price in worker_usd (_unbilled)
 METHOD_SINCE = "2026-10-13"  # the day the current method went in; rows of an older method keep the old label
 MIN_POOL = 5
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
@@ -276,14 +275,23 @@ def _answered_tokens(results: list[dict]) -> str:
     return json.dumps([NO_CREDIT if via_climayte(r.get("selection")) else task_tokens(r.get("usage")) for r in results if r.get("status") == "ok"])
 
 
-def leg_cost(model: str | None, cost_usd, usage: dict | None) -> float:
-    """What a task's worker leg cost: its reported cost, or (a Claude-API leg reports none) its tokens at list price."""
+def leg_cost(model: str | None, cost_usd, usage: dict | None, when: dt.datetime | None = None) -> float:
+    """What a task's worker leg cost: its reported cost, or (a leg reports none when its route had no price as it ran, or a
+    leg of it went unpriced) its tokens at its route's price, else at Claude's list price for the model's name. By the name
+    alone every route with an effort in it ('claude-sonnet-5-5-low') and every GPT route came to $0 (2026-10-13)."""
     if cost_usd is not None:
         return float(cost_usd)
     t = task_tokens(usage)
     if not t or not model:
         return 0.0
-    m = str(model)
+    m, (hit, miss, out) = str(model), t
+    calls = max(1, int((usage or {}).get("calls") or 1))  # totals of several calls: the tier of the average call
+    try:
+        route = config.cost_usd(m, hit, miss, out, when, write=int((usage or {}).get("in_write") or 0), prompt_tokens=(hit + miss) // calls)
+    except ValueError:  # not a registered model
+        route = None
+    if route is not None:
+        return route
     return task_usd(m.split(":")[1] if m.startswith("rank:") and m.count(":") >= 1 else m, t) or 0.0
 
 
@@ -1453,8 +1461,22 @@ def _ts_key(ts) -> int | None:
         return None
 
 
+def _unbilled(r: dict) -> float:
+    """What an answered ledger line that reported no cost comes to at its route's price (leg_cost); 0.0 for any other line.
+    Such a line's route had no price when it ran, and the row it went into counted it as nothing (2026-10-13: 2,675 Claude-API
+    and 741 OpenAI answers from Sep 29 to Oct 12, about $85 with the free-tier hosts' list prices, $56 of it Claude and GPT)."""
+    if r.get("status") != "ok" or r.get("cost_usd") is not None or r.get("provider") in ("climayte", "free"):
+        return 0.0
+    try:
+        when = dt.datetime.fromisoformat(str(r.get("ts")))
+    except ValueError:
+        when = None
+    return leg_cost(r.get("model"), None, r, when)
+
+
 def _ledger_sources(ledger: Path | None = None) -> tuple[dict, dict, dict]:
-    """(asks by row id, asks by (second, model), job tasks by (job, task)) -> ([hit, miss, out] | NO_CREDIT) from the ledger's own lines.
+    """(asks by row id, asks by (second, model), job tasks by (job, task)) -> ([hit, miss, out] | NO_CREDIT, _unbilled USD) from the
+    ledger's own lines.
     Free misses are not tasks; a line that ended not-ok has no answer to size."""
     by_id: dict[str, list[int]] = {}
     by_ts: dict[tuple, list[int]] = {}
@@ -1470,14 +1492,14 @@ def _ledger_sources(ledger: Path | None = None) -> tuple[dict, dict, dict]:
         if r.get("free_miss"):
             continue
         if r.get("job") in ("ask", "decide"):  # a decide is an ask row with label 'decide'
-            tok = NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")]
+            tok = (NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")], _unbilled(r))
             if r.get("job") == "ask":
                 by_id[_ask_id(i, r)] = tok
             k = _ts_key(r.get("ts"))
             if k is not None and r.get("status") == "ok":
                 by_ts.setdefault((k, r.get("model") or ""), []).append(tok)
         elif r.get("status") == "ok" and r.get("job") and r.get("task"):
-            tok = NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")]
+            tok = (NO_CREDIT if r.get("provider") == "climayte" else [int(r.get(k) or 0) for k in ("in_hit", "in_miss", "out")], _unbilled(r))
             by_task.setdefault((r["job"], r["task"]), tok)
     return by_id, by_ts, by_task
 
@@ -1502,27 +1524,31 @@ def _run_task_tokens(job_ids: set[str]) -> dict[str, list[tuple[str, int, int]]]
     return out
 
 
-def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict, by_job: dict) -> list:
-    """The per-task token list of one old row, rebuilt from the sources: a task with no source stays None (unsized)."""
+def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict, by_job: dict) -> tuple[list, float]:
+    """The per-task token list of one old row, rebuilt from the sources (a task with no source stays None, unsized), and what
+    its answered tasks that reported no cost come to at their routes' prices (_unbilled)."""
     ok = int(r["ok"]) if r.get("ok") is not None else int(r.get("tasks") or 0)
     if r["kind"] == "ask":
-        tok = by_id.get(r["id"])
-        if tok is None:  # a live row: matched on its second and model, each ledger line used once
+        got = by_id.get(r["id"])
+        if got is None:  # a live row: matched on its second and model, each ledger line used once
             same = by_ts.get((_ts_key(r.get("ts")), r.get("worker_model") or ""))
-            tok = same.pop(0) if same else None
+            got = same.pop(0) if same else None
+        tok, usd = got if got is not None else (None, 0.0)
         if tok is not None and tok != NO_CREDIT and not any(tok):
             tok = None
-        return [tok] if ok else []
+        return ([tok], usd) if ok else ([], 0.0)
     got = runs.get(r["id"])
     if got is None:  # tasks.sqlite does not hold this job: take its tasks from the ledger's own ok lines (no in/out counts, so only a ledger line sizes a task)
         got = [(task, 0, 0) for task in by_job.get(r["id"], [])]
     sized: list = []
+    unbilled = 0.0
     for task_id, i, o in got[:ok]:
-        tok = by_task.get((r["id"], task_id))
+        tok, usd = by_task.get((r["id"], task_id), (None, 0.0))
+        unbilled += usd
         if tok is None and (i or o):
             tok = [0, i, o]
         sized.append(tok if tok is not None and (tok == NO_CREDIT or any(tok)) else None)
-    return sized + [None] * (ok - len(sized))
+    return sized + [None] * (ok - len(sized)), unbilled
 
 
 def _merge_known(rebuilt: list, existing) -> list:
@@ -1553,7 +1579,7 @@ def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, 
         mixes: dict[str, dict] = {}
         rep = {"machine": MACHINE, "rows": len(rows), "dry_run": dry_run, "method": METHOD, "unpriced": 0, "unsized_tasks": 0, "no_credit_tasks": 0,
                "est_usd_before": 0.0, "est_usd_after": 0.0, "saved_usd_before": 0.0, "saved_usd_after": 0.0,
-               "est_tokens_before": 0, "est_tokens_after": 0}
+               "est_tokens_before": 0, "est_tokens_after": 0, "unbilled_usd": 0.0}
         batch = 0
         for r in rows:
             prof = profiles.get(r.get("profile_id") or "")
@@ -1566,7 +1592,13 @@ def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, 
                 continue
             day = r.get("day") or local_day(r.get("ts"))
             mix = mixes.get(day) if day in mixes else mixes.setdefault(day, day_mix(c, MACHINE, day))
-            r["task_tokens"] = json.dumps(_merge_known(_rebuilt_tokens(r, by_id, by_ts, by_task, runs, by_job), r.get("task_tokens")))
+            tokens, unbilled = _rebuilt_tokens(r, by_id, by_ts, by_task, runs, by_job)
+            r["task_tokens"] = json.dumps(_merge_known(tokens, r.get("task_tokens")))
+            # Its answered legs that reported no cost, at their routes' prices: the row counted them as nothing. A row recorded
+            # since leg_cost (2026-10-12) priced such a leg itself, but only a Claude one by its name, and no Claude route ran
+            # unpriced after 2026-10-08, so none is counted twice.
+            r["worker_usd"] = round(float(r.get("worker_usd") or 0.0) + unbilled, 6)
+            rep["unbilled_usd"] += unbilled
             new = r | estimate(r, prof, mix)
             rep["est_usd_after"] += new["est_usd"]
             rep["saved_usd_after"] += new["saved_usd"]

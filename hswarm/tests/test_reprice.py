@@ -152,11 +152,44 @@ def test_a_row_is_priced_at_the_models_measured_that_day_before_the_callers_mode
     assert utilization.estimate(row | {"orchestrator_model": ""}, PROFILE, {})["est_model"] == utilization.FLOOR_MODEL
 
 
-def test_a_claude_api_leg_with_no_reported_cost_is_priced_from_its_tokens():
+# Regression: 2026-10-13, an unpriced leg on a ranked route was priced by its model's name, which no Claude price knows once
+# it carries an effort ('claude-sonnet-5-5-low') and no GPT route matches at all: it came to $0.
+def test_a_leg_with_no_reported_cost_is_priced_from_its_tokens_at_its_routes_price():
     usage = {"in_hit": 0, "in_miss": 1_000_000, "out": 0}
+    for route in ("rank:claude-sonnet-5-5-low:direct", "rank:gpt-6-sol:openai"):
+        want = config.cost_usd(route, 0, 1_000_000, 0, prompt_tokens=1_000_000)
+        assert want and utilization.leg_cost(route, None, usage) == pytest.approx(want), route
     assert utilization.leg_cost("claude-sonnet-5", None, usage) == pytest.approx(utilization.task_usd("claude-sonnet-5", [0, 1_000_000, 0]))
     assert utilization.leg_cost("claude-sonnet-5", 0.5, usage) == 0.5
     assert utilization.leg_cost("claude-sonnet-5", None, None) == 0.0
+
+
+# Contract: re-pricing history adds what each answered leg that reported no cost comes to at its route's price to its row's
+# worker cost, once. Regression: 2026-10-13, 3,416 Claude- and GPT-API answers had run while their routes had no price, and
+# every row they went into counted them as $0, so the saving was overstated.
+def test_reprice_adds_the_route_price_of_answers_that_reported_no_cost_to_the_worker_cost():
+    route = "rank:claude-sonnet-5-5-low:direct"
+    line = {"ts": TS, "model": route, "provider": "anthropic", "status": "ok", "in_hit": 0, "cost_usd": None}
+    _ledger(line | {"job": "ask", "task": "ask", "in_miss": 100_000, "out": 2_000},
+            line | {"job": "job-1", "task": "a", "in_miss": 50_000, "out": 1_000},
+            line | {"job": "job-1", "task": "b", "in_miss": 9, "out": 9, "cost_usd": 0.25})
+    c = utilization.connect()
+    _store_profile(c)
+    ask_id = utilization._ask_id(0, {"ts": TS})
+    _put(c, _old_row(ask_id) | {"worker_model": route})
+    _put(c, _old_row("job-1", kind="run", label="x", tasks=2, ok=2, worker_usd=0.25) | {"worker_model": route})
+    rep = utilization.reprice_history(c=c)
+    rows = {r["id"]: dict(r) for r in c.execute("SELECT * FROM utilizations")}
+    when = dt.datetime.fromisoformat(TS)
+    ask_usd = config.cost_usd(route, 0, 100_000, 2_000, when, prompt_tokens=100_000)
+    run_usd = config.cost_usd(route, 0, 50_000, 1_000, when, prompt_tokens=50_000)
+    assert ask_usd > 0 and run_usd > 0
+    assert rows[ask_id]["worker_usd"] == pytest.approx(ask_usd, abs=1e-6)
+    assert rows["job-1"]["worker_usd"] == pytest.approx(0.25 + run_usd, abs=1e-6)  # the priced answer's own cost stays
+    assert rows[ask_id]["saved_usd"] == pytest.approx(rows[ask_id]["est_usd"] - ask_usd, abs=1e-6)
+    assert rep["unbilled_usd"] == pytest.approx(ask_usd + run_usd, abs=1e-4)
+    utilization.reprice_history(c=c)  # once: a re-priced row is not re-priced
+    assert c.execute("SELECT worker_usd FROM utilizations WHERE id = ?", (ask_id,)).fetchone()[0] == pytest.approx(ask_usd, abs=1e-6)
 
 
 def test_record_on_a_locked_db_parks_the_row_and_the_next_record_writes_it(monkeypatch):
