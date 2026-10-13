@@ -25,6 +25,8 @@ after_climayte = true
 # (developers.openai.com/api/docs/models/<api_id>) lists "Input modalities: text, image" with Chat Completions
 # supported (read 2026-10-10), and GPT-6.1 Sol read a screenshot correctly through this provider that day. Without it
 # every critical or decision ask with an image fell below its floor onto Gemini Flash.
+# The routes whose benchmark point is the model at max effort send max: OpenAI runs a request that names no effort at
+# medium (probed 2026-10-13), so until then they claimed the max scores and ran at medium.
 [models."rank:gpt-6-astra:openai"]
 api_id = "gpt-6-astra"
 benchmark_slug = "gpt-6-astra"
@@ -32,6 +34,7 @@ ctx = 1050000
 vision = true
 tools = true
 price_ref = "openai/rank:gpt-6-astra:openai"
+default_reasoning_effort = "max"
 cc_effort = false
 
 [models."rank:gpt-6-astra-high:openai"]
@@ -51,6 +54,7 @@ ctx = 1050000
 vision = true
 tools = true
 price_ref = "openai/rank:gpt-6-luna:openai"
+default_reasoning_effort = "max"
 cc_effort = false
 
 [models."rank:gpt-6-luna-high:openai"]
@@ -70,6 +74,7 @@ ctx = 1050000
 vision = true
 tools = true
 price_ref = "openai/rank:gpt-6-sol:openai"
+default_reasoning_effort = "max"
 cc_effort = false
 
 [models."rank:gpt-6-sol-high:openai"]
@@ -91,4 +96,5 @@ max_out = 128000
 vision = true
 tools = true
 price_ref = "openai/rank:gpt-6-1-sol:openai"
+default_reasoning_effort = "max"
 cc_effort = false

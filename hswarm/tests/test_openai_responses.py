@@ -58,3 +58,30 @@ def test_a_gpt6_task_calls_tools_at_its_effort_through_the_responses_api():
     assert r.message["tool_calls"] == [{"id": "call_2", "type": "function",
                                         "function": {"name": "read_file", "arguments": '{"path": "b.txt"}'}}]
     assert (r.usage.hit, r.usage.miss, r.usage.out) == (800, 200, 40)
+
+
+# Contract: each OpenAI route asks for the effort its benchmark point was measured at, read from the point's own name
+# ("GPT-6 Sol (max)", "GPT-6 Sol (high)"). Regression: 2026-10-13, the max-scored routes named no effort, so OpenAI
+# ran them at its default, medium (probed), and the transport dropped "max" even when a task asked for it.
+def test_every_openai_route_asks_for_the_effort_its_benchmark_point_names():
+    import re
+
+    from hswarm import config
+    from hswarm.selection import evidence
+
+    names = {p["slug"]: p["name"] for p in evidence()["points"]}
+    routes = [m for m, spec in config.MODELS.items() if spec["provider"] == "openai" and spec.get("benchmark_slug")]
+    assert len(routes) >= 7
+    for model in routes:
+        sent: list[dict] = []
+
+        def reply(req: httpx.Request) -> httpx.Response:
+            sent.append(json.loads(req.content))
+            return httpx.Response(200, json={"status": "completed", "output": [
+                {"type": "message", "content": [{"type": "output_text", "text": "ok"}]}], "usage": {"input_tokens": 1, "output_tokens": 1}})
+
+        client = ChatClient(api_keys=["sk-test-a"], provider="openai")
+        client._http = httpx.AsyncClient(base_url="https://api.openai.com/v1", transport=httpx.MockTransport(reply))
+        asyncio.run(client.chat([{"role": "user", "content": "hi"}], model=model))
+        measured = re.search(r"\((\w+)\)\s*$", names[config.MODELS[model]["benchmark_slug"]]).group(1).lower()
+        assert (sent[0].get("reasoning") or {}).get("effort") == measured, model

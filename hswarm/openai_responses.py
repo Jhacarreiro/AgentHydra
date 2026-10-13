@@ -12,14 +12,15 @@ see no difference.
 """
 from __future__ import annotations
 
-import json
 
 from .usage import Usage
 
 PATH = "/responses"
 # The effort levels the Responses API's `reasoning.effort` accepts. Anything else a caller sends is left out,
 # so the model's default runs.
-EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh")
+# "max" too: GPT-6 takes it (probed 2026-10-13: echoed back, as the GPT-6 benchmark points were measured), and an effort
+# left out of this list is dropped, which runs the model at its default, medium.
+EFFORTS = ("none", "minimal", "low", "medium", "high", "xhigh", "max")
 
 
 def _text_of(content) -> str:
