@@ -5,7 +5,7 @@
 // down. Open: each helper with its memory drawn against the largest, a restart on each, and Stop all,
 // which acts at once and offers Undo. Hidden on a PC with no helpers.json.
 import { Boxes, Power, PowerOff, RotateCw } from '@lucide/vue'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import type { HelperRow, HelpersView } from '@agenthydra/server/types'
@@ -16,7 +16,7 @@ import { visibleInterval } from '@/lib/visible-poll'
 import IconTooltip from '@/shell/IconTooltip.vue'
 
 const { t } = useI18n()
-const view = ref<HelpersView | null>(null)
+const view = shallowRef<HelpersView | null>(null)
 const open = ref(false)
 const busy = ref<string | null>(null)
 
@@ -35,12 +35,14 @@ onMounted(() => {
 })
 onBeforeUnmount(() => stopPoll?.())
 
-async function act(key: string, call: () => Promise<HelpersView>) {
+async function act(key: string, call: () => Promise<HelpersView>): Promise<boolean> {
   busy.value = key
   try {
     view.value = await call()
+    return true
   } catch (e) {
     toast.error(t('helpers.failed', { reason: e instanceof Error ? e.message : String(e) }))
+    return false
   } finally {
     busy.value = null
   }
@@ -50,13 +52,12 @@ function restart(id: string) {
   void act(id, () => api.restartHelper(id))
 }
 
-function toggleAll() {
+async function toggleAll() {
   if (view.value?.paused) return void act('all', api.startHelpers)
-  void act('all', api.stopHelpers).then(() =>
-    toast(t('helpers.stoppedToast'), {
-      action: { label: t('helpers.undo'), onClick: () => void act('all', api.startHelpers) },
-    }),
-  )
+  if (!(await act('all', api.stopHelpers))) return
+  toast(t('helpers.stoppedToast'), {
+    action: { label: t('helpers.undo'), onClick: () => void act('all', api.startHelpers) },
+  })
 }
 
 const rows = computed(() => view.value?.helpers ?? [])
