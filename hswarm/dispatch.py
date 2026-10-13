@@ -774,7 +774,10 @@ async def run_selected(mgr, job, task, warm, is_pilot):
                budget=getattr(mgr, "_budgets", {}).get(job.id))  # the job's budget_usd ceiling, reserved against before every api turn
     res = _fold(await _walk_legs(run), run.attempts, run.plan)
     if run.route:
+        from . import climayte_route
+
         res.selection["route"] = run.route
+        climayte_route.mark_dropped(res, run.route)
     rescued = (res.selection.get("selected") or {}).get("rescue")
     if rescued and res.status == "ok":
         res.selection["below_floor"] = rescued

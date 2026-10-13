@@ -260,6 +260,13 @@ runs as a CliMayte worker (kind `code` for edit/all, else `review` or `sweep`), 
 error, or a failed or cancelled worker keeps the API route (a failed worker falls back once). The ledger line of a
 served task says provider `climayte`.
 
+While a worker runs, the task's row in `hswarm_status` names it (`climayte:<model>`), and each new line of the worker's
+log or each rise in its output stamps the row's progress, so a working worker is never listed under `quiet_running`. A
+worker that is running but whose model gives no reply within `QUIET_TASK_S` (180 s) is a silent leg: it is cancelled
+and the task runs on its API route, with the worker named in `failover` (`failover_errors` kind `slow`) and
+`selection.route` giving `climayte_silent` and why. A worker that failed, was cancelled or never started is named in
+`failover` the same way, kind `unavailable`.
+
 A task whose own plan misses its bar (2026-10-09, `floor_miss`): its plan stepped down below its profile
 (`below_floor`) or has no live leg, or its pinned model has no key that can serve now. It goes to CliMayte, which meets
 the bar, waiting up to `route_via_climayte_start_s` for an account to come free when none is; its

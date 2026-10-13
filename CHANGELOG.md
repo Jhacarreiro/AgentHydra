@@ -7,6 +7,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **An HSwarm task running on CliMayte no longer looks stalled, and a silent one moves on.** While one of your Claude
+  accounts worked an HSwarm task, the task's status kept the name of the paid model it would otherwise have used, with
+  no turns and no progress, so it was listed as stalled and two finished or nearly finished reviews were cancelled by
+  hand. The status now names the CliMayte model and shows its progress. A worker whose model never replies within
+  three minutes is stopped and the task goes to its paid route, and the result names the worker that could not serve.
 - **Every CliMayte task shows who started it.** Tasks sent without a ping target, from a script, a routine or a
   turned-off notify, used to read "Not traced". Each now names the chat it ran under, or the script that sent it, and
   a task recorded before this change shows its group.

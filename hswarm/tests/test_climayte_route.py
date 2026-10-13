@@ -37,10 +37,14 @@ class _Api:
 class _Fake:
     """A fake AgentHydra: GET /api/corch/capacity, POST /api/corch/workers, GET /api/corch/workers/:id."""
 
-    def __init__(self, idle=8, waiting=0, worker=None, delay=0.0, capacity_status=200, enabled=True, running_for=0.0, held=None):
+    def __init__(self, idle=8, waiting=0, worker=None, delay=0.0, capacity_status=200, enabled=True, running_for=0.0, held=None,
+                 running=None, progress=False):
         self.idle, self.waiting, self.delay, self.capacity_status, self.enabled = idle, waiting, delay, capacity_status, enabled
         self.held = held
         self.running_for, self.t0 = running_for, time.monotonic()
+        # What a running worker's read carries beside its status; with `progress`, each read shows a new log line and
+        # more output, as a worker whose model is replying does.
+        self.running, self.progress, self.polls = running or {}, progress, 0
         # Set by _run(hold=): true once every task has taken a route. Workers stay running until then (running_for is
         # only the ceiling), so a slow start on a loaded box cannot free a slot before the last task decides.
         self.until = None
@@ -82,7 +86,9 @@ class _Fake:
                                                                   "held": fake.held})
                 if self.path == "/api/corch/workers/w1":
                     if time.monotonic() - fake.t0 < fake.running_for and not (fake.until and fake.until()):
-                        return self._send(200, {"id": "w1", "status": "running"})
+                        fake.polls += 1
+                        live = {"lastActivity": f"Read f{fake.polls}.txt", "tokens": {"output": 100 * fake.polls}} if fake.progress else {}
+                        return self._send(200, {"id": "w1", "status": "running", **fake.running, **live})
                     return self._send(200, {"id": "w1", **fake.worker})
                 self._send(404, {})
 
@@ -300,6 +306,44 @@ def test_a_worker_still_queued_at_the_start_deadline_is_cancelled_and_the_task_f
     _, res, api = _run(tmp_path)
     assert f.cancelled == ["w1"] and api.calls == 1
     assert res.answer == "api route" and res.selection["route"]["climayte_not_started"] == "w1"
+
+
+# Contract: a running CliMayte worker whose model gives no reply within QUIET_TASK_S is cancelled and its task runs on the
+# API route, the worker named in `failover`; one whose log keeps moving is never cut, and while it works the job's row
+# names it and never reads as quiet. Regression: 2026-10-13, a worker's row kept the API leg's name, 0 turns and no
+# progress stamp, so status listed two working workers under quiet_running and a chat cancelled both (jobs
+# 20261013-222800-34e6, -223522-44f8); and a worker that never replied held its task to timeout_s, the API route untried.
+@pytest.mark.parametrize("replies", [False, True])
+def test_a_running_worker_fails_over_only_when_its_model_never_replies(fake, tmp_path, monkeypatch, replies):
+    # Replies a poll apart (10 ms) against a 1 s bar; the replying worker runs 2.5 s, well past it.
+    monkeypatch.setattr(config, "QUIET_TASK_S", 1.0)
+    f = fake(running_for=2.5 if replies else 60, running={"model": "claude-haiku-5-5"}, progress=replies)
+    api = _Api()
+    m = JobManager(client=api)
+
+    async def watch():
+        job = m.submit([Task.from_dict({"id": "t", "prompt": "look at it", "cwd": str(tmp_path), "tools": "read",
+                                        "model": "deepseek-flash", "timeout_s": 6}, {}, 0)])
+        loop = asyncio.get_running_loop()
+        start, samples = loop.time(), []
+        while job.results["t"].status in ("pending", "running") and loop.time() - start < 20:
+            if job.results["t"].status == "running":
+                samples.append((loop.time() - start, job.quiet_running(), job.results["t"].model))
+            await asyncio.sleep(0.02)
+        await asyncio.wait_for(m.wait(job.id, None), 20)
+        return job.results["t"], loop.time() - start, samples
+
+    res, took, samples = asyncio.run(watch())
+    if replies:
+        assert res.answer == "worker report" and api.calls == 0 and f.cancelled == [] and res.failover == []
+        assert any(t > 1.2 for t, _, _ in samples), samples  # it ran past QUIET_TASK_S
+        assert not any(q for _, q, _ in samples), samples  # replying all the while, it never read as quiet
+        assert any(model == "climayte:claude-haiku-5-5" for _, _, model in samples), samples  # status named where it ran
+    else:
+        assert f.cancelled == ["w1"] and api.calls == 1 and res.answer == "api route"
+        assert 1.0 <= took < 6, took  # cut at the quiet bar, not held to its timeout_s
+        assert res.failover == ["climayte:claude-haiku-5-5"] and res.failover_errors == [{"model": "climayte:claude-haiku-5-5", "kind": "slow"}]
+        assert res.selection["route"]["climayte_silent"] == "w1" and "no reply in 1 s" in res.selection["route"]["climayte_why"]
 
 
 def test_agenthydras_switch_off_means_no_capacity_read(fake, tmp_path):

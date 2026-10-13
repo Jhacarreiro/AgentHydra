@@ -842,6 +842,7 @@ class JobManager:
             res = Result(id=task.id, backend=task.backend, model=task.model, status="error", error=why,
                          started=now_iso(), finished=now_iso())
             res.selection = {"route": route_note}
+            climayte_route.mark_dropped(res, route_note)
             return res, None
         # then the owner's Free web accounts, for a tool-free task (free_route.py)
         served, free_note = await free_route.consult(job.id, task)
@@ -852,6 +853,7 @@ class JobManager:
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
         if route_note and isinstance(res, Result):  # a later offer to CliMayte in the walk (dispatch._climayte_before) is newer
             res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or route_note}
+            climayte_route.mark_dropped(res, route_note)
         return res, transcript
 
     async def _run_legs_api(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:

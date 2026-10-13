@@ -12,8 +12,11 @@ price: a paid key a little cheaper than that share won, so in 3 days to 2026-10-
 price (35 of them "the API is more than 3x cheaper") while AgentHydra showed 16 of its 35 accounts idle.
 
 Never a failure of its own: AgentHydra down, slow (over READ_TIMEOUT_S), or answering anything but 200 keeps the
-task's own route, logged once per job. A worker that fails or is cancelled hands the task back to the API route once.
-The route taken is on the result (`selection["route"]`) and its ledger line (provider `climayte`)."""
+task's own route, logged once per job. A worker that fails, is cancelled, or gives no reply within config.QUIET_TASK_S
+hands the task back to the API route once, named in the result's `failover` (mark_dropped). While a worker runs, the
+job's row names it (`climayte:<model>`) and each new line of its log stamps the row's progress, so a status read tells
+a working worker from a silent one. The route taken is on the result (`selection["route"]`) and its ledger line
+(provider `climayte`)."""
 from __future__ import annotations
 
 import asyncio
@@ -278,28 +281,69 @@ async def run_worker(job_id: str, task: Task, note: dict, caller: dict | None = 
             await asyncio.shield(_cancel(wid))
 
 
+def _progress(w: dict) -> tuple | None:
+    """What a worker has produced so far (its newest log line, output tokens and turns, across its attempts), or None
+    while its model has not replied once: no output token and no turn."""
+    attempts = [a for a in w.get("attempts") or () if isinstance(a, dict)]
+    out = max([_count((w.get("tokens") or {}).get("output"))] + [_count((a.get("tokens") or {}).get("output")) for a in attempts])
+    turns = max([_count(w.get("turns"))] + [_count(a.get("turns")) for a in attempts])
+    return (w.get("lastActivity"), out, turns) if out or turns else None
+
+
+def _count(v: object) -> int:
+    return int(v) if isinstance(v, (int, float)) else 0
+
+
 async def _wait_worker(job_id: str, task: Task, note: dict, wid: str) -> Result | None:
+    from .agent import LIVE_ROW
+
     started = now_iso("milliseconds")
     loop = asyncio.get_running_loop()
     begun = loop.time()
     deadline = begun + task.timeout_s
+    # The job's row for this task (jobs._run_one). Until 2026-10-13 it kept the API leg's name, 0 turns and no progress
+    # stamp the whole time a worker ran, so status listed a working worker under quiet_running as a silent leg, and a
+    # chat cancelled two (jobs 20261013-222800-34e6 and -223522-44f8; the first had finished its review 3 s earlier).
+    row, seen, running_at, named = LIVE_ROW.get(), None, None, "claude"
+
+    def drop(key: str) -> None:
+        """The worker did not serve the task: its note says so and names its model (mark_dropped); the API route takes it."""
+        note[key], note["climayte_model"] = wid, named
+
     while True:
         try:
             status, w = await _call("GET", f"/api/corch/workers/{wid}")
         except (OSError, ValueError):
             status, w = 0, {}
         state = w.get("status") if status == 200 else None
+        named = str(w.get("reportedModel") or w.get("model") or named)
+        if row is not None:
+            row.model = f"climayte:{named}"
         if state == "done":
-            return _result(task, w, note, started, job_id)
+            res = _result(task, w, note, started, job_id)
+            if res is None:
+                note["climayte_model"] = named  # its report was empty or broke the schema (_result notes which)
+            return res
         if state in ("failed", "cancelled"):
             _say(job_id, f"CliMayte worker {wid} {state}; its task runs on the API route")
-            note["climayte_" + state] = wid
-            return None
+            return drop("climayte_" + state)
         if state != "running" and loop.time() - begun >= config.ROUTE_VIA_CLIMAYTE_START_S:
             await _cancel(wid)
             _say(job_id, f"CliMayte worker {wid} was still {state or 'unreachable'} after {config.ROUTE_VIA_CLIMAYTE_START_S:g} s; cancelled, its task runs on the API route")
-            note["climayte_not_started"] = wid
-            return None
+            return drop("climayte_not_started")
+        if state == "running" and running_at is None:
+            running_at = loop.time()  # the queue wait is ROUTE_VIA_CLIMAYTE_START_S's; the reply wait starts here
+        if (mark := _progress(w) if state == "running" else None) is not None and mark != seen:
+            seen = mark
+            if row is not None:
+                row.progress_at = now_iso("milliseconds")  # what job.quiet_seconds reads, as an api reply stamps it
+        elif seen is None and running_at is not None and loop.time() - running_at >= config.QUIET_TASK_S:
+            # Running, by AgentHydra's word, with not one reply from its model: a silent leg, failed over like one
+            # (an API leg's first call is cut at config.SLOW_LEG_CALL_S), not held to the task's whole timeout_s.
+            await _cancel(wid)
+            note["climayte_why"] = f"CliMayte worker {wid} gave no reply in {config.QUIET_TASK_S:g} s"
+            _say(job_id, f"{note['climayte_why']}; cancelled, its task runs on the API route")
+            return drop("climayte_silent")
         if loop.time() + POLL_S > deadline:
             await _cancel(wid)
             res = Result(id=task.id, backend=task.backend, model=w.get("reportedModel") or "claude", status="timeout",
@@ -374,6 +418,22 @@ async def consult(job_id: str, task: Task, first: str | None = None, caller: dic
         _ACTIVE -= 1
         if now in _SENT:  # its account is free again, however recently it was sent
             _SENT.remove(now)
+
+
+# The note keys a worker that took the task and did not serve it leaves (_wait_worker, _result).
+_DROPPED = ("climayte_silent", "climayte_failed", "climayte_cancelled", "climayte_not_started")
+
+
+def mark_dropped(res: Result, note: dict | None) -> None:
+    """Name a worker that took the task and did not serve it (`note`, consult's) in `res.failover`, as a route leg that
+    could not serve is, with its kind in `failover_errors` (jobs.leg_kind's words: a silent worker stalled, any other
+    could not serve); the note on `selection["route"]` keeps the worker id and why."""
+    if not note or not any(note.get(k) for k in _DROPPED):
+        return
+    leg = f"climayte:{note.get('climayte_model') or 'claude'}"
+    res.failover = [leg, *(f for f in res.failover if f != leg)]
+    res.failover_errors = [{"model": leg, "kind": "slow" if note.get("climayte_silent") else "unavailable"},
+                           *(getattr(res, "failover_errors", None) or [])]
 
 
 def _remember(seen: set, job_id: str, task: Task) -> None:
