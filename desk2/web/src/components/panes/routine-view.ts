@@ -53,7 +53,10 @@ export function relativeTime(at: number, now: number): string {
 export function plainReason(reason: string, zone: string): string {
   const fmt = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h23' })
   return reason.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z/g, (iso) => {
-    const p = Object.fromEntries(fmt.formatToParts(new Date(iso)).map((x) => [x.type, x.value]))
+    // A stamp of that shape that is no real moment ('2026-13-45T25:99Z') stays as written: formatToParts throws on it.
+    const at = new Date(iso)
+    if (Number.isNaN(at.getTime())) return iso
+    const p = Object.fromEntries(fmt.formatToParts(at).map((x) => [x.type, x.value]))
     return `${p.weekday}, ${p.month} ${p.day} at ${Number(p.hour)}:${p.minute}, ${zoneName(zone)} time`
   })
 }

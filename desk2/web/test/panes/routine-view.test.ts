@@ -55,5 +55,6 @@ describe('plainReason', () => {
       'slot Monday, October 12 at 1:00, UTC time was missed by more than 12 hours: skipped'
     )
     expect(plainReason('paused by the owner', 'America/Chicago')).toBe('paused by the owner')
+    expect(plainReason('next due 2026-13-45T25:99Z', 'America/Chicago')).toBe('next due 2026-13-45T25:99Z')
   })
 })

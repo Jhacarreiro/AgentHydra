@@ -151,7 +151,8 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
         <button type="button" :class="BUTTON" :disabled="!canRun" @click="act({ run: routine.id })">Run now</button>
         <button v-if="chatSession" type="button" :class="BUTTON" @click="openChat(chatSession)">Open chat</button>
       </div>
-      <div v-if="error" role="alert" class="mt-1.5 wrap-break-word text-[12px] leading-4.5 text-danger-text">{{ error }}</div>
     </div>
+    <!-- Under the card, open or not: the row's own switch fails here too, and a closed card would hide it. -->
+    <div v-if="error" role="alert" class="wrap-break-word px-3 pb-2 text-[12px] leading-4.5 text-danger-text">{{ error }}</div>
   </div>
 </template>
