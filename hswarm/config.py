@@ -603,7 +603,7 @@ def provider_enabled(provider: str) -> bool:
 def provider_chat(provider: str) -> bool:
     """Only chat transports may enter model routing; media/search/observability use service operations."""
     spec = PROVIDERS.get(provider, {})
-    return spec.get("transport", "openai") in ("openai", "anthropic") and "chat" in spec.get("capabilities", ("chat",))
+    return spec.get("transport", "openai") in ("openai", "anthropic", "openai-responses") and "chat" in spec.get("capabilities", ("chat",))
 
 
 def provider_chat_model(provider: str, model_id: str | None) -> bool:

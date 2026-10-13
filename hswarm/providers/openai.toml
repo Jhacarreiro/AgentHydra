@@ -1,21 +1,22 @@
 base_url = "https://api.openai.com/v1"
-about = "OpenAI language models through Chat Completions; address a model as openai:<model ID>."
+about = "OpenAI language models through the Responses API; address a model as openai:<model ID>."
 website = "https://openai.com"
 key_url = "https://platform.openai.com/api-keys"
-docs = "https://developers.openai.com/api/reference/resources/chat"
-transport = "openai"
+docs = "https://developers.openai.com/api/reference/resources/responses"
+transport = "openai-responses"
 capabilities = ["chat"]
 key_billing = "unknown"
 models_path = "/models"
 passthrough = ["openai:"]
 options = ["reasoning_effort"]
-max_tokens_field = "max_completion_tokens"
 anthropic_url = "facade"
 # The catalog includes non-chat models. Choose a Chat Completions-capable model explicitly.
 
 # Ranked routes (owner, 2026-10-07): the benchmarked GPT-6 models on OpenAI's own API. Prices and the 1,050,000-token
-# context are from OpenAI's pricing page (developers.openai.com/api/docs/pricing). tools = false: that page says Chat
-# Completions supports function calling only at reasoning_effort "none". The -high routes run the same model at
+# context are from OpenAI's pricing page (developers.openai.com/api/docs/pricing). tools = true since 2026-10-13: the
+# provider speaks the Responses API (transport "openai-responses", hswarm/openai_responses.py), which takes function
+# tools beside reasoning_effort. On Chat Completions they ran tool-free (function calling only at reasoning_effort
+# "none"), so the code profile had no live route while these 82 keys served only tool-free asks. The -high routes run the same model at
 # reasoning_effort "high", as openrouter.toml registers them. vision = true: each model's page
 # (developers.openai.com/api/docs/models/<api_id>) lists "Input modalities: text, image" with Chat Completions
 # supported (read 2026-10-10), and GPT-6.1 Sol read a screenshot correctly through this provider that day. Without it
@@ -25,7 +26,7 @@ api_id = "gpt-6-astra"
 benchmark_slug = "gpt-6-astra"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-astra:openai"
 cc_effort = false
 
@@ -34,7 +35,7 @@ api_id = "gpt-6-astra"
 benchmark_slug = "gpt-6-astra-high"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-astra-high:openai"
 default_reasoning_effort = "high"
 cc_effort = false
@@ -44,7 +45,7 @@ api_id = "gpt-6-luna"
 benchmark_slug = "gpt-6-luna"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-luna:openai"
 cc_effort = false
 
@@ -53,7 +54,7 @@ api_id = "gpt-6-luna"
 benchmark_slug = "gpt-6-luna-high"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-luna-high:openai"
 default_reasoning_effort = "high"
 cc_effort = false
@@ -63,7 +64,7 @@ api_id = "gpt-6-sol"
 benchmark_slug = "gpt-6-sol"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-sol:openai"
 cc_effort = false
 
@@ -72,7 +73,7 @@ api_id = "gpt-6-sol"
 benchmark_slug = "gpt-6-sol-high"
 ctx = 1050000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-sol-high:openai"
 default_reasoning_effort = "high"
 cc_effort = false
@@ -84,6 +85,6 @@ benchmark_slug = "gpt-6-1-sol"
 ctx = 1050000
 max_out = 128000
 vision = true
-tools = false
+tools = true
 price_ref = "openai/rank:gpt-6-1-sol:openai"
 cc_effort = false

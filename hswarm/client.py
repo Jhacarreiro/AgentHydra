@@ -60,7 +60,7 @@ except ImportError:  # pragma: no cover - POSIX
     msvcrt = None
     import fcntl
 
-from . import anthropic_native, config, egress, faults, input_limit, keylimits, keystate
+from . import anthropic_native, config, egress, faults, input_limit, keylimits, keystate, openai_responses
 from . import zdr as zdr_mod
 from .usage import ApiError, ChatResult, Usage, request_body  # noqa: F401 - re-exported
 
@@ -1056,6 +1056,19 @@ def _native_result(r: httpx.Response, attempts: int, model: str, t0: float) -> C
     )
 
 
+def _responses_result(r: httpx.Response, attempts: int, model: str, t0: float) -> ChatResult:
+    """A Responses reply (the `openai-responses` transport) as the ChatResult the OpenAI path returns."""
+    data = r.json()
+    message, finish = openai_responses.chat_message(data)
+    usage = openai_responses.usage(data.get("usage"))
+    now = dt.datetime.now(dt.timezone.utc)
+    return ChatResult(
+        message=message, finish_reason=finish, usage=usage, model=model, seconds=time.perf_counter() - t0,
+        cost_usd=config.cost_usd(model, usage.hit, usage.miss, usage.out, now, write=usage.write, prompt_tokens=usage.hit + usage.miss),
+        peak=config.is_peak(now), attempts=attempts, raw=data,
+    )
+
+
 # Together answers a bare JSON list; the other providers answer {"data": [...]} (owner, 2026-10-07)
 def model_rows(body: dict | list) -> list:
     return body if isinstance(body, list) else (body.get("data") or [])
@@ -1095,9 +1108,17 @@ class ChatClient:
         self.stalls = 0  # requests that hit the read timeout with no reply at all, counted apart from a transport error
         self.gate = None  # leggate.LegGate, set by the JobManager: a 200 opens it by one, a 429 on a resting pool halves it
         # `transport = "anthropic"`: chat goes to the provider's native Messages endpoint (anthropic_native), which
-        # caches prompts; its OpenAI-compatible one does not. Everything else posts OpenAI chat to base_url.
+        # caches prompts; its OpenAI-compatible one does not. `transport = "openai-responses"`: chat goes to OpenAI's
+        # Responses API (openai_responses), which takes function tools beside reasoning_effort (Chat Completions does
+        # not). Everything else posts OpenAI chat to base_url.
         self.native = self.spec.get("transport") == "anthropic"
-        self._chat_url = (self.spec["anthropic_url"].rstrip("/") + anthropic_native.PATH) if self.native else self.spec.get("chat_path", "/chat/completions")
+        self.responses = self.spec.get("transport") == "openai-responses"
+        if self.native:
+            self._chat_url = self.spec["anthropic_url"].rstrip("/") + anthropic_native.PATH
+        elif self.responses:
+            self._chat_url = self.spec.get("chat_path") or openai_responses.PATH
+        else:
+            self._chat_url = self.spec.get("chat_path", "/chat/completions")
         self._sticky = bool(self.spec.get("sticky_keys"))
         self._pins: dict = {}  # conversation -> the key it runs on (_pick)
         self._tpm: dict[tuple[str, str], tuple[int, float]] = {}  # (key, api model) -> (its account's limit, when learned): _LIMIT_413
@@ -1344,8 +1365,9 @@ class ChatClient:
         resamples = 0  # bounded re-rolls when the MODEL's output was refused (see _MODEL_OUTPUT_400)
         stalls = 0  # bounded retries of a read that never came back (see STALL_RETRIES)
         too_small: set[str] = set()  # keys whose account refused this request as over its limit (_ACCOUNT_LIMIT_413)
-        read_s = _read_timeout_s(body.get("reasoning_effort") or (body.get("output_config") or {}).get("effort"),
-                                 body.get("max_tokens") or body.get("max_completion_tokens"), rest_budget_s)
+        read_s = _read_timeout_s(body.get("reasoning_effort") or (body.get("output_config") or {}).get("effort")
+                                 or (body.get("reasoning") or {}).get("effort"),
+                                 body.get("max_tokens") or body.get("max_completion_tokens") or body.get("max_output_tokens"), rest_budget_s)
         req_timeout = httpx.Timeout(read_s, connect=30.0, pool=None)
         # Serialised once, here, so the egress receipt hashes the exact bytes that go on the wire.
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
@@ -1461,6 +1483,8 @@ class ChatClient:
         entry = config.MODELS[model]
         if zdr and self.native:
             raise ValueError("zdr task refused: the native Anthropic transport carries no zero-retention preference")
+        if zdr and self.responses:
+            raise ValueError("zdr task refused: the OpenAI Responses transport carries no zero-retention preference")
         if zdr and (why := zdr_mod.refusal(model)):
             raise ValueError(f"zdr task refused: {why}")  # before any request: nothing is sent
         max_tokens, thinking, reasoning_effort = _call_options(model, entry, max_tokens, thinking, reasoning_effort)
@@ -1476,6 +1500,11 @@ class ChatClient:
                                                      reasoning_effort=reasoning_effort, stop=stop, cache_turns=cache_turns)
             r, attempts = await self._post(body, free=False, rest_budget_s=rest_budget_s, last_leg=last_leg, affinity=affinity)
             return _native_result(r, attempts, model, t0)
+        if self.responses:
+            body = openai_responses.responses_request(api_id, messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens,
+                                                      reasoning_effort=reasoning_effort, response_format=response_format)
+            r, attempts = await self._post(body, free=False, rest_budget_s=rest_budget_s, last_leg=last_leg, affinity=affinity)
+            return _responses_result(r, attempts, model, t0)
         body = self._chat_body(model, entry, api_id, messages, tools=tools, tool_choice=tool_choice, max_tokens=max_tokens, thinking=thinking,
                                reasoning_effort=reasoning_effort, response_format=response_format, temperature=temperature, user=user, stop=stop, avoid_upstream=avoid_upstream, zdr=zdr)
         r, attempts = await self._post_chat(body, model, api_id.endswith(":free"), rest_budget_s, last_leg, affinity)

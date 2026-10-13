@@ -206,7 +206,7 @@ def test_new_chat_routes_send_the_documented_bearer_request(provider, model, url
     assert json.loads(seen[0].content)["model"] == model.split(":", 1)[1]
 
 
-def test_openai_uses_completion_token_field_without_changing_existing_providers():
+def test_openai_sends_its_token_cap_in_the_field_its_responses_endpoint_takes():
     seen = []
 
     def handler(req):
@@ -221,7 +221,10 @@ def test_openai_uses_completion_token_field_without_changing_existing_providers(
             await client.chat([{"role": "user", "content": "example"}], model="openai:example-model", max_tokens=100)
 
     asyncio.run(go())
-    assert seen[0]["max_completion_tokens"] == 100 and "max_tokens" not in seen[0]
+    # The Responses API (transport "openai-responses", 2026-10-13) names the cap max_output_tokens; Chat Completions
+    # named it max_completion_tokens and refused max_tokens on its reasoning models.
+    assert seen[0]["max_output_tokens"] == 100
+    assert "max_tokens" not in seen[0] and "max_completion_tokens" not in seen[0]
 
 
 def test_inworld_chat_shares_its_basic_credential_with_speech():
