@@ -1,6 +1,5 @@
 import type { App } from 'vue'
-import type { CMInstance } from '@/lib/api'
-import { accountName, displayName } from '@/lib/instance-appearance'
+import { accountName, displayName, type NamedInstance } from '@/lib/instance-appearance'
 import { maskEmails, maskName } from '@/lib/privacy'
 import { privacyMode } from './useUiPrefs'
 
@@ -23,7 +22,7 @@ export function piiName(name: string | null | undefined): string {
 /** displayName() as the screen shows it. With no label typed, the name IS the account's (its
  *  profile name or handle), so it is masked like one; a label or folder name only loses an address.
  *  Mask before any cut: a cut leaves "jo@gmai…" with no domain for the mask to find. */
-export function piiDisplayName(inst: Pick<CMInstance, 'name' | 'label' | 'account'>): string {
+export function piiDisplayName(inst: NamedInstance): string {
   const name = displayName(inst)
   return !inst.label?.trim() && accountName(inst.account) ? piiName(name) : pii(name)
 }

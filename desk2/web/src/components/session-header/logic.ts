@@ -169,8 +169,27 @@ export function accountName(inst: AhInstance | null, label: string): string {
   return label === 'default' ? 'Default' : label
 }
 
+/** A Codex account AgentHydra manages (GET /api/codex-instances), as the row menu's Move to account needs it. */
+export interface AhCodexInstance {
+  id: string
+  num: number
+  name: string
+  /** The name is a person's own (renamed): it is shown over the account's. */
+  ownName?: boolean
+  isDesktopRunning: boolean
+  isExternal: boolean
+  account: { email: string | null; name: string | null; authMode: string } | null
+}
+
+/** A Codex chat's move: the plan's row for it (GET /api/codex-instances/:id/move-chats) restated to the move. */
+export interface AhCodexMovePlan {
+  chats: { id: string; title: string; cwd: string; updatedAt: number }[]
+  sourceAccountId: string | null
+  targetAccountId: string | null
+}
+
 /** The name a migrate target goes by: the label someone gave it, else its account, else its folder. */
-export function instanceName(inst: AhInstance): string {
+export function instanceName(inst: Pick<AhInstance, 'name' | 'label' | 'account'>): string {
   return inst.label?.trim() || inst.account?.name?.trim() || inst.account?.email?.trim().split('@')[0] || inst.name
 }
 

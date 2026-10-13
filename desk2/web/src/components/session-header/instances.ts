@@ -1,16 +1,18 @@
 // AgentHydra's desktop instances, one list for the window: the session header's account chip and Migrate, and the
 // row menu's first line and Move to account (sidebar/logic.ts). Read when one of them opens, at most every 15 s
 // unless asked to; the address an instance was resolved to (ah.instanceAccount) is kept across reads, which do not
-// carry it.
-import { computed, ref } from 'vue'
+// carry it. AgentHydra's Codex accounts are read with them, for a Codex chat's row menu.
+import { computed, ref, shallowRef } from 'vue'
 import type { AccountChoice } from '@/components/sidebar/logic'
 import { ah } from './ah'
-import { instanceName, type AhInstance } from './logic'
+import { instanceName, type AhCodexInstance, type AhInstance } from './logic'
 
 const FRESH_MS = 15_000
 
 /** null until AgentHydra first answers. */
 export const ahInstances = ref<AhInstance[] | null>(null)
+/** AgentHydra's Codex accounts; null until it first answers. */
+export const ahCodexInstances = shallowRef<AhCodexInstance[] | null>(null)
 let reading: Promise<void> | null = null
 let readAt = 0
 
@@ -18,16 +20,20 @@ let readAt = 0
 export function refreshAhInstances(force = false): Promise<void> {
   if (reading) return reading
   if (!force && ahInstances.value && Date.now() - readAt < FRESH_MS) return Promise.resolve()
-  reading = ah
-    .instances()
-    .then(
-      (list) => {
-        const known = new Map((ahInstances.value ?? []).map((x) => [x.dir, x.account]))
-        ahInstances.value = list.map((x) => (x.account?.email || !known.get(x.dir) ? x : { ...x, account: known.get(x.dir) ?? null }))
-        readAt = Date.now()
-      },
-      () => {}
-    )
+  const desktop = ah.instances().then(
+    (list) => {
+      const known = new Map((ahInstances.value ?? []).map((x) => [x.dir, x.account]))
+      ahInstances.value = list.map((x) => (x.account?.email || !known.get(x.dir) ? x : { ...x, account: known.get(x.dir) ?? null }))
+      readAt = Date.now()
+    },
+    () => {}
+  )
+  const codex = ah.codexInstances().then(
+    (list) => void (ahCodexInstances.value = list),
+    () => {}
+  )
+  reading = Promise.all([desktop, codex])
+    .then(() => {})
     .finally(() => (reading = null))
   return reading
 }
@@ -40,4 +46,22 @@ export function setInstanceAccount(dir: string, account: AhInstance['account']):
 /** What Move to account offers, by the name the header's Migrate uses; null until the list is read. */
 export const accountChoices = computed<AccountChoice[] | null>(
   () => ahInstances.value?.map((i) => ({ ref: `desktop:${i.dir}`, num: i.num, name: instanceName(i), running: i.isRunning })) ?? null
+)
+
+/**
+ * What Move to account offers a Codex chat: the Codex accounts a chat can move to (AgentHydra's own, signed into
+ * ChatGPT, as the Instances page's Move chats offers them), named as the Instances table names them. `tag` is the
+ * name AgentHydra's session list gives their chats, which is how a row finds the account it is on.
+ */
+export const codexAccountChoices = computed<AccountChoice[] | null>(
+  () =>
+    ahCodexInstances.value
+      ?.filter((i) => !i.isExternal && i.account?.authMode === 'chatgpt')
+      .map((i) => ({
+        ref: `codex:${i.id}`,
+        num: i.num,
+        name: instanceName({ name: i.name, label: i.ownName ? i.name : null, account: i.account }),
+        running: i.isDesktopRunning,
+        tag: i.name
+      })) ?? null
 )

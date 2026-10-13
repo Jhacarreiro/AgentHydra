@@ -17,8 +17,8 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { moveSession } from '@/components/session-header/ah'
-import { accountChoices, refreshAhInstances } from '@/components/session-header/instances'
+import { moveCodexSession, moveSession } from '@/components/session-header/ah'
+import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
 import { useSwarmJobs } from '@/lib/swarm-jobs'
@@ -670,7 +670,8 @@ function act(row: Row, item: RowMenuItem) {
 }
 
 // Move to account: AgentHydra's migrate, as the session header's Migrate runs it (one move at a time, a move ends a
-// running turn). It takes a while (the target app imports the chat), so the list says it is moving and how it went.
+// running turn); for a Codex chat (a `codex:` account), AgentHydra's Codex move: copy, verify, archive the original.
+// It takes a while (the target app imports the chat), so the list says it is moving and how it went.
 const moving = ref(false)
 const rowNote = ref<string | null>(null)
 let rowNoteTimer: ReturnType<typeof setTimeout> | null = null
@@ -691,11 +692,18 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
   rowError.value = null
   noteRow(`Moving “${title}” to ${item.label}…`)
   try {
-    const x = await moveSession(sessionId, item.value)
+    const codex = item.value.startsWith('codex:')
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[] } = codex ? await moveCodexSession(sessionId, item.value) : await moveSession(sessionId, item.value)
     if (!x.ok) {
       noteRow(null)
       rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
-    } else noteRow(x.sourceStillShown?.length ? `Moved to ${item.label}. An old account still lists it.` : `Moved to ${item.label}. It is in that desktop app now.`, 8000)
+    } else
+      noteRow(
+        x.sourceStillShown?.length
+          ? `Moved to ${item.label}. An old account still lists it.`
+          : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.`,
+        8000
+      )
   } catch (err) {
     noteRow(null)
     rowError.value = `Move failed: ${err instanceof Error ? err.message : String(err)}`
@@ -741,21 +749,26 @@ function cloudMenu(r: CloudSession): RowMenuEntry[] {
   const row = deskRowOf(r.id)
   if (!row) {
     const account = r.instanceNum !== null ? { num: r.instanceNum, title: null } : null
+    const accounts = r.source === 'codex' ? codexAccountChoices.value : accountChoices.value
     const out: RowMenuEntry[] = [
-      rowIdentity(r.id, account, accountChoices.value),
+      rowIdentity(r.id, account, accounts),
       'separator',
       { action: 'open', label: 'Open' },
       'separator',
       { action: 'pin', label: 'Pin', shortcut: 'P' },
       { action: 'copySessionId', label: 'Copy session ID' }
     ]
-    if (cloudMovable(r)) out.push('separator', accountMenu(r.instanceNum, accountChoices.value))
+    const kind = cloudMovable(r)
+    if (kind) out.push('separator', accountMenu(r.instanceNum, accounts, kind))
     return out
   }
-  return rowMenu(stateOf(row), groupNames.value, accountChoices.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
+  return rowMenu(stateOf(row), groupNames.value, accountChoices.value, codexAccountChoices.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
 }
-/** A Claude session on this PC only the cloud list has (a past one): AgentHydra here can move it, not one of the other PC's. */
-const cloudMovable = (r: CloudSession) => r.source === 'claude' && (!r.fromPc || r.fromPc === cloud.thisPc.value)
+/** A Claude or Codex session on this PC only the cloud list has (a past one): AgentHydra here can move it, not one of the other PC's. */
+function cloudMovable(r: CloudSession): 'desktop' | 'codex' | null {
+  if (r.fromPc && r.fromPc !== cloud.thisPc.value) return null
+  return r.source === 'claude' ? 'desktop' : r.source === 'codex' ? 'codex' : null
+}
 function cloudAct(r: CloudSession, item: RowMenuItem) {
   const added = addedRows.value.get(r.id)
   if (added) return addedAct(added, item)

@@ -747,8 +747,11 @@ export interface RowState {
   id: string
   /** The account it runs under: AgentHydra's instance number, and the whole name when the row itself knows it (a chat's account). */
   account: RowAccount | null
-  /** A Claude Code session of another app on this PC (Claude Desktop, a CLI): Move to account can take it to a desktop account. */
-  movable: boolean
+  /**
+   * Which accounts Move to account can take it to: a Claude Code session of another app on this PC (Claude Desktop, a
+   * CLI) to a desktop account, a Codex chat on this PC to another Codex account; null, nowhere.
+   */
+  movable: 'desktop' | 'codex' | null
   /** Whether the person muted this chat's sound (lib/chat-audio.ts); left out, the menu has no Mute entry (a row that cannot mute). */
   muted?: boolean
 }
@@ -757,12 +760,14 @@ export interface RowAccount {
   title: string | null
 }
 
-/** A desktop account Move to account offers (one of AgentHydra's instances): the ref the move names it by, its number and name. */
+/** An account Move to account offers (one of AgentHydra's desktop or Codex instances): the ref the move names it by, its number and name. */
 export interface AccountChoice {
   ref: string
   num: number
   name: string
   running: boolean
+  /** The name AgentHydra's session list gives the account's chats when it is not `#num` (a Codex instance's own name). */
+  tag?: string
 }
 
 export function chatRow(chat: ChatSummary): RowState {
@@ -779,7 +784,7 @@ export function chatRow(chat: ChatSummary): RowState {
     forkable: Boolean(chat.sessionId ?? chat.forkedFrom),
     id: chat.sessionId ?? chat.id,
     account: { num: chat.account.number ?? null, title: accountTitle(chat.account) },
-    movable: false
+    movable: null
   }
 }
 
@@ -800,7 +805,7 @@ export function externalRow(s: ExternalSession): RowState {
     id: s.id,
     account: s.instance ? (num ? { num: Number(num[1]), title: null } : { num: null, title: s.instance }) : null,
     // A chat the chat sync brought from the other PC lives in that PC's apps: this PC's AgentHydra cannot move it.
-    movable: claude && !s.fromPc
+    movable: s.fromPc ? null : claude ? 'desktop' : s.source === 'codex' ? 'codex' : null
   }
 }
 
@@ -853,10 +858,19 @@ export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (
 
 const OUTSIDE_ARCHIVE = 'Hides it in Hydra Desk. Sessions run outside are never deleted here: their files belong to the app that ran them.'
 
+/** The number of the account a row is on: its own, else the account whose chats go by its name (a Codex chat's). */
+function accountNum(account: RowAccount | null, accounts: readonly AccountChoice[] | null): number | null {
+  if (!account) return null
+  return account.num ?? (account.title ? (accounts?.find((a) => a.tag === account.title)?.num ?? null) : null)
+}
+
 /** "#72 example": the account by its number and, when known, its name (the row's own, else AgentHydra's list's). */
 function accountText(account: RowAccount | null, accounts: readonly AccountChoice[] | null): string | null {
   if (!account) return null
-  if (account.num === null) return account.title
+  if (account.num === null) {
+    const tagged = account.title ? accounts?.find((a) => a.tag === account.title) : undefined
+    return tagged ? `#${tagged.num} ${tagged.name}` : account.title
+  }
   if (account.title) return account.title
   const name = accounts?.find((a) => a.num === account.num)?.name
   return name ? `#${account.num} ${name}` : `#${account.num}`
@@ -869,19 +883,26 @@ export function rowIdentity(id: string, account: RowAccount | null, accounts: re
 }
 
 /**
- * Move to account ›: every desktop account, those whose app runs first, then by number; the one the session is on
- * now is ticked and off. A closed account's app is not started: the chat lands in its store for when it starts.
+ * Move to account ›: every desktop (or, for a Codex chat, Codex) account, those whose app runs first, then by number;
+ * the one the session is on now is ticked and off. A closed desktop account's app is not started: the chat lands in
+ * its store for when it starts. A Codex move opens the destination's app to show the chat there.
  * `accounts` null: AgentHydra's list is not read yet (or did not answer).
  */
-export function accountMenu(current: number | null, accounts: readonly AccountChoice[] | null): { label: string; items: (RowMenuItem | 'separator')[] } {
-  if (!accounts?.length) return { label: 'Move to account', items: [{ action: 'moveToAccount', label: accounts ? 'No desktop accounts' : 'Reading accounts…', disabled: true }] }
+export function accountMenu(
+  current: number | null,
+  accounts: readonly AccountChoice[] | null,
+  kind: 'desktop' | 'codex' = 'desktop'
+): { label: string; items: (RowMenuItem | 'separator')[] } {
+  if (!accounts?.length)
+    return { label: 'Move to account', items: [{ action: 'moveToAccount', label: accounts ? `No ${kind === 'codex' ? 'Codex' : 'desktop'} accounts` : 'Reading accounts…', disabled: true }] }
+  const closedTitle = kind === 'codex' ? 'Its app is not running: the move opens it to show the chat' : 'Its app is not running: the chat lands in its store, ready when it starts'
   const item = (a: AccountChoice): RowMenuItem => ({
     action: 'moveToAccount',
     label: `#${a.num} ${a.name}`,
     value: a.ref,
     checked: a.num === current,
     disabled: a.num === current,
-    ...(a.running ? {} : { hint: 'closed', title: 'Its app is not running: the chat lands in its store, ready when it starts' })
+    ...(a.running ? {} : { hint: 'closed', title: closedTitle })
   })
   const byNum = (a: AccountChoice, b: AccountChoice) => a.num - b.num
   const running = accounts.filter((a) => a.running).sort(byNum).map(item)
@@ -889,7 +910,14 @@ export function accountMenu(current: number | null, accounts: readonly AccountCh
   return { label: 'Move to account', items: running.length && closed.length ? [...running, 'separator', ...closed] : [...running, ...closed] }
 }
 
-export function rowMenu(row: RowState, groups: string[] = [], accounts: readonly AccountChoice[] | null = null): RowMenuEntry[] {
+/** `codexAccounts` are a Codex chat's: its first line and Move to account name those instead of the desktop ones. */
+export function rowMenu(
+  row: RowState,
+  groups: string[] = [],
+  desktopAccounts: readonly AccountChoice[] | null = null,
+  codexAccounts: readonly AccountChoice[] | null = null
+): RowMenuEntry[] {
+  const accounts = row.movable === 'codex' ? codexAccounts : desktopAccounts
   const current = (row.group ?? folderLabel(row.cwd)).toLowerCase()
   const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === current }))
   if (moveTo.length) moveTo.push('separator')
@@ -916,7 +944,7 @@ export function rowMenu(row: RowState, groups: string[] = [], accounts: readonly
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
   out.push('separator', { label: 'Move to group', items: moveTo })
-  if (row.movable) out.push(accountMenu(row.account?.num ?? null, accounts))
+  if (row.movable) out.push(accountMenu(accountNum(row.account, accounts), accounts, row.movable))
   out.push('separator')
   out.push(
     row.archived

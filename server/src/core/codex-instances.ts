@@ -441,8 +441,10 @@ export function createCodexInstance(name: string): CMActionResult {
   }
 }
 
-export function renameCodexInstance(id: string, name: string): CMActionResult {
-  const reason = validName(name)
+/** A name renames it and marks the name as the person's own (`ownName`); null keeps the name and
+ *  drops the mark, so the table names the row after its account again. */
+export function renameCodexInstance(id: string, name: string | null): CMActionResult {
+  const reason = name === null ? null : validName(name)
   if (reason)
     return {
       ok: false,
@@ -454,7 +456,11 @@ export function renameCodexInstance(id: string, name: string): CMActionResult {
   const outcome = mutate((store) => {
     const instance = store.instances.find((candidate) => candidate.id === id)
     if (!instance) return { result: null, changed: false }
-    instance.name = name.trim()
+    if (name === null) delete instance.ownName
+    else {
+      instance.name = name.trim()
+      instance.ownName = true
+    }
     return { result: instance.codexHome, changed: true }
   })
   if (!outcome.ok) return refusal('codex-rename', null, { id }, outcome)

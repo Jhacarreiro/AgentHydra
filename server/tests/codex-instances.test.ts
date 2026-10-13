@@ -128,8 +128,14 @@ test('Codex instance lifecycle uses isolated CLI/desktop homes and guarded delet
     })
   ).find((instance) => instance.id === id)
   expect(runningInstance?.name).toBe(renamed)
+  expect(runningInstance?.ownName).toBe(true)
   expect(runningInstance?.isDesktopRunning).toBe(true)
   expect(runningInstance?.desktopPid).toBe(1234)
+  // Named after its account again: the mark goes, the name stays (delete still confirms it).
+  expect(renameCodexInstance(id, null).ok).toBe(true)
+  const named = getCodexInstance(id)
+  expect(named?.name).toBe(renamed)
+  expect(named?.ownName).toBeUndefined()
 
   expect((await deleteCodexInstance(id, name)).ok).toBe(false)
   expect(getCodexInstance(id)).not.toBeNull()

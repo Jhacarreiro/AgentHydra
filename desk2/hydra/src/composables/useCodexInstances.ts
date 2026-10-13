@@ -70,7 +70,7 @@ const logout = (id: string) => withBusy(id, () => api.codexInstanceLogout(id), t
 const openDesktop = (id: string) => withBusy(id, () => api.openCodexDesktopInstance(id), true)
 const focusDesktop = (id: string) => withBusy(id, () => api.focusCodexDesktopInstance(id))
 const quitDesktop = (id: string) => withBusy(id, () => api.quitCodexDesktopInstance(id), true)
-const rename = (id: string, name: string) =>
+const rename = (id: string, name: string | null) =>
   withBusy(id, () => api.renameCodexInstance(id, name), true)
 const remove = (id: string, confirmName: string) =>
   withBusy(id, () => api.deleteCodexInstance(id, confirmName), true)

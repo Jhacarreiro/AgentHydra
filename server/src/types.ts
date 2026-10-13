@@ -1619,6 +1619,11 @@ export interface CodexInstance {
   num: number
   id: string
   name: string
+  /** True once a person renamed it: the Instances table then shows `name`. Absent, the table names
+   *  the row after the account it is signed into, as the Claude rows do with no label (owner,
+   *  2026-10-13), and `name` (the one typed at creation) is the fallback. Delete confirms `name`
+   *  either way. */
+  ownName?: boolean
   codexHome: string
   loggedIn: boolean
   /**

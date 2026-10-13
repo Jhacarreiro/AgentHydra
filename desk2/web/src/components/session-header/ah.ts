@@ -1,6 +1,6 @@
 // The session header's calls to AgentHydra, through Desk 2's own /ah/api (server/src/plugins/45-agenthydra.ts
 // hands them to the one AgentHydra daemon). The same endpoints AgentHydra's Sessions tab calls.
-import type { AhInstance, AhSecrets, AhSessionRow, AhUsage } from './logic'
+import type { AhCodexInstance, AhCodexMovePlan, AhInstance, AhSecrets, AhSessionRow, AhUsage } from './logic'
 
 const BASE = '/ah/api'
 
@@ -48,10 +48,40 @@ export const ah = {
       body: JSON.stringify({ instance_ref: instanceRef, confirm_title: row.title })
     }),
   exportUrl: (row: AhSessionRow, format: 'markdown' | 'html') => `${BASE}/sessions/${sid(row)}/export${where(row)}&format=${format}`,
-  fileUrl: (row: AhSessionRow) => `${BASE}/sessions/${sid(row)}/file${where(row)}`
+  fileUrl: (row: AhSessionRow) => `${BASE}/sessions/${sid(row)}/file${where(row)}`,
+  codexInstances: () => call<AhCodexInstance[]>('/codex-instances'),
+  /** Every active chat of one Codex account, as the move to `targetId` would take it; moves nothing. */
+  codexMovePlan: (fromId: string, targetId: string) =>
+    call<AhCodexMovePlan>(`/codex-instances/${encodeURIComponent(fromId)}/move-chats?targetId=${encodeURIComponent(targetId)}`),
+  /** Copies one planned chat to the target account, checks it landed whole, then archives the original. */
+  moveCodexChat: (fromId: string, body: { targetId: string; threadId: string; updatedAt: number; sourceAccountId: string | null; targetAccountId: string | null }) =>
+    call<{ ok: boolean; error?: string }>(`/codex-instances/${encodeURIComponent(fromId)}/move-chat`, { method: 'POST', body: JSON.stringify(body) })
 }
 
 /** Migrate by the session's id alone (the row menu's Move to account): AgentHydra's row first, whose title the move restates. */
 export async function moveSession(sessionId: string, instanceRef: string): ReturnType<typeof ah.migrate> {
   return ah.migrate(await ah.session(sessionId, 'claude'), instanceRef)
+}
+
+/**
+ * Move to account for a Codex chat (`codex:<instance id>`): a Codex thread cannot be re-homed, so AgentHydra copies it,
+ * verifies the copy and archives the original (docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md). The move takes only a chat that
+ * came back from a plan, with its updatedAt and both accounts, so the plan is read first, at the moment of the click:
+ * a chat Codex does not list as active on its account is refused here rather than guessed at.
+ */
+export async function moveCodexSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string }> {
+  const targetId = instanceRef.replace(/^codex:/, '')
+  const from = (await ah.session(sessionId, 'codex')).instance_ref?.match(/^codex:(.+)$/)?.[1]
+  if (!from) return { ok: false, error: 'AgentHydra does not know which Codex account this chat is on.' }
+  if (from === targetId) return { ok: false, error: 'It is already on that account.' }
+  const plan = await ah.codexMovePlan(from, targetId)
+  const chat = plan.chats.find((c) => c.id === sessionId)
+  if (!chat) return { ok: false, error: 'Codex does not list it as an active chat on its account.' }
+  return ah.moveCodexChat(from, {
+    targetId,
+    threadId: chat.id,
+    updatedAt: chat.updatedAt,
+    sourceAccountId: plan.sourceAccountId,
+    targetAccountId: plan.targetAccountId
+  })
 }

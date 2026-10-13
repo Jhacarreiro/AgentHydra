@@ -973,7 +973,9 @@ app.post('/api/codex-instances/:id/redeem-reset-credit', async (c) => {
 })
 app.post('/api/codex-instances/:id/rename', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string') return c.json({ error: 'name is required' }, 400)
+  // null: name it after its account again (the Instances row menu's "Name it after the account").
+  if (typeof body.name !== 'string' && body.name !== null)
+    return c.json({ error: 'name is required' }, 400)
   return c.json(renameCodexInstance(c.req.param('id'), body.name))
 })
 app.delete('/api/codex-instances/:id', async (c) => {

@@ -16,6 +16,7 @@ import {
   Square,
   Terminal,
   Trash2,
+  UserRound,
 } from '@lucide/vue'
 import { computed, onMounted, onUnmounted, ref, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
@@ -46,12 +47,17 @@ import { useAppSettings } from '@/composables/useAppSettings'
 import { useCodexInstances } from '@/composables/useCodexInstances'
 import { quotaSortColumns, useInstanceSource } from '@/composables/useInstanceSource'
 import { useMergedOrderSource } from '@/composables/useMergedOrder'
-import { pii } from '@/composables/usePrivacy'
+import { piiDisplayName, piiName } from '@/composables/usePrivacy'
 import { useUiPrefs } from '@/composables/useUiPrefs'
 import { useUsage } from '@/composables/useUsage'
 import { useUsageMode } from '@/composables/useUsageMode'
 import { type CodexInstance, type CodexMovePlan, moveCodexChat, planCodexChatMove } from '@/lib/api'
-import { shortDisplayName } from '@/lib/instance-appearance'
+import {
+  accountName,
+  codexNamed,
+  displayName,
+  shortDisplayName,
+} from '@/lib/instance-appearance'
 import { type InstanceFacts, searchText } from '@/lib/instance-filter'
 import { type InstanceColumn, type InstanceRowModel, nameTooltipFor } from '@/lib/instance-table'
 import { moveTargets } from '@/lib/move-chats'
@@ -228,7 +234,7 @@ const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource(
       accessor: (instance: CodexInstance) =>
         `${desktopEnabled.value && instance.isDesktopRunning ? '0' : '1'}:${cliEnabled.value && instance.loggedIn ? '0' : '1'}`,
     },
-    { key: 'name', accessor: (instance: CodexInstance) => instance.name },
+    { key: 'name', accessor: (instance: CodexInstance) => displayName(codexNamed(instance)) },
     { key: 'pid', accessor: (instance: CodexInstance) => instance.desktopPid ?? undefined },
     ...quotaSortColumns(
       usageFor,
@@ -256,6 +262,10 @@ const { visibleRows, hiddenByFilter, isDimmed, sortValues } = useInstanceSource(
 /** What the shared row draws for one Codex instance (components/InstanceRow.vue). */
 function rowModel(instance: CodexInstance): InstanceRowModel {
   const email = instance.account?.email
+  // Named after the account it is signed into unless a person renamed it, as the Claude rows are
+  // (owner, 2026-10-13: Codex rows "only currently show the name of the folder").
+  const full = piiDisplayName(codexNamed(instance))
+  const shown = shortDisplayName(full)
   return {
     id: instance.id,
     num: instance.num,
@@ -265,13 +275,13 @@ function rowModel(instance: CodexInstance): InstanceRowModel {
     status: { on: !!statusOn(instance), title: statusTitle(instance) },
     glyph: { dir: instance.codexHome, running: !!statusOn(instance) },
     name: {
-      shown: shortDisplayName(pii(instance.name)),
+      shown,
       // The hover is the address and the folder; a click copies the address (owner, 2026-10-06).
       tooltip: (clipped) =>
         nameTooltipFor(
           {
-            full: pii(instance.name),
-            shown: shortDisplayName(pii(instance.name)),
+            full,
+            shown,
             email,
             folder: instance.codexHome,
             copyHint: t('instances.nameCopyHint'),
@@ -355,6 +365,16 @@ async function onRename(name: string) {
   } finally {
     renaming.value = false
   }
+}
+
+/** Drops the person's own name so the row is named after its account again; the name itself stays,
+ *  for Delete to confirm. The Claude rows' "Name it after the account". */
+async function onUseAccountName(instance: CodexInstance) {
+  const next = accountName(instance.account)
+  if (!next) return
+  const result = await rename(instance.id, null)
+  if (result?.ok) toast.success(t('instances.toastUsingAccountName', { name: piiName(next) }))
+  else toast.error(result?.message ?? t('codexInstances.toastRenameFailed'))
 }
 
 const deleteOpen = ref(false)
@@ -470,7 +490,8 @@ const moveShowClosed = ref(false)
 const moveBusy = ref(false)
 const moveJob = ref<{ from: CodexInstance; to: CodexInstance; plan: CodexMovePlan } | null>(null)
 const moveErrors = ref<string[]>([])
-const moveLabel = (instance: CodexInstance) => `#${instance.num} ${instance.name}`
+const moveLabel = (instance: CodexInstance) =>
+  `#${instance.num} ${piiDisplayName(codexNamed(instance))}`
 const moveTargetsFor = (from: CodexInstance) =>
   moveTargets(
     instances.value
@@ -727,6 +748,14 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
       <DropdownMenuItem :disabled="!usageFor(instance)" @click="onClearUsage(instance)">
         <Eraser /> {{ $t('codexInstances.clearUsage') }}
       </DropdownMenuItem>
+      <!-- Only on a row a person renamed: drop that name and call it after the account again. -->
+      <DropdownMenuItem
+        v-if="instance.ownName"
+        :disabled="isBusy(instance) || !accountName(instance.account)"
+        @click="onUseAccountName(instance)"
+      >
+        <UserRound /> {{ $t('instances.useAccountName') }}
+      </DropdownMenuItem>
       <DropdownMenuSeparator />
       <DropdownMenuItem
         variant="destructive"
@@ -810,7 +839,7 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   />
   <LogoutInstanceDialog
     v-model:open="logoutOpen"
-    :instance-name="logoutTarget?.name ?? null"
+    :instance-name="logoutTarget ? piiDisplayName(codexNamed(logoutTarget)) : null"
     :account-email="logoutTarget?.account?.email ?? null"
     :description="$t('codexInstances.logoutDialogDescription')"
     :submitting="loggingOut"

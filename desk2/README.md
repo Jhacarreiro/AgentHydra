@@ -238,7 +238,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   session of another app on this PC (Claude Desktop, a CLI) also has Move to account ›: every desktop
   account, those whose app runs first, the one it is on now ticked and off. It is the session header's
   Migrate (AgentHydra's `POST /api/sessions/:id/migrate`, one move at a time; a line under the list says
-  where it went), never Desk's own chats or the other PC's. Opening a session from a search while the
+  where it went), never Desk's own chats or the other PC's. A Codex chat on this PC has it too, listing
+  the Codex accounts (owner, 2026-10-13): AgentHydra's Codex move reads the chat's plan at the click and
+  copies it, checks the copy, then archives the original (`moveCodexSession` in `session-header/ah.ts`;
+  docs/MOVING-CHATS-BETWEEN-ACCOUNTS.md). Opening a session from a search while the
   session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
   it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of

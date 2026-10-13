@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Right-click a Codex chat to move it to another Codex account.** Codex chats in the sidebar now have Move to account,
+  like Claude chats. The chat is copied to the account you pick, checked, and only then archived on the old one.
+- **Codex accounts are named after the account.** The Instances table's name column shows a Codex account's own name,
+  as it does for Claude accounts, unless you renamed it yourself; "Name it after the account" switches back.
 - **A long Codex chat moves to another account with all of its history.** A chat that had rolled over to a new
   context window used to arrive missing its earlier turns. Now the whole history moves, and the original is archived
   only after the copy shows every turn it had. A copy that is open in Codex is never rewritten, and a move that was

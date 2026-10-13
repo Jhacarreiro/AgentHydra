@@ -482,7 +482,7 @@ describe('row menu', () => {
     expect(first(rowMenu(chatRow(chat('a')))).value).toBe('a')
   })
 
-  it('Move to account lists the desktop accounts, running ones first, the current one ticked and off; only a Claude session of another app on this PC has it', () => {
+  it('Move to account lists the desktop accounts, running ones first, the current one ticked and off; only a session of another app on this PC has it', () => {
     const accounts: AccountChoice[] = [
       { ref: 'desktop:C:/p/9', num: 9, name: 'nine', running: false },
       { ref: 'desktop:C:/p/72', num: 72, name: 'example', running: true },
@@ -495,9 +495,22 @@ describe('row menu', () => {
     expect(sub(rowMenu(externalRow(ext())), 'Move to account')).toEqual(['Reading accounts… (off)'])
     const has = (entries: RowMenuEntry[]) => show(entries).includes('Move to account >')
     expect(has(rowMenu(externalRow(ext({ source: 'cli' }))))).toBe(true)
-    expect(has(rowMenu(externalRow(ext({ source: 'codex' }))))).toBe(false)
     expect(has(rowMenu(externalRow(ext({ fromPc: 'OTHER-PC' }))))).toBe(false)
+    expect(has(rowMenu(externalRow(ext({ source: 'codex', fromPc: 'OTHER-PC' }))))).toBe(false)
     expect(has(rowMenu(chatRow(chat('a', { sessionId: 's1' }))))).toBe(false)
+  })
+
+  it('a Codex chat moves only to the Codex accounts, the one its account name says ticked and off', () => {
+    const desktop: AccountChoice[] = [{ ref: 'desktop:C:/p/3', num: 3, name: 'three', running: true }]
+    const codex: AccountChoice[] = [
+      { ref: 'codex:b', num: 196, name: 'spare', running: false, tag: 'second' },
+      { ref: 'codex:a', num: 61, name: 'Example Owner', running: true, tag: 'work' }
+    ]
+    // AgentHydra's list names a Codex chat's account by the instance's own name, which `tag` matches
+    const entries = rowMenu(externalRow(ext({ source: 'codex', instance: 'work' })), [], desktop, codex)
+    expect(sub(entries, 'Move to account')).toEqual(['#61 Example Owner * (off)', '-', '#196 spare'])
+    expect((entries[0] as RowMenuItem).hint).toBe('#61 Example Owner')
+    expect(sub(rowMenu(externalRow(ext({ source: 'codex' })), [], desktop, []), 'Move to account')).toEqual(['No Codex accounts (off)'])
   })
 
   it('Move to group lists every group with a check on the current one, then New group and Remove from group', () => {

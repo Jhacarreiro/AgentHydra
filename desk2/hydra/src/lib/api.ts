@@ -1470,7 +1470,8 @@ export const redeemCodexResetCredit = (id: string, opts: { force?: boolean } = {
     `/api/codex-instances/${encodeURIComponent(id)}/redeem-reset-credit`,
     { method: 'POST', body: JSON.stringify({ force: opts.force === true }) },
   )
-export const renameCodexInstance = (id: string, name: string) =>
+/** null: name it after its account again (the name stays, for Delete to confirm). */
+export const renameCodexInstance = (id: string, name: string | null) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/rename`, {
     method: 'POST',
     body: JSON.stringify({ name }),

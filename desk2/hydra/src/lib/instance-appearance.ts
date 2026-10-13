@@ -31,7 +31,13 @@ import {
   Terminal,
   Zap,
 } from '@lucide/vue'
-import type { CMAccount, CMInstance, InstanceColorKey, InstanceIconKey } from '@/lib/api'
+import type {
+  CMAccount,
+  CMInstance,
+  CodexInstance,
+  InstanceColorKey,
+  InstanceIconKey,
+} from '@/lib/api'
 
 /** key -> Lucide component. Keys match INSTANCE_ICON_KEYS exactly (kept in lockstep). */
 const ICON_COMPONENTS: Record<InstanceIconKey, LucideIcon> = {
@@ -115,7 +121,7 @@ export function colorValue(key: InstanceColorKey): string {
  *  whether that account happens to have `full_name` set on its Anthropic profile, and nothing on
  *  screen says which one you got. That is fine for NAMING a row (see displayName) and wrong for
  *  the account column, which is answering "which login is this?" — use {@link accountHandle}. */
-export function accountName(account: CMAccount | null | undefined): string | null {
+export function accountName(account: NamedAccount | null | undefined): string | null {
   const name = account?.name?.trim()
   if (name) return name
   const localPart = accountHandle(account)
@@ -137,7 +143,7 @@ export function accountName(account: CMAccount | null | undefined): string | nul
  * address and the profile name ride in the tooltip. Null when nothing is resolved or the instance
  * is signed out.
  */
-export function accountHandle(account: CMAccount | null | undefined): string | null {
+export function accountHandle(account: NamedAccount | null | undefined): string | null {
   return account?.email?.trim().split('@')[0]?.trim() || null
 }
 
@@ -226,8 +232,23 @@ export function instanceForSessionLabel<T extends Pick<CMInstance, 'name' | 'isD
  *  default; the folder name survives only as the last resort for an instance that has no
  *  resolved identity at all. Two profiles on the same account will share a name — the dir shown
  *  beneath it is what tells them apart. */
-export function displayName(inst: Pick<CMInstance, 'name' | 'label' | 'account'>): string {
+export function displayName(inst: NamedInstance): string {
   return inst.label?.trim() || accountName(inst.account) || inst.name
+}
+
+/** What displayName reads off an account: a Claude login's (CMAccount) or a Codex one's. */
+export type NamedAccount = Pick<CMAccount, 'name' | 'email'>
+/** What displayName reads off an instance: a Claude desktop row, or a Codex row through {@link codexNamed}. */
+export interface NamedInstance {
+  name: string
+  label: string | null
+  account: NamedAccount | null
+}
+
+/** A Codex row as displayName reads it: its name is a label only once a person renamed it
+ *  (`ownName`); until then the row is named after its account, as a Claude row with no label is. */
+export function codexNamed(inst: Pick<CodexInstance, 'name' | 'ownName' | 'account'>): NamedInstance {
+  return { name: inst.name, label: inst.ownName ? inst.name : null, account: inst.account }
 }
 
 /** How many characters of a name the Name column shows before it elides the rest.

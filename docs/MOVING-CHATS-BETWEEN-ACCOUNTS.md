@@ -268,6 +268,12 @@ first, and the destructive half only accepts a chat that came back from a plan, 
 `updatedAt` and both account ids, so a stale or unreviewed request is refused rather than guessed
 at.
 
+A person can also move ONE Codex chat from AgentHydra's sidebar (2026-10-13): right-click the chat,
+**Move to account ›**, and pick a Codex account. The click is the review: the window reads the plan
+for that chat's account at that moment, takes the one row whose id is the chat's, and sends it to
+`move-chat` unchanged, so every refusal above still applies; a chat the plan does not list is
+refused in the window without a call.
+
 ### What it refuses, and what an interruption leaves behind
 
 Every refusal happens at planning time, before anything connects:
