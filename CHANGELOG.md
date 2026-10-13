@@ -7,6 +7,16 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A new transcript is no longer missed.** The folder tree behind the transcript index and the kit's ingest read a
+  folder again only when its modified time moved, so a file created in the same clock tick as the last read (a
+  subagent's transcript, say) stayed invisible until something else touched that folder. A folder whose modified time
+  is less than two seconds older than its last read is now read again on the next walk.
+- **Three rarely used tools left the MCP tool list.** `manager_stats`, `manager_rsi` and `list_cli_instances` still
+  work through `hydra_find` and `hydra_run`. The listed set is back at its cap of 32 tools, which keeps the tool
+  schemas every chat loads small.
+- **A test fixture that writes a SQLite file row by row fails CI.** On Windows every separate write is a disk sync,
+  and three tests timed out at 5 s there because of it. A new check flags a test that makes more than three writes
+  outside one transaction, and the slow fixtures it found now write in one.
 - **The sidebar lists every unarchived Codex chat.** With Codex picked in the sidebar's filter, only a chat written
   in the last ten minutes was listed, so ten open Codex chats showed as one. Now every chat each Codex app shows is
   listed, however old; archived chats and Codex's own helper threads stay out.

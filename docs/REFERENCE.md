@@ -1085,3 +1085,12 @@ stays quiet on the fixed one, so none can rot into a silent no-op.
   `^(sweep|reassert|run.*Once)`) that only test code names. `reassertAutomationStamps` and
   `sweepUntitledDesktopChats` both shipped like that, unit-tested and documented as running on a
   timer, with no production caller. Wire it or delete it with its test; never allowlist it.
+- `timer-callback-can-kill-the-daemon.mjs`: a `setInterval` callback that can throw out of itself.
+  The daemon exits on an uncaught exception, so one failed tick (a locked sqlite read is enough)
+  takes the queue, the monitor and the HTTP API down together. The callback must open with `try`,
+  end in `.catch(...)`, or name a function or `const` arrow that does. Only a plain `let` and a
+  re-entrancy flag (`if (running) return`, `running = true`) may sit above the `try`.
+- `sqlite-fixture-autocommits.mjs`: a `bun:sqlite` test fixture that makes more than three writes
+  outside one transaction. Each autocommit is a journal fsync, which windows-latest pays dearly
+  for: three such tests timed out at bun's 5s limit there on 2026-10-13. Wrap the fixture in
+  `db.exec('begin')` ... `db.exec('commit')` or `db.transaction(...)`; never raise the timeout.
