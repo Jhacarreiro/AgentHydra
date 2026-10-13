@@ -19,6 +19,7 @@ ROLES = ("gpt-instant", "gpt-thinking", "gpt-auto")
 # Names kept because routing was measured on them (the harness's pinned names): name -> the slug each means.
 PINNED = {"luna-thinking": "gpt-5-6-t-mini", "gpt-6": "gpt-6", "gpt-6-thinking": "gpt-6-t-mini"}
 NOT_REPORTED = "roles not reported"
+DEFAULT_TEXT = "gpt-5-6-mini"  # the harness's default text model (chatgpt/http.py TEXT_MODEL) while an account lists it
 A_B = ("python -m hswarm.free_ab pick --profile critical --n 30", "python -m hswarm.free_ab arm --model <slug>",
        "python -m hswarm.free_ab judge", "python -m hswarm.free_ab report")
 
@@ -48,6 +49,13 @@ def _accounts(status: dict) -> list[dict]:
     return [a for a in (status.get("accounts") or []) if isinstance(a, dict) and a.get("signedIn") and a.get("provider") == "chatgpt"]
 
 
+def _default(a: dict) -> str | None:
+    """An account's default text model by the harness's rule: gpt-5-6-mini while listed, else its gpt-instant."""
+    if a.get("default_moved"):
+        return (a.get("roles") or {}).get("gpt-instant")
+    return DEFAULT_TEXT if DEFAULT_TEXT in {x for x in map(_slug, a.get("offers") or []) if x} else None
+
+
 def analyse(status: dict, previous: dict, now: str) -> dict:
     """The report for one free_status read against the stored state (no I/O)."""
     accounts = _accounts(status)
@@ -64,7 +72,8 @@ def analyse(status: dict, previous: dict, now: str) -> dict:
                     roles[r].add(a["roles"][r])
     seen = previous.get("slugs") or {}
     first = not seen  # the first scan records what is listed; only a later one calls a model new, as Desk does
-    new = [] if first else sorted(s for s in offers if s not in seen)
+    # A slug listed again after a scan saw it gone is new again, as Desk's notice treats it.
+    new = [] if first else sorted(s for s in offers if s not in seen or (seen[s] or {}).get("gone"))
     gone = sorted(s for s, v in seen.items() if s not in offers and not (v or {}).get("gone"))
     resolves = {r: sorted(roles[r]) if reported else NOT_REPORTED for r in ROLES}
     asks = {}
@@ -75,7 +84,7 @@ def analyse(status: dict, previous: dict, now: str) -> dict:
             if provider and provider != "chatgpt":
                 means = f"{provider} account"
             elif not model:
-                defaults = sorted({a["model_slug"] for a in accounts if a.get("model_slug")})
+                defaults = sorted({d for d in map(_default, accounts) if d})
                 means = ", ".join(defaults) + " (each account's default)" if defaults else "each account's default text model"
             elif model in resolves:
                 v = resolves[model]

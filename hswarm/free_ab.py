@@ -144,7 +144,8 @@ async def _arm_one(run: str, model: str, i: int, r: dict, stamp: str) -> dict:
     t0 = time.monotonic()
     waited = 0.0
     while True:
-        res, note = await free_route.consult(f"ab{model[:4]}{stamp}-{i}", task)
+        tag = hashlib.sha256(model.encode()).hexdigest()[:6]  # gpt-6 and gpt-6-thinking share any short prefix
+        res, note = await free_route.consult(f"ab{tag}{stamp}-{i}", task)
         infra = "free accounts unavailable" in str((note or {}).get("error") or "")  # a daemon relaunch, not the model
         if res is not None or (note and not note.get("short") and not infra) or note is None:
             break

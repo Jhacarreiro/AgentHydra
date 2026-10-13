@@ -24,11 +24,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   does code review work that only reads files.
 - **Free ChatGPT accounts keep up with new models by themselves.** A Free chat can now ask for "the newest instant",
   "the newest thinking" or "the newest auto" model, and gets whatever the account lists today, so a GPT-6.1 is there
-  the day it appears with no update. Routed HSwarm work stays on the model a test chose until a new test moves it.
-  Desk tells you once when an account lists a model it has never seen, and
-  `hswarm models --free` shows every model your accounts list, what is new, and the steps to test a new one against
-  the paid route before any work moves to it. A renamed default model no longer marks every ChatGPT account
-  unavailable at once.
+  the day it appears with no update, and a renamed default no longer marks every ChatGPT account unavailable. Desk
+  tells you once when an account lists a model it has never seen, and `hswarm models --free` shows every model your
+  accounts list, what is new, and the steps to test a new one against the paid route before any routed work moves
+  to it.
 - **Free account work survives AgentHydra restarting itself.** AgentHydra restarts onto each update it pulls, about
   every 25 minutes on a busy day, and each restart used to drop every Free account task in flight onto paid keys. The
   task now waits for AgentHydra to come back and takes its answer from the chat, which kept going meanwhile.

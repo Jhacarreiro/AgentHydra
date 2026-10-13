@@ -54,10 +54,12 @@ def test_vanished_slug_is_gone(monkeypatch):
     _scan(monkeypatch, _status(BASE))
     out = _scan(monkeypatch, _status(BASE[:-1]))
     assert out["gone"] == ["gpt-5-6-t-mini"] and "GONE: gpt-5-6-t-mini" in free_models.render(out)
+    assert _scan(monkeypatch, _status(BASE))["new"] == ["gpt-5-6-t-mini"]  # listed again: new again, as in Desk
 
 
 def test_asks_table_names_the_pinned_slug_and_roles_not_reported(monkeypatch):
     out = _scan(monkeypatch, _status(BASE, roles=None))
     critical = out["asks"]["critical"][0]
     assert critical["ask"] == "luna-thinking" and critical["means"].startswith("gpt-5-6-t-mini")
+    assert {"ask": "@chatgpt", "means": "gpt-5-6-mini (each account's default)"} in out["asks"]["research"]
     assert out["roles"]["gpt-instant"] == free_models.NOT_REPORTED
