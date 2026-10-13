@@ -260,6 +260,62 @@ describe('free_chat through a stand-in Desk 2', () => {
     ).rejects.toThrow('ChatGPT model')
   }, 30_000)
 
+  // Contract (free-model-currency plan): a role name or any gpt- slug is a ChatGPT model, so a release the
+  // code never heard of ('gpt-6-1-mini') reaches a ChatGPT account without a code change.
+  test('a gpt- slug and a role name are accepted and go to a ChatGPT account', async () => {
+    const out = await run('free_chat', {
+      tasks: [
+        { prompt: 'slug', model: 'gpt-6-1-mini' },
+        { prompt: 'role', model: 'gpt-instant' },
+      ],
+    })
+    expect(out.tasks.map((t: { state: string }) => t.state)).toEqual(['done', 'done'])
+    expect(ran.find((r) => r.prompt === 'slug')).toMatchObject({
+      instance: 'b',
+      model: 'gpt-6-1-mini',
+    })
+    expect(ran.find((r) => r.prompt === 'role')).toMatchObject({
+      instance: 'b',
+      model: 'gpt-instant',
+    })
+  }, 30_000)
+
+  // Contract: a model that is neither a Claude family nor a ChatGPT name/slug is refused before any send.
+  test('a model that is not a slug is refused', async () => {
+    await expect(run('free_chat', { tasks: [{ prompt: 'x', model: 'GPT 6!' }] })).rejects.toThrow(
+      'model is haiku, sonnet',
+    )
+  })
+
+  // Contract: a ChatGPT name (a role) with provider claude is a conflict, as gpt-6 always was.
+  test('a ChatGPT role name with provider claude is refused', async () => {
+    await expect(
+      run('free_chat', { tasks: [{ prompt: 'x', provider: 'claude', model: 'gpt-thinking' }] }),
+    ).rejects.toThrow('ChatGPT model')
+  })
+
+  // Contract: free_status shows a ChatGPT account's `roles` (and default_moved) so a caller sees which
+  // slug each role resolves to today.
+  test('free_status passes roles through for a ChatGPT account', async () => {
+    const b = INSTANCES[1]!
+    const saved = b.usage
+    b.usage = {
+      ...usage(null, null, true),
+      models: [{ slug: 'gpt-6-1-mini' }],
+      roles: { instant: 'gpt-6-1-mini' },
+      default_moved: true,
+    } as FreeInstance['usage']
+    try {
+      const st = await run('free_status', {})
+      const acct = st.accounts.find((a: { num: number }) => a.num === 2)
+      expect(acct.roles).toEqual({ instant: 'gpt-6-1-mini' })
+      expect(acct.default_moved).toBe(true)
+      expect(acct.offers).toEqual(['gpt-6-1-mini'])
+    } finally {
+      b.usage = saved
+    }
+  })
+
   test('a new thread its account refuses is answered by another idle account, and the refusing one rests', async () => {
     // 2026-10-07: a failing ChatGPT account stayed first in line and took ~3,700 sends in a row.
     const out = await run('free_chat', { tasks: [{ prompt: 'refused' }] })

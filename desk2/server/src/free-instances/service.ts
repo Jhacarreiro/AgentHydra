@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_CHATGPT_MODELS, FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isPaidPlan, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, isPaidPlan, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -46,9 +46,12 @@ function checkOptions(r: FreeRequest, send: boolean): void {
   if (r.command === 'track' && !r.name) throw new FreeError('A name is required when tracking a chat.')
   const claudeMessage = send && r.provider === 'claude'
   if (r.webSearch !== undefined && (typeof r.webSearch !== 'boolean' || !claudeMessage)) throw new FreeError('Web search is an option for Claude messages only.')
-  const models: readonly string[] = r.provider === 'claude' ? FREE_CLAUDE_MODELS : FREE_CHATGPT_MODELS
-  if (r.model !== undefined && (!send || !models.includes(r.model)))
-    throw new FreeError(`Model is ${models.join(' or ')} for a ${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} message.`)
+  if (r.model !== undefined) {
+    const claude = r.provider === 'claude'
+    const ok = send && typeof r.model === 'string' && (claude ? (FREE_CLAUDE_MODELS as readonly string[]).includes(r.model) : isFreeChatgptModel(r.model))
+    if (!ok) throw new FreeError(claude ? `Model is ${FREE_CLAUDE_MODELS.join(' or ')} for a Claude message.`
+      : 'Model is gpt-instant, gpt-thinking, gpt-auto, luna-thinking, gpt-6, gpt-6-thinking or a slug the account lists (gpt-...) for a ChatGPT message.')
+  }
 }
 export function validateRequest(value: unknown): FreeRequest {
   const r = record(value) as unknown as FreeRequest
@@ -83,6 +86,8 @@ export class FreeInstances {
   onLoginChange?: () => void
   /** An account moved between free and paid (notePlan); the plugin tells the window. */
   onPlanChange?: (instance: FreeInstance) => void
+  /** Told after a usage reading is kept on an account (the model watch reads the listed models). */
+  onUsage?: (instance: FreeInstance) => void
   constructor(home: string, private runner: FreeRunner = runFree, runtime?: FreeRuntime) {
     this.store = new FreeStorage(home)
     this.runtime = runtime ?? new ManagedFreeRuntime(home)
@@ -245,6 +250,10 @@ export class FreeInstances {
     this.store.data.forgotten = [...(this.store.data.forgotten ?? []).filter(f => f !== id), id].slice(-5000)
     this.store.save()
     return { ok: true }
+  }
+  /** Every account row, as kept (the model watch reads their listed models). */
+  allInstances(): readonly FreeInstance[] {
+    return this.store.data.instances
   }
   status(): FreeStatus {
     this.prune()
@@ -418,6 +427,7 @@ export class FreeInstances {
       if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
       instance.usage = result.usage
       this.notePlan(instance, result.usage.plan ?? null)
+      try { this.onUsage?.(instance) } catch { /* a watcher's failure never fails a reading */ }
     }
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()

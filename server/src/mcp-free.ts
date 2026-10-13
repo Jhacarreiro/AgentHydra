@@ -29,6 +29,10 @@ interface FreeUsage {
   windows: FreeWindow[]
   /** ChatGPT: the models the account lists for Temporary Chats (desk2 shared/free-instances.ts). */
   models?: { slug: string }[]
+  /** ChatGPT: the newest model the account lists per role (instant, thinking, auto). */
+  roles?: Record<string, string>
+  /** ChatGPT: the account's default model moved since it was last read. */
+  default_moved?: boolean
 }
 export interface FreeInstance {
   id: string
@@ -348,8 +352,20 @@ export interface FreeTask {
   model?: FreeModel
 }
 /** A new chat's model: a Claude family, or a ChatGPT model the account may offer (desk2 shared/free-instances.ts). */
-export type FreeModel = 'haiku' | 'sonnet' | 'gpt-6' | 'luna-thinking' | 'gpt-6-thinking'
-const CHATGPT_MODELS: readonly string[] = ['gpt-6', 'luna-thinking', 'gpt-6-thinking']
+export type FreeModel = 'haiku' | 'sonnet' | string
+const CHATGPT_NAMES: readonly string[] = [
+  'gpt-instant',
+  'gpt-thinking',
+  'gpt-auto',
+  'luna-thinking',
+  'gpt-6',
+  'gpt-6-thinking',
+]
+// The same rule as isFreeChatgptModel in Desk's shared/free-instances.ts: a name above or a gpt- slug.
+// The harness decides what an account can actually send.
+function isChatgptModel(m: string): boolean {
+  return CHATGPT_NAMES.includes(m) || /^gpt-[a-z0-9][a-z0-9.-]{0,38}$/.test(m)
+}
 interface TaskState {
   task: number
   state: 'queued' | 'running' | 'done' | 'failed'
@@ -515,7 +531,7 @@ function jobBody(task: FreeTask, account: FreeInstance, requestId: string) {
     // it names: a Claude family goes to Claude only, a ChatGPT model to ChatGPT only (2026-10-08).
     ...(task.model &&
     !task.chat_id &&
-    (account.provider === 'chatgpt') === CHATGPT_MODELS.includes(task.model)
+    (account.provider === 'chatgpt') === isChatgptModel(task.model)
       ? { model: task.model }
       : {}),
   }
@@ -623,18 +639,16 @@ function readTask(raw: unknown, index: number): FreeTask {
   if (prompt.length > 100_000)
     throw new Error(`task ${index}: a prompt is at most 100,000 characters`)
   const model = t.model == null ? undefined : str(t.model)
-  if (model !== undefined && !['haiku', 'sonnet', ...CHATGPT_MODELS].includes(model))
-    throw new Error(`task ${index}: model is haiku, sonnet, gpt-6, luna-thinking or gpt-6-thinking`)
+  if (model !== undefined && model !== 'haiku' && model !== 'sonnet' && !isChatgptModel(model))
+    throw new Error(
+      `task ${index}: model is haiku, sonnet, gpt-instant, gpt-thinking, gpt-auto, luna-thinking, gpt-6, gpt-6-thinking or a slug an account lists (free_status offers)`,
+    )
   // A ChatGPT model is asked of ChatGPT: the task goes to a ChatGPT account.
   const provider =
-    t.provider == null
-      ? model && CHATGPT_MODELS.includes(model)
-        ? 'chatgpt'
-        : undefined
-      : str(t.provider)
+    t.provider == null ? (model && isChatgptModel(model) ? 'chatgpt' : undefined) : str(t.provider)
   if (provider !== undefined && provider !== 'claude' && provider !== 'chatgpt')
     throw new Error(`task ${index}: provider is claude or chatgpt`)
-  if (provider === 'claude' && model && CHATGPT_MODELS.includes(model))
+  if (provider === 'claude' && model && isChatgptModel(model))
     throw new Error(`task ${index}: ${model} is a ChatGPT model`)
   return {
     prompt,
@@ -685,6 +699,8 @@ async function freeStatus() {
         ...(i.usage?.plan ? { plan: i.usage.plan } : {}),
         // What a new thread could ask for, so a plan's better models are seen rather than assumed (owner, 2026-10-13).
         ...(i.usage?.models?.length ? { offers: i.usage.models.map((m) => m.slug) } : {}),
+        ...(i.provider === 'chatgpt' && i.usage?.roles ? { roles: i.usage.roles } : {}),
+        ...(i.usage?.default_moved ? { default_moved: true } : {}),
         signedIn: i.loggedIn,
         busy: busy.has(i.id),
         // HSwarm counts an account resting after a failed send as not idle (hswarm/free_route.py _idle).
@@ -730,7 +746,7 @@ export const FREE_TOOLS: HydraTool[] = [
   {
     name: 'free_chat',
     description:
-      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. A task's `model` asks a new thread for a model: 'haiku' for the lightest Claude, 'gpt-6', 'luna-thinking' or 'gpt-6-thinking' for a ChatGPT one. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
+      "MUTATES: send messages to the Free accounts (free_status), each a new private thread (Claude incognito, ChatGPT temporary chat) or, with `chat_id`, the next message in a thread you started before: the thread keeps everything said in it, so a later message can build on an earlier answer. Tasks run at once, one per account; more tasks than idle accounts wait their turn (a continuation waits for its own thread's account). Without `account` or `provider`, a task goes to an idle signed-in account with room (ChatGPT's unlimited text and a Claude 5-hour window under half used count alike), the one used longest ago first, so work spreads over every account and both providers; accounts at 90% of their week are skipped. Waits up to 45 s, then answers with what is done and a `batch` to poll with free_results; the sending goes on. Each answer names the account, the `chat_id` to continue or read the thread, the reply and `seconds` on its account (not counting the wait for one; `elapsed_s` is the batch's). A failed send that names a chat_id may still have reached the provider: free_read it before sending again. A task's `model` asks a new thread for a model: 'haiku' or 'sonnet' for Claude; for ChatGPT 'gpt-instant', 'gpt-thinking', 'gpt-auto', 'luna-thinking', 'gpt-6', 'gpt-6-thinking' or a slug from free_status `offers`. Free threads are private and never show in the account's history, so unlike probe chats they need no deleting.",
     inputSchema: S(
       {
         tasks: {
@@ -758,9 +774,9 @@ export const FREE_TOOLS: HydraTool[] = [
               web_search: { type: 'boolean', description: 'Claude only: let it search the web.' },
               model: {
                 type: 'string',
-                enum: ['haiku', 'sonnet', 'gpt-6', 'luna-thinking', 'gpt-6-thinking'],
+                pattern: '^(haiku|sonnet|gpt-[a-z0-9][a-z0-9.-]{0,38}|luna-thinking)$',
                 description:
-                  "A new thread's preferred model, else the account's usual one; the answer's `model` says which answered. Claude: 'haiku' takes the newest Haiku the account offers (Haiku 5.5 today); ignored on a chatgpt account. ChatGPT: 'gpt-6', 'luna-thinking' (GPT-5.6 Luna Thinking mini) or 'gpt-6-thinking' (GPT-6 Thinking mini), when the account offers it; it sends the task to a chatgpt account. Ignored for a continued thread.",
+                  "A new thread's preferred model, else the account's usual one; the answer's `model` says which answered. Claude: 'haiku' or 'sonnet' (the newest of that family the account offers); ignored on a chatgpt account. ChatGPT: 'gpt-instant', 'gpt-thinking' or 'gpt-auto' (the newest model the account lists in that role, so a new release is used the day an account lists it), the measured 'luna-thinking' (GPT-5.6 Luna Thinking), 'gpt-6', 'gpt-6-thinking', or any slug in free_status `offers`; it sends the task to a ChatGPT account. Ignored for a continued thread.",
               },
             },
             ['prompt'],

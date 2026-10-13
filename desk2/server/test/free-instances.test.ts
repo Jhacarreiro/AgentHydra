@@ -285,7 +285,12 @@ describe('Free jobs and routes', () => {
     const chat = { requestId: crypto.randomUUID(), instanceId: INSTANCE, command: 'chat', prompt: 'synthetic prompt' }
     const six = validateRequest({ ...chat, provider: 'chatgpt', model: 'gpt-6' })
     expect(commandArgs(config, six).slice(-2)).toEqual(['--prefer', 'gpt-6'])
-    expect(() => validateRequest({ ...chat, provider: 'chatgpt', model: 'haiku' })).toThrow('gpt-6 or luna-thinking')
+    for (const model of ['gpt-6-1-mini', 'gpt-instant']) {
+      expect(commandArgs(config, validateRequest({ ...chat, provider: 'chatgpt', model })).slice(-2)).toEqual(['--prefer', model])
+    }
+    expect(() => validateRequest({ ...chat, provider: 'chatgpt', model: 'haiku' })).toThrow('gpt-instant, gpt-thinking')
+    expect(() => validateRequest({ ...chat, provider: 'chatgpt', model: 'GPT 6!' })).toThrow('Model is')
+    expect(() => validateRequest({ ...chat, provider: 'claude', model: 'gpt-instant' })).toThrow('haiku or sonnet')
     expect(() => validateRequest({ ...chat, provider: 'claude', model: 'gpt-6' })).toThrow('haiku or sonnet')
     expect(() => validateRequest({ requestId: crypto.randomUUID(), instanceId: INSTANCE, provider: 'chatgpt', command: 'auth', model: 'gpt-6' })).toThrow('Model is')
   })

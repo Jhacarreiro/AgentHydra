@@ -120,7 +120,7 @@ def _idle(status: dict, provider: str | None = None) -> int:
                and not a.get("paced") and (provider is None or (a.get("provider") == provider and _room(a))))
 
 
-CHATGPT_MODELS = ("gpt-6", "luna-thinking", "gpt-6-thinking")  # free_chat's ChatGPT models (mcp-free.ts CHATGPT_MODELS)
+CLAUDE_FAMILIES = ("haiku", "sonnet")  # the only model names that are Claude's; every other name is ChatGPT's
 CLAUDE_FULL_PCT = 80  # a Claude account this far into its 5-hour window is not asked for a thread (mcp-free.ts roomBand 3)
 
 
@@ -132,9 +132,11 @@ def _room(account: dict) -> bool:
 
 
 def _ask(ask: str) -> tuple[str, str | None]:
-    """A route_via_free_tool_asks entry as free_chat's (model, provider): "sonnet@claude", or "gpt-6" (ChatGPT's)."""
+    """A route_via_free_tool_asks entry as free_chat's (model, provider): "sonnet@claude", or "gpt-6" (ChatGPT's).
+    Any model name that is not "haiku" or "sonnet" is ChatGPT's (a role name like gpt-instant, a pinned name like
+    luna-thinking, or a slug); an explicit "@provider" wins."""
     model, _, provider = ask.partition("@")
-    return model, provider or ("chatgpt" if model in CHATGPT_MODELS else None)
+    return model, provider or ("chatgpt" if model and model not in CLAUDE_FAMILIES else None)
 
 
 def _pick(task: Task, status: dict, unseen: int) -> tuple[str, str | None] | None:

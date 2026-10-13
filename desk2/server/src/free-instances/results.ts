@@ -53,6 +53,12 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
       windows: list(r.windows).map(item => { const w = object(item); return { id: str(w.id, 100), used_percent: percent(w.used_percent), remaining_percent: percent(w.remaining_percent), resets_at: str(w.resets_at, 100) || null, reset_passed: w.reset_passed === true } }) }
     const models = list(r.models).map(item => { const m = object(item); return { slug: str(m.slug, 100), title: str(m.title, 100) || undefined, reasoning: str(m.reasoning, 40) || undefined } }).filter(m => m.slug).slice(0, 40)
     if (models.length) usage.models = models
+    const roles: Record<string, string> = {}
+    for (const [k, v] of Object.entries(object(r.roles)).slice(0, 8)) {
+      if (k.length <= 100 && typeof v === 'string' && v.length <= 100 && /^gpt-[a-z0-9][a-z0-9.-]{0,38}$/.test(v)) roles[k] = v
+    }
+    if (Object.keys(roles).length) usage.roles = roles
+    if (r.default_moved === true) usage.default_moved = true
     return { ok: true, usage }
   }
   const chatId = str(r.chat_id, 100)

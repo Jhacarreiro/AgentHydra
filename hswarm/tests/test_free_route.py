@@ -447,6 +447,14 @@ def test_a_tool_task_asks_for_its_profiles_first_model_with_room(fake, tmp_path,
     assert after["chat_id"] == "c1" and "model" not in after and "provider" not in after
 
 
+@pytest.mark.parametrize("ask, expected", [
+    ("gpt-instant", ("gpt-instant", "chatgpt")), ("gpt-6-1-mini", ("gpt-6-1-mini", "chatgpt")),
+    ("sonnet", ("sonnet", None)), ("sonnet@claude", ("sonnet", "claude")), ("@chatgpt", ("", "chatgpt")),
+])
+def test_ask_provider_is_chatgpt_for_any_name_but_the_claude_families(ask, expected):
+    assert free_route._ask(ask) == expected
+
+
 @pytest.mark.parametrize("claude_usage, profile, sent", [
     ("5h 40%, week 3%", "research", {"model": "sonnet", "provider": "claude"}),
     ("5h 95%, week 3%", "research", {"model": None, "provider": "chatgpt"}),

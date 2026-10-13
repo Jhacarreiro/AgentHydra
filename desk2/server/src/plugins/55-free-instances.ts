@@ -2,6 +2,7 @@ import { Hono } from 'hono'
 import { bodyLimit } from 'hono/body-limit'
 import { bridge } from '../bridge'
 import type { ServerContext } from '../context'
+import { ModelWatch } from '../free-instances/models'
 import { planNotice } from '../free-instances/plan'
 import { FreeError, FreeInstances } from '../free-instances/service'
 import { daemonCreds, FreeSync } from '../free-instances/sync'
@@ -13,6 +14,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   ctx.onStop(() => service.stop())
   service.onPlanChange = (instance) => {
     const notice = planNotice(instance)
+    if (notice) ctx.broadcast({ type: 'notice', ...notice })
+  }
+  // A model no account listed before is told once (free-instances/models.ts); the seen file lives under this home.
+  const watch = new ModelWatch(ctx.home)
+  service.onUsage = () => {
+    const notice = watch.check(service.allInstances())
     if (notice) ctx.broadcast({ type: 'notice', ...notice })
   }
   // The logins go to the other PCs through AgentHydra's Login sync store, from the real home only (real-home.ts): a

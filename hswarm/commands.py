@@ -873,6 +873,15 @@ async def cmd_models(a) -> int:
         out = await catalogue.refresh(a.refresh)
         _print(out) if a.json else print(out["note"])
         return 0
+    if getattr(a, "free", False):
+        from . import free_models
+
+        out = await free_models.scan()
+        if a.json:
+            _print(out)
+        else:
+            print(free_models.render(out))
+        return 3 if out.get("new") else 0
     if getattr(a, "watch", False):
         from . import aa_index, model_watch
 

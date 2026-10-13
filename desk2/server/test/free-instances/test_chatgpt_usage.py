@@ -4,7 +4,7 @@ import json
 import unittest
 from unittest.mock import Mock
 
-from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL, TEXT_MODEL_NAME, thread_model
+from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL, TEXT_MODEL_NAME, _stream_event, roles, thread_model
 from claudfree.errors import ClaudeError
 from claudfree.http import account_label
 
@@ -15,6 +15,10 @@ def account(plan, **extra):
 
 def model(**extra):
     return {"slug": TEXT_MODEL, "title": TEXT_MODEL_NAME, "reasoning_type": "none", **extra}
+
+
+def entry(slug, title, reasoning_type):
+    return {"slug": slug, "title": title, "reasoning_type": reasoning_type}
 
 
 def usage(accounts, models):
@@ -72,7 +76,6 @@ class ChatGPTUsageTests(unittest.TestCase):
             ({"personal": account("free"), "workspace": account("team")}, [model()]),
             ({"personal": account("free"), "malformed": {}}, [model()]),
             ({"personal": account("free")}, []),
-            ({"personal": account("free")}, [model(title="Another model")]),
             ({"personal": account("free")}, [model(reasoning_type="reasoning")]),
         ]
         for accounts, models in cases:
@@ -102,7 +105,7 @@ class ChatGPTUsageTests(unittest.TestCase):
                 http = object.__new__(ChatGPTHttp)
                 http._json = Mock(return_value=models)
                 self.assertEqual(http.model_for(prefer), expected)
-                self.assertEqual(http._json.call_count, 0 if prefer == "sonnet" else 1)
+                self.assertEqual(http._json.call_count, 1)
         http = object.__new__(ChatGPTHttp)
         http.preparations = None
         http._request = Mock(side_effect=ClaudeError("Stop before fixture transmission", code="fixture"))
@@ -110,9 +113,49 @@ class ChatGPTUsageTests(unittest.TestCase):
             http.send("Synthetic smoke message", model="gpt-6")
         self.assertEqual(http._request.call_args.kwargs["json"]["model"], "gpt-6")
         with self.assertRaises(ClaudeError) as refused:
-            http.send("Synthetic smoke message", model="gpt-6-1")
+            http.send("Synthetic smoke message", model="claude-sonnet")
         self.assertEqual(refused.exception.code, "invalid_model")
         self.assertEqual(http._request.call_count, 1)
+
+    def test_roles_resolve_to_the_newest_listed_model_of_each_kind(self):
+        # Contract: gpt-instant/thinking/auto follow the highest listed version, shorter slug on a tie, no code change.
+        listed = [entry(*row) for row in (
+            ("gpt-6", "GPT-6", "auto"), ("gpt-6-mini", "GPT-6", "none"), ("gpt-6-t-mini", "GPT-6", "reasoning"),
+            ("gpt-5-6", "GPT-5.6 Luna", "auto"), (TEXT_MODEL, TEXT_MODEL_NAME, "none"),
+            ("gpt-5-6-t-mini", "GPT-5.6 Luna", "reasoning"), ("gpt-5-5-mini", "GPT-5.5", "none"),
+            ("gpt-6-t-mini-mini", "GPT-6", "reasoning"), ("auto", "Auto", "auto"))]
+        self.assertEqual(roles(listed), {"gpt-instant": "gpt-6-mini", "gpt-thinking": "gpt-6-t-mini", "gpt-auto": "gpt-6"})
+        listed.append(entry("gpt-6-1-mini", "GPT-6.1", "none"))
+        self.assertEqual(roles(listed)["gpt-instant"], "gpt-6-1-mini")
+
+    def test_usage_stays_available_when_the_default_model_is_retired(self):
+        # Contract: a missing gpt-5-6-mini moves the default to gpt-instant instead of marking the account unavailable.
+        result = usage({"personal": account("go")}, [entry("gpt-6-mini", "GPT-6", "none")])
+        self.assertTrue(result["available"])
+        self.assertTrue(result["default_moved"])
+        self.assertEqual(result["model_slug"], "gpt-6-mini")
+        self.assertEqual(result["text_model"], "GPT-6")
+        self.assertEqual(result["roles"], {"gpt-instant": "gpt-6-mini"})
+        self.assertNotIn("default_moved", usage({"personal": account("go")}, [model()]))
+
+    def test_a_retitled_default_model_stays_available_under_its_new_title(self):
+        # Contract: the default is found by slug and reasoning type, so a rename never marks an account unavailable.
+        result = usage({"personal": account("free")}, [model(title="Another model")])
+        self.assertTrue(result["available"])
+        self.assertEqual(result["text_model"], "Another model")
+        self.assertNotIn("default_moved", result)
+
+    def test_a_listed_raw_slug_is_sent_and_an_unlisted_one_falls_back(self):
+        # Contract: --prefer <slug> is sent only when listed; otherwise the account's default text model.
+        listed = {"models": [model(), entry("gpt-5-5-mini", "GPT-5.5", "none")]}
+        for prefer, expected in (("gpt-5-5-mini", "gpt-5-5-mini"), ("gpt-9-mini", TEXT_MODEL), ("gpt-instant", TEXT_MODEL), (None, TEXT_MODEL)):
+            with self.subTest(prefer=prefer):
+                http = object.__new__(ChatGPTHttp)
+                http._json = Mock(return_value=listed)
+                self.assertEqual(http.model_for(prefer), expected)
+        http = object.__new__(ChatGPTHttp)
+        http._json = Mock(return_value={"models": [entry("gpt-6-mini", "GPT-6", "none")]})
+        self.assertEqual(http.model_for(None), "gpt-6-mini")
 
     def test_a_continued_chat_stays_on_the_model_its_thread_answered_on(self):
         def thread(*models):
@@ -125,7 +168,7 @@ class ChatGPTUsageTests(unittest.TestCase):
                     parent = node
             return {"conversation_id": "11111111-2222-4333-8444-555555555555", "current_node": parent, "mapping": mapping}
         cases = [(("gpt-6",), "gpt-6"), ((TEXT_MODEL, "gpt-5-6-t-mini"), "gpt-5-6-t-mini"), (("gpt-6", TEXT_MODEL), TEXT_MODEL),
-                 (("gpt-5-5",), TEXT_MODEL), ((None,), TEXT_MODEL), ((), TEXT_MODEL)]
+                 (("gpt-5-5",), "gpt-5-5"), (("claude-x",), TEXT_MODEL), ((None,), TEXT_MODEL), ((), TEXT_MODEL)]
         for models, expected in cases:
             with self.subTest(models=models):
                 self.assertEqual(thread_model(thread(*models)), expected)
@@ -152,6 +195,18 @@ class ChatGPTUsageTests(unittest.TestCase):
                     self.assertNotIn("temporary_chat_requests_personalization", request.kwargs["json"])
                 else:
                     self.assertFalse(request.kwargs["json"]["temporary_chat_requests_personalization"])
+
+
+class StreamErrorTest(unittest.TestCase):
+    # 2026-10-13: ChatGPT sends `error: true` beside its words, and the failure read "ChatGPT generation failed (True)".
+    def test_a_bare_error_flag_gives_chatgpts_own_words_or_the_event_keys(self):
+        with self.assertRaises(ClaudeError) as said:
+            _stream_event({"error": True, "message": "You've hit your limit for this model."}, None, None)
+        self.assertIn("You've hit your limit for this model.", str(said.exception))
+        with self.assertRaises(ClaudeError) as bare:
+            _stream_event({"type": "error", "error": True, "v": 3}, None, None)
+        self.assertNotIn("(True)", str(bare.exception))
+        self.assertIn("event keys: error, type, v", str(bare.exception))
 
 
 if __name__ == "__main__":

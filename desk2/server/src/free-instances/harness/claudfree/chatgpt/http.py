@@ -23,7 +23,14 @@ UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include e
 # On 2026-10-13 the usage check's model list read the same on a Go and a Free account: GPT-6 (and its Thinking mini and
 # mini), GPT-5.6 Luna (and its Thinking mini), GPT-5.5 and older minis. Only Luna's Instant is the verified unlimited
 # text, so it stays the default.
-PREFERRED_MODELS = {"gpt-6": "gpt-6", "luna-thinking": "gpt-5-6-t-mini", "gpt-6-thinking": "gpt-6-t-mini"}
+#
+# Two tables, so a new model needs no code change (owner, 2026-10-13: "in case they release a new 6.1"): PINNED names
+# keep the slug routing was measured on; ROLES names resolve per account to the newest model it lists in that role
+# (value: the reasoning_type), and any listed slug is sent as itself.
+PINNED = {"luna-thinking": "gpt-5-6-t-mini", "gpt-6": "gpt-6", "gpt-6-thinking": "gpt-6-t-mini"}
+ROLES = {"gpt-instant": "none", "gpt-thinking": "reasoning", "gpt-auto": "auto"}
+SLUG = re.compile(r"gpt-[a-z0-9][a-z0-9.-]{0,38}")
+_VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 # ChatGPT sets conv_key_<uuid> (30 days) and history_off_<uuid> (7 days) on every Temporary Chat. Kept and sent
 # back, ~370 chats made each account's jar ~62 KB and ChatGPT refused every request in 0.1 s (2026-10-07: all
 # three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.
@@ -64,8 +71,52 @@ def thread_model(conversation):
     for message in reversed(visible_messages(conversation)):
         if message["role"] == "assistant" and message.get("model"):
             sent = message["model"]
-            return sent if sent == TEXT_MODEL or sent in PREFERRED_MODELS.values() else TEXT_MODEL
+            return sent if isinstance(sent, str) and SLUG.fullmatch(sent) else TEXT_MODEL
     return TEXT_MODEL
+
+
+def roles(listed):
+    """{role: slug} for each ROLES name this account resolves: among listed gpt-<major>[-<minor>] slugs of the role's
+    reasoning type the highest version wins, and at one version the shorter slug (gpt-6-t-mini over gpt-6-t-mini-mini)."""
+    found = {}
+    for entry in listed if isinstance(listed, list) else []:
+        slug = entry.get("slug") if isinstance(entry, dict) else None
+        match = _VERSION.match(slug) if isinstance(slug, str) else None
+        if not match:
+            continue
+        version = (int(match.group(1)), int(match.group(2) or 0))
+        for role, kind in ROLES.items():
+            if entry.get("reasoning_type") != kind:
+                continue
+            best = found.get(role)
+            if best is None or (version, -len(slug)) > best[0]:
+                found[role] = ((version, -len(slug)), slug)
+    return {role: pair[1] for role, pair in found.items()}
+
+
+def _slugs(listed):
+    return {e["slug"] for e in listed if isinstance(e, dict) and isinstance(e.get("slug"), str)} if isinstance(listed, list) else set()
+
+
+def resolve(prefer, listed):
+    """The slug to send for `prefer` on an account listing `listed`, or None when it resolves to nothing listed."""
+    if not isinstance(prefer, str):
+        return None
+    if prefer in PINNED:
+        return PINNED[prefer] if PINNED[prefer] in _slugs(listed) else None
+    if prefer in ROLES:
+        return roles(listed).get(prefer)
+    return prefer if SLUG.fullmatch(prefer) and prefer in _slugs(listed) else None
+
+
+def default_text(listed):
+    """(slug, moved): TEXT_MODEL while listed with reasoning none, else the account's gpt-instant (moved True), else
+    (None, False). A retired or renamed Luna Instant then moves the default instead of marking every account down."""
+    for entry in listed if isinstance(listed, list) else []:
+        if isinstance(entry, dict) and entry.get("slug") == TEXT_MODEL and entry.get("reasoning_type") == "none":
+            return TEXT_MODEL, False
+    instant = roles(listed).get("gpt-instant")
+    return (instant, True) if instant else (None, False)
 
 
 def _branch(conversation):
@@ -328,14 +379,21 @@ class ChatGPTHttp:
         accounts = self._json("GET", "/backend-api/accounts/check/v4-2023-04-27")
         models = self._json("GET", "/backend-api/models?history_and_training_disabled=true")
         plans = _plans(accounts)
-        unlimited = bool(plans) and all(p in UNLIMITED_PLANS for p in plans) and _offers_luna(models)
+        listed = models.get("models", [])
+        listed = listed if isinstance(listed, list) else []
+        default, moved = default_text(listed)
+        unlimited = bool(plans) and all(p in UNLIMITED_PLANS for p in plans) and default is not None
         plan = plans[0] if plans and all(p == plans[0] for p in plans) else None
+        title = next((m.get("title") for m in listed if isinstance(m, dict) and m.get("slug") == default), None)
+        title = title if isinstance(title, str) and title else TEXT_MODEL_NAME
         return {
             "plan": plan,
             "available": unlimited,
             "unlimited_text": unlimited,
-            "text_model": TEXT_MODEL_NAME,
-            "model_slug": TEXT_MODEL,
+            "text_model": title,
+            "model_slug": default,
+            "roles": roles(listed),
+            **({"default_moved": True} if moved else {}),
             "source": (
                 "not_exposed" if not unlimited
                 else "verified_free_text_policy" if plan == "free"
@@ -345,19 +403,16 @@ class ChatGPTHttp:
             "is_snapshot": False,
             "windows": [],
             "exact_remaining_messages": None,
-            "note": _usage_note(unlimited, plan),
+            "note": _usage_note(unlimited, plan, title),
             "models": _offered(models),
         }
 
     def model_for(self, prefer):
-        """The model a new chat asked for `prefer` (a PREFERRED_MODELS key) is sent: that model when this account
-        offers it in Temporary Chats, else Luna Instant. The reply's own model says which one answered."""
-        slug = PREFERRED_MODELS.get(prefer)
-        if not slug:
-            return TEXT_MODEL
-        models = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
-        offered = isinstance(models, list) and any(isinstance(m, dict) and m.get("slug") == slug for m in models)
-        return slug if offered else TEXT_MODEL
+        """The model a new chat asked for `prefer` (a PINNED or ROLES name, or a listed slug) is sent: that model when
+        this account lists it in Temporary Chats, else the account's default text model (which is Luna Instant until
+        an account stops listing it, so a retirement never breaks a send). The reply's own model says which answered."""
+        listed = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
+        return resolve(prefer, listed) or default_text(listed)[0] or TEXT_MODEL
 
     def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL):
         """One private POST. A prepared credential is consumed before transmission."""
@@ -365,7 +420,7 @@ class ChatGPTHttp:
             raise ClaudeError("Supply a nonempty prompt.", code="invalid_arguments")
         if existing is not None and existing.get("is_temporary_chat") is not True:
             raise ClaudeError("Temporary Chat is not verified.", code="privacy_not_verified")
-        if model != TEXT_MODEL and model not in PREFERRED_MODELS.values():
+        if model != TEXT_MODEL and not (isinstance(model, str) and SLUG.fullmatch(model)):
             raise ClaudeError("That ChatGPT model is not one AgentHydra sends.", code="invalid_model")
         previous = {m["id"] for m in visible_messages(existing)} if existing else set()
         payload = _send_payload(prompt, existing, model)
@@ -404,15 +459,6 @@ def _plans(accounts):
     return plans
 
 
-def _offers_luna(models):
-    advertised = models.get("models", [])
-    if not isinstance(advertised, list):
-        return False
-    return any(isinstance(model, dict) and model.get("slug") == TEXT_MODEL
-               and model.get("title") == TEXT_MODEL_NAME and model.get("reasoning_type") == "none"
-               for model in advertised)
-
-
 def _offered(models):
     """The models this account lists for Temporary Chats (slug, title, reasoning type): what a new private chat could
     ask for, read so which plan offers which model is a reading, not a guess (owner, 2026-10-13: "We literally have
@@ -426,15 +472,15 @@ def _offered(models):
             for m in advertised if isinstance(m, dict) and isinstance(m.get("slug"), str)][:40]
 
 
-def _usage_note(unlimited, plan):
+def _usage_note(unlimited, plan, title=TEXT_MODEL_NAME):
     if unlimited and plan == "free":
         return (
-            "GPT-5.6 Luna: unlimited everyday text on the Free plan, subject to abuse safeguards. "
+            f"{title}: unlimited everyday text on the Free plan, subject to abuse safeguards. "
             "Uploads, images, voice and other tools have separate limits. This is a verified plan policy, not a remaining-message counter."
         )
     if unlimited:
         return (
-            f"GPT-5.6 Luna: unlimited everyday text on the {plan.capitalize() if plan else 'paid'} plan, which includes everything in Free, subject to abuse safeguards. "
+            f"{title}: unlimited everyday text on the {plan.capitalize() if plan else 'paid'} plan, which includes everything in Free, subject to abuse safeguards. "
             "Uploads, images, voice and other tools have separate limits. This is a plan policy, not a remaining-message counter."
         )
     return "An unlimited Free text allowance could not be verified for this login. No remaining-message counter was returned."
@@ -493,9 +539,13 @@ def _stream_event(event, server_id, on_id):
     if event.get("type") == "error" or event.get("error"):
         # ChatGPT's own words for it, so a failure says whether it was a model's usage cap or something else: 3 of
         # the first 6 Luna Thinking threads of an A/B failed here in 6 to 9 s with nothing more (2026-10-13).
+        # ChatGPT often sends `error: true` with its words elsewhere in the event; a bare flag is not a reason.
         raw = event.get("error")
-        why = (raw.get("message") or raw.get("code")) if isinstance(raw, dict) else raw
-        why = " ".join(str(why or event.get("message") or event.get("code") or "").split())[:200]
+        why = (raw.get("message") or raw.get("code")) if isinstance(raw, dict) else raw if isinstance(raw, str) else None
+        why = why or event.get("message") or event.get("code") or event.get("error_code") or event.get("detail")
+        if not isinstance(why, str) or not why.strip():
+            why = "no reason given; event keys: " + ", ".join(sorted(map(str, event))[:12])
+        why = " ".join(why.split())[:200]
         raise ClaudeError(
             f"ChatGPT generation failed{f' ({why})' if why else ''}; read the chat before sending again.",
             code="generation_error",

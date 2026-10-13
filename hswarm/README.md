@@ -220,6 +220,17 @@ process's one `jobs.manager()`. It imports no MCP SDK and no pydantic. Measured 
 interpreter costs 63 MB and 661 modules importing it, against 101 MB and 998 modules for
 `from hswarm.mcp_server import hswarm_decide`.
 
+### Keeping Free on the newest models
+
+Claude families (`haiku`, `sonnet`) follow new models by themselves, and so do ChatGPT's role names `gpt-instant`,
+`gpt-thinking` and `gpt-auto`: each resolves per account to the newest model it lists in that role.
+`hswarm models --free` shows what every account lists, what each role and each `route_via_free_tool_asks` entry
+resolves to, and what is new or gone since the last scan (exit code 3 when something is new; `hswarm doctor` carries a
+`free_model_watch` line, and Desk notifies once per new model). To measure a new one, run
+`python -m hswarm.free_ab pick --profile critical --n 30`, then `arm --model <slug>`, `judge` and `report`; when it wins,
+adopt it with one setting, `route_via_free_tool_asks`. Pinned names such as `luna-thinking` stay where an A/B chose
+them until another A/B moves them.
+
 ## How many more free accounts would help
 
 A task the Free accounts or CliMayte could have taken but found no account free for runs on a paid key, and its ledger

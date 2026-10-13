@@ -22,8 +22,13 @@ export interface FreeRequest {
   model?: FreeModel
 }
 export const FREE_CLAUDE_MODELS = ['haiku', 'sonnet'] as const
-export const FREE_CHATGPT_MODELS = ['gpt-6', 'luna-thinking', 'gpt-6-thinking'] as const
-export type FreeModel = (typeof FREE_CLAUDE_MODELS)[number] | (typeof FREE_CHATGPT_MODELS)[number]
+/** ChatGPT names a caller may give: roles (newest model in that role, per account) and pinned names. */
+export const FREE_CHATGPT_NAMES = ['gpt-instant', 'gpt-thinking', 'gpt-auto', 'luna-thinking', 'gpt-6', 'gpt-6-thinking'] as const
+/** A name above, or a model slug the account lists (the harness alone decides what an account can send). */
+export function isFreeChatgptModel(m: string): boolean {
+  return (FREE_CHATGPT_NAMES as readonly string[]).includes(m) || /^gpt-[a-z0-9][a-z0-9.-]{0,38}$/.test(m)
+}
+export type FreeModel = (typeof FREE_CLAUDE_MODELS)[number] | string
 export interface FreeChat {
   chat_id: string
   name: string | null
@@ -51,6 +56,10 @@ export interface FreeUsage {
   windows: { id: string; used_percent: number | null; remaining_percent: number | null; resets_at: string | null; reset_passed: boolean }[]
   /** ChatGPT: the models the account lists for Temporary Chats, what a new private chat could ask for. */
   models?: { slug: string; title?: string; reasoning?: string }[]
+  /** ChatGPT: the slug each role name (gpt-instant, gpt-thinking, gpt-auto) resolves to on this account. */
+  roles?: Record<string, string>
+  /** ChatGPT: true when the usual default text model is no longer listed and the default fell back to another. */
+  default_moved?: boolean
 }
 export interface FreeResult {
   ok: boolean

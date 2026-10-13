@@ -21,6 +21,16 @@ def run_http(args):
     emit(args, Client()._run(args, on_text=on_text))
 
 
+def _prefer(value):
+    """--prefer is haiku, sonnet, a ChatGPT PINNED or ROLES name, or a gpt- slug; the names are listed on a refusal."""
+    from .chatgpt.http import PINNED, ROLES, SLUG
+
+    names = ["haiku", "sonnet", *ROLES, *PINNED]
+    if value in names or SLUG.fullmatch(value):
+        return value
+    raise argparse.ArgumentTypeError(f"invalid choice: {value!r} (choose from {', '.join(names)}, or a gpt- slug)")
+
+
 class _Parser(argparse.ArgumentParser):
     def error(self, message):
         # argparse normally exits and prints; API/MCP callers need an exception.
@@ -117,11 +127,12 @@ def _build_parser():
     )
     parser.add_argument(
         "--prefer",
-        choices=["haiku", "sonnet", "gpt-6", "luna-thinking", "gpt-6-thinking"],
+        type=_prefer,
         default=None,
         help="Model for a new chat: the newest of Claude's haiku or sonnet family the account offers, ahead of the "
-        "login's remembered model (none: the remembered one, else sonnet); ChatGPT's gpt-6, luna-thinking or gpt-6-thinking when the "
-        "account offers it, else GPT-5.6 Luna Instant",
+        "login's remembered model (none: the remembered one, else sonnet); ChatGPT's gpt-instant, gpt-thinking, "
+        "gpt-auto (the newest the account lists in that role), luna-thinking, gpt-6, gpt-6-thinking or a listed "
+        "gpt- slug, else the account's default text model (GPT-5.6 Luna Instant)",
     )
     parser.add_argument(
         "--web-search",
