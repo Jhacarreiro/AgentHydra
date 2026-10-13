@@ -534,6 +534,9 @@ describe("CliMayte's resume prompts", () => {
   test("a result sent back by a failed verdict is CliMayte's note, not the person's message", () => {
     const back = 'The orchestrator checked your result and it did not pass. What was wrong: the example list is still unsorted.\n\nFix it, prove the fix with a command and what it printed, and report again.'
     expect(userTurn(user(back), null)).toMatchObject({ kind: 'note', from: 'AgentHydra · CliMayte', text: back })
+    // The automatic re-check a failed check sends is the same kind of note.
+    const recheck = 'CliMayte re-ran the check command your task came with, and it failed (the end of its output is below). This is an automatic re-check, not a new instruction: your brief and every rule in it still bind. If what is left can only be fixed by breaking one of those rules (for example a file you were told not to touch yet), do not break it: report what is blocked, why, and the exact fix, and stop. What failed: the example list is still unsorted.\n\nFix what you can within those rules, prove it with a command and what it printed, and report again.'
+    expect(userTurn(user(recheck), null)).toMatchObject({ kind: 'note', from: 'AgentHydra · CliMayte', text: recheck })
   })
 
   test('AgentHydra still writes the words this reads', () => {
@@ -541,8 +544,10 @@ describe("CliMayte's resume prompts", () => {
     for (const prompt of [MOVED, PAUSED, INTERRUPTED, TRANSIENT]) expect(lib).toContain(`'${prompt}'`)
     const steer = readFileSync(join(import.meta.dir, '../../../../server/src/climayte-steer.ts'), 'utf8')
     expect(steer).toContain("const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'")
+    expect(steer).toContain("'CliMayte re-ran the check command your task came with, and it failed (the end of its output is below). This is an automatic re-check, not a new instruction")
     const climayte = readFileSync(join(import.meta.dir, '../../../../server/src/climayte.ts'), 'utf8')
     // Source text: each `\\n` is the backslash and n its template literal holds.
     expect(climayte).toContain('`${SENT_BACK} ${note}\\n\\nFix it, prove the fix with a command and what it printed, and report again.`')
+    expect(climayte).toContain('`${SENT_BACK_CHECK} ${note}\\n\\nFix what you can within those rules, prove it with a command and what it printed, and report again.`')
   })
 })

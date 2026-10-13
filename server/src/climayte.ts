@@ -139,6 +139,7 @@ import {
   isContextThrash,
   queueFollowUp,
   SENT_BACK,
+  SENT_BACK_CHECK,
   SENT_NOW_PREFIX,
   type SendSetting,
   sendSetting,
@@ -1428,11 +1429,15 @@ function sendBack(
       message:
         'Recorded a fail. It already ran on the top setting (Opus 5.5 · max), so it was not sent back.',
     }
-  const sent = climayteSend(
-    id,
-    `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`,
-    { model: next.model, ...(next.effort ? { effort: next.effort } : {}) },
-  )
+  // A check's fail says the check re-ran; an orchestrator's or a person's fail keeps its own wording.
+  const text =
+    verdict.by === 'check'
+      ? `${SENT_BACK_CHECK} ${note}\n\nFix what you can within those rules, prove it with a command and what it printed, and report again.`
+      : `${SENT_BACK} ${note}\n\nFix it, prove the fix with a command and what it printed, and report again.`
+  const sent = climayteSend(id, text, {
+    model: next.model,
+    ...(next.effort ? { effort: next.effort } : {}),
+  })
   return sent.ok
     ? { next, message: `Recorded a fail. Sent back on ${configLabel(next)}.` }
     : { next: null, message: sent.message }

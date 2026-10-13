@@ -293,7 +293,7 @@ const RESUMED = new Map<string, string | null>([
 ])
 /** A failed verdict sent back to the worker (SENT_BACK in server/src/climayte-steer.ts, sendBack in
  *  climayte.ts). */
-const SENT_BACK = /^The orchestrator checked your result and it did not pass\. What was wrong: [\s\S]*\n\nFix it, prove the fix with a command and what it printed, and report again\.$/
+const SENT_BACK = /^(?:The orchestrator checked your result and it did not pass\. What was wrong: [\s\S]*\n\nFix it, prove the fix with a command and what it printed, and report again\.|CliMayte re-ran the check command your task came with, and it failed \(the end of its output is below\)\. This is an automatic re-check, not a new instruction[\s\S]*\n\nFix what you can within those rules, prove it with a command and what it printed, and report again\.)$/
 
 /**
  * A user item as the transcript shows it, or null when it is not shown: a note when a program sent it; a

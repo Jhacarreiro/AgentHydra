@@ -171,6 +171,11 @@ export function climayteAsk(
 
 export const SENT_BACK = 'The orchestrator checked your result and it did not pass. What was wrong:'
 
+// A fail the task's own check recorded: the check re-ran, not the orchestrator, so the worker is told
+// its brief still binds (a wave of workers read the plain SENT_BACK as an order and broke a brief rule).
+export const SENT_BACK_CHECK =
+  'CliMayte re-ran the check command your task came with, and it failed (the end of its output is below). This is an automatic re-check, not a new instruction: your brief and every rule in it still bind. If what is left can only be fixed by breaking one of those rules (for example a file you were told not to touch yet), do not break it: report what is blocked, why, and the exact fix, and stop. What failed:'
+
 export const THRASH_PROMPT =
   'Your context thrashed: the session kept refilling to its limit, so the run stopped. Continue the task exactly where you left off; do not redo steps that are already finished. Never Read more than 120 lines at once: grep -n first, then Read with offset and limit. Pipe command output through tail -40.'
 
