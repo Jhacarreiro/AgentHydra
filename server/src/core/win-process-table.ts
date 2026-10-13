@@ -210,9 +210,12 @@ function lib(): Native | null {
  * snapshot of ~1,500 processes, several requests a second from every chat and Desk, ~1 core in all.
  */
 const TABLE_TTL_MS = 1000
-/** A `mustHave` pid that never shows (exited, or never started) retakes at most this often. */
+/** A `mustHave` pid missing from a snapshot retaken for it (it exited, or never started) retakes at most this
+ *  often. Any other snapshot without it is retaken: one another caller took a moment before the pid existed
+ *  answered "no such process" for a script that dispatched a CliMayte worker as soon as it started, traced as
+ *  "an unidentified process" (Windows CI, 2026-10-13). */
 const MUST_HAVE_RETAKE_MS = 200
-let lastTable: { at: number; rows: NativeProcess[] } | null = null
+let lastTable: { at: number; rows: NativeProcess[]; mustHave?: number } | null = null
 const copyRows = (rows: NativeProcess[]) => rows.map((p) => ({ ...p }))
 
 /**
@@ -232,13 +235,13 @@ export function nativeProcessTable(
     now - lastTable.at < TABLE_TTL_MS &&
     !nativeProcessTableForTests.disabled &&
     (mustHave === undefined ||
-      now - lastTable.at < MUST_HAVE_RETAKE_MS ||
-      lastTable.rows.some((p) => p.pid === mustHave))
+      lastTable.rows.some((p) => p.pid === mustHave) ||
+      (lastTable.mustHave === mustHave && now - lastTable.at < MUST_HAVE_RETAKE_MS))
   )
     return copyRows(lastTable.rows)
   try {
     const rows = lib()?.table() ?? null
-    lastTable = rows ? { at: now, rows } : null
+    lastTable = rows ? { at: now, rows, mustHave } : null
     return rows ? copyRows(rows) : null
   } catch {
     return null

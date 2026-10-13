@@ -19,11 +19,17 @@ test.skipIf(process.platform !== 'win32')(
   async () => {
     const marker = `win-process-table-${process.pid}-${Date.now()}`
     const exeName = basename(process.execPath)
+    // A snapshot taken a moment before the child exists: asked for the child at once, the table must
+    // retake rather than answer from it (Windows CI, 2026-10-13: a script that dispatched a CliMayte
+    // worker straight after it started was traced as "an unidentified process").
+    nativeProcessTable({ fresh: true })
     const child = Bun.spawn([process.execPath, '-e', 'setTimeout(() => {}, 5000)', marker], {
       stdout: 'ignore',
       stderr: 'ignore',
     })
     try {
+      const atOnce = nativeProcessTable({ mustHave: child.pid })
+      expect(atOnce?.some((p) => p.pid === child.pid)).toBe(true)
       // The process exists once spawn returns; give its command line a moment to be mapped.
       await Bun.sleep(200)
       const table = nativeProcessTable({ mustHave: child.pid })
