@@ -30,6 +30,7 @@
 // are mcp-fan-out.ts. TOOLS below assembles them in the order agents have always seen.
 
 import { RECENT_FINISHED } from './climayte-lib'
+import { buildTrace, type CliMayteBy, parseBy, processLabel } from './climayte-trace'
 import { VERSION } from './config'
 import { DEV_SERVERS_TOOLS } from './dev-servers-tool'
 import { BABYSITTER_TOOLS } from './mcp-babysitter'
@@ -225,12 +226,39 @@ function climaytePingLine(
   return `on: ${caller.origin.sessionId.slice(0, 8)} is messaged when work settles (${caller.origin.how})`
 }
 
-/** The calling chat for a dispatch, unless the caller opted out with `notify: false`. */
+/** The label of the process that called this tool (its script, else its program), for a dispatch whose
+ *  caller is no chat: the HTTP caller's pid, or this stdio server's parents. Null when it cannot be read. */
+async function mcpProcessLabel(a: Record<string, unknown>): Promise<string | null> {
+  const pid = await callerPidFromArgs(a)
+  if (pid === null) return null
+  if (pid === undefined) return processLabel(process.pid, false)
+  if (pid === process.pid) return 'AgentHydra'
+  return processLabel(pid, true)
+}
+
+/** The calling chat for a dispatch (its ping origin), unless the caller opted out with `notify: false`, and
+ *  the `by` the route records as the trace. The route's own socket is this daemon, so it cannot see the
+ *  caller: whenever the origin it is sent is null, the trace goes in `by` (the chat found here, else the
+ *  process, else the label the caller declared). A malformed `by` is refused here, as the route would. */
 async function dispatchOrigin(
   a: Record<string, unknown>,
-): Promise<{ origin: CallerChatOrigin | null; why: string | null }> {
-  if (a.notify === false) return { origin: null, why: 'notify: false' }
-  return callerOrigin(a)
+): Promise<{ origin: CallerChatOrigin | null; why: string | null; by: CliMayteBy | undefined }> {
+  const declared = parseBy(a.by)
+  if (declared.why) throw new Error(declared.why)
+  const caller = await callerOrigin(a)
+  const origin = a.notify === false ? null : caller.origin
+  const why = a.notify === false ? 'notify: false' : caller.why
+  if (origin && !declared.by) return { origin, why: null, by: undefined }
+  const trace = await buildTrace({
+    chatSessionId: caller.origin?.sessionId,
+    by: declared.by,
+    process: () => mcpProcessLabel(a),
+  })
+  return {
+    origin,
+    why: origin ? null : why,
+    by: { label: trace.label ?? 'a chat', sessionId: trace.sessionId },
+  }
 }
 
 /** climayte_status's ping extras: `ping: true` adopts the group's live workers without an origin
@@ -983,6 +1011,16 @@ export const TOOLS: HydraTool[] = [
           description:
             'Default true: this chat is messaged when the work settles (finished, failed, needs a verdict, a group done; a worker limited and moved rides along). false: no messages; poll with climayte_status.',
         },
+        by: {
+          type: 'object',
+          description:
+            'Optional: who you are, for the From column of the CliMayte list. {label} names you (up to 80 characters, e.g. "CreAItor"); {label, sessionId} also names the chat you run under, for the From column only. Never pinged. Without it the From is your chat, else the script or program that called this tool.',
+          properties: {
+            label: { type: 'string' },
+            sessionId: { type: 'string' },
+          },
+          required: ['label'],
+        },
         copies: {
           type: 'boolean',
           description:
@@ -1011,8 +1049,10 @@ export const TOOLS: HydraTool[] = [
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          // null: no origin on purpose (notify false, or no traceable caller), so the route traces none.
+          // null: no origin on purpose (notify false, or no traceable caller), so nothing is pinged.
           origin: caller.origin,
+          // Who dispatched it, always (climayte-trace.ts): the route cannot see this caller itself.
+          by: caller.by,
           tasks: Array.isArray(a.tasks) ? a.tasks : [],
           group: a.group != null ? str(a.group) : undefined,
           accounts,
@@ -1096,8 +1136,9 @@ export const TOOLS: HydraTool[] = [
         method: 'POST',
         headers: JSON_HEADERS,
         body: JSON.stringify({
-          // null: no origin on purpose (notify false, or no traceable caller), so the route traces none.
+          // null: no origin on purpose (notify false, or no traceable caller), so nothing is pinged.
           origin: caller.origin,
+          by: caller.by,
           plan: a.plan != null ? str(a.plan) : undefined,
           cwd: a.cwd != null ? str(a.cwd) : undefined,
           tasks: Array.isArray(a.tasks) ? a.tasks : [],

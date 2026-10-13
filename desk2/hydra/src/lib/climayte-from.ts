@@ -1,5 +1,6 @@
 // Who dispatched a CliMayte task, for the list's From cell and the detail's From line. The server gives the
-// ids and a chat's title (climayte-origin.ts); a worker's title comes from the tasks already loaded.
+// ids, a chat's title and a process's label (server climayte-origin.ts, climayte-trace.ts); a worker's title
+// comes from the tasks already loaded.
 import type { CliMayteWorkerView } from './api'
 
 export type CliMayteFrom =
@@ -7,10 +8,15 @@ export type CliMayteFrom =
   | { kind: 'chat'; sessionId: string; label: string }
   /** A CliMayte worker that dispatched it, labelled with that worker's title (its id while the title is not loaded). */
   | { kind: 'worker'; workerId: string; label: string }
-  /** Nothing traced: the task's group names it in the hover. */
-  | { kind: 'untraced'; group: string }
+  /** A process that is no chat: its script (folder/file) or what the dispatcher declared. */
+  | { kind: 'process'; label: string }
+  /** Recorded before traces existed: the task's group is the only fact there is. */
+  | { kind: 'group'; group: string }
 
-type FromFields = Pick<CliMayteWorkerView, 'group' | 'originSessionId' | 'originWorkerId' | 'originTitle'>
+type FromFields = Pick<
+  CliMayteWorkerView,
+  'group' | 'originSessionId' | 'originWorkerId' | 'originTitle' | 'originLabel'
+>
 
 export function climayteFrom(
   w: FromFields,
@@ -27,20 +33,15 @@ export function climayteFrom(
       label: w.originTitle?.trim() || w.originSessionId.slice(0, 8),
     }
   }
-  return { kind: 'untraced', group: w.group }
+  if (w.originLabel?.trim()) return { kind: 'process', label: w.originLabel.trim() }
+  return { kind: 'group', group: w.group }
 }
 
-/** The words a From shows: the label (or Not traced, muted, with its group in the hover). */
+/** The words a From shows: the label (a group's, muted, is the fallback for a task recorded before traces). */
 export function climayteFromText(
   f: CliMayteFrom,
   t: (key: string, named?: Record<string, string>) => string,
 ): { text: string; muted: boolean; hint: string } {
-  if (f.kind === 'untraced') {
-    return {
-      text: t('climayte.fromNotTraced'),
-      muted: true,
-      hint: t('climayte.fromNotTracedHint', { group: f.group }),
-    }
-  }
+  if (f.kind === 'group') return { text: f.group, muted: true, hint: t('climayte.fromHint', { label: f.group }) }
   return { text: f.label, muted: false, hint: t('climayte.fromHint', { label: f.label }) }
 }

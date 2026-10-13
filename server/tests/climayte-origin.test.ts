@@ -202,10 +202,14 @@ describe('climayte_run records the calling chat as the origin', () => {
       tasks: [task('origin d')],
       group: 'og-quiet',
       notify: false,
-    })) as { ping: string }
+    })) as { ping: string; workers: Array<{ id: string }> }
     // null, not absent: the route traces a body with no origin key (a plain HTTP caller), never this one.
     expect(lastPost('/api/corch/workers')?.origin).toBeNull()
     expect(r.ping).toStartWith('off: notify: false')
+    // Still traced: the chat that called is the From, though nothing is pinged.
+    const w = climayteGet(r.workers[0].id) as { origin?: unknown; trace?: { sessionId?: string } }
+    expect(w.origin).toBeUndefined()
+    expect(w.trace?.sessionId).toBe(SID)
   })
 
   test('the route refuses a malformed origin rather than storing it', async () => {
@@ -497,8 +501,10 @@ describe('a plain HTTP dispatch records the chat its process runs under', () => 
     PROCESS_WALK_TEST_MS,
   )
 
+  // The owner (2026-10-13): "Not traced is never an option. They must always be traced." origin: null
+  // still traces the sending process to its chat; it only stops the pings.
   test(
-    'origin: null in the body: nothing is traced and the worker has no origin',
+    'origin: null in the body: no ping, but the sending process is still traced to its chat',
     async () => {
       let asked = 0
       setCallerTranscriptResolver(async () => {
@@ -511,8 +517,13 @@ describe('a plain HTTP dispatch records the chat its process runs under', () => 
           group: 'og-http-none',
           origin: null,
         })
-        expect(asked).toBe(0)
-        expect((climayteGet(reply.workers[0].id) as { origin?: unknown }).origin).toBeUndefined()
+        expect(asked).toBe(1)
+        const w = climayteGet(reply.workers[0].id) as {
+          origin?: unknown
+          trace?: { sessionId?: string }
+        }
+        expect(w.origin).toBeUndefined()
+        expect(w.trace?.sessionId).toBe(SID)
       } finally {
         setCallerTranscriptResolver(async () => caller())
       }
@@ -628,6 +639,84 @@ describe('a chat registered under a CLI instance is found as the caller', () => 
       expect(t.chain).toEqual([proc.pid, process.pid])
       expect(t.sessionId).toBe(nearSid)
       expect(t.home).toBe(instance)
+    },
+    PROCESS_WALK_TEST_MS,
+  )
+})
+
+describe('every dispatch records who sent it; only a ping origin is pinged', () => {
+  let server: ReturnType<typeof Bun.serve>
+  beforeAll(() => {
+    server = Bun.serve({
+      port: 0,
+      hostname: '127.0.0.1',
+      fetch: (req, srv) => http.fetch(req, srv),
+    })
+  })
+  afterAll(() => server.stop(true))
+
+  test('a declared by: its label and its chat are the trace, and nothing is pinged', async () => {
+    const res = await http.fetch(
+      new Request('http://127.0.0.1/api/corch/workers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tasks: [task('by a')],
+          group: 'og-by',
+          origin: null,
+          by: { label: 'CreAItor', sessionId: SID },
+        }),
+      }),
+    )
+    const r = (await res.json()) as { workers: Array<{ id: string }>; ping: { on: boolean } }
+    expect(r.ping.on).toBe(false)
+    const w = climayteGet(r.workers[0].id) as { origin?: unknown; trace?: unknown }
+    expect(w.origin).toBeUndefined()
+    expect(w.trace).toEqual({ sessionId: SID, label: 'CreAItor' })
+  })
+
+  test('a by that is malformed is refused with 400, and nothing starts', async () => {
+    const res = await http.fetch(
+      new Request('http://127.0.0.1/api/corch/workers', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({
+          tasks: [task('by b')],
+          group: 'og-by-bad',
+          by: { label: 'x'.repeat(81) },
+        }),
+      }),
+    )
+    expect(res.status).toBe(400)
+    expect([...workers.values()].some((x) => x.group === 'og-by-bad')).toBe(false)
+  })
+
+  test(
+    'an untraceable caller is traced as the script that sent it, not as "untraced"',
+    async () => {
+      const dir = mkdtempSync(join(scratch, 'script-caller-'))
+      mkdirSync(join(dir, 'michaiel'))
+      const script = join(dir, 'michaiel', 'act.mjs')
+      const url = `http://127.0.0.1:${server.port}/api/corch/workers`
+      writeFileSync(
+        script,
+        `const r = await fetch(${JSON.stringify(url)}, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ tasks: [${JSON.stringify(task('traced c'))}], group: 'og-script' }) }); process.stdout.write(await r.text())`,
+      )
+      setCallerTranscriptResolver(async () => {
+        throw new Error('no chat runs this process')
+      })
+      try {
+        const child = Bun.spawn([process.execPath, script], { stdout: 'pipe', stderr: 'pipe' })
+        const reply = JSON.parse(await new Response(child.stdout).text()) as {
+          workers: Array<{ id: string }>
+        }
+        await child.exited
+        const w = climayteGet(reply.workers[0].id) as { origin?: unknown; trace?: unknown }
+        expect(w.origin).toBeUndefined()
+        expect(w.trace).toEqual({ label: 'michaiel/act.mjs' })
+      } finally {
+        setCallerTranscriptResolver(async () => caller())
+      }
     },
     PROCESS_WALK_TEST_MS,
   )

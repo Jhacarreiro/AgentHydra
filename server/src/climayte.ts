@@ -188,6 +188,7 @@ import {
   PACK_PASS_BYTES,
   storagePass,
 } from './climayte-storage'
+import type { CliMayteTrace } from './climayte-trace'
 import { matches, onCliMayteChange } from './climayte-view'
 import { judgeWaveTask, type WaveJudgement, waveBatch, writeWave } from './climayte-wave'
 import {
@@ -1097,16 +1098,20 @@ function enlistWorkers(
   made: CliMayteWorker[],
   settings: RunSetting[],
   fresh: number[],
-  input: { wave?: string; origin?: CliMayteOrigin },
+  input: { wave?: string; origin?: CliMayteOrigin; trace?: CliMayteTrace },
 ): void {
   // A wave's tasks are reported to their manager by the wave's own batch wake, so they carry none.
   const origin = input.wave ? undefined : originFor(input.origin)
+  // Every dispatch names its dispatcher (the trace); a wave's tasks, dispatched by the wave, name it.
+  const trace = input.trace ?? (input.wave ? { label: `wave ${input.wave}` } : undefined)
   for (const [k, w] of made.entries()) {
     if (input.wave) w.wave = input.wave
     if (origin) w.origin = origin
+    if (trace) w.trace = trace
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
+      trace: trace ? (trace.label ?? (trace.sessionId ? 'a chat' : 'a worker')) : undefined,
       accounts: w.accounts?.length,
       model: w.model,
       effort: w.effort,
@@ -1184,6 +1189,8 @@ export function climayteRun(input: {
   wave?: string
   /** Who dispatched them, as the route resolved the caller (originFor); pinged when they settle. */
   origin?: CliMayteOrigin
+  /** Who dispatched them, for the From column (climayte-trace.ts); never pinged. */
+  trace?: CliMayteTrace
 }): RunReply {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
@@ -1667,6 +1674,8 @@ export async function climayteWaveStart(input: {
   maxRounds?: unknown
   /** The climayte_manage caller: the manager worker reports to it. */
   origin?: CliMayteOrigin
+  /** The same caller, for the From column (climayte-trace.ts). */
+  trace?: CliMayteTrace
 }): Promise<{ wave: string; managerId: string; waiter: string }> {
   load()
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
@@ -1736,6 +1745,7 @@ export async function climayteWaveStart(input: {
     ],
     group: `mgr-${id}`,
     origin: input.origin,
+    trace: input.trace,
   })
   const managerId = manager.workers[0]?.id as string
   const mw = workers.get(managerId)

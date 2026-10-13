@@ -152,6 +152,23 @@ def test_an_eligible_task_goes_to_an_idle_climayte_account_with_no_price_questio
     assert row["provider"] == "climayte" and row["climayte_worker"] == "w1" and row["route_why"] == climayte_route.FREE_FIRST
 
 
+# Contract: a routed task's From names its job and the chat its caller ran under. Only a session id is sent as the chat
+# (the server refuses any other form with 400, so a malformed one is left out); the task is never pinged (origin None).
+SESSION = "12345678-aaaa-4bbb-8ccc-1234567890ab"
+
+
+@pytest.mark.parametrize("caller,by", [
+    ({"session_id": SESSION}, {"label": "HSwarm job j-1", "sessionId": SESSION}),
+    ({"chat_id": "not-a-session"}, {"label": "HSwarm job j-1"}),
+    (None, {"label": "HSwarm job j-1"}),
+])
+def test_a_routed_task_declares_its_job_and_its_callers_chat(fake, tmp_path, caller, by):
+    f = fake()
+    task = Task.from_dict({"id": "t0", "prompt": "look at it", "cwd": str(tmp_path), "tools": "edit", "model": "deepseek-flash"}, {}, 0)
+    asyncio.run(climayte_route.run_worker("j-1", task, {}, caller))
+    assert f.dispatched[0]["by"] == by and f.dispatched[0]["origin"] is None
+
+
 # Contract: with no account idle (or every idle one already spoken for by a queued worker), the task runs on its API
 # route at once, never queued behind CliMayte, and its route says why: for want of an account, which the shortfall report
 # counts, or because AgentHydra held every start for the PC (`held`), which more accounts would not fix (shortfall.py).

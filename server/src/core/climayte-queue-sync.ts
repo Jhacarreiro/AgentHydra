@@ -255,7 +255,7 @@ function reduce(w: CliMayteWorker, now: number): RemoteWorker {
     verdict: v === 'pass' || v === 'fail' ? v : null,
     sessionId: w.sessionId ?? null,
     // Who dispatched it, as ids and a title only (climayte-origin.ts, shared with the CliMayte list).
-    ...originFields(w.origin, originLookup),
+    ...originFields(w.origin, originLookup, w.trace),
     wave: w.wave ?? null,
     sessions: [...(w.sessions ?? [])],
     folder: folderName(w.cwd),
@@ -437,6 +437,7 @@ const shapePrint = (snap: QueueSnapshot): string =>
       w.verdict,
       w.sessions,
       w.originTitle,
+      w.originLabel,
       w.folder,
     ]),
   ])

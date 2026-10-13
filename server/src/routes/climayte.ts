@@ -49,6 +49,13 @@ import {
 import type { CliMayteWorkerView } from '../climayte-lib'
 import type { CliMayteOrigin } from '../climayte-ping'
 import { buildStatus, remoteSnapshots } from '../climayte-remote'
+import {
+  buildTrace,
+  type CliMayteBy,
+  type CliMayteTrace,
+  parseBy,
+  processLabel,
+} from '../climayte-trace'
 import { queueSharingOn } from '../core/cli-login-sync'
 import {
   cancelQuickAdd,
@@ -61,7 +68,7 @@ import { warmOriginTitles } from '../core/climayte-queue-sync'
 import { readOwnBuild } from '../core/own-build'
 import { app } from '../http-app'
 import { CLIMAYTE_MAX_WAIT_S } from '../mcp-client'
-import { requestCallerOrigin } from '../request-caller'
+import { requestCallerOrigin, requestCallerPid } from '../request-caller'
 import { jsonBody } from '../route-helpers'
 
 // A request at boot waits for CliMayte's first load (startCliMayte reads done/ off the daemon's thread
@@ -104,20 +111,67 @@ function chatOrigin(v: unknown): { origin: CliMayteOrigin | undefined; why: stri
   }
 }
 
-/** The origin a dispatch records. An `origin` in the body is checked (chatOrigin); `null` there is the
- *  dispatcher saying it has none on purpose (the MCP tool under notify false or with no traceable caller,
- *  HSwarm's per-task routing, a Desk chat run as a worker), so nothing is traced. A body with no `origin`
- *  at all is a plain HTTP caller, such as a script a chat ran: the chat its process runs under is traced
- *  from the request's socket (request-caller.ts). */
+/** Who dispatched it, for the From column (climayte-trace.ts): always recorded, never pinged. A declared
+ *  `by` names it; otherwise the chat a plain request came from, else the process that sent it. */
+async function dispatchTrace(
+  c: { env: unknown; req: { raw: Request } },
+  origin: CliMayteOrigin | undefined,
+  by: CliMayteBy | undefined,
+  traced?: { pid: number | null },
+): Promise<CliMayteTrace> {
+  const pid = traced?.pid
+  return buildTrace({
+    chatSessionId: origin?.kind === 'chat' ? origin.sessionId : undefined,
+    workerId: origin?.kind === 'worker' ? origin.workerId : undefined,
+    by,
+    process: () => dispatchProcessLabel(c, pid),
+  })
+}
+
+/** The label of the process that sent a request: the pid the request came from (its script, else its
+ *  program), or the daemon itself, or an unidentified process when the socket names nobody. */
+async function dispatchProcessLabel(
+  c: { env: unknown; req: { raw: Request } },
+  pid: number | null | undefined,
+): Promise<string | null> {
+  const callerPid = pid === undefined ? await requestCallerPid(c) : pid
+  if (callerPid === null) return null
+  if (callerPid === process.pid) return 'AgentHydra'
+  return processLabel(callerPid, true)
+}
+
+/** The origin a dispatch records (its ping target) and the trace it always records. An `origin` in the
+ *  body is checked (chatOrigin); `null` there is the dispatcher saying it has none on purpose (the MCP tool
+ *  under notify false or with no traceable caller, HSwarm's per-task routing, a Desk chat run as a worker):
+ *  nothing is pinged, but the caller is still traced. A body with no `origin` at all is a plain HTTP caller,
+ *  such as a script a chat ran: the chat its process runs under is the origin and the trace. */
 async function dispatchOrigin(
   c: { env: unknown; req: { raw: Request } },
   v: unknown,
-): Promise<{ origin: CliMayteOrigin | undefined; why: string | null }> {
-  if (v !== undefined) return chatOrigin(v)
+  by?: CliMayteBy,
+): Promise<{ origin: CliMayteOrigin | undefined; trace: CliMayteTrace; why: string | null }> {
+  if (v !== undefined) {
+    const refused = chatOrigin(v)
+    if (refused.origin) {
+      return {
+        origin: refused.origin,
+        trace: await dispatchTrace(c, refused.origin, by),
+        why: null,
+      }
+    }
+    const traced = await requestCallerOrigin(c)
+    return {
+      origin: undefined,
+      trace: await dispatchTrace(c, traced.origin ?? undefined, by, traced),
+      why: refused.why,
+    }
+  }
   const traced = await requestCallerOrigin(c)
-  return traced.origin
-    ? { origin: traced.origin, why: null }
-    : { origin: undefined, why: traced.why }
+  return {
+    origin: traced.origin ?? undefined,
+    trace: await dispatchTrace(c, traced.origin ?? undefined, by, traced),
+    why: traced.origin ? null : traced.why,
+  }
 }
 
 /** What a dispatch answers about its pings: on (to a chat, or to the worker that dispatched it),
@@ -256,7 +310,10 @@ app.post('/api/corch/workers', async (c) => {
   const strict = body.perAccountStrict ?? body.per_account_strict
   if (strict !== undefined && typeof strict !== 'boolean')
     return c.json({ error: 'perAccountStrict must be true or false' }, 400)
-  const { origin, why } = await dispatchOrigin(c, body.origin)
+  // A dispatcher's own declaration of who it is (the From column); never a ping target.
+  const declared = parseBy(body.by)
+  if (declared.why) return c.json({ error: declared.why }, 400)
+  const { origin, trace, why } = await dispatchOrigin(c, body.origin, declared.by)
   try {
     const reply = climayteRun({
       tasks: body.tasks as Parameters<typeof climayteRun>[0]['tasks'],
@@ -278,6 +335,7 @@ app.post('/api/corch/workers', async (c) => {
       // (field note 62); `copies: true` makes new ones anyway.
       copies: body.copies === true,
       origin,
+      trace,
     })
     // The origin as stored: a chat that is itself a CliMayte worker became that worker.
     const made = reply.workers.find((w) => !w.repeat)
@@ -368,7 +426,9 @@ app.post('/api/corch/verdicts', async (c) => {
 // mistake: 400 with the reason, nothing started.
 app.post('/api/corch/waves', async (c) => {
   const body = await jsonBody(c)
-  const { origin, why } = await dispatchOrigin(c, body.origin)
+  const declared = parseBy(body.by)
+  if (declared.why) return c.json({ error: declared.why }, 400)
+  const { origin, trace, why } = await dispatchOrigin(c, body.origin, declared.by)
   try {
     const reply = await climayteWaveStart({
       plan: body.plan,
@@ -378,6 +438,7 @@ app.post('/api/corch/waves', async (c) => {
       branch: body.branch,
       maxRounds: body.max_rounds ?? body.maxRounds,
       origin,
+      trace,
     })
     const stored = climayteGet(reply.managerId) as { origin?: CliMayteOrigin } | null
     return c.json({ ...reply, ping: pingReply(stored?.origin ?? origin, why) })

@@ -21,6 +21,7 @@ import dataclasses
 import json
 import logging
 import os
+import re
 import urllib.error
 import time
 import urllib.request
@@ -114,15 +115,15 @@ def climayte_first(task: Task) -> str | None:
     return None
 
 
-async def before_last_resort(job_id: str, task: Task, providers: list[str]) -> tuple[Result | None, dict | None]:
+async def before_last_resort(job_id: str, task: Task, providers: list[str], caller: dict | None = None) -> tuple[Result | None, dict | None]:
     """consult, once more, as a task's walk reaches its first `after_climayte` leg (its cheaper legs failed over): CliMayte
     is asked to run it before that leg is. A task CliMayte was already asked to run is not asked again."""
     if (job_id, task.id) in _ASKED:
         return None, None
-    return await consult(job_id, task, first=f"its other routes failed over and only {', '.join(providers)} is left, kept for after CliMayte")
+    return await consult(job_id, task, first=f"its other routes failed over and only {', '.join(providers)} is left, kept for after CliMayte", caller=caller)
 
 
-async def step_up(job_id: str, task: Task, why: str) -> Result | None:
+async def step_up(job_id: str, task: Task, why: str, caller: dict | None = None) -> Result | None:
     """A cheaper API leg gave up on the task (jobs._step_up): CliMayte takes it as the next level up when an account
     is idle or comes free within ROUTE_VIA_CLIMAYTE_START_S, told that a cheaper model tried first. None when the task
     is not one CliMayte takes, was already asked (CliMayte failed it first), or no account came free. The worker is
@@ -130,8 +131,21 @@ async def step_up(job_id: str, task: Task, why: str) -> Result | None:
     if (job_id, task.id) in _ASKED:
         return None
     told = dataclasses.replace(task, prompt=task.prompt.rstrip() + STEPPED_UP)
-    res, _ = await consult(job_id, told, first=f"stepped up: its API leg gave up ({why})")
+    res, _ = await consult(job_id, told, first=f"stepped up: its API leg gave up ({why})", caller=caller)
     return res
+
+
+_SESSION_ID = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$", re.IGNORECASE)
+
+
+def declared_by(job_id: str, caller: dict | None) -> dict:
+    """The `by` a routed task sends CliMayte: the job's name, and the chat its caller ran under when that is a session
+    id. The server refuses any other form of session id (400), so anything else is left out rather than sent."""
+    by = {"label": f"HSwarm job {job_id}"[:80]}
+    session = str((caller or {}).get("session_id") or (caller or {}).get("chat_id") or "")
+    if _SESSION_ID.match(session):
+        by["sessionId"] = session
+    return by
 
 
 def _say(job_id: str, msg: str) -> None:
@@ -232,7 +246,7 @@ def worker_kind(task: Task) -> str:
     return "sweep"
 
 
-async def run_worker(job_id: str, task: Task, note: dict) -> Result | None:
+async def run_worker(job_id: str, task: Task, note: dict, caller: dict | None = None) -> Result | None:
     """Run the task as a CliMayte worker; the Result, or None when the API route should take it instead."""
     title = (task.prompt.strip().splitlines() or ["hswarm task"])[0][:80]
     spec = {"prompt": brief(task), "cwd": task.cwd, "title": title, "kind": worker_kind(task)}
@@ -241,9 +255,9 @@ async def run_worker(job_id: str, task: Task, note: dict) -> Result | None:
         # light worker does not wait behind the CPU gate the way a builds-and-tests worker does (2026-10-13).
         spec["light"] = True
     try:
-        # origin None: a routed task names no dispatching chat (its job's caller stands for it), so CliMayte
-        # neither traces one from this process nor pings a chat once per task.
-        body = {"tasks": [spec], "group": f"hswarm-{job_id}-{task.id}", "origin": None}
+        # origin None: a routed task is never pinged to a chat (one ping per task would flood it). `by` is its
+        # From instead: the job, and the chat its caller ran under (climayte-trace.ts).
+        body = {"tasks": [spec], "group": f"hswarm-{job_id}-{task.id}", "origin": None, "by": declared_by(job_id, caller)}
         status, doc = await _call("POST", "/api/corch/workers", body)
     except (OSError, ValueError) as e:
         _say(job_id, f"CliMayte dispatch failed ({type(e).__name__}); the task runs on its API route")
@@ -315,7 +329,7 @@ def _result(task: Task, w: dict, note: dict, started: str, job_id: str) -> Resul
     return res
 
 
-async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Result | None, dict | None]:
+async def consult(job_id: str, task: Task, first: str | None = None, caller: dict | None = None) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when CliMayte served the task; (None, note) when the API route runs, the note saying
     why; (None, None) when nobody was asked. An eligible task goes to CliMayte whenever an account can start it now
     (_room), and to its API route at once when none can. `first` (before_last_resort), a floor miss, or a plan left with
@@ -355,7 +369,7 @@ async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Re
     _SENT.append(now)
     _ACTIVE += 1  # both taken with no await since the room read, held to the worker's end
     try:
-        return await _consult(job_id, task, first or FREE_FIRST, missed)
+        return await _consult(job_id, task, first or FREE_FIRST, missed, caller)
     finally:
         _ACTIVE -= 1
         if now in _SENT:  # its account is free again, however recently it was sent
@@ -368,10 +382,10 @@ def _remember(seen: set, job_id: str, task: Task) -> None:
     seen.add((job_id, task.id))
 
 
-async def _consult(job_id: str, task: Task, why: str, missed: str | None = None) -> tuple[Result | None, dict | None]:
+async def _consult(job_id: str, task: Task, why: str, missed: str | None = None, caller: dict | None = None) -> tuple[Result | None, dict | None]:
     note = {"provider": "climayte", "decided": "subscription", "why": why}
     _remember(_ASKED, job_id, task)
-    res = await run_worker(job_id, task, note)
+    res = await run_worker(job_id, task, note, caller)
     if res is not None:
         return res, None
     return None, {"via": "api", "decided": "subscription", "why": note["why"], "fallback": "CliMayte could not serve it",

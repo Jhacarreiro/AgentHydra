@@ -53,6 +53,7 @@ export interface CliMayteJournalEntry {
   event: CliMayteJournalEvent
   account?: string // '#84', or the account's name when it has no number
   from?: string // moved: the account it left
+  trace?: string // dispatched: who dispatched it, as the From column names it (climayte-trace.ts)
   attempt?: number // 1-based
   sessionPct?: number | null // launched: the account's 5-hour window when it was picked
   weekPct?: number | null // launched: its week

@@ -833,7 +833,7 @@ class JobManager:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
         # Before the plan's own route runs: an agentic task goes to an idle CliMayte account first, at no extra cost (climayte_route.py).
-        served, route_note = await climayte_route.consult(job.id, task)
+        served, route_note = await climayte_route.consult(job.id, task, caller=job.caller)
         if served is not None:
             return served, None
         # Let through at submit for CliMayte, which did not take it: a route that cannot serve at all is refused now,
@@ -1102,7 +1102,7 @@ class JobManager:
         why = None if leg_unavailable(res) else escalation.gave_up(res, messages)
         if not why:
             return res, transcript
-        served = await climayte_route.step_up(job.id, task, why)
+        served = await climayte_route.step_up(job.id, task, why, caller=job.caller)
         if served is not None:
             _merge_spend(served, res)
             served.failover = res.failover + [f for f in served.failover if f not in res.failover]

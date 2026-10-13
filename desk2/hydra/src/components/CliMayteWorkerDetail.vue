@@ -559,7 +559,7 @@ async function onStop() {
                   <dt v-if="fromView" class="text-muted-foreground">{{ $t('climayte.fromLabel') }}</dt>
                   <dd v-if="fromView" class="min-w-0">
                     <button
-                      v-if="from?.kind !== 'untraced'"
+                      v-if="from?.kind === 'chat' || from?.kind === 'worker'"
                       type="button"
                       class="inline-flex min-w-0 max-w-full items-center gap-1 rounded-sm hover:underline focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring"
                       :title="from?.kind === 'chat' ? $t('climayte.fromOpenChat') : $t('climayte.fromOpenWorker')"

@@ -61,6 +61,9 @@ export interface RemoteWorker {
    *  null when unknown or when a worker dispatched it), for a PC that does not list that chat. Never
    *  the origin's Claude home or transcript path. */
   originTitle?: string | null
+  /** The dispatcher's readable name when it is no chat (a process's script or a declared label).
+   *  Absent from an older AgentHydra's snapshot. */
+  originLabel?: string | null
   /** The last name of the folder it runs in (folderName), never the path. Absent from an older
    *  AgentHydra's snapshot. */
   folder?: string | null

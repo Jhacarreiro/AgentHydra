@@ -708,7 +708,7 @@ async def _climayte_before(run, i):
     from . import climayte_route
 
     providers = sorted({c["provider"] for c in run.candidates[i:] if c.get("after_climayte")})
-    served, note = await climayte_route.before_last_resort(run.job.id, run.task, providers)
+    served, note = await climayte_route.before_last_resort(run.job.id, run.task, providers, caller=run.job.caller)
     run.route = (served.selection or {}).get("route") if served is not None else note
     return served
 

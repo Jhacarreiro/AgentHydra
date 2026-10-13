@@ -26,6 +26,7 @@ import {
   rereadUnits,
   UNITS_PER_PRO_PERCENT,
 } from './climayte-scorecard'
+import type { CliMayteTrace } from './climayte-trace'
 import { pinHaikuModel } from './core/haiku-pin'
 import { sharedKitStore, usageQuery } from './kit/query'
 import type { KitStore } from './kit/store'
@@ -311,6 +312,8 @@ export interface CliMayteWorker {
    *  the MCP route resolved it, or the worker that dispatched it. Absent: nobody is pinged (work
    *  dispatched before 2026-10-03, a wave task, or `notify: false`). */
   origin?: CliMayteOrigin
+  /** Who dispatched it, for the From column when no ping origin exists (climayte-trace.ts). */
+  trace?: CliMayteTrace
   /** What it asked with climayte_ask and waits on (its turn ends after asking). Cleared when the
    *  answer arrives through climayteSend. Absent: it asks nothing. */
   question?: CliMayteQuestion
@@ -2163,7 +2166,7 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
   const live = isLive(w)
   return {
     ...w,
-    ...originFields(w.origin, lookup),
+    ...originFields(w.origin, lookup, w.trace),
     // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
     sendIds: undefined,
     prompt: w.prompt.slice(0, 300),

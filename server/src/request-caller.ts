@@ -40,7 +40,10 @@ export const REQUEST_ORIGIN_BUDGET_MS = 5_000
 export async function requestCallerOrigin(
   c: { env: unknown; req: { raw: Request } },
   budgetMs = REQUEST_ORIGIN_BUDGET_MS,
-): Promise<{ origin: CallerChatOrigin; why: null } | { origin: null; why: string }> {
+): Promise<
+  | { origin: CallerChatOrigin; why: null; pid: number | null }
+  | { origin: null; why: string; pid: number | null }
+> {
   // The budget covers the pid lookup too: off Windows it shells out to lsof, which can take seconds.
   const started = Date.now()
   let timer: ReturnType<typeof setTimeout> | undefined
@@ -51,16 +54,21 @@ export async function requestCallerOrigin(
     }),
   ]).finally(() => clearTimeout(timer))
   if (pid === null)
-    return { origin: null, why: 'no origin was sent, and the calling process could not be traced' }
-  if (pid === process.pid) return { origin: null, why: 'no origin was sent' }
+    return {
+      origin: null,
+      why: 'no origin was sent, and the calling process could not be traced',
+      pid: null,
+    }
+  if (pid === process.pid) return { origin: null, why: 'no origin was sent', pid }
   const { CALLER_PID_ARG, callerOrigin } = await import('./mcp-self')
   const r = await callerOrigin(
     { [CALLER_PID_ARG]: async () => pid },
     Math.max(1, budgetMs - (Date.now() - started)),
   )
-  if (!r.origin) return { origin: null, why: `no origin was sent, and ${r.why}` }
+  if (!r.origin) return { origin: null, why: `no origin was sent, and ${r.why}`, pid }
   return {
     origin: { ...r.origin, how: `traced from the HTTP request: ${r.origin.how}`.slice(0, 300) },
     why: null,
+    pid,
   }
 }
