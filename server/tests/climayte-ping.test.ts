@@ -6,7 +6,14 @@
 // test that drives the real peer pipe points it at a temp Claude home whose registry names a pipe
 // this test serves itself.
 import { afterAll, describe, expect, test } from 'bun:test'
-import { appendFileSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import {
+  appendFileSync,
+  mkdirSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  writeFileSync,
+} from 'node:fs'
 import net from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -169,6 +176,16 @@ interface Sent {
   home?: string
 }
 
+type NativeAnswer = { ok: boolean; unavailable: boolean; reason?: string; busy?: boolean }
+
+/** Pings still in the outbox file (pings.json) of this folder. */
+function pendingIn(dir: string): number {
+  const ledger = JSON.parse(readFileSync(join(dir, 'pings.json'), 'utf8')) as {
+    origins: Record<string, { pending: unknown[] }>
+  }
+  return Object.values(ledger.origins).reduce((n, b) => n + b.pending.length, 0)
+}
+
 function harness(
   opts: {
     dir?: string
@@ -176,7 +193,7 @@ function harness(
     peer?: (n: number) => { ok: boolean; reason: string }
     composer?: { eligible: boolean; ok: boolean }
     desk?: { ok: boolean; reason: string; notDesk?: boolean }
-    native?: { ok: boolean; unavailable: boolean; reason?: string }
+    native?: NativeAnswer | ((n: number, text: string) => NativeAnswer)
     send?: (id: string, text: string) => { ok: boolean; message: string }
     start?: number
   } = {},
@@ -242,8 +259,11 @@ function harness(
       : undefined,
     native: opts.native
       ? async (_origin, text) => {
+          const n = nativeSent.length
           nativeSent.push(text)
-          return opts.native as { ok: boolean; unavailable: boolean; reason?: string }
+          return typeof opts.native === 'function'
+            ? opts.native(n, text)
+            : (opts.native as NativeAnswer)
         }
       : undefined,
     toast: async (n) => {
@@ -757,6 +777,45 @@ describe('the outbox', () => {
     expect(h.nativeSent).toHaveLength(1)
     expect(h.peerCalls()).toBe(1)
     expect(h.sent).toHaveLength(1)
+    h.ping.stop()
+  })
+
+  test('a busy chat is not settled: its pings wait, then go out as one message once it is idle', async () => {
+    const ids = ['w-a', 'w-b', 'w-c', 'w-d', 'w-e']
+    const ws = ids.map((id) => running(id))
+    const delivered: string[] = []
+    const h = harness({
+      workers: ws,
+      desk: { ok: false, reason: 'not a Desk 2 chat', notDesk: true },
+      // The chat is busy for its first 20 asks (about 20 minutes at BUSY_RETRY_MS), then idle.
+      native: (n, text) => {
+        if (n < 20) return { ok: false, unavailable: false, busy: true }
+        delivered.push(text)
+        return { ok: true, unavailable: false }
+      },
+    })
+    h.change(failedOf(ws[0]))
+    await h.at(3 * 60_000)
+    h.change(failedOf(ws[1]))
+    await h.at(7 * 60_000)
+    h.change(failedOf(ws[2]))
+    await h.at(12 * 60_000)
+    h.change(failedOf(ws[3]))
+    await h.at(18 * 60_000)
+    h.change(failedOf(ws[4]))
+    await h.at(19 * 60_000)
+    // Still busy: asked again and again, nothing settled, the batch still in the outbox.
+    expect(h.nativeSent.length).toBeGreaterThan(5)
+    expect(delivered).toHaveLength(0)
+    expect(pendingIn(h.dir)).toBeGreaterThan(0)
+    await h.at(30 * 60_000)
+    // Idle: exactly one message, carrying every event that waited.
+    expect(delivered).toHaveLength(1)
+    for (const id of ids) expect(delivered[0]).toContain(`Task ${id}`)
+    expect(h.nativeSent.length).toBe(21)
+    expect(h.peerCalls()).toBe(0)
+    expect(h.toasts).toHaveLength(0)
+    expect(pendingIn(h.dir)).toBe(0)
     h.ping.stop()
   })
 

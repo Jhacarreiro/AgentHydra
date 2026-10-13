@@ -20,9 +20,10 @@
 // which resumes a closed chat and starts a turn, or queues behind a running one; the peer pipe only
 // queues a note in an idle chat, so it never woke one (owner, 2026-10-06). Any other chat, or Desk 2
 // unreachable: the app's native send (claude-native-send.ts, the peer_only path; it starts a turn in
-// an idle chat too, 2026-10-12). Only a refusal before dispatch (no native control, no live app) goes
-// on to the chat's own peer pipe (peer-message.ts; it queues behind a running turn); a send the app
-// took is never sent again another way.
+// an idle chat too, 2026-10-12). A busy chat answers busy: its pings wait in this outbox and go out as
+// one batch once it is idle, never journalled in the app's hold queue (2026-10-13). Only a refusal
+// before dispatch (no native control, no live app) goes on to the chat's own peer pipe (peer-message.ts;
+// it queues behind a running turn); a send the app took is never sent again another way.
 // A write the pipe accepted is delivered, once, even when the transcript has not grown yet (a busy
 // chat shows it when its turn ends); only a chat with no pipe, or a refused write, is retried every
 // 2 minutes for 2 hours; then, only for a failed or settled group on a desktop chat whose instance
@@ -68,6 +69,8 @@ export const HEARTBEAT_MS = 15_000
 export const RETRY_EVERY_MS = 2 * 60_000
 /** ...for this long, before the composer or the toast. */
 export const RETRY_FOR_MS = 2 * 3_600_000
+/** A busy chat is asked again this soon; a busy answer is not a failure and never counts toward RETRY_FOR_MS. */
+export const BUSY_RETRY_MS = 60_000
 /** How long the peer pipe has to show the message in the chat's transcript. */
 export const PEER_CONFIRM_MS = 45_000
 
@@ -406,6 +409,8 @@ interface OriginBox {
   urgentAt: number | null
   /** Set by a send that did not reach the chat (no pipe, or the pipe refused it): the next try. */
   retry: { firstAt: number; nextAt: number; tries: number } | null
+  /** The app said the chat is busy: the next ask, BUSY_RETRY_MS later. Absent in a ledger the old code wrote. */
+  busyUntil?: number | null
   /** Pings no channel delivered, for the caller's next climayte_status. */
   unread: Array<{ at: number; seqs: string; text: string }>
 }
@@ -473,7 +478,7 @@ export interface CliMaytePingDeps {
   native?(
     origin: ChatOrigin,
     text: string,
-  ): Promise<{ ok: boolean; unavailable: boolean; reason?: string }>
+  ): Promise<{ ok: boolean; unavailable: boolean; reason?: string; busy?: boolean }>
   /** One OS notification (notify-os sendOsNotification by default). */
   toast?(n: { title: string; body: string }): Promise<unknown>
   /** One line per failed delivery; appended to `<dir>/pings-journal.jsonl` by default. */
@@ -658,6 +663,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   /** When this box's batch is due, or null when it has none. */
   const dueAt = (box: OriginBox): number | null => {
     if (!box.pending.length) return null
+    if (box.busyUntil != null && box.busyUntil > clock.now()) return box.busyUntil
     if (box.retry) return box.retry.nextAt
     const waking = box.pending.filter((p) => !INFO_KINDS.has(p.kind))
     if (waking.length) {
@@ -679,6 +685,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     box.deliveredKeys = [...box.deliveredKeys, ...sent].slice(-DELIVERED_KEYS_MAX)
     box.lastFlush = clock.now()
     box.retry = null
+    box.busyUntil = null
     box.urgentAt = null
     const waking = box.pending.some((p) => !INFO_KINDS.has(p.kind))
     if (
@@ -732,8 +739,15 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
         ok: false,
         unavailable: true,
         reason: String(err),
+        busy: false,
       }))
       if (n.ok) return settle(box, batch)
+      // Busy is not a failure: the batch stays pending and is built again, from every pending ping, at the
+      // next ask. Nothing is sent to the pipe or the composer, and no toast.
+      if (n.busy) {
+        box.busyUntil = clock.now() + BUSY_RETRY_MS
+        return
+      }
       if (!n.unavailable) {
         fail(box, batch, 'native', n.reason ?? 'the app did not confirm the message')
         return giveUp(

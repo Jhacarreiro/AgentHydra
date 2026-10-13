@@ -189,19 +189,37 @@ export async function sendOrHold(
   return { ok: true, unavailable: false, delivery: 'held' }
 }
 
-/** sendOrHold for a chat known only by its CLI session id, sent to the desktop profile whose app holds
- *  it (the app's chat index, as the message route finds it). Never the engine's config home: a desktop
- *  chat's engine runs on ~/.claude while native control is set per desktop profile, so on 2026-10-12
- *  every CliMayte ping to a desktop chat was refused as "not configured" and fell to the pipe, which
- *  only queues a note in an idle chat. */
+/** The desktop profile whose app holds a chat known only by its CLI session id (the app's chat index, as
+ *  the message route finds it), or null. Never the engine's config home: a desktop chat's engine runs on
+ *  ~/.claude while native control is set per desktop profile, so on 2026-10-12 every CliMayte ping to a
+ *  desktop chat was refused as "not configured" and fell to the pipe, which only queues a note in an idle
+ *  chat. */
+async function desktopProfileOf(cliSessionId: string): Promise<string | null> {
+  const { desktopHomeFor } = await import('./session-launch')
+  return desktopHomeFor(cliSessionId).catch(() => null)
+}
+
+/** sendOrHold for a chat known only by its CLI session id, sent to the desktop profile whose app holds it. */
 export async function sendOrHoldToChat(
   cliSessionId: string,
   text: string,
   fromName: string,
 ): Promise<NativeSendOutcome> {
-  const { desktopHomeFor } = await import('./session-launch')
-  const profileDir = await desktopHomeFor(cliSessionId).catch(() => null)
+  const profileDir = await desktopProfileOf(cliSessionId)
   if (!profileDir)
     return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
   return sendOrHold(profileDir, cliSessionId, text, fromName)
+}
+
+/** tryNativeSend for a chat known only by its CLI session id (the same profile lookup as sendOrHoldToChat).
+ *  Nothing is journalled: a busy chat answers `busy: true` and the caller keeps the message until it is idle. */
+export async function tryNativeSendToChat(
+  cliSessionId: string,
+  text: string,
+  fromName: string,
+): Promise<NativeSendOutcome> {
+  const profileDir = await desktopProfileOf(cliSessionId)
+  if (!profileDir)
+    return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
+  return tryNativeSend(profileDir, cliSessionId, text, fromName)
 }

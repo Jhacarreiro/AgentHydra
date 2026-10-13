@@ -2000,8 +2000,9 @@ const composer: NonNullable<CliMaytePingDeps['composer']> = {
  *  through the running app that holds the chat, and the pipe is tried only when nothing reached the app.
  *  Sent as CliMayte. */
 const native: NonNullable<CliMaytePingDeps['native']> = async (o, text) => {
-  const { sendOrHoldToChat } = await import('./claude-native-send')
-  return sendOrHoldToChat(o.sessionId, text, 'CliMayte')
+  // No hold: a busy chat answers busy and the ping waits in its own outbox, to go out as one batch.
+  const { tryNativeSendToChat } = await import('./claude-native-send')
+  return tryNativeSendToChat(o.sessionId, text, 'CliMayte')
 }
 
 /** Desk 2's own route for a chat it runs (desk2 plugins/20-engine.ts POST /api/sessions/:id/ping): a
