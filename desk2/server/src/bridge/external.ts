@@ -16,7 +16,9 @@
 // workers, this PC's unarchived Claude Desktop chats (/api/chats), running or not (owner, 2026-10-08: with the
 // cloud off "I should see all my chats"; a chat whose engine had stopped left the list while the cloud list
 // kept it, so the two lists looked like they disagreed about which chats are local; the other PC's chats
-// never come through /api/chats), the live registry (/api/sessions/live), hook rows
+// never come through /api/chats), every Codex account's unarchived chats (/api/codex-chats), however old, as
+// the Desktop chats are (owner, 2026-10-13: Desk showed one of ten, "I have many unarchived chats"), the live
+// registry (/api/sessions/live), hook rows
 // that say working or blocked, and any indexed transcript written in the last 10 minutes (a CLI or Codex
 // session outside ~/.claude; working for its first 30 s, idle after), or of any age when it is the one
 // session asked for by id. Minus the session ids of Hydra Desk's own chats, and minus HSwarm's job
@@ -26,7 +28,7 @@
 
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { MAX_TOOL_RESULT_CHARS } from '@shared/protocol'
-import type { AhAgentStatus, AhChatRow, AhLiveSession, AhSessionRow, AhTail, AhWorker, AhWorkerDetail } from './client'
+import type { AhAgentStatus, AhChatRow, AhCodexChatRow, AhLiveSession, AhSessionRow, AhTail, AhWorker, AhWorkerDetail } from './client'
 import { isActiveWorkerStatus, workerAccountLabel } from './climayte'
 import { canResume, configRootOf, type ResumeQuery } from './resume'
 import { classifyUserText, taskItemFrom, userTurns } from '../engine/system-text'
@@ -43,6 +45,8 @@ export interface ExternalInputs {
   agentStatus: AhAgentStatus[]
   live: AhLiveSession[]
   chats: AhChatRow[]
+  /** Every Codex account's unarchived chats; none when AgentHydra has not answered it. */
+  codexChats?: AhCodexChatRow[]
   sessions: AhSessionRow[]
   workers: AhWorker[]
   /** Session ids listed from their index row however old they are (one session asked for by id). */
@@ -191,6 +195,7 @@ export function mapExternal(
 
   for (const c of chats.values())
     fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
+  for (const c of inp.codexChats ?? []) fromIndex(c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt) })
   // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript
   // whose chat runs as another session is a spare one Claude Desktop left running, nothing to show (owner, 2026-10-10:
   // "ddc6fc99 ... shows nothing, like cannot load"; a second engine of a listed chat, started with no prompt, was a row

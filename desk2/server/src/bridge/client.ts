@@ -79,6 +79,18 @@ export interface AhChatRow {
   livePid?: number | null
 }
 
+/** GET /api/codex-chats: every Codex account's unarchived chats, as its Codex app lists them (codex-chat-list.ts). */
+export interface AhCodexChatRow {
+  instance: string
+  instanceNum: number
+  instanceId: string
+  /** The session id the transcript index keys the chat on. */
+  threadId: string
+  title: string
+  cwd: string | null
+  lastActivityAt: string | null // ISO
+}
+
 /** GET /api/sessions: the transcript index (SessionSummary), trimmed. */
 export interface AhSessionRow {
   session_id: string
@@ -465,6 +477,7 @@ export function createClient(opts: HydraClientOptions = {}) {
     chats: async (archived: 'hide' | 'include' = 'hide') =>
       (await get<{ rows: AhChatRow[] }>(`/api/chats?limit=1000${archived === 'include' ? '&archived=include' : ''}`)).rows,
     /** The transcript index of the last 24 hours (its default window), newest first. */
+    codexChats: async () => (await get<{ rows: AhCodexChatRow[] }>('/api/codex-chats')).rows,
     sessions: () => get<AhSessionRow[]>('/api/sessions?limit=200&period=24h'),
     cliInstances: () => get<AhCliInstance[]>('/api/cli-instances'),
     desktopInstances: () => get<AhDesktopInstance[]>('/api/instances'),

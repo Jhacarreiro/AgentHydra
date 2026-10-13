@@ -185,6 +185,23 @@ describe('external sessions', () => {
     expect(list.some((x) => x.id === sid(891))).toBe(false)
   })
 
+  // Owner, 2026-10-13: Desk listed one of ten unarchived Codex chats, the one written in the last 10 minutes.
+  test('an unarchived Codex chat is listed however old, with its title and account', () => {
+    const codexChats = [
+      {
+        instance: 'codex-1',
+        instanceNum: 61,
+        instanceId: 'b0000000-0000-4000-8000-000000000001',
+        threadId: sid(892),
+        title: 'Invented Codex chat',
+        cwd: 'C:/Users/me/project',
+        lastActivityAt: new Date(NOW - 6 * 24 * 3600_000).toISOString(),
+      },
+    ]
+    const row = mapExternal({ ...inputs, codexChats }, new Set(), NOW).find((x) => x.id === sid(892))
+    expect(row).toMatchObject({ source: 'codex', title: 'Invented Codex chat', instance: 'codex-1', cwd: 'C:/Users/me/project', status: 'stale' })
+  })
+
   test('a chat started from a chip is parented to the chat it names; an unknown parent leaves it out', () => {
     const chat = (n: number, spawnedFrom: string | null) => ({
       instance: 'Claude-9',

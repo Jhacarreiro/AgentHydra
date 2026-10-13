@@ -25,6 +25,7 @@ import {
   type AhAgentStatus,
   type AhChatRow,
   type AhCliInstance,
+  type AhCodexChatRow,
   type AhLiveSession,
   type AhSearchResult,
   type AhSessionRow,
@@ -416,10 +417,14 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** The desktop chats, read at most every SESSIONS_FRESH_MS. */
   const chatsForExternal = sharedRead(SESSIONS_FRESH_MS, () => client.chats())
 
+  /** Every Codex account's unarchived chats, read at most every SESSIONS_FRESH_MS. */
+  const codexChatsForExternal = sharedRead(SESSIONS_FRESH_MS, () => client.codexChats())
+
   const keptInputs = {
     agentStatus: keepLast<AhAgentStatus[]>(),
     live: keepLast<AhLiveSession[]>(),
     chats: keepLast<AhChatRow[]>(),
+    codexChats: keepLast<AhCodexChatRow[]>(),
     sessions: keepLast<AhSessionRow[]>(),
     workers: keepLast<AhWorker[]>(),
   }
@@ -433,10 +438,11 @@ export function createBridge(opts: BridgeOptions = {}) {
    * BridgeError: the poller reads that as down in place of a ping.
    */
   async function externalInputs(strict = false): Promise<ExternalInputs | null> {
-    const [agentStatus, live, chats, sessions, workers] = await Promise.allSettled([
+    const [agentStatus, live, chats, codexChats, sessions, workers] = await Promise.allSettled([
       client.agentStatus(),
       client.liveSessions(),
       chatsForExternal(),
+      codexChatsForExternal(),
       sessionsIndex(),
       rawWorkers(),
     ])
@@ -447,6 +453,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       agentStatus: pick(agentStatus, keptInputs.agentStatus),
       live: pick(live, keptInputs.live),
       chats: pick(chats, keptInputs.chats),
+      codexChats: pick(codexChats, keptInputs.codexChats),
       sessions: pick(sessions, keptInputs.sessions),
       workers: pick(workers, keptInputs.workers),
     }
@@ -455,6 +462,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       agentStatus: got.agentStatus ?? [],
       live: got.live ?? [],
       chats: got.chats ?? [],
+      codexChats: got.codexChats ?? [],
       sessions: got.sessions ?? [],
       workers: got.workers ?? [],
     }

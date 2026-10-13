@@ -11,6 +11,7 @@ import {
 } from '../chat-dossier'
 import { CLIPBOARD_DIR } from '../config'
 import { collectChatsAsync } from '../core/chat-store-scan'
+import { listCodexChats } from '../core/codex-chat-list'
 import { resolveInstance } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
 import { defaultClaudeUserDataDir } from '../core/paths'
@@ -402,6 +403,9 @@ app.get('/api/chats', async (c) => {
     )
   return c.json(got)
 })
+// Every Codex account's unarchived chats, as each Codex app lists them (core/codex-chat-list.ts): Desk's sidebar
+// lists them however old, as it does the Desktop chats above.
+app.get('/api/codex-chats', (c) => c.json({ rows: listCodexChats() }))
 // How many sessions hold a LIVE engine process right now — ONE cheap authoritative read of
 // the same pid-checked registry the dossier's `live` field answers from, so the two can
 // never disagree. Built 2026-08-31 for the orchestrator's machine-wide concurrency cap
