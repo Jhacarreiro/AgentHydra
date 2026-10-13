@@ -117,7 +117,7 @@ def _idle(status: dict, provider: str | None = None) -> int:
                and not a.get("paced") and (provider is None or (a.get("provider") == provider and _room(a))))
 
 
-CHATGPT_MODELS = ("gpt-6", "luna-thinking")  # free_chat's ChatGPT models (mcp-free.ts CHATGPT_MODELS)
+CHATGPT_MODELS = ("gpt-6", "luna-thinking", "gpt-6-thinking")  # free_chat's ChatGPT models (mcp-free.ts CHATGPT_MODELS)
 CLAUDE_FULL_PCT = 80  # a Claude account this far into its 5-hour window is not asked for a thread (mcp-free.ts roomBand 3)
 
 

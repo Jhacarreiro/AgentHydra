@@ -23,7 +23,7 @@ UNLIMITED_PLANS = {"free", "go", "plus", "pro"}  # paid personal plans include e
 # On 2026-10-13 the usage check's model list read the same on a Go and a Free account: GPT-6 (and its Thinking mini and
 # mini), GPT-5.6 Luna (and its Thinking mini), GPT-5.5 and older minis. Only Luna's Instant is the verified unlimited
 # text, so it stays the default.
-PREFERRED_MODELS = {"gpt-6": "gpt-6", "luna-thinking": "gpt-5-6-t-mini"}
+PREFERRED_MODELS = {"gpt-6": "gpt-6", "luna-thinking": "gpt-5-6-t-mini", "gpt-6-thinking": "gpt-6-t-mini"}
 # ChatGPT sets conv_key_<uuid> (30 days) and history_off_<uuid> (7 days) on every Temporary Chat. Kept and sent
 # back, ~370 chats made each account's jar ~62 KB and ChatGPT refused every request in 0.1 s (2026-10-07: all
 # three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.

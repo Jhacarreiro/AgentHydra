@@ -369,7 +369,7 @@ class ChatGPTClient(Client):
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
                 "No message is retried automatically. On timeout, read the returned chat_id before sending again.",
                 "usage verifies Free access to GPT-5.6 Luna Instant and reports its documented unlimited text policy, with separate tool limits; exact remaining-message counters remain unavailable. It never sends a message.",
-                "GPT-5.6 Luna Instant (gpt-5-6-mini) unless --prefer gpt-6 or luna-thinking asks a new chat for that model and the account offers it; the reply's model says which answered. regular, model, web_search, organization selection and token streaming are unsupported.",
+                "GPT-5.6 Luna Instant (gpt-5-6-mini) unless --prefer gpt-6, luna-thinking or gpt-6-thinking asks a new chat for that model and the account offers it; the reply's model says which answered. regular, model, web_search, organization selection and token streaming are unsupported.",
                 "Exporting is opt-in and writes the private transcript to disk.",
             ],
         }

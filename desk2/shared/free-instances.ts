@@ -22,7 +22,7 @@ export interface FreeRequest {
   model?: FreeModel
 }
 export const FREE_CLAUDE_MODELS = ['haiku', 'sonnet'] as const
-export const FREE_CHATGPT_MODELS = ['gpt-6', 'luna-thinking'] as const
+export const FREE_CHATGPT_MODELS = ['gpt-6', 'luna-thinking', 'gpt-6-thinking'] as const
 export type FreeModel = (typeof FREE_CLAUDE_MODELS)[number] | (typeof FREE_CHATGPT_MODELS)[number]
 export interface FreeChat {
   chat_id: string

@@ -117,10 +117,10 @@ def _build_parser():
     )
     parser.add_argument(
         "--prefer",
-        choices=["haiku", "sonnet", "gpt-6", "luna-thinking"],
+        choices=["haiku", "sonnet", "gpt-6", "luna-thinking", "gpt-6-thinking"],
         default=None,
         help="Model for a new chat: the newest of Claude's haiku or sonnet family the account offers, ahead of the "
-        "login's remembered model (none: the remembered one, else sonnet); ChatGPT's gpt-6 or luna-thinking when the "
+        "login's remembered model (none: the remembered one, else sonnet); ChatGPT's gpt-6, luna-thinking or gpt-6-thinking when the "
         "account offers it, else GPT-5.6 Luna Instant",
     )
     parser.add_argument(
