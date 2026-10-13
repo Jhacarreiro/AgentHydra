@@ -167,6 +167,9 @@ moves at most 256 MB (whole workers); the rest goes a minute later. The readers 
 to the archive, and `climayte_status { id }` ends an archived attempt's lines with
 `(log read from its day archive <path>)` (last, so the newest-60-lines cut keeps it), or says
 `(no log on disk: ...)` when the log is nowhere.
+What stays in `logs/` is the last `days` of work, so its file count follows the work rate, not a leak:
+6,000 to 10,000 new files a day on 2026-10-10 to 10-12 (a third of them empty error logs), so a 7-day
+window holds roughly 40,000 to 70,000 files. Lower `days` to hold fewer.
 `GET /api/corch/log-archive` shows the setting and the last pass; `POST` with `{ days }` changes the
 setting, with `{ run: true }` runs a pass now and answers with it. The orchestration journal
 (`climayte_log`) is `journal.jsonl`, not these files, and is untouched.

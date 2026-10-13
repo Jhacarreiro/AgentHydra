@@ -261,7 +261,12 @@ the change.
    in `climayte-log-archive.ts` now moves every file of a worker finished more than 7 days ago
    (`climayte_log_archive_days`) into `corch/logs/archive/<day>.tar`, removing nothing it has not
    written there, and every reader falls back to the archive. Its first live run moved 9,782 files
-   (615.7 MB) into 7 day archives in 43 s, leaving 37,483 files (1.72 GB). Pinned by
+   (615.7 MB) into 7 day archives in 43 s, leaving 37,483 files (1.72 GB). By the end of that day
+   five passes had moved 9,816 files (616 MB), the same count the 7 tars list, and `logs/` held
+   37,628 files (1.6 GB), 45 of them older than 7 days (workers kept whole by a newer file). New files
+   arrive at 6,000 to 10,000 a day (2026-10-10 to 10-12), so a 7-day window holds roughly 40,000 to
+   70,000 files: a fixed file-count limit cannot hold, so a health check should test that the pass
+   runs (`GET /api/corch/log-archive`: `last.at` under 3 h old, `last.failed` 0). Pinned by
    `server/tests/climayte-log-archive.test.ts`; the design is "Log retention" in `CLIMAYTE.md`.
 7. **Prune old `claude-native` builds.** Files: `server/src/claude-native-launch.ts`. Keep the build
    in use and one previous; never delete one a running Claude holds. Measure:
