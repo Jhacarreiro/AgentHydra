@@ -19,6 +19,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   blind test on 30 real tasks its answers scored as well as the paid ones, about twice as fast. Decision and research
   work, web research included, goes to Sonnet on a Free Claude account that has room, where it scored above the paid
   answers; with no such account it stays on paid keys.
+- **Free account work survives AgentHydra restarting itself.** AgentHydra restarts onto each update it pulls, about
+  every 25 minutes on a busy day, and each restart used to drop every Free account task in flight onto paid keys. The
+  task now waits for AgentHydra to come back and takes its answer from the chat, which kept going meanwhile.
 - **An HSwarm job budget no longer fills up with money that was never spent.** A turn refused before anything was
   sent, or stopped while it waited out a rate limit, used to count its worst case against the job's budget. One job
   with a $6 budget cancelled 16 of its 17 tasks after spending 11 cents. Such a turn now costs nothing.

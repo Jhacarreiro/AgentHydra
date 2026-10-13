@@ -35,11 +35,18 @@ class _Api:
 
 
 class _Fake:
-    """A fake AgentHydra: POST /api/mcp answering free_status, free_chat and free_results."""
+    """A fake AgentHydra: POST /api/mcp answering free_status, free_chat and free_results, and free_threads and
+    free_read for a turn it dropped. `cut` holds the free_chat calls (1 = the first) it drops as a relaunched daemon
+    does: the message is taken, then its batch is forgotten."""
 
-    def __init__(self, accounts=None, reply="free answer", state="done", status_delays=()):
+    def __init__(self, accounts=None, reply="free answer", state="done", status_delays=(), cut=(), threads=(), read=(),
+                 chat_error=False):
         self.accounts = ACCOUNTS if accounts is None else accounts
         self.reply, self.state = reply, state
+        self.cut, self.cutting = set(cut), False
+        self.threads, self.read = list(threads), list(read)
+        self.chat_error = chat_error  # free_chat answers with a tool error, as for a request it refuses
+        self.names: list[str] = []  # every tool called, in order
         self.chats: list[dict] = []
         self.status_delays = list(status_delays)  # seconds before each free_status answer, in arrival order
         self.hold = threading.Event()  # cleared, a sent chat is not answered until it is set again
@@ -55,16 +62,28 @@ class _Fake:
                 if self.path != "/api/mcp":
                     return self._send(404, {})
                 name, args = body["params"]["name"], body["params"]["arguments"]
+                fake.names.append(name)
                 if name == "free_status":
                     if fake.status_delays:
                         time.sleep(fake.status_delays.pop(0))
                     out = {"ready": True, "accounts": fake.accounts, "running": 0}
+                elif name == "free_chat" and fake.chat_error:
+                    return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": [{"type": "text", "text": "bad task"}]}})
                 elif name == "free_chat":
                     fake.chats.append(args)
                     fake.hold.wait(10)
-                    out = fake.batch()
+                    fake.cutting = len(fake.chats) in fake.cut
+                    out = {**fake.batch(), "finished": False, "tasks": [{"task": 0, "state": "running"}]} if fake.cutting else fake.batch()
                 elif name == "free_results":
+                    if fake.cutting:
+                        fake.cutting = False
+                        return self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"isError": True, "content": [{"type": "text", "text": "no batch b1 here"}]}})
                     out = fake.batch()
+                elif name == "free_threads":
+                    now = time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime())
+                    out = {"total": len(fake.threads), "threads": [{"updated": now, **t} for t in fake.threads]}
+                elif name == "free_read":
+                    out = {"chat_id": args.get("chat_id"), "messages": fake.read}
                 else:
                     return self._send(404, {})
                 self._send(200, {"jsonrpc": "2.0", "id": 1, "result": {"content": [{"type": "text", "text": json.dumps(out)}]}})
@@ -133,6 +152,40 @@ def test_a_tool_free_task_is_answered_by_a_free_account(fake):
     assert res.model == "free:gpt-5-6-mini"
     assert res.selection["route"]["via"] == "free" and res.selection["route"]["account"] == "a1" and res.selection["route"]["chat_id"] == "c1"
     assert f.chats[0]["tasks"][0]["name"] == "hswarm j1 t0" and "say hi" in f.chats[0]["tasks"][0]["prompt"]
+
+
+def test_a_turn_the_daemon_dropped_is_read_back_from_its_thread(fake):
+    # AgentHydra's daemon relaunches after each update it pulls (52 times on 2026-10-13) and forgets the batches in
+    # flight, while Desk finishes the message: the reply is taken from its thread, not paid for again on the API route.
+    f = fake(cut={1}, threads=[{"chat_id": "c9", "name": "hswarm j1 t0", "status": "done", "account": "a1"}],
+             read=[{"role": "assistant", "text": "free answer"}])
+    res, note = _consult(_task())
+    assert note is None and res.answer == "free answer" and res.cost_usd == 0.0
+    assert res.selection["route"]["chat_id"] == "c9" and res.selection["route"]["recovered"] == 1 and len(f.chats) == 1
+
+
+def test_a_message_the_daemon_refuses_fails_over_at_once(fake):
+    # The daemon answered: nothing is in flight, so no thread is waited for.
+    f = fake(chat_error=True, threads=[{"chat_id": "c9", "name": "hswarm j1 t0", "status": "done", "account": "a1"}])
+    res, note = _consult(_task())
+    assert res is None and note["fallback"] == "free send failed" and "free_threads" not in f.names
+
+
+def test_a_message_sent_while_no_daemon_listened_is_sent_again_once_one_does(fake, monkeypatch):
+    # Between one daemon's exit and the next one's start a connection is refused: the message never left.
+    f = fake()
+    real, refused = free_route._call, []
+
+    async def call(name, arguments, timeout):
+        if name == "free_chat" and not refused:
+            refused.append(name)
+            raise ConnectionRefusedError("no daemon on the port")
+        return await real(name, arguments, timeout)
+
+    monkeypatch.setattr(free_route, "_call", call)
+    res, note = _consult(_task())
+    assert note is None and res.answer == "free answer" and res.selection["route"]["recovered"] == 1
+    assert refused and len(f.chats) == 1 and "free_threads" not in f.names
 
 
 def test_a_climayte_workers_ask_is_answered_by_a_free_account(fake, monkeypatch):
@@ -322,6 +375,31 @@ def test_a_read_task_runs_its_tools_on_a_free_thread(fake, tmp_path):
     # The thread already holds the brief and the task: the next message is only the tool's result.
     assert last["chat_id"] == "c1" and last["prompt"].startswith('<tool_result name="read_file">')
     assert "the answer is 42" in last["prompt"] and "# Your brief" not in last["prompt"]
+
+
+def test_a_thread_that_finishes_on_too_few_reads_is_asked_once_to_check(fake, tmp_path, monkeypatch):
+    # Free ChatGPT threads answered after a median of 3 reads where the API route read 20 (2026-10-13): one that would
+    # finish on fewer than CHECK_READS tool results is asked, in the same thread, to check its claims first.
+    monkeypatch.setattr(free_client, "CHECK_READS", 2)
+    read = '<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>'
+    f = fake(reply=[read, "It is 41.", read, "It is 42.", "never sent"])
+    res, note = _consult(_read_task(tmp_path))
+    assert note is None and res.status == "ok" and res.answer == "It is 42."
+    sent = [c["tasks"][0]["prompt"] for c in f.chats]
+    assert len(sent) == 4 and sent[2] == free_client.CHECK and sent.count(free_client.CHECK) == 1
+
+
+def test_a_continued_message_the_daemon_dropped_before_its_thread_had_it_is_sent_again_once(fake, tmp_path):
+    # The thread was last used before this turn began, so the message never reached it: it is sent again, in the same
+    # thread, rather than read back (its last reply is the previous turn's) or failed over.
+    read = '<tool_call>{"name": "read_file", "arguments": {"path": "notes.txt"}}</tool_call>'
+    f = fake(reply=[read, "never answered", "It is 42."], cut={2},
+             threads=[{"chat_id": "c1", "name": "hswarm j1 t0", "status": "done", "updated": "2026-01-01T00:00:00Z"}])
+    res, note = _consult(_read_task(tmp_path))
+    assert note is None and res.status == "ok" and res.answer == "It is 42."
+    sent = [c["tasks"][0] for c in f.chats]
+    assert len(sent) == 3 and sent[2]["chat_id"] == "c1" and sent[2]["prompt"] == sent[1]["prompt"]
+    assert res.selection["route"]["recovered"] == 1
 
 
 def test_a_schema_read_task_answers_through_submit_result_on_a_free_thread(fake, tmp_path):

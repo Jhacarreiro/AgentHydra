@@ -22,7 +22,7 @@ from collections import Counter
 
 from . import config
 from .climayte_route import base_url
-from .free_client import FreeChatClient, tool_names_allowed
+from .free_client import FreeChatClient, TurnError, tool_names_allowed, turn
 from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.free")
@@ -230,50 +230,36 @@ def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Resul
             _say(job_id, "the free account's reply did not match the task's schema; the task runs on its API route")
             return None
         res.data = data
-    res.selection = {"route": {"via": "free", "account": one.get("account"), "chat_id": one.get("chat_id"), "why": why}}
+    res.selection = {"route": {"via": "free", "account": one.get("account"), "chat_id": one.get("chat_id"), "why": why,
+                               **({"recovered": 1} if one.get("recovered") else {})}}
     return res
+
+
+# A tool-free turn that gave no reply, by where it stopped (free_client.TurnError.stage): its note's fallback, status and
+# kind, which `hswarm` reads back from the ledger (commands.py).
+_TURN_MISS = {"send": ("free send failed", "error", "unavailable"), "refused": ("free chat refused", "error", "unavailable"),
+              "failed": ("free account failed", "error", "unavailable"), "timeout": ("free account timed out", "timeout", "timeout"),
+              "results": ("free results unavailable", "error", "unavailable")}
 
 
 async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple[Result | None, dict | None]:
     started = now_iso("milliseconds")
-    name = f"hswarm {job_id} {task.id}"
+    item = {"prompt": shape(task), "name": f"hswarm {job_id} {task.id}"}
+    # Narrow work asks for the lightest Claude model (Haiku 5.5) (owner, 2026-10-07: low-impact Haiku 5.5 through
+    # free instances where possible); research and decision ask for Sonnet by name, since "the account's usual
+    # one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every account (2026-10-10). A
+    # ChatGPT account ignores both.
+    item["model"] = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
     try:
-        item = {"prompt": shape(task), "name": name}
-        # Narrow work asks for the lightest Claude model (Haiku 5.5) (owner, 2026-10-07: low-impact Haiku 5.5 through
-        # free instances where possible); research and decision ask for Sonnet by name, since "the account's usual
-        # one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every account (2026-10-10). A
-        # ChatGPT account ignores both.
-        item["model"] = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
-        sent = await _call("free_chat", {"tasks": [item], "wait_s": WAIT_S}, WAIT_S + 5)
-    except _ERRORS as e:
-        _say(job_id, f"free chat send failed ({type(e).__name__}); the task runs on its API route")
-        return None, _miss(task, "free send failed", "error", "unavailable", accounts=accounts)
-    batch = sent.get("batch")
-    if not batch:
-        _say(job_id, "free chat refused the task; it runs on its API route")
-        return None, _miss(task, "free chat refused", "error", "unavailable", accounts=accounts)
-    loop = asyncio.get_running_loop()
-    waits = min(task.timeout_s, WAIT_CAP_S)
-    deadline = loop.time() + waits
-    while True:
-        one = next((t for t in sent.get("tasks") or [] if isinstance(t, dict)), {})
-        state = one.get("state")
-        if state == "done":
-            why = "tool-free task on a signed-in Free account, no API cost"
-            res = _result(task, one, why, started, job_id)
-            return (res, None) if res else (None, _miss(task, "the free reply was unusable", "error", "model", one, accounts))
-        if state == "failed":
-            _say(job_id, f"free account failed the task ({one.get('error') or 'no reason'}); it runs on its API route")
-            return None, _miss(task, "free account failed", "error", "unavailable", one, accounts, str(one.get("error") or "")[:200])
-        left = deadline - loop.time()
-        if left <= 1:
-            _say(job_id, f"free account still {state or 'silent'} after {waits} s; the task runs on its API route")
-            return None, _miss(task, "free account timed out", "timeout", "timeout", one, accounts)
-        try:
-            sent = await _call("free_results", {"batch": batch, "wait_s": int(min(WAIT_S, left))}, min(WAIT_S, left) + 5)
-        except _ERRORS as e:
-            _say(job_id, f"free results unavailable ({type(e).__name__}); the task runs on its API route")
-            return None, _miss(task, "free results unavailable", "error", "unavailable", one, accounts)
+        one = await turn(_call, item, min(task.timeout_s, WAIT_CAP_S))
+    except TurnError as e:
+        fallback, status, kind = _TURN_MISS[e.stage]
+        _say(job_id, f"{fallback} ({e.body}); the task runs on its API route")
+        error = str(e.one.get("error") or "")[:200] if e.stage == "failed" else None
+        return None, _miss(task, fallback, status, kind, e.one or None, accounts, error)
+    why = "tool-free task on a signed-in Free account, no API cost"
+    res = _result(task, one, why, started, job_id)
+    return (res, None) if res else (None, _miss(task, "the free reply was unusable", "error", "model", one, accounts))
 
 
 async def _serve_tools(job_id: str, task: Task, accounts: list | None = None,
@@ -296,7 +282,8 @@ async def _serve_tools(job_id: str, task: Task, accounts: list | None = None,
     res.model = miss_model(task, one, accounts)  # the model that answered, as a Free miss would name it
     res.backend, res.cost_usd = task.backend, 0.0
     res.selection = {**(res.selection or {}), "route": {"via": "free", "account": client.account, "chat_id": client.chat_id,
-                                                         "why": "tool task on a Free account through the text tool protocol, no API cost"}}
+                                                         "why": "tool task on a Free account through the text tool protocol, no API cost",
+                                                         **({"recovered": client.recovered} if client.recovered else {})}}
     return res, None
 
 
