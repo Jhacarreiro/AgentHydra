@@ -215,6 +215,41 @@ export function verdictCoversNewestWork(w: {
   return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
 }
 
+/** A sent-back line is history once the same worker has a newer outcome waiting behind it. */
+function sentBackSuperseded(e: QueuedPing, queued: QueuedPing[]): boolean {
+  return (
+    e.kind === 'check-failed' &&
+    queued.some((p) => p.workerId === e.workerId && p.seq > e.seq && OUTCOME_KINDS.has(p.kind))
+  )
+}
+
+/** Every member of the line's group has reported: judged when done, or ended with its own line no
+ *  longer waiting here (a failed or cancelled worker). */
+function groupReported(e: QueuedPing, queued: QueuedPing[], group: PingWorker[]): boolean {
+  const members = group.filter((x) => x.group === e.group)
+  const waiting = (x: PingWorker) => queued.some((p) => p.workerId === x.id && p.kind === x.status)
+  const reported = (x: PingWorker) =>
+    x.status === 'done'
+      ? verdictCoversNewestWork(x)
+      : (x.status === 'failed' || x.status === 'cancelled') && !waiting(x)
+  return members.length > 0 && members.every(reported)
+}
+
+/** A worker line the worker's own state has answered since it was queued. */
+const WORKER_ANSWERED: Partial<Record<PingKind, (w: PingWorker) => boolean>> = {
+  'needs-verdict': (w) => w.status === 'done' && verdictCoversNewestWork(w),
+  // Its own check's verdict is why it was sent: only a later one counts.
+  finished: (w) =>
+    w.status === 'done' &&
+    verdictCoversNewestWork({
+      attempts: w.attempts,
+      verdicts: (w.verdicts ?? []).filter((v) => v.by !== 'check'),
+    }),
+  failed: (w) => w.status !== 'failed',
+  asking: (w) => !w.question,
+  stuck: (w) => w.status !== 'waiting',
+}
+
 const cut = (s: string, max: number): string => (s.length > max ? s.slice(0, max) : s)
 
 /** An error's first line, cut, without a closing full stop (the bullet adds its own). */
@@ -833,52 +868,16 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     group: PingWorker[],
     origin: CliMayteOrigin,
   ): boolean => {
-    const w = e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
-    if (
-      e.kind === 'check-failed' &&
-      queued.some((p) => p.workerId === e.workerId && p.seq > e.seq && OUTCOME_KINDS.has(p.kind))
-    )
-      return true
-    switch (e.kind) {
-      case 'swarm-job':
-        return (
-          origin.kind === 'chat' &&
-          (deps.swarmJobSeen?.(e.key.slice(SWARM_KEY.length), origin.sessionId) ?? false)
-        )
-      case 'needs-verdict':
-        return !!w && w.status === 'done' && verdictCoversNewestWork(w)
-      case 'finished': // its own check's verdict is why it was sent: only a later one counts
-        return (
-          !!w &&
-          w.status === 'done' &&
-          verdictCoversNewestWork({
-            attempts: w.attempts,
-            verdicts: (w.verdicts ?? []).filter((v) => v.by !== 'check'),
-          })
-        )
-      case 'failed':
-        return !!w && w.status !== 'failed'
-      case 'asking':
-        return !!w && !w.question
-      case 'stuck':
-        return !!w && w.status !== 'waiting'
-      case 'group-done': {
-        const members = group.filter((x) => x.group === e.group)
-        // A failed or cancelled worker counts as reported once its own line is not waiting here.
-        const waiting = (x: PingWorker) =>
-          queued.some((p) => p.workerId === x.id && p.kind === x.status)
-        return (
-          members.length > 0 &&
-          members.every((x) =>
-            x.status === 'done'
-              ? verdictCoversNewestWork(x)
-              : (x.status === 'failed' || x.status === 'cancelled') && !waiting(x),
-          )
-        )
-      }
-      default:
-        return false
-    }
+    if (sentBackSuperseded(e, queued)) return true
+    if (e.kind === 'swarm-job')
+      return (
+        origin.kind === 'chat' &&
+        (deps.swarmJobSeen?.(e.key.slice(SWARM_KEY.length), origin.sessionId) ?? false)
+      )
+    if (e.kind === 'group-done') return groupReported(e, queued, group)
+    const answered = WORKER_ANSWERED[e.kind]
+    const w = answered && e.workerId ? deps.workers().find((x) => x.id === e.workerId) : undefined
+    return !!answered && !!w && answered(w)
   }
 
   const flush = (box: OriginBox) => {
