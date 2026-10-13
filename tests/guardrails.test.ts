@@ -794,6 +794,9 @@ export function saveSettings(dir: string, settings: object): void {
 `,
     ],
   },
+  // Its fixtures live in the dedicated describe block at the end of this file. Repeating them here
+  // would run the same contracts twice, so this entry registers the check without restating them.
+  'sqlite-fixture-autocommits.mjs': { broken: [], fixed: [] },
 }
 
 // Checks that deliberately do NOT export findViolations, and why, asserted explicitly below rather
@@ -1032,4 +1035,64 @@ describe('checks survive a differently-cased repo root (Windows path identity)',
       expect(lower.failed).toBe(false)
     })
   }
+})
+
+// sqlite-fixture-autocommits.mjs: four contracts, one fixture each. The broken shape is the codex
+// fixture as it stood before 6fea9abe: CREATE TABLEs and INSERTs with no transaction. Two fixes
+// are accepted (the begin/commit markers and db.transaction), and a read-only handle is out of scope.
+describe('sqlite-fixture-autocommits.mjs — autocommit fixtures', () => {
+  const load = () => import(pathToFileURL(join(CHECKS_DIR, 'sqlite-fixture-autocommits.mjs')).href)
+
+  const BROKEN = `import { Database } from 'bun:sqlite'
+const db = new Database(join(codexHome, 'thread_history_1.sqlite'))
+db.exec('CREATE TABLE thread_turns (thread_id TEXT, turn_id TEXT); CREATE TABLE thread_items (thread_id TEXT, item_id TEXT); CREATE TABLE thread_history_projection_state (thread_id TEXT, cursor INTEGER);')
+db.query('INSERT INTO thread_turns VALUES (?, ?)').run('t1', 't1-turn')
+db.query('INSERT INTO thread_items VALUES (?, ?)').run('t1', 't1-item')
+db.query('INSERT INTO thread_history_projection_state VALUES (?, 42)').run('t1')
+db.query('INSERT INTO thread_turns VALUES (?, ?)').run('t2', 't2-turn')
+db.query('INSERT INTO thread_items VALUES (?, ?)').run('t2', 't2-item')
+db.query('INSERT INTO thread_history_projection_state VALUES (?, 42)').run('t2')
+db.close()
+`
+
+  test('the pre-fix codex shape (3 CREATE TABLE, 6 INSERT, no transaction) is one finding', async () => {
+    const { findViolations } = await load()
+    expect(findViolations(BROKEN)).toHaveLength(1)
+  })
+
+  test('the same fixture wrapped in db.exec begin/commit is no finding', async () => {
+    const { findViolations } = await load()
+    const wrapped = BROKEN.replace(
+      "db.exec('CREATE TABLE",
+      "db.exec('begin')\ndb.exec('CREATE TABLE",
+    ).replace('db.close()', "db.exec('commit')\ndb.close()")
+    expect(findViolations(wrapped)).toHaveLength(0)
+  })
+
+  test('the same fixture wrapped in db.transaction(() => {...})() is no finding', async () => {
+    const { findViolations } = await load()
+    const body = BROKEN.split('\n')
+      .slice(2, -2)
+      .map((line) => `  ${line}`)
+      .join('\n')
+    const wrapped = `import { Database } from 'bun:sqlite'
+const db = new Database(join(codexHome, 'thread_history_1.sqlite'))
+db.transaction(() => {
+${body}
+})()
+db.close()
+`
+    expect(findViolations(wrapped)).toHaveLength(0)
+  })
+
+  test('a read-only handle that only reads is no finding', async () => {
+    const { findViolations } = await load()
+    const readonly = `import { Database } from 'bun:sqlite'
+const db = new Database(join(codexHome, 'thread_history_1.sqlite'), { readonly: true })
+const turns = db.query('SELECT thread_id FROM thread_turns').all()
+const items = db.query('SELECT COUNT(*) AS n FROM thread_items').get()
+db.close()
+`
+    expect(findViolations(readonly)).toHaveLength(0)
+  })
 })

@@ -34,6 +34,8 @@ function makeOpenCodeDb(dir: string, dbFile: string, text: string) {
   mkdirSync(dir, { recursive: true })
   const dbPath = join(dir, dbFile)
   const db = new Database(dbPath)
+  // One commit for the whole fixture: each autocommit is a journal fsync, which the Windows runner pays dearly.
+  db.exec('begin')
   db.exec(`
     create table session (id text primary key, project_id text, directory text, title text,
       time_created integer, time_updated integer, time_archived integer, model text,
@@ -71,6 +73,7 @@ function makeOpenCodeDb(dir: string, dbFile: string, text: string) {
     2,
     JSON.stringify({ type: 'text', text }),
   )
+  db.exec('commit')
   db.close()
   return dbPath
 }

@@ -29,6 +29,8 @@ mkdirSync(kiloRoot, { recursive: true })
 const kiloDb = join(kiloRoot, 'kilo.db')
 {
   const db = new Database(kiloDb)
+  // One commit for the whole fixture: each autocommit is a journal fsync, which the Windows runner pays dearly.
+  db.exec('begin')
   db.exec(`
     create table session (id text primary key, project_id text, directory text, title text,
       time_created integer, time_updated integer, time_archived integer, model text,
@@ -66,6 +68,7 @@ const kiloDb = join(kiloRoot, 'kilo.db')
     2,
     JSON.stringify({ type: 'text', text: 'from Kilo' }),
   )
+  db.exec('commit')
   db.close()
 }
 const previousKiloDir = process.env.KILO_DIR

@@ -155,6 +155,11 @@ jobs:
       - name: Guardrail (a repeating timer must not be able to kill the daemon)
         run: bun scripts/checks/timer-callback-can-kill-the-daemon.mjs
 
+      # A bun:sqlite test fixture must wrap its writes in one transaction. Three tests on this pattern
+      # timed out at bun's 5 s limit on windows-latest on 2026-10-13, each fsyncing once per write.
+      - name: Guardrail (sqlite test fixtures must not autocommit per write)
+        run: bun scripts/checks/sqlite-fixture-autocommits.mjs
+
       # The agent catalog's paths came from a third-party registry, and a wrong one is INVISIBLE:
       # a row pointing at a directory that does not exist produces exactly what a correct row
       # produces on a machine without that tool - nothing. Three rows were checked against upstream
