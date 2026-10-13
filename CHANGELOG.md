@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Every CliMayte task shows who started it.** Tasks sent without a ping target, from a script, a routine or a
+  turned-off notify, used to read "Not traced". Each now names the chat it ran under, or the script that sent it, and
+  a task recorded before this change shows its group.
 - **Manager Hydra keeps score on its managers.** Every manager turn is now recorded: whether it answered, how long it
   took, what it cost, and how your next message took it. A cheap judge on your Free accounts scores each answer, and each
   manager's card in Desk shows a one-line summary. Once a day the weakest manager's instructions get one careful edit,
@@ -18,9 +21,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **An HSwarm job budget no longer fills up with money that was never spent.** A turn refused before anything was
   sent, or stopped while it waited out a rate limit, used to count its worst case against the job's budget. One job
   with a $6 budget cancelled 16 of its 17 tasks after spending 11 cents. Such a turn now costs nothing.
-- **Free ChatGPT accounts say which models they offer.** Each account's usage check now records the models it lists
-  for private chats, and the Free account status shows them, so whether a Go account has a better model than the
-  default is a reading rather than a guess.
+- **Free ChatGPT accounts say which models they offer, and a chat stays on its model.** Each account's usage check
+  now records the models it lists for private chats, and the Free account status shows them. A chat started on GPT-6
+  used to answer only its first message there and every later one on GPT-5.6 mini; it now stays on GPT-6.
 - **Restart to update restarts AgentHydra itself too.** On a copy run from source, the update click fetched the new
   code and restarted the window, but AgentHydra kept running the old code until you restarted it by hand. It now
   restarts onto the update by itself, as it already did on its own schedule.
