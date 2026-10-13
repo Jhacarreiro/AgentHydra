@@ -208,12 +208,41 @@ def test_an_unreachable_daemon_falls_back_without_an_error(monkeypatch):
     assert _consult(_task()) == (None, None)
 
 
-def test_no_idle_account_falls_back_without_calling_free_chat(fake):
-    f = fake(accounts=[{**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "signedIn": False},
-                       {**ACCOUNTS[0], "resting": "until 2026-10-08T08:00:00Z after http_rejected (x1)"},
-                       {**ACCOUNTS[0], "paced": "until 2026-10-08T08:00:00Z (69 new chats per 30 min)"}])
-    assert _consult(_task()) == (None, None)
+# Contract: with no account free the task keeps its API route and nothing is sent, and its note says what held the
+# accounts: the shortfall report counts busy, paced and resting ones and reports signed-out ones apart (shortfall.py).
+@pytest.mark.parametrize("accounts,why", [
+    ([{**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "busy": True}, {**ACCOUNTS[0], "signedIn": False},
+      {**ACCOUNTS[0], "resting": "until 2026-10-08T08:00:00Z after http_rejected (x1)"},
+      {**ACCOUNTS[0], "paced": "until 2026-10-08T08:00:00Z (69 new chats per 30 min)"}], "busy"),
+    ([{**ACCOUNTS[0], "paced": "until 2026-10-08T08:00:00Z (69 new chats per 30 min)"}] * 2, "paced"),
+    ([{**ACCOUNTS[0], "signedIn": False}] * 2, "signed_out"),
+])
+def test_no_idle_account_falls_back_without_calling_free_chat(fake, accounts, why):
+    f = fake(accounts=accounts)
+    assert _consult(_task()) == (None, {"via": "api", "short": "free", "short_why": why})
     assert f.chats == []
+
+
+# Contract: a task or an ask no Free account had room for says so on its ledger line, which the shortfall report
+# reads (shortfall.py). Before 2026-10-13 it left no trace, so nothing could say how many more accounts would help.
+def test_a_task_no_free_account_had_room_for_says_so_on_its_ledger_line(fake, monkeypatch):
+    fake(accounts=[{**ACCOUNTS[0], "busy": True}])
+    api = _Api()
+    monkeypatch.setattr(free_route, "eligible", lambda task: True)  # pinned, so its API route needs no keys
+    job = asyncio.run(JobManager(client=api).run_batch([_task(model="deepseek-flash")], concurrency=1))
+    row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
+    assert api.calls == 1 and job.results["t0"].status == "ok"
+    assert row["provider"] != "free" and row["short_pool"] == "free" and row["short_why"] == "busy"
+
+
+def test_an_ask_no_free_account_had_room_for_says_so_on_its_ledger_line(fake, monkeypatch):
+    from hswarm import mcp_server
+
+    fake(accounts=[{**ACCOUNTS[0], "paced": "until 2026-10-08T08:00:00Z (69 new chats per 30 min)"}])
+    monkeypatch.setattr(mcp_server, "manager", lambda: JobManager(client=_Api()))
+    asyncio.run(mcp_server.hswarm_ask("say hi"))
+    row = json.loads(config.LEDGER.read_text(encoding="utf-8").splitlines()[-1])
+    assert row["job"] == "ask" and row["short_pool"] == "free" and row["short_why"] == "paced"
 
 
 def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
@@ -225,7 +254,7 @@ def test_one_process_can_fill_every_idle_account(fake, monkeypatch):
     res, _ = _consult(_task())
     assert res is not None and len(f.chats) == 1
     monkeypatch.setattr(config, "ROUTE_VIA_FREE_MAX", 10)
-    assert _consult(_task(id="t1")) == (None, None) and len(f.chats) == 1
+    assert _consult(_task(id="t1")) == (None, {"via": "api", "short": "free", "short_why": "capped"}) and len(f.chats) == 1
 
 
 def test_tasks_reading_one_snapshot_take_its_one_idle_account_once(fake, monkeypatch):

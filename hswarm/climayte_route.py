@@ -171,26 +171,28 @@ async def switch_on() -> bool:
     return _SWITCH["on"]
 
 
-async def _room(job_id: str, asked: float) -> int | None:
+async def _room(job_id: str, asked: float) -> tuple[int | None, str]:
     """How many more tasks CliMayte can start now, or None (and a log line) when AgentHydra does not say in time.
     AgentHydra's idle accounts (room under their usage ceiling, no worker running), less the workers already queued or
     waiting for room there (each will take one) and the tasks this process sent since `asked` - UNSEEN_S; 0 at
-    route_via_climayte_max. Everything after the read is free of awaits, so consult claims the room it returns before
-    any other task can read it."""
+    route_via_climayte_max. Beside it, what would hold a task when there is no room (the shortfall report counts only
+    `accounts`, shortfall.py): `capped` at route_via_climayte_max, `machine` while AgentHydra holds every start for the
+    PC's CPU or memory (its `held`), else `accounts`. Everything after the read is free of awaits, so consult claims the
+    room it returns before any other task can read it."""
     try:
         # to_thread cannot stop a socket early, so the wait is bounded here as well as on the socket
         status, doc = await asyncio.wait_for(_call("GET", "/api/corch/capacity", None, READ_TIMEOUT_S), READ_TIMEOUT_S + 0.5)
     except (OSError, ValueError, asyncio.TimeoutError) as e:
         _say(job_id, f"CliMayte capacity unavailable ({type(e).__name__}); tasks keep their own route")
-        return None
+        return None, ""
     idle, waiting = doc.get("idle"), doc.get("waiting")
     if status != 200 or not isinstance(idle, int) or not isinstance(waiting, int):
         _say(job_id, f"CliMayte capacity answered HTTP {status}; tasks keep their own route")
-        return None
+        return None, ""
     if config.ROUTE_VIA_CLIMAYTE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_CLIMAYTE_MAX:
-        return 0
+        return 0, "capped"
     unseen = sum(1 for t in _SENT if t > asked - UNSEEN_S)
-    return idle - waiting - unseen
+    return idle - waiting - unseen, "machine" if doc.get("held") else "accounts"
 
 
 def brief(task: Task) -> str:
@@ -331,23 +333,24 @@ async def consult(job_id: str, task: Task, first: str | None = None) -> tuple[Re
         return None, unserved
     loop = asyncio.get_running_loop()
     asked = time.monotonic()
-    room = await _room(job_id, asked)
+    room, held = await _room(job_id, asked)
     if first and room is not None and room <= 0 and (job_id, task.id) not in _WAITED:
         # Its own route is below its bar or kept for after CliMayte: worth a wait for an account to come free.
         until = loop.time() + config.ROUTE_VIA_CLIMAYTE_START_S
         while room is not None and room <= 0 and loop.time() < until:
             await asyncio.sleep(POLL_S)
             asked = time.monotonic()
-            room = await _room(job_id, asked)
+            room, held = await _room(job_id, asked)
     if room is None:
         return None, unserved
     if room <= 0:
+        short = {"short": "climayte", "short_why": held}  # a task CliMayte had no room for (shortfall.py)
         if first:
             # It waited its turn once. Not an ask: CliMayte never saw it, so the walk still offers it before its last legs
             # (an account may be free by then), only without waiting again (2026-10-13: recorded as an ask, it skipped CliMayte).
             _remember(_WAITED, job_id, task)
-            return None, unserved
-        return None, {"via": "api", "decided": "api", "why": NO_ROOM}
+            return None, {**(unserved or {"via": "api"}), **short}
+        return None, {"via": "api", "decided": "api", "why": NO_ROOM, **short}
     now = time.monotonic()
     _SENT.append(now)
     _ACTIVE += 1  # both taken with no await since the room read, held to the worker's end

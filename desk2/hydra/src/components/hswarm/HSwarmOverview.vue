@@ -7,6 +7,7 @@ import {
   Play,
   Stethoscope,
   TrendingUp,
+  UserPlus,
   Zap,
 } from '@lucide/vue'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
@@ -152,6 +153,38 @@ async function loadUsage() {
     }
   }
 }
+
+/** One kind of account in HSwarm's shortfall report (hswarm/shortfall.py): how many more would have been worth having. */
+interface ShortfallKind {
+  kind: string
+  more: number | null
+  would_take: number | null
+}
+/** Tasks the Free accounts or CliMayte turned away for want of an account in the last day, so a paid key ran them. */
+const shortfall = shallowRef<{ pools: { pool: string; turned_away: number; kinds: ShortfallKind[] }[] } | null>(null)
+
+async function loadShortfall() {
+  try {
+    shortfall.value = await apiCall('shortfall?days=1')
+  } catch {
+    shortfall.value = null // an HSwarm without the report: nothing to say
+  }
+}
+
+/** One line per pool whose turn-aways more accounts would have taken, naming the fewest that would; '' when none. */
+const shortLine = computed(() =>
+  (shortfall.value?.pools ?? [])
+    .flatMap((p) => {
+      const k = p.kinds
+        .filter((x) => (x.more ?? 0) > 0 && (x.would_take ?? 0) > 0)
+        .sort((a, b) => (a.more ?? 0) - (b.more ?? 0))[0]
+      if (!k) return []
+      const more = k.more ?? 0
+      const kind = t(`hswarm.v.overview.shortfallKind.${k.kind}`)
+      return [t('hswarm.v.overview.shortfall', { turned: p.turned_away, more, kind, took: k.would_take }, more)]
+    })
+    .join(' · '),
+)
 
 async function loadClients() {
   try {
@@ -364,7 +397,7 @@ async function submitAsk() {
 
 // Load data on mount
 onMounted(async () => {
-  await Promise.all([loadUsage(), loadClients(), refreshCliMayte({ silent: true })])
+  await Promise.all([loadUsage(), loadClients(), loadShortfall(), refreshCliMayte({ silent: true })])
 })
 
 // Money and tokens: the kit's formatters (lib/kit.ts).
@@ -443,6 +476,12 @@ function formatPercent(value: number): string {
         </p>
       </div>
     </div>
+
+    <!-- Free capacity that ran short: only when more accounts would have taken work a paid key ran instead -->
+    <p v-if="shortLine" class="flex items-center gap-1.5 text-xs text-warning">
+      <UserPlus class="size-3.5 shrink-0" />
+      <span class="truncate" :title="shortLine">{{ shortLine }}</span>
+    </p>
 
     <!-- Getting started checklist -->
     <div v-if="!checklist.allDone" class="space-y-2">

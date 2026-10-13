@@ -200,6 +200,17 @@ process's one `jobs.manager()`. It imports no MCP SDK and no pydantic. Measured 
 interpreter costs 63 MB and 661 modules importing it, against 101 MB and 998 modules for
 `from hswarm.mcp_server import hswarm_decide`.
 
+## How many more free accounts would help
+
+A task the Free accounts or CliMayte could have taken but found no account free for runs on a paid key, and its ledger
+line says which pool turned it away and why (`short_pool`, `short_why`). `GET /api/shortfall?days=1` on the console
+(`shortfall.py`) counts the turn-aways more accounts would have fixed (every Free account busy, paced or resting; every
+CliMayte account busy or at its ceiling), lists the rest apart (a `route_via_*_max` cap, signed-out accounts, a PC too
+busy to start a worker), and replays them against k more accounts of each kind: an account takes a task only when free
+at that moment, then stays busy for its kind's median time per task. `more` is the last k whose own account still takes
+5% of them, `would_take` what that many would have taken. AgentHydra reads it hourly and says "We would love 6 more Free
+ChatGPT accounts" at most once a day (`server/src/hswarm-shortfall.ts`); HSwarm's overview shows the same line.
+
 ## Jobs ping their chat
 
 A `wait: false` job (or a `wait_s` that ran out) pings the chat that started it when it finishes, through AgentHydra: one line with the job id, state, counts, cost and `hswarm_results('<id>')`. There is no need to poll `hswarm_status` or build a watcher. A job whose result came back inside the call never pings.

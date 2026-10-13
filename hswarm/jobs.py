@@ -36,7 +36,7 @@ from .client import DeepSeekClient, account_gone, regain_at
 from .envelope import admit as admit_envelope
 from .envelope import record_spend as record_tree_spend
 from .job import Job, new_job_id
-from .ledger import batch_argparser, billed_fields, error_fields, free_miss_row, ledger_summary  # noqa: F401 - re-exported for the batch tools and the CLI
+from .ledger import batch_argparser, billed_fields, error_fields, free_miss_row, ledger_summary, short_fields  # noqa: F401 - re-exported for the batch tools and the CLI
 from .spec import Result, Task, add_spend, merge_taint, mis_scoped, now_iso
 from .worker import classify_liveness
 
@@ -511,12 +511,13 @@ def _via_free(res: Result) -> bool:
 
 
 def _route_fields(res: Result) -> dict:
-    """Ledger columns for a task CliMayte served: its worker, why it went there, and that nothing was billed per token."""
+    """Ledger columns for a task CliMayte or a Free account served: its worker or account, why it went there, and that
+    nothing was billed per token; for a task one of them had no room for, which (ledger.short_fields)."""
     route = (res.selection or {}).get("route") or {}
     if route.get("via") == "free":
         return {"route_why": route.get("why"), "free_account": route.get("account"), "billed": False}
     if route.get("via") != "climayte":
-        return {}
+        return short_fields(res)
     return {"climayte_worker": route.get("worker"), "route_why": route.get("why"), "billed": False}
 
 
@@ -775,6 +776,7 @@ class JobManager:
         # The owner's Free web accounts answer first when one is idle (free_route.py). Every tool-free ask on auto
         # comes through here: hswarm_ask, hswarm_decide's escalations (~4,900 a day that never tried one before
         # 2026-10-08) and the role asks; free_route.eligible keeps critical and evaluation work off them.
+        miss = None
         if not kw.get("images"):
             free = Task(prompt=prompt, id="ask", system=kw.get("system"), schema=kw.get("schema"), tools="none",
                         profile=profile, purpose=purpose, timeout_s=int(kw.get("timeout_s") or 120))
@@ -786,7 +788,10 @@ class JobManager:
                 return served
             self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
         from .dispatch import ask_selected
-        return await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
+        res = await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
+        if miss and miss.get("short"):  # no Free account had room: the ask's ledger line says so (ledger.short_fields)
+            res.selection = {**(res.selection or {}), "route": (res.selection or {}).get("route") or miss}
+        return res
 
     async def ask_role(self, role: str, prompt: str, **kw) -> Result:
         """One tool-free call for a role (judge, doubt, ...). A role left on AUTO runs its profile's plan over the

@@ -78,6 +78,14 @@ def billed_fields(res) -> dict:
     return {} if billed is None else {"billed": billed}
 
 
+def short_fields(res) -> dict:
+    """`short_pool` and `short_why` for a task a pool that costs nothing extra (the owner's Free web accounts, CliMayte)
+    could have taken but had no room for: its route note says which (free_route._short, climayte_route.consult). The
+    shortfall report reads them (shortfall.py). {} for every other task."""
+    route = (getattr(res, "selection", None) or {}).get("route") or {}
+    return {"short_pool": route["short"], "short_why": route.get("short_why")} if route.get("short") else {}
+
+
 def ask_row(res, caller: dict | None) -> dict:
     """The ledger line for a one-shot hswarm_ask, so asks are attributed and costed like jobs."""
     return {
@@ -86,7 +94,7 @@ def ask_row(res, caller: dict | None) -> dict:
         **({"token_basis": "chars/4"} if _provider(res.model) == "free" else {}),
         "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
         "upstream": ",".join(getattr(res, "upstream", []) or []) or None, "api_seconds": getattr(res, "api_seconds", 0.0),
-        "failover": ",".join(getattr(res, "failover", []) or []) or None, "failover_errors": getattr(res, "failover_errors", None) or None, "taint": getattr(res, "taint", "") or None, **billed_fields(res), **ledger_fields(caller),
+        "failover": ",".join(getattr(res, "failover", []) or []) or None, "failover_errors": getattr(res, "failover_errors", None) or None, "taint": getattr(res, "taint", "") or None, **billed_fields(res), **short_fields(res), **ledger_fields(caller),
     }
 
 

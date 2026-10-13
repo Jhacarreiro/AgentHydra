@@ -13,6 +13,7 @@ import {
   load,
   workers,
 } from './climayte-core'
+import { cpuShort } from './climayte-cpu'
 import {
   type EtaBandCalibration,
   type EtaCalibration,
@@ -43,6 +44,7 @@ import {
   toReport,
   toView,
 } from './climayte-lib'
+import { memoryShort } from './climayte-memory'
 import type { OriginLookup } from './climayte-origin'
 import { roomNow, tickState } from './climayte-schedule'
 import {
@@ -74,6 +76,9 @@ export async function climayteCapacity(now = Date.now()): Promise<{
   expiredLogins: { account: string; state: 'renewing' | 'open-once' }[]
   /** Whether a Claude Code CLI can be started: false holds every task (claude-install-guard.ts). */
   claudeInstall: Awaited<ReturnType<typeof installStatusView>>
+  /** Why no account can start anything now whatever its room (the PC's memory or CPU, as roomNow holds it), or null:
+   *  HSwarm counts a task this turned away apart from one turned away for want of an account (hswarm/shortfall.py). */
+  held: string | null
 }> {
   load()
   let accounts: CliMayteAccount[] = []
@@ -95,7 +100,8 @@ export async function climayteCapacity(now = Date.now()): Promise<{
     running++
     if (w.accountId) busy.add(w.accountId)
   }
-  const idle = roomNow(tickState(accounts, now)).filter((a) => !busy.has(a.id)).length
+  const state = tickState(accounts, now)
+  const idle = roomNow(state).filter((a) => !busy.has(a.id)).length
   return {
     idle,
     accounts: accounts.length,
@@ -106,6 +112,7 @@ export async function climayteCapacity(now = Date.now()): Promise<{
       .filter((a) => a.loginExpired)
       .map((a) => ({ account: acctLabel(a), state: a.loginExpired as 'renewing' | 'open-once' })),
     claudeInstall: await installStatusView(),
+    held: memoryShort(state.memory, state.growing) ?? cpuShort(state.cpu, state.cpuRunning),
   }
 }
 

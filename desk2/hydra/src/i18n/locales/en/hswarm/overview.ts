@@ -70,6 +70,9 @@ export default {
   keyHealth: 'Key health by provider',
   moneyChart: 'Tokens by provider (14 days)',
   climayteTitle: 'CliMayte',
+  shortfall:
+    '{turned} tasks went to paid keys today with every account busy; {more} more {kind} account would have taken {took} | {turned} tasks went to paid keys today with every account busy; {more} more {kind} accounts would have taken {took}',
+  shortfallKind: { chatgpt: 'Free ChatGPT', claude: 'Free Claude', climayte: 'CliMayte' },
   climayteCaption: 'What the tasks handed to CliMayte offloaded, and which models pass each kind of task.',
   chartsEmpty:
     'Tokens, failures and key health are charted here once you have a key and the swarm has run a task.',

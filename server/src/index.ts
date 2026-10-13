@@ -89,6 +89,7 @@ import {
 } from './github-updater'
 import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
+import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
@@ -1635,6 +1636,9 @@ startResetWatch({
 // On by default; AGENTHYDRA_HSWARM_ENABLED=0 switches it off. Runs in the
 // background with automatic restart on crash (exponential backoff).
 void startHSwarm({ logDir: join(DATA_DIR, 'logs') })
+// Hourly: tell the owner when the Free accounts or CliMayte turned work away that more accounts would have taken
+// (server/src/hswarm-shortfall.ts, at most once a day).
+startShortfallWatch()
 
 // The owner's always-on helpers (<CONFIG_DIR>/helpers.json; server/src/helpers.ts). A side-run never
 // starts or ends them: they are the machine's, and the primary daemon owns them.

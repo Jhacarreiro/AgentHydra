@@ -14,6 +14,7 @@ import logging
 import time
 import urllib.error
 import urllib.request
+from collections import Counter
 
 from . import config
 from .climayte_route import base_url
@@ -104,6 +105,23 @@ def _idle(status: dict) -> int:
     return sum(1 for a in status.get("accounts") or []
                if isinstance(a, dict) and a.get("signedIn") and not a.get("busy") and not a.get("resting")
                and not a.get("paced"))
+
+
+def _short(status: dict, capped: bool) -> dict | None:
+    """The note for an eligible task no Free account could take (the shortfall report counts these, shortfall.py):
+    `short_why` is `capped` (route_via_free_max), `signed_out` (no account signed in), or what held most signed-in
+    accounts (busy, paced or resting). None while the daemon is not ready, which says nothing about how many accounts
+    it would take."""
+    if not status.get("ready"):
+        return None
+    signed = [a for a in status.get("accounts") or [] if isinstance(a, dict) and a.get("signedIn")]
+    if capped:
+        why = "capped"
+    elif not signed:
+        why = "signed_out"
+    else:
+        why = Counter("paced" if a.get("paced") else "resting" if a.get("resting") else "busy" for a in signed).most_common(1)[0][0]
+    return {"via": "api", "short": "free", "short_why": why}
 
 
 def _tokens(text: str) -> int:
@@ -219,7 +237,8 @@ async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple
 
 async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     """(a finished Result, None) when a free account served the task; (None, note) when the API route runs and the
-    note says why; (None, None) when nobody was asked or nothing is worth noting."""
+    note says why (a try that failed, or no account free to take it); (None, None) when nobody was asked or nothing is
+    worth noting."""
     global _ACTIVE
     if not eligible(task):
         return None, None
@@ -236,8 +255,10 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     # daemon is allowed STATUS_TIMEOUT_S) aged out a task sent while it waited, and both took the one idle account.
     unseen = sum(1 for t in _SENT if t > asked - UNSEEN_S)
     capped = config.ROUTE_VIA_FREE_MAX is not None and _ACTIVE >= config.ROUTE_VIA_FREE_MAX
-    if not isinstance(status, dict) or _idle(status) - unseen <= 0 or capped:
+    if not isinstance(status, dict):
         return None, None
+    if _idle(status) - unseen <= 0 or capped:
+        return None, _short(status, capped)
     now = time.monotonic()
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below

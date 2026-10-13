@@ -24,7 +24,7 @@ import traceback
 from importlib.resources import files
 from pathlib import Path
 
-from . import config, ledger, model_stats, settings, shared
+from . import config, ledger, model_stats, settings, shared, shortfall
 from .shared import local_host  # the Host check every custom route shares
 from . import vault
 from .vault import NotGranted, VaultError
@@ -431,6 +431,8 @@ ROUTES = {
     ("GET", "doctor"): _doctor,
     # Off the event loop: the first read of the day chart parses the whole ledger (~1 s on a big one).
     ("GET", "usage"): lambda b: asyncio.to_thread(lambda: {"days": ledger.daily(max(1, min(90, int(b.get("days") or 14))))}),
+    # Tasks the Free accounts or CliMayte had no room for, and how many more accounts would have taken them (shortfall.py).
+    ("GET", "shortfall"): lambda b: asyncio.to_thread(shortfall.report, max(1.0, min(30.0, float(b.get("days") or 1)))),
     ("GET", "model-stats"): lambda b: asyncio.to_thread(model_stats.model_stats, int(b.get("days") or 14)),
     ("GET", "stats"): lambda b: asyncio.to_thread(lambda: _stats(b)),
     ("POST", "ask"): _ask,

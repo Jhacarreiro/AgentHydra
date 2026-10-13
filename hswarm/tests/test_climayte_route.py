@@ -37,8 +37,9 @@ class _Api:
 class _Fake:
     """A fake AgentHydra: GET /api/corch/capacity, POST /api/corch/workers, GET /api/corch/workers/:id."""
 
-    def __init__(self, idle=8, waiting=0, worker=None, delay=0.0, capacity_status=200, enabled=True, running_for=0.0):
+    def __init__(self, idle=8, waiting=0, worker=None, delay=0.0, capacity_status=200, enabled=True, running_for=0.0, held=None):
         self.idle, self.waiting, self.delay, self.capacity_status, self.enabled = idle, waiting, delay, capacity_status, enabled
+        self.held = held
         self.running_for, self.t0 = running_for, time.monotonic()
         self.cancelled: list[str] = []
         self.worker = worker or {"status": "done", "result": "worker report", "reportedModel": "claude-sonnet-5-5"}
@@ -74,7 +75,8 @@ class _Fake:
                 if self.path == "/api/corch/capacity":
                     fake.reads += 1
                     time.sleep(fake.delay)
-                    return self._send(fake.capacity_status, {"idle": fake.idle, "accounts": 35, "running": 0, "waiting": fake.waiting})
+                    return self._send(fake.capacity_status, {"idle": fake.idle, "accounts": 35, "running": 0, "waiting": fake.waiting,
+                                                                  "held": fake.held})
                 if self.path == "/api/corch/workers/w1":
                     if time.monotonic() - fake.t0 < fake.running_for:
                         return self._send(200, {"id": "w1", "status": "running"})
@@ -146,14 +148,16 @@ def test_an_eligible_task_goes_to_an_idle_climayte_account_with_no_price_questio
 
 
 # Contract: with no account idle (or every idle one already spoken for by a queued worker), the task runs on its API
-# route at once, never queued behind CliMayte, and its route says why.
-@pytest.mark.parametrize("idle,waiting", [(0, 0), (3, 3)])
-def test_with_no_idle_account_the_task_runs_on_its_api_route_at_once(fake, tmp_path, idle, waiting):
-    f = fake(idle=idle, waiting=waiting)
+# route at once, never queued behind CliMayte, and its route says why: for want of an account, which the shortfall report
+# counts, or because AgentHydra held every start for the PC (`held`), which more accounts would not fix (shortfall.py).
+@pytest.mark.parametrize("idle,waiting,held,why", [(0, 0, None, "accounts"), (3, 3, None, "accounts"),
+                                                   (0, 0, "88% busy over the last 60 s with 8 workers running", "machine")])
+def test_with_no_idle_account_the_task_runs_on_its_api_route_at_once(fake, tmp_path, idle, waiting, held, why):
+    f = fake(idle=idle, waiting=waiting, held=held)
     t0 = time.monotonic()
     _, res, api = _run(tmp_path)
     assert f.dispatched == [] and api.calls == 1 and time.monotonic() - t0 < 5
-    assert res.selection["route"] == {"via": "api", "decided": "api", "why": climayte_route.NO_ROOM}
+    assert res.selection["route"] == {"via": "api", "decided": "api", "why": climayte_route.NO_ROOM, "short": "climayte", "short_why": why}
 
 
 # Contract: a burst of tasks that read one idle count takes only that many accounts: a task sent moments before a read
@@ -351,10 +355,11 @@ def test_a_task_whose_slot_wait_ran_out_is_still_offered_to_climayte_before_its_
     f = fake(idle=0)  # every account busy
     t = Task(id="t", prompt="fix it", cwd=str(tmp_path), tools="edit", profile="critical", max_turns=10, max_cost_usd=1.0)
     t0 = time.monotonic()
-    assert asyncio.run(climayte_route.consult("j-wait", t, first="only anthropic routes are left")) == (None, None)
+    no_room = {"via": "api", "short": "climayte", "short_why": "accounts"}
+    assert asyncio.run(climayte_route.consult("j-wait", t, first="only anthropic routes are left")) == (None, no_room)
     assert time.monotonic() - t0 >= 0.6 and f.dispatched == []  # it waited its turn
     t0 = time.monotonic()
-    assert asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"])) == (None, None)
+    assert asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"])) == (None, no_room)
     assert time.monotonic() - t0 < 0.3 and f.dispatched == []  # still full: no second wait
     f.idle = 1  # an account came free
     res, _ = asyncio.run(climayte_route.before_last_resort("j-wait", t, ["anthropic"]))
