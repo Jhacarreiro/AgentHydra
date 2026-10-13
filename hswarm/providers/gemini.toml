@@ -65,4 +65,31 @@ tools = true
 default_reasoning_effort = "high"
 default_thinking = true
 cc_effort = false
-siblings = ["gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+
+# 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite rode behind 3.8 Flash as its unevidenced `siblings` until Artificial
+# Analysis's points for them were indexed (2026-10-13). Each is now ranked on its own point, at the effort that point
+# names: 3.7 Flash clears general and research, 3.5 Flash routine only (long-context 0.733), and 3.5 Flash-Lite no
+# floor at all (humanity's-last-exam 0.188), though as a sibling it answered 1,068 tasks on Oct 11-12, 135 of them
+# critical ones that fell onto general's legs as rescue.
+[models."rank:gemini-3-7-flash:direct"]
+inherits = "gemini-3.7-flash"
+benchmark_slug = "gemini-3-7-flash"
+tools = true
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+
+[models."rank:gemini-3-5-flash:direct"]
+inherits = "gemini-3.5-flash"
+benchmark_slug = "gemini-3-5-flash"
+tools = true
+default_reasoning_effort = "high"
+default_thinking = true
+cc_effort = false
+
+# Its point names no effort ("Gemini 3.5 Flash-Lite"), so none is sent: the model runs at its own default.
+[models."rank:gemini-3-5-flash-lite:direct"]
+inherits = "gemini-3.5-flash-lite"
+benchmark_slug = "gemini-3-5-flash-lite"
+tools = true
+cc_effort = false

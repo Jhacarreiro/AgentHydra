@@ -95,6 +95,10 @@ def profile_for(role=None, tools="none"):
 # 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite all answered), so a task advances onto them instead of dying. They carry
 # no benchmark evidence of their own: they come after every evaluated candidate and are marked `unevidenced`, and
 # the orchestrator's acceptance check judges their answer. A model lists them as `siblings` in its provider file.
+# A sibling that has an evaluated route of its own (the same wire model on the same provider) is judged by that
+# route's published scores, never offered again as unevidenced: once 3.5 Flash-Lite's point was indexed
+# (2026-10-13, humanity's-last-exam 0.188, under every floor), it had answered 1,068 tasks in two days, 135 of them
+# critical ones that fell onto general's legs as rescue.
 
 
 def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile="general", tools="none", backend="api", vision=False,
@@ -113,11 +117,14 @@ def _last_resort(candidates, *, excluded=(), usable=None, min_context=0, profile
                 or (min_context and entry.get("ctx", 0) < min_context)
                 or (backend == "cc" and not config.PROVIDERS[entry["provider"]].get("anthropic_url")))
 
+    evaluated = {(m.get("api_id") or n, m["provider"]) for n, m in auto_models()}
     for c in candidates:
         for name in config.MODELS.get(c["model"], {}).get("siblings") or ():
             entry = config.MODELS.get(name)
             if not entry or name in have or name in excluded or entry["provider"] != c["provider"] or name in config.DISABLED_MODELS:
                 continue
+            if (entry.get("api_id") or name, entry["provider"]) in evaluated:
+                continue  # plan() judged it on its own published scores
             if auto_barred(entry):
                 continue
             if unfit(entry) or (usable is not None and not usable(entry["provider"])):

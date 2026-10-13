@@ -56,7 +56,10 @@ def test_a_free_tier_key_pool_ranks_with_the_free_routes():
 # at its own floor. Regression: 2026-10-10, flagging OpenAI's GPT-6 routes as seeing put paid GPT-6 Luna ahead of Gemini
 # 3.8 Flash's free siblings, so routine image asks ran on Luna whenever 3.8 Flash's free key rested; unflagged, critical
 # and decision image asks fell below their floors onto Gemini Flash.
-def test_a_routine_image_plan_walks_every_free_seeing_route_before_a_paid_one():
+def test_a_routine_image_plan_walks_every_free_seeing_route_before_a_paid_one(monkeypatch):
+    # Gemini 3.8 Flash's shipped siblings are ranked on their own scores since 2026-10-13; 3.1 Flash-Lite, which has
+    # no route of its own, stands in so the walk still covers an unevidenced one.
+    monkeypatch.setitem(config.MODELS["rank:gemini-3-8-flash:direct"], "siblings", ["gemini-3.1-flash-lite"])
     everywhere = lambda p: True  # noqa: E731 - a live-looking plan, so siblings are offered too
     routine = selection.rebias(selection.plan("routine", vision=True, usable=everywhere)["candidates"], lambda p: 0.0)
     free = [config.billed_of(c["model"]) is False for c in routine]
@@ -90,12 +93,21 @@ def test_a_provider_whose_terms_allow_evaluation_only_never_serves_a_production_
 def test_a_saturated_models_siblings_are_its_last_unevidenced_legs(monkeypatch):
     """2026-09-25: Gemini 3.8 Flash's per-model quota saturated and research had no other leg; its same-provider
     siblings, rate-limited separately, now follow every evaluated candidate, marked unevidenced. A sibling still has
-    to fit the task: one whose file does not say it calls tools is no leg for a tool-using task (audit, 2026-09-26)."""
+    to fit the task: one whose file does not say it calls tools is no leg for a tool-using task (audit, 2026-09-26).
+    A sibling with an evaluated route of its own is judged by that route's published scores instead: 3.5 Flash-Lite,
+    under every floor once its point was indexed, had answered 1,068 tasks in two days as a sibling, 135 of them
+    critical (2026-10-13)."""
+    lead = config.MODELS["rank:gemini-3-8-flash:direct"]
+    monkeypatch.setitem(lead, "siblings", ["gemini-3.1-flash-lite", "gemini-3.5-flash-lite", "gemini-3.7-flash"])
     legs = _p("research", usable=lambda p: p == "gemini")
-    assert [c["model"] for c in legs] == ["rank:gemini-3-8-flash:direct", *config.MODELS["rank:gemini-3-8-flash:direct"]["siblings"]]
-    assert not legs[0].get("unevidenced") and all(c["unevidenced"] for c in legs[1:])
-    monkeypatch.delitem(config.MODELS["gemini-3.5-flash"], "tools")
-    assert "gemini-3.5-flash" not in [c["model"] for c in _p("research", tools="read", usable=lambda p: p == "gemini")]
+    names = [c["model"] for c in legs]
+    assert names[-1] == "gemini-3.1-flash-lite" and legs[-1]["unevidenced"]
+    assert not any(c.get("unevidenced") for c in legs[:-1]) and "rank:gemini-3-8-flash:direct" in names
+    # 3.7 Flash rides once, as its evaluated route; 3.5 Flash-Lite's own route is under research's floor
+    assert "rank:gemini-3-7-flash:direct" in names and "gemini-3.7-flash" not in names
+    assert "gemini-3.5-flash-lite" not in names and "rank:gemini-3-5-flash-lite:direct" not in names
+    monkeypatch.delitem(config.MODELS["gemini-3.1-flash-lite"], "tools")
+    assert "gemini-3.1-flash-lite" not in [c["model"] for c in _p("research", tools="read", usable=lambda p: p == "gemini")]
 
 
 def test_exact_effort_is_preserved_not_approximated():

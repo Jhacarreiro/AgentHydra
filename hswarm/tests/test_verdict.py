@@ -38,7 +38,7 @@ def test_no_key_anywhere_is_unusable_and_says_where_to_put_one(monkeypatch, tmp_
 def test_no_deepseek_key_but_a_gemini_pool_is_usable(monkeypatch, tmp_path):
     _keys(monkeypatch, tmp_path, gemini=2)
     v = verdict.compute()
-    assert v["usable"] is True and v["chains"]["tool_free"]["usable_legs"] == ["rank:gemini-3-8-flash:direct", "gemini-3.7-flash", "gemini-3.5-flash", "gemini-3.5-flash-lite"]
+    assert v["usable"] is True and v["chains"]["tool_free"]["usable_legs"] == ["rank:gemini-3-7-flash:direct", "rank:gemini-3-8-flash:direct"]
     assert v["chains"]["cc"]["usable_legs"] == []  # cc needs an Anthropic endpoint: DeepSeek, Hugging Face or OpenRouter
 
 
