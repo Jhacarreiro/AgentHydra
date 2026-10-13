@@ -25,7 +25,7 @@ export interface PaneApi {
   babysitter(): Promise<BabysitterStatus>
   /** GET /api/routines: the routines the last look read, and the proposals waiting for the owner (plugins/73-routines.ts). */
   routines(): Promise<RoutinesStatus>
-  /** POST /api/routines: one action (run, pause, resume, approve, discard) or the switch; answers the whole status, or why not (409, 404, 403). */
+  /** POST /api/routines: one action (run, pause, resume, approve, discard, describe) or the switch; answers the whole status, or why not (409, 404, 403). */
   routinesAct(body: RoutinesRequest): Promise<RoutinesStatus>
   /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
   orchestratorModel(): Promise<OrchestratorModelStatus>

@@ -5,7 +5,8 @@
 // fell due. Its memory (each routine's last 30 runs, the one running, the newest slot it ran for, paused) is
 // <home>/routines.json, so a restart goes on watching a run it had not seen end (a command run's runner, routines/runner.ts,
 // and a prompt run's chat both outlive Desk) and never starts a slot twice. A proposal (routines/proposed) is listed and
-// never run. No model is asked here: a prompt routine is a Desk chat that runs its prompt.
+// never run. No model decides here: a prompt routine is a Desk chat that runs its prompt, and a routine whose file says
+// `describe` has each run's output read by one Haiku turn afterwards (routines/describe.ts), kept with the run.
 
 import { existsSync, mkdirSync, readFileSync, rmSync, statSync, renameSync } from 'node:fs'
 import { join, resolve } from 'node:path'
@@ -19,6 +20,7 @@ import {
   type RoutineRun,
   type RoutinesRequest,
   type RoutinesStatus,
+  type RunDescription,
 } from '@shared/routines'
 import type { ServerContext } from '../context'
 import { AsyncFile } from '../async-file'
@@ -26,10 +28,12 @@ import { bridge } from '../bridge'
 import type { AhWorker, StartWorker } from '../bridge/client'
 import { isActiveWorkerStatus } from '../bridge/climayte'
 import { callerKind } from '../caller'
+import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { chatAddOns } from '../engine/desk-prompt'
 import { killHostTree, pidAlive, recordedPidOwner, startDetached } from '../host/launch'
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
-import { kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
+import { sdkDescriber, type Describer } from '../routines/describe'
+import { checkDefinition, kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
 import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
 import { readJson, RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunResult, type RunSpec } from '../routines/runner'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
@@ -53,11 +57,13 @@ const RUNNER_START_MS = 60_000
 /** A runner still going this long past its run's timeout (it ends the command itself at the timeout) is ended here. */
 const RUNNER_GRACE_MS = 2 * 60_000
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
-const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose'] as const
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard']
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'describe'] as const
+const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'describe']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract }, "describe"?: { "id": "<id>", "on": true | false } }, one action per call besides "enabled"'
+/** A description still being written when Desk stopped is never finished: the output it read went with that Desk. */
+const RESTARTED: RunDescription = { state: 'failed', text: 'AgentHydra restarted before it was described' }
 
 /** How a worker stands now: the bridge's view of it. */
 export type WorkerView = Pick<AhWorker, 'status' | 'error' | 'result' | 'sessionId'>
@@ -87,6 +93,8 @@ export interface RoutinesOptions {
   tasks?: RoutineTasks
   /** Test seam: the platform a windowsTask routine needs. */
   platform?: NodeJS.Platform
+  /** Test seam: what describes a run. The server asks Haiku 5.5 (routines/describe.ts). */
+  describer?: Describer
 }
 
 const liveWorkers: RoutineWorkers = {
@@ -123,7 +131,7 @@ function load(file: string): Record<string, Memory> {
     // Only routine ids: a run's files are named by its id, so a key that is not one never names a path.
     Object.entries(routines).filter(([id]) => ROUTINE_ID.test(id)).map(([id, m]) => {
       const mem: Memory = {
-        runs: Array.isArray(m?.runs) ? m.runs.slice(0, RUNS_KEPT) : [],
+        runs: Array.isArray(m?.runs) ? m.runs.slice(0, RUNS_KEPT).map((r) => (r?.description?.state === 'pending' ? { ...r, description: RESTARTED } : r)) : [],
         running: null,
         lastSlot: typeof m?.lastSlot === 'number' ? m.lastSlot : null,
         paused: m?.paused === true,
@@ -185,6 +193,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const platform = opts.platform ?? process.platform
   const workers = opts.workers ?? liveWorkers
   const tasks = opts.tasks ?? liveTasks
+  const describer = opts.describer ?? sdkDescriber(ctx.home, () => bridge().listAccounts(), () => claudeCodeBinaryFor(ctx.home).path())
   const memory = load(file)
   /** The prompt runs this Desk is starting (`<id>@<startedAt>`): their chat id is not known yet. */
   const startingPrompts = new Set<string>()
@@ -224,11 +233,32 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     }
   }
 
-  /** Records a run and keeps the newest RUNS_KEPT of them. */
-  function finishRun(mem: Memory, r: RoutineRun): void {
+  /** Records a run and keeps the newest RUNS_KEPT of them. When its routine describes its runs, a run that printed
+   *  something (`output`) and was not busy is described in the background. */
+  function finishRun(id: string, mem: Memory, r: RoutineRun, output = ''): void {
+    const def = seen.find((s) => s.entry.id === id)?.entry.def
+    const described = def?.describe === true && r.outcome !== 'busy' && output.trim() !== ''
+    if (described) r.description = { state: 'pending', text: '' }
     mem.runs.unshift(r)
     mem.runs.splice(RUNS_KEPT)
     mem.running = null
+    save()
+    if (described) void describeRun(id, def, r, output)
+  }
+
+  /** Asks for a run's description and keeps it on the run, found again by its start. A failure keeps its reason. */
+  async function describeRun(id: string, def: RoutineDefinition, r: RoutineRun, output: string): Promise<void> {
+    let description: RunDescription
+    try {
+      const minutes = Math.round((r.endedAt - r.startedAt) / 6_000) / 10
+      const text = await describer({ name: def.name, what: r.workerId ? 'prompt' : 'command', outcome: r.outcome, exitCode: r.exitCode, minutes, output })
+      description = { state: 'done', text }
+    } catch (err) {
+      description = { state: 'failed', text: message(err).slice(0, LINE_CHARS) }
+    }
+    const kept = memory[id]?.runs.find((x) => x.startedAt === r.startedAt)
+    if (!kept || stopping) return
+    kept.description = description
     save()
   }
 
@@ -256,7 +286,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       log,
     }
     const notStarted = (why: string): void =>
-      finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: `its runner could not start: ${why}`.slice(0, LINE_CHARS), workerId: null, sessionId: null })
+      finishRun(def.id, mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: `its runner could not start: ${why}`.slice(0, LINE_CHARS), workerId: null, sessionId: null })
     try {
       for (const f of [paths.spec, paths.taken, paths.run, paths.result]) rmSync(f, { force: true })
       writeJson(paths.spec, spec)
@@ -315,12 +345,12 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         const t = clock()
         if (running.kind === 'prompt') {
           if (!startingPrompts.has(key))
-            finishRun(mem, { startedAt: running.startedAt, endedAt: t, outcome: 'interrupted', exitCode: null, lastLine: 'AgentHydra restarted before its chat started', workerId: null, sessionId: null })
+            finishRun(id, mem, { startedAt: running.startedAt, endedAt: t, outcome: 'interrupted', exitCode: null, lastLine: 'AgentHydra restarted before its chat started', workerId: null, sessionId: null })
           continue
         }
         const paths = runPaths(runsDir, id)
-        const record = (r: Pick<RoutineRun, 'endedAt' | 'outcome' | 'lastLine'> & { exitCode?: number | null }): void => {
-          finishRun(mem, { startedAt: running.startedAt, exitCode: null, workerId: null, sessionId: null, ...r })
+        const record = (r: Pick<RoutineRun, 'endedAt' | 'outcome' | 'lastLine'> & { exitCode?: number | null }, output = ''): void => {
+          finishRun(id, mem, { startedAt: running.startedAt, exitCode: null, workerId: null, sessionId: null, ...r }, output)
           if (def?.status) refreshStatus(def)
           try {
             writer.flushSync()
@@ -339,7 +369,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         const ended = (): boolean => {
           const result = readJson<RunResult>(paths.result)
           if (result?.startedAt !== running.startedAt) return false
-          record({ endedAt: running.startedAt + result.durationMs, outcome: outcomeOf(result), exitCode: result.code, lastLine: result.lastLine })
+          record({ endedAt: running.startedAt + result.durationMs, outcome: outcomeOf(result), exitCode: result.code, lastLine: result.lastLine }, result.output ?? result.lastLine)
           return true
         }
         if (ended()) continue
@@ -419,7 +449,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       mem.running = { startedAt, kind: 'prompt', pid: null, workerId: w.id, sessionId: w.sessionId }
       save()
     } catch (err) {
-      finishRun(mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: message(err).slice(0, LINE_CHARS), workerId: null, sessionId: null })
+      finishRun(def.id, mem, { startedAt, endedAt: clock(), outcome: 'failed', exitCode: null, lastLine: message(err).slice(0, LINE_CHARS), workerId: null, sessionId: null })
     } finally {
       startingPrompts.delete(key)
     }
@@ -452,12 +482,12 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       if (w && isActiveWorkerStatus(w.status)) {
         if (t - running.startedAt < minutes * 60_000 * timeoutScale) continue
         await workers.cancel(workerId).catch(() => undefined)
-        finishRun(mem, { startedAt: running.startedAt, endedAt: clock(), outcome: 'timed-out', exitCode: null, lastLine: `timed out after ${minutes} minutes`, workerId, sessionId: running.sessionId })
+        finishRun(id, mem, { startedAt: running.startedAt, endedAt: clock(), outcome: 'timed-out', exitCode: null, lastLine: `timed out after ${minutes} minutes`, workerId, sessionId: running.sessionId })
         continue
       }
       const failed = !w || w.error !== null || /fail|cancel|stop|error/.test(w.status)
       const last = w ? lastLineOf(w.result ?? w.error ?? '') || w.status : 'its chat is gone'
-      finishRun(mem, { startedAt: running.startedAt, endedAt: clock(), outcome: failed ? 'failed' : 'ok', exitCode: null, lastLine: last.slice(0, LINE_CHARS), workerId, sessionId: w?.sessionId ?? running.sessionId })
+      finishRun(id, mem, { startedAt: running.startedAt, endedAt: clock(), outcome: failed ? 'failed' : 'ok', exitCode: null, lastLine: last.slice(0, LINE_CHARS), workerId, sessionId: w?.sessionId ?? running.sessionId }, w?.result ?? '')
     }
   }
 
@@ -575,6 +605,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       timeoutMinutes: def?.timeoutMinutes ?? null,
       until: def?.until ?? null,
       paused: def?.windowsTask !== undefined ? s.task?.state === 'Disabled' : mem.paused,
+      describe: def?.describe === true,
       headline: s.reading?.headline ?? null,
       totals: s.reading?.totals ?? null,
       settings: s.reading?.settings ?? null,
@@ -614,7 +645,13 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const body = (await c.req.json().catch(() => null)) as RoutinesRequest | null
     if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: SHAPE }, 400)
     const actions = ACTIONS.filter((k) => body[k] !== undefined)
-    const typed = actions.every((k) => (k === 'propose' ? typeof body.propose === 'object' && body.propose !== null : typeof body[k] === 'string'))
+    const typed = actions.every((k) =>
+      k === 'propose'
+        ? typeof body.propose === 'object' && body.propose !== null
+        : k === 'describe'
+          ? typeof body.describe?.id === 'string' && typeof body.describe.on === 'boolean'
+          : typeof body[k] === 'string',
+    )
     if (
       (body.enabled !== undefined && typeof body.enabled !== 'boolean') ||
       actions.length > 1 ||
@@ -626,7 +663,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     const [action] = actions
     if (body.enabled !== undefined && !owner) return c.json(OWNER_ONLY, 403)
     if (action !== undefined && OWNER_ACTIONS.includes(action) && !owner) return c.json(OWNER_ONLY, 403)
-    const id = action === 'propose' ? '' : (body[action as 'run'] ?? '')
+    const id = action === 'propose' ? '' : action === 'describe' ? body.describe!.id : (body[action as 'run'] ?? '')
     if (action !== undefined && action !== 'propose' && !ROUTINE_ID.test(id)) return c.json({ error: `"${id}" is not a routine id` }, 400)
 
     if (body.enabled !== undefined && body.enabled !== ctx.settings().routines) ctx.updateSettings({ routines: body.enabled })
@@ -671,6 +708,26 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         memOf(s.entry, t).paused = action === 'pause'
         save()
       }
+      await look()
+      return c.json(status())
+    }
+
+    if (action === 'describe') {
+      // The owner's switch writes the routine's own file, every other key as it was.
+      const routineFile = join(routinesDir, `${id}.json`)
+      let raw: Record<string, unknown>
+      try {
+        raw = JSON.parse(readFileSync(routineFile, 'utf8')) as Record<string, unknown>
+      } catch {
+        return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing or not JSON` }, 404)
+      }
+      const next = { ...raw, describe: body.describe!.on }
+      try {
+        checkDefinition(id, next)
+      } catch (err) {
+        return c.json({ error: `"${id}" cannot be described: ${message(err)}` }, 409)
+      }
+      writeWhole(routineFile, next)
       await look()
       return c.json(status())
     }

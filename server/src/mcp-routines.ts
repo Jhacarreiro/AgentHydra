@@ -14,6 +14,7 @@ interface Run {
   exitCode: number | null
   lastLine: string
   workerId: string | null
+  description?: { state: string; text: string }
 }
 interface Routine {
   id: string
@@ -26,6 +27,7 @@ interface Routine {
   windowsTask: string | null
   what: string | null
   paused: boolean
+  describe?: boolean
   headline: string | null
   totals: Record<string, number> | null
   lastRunAt: number | null
@@ -103,6 +105,7 @@ async function routines(args: {
       windowsTask: r.windowsTask,
       what: r.what,
       paused: r.paused,
+      describe: r.describe === true,
       headline: r.headline,
       totals: r.totals,
       lastRunAt: iso(r.lastRunAt),
@@ -120,15 +123,15 @@ async function routines(args: {
 }
 
 const CONTRACT =
-  'name, askedBy (who asked, in their words, with the date), exactly one of schedule (5-field cron, local time), status (argv) or windowsTask (a Windows task path), and for schedule or status exactly one of run (argv) or prompt (an AI run, needs cwd); optional cwd, timeoutMinutes (5-360), until (YYYY-MM-DD)'
+  'name, askedBy (who asked, in their words, with the date), exactly one of schedule (5-field cron, local time), status (argv) or windowsTask (a Windows task path), and for schedule or status exactly one of run (argv) or prompt (an AI run, needs cwd); optional cwd, timeoutMinutes (5-360), until (YYYY-MM-DD), describe (true: an AI describes each run once it ends)'
 
 export const ROUTINES_TOOLS: HydraTool[] = [
   {
     name: 'routines',
     description:
-      "The owner's routines (AgentHydra's routine manager): standing jobs on a schedule, each a command, an AI prompt that runs as a chat, or a Windows scheduled task, with its state (idle, due, running, paused, off, ended, or broken, and why), its schedule, when it last ran and how (ok, busy, failed, timed-out or interrupted, with the last output line), and when it runs next; plus the proposals waiting for the owner's yes. It looks every 5 minutes and asks no model itself. Answers from its last look in milliseconds; `fresh` looks first. " +
+      "The owner's routines (AgentHydra's routine manager): standing jobs on a schedule, each a command, an AI prompt that runs as a chat, or a Windows scheduled task, with its state (idle, due, running, paused, off, ended, or broken, and why), its schedule, when it last ran and how (ok, busy, failed, timed-out or interrupted, with the last output line, and for a routine whose `describe` is on, an AI's description of what each run did), and when it runs next; plus the proposals waiting for the owner's yes. It looks every 5 minutes and asks no model itself. Answers from its last look in milliseconds; `fresh` looks first. " +
       'The owner (2026-10-12): never schedule anything the owner did not ask for. To add a routine you must ask: `propose` it, and it runs only after the owner approves it in Settings > Managers > Routines. Prefer a temporary background task you run and manage yourself over adding a routine or sub-tasks on other things. Only a routine the owner asked for in their own words belongs here. ' +
-      "MUTATES: `run` (runs one routine now; refused when it is paused, off, ended, broken or running), `pause` (pauses one, so it never starts on its own) and `propose` (writes a proposal; it never runs until the owner approves it). Only one of them per call. Resume, approve and discard are the owner's alone, in Settings.",
+      "MUTATES: `run` (runs one routine now; refused when it is paused, off, ended, broken or running), `pause` (pauses one, so it never starts on its own) and `propose` (writes a proposal; it never runs until the owner approves it). Only one of them per call. Resume, approve, discard and the Describe runs switch are the owner's alone, in Settings.",
     inputSchema: S({
       fresh: { type: 'boolean', description: 'Look now before answering.' },
       run: { type: 'string', description: 'MUTATES: the id of one routine to run now.' },

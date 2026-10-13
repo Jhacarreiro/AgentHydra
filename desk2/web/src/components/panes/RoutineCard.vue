@@ -1,8 +1,9 @@
 <script setup lang="ts">
-// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, and its own on/off
-// switch) that opens into its schedule in words, its history and its actions: Run now, and Open chat for a prompt run's chat.
+// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, what the last run did when
+// it is described, and its own on/off switch) that opens into its schedule in words, its Describe runs switch, its history
+// with each run's description, and its actions: Run now, and Open chat for a prompt run's chat.
 import { computed, ref } from 'vue'
-import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, MessageSquare, Repeat } from '@lucide/vue'
+import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
@@ -46,6 +47,10 @@ const totalsText = computed(() => Object.entries(props.routine.totals ?? {}).map
 const settingRows = computed(() => Object.entries(props.routine.settings ?? {}))
 /** The session of a prompt run's chat: the one running now, else the last run's. */
 const chatSession = computed(() => props.routine.running?.sessionId ?? last.value?.sessionId ?? null)
+/** What the last run did, as its description says (owner, 2026-10-13: "an AI description of what they did"). */
+const lastDescription = computed(() => (last.value?.description?.state === 'done' ? last.value.description.text : null))
+/** Windows runs a windowsTask routine, so its output never reaches the manager to describe; a broken one has nothing to run. */
+const describable = computed(() => props.routine.kind === 'schedule' || props.routine.kind === 'status')
 
 const stamp = (ms: number) => new Date(ms).toLocaleString()
 function toggleRun(at: number) {
@@ -101,6 +106,7 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
             Next {{ nextShort }}
           </span>
         </span>
+        <span v-if="routine.describe && lastDescription" class="line-clamp-2 basis-full ps-12 text-ui-sm leading-4.5 text-text-2" :title="lastDescription">{{ lastDescription }}</span>
       </button>
       <!-- Its own on/off (owner, 2026-10-12: "each toggle"): on runs it on its schedule, off pauses it. The Routines switch
            above is the manager's, for all of them. A routine with no kind (a file that does not check out) has nothing to pause. -->
@@ -126,6 +132,19 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
           <dd class="tnum truncate text-text-2">{{ String(v) }}</dd>
         </div>
       </dl>
+      <!-- Its file's `describe` (owner, 2026-10-13: "have a toggle that says... run description"): on, an AI writes what each
+           run did once it ends. -->
+      <div v-if="describable" class="mt-2 flex items-center gap-2 text-ui-sm leading-4.5">
+        <Sparkles class="size-3.5 shrink-0 text-text-2" aria-hidden="true" />
+        <span class="text-text-2">Describe each run</span>
+        <span class="min-w-0 flex-1 truncate text-text-muted">AI writes what it did</span>
+        <PaneSwitch
+          :model-value="routine.describe"
+          :label="`Describe each run of ${routine.name}`"
+          :disabled="busy"
+          @update:model-value="(on: boolean) => act({ describe: { id: routine.id, on } })"
+        />
+      </div>
       <div class="mt-3 text-ui-sm leading-4.5 text-text-2">Recent runs</div>
       <div v-if="!routine.runs.length" class="text-ui-sm leading-4.5 text-text-muted">No runs yet.</div>
       <ul v-else class="mt-1 grid gap-0.5">
@@ -134,7 +153,7 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
             type="button"
             class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
             :aria-expanded="openRuns.has(r.startedAt)"
-            :disabled="!r.lastLine"
+            :disabled="!r.lastLine && r.description?.state !== 'failed'"
             @click="toggleRun(r.startedAt)"
           >
             <CircleCheck v-if="outcomeKind(r.outcome) === 'ok'" class="size-3.5 shrink-0 text-success" aria-hidden="true" />
@@ -142,9 +161,14 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
             <CircleMinus v-else class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
             <span class="text-text-2">{{ stamp(r.startedAt) }}</span>
             <span class="tnum text-text-muted">{{ spanOf(r.endedAt - r.startedAt) }} · {{ r.outcome }}</span>
-            <ChevronRight v-if="r.lastLine" class="ms-auto size-3.5 shrink-0 text-text-muted transition-transform" :class="openRuns.has(r.startedAt) ? 'rotate-90' : ''" aria-hidden="true" />
+            <LoaderCircle v-if="r.description?.state === 'pending'" class="size-3.5 shrink-0 animate-spin text-text-muted" aria-label="Describing the run" />
+            <ChevronRight v-if="r.lastLine || r.description?.state === 'failed'" class="ms-auto size-3.5 shrink-0 text-text-muted transition-transform" :class="openRuns.has(r.startedAt) ? 'rotate-90' : ''" aria-hidden="true" />
           </button>
-          <div v-if="openRuns.has(r.startedAt)" class="wrap-break-word ps-7 font-mono text-ui-sm leading-4.5 text-text-muted">{{ r.lastLine }}</div>
+          <div v-if="r.description?.state === 'done'" class="wrap-break-word ps-7 text-ui-sm leading-4.5 text-text-2">{{ r.description.text }}</div>
+          <template v-if="openRuns.has(r.startedAt)">
+            <div v-if="r.lastLine" class="wrap-break-word ps-7 font-mono text-ui-sm leading-4.5 text-text-muted">{{ r.lastLine }}</div>
+            <div v-if="r.description?.state === 'failed'" class="wrap-break-word ps-7 text-ui-sm leading-4.5 text-text-muted">Not described: {{ r.description.text }}</div>
+          </template>
         </li>
       </ul>
       <div class="mt-3 flex flex-wrap gap-2">

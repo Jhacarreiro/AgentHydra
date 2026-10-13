@@ -34,6 +34,10 @@
 // A "windowsTask" routine has neither.
 // "cwd" is required for a prompt routine and optional for the others. "timeoutMinutes" is 5 to 360, default 120.
 // "until" is an optional YYYY-MM-DD: after the end of that local day the routine is 'ended' and never runs.
+// "describe" is an optional true or false (default false), for "schedule" and "status" routines: true, and once each run
+// that printed something ends (a prompt run: its chat's last answer), an AI reads it and writes what the run did in two or
+// three plain sentences, kept with the run (owner, 2026-10-13: "every time they finish, to have a, like, AI description of
+// what they did ... have a toggle"). A busy run is not described. The card's Describe runs switch sets it (the window only).
 //
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
 // <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
@@ -75,6 +79,14 @@ export interface RoutineRun {
   workerId: string | null
   /** The chat's session, once it has one (a prompt run); the card opens its transcript by it. */
   sessionId: string | null
+  /** What the run did, as an AI read it (its routine's `describe` is on); absent when the run was not described. */
+  description?: RunDescription
+}
+
+/** An AI's account of one run: `pending` while it is written (text empty), `done` with the account, or `failed` with why. */
+export interface RunDescription {
+  state: 'pending' | 'done' | 'failed'
+  text: string
 }
 
 /** A run going on now: when it started, what it runs (kept from its start: the routine's file may change meanwhile), the
@@ -100,6 +112,7 @@ export interface RoutineDefinition {
   cwd?: string
   timeoutMinutes: number
   until?: string
+  describe?: boolean
 }
 
 /** A proposal an AI wrote: the definition, plus why it should be a routine rather than a background task it runs itself. */
@@ -124,6 +137,8 @@ export interface Routine {
   timeoutMinutes: number | null
   until: string | null
   paused: boolean
+  /** Whether an AI describes each of its runs (its file's `describe`). */
+  describe: boolean
   /** From its status (status kind): one line, cut to 160 characters. */
   headline: string | null
   totals: Record<string, number> | null
@@ -154,7 +169,7 @@ export interface RoutinesStatus {
 
 /**
  * POST /api/routines. One action per call besides `enabled`. The window (X-Desk-Caller: window) may do every action; an
- * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest.
+ * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `describe` sets a routine file's `describe`.
  */
 export interface RoutinesRequest {
   enabled?: boolean
@@ -164,6 +179,7 @@ export interface RoutinesRequest {
   approve?: string
   discard?: string
   propose?: RoutineProposal
+  describe?: { id: string; on: boolean }
 }
 
 const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']

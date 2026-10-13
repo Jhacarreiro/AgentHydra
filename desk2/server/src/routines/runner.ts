@@ -19,8 +19,8 @@ import { lastLineOf, runArgv } from './proc'
 /** The runner program. */
 export const RUNNER_ENTRY = join(import.meta.dir, 'runner.ts')
 
-/** Output kept to find a run's last line. */
-const TAIL_CHARS = 4096
+/** Output kept: its last line is the run's, and a routine that describes its runs has the whole tail read (describe.ts). */
+const TAIL_CHARS = 16_384
 
 /** What the manager hands the runner. `startedAt` names the run in the manager's memory (its clock); `launchedAt` is this
  *  machine's time at the start, so the run's length reads the same whichever clock the manager keeps. */
@@ -54,6 +54,8 @@ export interface RunResult {
   timedOut: boolean
   error: string | null
   lastLine: string
+  /** The end of what the command printed (absent from a runner before 2026-10-13). */
+  output?: string
 }
 
 /** A routine's run files in `dir`: the spec, the spec the runner took (until it has said it runs), the runner's file and the
@@ -140,6 +142,7 @@ async function main(): Promise<void> {
     timedOut: r.timedOut,
     error: r.error,
     lastLine: lastLineOf(tail) || (r.error ?? ''),
+    output: tail,
   }
   // The run file stays: Desk deletes both once it has recorded the run, so no moment shows neither.
   writeJson(paths.result, result)

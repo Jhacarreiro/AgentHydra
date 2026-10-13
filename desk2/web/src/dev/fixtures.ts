@@ -618,6 +618,7 @@ export const routinesFixtures: RoutinesStatus = {
       timeoutMinutes: 60,
       until: '2026-10-23',
       paused: false,
+      describe: false,
       headline: null,
       totals: null,
       settings: null,
@@ -640,13 +641,17 @@ export const routinesFixtures: RoutinesStatus = {
       timeoutMinutes: 120,
       until: null,
       paused: false,
+      describe: true,
       headline: 'Checked 3 items, 1 needs a look',
       totals: { items: 3, flagged: 1 },
       settings: { mode: 'example', every: '2 h', dryRun: false, limit: 12 },
       lastRunAt: now - 3_600_000,
       nextRunAt: now + 3_600_000,
       running: null,
-      runs: [{ startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: 0, lastLine: 'sortie done: 3 items checked', workerId: null, sessionId: null }]
+      runs: [
+        { startedAt: now - 3_660_000, endedAt: now - 3_600_000, outcome: 'ok', exitCode: 0, lastLine: 'sortie done: 3 items checked', workerId: null, sessionId: null, description: { state: 'done', text: 'Checked 3 items in the example queue and flagged 1 for a look: a duplicate helper in the example tools. Nothing was changed.' } },
+        { startedAt: now - 7_260_000, endedAt: now - 7_200_000, outcome: 'busy', exitCode: 75, lastLine: 'busy: the PC is busy', workerId: null, sessionId: null }
+      ]
     },
     {
       id: 'example-task',
@@ -662,6 +667,7 @@ export const routinesFixtures: RoutinesStatus = {
       timeoutMinutes: null,
       until: null,
       paused: true,
+      describe: false,
       headline: null,
       totals: null,
       settings: null,

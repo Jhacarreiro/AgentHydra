@@ -25,7 +25,7 @@ const text = (v: unknown, key: string): string => {
 }
 
 /** The keys this contract knows; `tick` is refused with its replacement. */
-const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until']
+const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe']
 
 /** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
 export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
@@ -81,6 +81,12 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
     if (typeof o.until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.until) || untilEndOf(o.until) === null)
       throw new Error('"until" must be a day, YYYY-MM-DD')
     def.until = o.until
+  }
+
+  if (o.describe !== undefined) {
+    if (typeof o.describe !== 'boolean') throw new Error('"describe" must be true or false')
+    if (when === 'windowsTask' && o.describe) throw new Error('a windowsTask routine is not described: Windows runs it, and its output never reaches the manager')
+    def.describe = o.describe
   }
   return def
 }

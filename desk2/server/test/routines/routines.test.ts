@@ -13,6 +13,7 @@ import { checkDefinition, untilEndOf, type Entry } from '../../src/routines/mani
 import { emptyMemory, judge, MIN_GAP_MS, MISSED_MS, type Memory, type Reading, type Seen } from '../../src/routines/decide'
 import { parseTaskReadings, readTasks, type TaskReading } from '../../src/routines/wintask'
 import type { RunFile } from '../../src/routines/runner'
+import { cleanDescription, describePrompt, DESCRIBE_INPUT_CHARS, type Describer, type DescribeRequest } from '../../src/routines/describe'
 import { pidAlive, recordedPidOwner } from '../../src/host/launch'
 import { loadSettings, settingsPath } from '../../src/settings'
 import plugin, { type RoutinesOptions, type RoutineTasks, type RoutineWorkers } from '../../src/plugins/73-routines'
@@ -115,6 +116,12 @@ describe('the definition (routines/manifest.ts)', () => {
   test('tick is refused with its replacement; the id must be a file name', () => {
     expect(() => checkDefinition('example-t', { name: 'E', askedBy, schedule: '0 9 * * *', tick: ['x'] })).toThrow(/"run"/)
     expect(() => checkDefinition('Bad Id', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'] })).toThrow()
+  })
+
+  test('describe is true or false, and a Windows task routine is never described', () => {
+    expect(checkDefinition('example-d', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], describe: true }).describe).toBe(true)
+    expect(() => checkDefinition('example-d', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], describe: 'yes' })).toThrow(/describe/)
+    expect(() => checkDefinition('example-d', { name: 'E', askedBy, windowsTask: '\\Example', describe: true })).toThrow(/windowsTask/)
   })
 
   test('the timeout is 5 to 360 minutes', () => {
@@ -274,7 +281,7 @@ afterEach(async () => {
 })
 
 // The fake command: `tick` counts a line in its file and exits 0, `wait` exits 0 once <file>.go exists (or a minute passes),
-// `busy` exits 75.
+// `busy` says so and exits 75.
 const COMMAND = `const fs = require('node:fs')
 const [mode, file] = process.argv.slice(2)
 if (mode === 'tick') {
@@ -292,7 +299,10 @@ if (mode === 'tick') {
     setTimeout(poll, 50)
   }
   poll()
-} else process.exit(75)
+} else {
+  console.log('busy: another run holds the lock')
+  process.exit(75)
+}
 `
 
 interface Desk {
@@ -558,7 +568,7 @@ describe('the plugin', () => {
     const d = desk()
     d.routine('example-owned', { name: 'Example owned', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
     await get(d.app, true)
-    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { enabled: false }]) {
+    for (const body of [{ resume: 'example-owned' }, { approve: 'example-owned' }, { discard: 'example-owned' }, { describe: { id: 'example-owned', on: true } }, { enabled: false }]) {
       const res = await post(d.app, body)
       expect(res.status).toBe(403)
       expect(((await res.json()) as { error: string }).error).toBe('only the owner can do that, in Settings > Managers > Routines')
@@ -653,6 +663,84 @@ describe('the plugin', () => {
     const off = await get(elsewhere.app, true)
     expect(off.routines[0]).toMatchObject({ state: 'broken' })
     expect(off.routines[0].reason).toContain('Windows')
+  })
+
+  // Owner, 2026-10-13: "every time they finish, to have a, like, AI description of what they did".
+  test('a routine that describes its runs: a run that printed gets an account of its output, a failed ask keeps its reason, a busy run gets none', async () => {
+    const asked: DescribeRequest[] = []
+    let fail = false
+    const d = desk({
+      describer: async (req) => {
+        asked.push(req)
+        if (fail) throw new Error('no account has room to describe it')
+        return 'It checked 3 items and changed nothing.'
+      },
+    })
+    const body = { name: 'Example described', askedBy, schedule: '0 9 * * *', timeoutMinutes: 5, describe: true }
+    d.routine('example-described', { ...body, run: d.argv('tick') })
+    expect((await get(d.app, true)).routines[0].describe).toBe(true)
+    expect((await post(d.app, { run: 'example-described' })).status).toBe(200)
+    const done = await settle(d.app, (s) => s.routines[0].runs[0]?.description?.state === 'done')
+    expect(done.routines[0].runs[0].description).toEqual({ state: 'done', text: 'It checked 3 items and changed nothing.' })
+    expect(asked[0]).toMatchObject({ name: 'Example described', what: 'command', outcome: 'ok', exitCode: 0 })
+    expect(asked[0].output).toContain('first line of the run')
+    expect(asked[0].output).toContain('done: 3 items checked')
+
+    fail = true
+    d.clock.now += MIN
+    expect((await post(d.app, { run: 'example-described' })).status).toBe(200)
+    const failed = await settle(d.app, (s) => s.routines[0].runs.length === 2 && s.routines[0].runs[0].description?.state === 'failed')
+    expect(failed.routines[0].runs[0].description).toEqual({ state: 'failed', text: 'no account has room to describe it' })
+
+    // A busy run printed why it waited, and is not described: its last line says it.
+    d.routine('example-described', { ...body, run: d.argv('busy') })
+    d.clock.now += MIN
+    expect((await post(d.app, { run: 'example-described' })).status).toBe(200)
+    const busy = await settle(d.app, (s) => s.routines[0].runs.length === 3)
+    expect(busy.routines[0].runs[0]).toMatchObject({ outcome: 'busy', lastLine: 'busy: another run holds the lock' })
+    expect(busy.routines[0].runs[0].description).toBeUndefined()
+    expect(asked).toHaveLength(2)
+  }, 60_000)
+
+  test("the describe switch writes the routine's own file, the rest of it as it was; a Windows task routine refuses it", async () => {
+    const d = desk()
+    const body = { name: 'Example switch', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5 }
+    d.routine('example-switch', body)
+    d.routine('example-task', { name: 'Example task', askedBy, windowsTask: '\\Example nightly job' })
+    await get(d.app, true)
+    const res = await post(d.app, { describe: { id: 'example-switch', on: true } }, OWNER)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as RoutinesStatus).routines.find((r) => r.id === 'example-switch')?.describe).toBe(true)
+    expect(JSON.parse(readFileSync(join(d.home, 'routines', 'example-switch.json'), 'utf8'))).toEqual({ ...body, describe: true })
+
+    const task = join(d.home, 'routines', 'example-task.json')
+    const before = readFileSync(task, 'utf8')
+    expect((await post(d.app, { describe: { id: 'example-task', on: true } }, OWNER)).status).toBe(409)
+    expect(readFileSync(task, 'utf8')).toBe(before)
+  })
+
+  test('a description still being written when Desk stopped reads failed after the restart, never pending for good', async () => {
+    const never: Describer = () => new Promise(() => {})
+    const a = desk({ describer: never })
+    a.routine('example-cut', { name: 'Example cut', askedBy, schedule: '0 9 * * *', run: a.argv('tick'), timeoutMinutes: 5, describe: true })
+    await get(a.app, true)
+    expect((await post(a.app, { run: 'example-cut' })).status).toBe(200)
+    await settle(a.app, (s) => s.routines[0].runs[0]?.description?.state === 'pending')
+    await a.stop()
+
+    const b = desk({ describer: never }, a.home)
+    const after = await get(b.app, true)
+    expect(after.routines[0].runs[0].description).toEqual({ state: 'failed', text: 'AgentHydra restarted before it was described' })
+  }, 30_000)
+})
+
+describe('describing a run (routines/describe.ts)', () => {
+  test('the question keeps the end of a long output, where a run says what it did; an answer comes back as one plain paragraph', () => {
+    const output = `${'x'.repeat(DESCRIBE_INPUT_CHARS)}\ntick 1: found 3, landed 1`
+    const q = describePrompt({ name: 'Example', what: 'command', outcome: 'ok', exitCode: 0, minutes: 1.9, output })
+    expect(q).toContain('tick 1: found 3, landed 1')
+    expect(q.length).toBeLessThan(DESCRIBE_INPUT_CHARS + 300)
+    expect(cleanDescription('**Summary:** It landed\n\none fix.')).toBe('It landed one fix.')
   })
 })
 
