@@ -7,7 +7,9 @@ import argparse
 import datetime as dt
 import json
 import os
+import re
 import threading
+import uuid
 
 from . import config, ledgerstore, survival
 from .caller import ledger_fields
@@ -17,9 +19,53 @@ from .ledgerstore import rotate  # noqa: F401 - the monthly move of finished mon
 def append_row(row: dict) -> None:
     """One ledger line. Disk errors never fail the call that produced the row."""
     try:
-        ledgerstore.append_line(json.dumps(row, ensure_ascii=False) + "\n")
+        ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}, ensure_ascii=False) + "\n")
     except OSError:
         pass
+
+
+_KEY_ERR = re.compile(r"API (?:Error:? )?(?:401|402|403)\b|NoUsableKey|keys? is disabled|every one of the \d+ \w+ keys", re.I)
+_UNAVAIL_ERR = re.compile(r"API (?:Error:? )?(?:404|408|429|502|503|504|529)\b|PoolSaturated|SlowLeg|GateQueued|no endpoints|does not exist"
+                          r"|dead run|ConnectError|ConnectTimeout|RemoteProtocolError|PoolTimeout|RESOURCE_EXHAUSTED|Quota exceeded", re.I)
+
+
+def error_kind_of(status: str | None, error: str | None) -> str | None:
+    """Why a non-ok line is not ok: cancelled | job_budget | key | unavailable | timeout | model (None for an ok line).
+    Only `model` says something about the model; the others are the caller's, the key's or the route's."""
+    if status == "ok":
+        return None
+    err = error or ""
+    if "job budget" in err or "(budget_usd)" in err:
+        return "job_budget"
+    if status == "cancelled":
+        return "cancelled"
+    if status == "timeout":
+        return "timeout"
+    if _KEY_ERR.search(err):
+        return "key"
+    if _UNAVAIL_ERR.search(err):
+        return "unavailable"
+    return "model"
+
+
+def error_fields(res) -> dict:
+    """`{"error_kind": ...}` for a result's ledger line when it is not ok, else {}."""
+    kind = error_kind_of(getattr(res, "status", None), getattr(res, "error", None))
+    return {"error_kind": kind} if kind else {}
+
+
+def free_miss_row(note: dict, job: str, task: str, caller: dict | None = None) -> dict | None:
+    """The EXTRA ledger row for a Free try HSwarm did not accept (the API row that then served the task is the task):
+    model free:<model>, provider free, status error|timeout, cost 0. None when the note is not a Free miss."""
+    if not isinstance(note, dict) or not note.get("free_miss"):
+        return None
+    return {
+        "ts": note.get("ts") or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "job": job, "task": task,
+        "backend": "api", "model": note.get("free_model") or "free:unknown", "provider": "free", "status": note.get("free_status") or "error",
+        "error_kind": note.get("free_kind") or "unavailable", "free_miss": True, "calls": 0, "in_hit": 0, "in_miss": 0, "out": 0,
+        "reasoning": 0, "cost_usd": 0.0, "seconds": 0.0, "billed": False, "free_account": note.get("account"),
+        "free_fallback": note.get("fallback"), "token_basis": "chars/4", **ledger_fields(caller),
+    }
 
 
 def billed_fields(res) -> dict:
@@ -36,10 +82,11 @@ def ask_row(res, caller: dict | None) -> dict:
     """The ledger line for a one-shot hswarm_ask, so asks are attributed and costed like jobs."""
     return {
         "ts": res.finished or dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds"), "job": "ask", "task": res.id,
-        "backend": res.backend, "model": res.model, "provider": _provider(res.model), "status": res.status, "calls": max(1, res.turns), **res.usage,
+        "backend": res.backend, "model": res.model, "provider": _provider(res.model), "status": res.status, "calls": max(1, res.turns), **res.usage, **error_fields(res),
+        **({"token_basis": "chars/4"} if _provider(res.model) == "free" else {}),
         "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
         "upstream": ",".join(getattr(res, "upstream", []) or []) or None, "api_seconds": getattr(res, "api_seconds", 0.0),
-        "failover": ",".join(getattr(res, "failover", []) or []) or None, "taint": getattr(res, "taint", "") or None, **billed_fields(res), **ledger_fields(caller),
+        "failover": ",".join(getattr(res, "failover", []) or []) or None, "failover_errors": getattr(res, "failover_errors", None) or None, "taint": getattr(res, "taint", "") or None, **billed_fields(res), **ledger_fields(caller),
     }
 
 
@@ -234,8 +281,8 @@ def _fold_day(line: bytes) -> None:
         day = dt.datetime.fromisoformat(r["ts"]).astimezone().date().isoformat()
     except (ValueError, KeyError, TypeError):
         return
-    if r.get("cached"):
-        return  # an answer a resume reused: no call, no spend
+    if r.get("cached") or r.get("free_miss"):
+        return  # an answer a resume reused: no call, no spend; a Free miss is not a task
     b = _DAILY["days"].setdefault(day, _new_day())
     b["tasks"] += 1
     outcome = "ok" if r.get("status") == "ok" else "error"
@@ -265,7 +312,7 @@ def ledger_summary(days: float = 1.0) -> dict:
     rows = ledger_rows(days)
     # A `cached` line is an answer a resume reused (no call, no spend): counting it would count one task twice.
     cached = sum(1 for r in rows if r.get("cached"))
-    rows = [r for r in rows if not r.get("cached")]
+    rows = [r for r in rows if not r.get("cached") and not r.get("free_miss")]  # a Free miss is not a task
     total = 0.0
     unknown = 0
     split = {"spent": 0.0, "free": 0.0, "unknown": 0.0}
@@ -342,6 +389,8 @@ def _group_seed(k: tuple, inst: str, sess: str, cwd: str, ts: str) -> dict:
 
 def _add_to_group(g: dict, r: dict, labels: dict[str, str]) -> None:
     """Fold one ledger line into its caller's tally."""
+    if r.get("free_miss"):
+        return  # the API row that served the task is the task
     job = str(r.get("job") or "")
     if job == "ask":
         g["asks"] += 1
@@ -363,7 +412,7 @@ def _caller_groups(rows: list[dict]) -> list[dict]:
     spender first. Lines written before the stamp existed land under one "unstamped" row, never guessed at."""
     labels: dict[str, str] = {}
     groups: dict[tuple, dict] = {}
-    for r in rows:
+    for r in (r for r in rows if not r.get("free_miss")):
         inst, sess, cwd = r.get("caller_instance") or "", r.get("caller_session") or "", r.get("caller_cwd") or ""
         k = (inst or "-", sess or "-", os.path.basename(cwd.rstrip("\\/")) or "-")
         _add_to_group(groups.setdefault(k, _group_seed(k, inst, sess, cwd, r["ts"])), r, labels)

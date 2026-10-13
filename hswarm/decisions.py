@@ -206,7 +206,7 @@ async def jev_answers(jev: typesafe.Jev, items: list[dict], model: str = typesaf
         calls += [(False, [next(rest) for _ in p]) for p in pack([items[s] for s in solo], batch)]
     else:
         calls += [(False, [s]) for s in solo]
-    stats = {"calls": 0, "in": 0, "out": 0, "cost_usd": 0.0, "secs": 0.0, "model": model, "errors": 0}
+    stats = {"calls": 0, "in": 0, "out": 0, "cost_usd": 0.0, "secs": 0.0, "model": model, "errors": 0, "key_dead": 0}
     results: list[dict] = [{}] * len(items)
 
     async def one(same_state: bool, group: list[int]) -> None:
@@ -219,6 +219,8 @@ async def jev_answers(jev: typesafe.Jev, items: list[dict], model: str = typesaf
         stats["calls"] += 1
         if res["status"] != "ok":
             stats["errors"] += 1
+            if res.get("http") in typesafe.KEY_DEAD:
+                stats["key_dead"] += 1  # a dead key says nothing about the model
             for k in group:
                 results[k] = {"status": "error", "error": res["error"], "http": res.get("http")}
             return

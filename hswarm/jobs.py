@@ -36,7 +36,7 @@ from .client import DeepSeekClient, account_gone, regain_at
 from .envelope import admit as admit_envelope
 from .envelope import record_spend as record_tree_spend
 from .job import Job, new_job_id
-from .ledger import batch_argparser, billed_fields, ledger_summary  # noqa: F401 - re-exported for the batch tools and the CLI
+from .ledger import batch_argparser, billed_fields, error_fields, free_miss_row, ledger_summary  # noqa: F401 - re-exported for the batch tools and the CLI
 from .spec import Result, Task, add_spend, merge_taint, mis_scoped, now_iso
 from .worker import classify_liveness
 
@@ -138,6 +138,30 @@ def leg_unavailable(res: Result) -> bool:
     return res.status == "error" and (bool(_UNAVAILABLE.search(res.error or "")) or too_large(res) or _refused_unserved(res))
 
 
+def _caller_or_none(kind: str) -> dict | None:
+    try:
+        return detect_caller(kind)
+    except Exception:  # noqa: BLE001 - a missing stamp never costs the ask its row
+        return None
+
+
+def leg_kind(status: str | None, error: str | None) -> str:
+    """Why a route leg failed over: quality (no usable answer), slow (a stall or timeout), budget, else unavailable."""
+    err = error or ""
+    if _NO_USABLE_ANSWER.search(err):
+        return "quality"
+    if status == "timeout" or "stalled:" in err or err.startswith("SlowLeg:"):
+        return "slow"
+    if "budget" in err and "reached" in err:
+        return "budget"
+    return "unavailable"
+
+
+def _failover_errors(res: Result, legs: list[tuple[str, str | None, str | None]]) -> None:
+    """`failover_errors` beside `failover` on the result: [{model, kind}] for the legs that did not serve."""
+    res.failover_errors = [{"model": m, "kind": leg_kind(st, err)} for m, st, err in legs]
+
+
 def _taint_failover(res: Result, dead: list[dict]) -> None:
     """Taint F when a later leg served, and keep every dead leg's own letters: a taint is sticky across legs too."""
     if dead:
@@ -165,6 +189,8 @@ def _carry_dead_run(new: Result, old: Result, reruns: int) -> Result:
     add_spend(new, [old])
     new.files_changed = sorted(set(new.files_changed + old.files_changed))
     new.failover = list(dict.fromkeys([*old.failover, old.model, *new.failover]))
+    new.failover_errors = [*getattr(old, "failover_errors", []), {"model": old.model, "kind": leg_kind(old.status, old.error)},
+                           *getattr(new, "failover_errors", [])]
     new.selection = {**(new.selection or {}), "dead_reruns": reruns}
     return new
 
@@ -725,6 +751,7 @@ class JobManager:
             dead.append(res)
         add_spend(res, [{"cost_usd": d.cost_usd, "seconds": d.seconds} for d in dead])
         res.failover = [d.model for d in dead]
+        _failover_errors(res, [(d.model, d.status, d.error) for d in dead])
         _taint_failover(res, [{"taint": d.taint} for d in dead])
         if too_large(res):
             res.error = too_large_for_route([(d.model, d.error or "") for d in dead] + [(res.model, res.error)], tool_free=True)
@@ -740,9 +767,11 @@ class JobManager:
                         profile=profile, purpose=purpose, timeout_s=int(kw.get("timeout_s") or 120))
             # Its own id per call: a Free thread's name must be unique on its account, and one fixed name refused
             # every ask after each account's first (name_conflict, 2026-10-07 07:33Z onward).
-            served, _ = await free_route.consult(f"ask-{uuid.uuid4().hex[:8]}", free)
+            ask_id = f"ask-{uuid.uuid4().hex[:8]}"
+            served, miss = await free_route.consult(ask_id, free)
             if served is not None:
                 return served
+            self._book_free_miss(miss, "ask", "ask", None if miss is None else _caller_or_none("ask"))
         from .dispatch import ask_selected
         return await ask_selected(self, prompt, profile=profile, route=route, purpose=purpose, **kw)
 
@@ -773,6 +802,15 @@ class JobManager:
                 "Name a model with eyes (vision = true in its provider file; hswarm_select with vision=true lists the ones "
                 "this machine's keys reach) or wait for its pool.")
 
+    @staticmethod
+    def _book_free_miss(note: dict | None, job_id: str, task_id: str, caller: dict | None) -> None:
+        """A Free try HSwarm did not accept is an extra ledger row (the API run that follows is the task)."""
+        try:
+            if row := free_miss_row(note or {}, job_id, task_id, caller):
+                ledgerstore.append_line(json.dumps({"id": uuid.uuid4().hex, **row}) + "\n")
+        except Exception:  # noqa: BLE001 - bookkeeping never fails the task
+            pass
+
     async def _run_legs(self, job: Job, task: Task, warm: asyncio.Event | None, is_pilot: bool) -> tuple[Result, object]:
         """Run a task on its route; when a pinned route runs out of legs that can serve, go on by its profile
         (unpinned) with the budget that is left, the dead attempts' spend and edits carried on the result."""
@@ -791,6 +829,7 @@ class JobManager:
         served, free_note = await free_route.consult(job.id, task)
         if served is not None:
             return served, None
+        self._book_free_miss(free_note, job.id, task.id, job.caller)
         route_note = route_note or free_note
         res, transcript = await self._run_legs_api(job, task, warm, is_pilot)
         if route_note and isinstance(res, Result):
@@ -813,6 +852,8 @@ class JobManager:
         add_spend(new, [res])
         new.files_changed = sorted(set(new.files_changed + res.files_changed))
         new.failover = list(dict.fromkeys([*res.failover, res.model, *new.failover]))
+        new.failover_errors = [*getattr(res, "failover_errors", []), {"model": res.model, "kind": leg_kind(res.status, res.error)},
+                               *getattr(new, "failover_errors", [])]
         new.add_taint("F", res.taint)  # the pinned route could not serve: its letters stay on the answer that did
         new.selection = {**(new.selection or {}), "unpinned_from": pinned, "pinned_error": (res.error or "")[:300]}
         return new, {"pinned": transcript, "unpinned": new_transcript}
@@ -842,6 +883,7 @@ class JobManager:
         res, transcript, dead = await self._walk_route(job, task, legs, terminal, spent, warm, is_pilot)
         add_spend(res, dead)
         res.failover = [d["model"] for d in dead]
+        _failover_errors(res, [(d["model"], None, d.get("error")) for d in dead])
         _taint_failover(res, dead)
         if cc:
             if dead and isinstance(transcript, dict):
@@ -1239,6 +1281,52 @@ class JobManager:
                 print(f"[hswarm] job {folder.name} could not be carried on after the restart: {type(e).__name__}: {e}", file=sys.stderr)
         return adopted
 
+    def finish_orphans(self, days: float = 7.0) -> list[str]:
+        """Close the jobs a dead process left in state `running` that adopt_orphans did not carry on (an old crash, a CLI
+        run, a per-chat server): their finished tasks (results.jsonl) were never recorded, because record_job only fires
+        when a job ends (two such runs held 94 tasks on 2026-10-12). Each gets state `orphaned` on disk, `finished`
+        stamped, and its utilization row from the results it did finish. A job whose runner pid is still alive, or one
+        this process holds, is left alone."""
+        if not config.JOBS_DIR.exists():
+            return []
+        from . import utilization
+        from .procgate import pid_alive
+        from .shared import process_started
+
+        oldest = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(days=days)).strftime("%Y%m%d-%H%M%S")
+        finished = []
+        for folder in sorted(config.JOBS_DIR.iterdir(), reverse=True):
+            if folder.name < oldest:
+                break
+            record = folder / "job.json"
+            if folder.name in self.jobs or not record.is_file():
+                continue
+            try:
+                with record.open(encoding="utf-8") as f:
+                    if '"running"' not in f.read(64):
+                        continue
+                raw = json.loads(record.read_text(encoding="utf-8"))
+                runner = raw.get("runner") or {}
+                pid, started = runner.get("pid"), runner.get("started")
+                if isinstance(pid, int) and pid_alive(pid) and (started is None or process_started(pid) in (None, started)):
+                    continue
+                doc = Job.load_from_disk(folder.name)
+                summary = doc.get("summary") or {}
+                if summary.get("state") != "orphaned":  # still checkpointing: a live runner of another kind
+                    continue
+                stamp = now_iso()
+                summary = {**summary, "state": "orphaned", "finished": stamp}
+                done = {**doc, "state": "orphaned", "summary": summary}
+                row = utilization._job_row_from_doc(folder.name, {**done, "summary": {**summary, "state": "done"}}, {})
+                raw.update(state="orphaned", summary={**(raw.get("summary") or {}), **{k: summary[k] for k in ("state", "finished", "orphaned") if k in summary}})
+                record.write_text(json.dumps(raw, ensure_ascii=False), encoding="utf-8")
+                if row:
+                    utilization.record(row)
+                finished.append(folder.name)
+            except (OSError, ValueError, TypeError, KeyError) as e:
+                print(f"[hswarm] job {folder.name} could not be closed after its runner died: {type(e).__name__}: {e}", file=sys.stderr)
+        return finished
+
     async def run_batch(self, tasks: list[Task], concurrency: dict | int | None = None, label: str = "", budget_usd: float | None = None, caller: dict | None = None,
                         resume_from: str | None = None, envelope: dict | None = None) -> Job:
         """submit + wait: the shape every batch script wants."""
@@ -1485,10 +1573,14 @@ class JobManager:
                 packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
                 (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
             row = {
+                "id": uuid.uuid4().hex,
                 "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model),
                 "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
                 "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
                 "failover": ",".join(res.failover) or None,
+                "failover_errors": getattr(res, "failover_errors", None) or None,
+                **error_fields(res),
+                **({"token_basis": "chars/4"} if _via_free(res) else {}),
                 "selection_profile": res.selection.get("profile"),
                 "benchmark_slug": (res.selection.get("selected") or {}).get("benchmark_slug"),
                 "reasoning_effort": (res.selection.get("selected") or {}).get("reasoning_effort", task.reasoning_effort),
@@ -1687,4 +1779,8 @@ def manager() -> JobManager:
         # A restart: the jobs the previous server on this port left unfinished carry on here, under their own ids,
         # before this first call looks any of them up.
         _manager.adopt_orphans()
+        try:
+            _manager.finish_orphans()
+        except Exception as e:  # noqa: BLE001 - closing old crashes never stops the server from serving
+            print(f"[hswarm] finish_orphans failed: {type(e).__name__}: {e}", file=sys.stderr)
     return _manager

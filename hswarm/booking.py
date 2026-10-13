@@ -58,5 +58,9 @@ async def decide(items: list[dict], mgr=None, *, escalate_below: float = 0.7, fa
             jr = Result(id="decide", status="ok" if not stats.get("errors") else "error", backend=provider, model=stats.get("model") or name,
                         usage={"in_hit": 0, "in_miss": stats.get("in", 0), "out": stats.get("out", 0), "reasoning": 0}, cost_usd=stats.get("cost_usd", 0.0),
                         seconds=round(stats.get("secs", 0.0), 3), turns=stats["calls"], finished=now_iso())
-            spent += ((jr, {"provider": provider, "job": "decide"}),)
+            fields = {"provider": provider, "job": "decide"}
+            if stats.get("errors") and stats.get("key_dead", 0) >= stats["errors"] and not stats.get("in") and not stats.get("out"):
+                # Every error was a dead key and no tokens came back: the line stays an error, but is not the model's.
+                fields |= {"unjudged": "key", "error_kind": "key"}
+            spent += ((jr, fields),)
     return out | await book_asks(fallbacks, "decide", spent)

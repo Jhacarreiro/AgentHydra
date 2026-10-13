@@ -96,6 +96,7 @@ META: dict[str, dict] = {
     "history": {"effect": WRITE, "guide": "The table of every finished task (history/tasks.sqlite): how each shape and model ended and what it "
                 "cost over --days; --index adds the jobs not yet in it (maintain does daily). No model call.",
                 "examples": ["hswarm history --days 7", "hswarm history --index"]},
+    "backfill-free-misses": {"effect": WRITE, "guide": "Appends a free_miss ledger row for each Free try that finished jobs' route notes record and the ledger lacks (idempotent); --dry-run counts only."},
     "survival": {"effect": READ, "guide": "Scores due edit checkpoints from files on disk and prints the per-model survival; no model call."},
     "panel": {"effect": SPEND, "guide": "Two paid rounds across 2-5 models; prefer the hswarm_panel MCP tool inside a Claude session."},
     "filters": {"effect": READ, "guide": "Lists the bash output filters in effect and runs their inline tests; exits 1 on a rejected filter."},

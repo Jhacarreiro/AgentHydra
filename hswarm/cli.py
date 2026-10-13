@@ -198,6 +198,10 @@ def build_parser() -> argparse.ArgumentParser:
     hs.add_argument("--days", type=float, default=30.0)
     hs.add_argument("--json", action="store_true")
 
+    bf = sub.add_parser("backfill-free-misses", help="append a free_miss ledger row for each Free try the finished jobs' route notes record and the ledger lacks")
+    bf.add_argument("--days", type=float, default=30.0)
+    bf.add_argument("--dry-run", action="store_true", help="count what would be appended; write nothing")
+
     es = sub.add_parser("survival", help="per model: how much of what api workers wrote is still in the file (5m / 1h / 1d after the task)")
     es.add_argument("--days", type=float, default=7.0)
     es.add_argument("--json", action="store_true")

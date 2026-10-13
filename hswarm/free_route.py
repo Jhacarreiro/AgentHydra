@@ -110,6 +110,46 @@ def _tokens(text: str) -> int:
     return -(-len(text) // 4)
 
 
+GPT_MODEL = "gpt-5-6-mini"
+CLAUDE_MODELS = {"haiku": "claude-haiku-5-5", "sonnet": "claude-sonnet-5-5"}
+
+
+def miss_model(task: Task, one: dict | None = None, accounts: list | None = None) -> str:
+    """`free:<model>` for a Free try that was not accepted: the model the answering account named, else the one its
+    provider gives for the family HSwarm asked for (Haiku for narrow profiles, Sonnet otherwise; a ChatGPT account
+    ignores the family). The provider comes from the reply, the account's status entry, or the only provider among the
+    signed-in accounts; `free:unknown` only when none of that is known."""
+    one = one or {}
+    if one.get("model"):
+        return "free:" + str(one["model"])
+    prov = str(one.get("provider") or "").lower()
+    accts = [a for a in accounts or [] if isinstance(a, dict)]
+    if not prov:
+        name = one.get("account")
+        for a in accts:
+            if name is not None and name in (a.get("id"), a.get("name"), a.get("account"), a.get("num")):
+                prov = str(a.get("provider") or "").lower()
+    if not prov:
+        seen = {str(a.get("provider") or "").lower() for a in accts if a.get("signedIn") and a.get("provider")}
+        prov = seen.pop() if len(seen) == 1 else ""
+    if "gpt" in prov or "openai" in prov:
+        return "free:" + GPT_MODEL
+    if "claude" in prov or "anthropic" in prov:
+        return "free:" + CLAUDE_MODELS["haiku" if task.profile in HAIKU_PROFILES else "sonnet"]
+    return "free:unknown"
+
+
+def _miss(task: Task, fallback: str, status: str, kind: str, one: dict | None = None, accounts: list | None = None, error: str | None = None) -> dict:
+    """The note for a Free try that did not serve the task. `free_miss` marks it for the ledger (jobs books an extra row)."""
+    note = {"via": "api", "fallback": fallback, "free_miss": True, "free_model": miss_model(task, one, accounts), "free_status": status,
+            "free_kind": kind, "ts": now_iso()}
+    if one and one.get("account") is not None:
+        note["account"] = one.get("account")
+    if error:
+        note["error"] = error
+    return note
+
+
 def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Result | None:
     from .worker import payload_in_text
 
@@ -119,12 +159,12 @@ def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Resul
         return None
     # `seconds` is the account's own time on it (free_results), so the ledger shows how busy the Free accounts are.
     on_account = float(one.get("seconds") or 0.0)
-    res = Result(id=task.id, backend=task.backend, model="free:" + str(one.get("model") or "unknown"), status="ok",
+    res = Result(id=task.id, backend=task.backend, model="free:" + str(one.get("model") or "unknown"), status="ok", turns=1,
                  answer=text, cost_usd=0.0, started=started, finished=now_iso(), seconds=on_account,
                  api_seconds=on_account)
     # A web chat reports no token counts, so the ledger gets an estimate (4 characters a token, as Desk's Free tab
     # counts them); without one every Free answer was ledgered as 0 tokens (2026-10-09).
-    res.usage = {"in_hit": 0, "in_miss": _tokens(shape(task)), "out": _tokens(text), "reasoning": 0}
+    res.usage = {"in_hit": 0, "in_miss": _tokens(shape(task)), "out": _tokens(text), "reasoning": 0}  # ledger line: token_basis chars/4
     if task.schema:
         data = payload_in_text(text, task.schema)  # strips a code fence; the same schema check as the API route
         if data is None:
@@ -135,7 +175,7 @@ def _result(task: Task, one: dict, why: str, started: str, job_id: str) -> Resul
     return res
 
 
-async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
+async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple[Result | None, dict | None]:
     started = now_iso("milliseconds")
     name = f"hswarm {job_id} {task.id}"
     try:
@@ -148,11 +188,11 @@ async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
         sent = await _call("free_chat", {"tasks": [item], "wait_s": WAIT_S}, WAIT_S + 5)
     except _ERRORS as e:
         _say(job_id, f"free chat send failed ({type(e).__name__}); the task runs on its API route")
-        return None, None
+        return None, _miss(task, "free send failed", "error", "unavailable", accounts=accounts)
     batch = sent.get("batch")
     if not batch:
         _say(job_id, "free chat refused the task; it runs on its API route")
-        return None, None
+        return None, _miss(task, "free chat refused", "error", "unavailable", accounts=accounts)
     loop = asyncio.get_running_loop()
     waits = min(task.timeout_s, WAIT_CAP_S)
     deadline = loop.time() + waits
@@ -162,20 +202,19 @@ async def _serve(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
         if state == "done":
             why = "tool-free task on a signed-in Free account, no API cost"
             res = _result(task, one, why, started, job_id)
-            return (res, None) if res else (None, {"via": "api", "fallback": "the free reply was unusable", "account": one.get("account")})
+            return (res, None) if res else (None, _miss(task, "the free reply was unusable", "error", "model", one, accounts))
         if state == "failed":
             _say(job_id, f"free account failed the task ({one.get('error') or 'no reason'}); it runs on its API route")
-            return None, {"via": "api", "fallback": "free account failed", "account": one.get("account"),
-                          "error": str(one.get("error") or "")[:200]}
+            return None, _miss(task, "free account failed", "error", "unavailable", one, accounts, str(one.get("error") or "")[:200])
         left = deadline - loop.time()
         if left <= 1:
             _say(job_id, f"free account still {state or 'silent'} after {waits} s; the task runs on its API route")
-            return None, {"via": "api", "fallback": "free account timed out", "account": one.get("account")}
+            return None, _miss(task, "free account timed out", "timeout", "timeout", one, accounts)
         try:
             sent = await _call("free_results", {"batch": batch, "wait_s": int(min(WAIT_S, left))}, min(WAIT_S, left) + 5)
         except _ERRORS as e:
             _say(job_id, f"free results unavailable ({type(e).__name__}); the task runs on its API route")
-            return None, None
+            return None, _miss(task, "free results unavailable", "error", "unavailable", one, accounts)
 
 
 async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
@@ -203,7 +242,7 @@ async def consult(job_id: str, task: Task) -> tuple[Result | None, dict | None]:
     _SENT.append(now)
     _ACTIVE += 1  # both taken before any await below
     try:
-        return await _serve(job_id, task)
+        return await _serve(job_id, task, status.get("accounts"))
     finally:
         _ACTIVE -= 1
         if now in _SENT:  # a finished task's account is free again, however recently it was sent

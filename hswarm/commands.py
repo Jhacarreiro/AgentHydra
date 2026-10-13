@@ -453,6 +453,18 @@ async def cmd_history(a) -> int:
     return 0
 
 
+async def cmd_backfill_free_misses(a) -> int:
+    """Append the free_miss rows the finished jobs' route notes name and the ledger lacks (free_backfill.py)."""
+    from . import free_backfill
+
+    out = await asyncio.to_thread(free_backfill.backfill, a.days, a.dry_run)
+    verb = "would add" if a.dry_run else "added"
+    print(f"{verb} {out['rows']} free_miss row(s) ({out['existing']} already in the ledger)")
+    for model, n in sorted(out["by_model"].items(), key=lambda kv: -kv[1]):
+        print(f"  {model:40s} {n:>6d}")
+    return 0
+
+
 async def cmd_survival(a) -> int:
     """Score the edits that reached a checkpoint, then say per model how much of what its workers wrote was kept."""
     from . import survival
@@ -886,5 +898,5 @@ COMMANDS = {
     "service": cmd_service,
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
-    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "index": cmd_index, "survival": cmd_survival, "prefix": cmd_prefix, "egress": cmd_egress,
+    "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "index": cmd_index, "survival": cmd_survival, "backfill-free-misses": cmd_backfill_free_misses, "prefix": cmd_prefix, "egress": cmd_egress,
 }

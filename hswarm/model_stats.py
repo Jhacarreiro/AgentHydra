@@ -57,10 +57,27 @@ def _survival_1d(path: Path, since: dt.datetime) -> dict[tuple, float]:
     return out
 
 
+def _unjudged(r: dict) -> bool:
+    """A non-ok line that says nothing about the model: the caller or a server stop cancelled it, the caller's own job
+    budget ended it, or its failure was a dead key (`unjudged`). Old lines have only the `cancelled` status."""
+    return r.get("status") != "ok" and (r.get("status") == "cancelled" or r.get("error_kind") in ("cancelled", "job_budget")
+                                        or bool(r.get("unjudged")))
+
+
 def _add_task(m: dict, r: dict) -> None:
-    """One ledger line's task, status, spend, time and tokens into its model's tally."""
+    """One ledger line's task, status, spend, time and tokens into its model's tally. A free_miss line is a Free try
+    HSwarm did not accept, not a task: it counts as a failure (a thumbs-down) and nothing else. A cancelled,
+    job-budget or unjudged line is a task that is neither a success nor a failure."""
+    if r.get("free_miss"):
+        m["failed"] += 1
+        return
     m["tasks"] += 1
-    m["ok" if r.get("status") == "ok" else "failed"] += 1
+    if r.get("status") == "ok":
+        m["ok"] += 1
+    elif _unjudged(r):
+        m["unjudged"] += 1
+    else:
+        m["failed"] += 1
     m["cost_usd"] += float(r.get("cost_usd") or 0.0)
     m[money_kind(r) + "_usd"] += float(r.get("cost_usd") or 0.0)
     m["seconds"] += float(r.get("seconds") or 0.0)
@@ -70,12 +87,12 @@ def _add_task(m: dict, r: dict) -> None:
 def _summary(m: dict) -> dict:
     """A model's tally as the console shows it: rounded, with its rates and averages."""
     s = m.pop("_surv")
-    return {**m, "success_rate": round(m["ok"] / m["tasks"], 4), "cost_usd": round(m["cost_usd"], 6),
+    return {**m, "success_rate": round(m["ok"] / (m["ok"] + m["failed"]), 4) if m["ok"] + m["failed"] else None, "cost_usd": round(m["cost_usd"], 6),
             "value_usd": round(m["cost_usd"], 6), "spent_usd": round(m["spent_usd"], 6),
             "free_usd": round(m["free_usd"], 6), "unknown_usd": round(m["unknown_usd"], 6),
             "cost_per_ok": round(m["cost_usd"] / m["ok"], 6) if m["ok"] else None,
             "tokens_per_ok": round(m["tokens"] / m["ok"]) if m["ok"] else None,
-            "avg_seconds": round(m["seconds"] / m["tasks"], 2), "seconds": round(m["seconds"], 1),
+            "avg_seconds": round(m["seconds"] / m["tasks"], 2) if m["tasks"] else 0.0, "seconds": round(m["seconds"], 1),
             "survival": round(s / m["scored"], 4) if m["scored"] else None}
 
 
@@ -96,9 +113,11 @@ def compute(days: int, ledger: Path, survival_log: Path, now: dt.datetime | None
         if at < since or r.get("cached"):
             continue
         name = str(r.get("model") or "other")
-        m = models.setdefault(name, {"model": name, "tasks": 0, "ok": 0, "failed": 0, "cost_usd": 0.0, "seconds": 0.0,
+        m = models.setdefault(name, {"model": name, "tasks": 0, "ok": 0, "failed": 0, "unjudged": 0, "cost_usd": 0.0, "seconds": 0.0,
                                      "spent_usd": 0.0, "free_usd": 0.0, "unknown_usd": 0.0, "tokens": 0, "scored": 0, "_surv": 0.0})
         _add_task(m, r)
+        if r.get("free_miss"):
+            continue  # not a task: no day count, no survival score
         day = at.astimezone().date().isoformat()
         day_counts.setdefault(name, {}).setdefault(day, 0)
         day_counts[name][day] += 1
