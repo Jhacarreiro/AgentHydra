@@ -55,6 +55,10 @@ def _read(db_path: Path, days: int) -> dict:
         # The stored check, as the report shows it: recomputing would read this home's routing log, not the DB's.
         rule_check = {**latest["rules"], "day": latest["day"], "partial": bool(latest.get("partial"))} if latest and latest.get("rules") else None
         recent_rows = utilization.recent(c, 50)
+        # The last `days` calendar days, oldest first (both sources are newest first). Filled before it is cut: cut first, a
+        # day nothing ran pushed the window a day further back.
+        window = fill_zero_days(list(reversed(per_day)))[-days:]
+        first_day = window[0]["day"] if window else ""
 
         return {
             "source": _source(),
@@ -64,8 +68,8 @@ def _read(db_path: Path, days: int) -> dict:
             "plan_rates": rates,
             "plan": utilization.plan_view(total, rates),
             "by_machine": [report_html.weigh_row(m, rates) for m in utilization.by_machine(c)],
-            "days": fill_zero_days(list(reversed(per_day[:days]))),  # both sources are newest first; the answer is oldest first
-            "claude_by_family": list(reversed(report_html.claude_by_family(c, rates)[:days])),
+            "days": window,
+            "claude_by_family": [r for r in reversed(report_html.claude_by_family(c, rates)) if r["day"] >= first_day],
             "accounts": report_html.account_view(c),
             "rule_check": rule_check,
             "recent": recent_rows,

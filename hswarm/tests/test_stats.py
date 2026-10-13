@@ -122,8 +122,9 @@ def test_stats_respects_days_parameter(tmp_path, monkeypatch):
     assert result_200["empty"] is True
 
 
-def _seeded_db(tmp_path, monkeypatch, n_days=5):
-    """A DB with one run and one stored Claude day (with its rule check) on each of the last n_days local days."""
+def _seeded_db(tmp_path, monkeypatch, n_days=5, quiet=()):
+    """A DB with one run and one stored Claude day (with its rule check) on each of the last n_days local days but the
+    `quiet` ones (0 = today), which hold nothing."""
     db_path = tmp_path / "test.sqlite"
     monkeypatch.setenv("HSWARM_STATS_DB", str(db_path))
     c = sqlite3.connect(str(db_path), timeout=15)
@@ -134,6 +135,8 @@ def _seeded_db(tmp_path, monkeypatch, n_days=5):
         noon = dt.datetime.now().astimezone().replace(hour=12, minute=0, second=0, microsecond=0) - dt.timedelta(days=i)
         day = noon.date().isoformat()
         days.append(day)
+        if i in quiet:
+            continue
         c.execute("INSERT INTO utilizations (id, ts, kind, machine, tasks, worker_usd, seq) VALUES (?, ?, ?, ?, ?, ?, ?)",
             (f"r{i}", noon.isoformat(), "run", utilization.MACHINE, 1, 0.01, i))
         c.execute("INSERT INTO claude_days (machine, day, claude_usd, sub_usd, subagents, partial, by_model, rules, tokens, plan_usd)"
@@ -144,12 +147,17 @@ def _seeded_db(tmp_path, monkeypatch, n_days=5):
     return days  # newest first
 
 
-def test_stats_days_are_the_newest_window_oldest_first(tmp_path, monkeypatch):
-    days = _seeded_db(tmp_path, monkeypatch)
+# The answer for `days` is the last `days` calendar days, oldest first: a day nothing ran is a zero day inside it, never
+# a reason to reach further back. Regression: 2026-10-13, the newest `days` days WITH rows were taken, so one quiet day
+# stretched the window a day further back (desk2's week-on-week tiles read the wrong fortnight).
+@pytest.mark.parametrize("quiet", [(), (1,)])
+def test_stats_days_are_the_newest_window_oldest_first(tmp_path, monkeypatch, quiet):
+    days = _seeded_db(tmp_path, monkeypatch, quiet=quiet)
     with patch("hswarm.report_html.account_view", return_value=NO_ACCOUNTS):
-        result = stats.stats(2)
-    assert [d["day"] for d in result["days"]] == [days[1], days[0]]
-    assert [d["day"] for d in result["claude_by_family"]] == [days[1], days[0]]
+        result = stats.stats(3)
+    assert [d["day"] for d in result["days"]] == [days[2], days[1], days[0]]
+    assert [d["tasks"] for d in result["days"]] == [1, 0 if 1 in quiet else 1, 1]
+    assert [d["day"] for d in result["claude_by_family"]] == [days[i] for i in (2, 1, 0) if i not in quiet]
 
 
 def test_stats_rule_check_is_the_latest_stored_day(tmp_path, monkeypatch):
