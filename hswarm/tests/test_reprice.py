@@ -83,6 +83,19 @@ def test_reprice_history_caps_each_row_on_its_own_profile_from_ledger_and_task_h
     assert again["rows"] == 0  # already on this method
 
 
+def test_a_run_job_missing_from_tasks_sqlite_is_sized_from_the_ledgers_own_ok_lines():
+    _ledger({"ts": TS, "job": "job-ledger", "task": "a", "model": "deepseek-flash", "provider": "deepseek", "status": "ok", "in_hit": 2000, "in_miss": 400, "out": 100},
+            {"ts": TS, "job": "job-ledger", "task": "b", "model": "x", "provider": "climayte", "status": "ok", "in_hit": 0, "in_miss": 0, "out": 0},
+            {"ts": TS, "job": "job-ledger", "task": "c", "model": "deepseek-flash", "provider": "deepseek", "status": "error", "in_hit": 9, "in_miss": 9, "out": 9})
+    c = utilization.connect()
+    _store_profile(c)
+    _put(c, _old_row("job-ledger", kind="run", label="x", tasks=3, ok=2))  # tasks.sqlite holds nothing for this job
+    utilization.reprice_history(c=c)
+    row = dict(c.execute("SELECT * FROM utilizations WHERE id = 'job-ledger'").fetchone())
+    assert row["unsized"] == 0 and row["est_tokens"] == 2500  # task a from its ledger ok line, task b is CliMayte (credited nothing)
+    assert row["est_usd"] == pytest.approx(utilization.task_usd(MODEL, [2000, 400, 100]), abs=1e-6)
+
+
 def test_a_row_with_no_token_source_is_unsized_not_the_median_and_climayte_is_credited_nothing():
     c = utilization.connect()
     _store_profile(c)

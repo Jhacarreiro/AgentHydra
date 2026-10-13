@@ -42,8 +42,8 @@ SYNC_BRANCH = "sync"
 MACHINE = (os.environ.get("HSWARM_MACHINE") or platform.node() or "unknown").lower()
 FLOOR_MODEL = "claude-sonnet-5"
 POOL_DAYS = 14
-METHOD = 2  # utilizations.method: NULL/1 = the median per task (old), 2 = each task capped at its own tokens, priced at the measured model mix
-METHOD_SINCE = "2026-10-09"  # the day the per-task cap went in; rows of an older method keep the old label
+METHOD = 3  # utilizations.method: NULL/1 = the median per task (old), 2 = each task capped at its own tokens (old), 3 = as 2 with a job's tasks taken from the ledger's own ok lines when tasks.sqlite does not hold the job
+METHOD_SINCE = "2026-10-13"  # the day the current method went in; rows of an older method keep the old label
 MIN_POOL = 5
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 
@@ -1502,7 +1502,7 @@ def _run_task_tokens(job_ids: set[str]) -> dict[str, list[tuple[str, int, int]]]
     return out
 
 
-def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict) -> list:
+def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict, by_job: dict) -> list:
     """The per-task token list of one old row, rebuilt from the sources: a task with no source stays None (unsized)."""
     ok = int(r["ok"]) if r.get("ok") is not None else int(r.get("tasks") or 0)
     if r["kind"] == "ask":
@@ -1513,9 +1513,11 @@ def _rebuilt_tokens(r: dict, by_id: dict, by_ts: dict, by_task: dict, runs: dict
         if tok is not None and tok != NO_CREDIT and not any(tok):
             tok = None
         return [tok] if ok else []
-    got = runs.get(r["id"], [])[:ok]
+    got = runs.get(r["id"])
+    if got is None:  # tasks.sqlite does not hold this job: take its tasks from the ledger's own ok lines (no in/out counts, so only a ledger line sizes a task)
+        got = [(task, 0, 0) for task in by_job.get(r["id"], [])]
     sized: list = []
-    for task_id, i, o in got:
+    for task_id, i, o in got[:ok]:
         tok = by_task.get((r["id"], task_id))
         if tok is None and (i or o):
             tok = [0, i, o]
@@ -1535,7 +1537,8 @@ def _merge_known(rebuilt: list, existing) -> list:
 def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, ledger: Path | None = None) -> dict:
     """Price this machine's history by the current method (METHOD): each answered task credited the smaller of the median
     sub-agent and its own tokens, at the sub-agent models measured on its day. Every row keeps ITS OWN stored profile (history
-    is not re-run against today's profile); task tokens are rebuilt from ledger lines (asks) and history/tasks.sqlite (runs).
+    is not re-run against today's profile); task tokens are rebuilt from ledger lines (asks) and history/tasks.sqlite (runs,
+    or the ledger's own ok lines per task when tasks.sqlite does not hold the job).
     Other machines' rows are left as their machine priced them and reported as `old_method`. `dry_run` writes nothing."""
     own = c is None
     c = c or connect()
@@ -1543,6 +1546,9 @@ def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, 
         rows = [dict(r) for r in c.execute("SELECT * FROM utilizations WHERE machine = ? AND COALESCE(method, 0) < ?", (MACHINE, METHOD))]
         profiles = {r["id"]: dict(r) for r in c.execute("SELECT * FROM profiles")}
         by_id, by_ts, by_task = _ledger_sources(ledger)
+        by_job: dict[str, list[str]] = {}
+        for job, task in by_task:  # by_task indexed by job once: the fallback task list for a job tasks.sqlite does not hold
+            by_job.setdefault(job, []).append(task)
         runs = _run_task_tokens({r["id"] for r in rows if r["kind"] == "run"})
         mixes: dict[str, dict] = {}
         rep = {"machine": MACHINE, "rows": len(rows), "dry_run": dry_run, "method": METHOD, "unpriced": 0, "unsized_tasks": 0, "no_credit_tasks": 0,
@@ -1560,7 +1566,7 @@ def reprice_history(dry_run: bool = False, c: sqlite3.Connection | None = None, 
                 continue
             day = r.get("day") or local_day(r.get("ts"))
             mix = mixes.get(day) if day in mixes else mixes.setdefault(day, day_mix(c, MACHINE, day))
-            r["task_tokens"] = json.dumps(_merge_known(_rebuilt_tokens(r, by_id, by_ts, by_task, runs), r.get("task_tokens")))
+            r["task_tokens"] = json.dumps(_merge_known(_rebuilt_tokens(r, by_id, by_ts, by_task, runs, by_job), r.get("task_tokens")))
             new = r | estimate(r, prof, mix)
             rep["est_usd_after"] += new["est_usd"]
             rep["saved_usd_after"] += new["saved_usd"]
