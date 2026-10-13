@@ -187,6 +187,15 @@ snapshot onward, however long that read took: counted from the answer instead, a
 take one idle account (2026-10-09). `selection.route` shows the route a task took (`via: free`), the
 ledger line says provider `free`. Order: free accounts first, then CliMayte, then the paid API (docs/CLIMAYTE.md, "Which route first"). Settings: `route_via_free` (default on), `route_via_free_max` (default: as many as are idle), `route_via_free_profiles`.
 
+A task with tools goes to a Free thread too when every tool it is offered only reads (`route_via_free_tools`; the web
+tools only for a profile in `route_via_free_web_profiles`, default research) and its profile is in
+`route_via_free_tool_profiles` (default routine, general, decision, research). `route_via_free_tool_asks` names the
+model and provider a profile's thread asks for: decision and research ask for Sonnet on a Claude account
+(`sonnet@claude`) with under 80% of its 5-hour window used, else they take their API route. In a blind A/B on real tasks
+(2026-10-13) Sonnet there beat the API answers on that work 10 to 0 (1 tie), while ChatGPT's threads (GPT-5.6 mini, and
+GPT-6) lost it: they read a median of 3 times before answering where the API read 20. Routine and general work runs on
+whichever account is idle, where mini held level with the API.
+
 `hswarm_decide`'s escalations take this route one question per message. Putting all of one state's open questions in
 one Free message was measured on Dredd's gold asks and not shipped (2026-10-08,
 [docs/BENCH-2026-10-08-free-batch.md](docs/BENCH-2026-10-08-free-batch.md)): batching cost 1-2 points against the

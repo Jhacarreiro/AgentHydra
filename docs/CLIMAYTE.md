@@ -43,7 +43,9 @@ are actually free"; 2026-10-13: the CliMayte accounts are free too, so they go f
 keys only when nothing cheaper can do the job).
 
 1. **Free accounts** take tool-free work at no cost. HSwarm tries them first when `route_via_free` is on and the
-   task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step.
+   task's profile is in `route_via_free_profiles`; no idle account or a bad reply moves on to the next step. A task
+   whose tools only read goes to CliMayte first (step 2) and then to a Free thread before any key
+   (`route_via_free_tool_profiles`, `route_via_free_tool_asks`; hswarm/README.md, "Free accounts first").
 2. **CliMayte** takes every task with tools that an idle account can start now: HSwarm reads `GET /api/corch/capacity`
    (idle accounts, less the workers queued there and its own sends of the last 2 s) and asks no price question
    (`hswarm/climayte_route.py`). With no account idle the task runs on its API route at once, never queued here. Until
