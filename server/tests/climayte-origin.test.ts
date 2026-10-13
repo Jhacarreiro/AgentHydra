@@ -332,6 +332,12 @@ describe('a chat that reads or cancels its own workers is not pinged about them 
     await bound('climayte_cancel').run({ id: a })
     expect(workers.get(a)?.status).toBe('cancelled')
     expect(workers.get(a)?.seenAt).toBeGreaterThanOrEqual(read)
+    // A finished worker's stamp reaches its done/ file, so a daemon restart does not bring its pings back.
+    await new Promise((r) => setTimeout(r, 5))
+    await bound('climayte_status').run({ id: a })
+    await flushCliMayteStore()
+    const filed = JSON.parse(readFileSync(join(ROOT, 'done', `${a}.json`), 'utf8'))
+    expect(filed.seenAt).toBe(workers.get(a)?.seenAt)
   })
 })
 

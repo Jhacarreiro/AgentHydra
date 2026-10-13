@@ -280,9 +280,17 @@ async function climayteStatusPings(
   return Object.keys(extra).length ? extra : null
 }
 
-/** The longest a scoped status read or a cancel waits, counted from the call's start, to learn which chat called
- *  it for markSeen. The trace runs beside the call, so it rarely adds time. */
-const SEEN_TRACE_MS = 3_000
+/** The longest a scoped status read or a cancel holds its answer, past the answer itself, for markSeen. The trace
+ *  starts with the call and keeps its own CALLER_ORIGIN_BUDGET_MS: a slower one stamps after the answer has gone.
+ *  A 3 s budget for the trace itself missed on the first read after a daemon restart (2026-10-13, at 99% CPU). */
+const SEEN_WAIT_MS = 3_000
+
+/** Wait for `p` at most `ms`; it goes on either way. */
+async function within(p: Promise<unknown>, ms: number): Promise<void> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([p, new Promise((r) => (timer = setTimeout(r, ms)))])
+  clearTimeout(timer)
+}
 
 /** Tell the daemon the calling chat has looked at `scope` as of `at` (a scoped climayte_status read, or its own
  *  climayte_cancel), so the pings queued about those workers before then are left out (climayte-ping.ts stale).
@@ -1193,14 +1201,14 @@ export const TOOLS: HydraTool[] = [
       const group = a.group != null && str(a.group) ? str(a.group) : undefined
       // A scoped read is the chat looking at its own work: what it read is no news after this (markSeen).
       const scope = statusScope(a, group)
-      const trace = scope ? callerOrigin(a, SEEN_TRACE_MS) : null
+      const trace = scope ? callerOrigin(a) : null
       // Adoption first, so the list read after it already shows it.
       const extra = await climayteStatusPings(a, group)
       // The watch gets only what the call has left: the pings' caller lookup can take up to
       // CALLER_ORIGIN_BUDGET_MS, and a full watch after it was an answer the call budget dropped.
       const left = Math.floor(CLIMAYTE_MAX_WAIT_S - (Date.now() - started) / 1000)
       const answer = await climayteStatusRead(a, group, Math.max(0, left))
-      if (scope && trace) await markSeen(trace, scope, Date.now())
+      if (scope && trace) await within(markSeen(trace, scope, Date.now()), SEEN_WAIT_MS)
       if (!extra) return answer
       return Array.isArray(answer)
         ? { workers: answer, ...extra }
@@ -1364,7 +1372,7 @@ export const TOOLS: HydraTool[] = [
     run: async (a) => {
       if (a.id == null && a.group == null) throw new Error('pass `id` or `group`')
       // A chat that cancels its own work knows it ended: no ping about it (markSeen).
-      const trace = callerOrigin(a, SEEN_TRACE_MS)
+      const trace = callerOrigin(a)
       const r = (await api('/api/corch/cancel', {
         method: 'POST',
         headers: JSON_HEADERS,
@@ -1376,7 +1384,7 @@ export const TOOLS: HydraTool[] = [
       const ids = Array.isArray(r?.cancelled)
         ? r.cancelled.filter((x): x is string => typeof x === 'string')
         : []
-      if (ids.length) await markSeen(trace, { ids }, Date.now())
+      if (ids.length) await within(markSeen(trace, { ids }, Date.now()), SEEN_WAIT_MS)
       return r
     },
   },

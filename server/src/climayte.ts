@@ -66,6 +66,7 @@ import {
   type LogRead,
   liveByAccount,
   load,
+  markForSave,
   notify,
   packColdWorkers,
   packedPath,
@@ -2189,6 +2190,9 @@ export function climayteSeen(
     if (!inScope || w.origin?.kind !== 'chat' || w.origin.sessionId !== sessionId) continue
     if ((w.seenAt ?? 0) >= at) continue
     w.seenAt = at
+    // A finished worker's done/ file is written only when marked: unmarked, its stamp lived in memory and a
+    // restart brought its pings back (2026-10-13, seen live on w-49823ef0).
+    markForSave(w)
     seen++
   }
   if (seen) save()

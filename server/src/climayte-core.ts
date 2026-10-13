@@ -898,6 +898,12 @@ export function changed(w: CliMayteWorker): void {
   void closeWorkerTabs(w)
 }
 
+/** A field no listener watches changed (climayteSeen's `seenAt`): written with the next save, a finished worker's
+ *  done/ file included, with no change event, so no status waiter wakes for it. */
+export function markForSave(w: CliMayteWorker): void {
+  dirty.add(w.id)
+}
+
 const isInit = (ev: unknown): boolean =>
   (ev as { type?: string; subtype?: string })?.type === 'system' &&
   (ev as { subtype?: string }).subtype === 'init'
