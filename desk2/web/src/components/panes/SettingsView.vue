@@ -506,21 +506,6 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-[12px] leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ babysitterNote }}</div>
-                <template v-if="r.id === 'routines' && routines">
-                  <div v-if="!routines.routines.length && !routines.proposals.length" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">
-                    No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
-                  </div>
-                  <template v-if="routines.proposals.length">
-                    <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
-                    <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
-                  </template>
-                  <template v-for="g in routineGroups" :key="g.key">
-                    <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2">
-                      <CirclePause v-if="g.key === 'paused'" class="size-3.5 text-text-muted" aria-hidden="true" /><Activity v-else class="size-3.5 text-success" aria-hidden="true" />{{ g.title }} ({{ g.routines.length }})
-                    </h4>
-                    <RoutineCard v-for="x in g.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
-                  </template>
-                </template>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-[12px] leading-4.5 text-text-muted">{{ n }}</div>
@@ -688,6 +673,24 @@ onBeforeUnmount(() => {
                   {{ bridge === null ? 'Checking…' : bridge.up ? 'Connected' : 'Not running' }}
                 </span>
               </template>
+
+              <!-- The routine list wraps onto its own full-width line, so the Routines switch stays beside its title, not
+                   centred down the list. -->
+              <div v-if="r.id === 'routines' && routines" class="basis-full">
+                <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-[12px] leading-4.5 text-text-muted">
+                  No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
+                </div>
+                <template v-if="routines.proposals.length">
+                  <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
+                  <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
+                </template>
+                <template v-for="g in routineGroups" :key="g.key">
+                  <h4 class="mt-3 flex items-center gap-1.5 text-[12px] leading-4.5 text-text-2 first:mt-0">
+                    <CirclePause v-if="g.key === 'paused'" class="size-3.5 text-text-muted" aria-hidden="true" /><Activity v-else class="size-3.5 text-success" aria-hidden="true" />{{ g.title }} ({{ g.routines.length }})
+                  </h4>
+                  <RoutineCard v-for="x in g.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
+                </template>
+              </div>
             </div>
           </div>
         </div>

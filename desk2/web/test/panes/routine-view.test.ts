@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'bun:test'
 import type { RoutineRun } from '@shared/routines'
-import { groupRoutines, lastRunText, nextRunText, relativeTime, routineStatus, scheduleSentence, spanOf } from '../../src/components/panes/routine-view'
+import { groupRoutines, lastRunText, nextRunText, plainReason, relativeTime, routineStatus, scheduleSentence, spanOf } from '../../src/components/panes/routine-view'
 
 const NOW = Date.UTC(2026, 9, 12, 12, 0, 0)
 const run = (outcome: RoutineRun['outcome']): RoutineRun => ({ startedAt: NOW - 1, endedAt: NOW - 2 * 3_600_000, outcome, exitCode: 0, lastLine: '', workerId: null, sessionId: null })
@@ -45,6 +45,16 @@ describe('scheduleSentence', () => {
   })
   it('hands back the cron for a form it cannot read plainly', () => {
     expect(scheduleSentence('*/5 * * * *', 'America/Chicago')).toBe('Cron */5 * * * *, Chicago time')
+  })
+})
+
+describe('plainReason', () => {
+  it("writes the manager's ISO stamps as local time in words and leaves other reasons as they are", () => {
+    expect(plainReason('next due 2026-10-13T13:57:00.000Z', 'America/Chicago')).toBe('next due Tuesday, October 13 at 8:57, Chicago time')
+    expect(plainReason('slot 2026-10-12T01:00:00.000Z was missed by more than 12 hours: skipped', 'UTC')).toBe(
+      'slot Monday, October 12 at 1:00, UTC time was missed by more than 12 hours: skipped'
+    )
+    expect(plainReason('paused by the owner', 'America/Chicago')).toBe('paused by the owner')
   })
 })
 

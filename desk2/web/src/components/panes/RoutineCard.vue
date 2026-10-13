@@ -9,7 +9,7 @@ import { useClock } from '@/lib/clock'
 import { usePaneApi } from './api'
 import { BUTTON } from './settings-styles'
 import RoutineStatusChip from './RoutineStatusChip.vue'
-import { lastRunText, localZone, nextRunText, outcomeKind, routineStatus, scheduleSentence, spanOf } from './routine-view'
+import { lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
 
 const props = defineProps<{
   /** The routine as the last look saw it (GET /api/routines). */
@@ -105,7 +105,7 @@ async function act(body: Parameters<typeof api.routinesAct>[0]) {
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span class="wrap-break-word">{{ scheduleText }}<template v-if="routine.until"> · until {{ routine.until }}</template></span>
       </div>
-      <div class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">{{ routine.headline ?? routine.reason }}</div>
+      <div class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
       <div v-if="totalsText" class="mt-0.5 tnum ps-5 text-[12px] leading-4.5 text-text-muted">{{ totalsText }}</div>
       <div v-if="routine.what === 'prompt' && routine.cwd" class="mt-0.5 wrap-break-word ps-5 text-[12px] leading-4.5 text-text-muted">An AI prompt in {{ routine.cwd }}</div>

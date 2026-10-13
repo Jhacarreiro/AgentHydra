@@ -48,6 +48,16 @@ export function relativeTime(at: number, now: number): string {
   return diff < 0 ? `${spanOf(-diff)} ago` : `in ${spanOf(diff)}`
 }
 
+/** A reason from the routine manager with its ISO stamps in plain words: 'next due 2026-10-13T13:57:00.000Z' reads
+ *  'next due Tuesday, October 13 at 8:57, Chicago time'. The manager writes ISO for the agents that read the same field. */
+export function plainReason(reason: string, zone: string): string {
+  const fmt = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h23' })
+  return reason.replace(/\d{4}-\d{2}-\d{2}T\d{2}:\d{2}(?::\d{2}(?:\.\d+)?)?Z/g, (iso) => {
+    const p = Object.fromEntries(fmt.formatToParts(new Date(iso)).map((x) => [x.type, x.value]))
+    return `${p.weekday}, ${p.month} ${p.day} at ${Number(p.hour)}:${p.minute}, ${zoneName(zone)} time`
+  })
+}
+
 /** The row's last-run text: null when it never ran. */
 export function lastRunText(r: Pick<Routine, 'runs' | 'lastRunAt'>, now: number): string | null {
   const at = r.runs[0]?.endedAt ?? r.lastRunAt
