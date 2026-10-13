@@ -314,6 +314,8 @@ export interface DevWebSettings {
   autoScan: boolean
   /** Folder names (matched anywhere) or absolute paths a scan skips. */
   scanExclude: string[]
+  /** A server AgentHydra started is stopped once nobody has used it this many minutes; 0 never stops it. */
+  idleStopMinutes: number
   skipWindows: boolean
   skipMac: boolean
   skipLinux: boolean

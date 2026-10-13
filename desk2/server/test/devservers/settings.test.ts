@@ -25,7 +25,7 @@ test('the defaults skip the system folders of the running OS only', () => {
     ['linux', false, false, true],
   ]
   for (const [platform, skipWindows, skipMac, skipLinux] of cases) {
-    expect(defaultSettings(platform)).toMatchObject({ skipWindows, skipMac, skipLinux, runtime: 'auto', freePortOnStart: false, autoStartOnLaunch: false, monitorResources: true, linkHost: '', autoScan: false, scanExclude: [] })
+    expect(defaultSettings(platform)).toMatchObject({ skipWindows, skipMac, skipLinux, runtime: 'auto', freePortOnStart: false, autoStartOnLaunch: false, monitorResources: true, linkHost: '', autoScan: false, scanExclude: [], idleStopMinutes: 30 })
   }
 })
 
@@ -55,7 +55,7 @@ test("the first run takes only the settings keys from DevWebUI's file, never wri
 })
 
 test('a settings change with a wrong type is a 400, and unknown keys are left out', () => {
-  const bad: unknown[] = [null, [], { runtime: 'deno' }, { autoScan: 'yes' }, { monitorResources: 1 }, { linkHost: 5 }, { linkHost: 'my pc' }, { scanExclude: 'node_modules' }, { scanExclude: [1] }, { osSkip: { windows: [2] } }]
+  const bad: unknown[] = [null, [], { runtime: 'deno' }, { autoScan: 'yes' }, { monitorResources: 1 }, { linkHost: 5 }, { linkHost: 'my pc' }, { scanExclude: 'node_modules' }, { scanExclude: [1] }, { osSkip: { windows: [2] } }, { idleStopMinutes: 1.5 }, { idleStopMinutes: 1441 }]
   for (const patch of bad) {
     let err: unknown = null
     try {

@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Idle dev servers stop themselves.** A dev server AgentHydra started that nobody has used for 30 minutes is stopped, and starts again the next time something asks for it. Settings sets the time, or turns it off.
 - **Old CliMayte worker logs are archived instead of piling up.** Logs of workers that finished more than 7 days
   ago move into one archive file per day, which any tar tool opens. Nothing is deleted, and a worker's status
   still shows its log, saying it came from the archive.

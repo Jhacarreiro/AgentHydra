@@ -40,6 +40,7 @@ import type {
   DevWebTrigger
 } from '@shared/devwebui'
 import type { Scan } from '../localhost/ports'
+import type { ClientCounter } from './idle'
 
 /** <home>/devservers/service.json: written by the service once it listens, removed when it exits cleanly. */
 export interface ServiceFile {
@@ -72,6 +73,8 @@ export interface DevServersDeps {
   /** Walks the disk for projects (default scan.ts scanProjects; the first start's scan covers every drive). */
   findProjects?: (opts: { preset: DevWebScanPreset; roots?: string[]; exclude?: string[] }) => Promise<DevWebScanResult>
   now?: () => number
+  /** Counts each server's outside clients (default idle.ts netstatClients). */
+  clients?: ClientCounter
   /** Watch the .devwebui files and apply their changes (default true). */
   watch?: boolean
   /** Desk's own pid and port, and the service's: never taken for a dev server. */
@@ -163,6 +166,8 @@ export interface DevServers {
 
   startAllServers(): Promise<{ ok: true; started: string[] }>
   stopAllServers(): Promise<{ ok: true; stopped: string[] }>
+  /** The idle pass the timer runs: stops each server AgentHydra started that no one has used for idleStopMinutes; returns the ids it stopped. */
+  checkIdle(): Promise<string[]>
   /** A page of its on-disk log: the newest `limit` lines before `before` (a seq), newest last. */
   logPage(id: string, opts: { before?: number; limit?: number }): Promise<{ lines: DevWebLogLine[]; more: boolean }>
   /** Ends an outside holder only when its pid is in confirmPids (the owners a needsConfirm answer showed). */

@@ -42,7 +42,7 @@ import {
   processAddress
 } from '@shared/devwebui'
 import { killHostTree, pidAlive } from '../host/launch'
-import { type Scan, scanPorts } from '../localhost/ports'
+import { isDescendant, type Scan, scanPorts } from '../localhost/ports'
 import { type AdoptContext, findByFolder, judgePort } from './adopt'
 import { UrlCapture } from './advertised-url'
 import { stripAnsi } from './ansi'
@@ -55,6 +55,7 @@ import { fileUrlToLocalPath, resolveLoadTarget, writeScaffold } from './load'
 import { type LoadedProject, type ProcessDef, parseJsonText, parseProjectSpec, readProjectFile, samePath } from './project-file'
 import { dataDir, defaultImportDir, loadFiles, readResume, removeResume, type StateShape, withPath, writeRegistry, writeState } from './registry'
 import { type AnswerRule, answerText, PromptAnswerer } from './answers'
+import { type ClientCounter, type IdleServer, netstatClients } from './idle'
 import { AlertStore } from './alerts'
 import { type ComposeSpec, composeActive, composeKey, prepareCompose, stopComposeServices } from './compose'
 import { ErrorStore } from './errors'
@@ -100,6 +101,8 @@ const OUTSIDE_STOP_WAIT_MS = 4000
 const ENSURE_WAIT_MS = 45_000
 const ENSURE_POLL_MS = 250
 const SAMPLE_MS = 3000
+/** The idle pass runs once a minute; a server is stopped only after its whole idle time, so a coarser tick is enough. */
+const IDLE_CHECK_MS = 60_000
 /** How far back each server's samples are kept for the info pane's charts: 10 minutes, 200 samples at SAMPLE_MS. */
 const METRICS_WINDOW_MS = 10 * 60_000
 
@@ -117,6 +120,8 @@ interface Entry {
   child: ChildProcess | null
   pid: number | null
   startedAt: number | null
+  /** When a client last used this server: its start, a start that reused it, an ensure, or an idle pass that saw a client. */
+  lastUsedAt: number | null
   restarts: number
   exitCode: number | null
   outside: Outside | null
@@ -229,6 +234,9 @@ class Manager implements DevServers {
   private readonly alertStore: AlertStore
   private sampler: ReturnType<typeof setInterval> | null = null
   private sampling = false
+  private readonly clients: ClientCounter
+  private idleTimer: ReturnType<typeof setInterval> | null = null
+  private idling = false
   private lastMetrics = new Map<string, { cpu: number | null; memory: number | null }>()
   /** Each server's samples of the last METRICS_WINDOW_MS, oldest first, for the info pane's charts (metricsHistory). */
   private metricsRing = new Map<string, DevWebMetricPoint[]>()
@@ -254,6 +262,7 @@ class Manager implements DevServers {
     this.portListening = deps.portListening ?? defaultPortListening
     this.alive = deps.alive ?? pidAlive
     this.scanFn = deps.scan ?? scanPorts
+    this.clients = deps.clients ?? netstatClients
     this.vault = new LogVault(path.join(dataDir(this.home), 'logs'))
     this.errorStore = new ErrorStore(path.join(dataDir(this.home), 'errors.ndjson'))
     this.alertStore = new AlertStore(dataDir(this.home))
@@ -376,6 +385,7 @@ class Manager implements DevServers {
       child: null,
       pid: null,
       startedAt: null,
+      lastUsedAt: null,
       restarts: 0,
       exitCode: null,
       outside: null,
@@ -538,6 +548,7 @@ class Manager implements DevServers {
   }
 
   private answer(e: Entry, reused: boolean, coStarted: string[]): DevWebStartAnswer {
+    if (reused) e.lastUsedAt = this.now()
     return { ok: true, process: this.view(e), reused, coStarted }
   }
 
@@ -565,6 +576,7 @@ class Manager implements DevServers {
     await this.ready
     await this.readRefresh()
     this.syncSampler()
+    this.syncIdle()
     return [...this.projects.values()].map((p) => this.projectView(p))
   }
 
@@ -674,6 +686,65 @@ class Manager implements DevServers {
     if (this.sampler) clearInterval(this.sampler)
     this.sampler = null
     this.lastMetrics.clear()
+  }
+
+  // The idle pass runs only while a run of ours is up and idleStopMinutes is on; a start, a stop and a settings change re-check that.
+  syncIdle(): void {
+    const ours = [...this.entries.values()].some((e) => e.child)
+    if (!this.closed && this.settingsNow.idleStopMinutes > 0 && ours) {
+      if (!this.idleTimer) {
+        this.idleTimer = setInterval(() => void this.checkIdle(), IDLE_CHECK_MS)
+        this.idleTimer.unref()
+      }
+    } else this.stopIdle()
+  }
+
+  private stopIdle(): void {
+    if (this.idleTimer) clearInterval(this.idleTimer)
+    this.idleTimer = null
+  }
+
+  /**
+   * The idle pass the timer runs: stops each server AgentHydra started that no client has used for idleStopMinutes, through
+   * the public stop (linked groups included); returns the ids it stopped. Outside servers and ports are never touched.
+   */
+  async checkIdle(): Promise<string[]> {
+    if (this.closed || this.idling || this.settingsNow.idleStopMinutes === 0) return []
+    this.idling = true
+    try {
+      const cands = [...this.entries.values()].filter((e) => e.child && e.pid && !e.stopping && !e.pendingStart && !e.startOp && !e.outside && e.status === 'running')
+      if (!cands.length) return []
+      const scan = await this.scanFn()
+      // A failed scan cannot tell a server's own processes from its clients, so nothing is judged idle on it.
+      if (scan.error) return []
+      const found = cands.map((e) => {
+        const tree = new Set([e.pid!, ...[...scan.procs.keys()].filter((p) => isDescendant(p, e.pid!, scan.procs))])
+        const ports = new Set(scan.listeners.filter((l) => tree.has(l.pid)).map((l) => l.port))
+        if (e.def.port) ports.add(e.def.port)
+        return { e, treePids: tree, ports: [...ports] }
+      }).filter((c) => c.ports.length > 0)
+      const servers: IdleServer[] = found.map((c) => ({ id: c.e.def.id, ports: c.ports, treePids: c.treePids }))
+      const counts = servers.length ? await this.clients(servers) : null
+      if (!counts) return []
+      const now = this.now()
+      const minutes = this.settingsNow.idleStopMinutes
+      for (const { e } of found) if ((counts.get(e.def.id) ?? 0) > 0) e.lastUsedAt = now
+      const idle = (x: Entry) => now - (x.lastUsedAt ?? x.startedAt ?? now) >= minutes * 60_000
+      const stopped: string[] = []
+      for (const { e } of found) {
+        if (!e.child || stopped.includes(e.def.id) || !idle(e)) continue
+        // Stopping one member stops its whole linked group, so a member still in use keeps the group up.
+        const group = linkedGroupIds(e.def, this.defsList()).map((gid) => this.entries.get(gid)).filter((g): g is Entry => !!g?.child)
+        if (group.some((g) => !idle(g))) continue
+        this.addLog(e, 'stdout', `[devservers] stopped: no one used it for ${minutes} min. Start it again any time.`)
+        const { coStopped } = await this.stop(e.def.id)
+        stopped.push(e.def.id, ...coStopped.filter((g) => g !== e.def.id && !stopped.includes(g)))
+      }
+      return stopped
+    } finally {
+      this.idling = false
+      this.syncIdle()
+    }
   }
 
   private async sample(): Promise<void> {
@@ -1181,6 +1252,7 @@ class Manager implements DevServers {
     e.child = child
     e.pid = child.pid ?? null
     e.startedAt = this.now()
+    e.lastUsedAt = e.startedAt
     // This child's own capture: a stopped child's late output must not land in the next run's.
     const advertised = new UrlCapture()
     e.advertised = advertised
@@ -1205,6 +1277,7 @@ class Manager implements DevServers {
     if (answerer) this.answerWith(e, child, answerer.start())
     if (e.pid) this.watchReady(e, child)
     this.syncSampler()
+    this.syncIdle()
   }
 
   /** Types the reply of each rule that fired; the log says which rule, never the text (it may be a password). */
@@ -1756,6 +1829,7 @@ class Manager implements DevServers {
     this.persistSettings()
     // Resource monitoring switched on or off takes effect now, not at the next list look.
     this.syncSampler()
+    this.syncIdle()
     return this.settings()
   }
 
@@ -1782,6 +1856,7 @@ class Manager implements DevServers {
       return { ok: false, error: server ? `${project.name} has no server "${server}".` : `${project.name} has several servers: say which one to start.`, choices }
     }
     const e = this.must(picked.id)
+    e.lastUsedAt = this.now()
     let reused: boolean
     try {
       reused = (await this.start(picked.id)).reused
@@ -1847,6 +1922,7 @@ class Manager implements DevServers {
     this.queued.clear()
     this.watcher?.stop()
     this.stopSampler()
+    this.stopIdle()
     const startOps = [...this.entries.values()].filter((e) => e.startOp).map((e) => e.startOp ?? Promise.resolve())
     await Promise.race([Promise.all(startOps), new Promise((r) => setTimeout(r, 15_000))])
     await Promise.all([...this.entries.values()].map((e) => (e.child || e.pendingStart ? this.stopEntry(e) : Promise.resolve())))
@@ -1866,6 +1942,7 @@ class Manager implements DevServers {
       if (e.child && e.pid) this.safeKill(e.pid)
     }
     this.stopSampler()
+    this.stopIdle()
     this.flushStores()
   }
 

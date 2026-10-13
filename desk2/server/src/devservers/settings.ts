@@ -25,6 +25,7 @@ export function defaultSettings(platform: NodeJS.Platform = process.platform): D
     linkHost: '',
     autoScan: false,
     scanExclude: [],
+    idleStopMinutes: 30,
     skipWindows: platform === 'win32',
     skipMac: platform === 'darwin',
     skipLinux: platform === 'linux',
@@ -33,6 +34,8 @@ export function defaultSettings(platform: NodeJS.Platform = process.platform): D
 }
 
 const isObject = (v: unknown): v is Record<string, unknown> => !!v && typeof v === 'object' && !Array.isArray(v)
+
+const isIdleMinutes = (v: unknown): v is number => Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 1440
 
 const uniq = (list: unknown[], lower: boolean): string[] => [...new Set(list.map((s) => String(s).trim()).filter(Boolean).map((s) => (lower ? s.toLowerCase() : s)))]
 
@@ -44,6 +47,7 @@ function lenient(src: unknown): Partial<DevWebSettings> {
   for (const k of BOOLS) if (typeof src[k] === 'boolean') out[k] = src[k] as boolean
   if (typeof src.linkHost === 'string') out.linkHost = src.linkHost.trim()
   if (Array.isArray(src.scanExclude)) out.scanExclude = uniq(src.scanExclude, false)
+  if (isIdleMinutes(src.idleStopMinutes)) out.idleStopMinutes = src.idleStopMinutes
   if (isObject(src.osSkip)) {
     const os = src.osSkip
     const base = defaultSettings().osSkip
@@ -104,6 +108,10 @@ export function cleanSettingsPatch(patch: unknown, current?: DevWebSettings): Pa
   if (patch.scanExclude !== undefined) {
     if (!Array.isArray(patch.scanExclude) || patch.scanExclude.some((x) => typeof x !== 'string')) throw new DevServerError('scanExclude must be a list of folder names or paths', 400)
     out.scanExclude = uniq(patch.scanExclude, false).slice(0, 500)
+  }
+  if (patch.idleStopMinutes !== undefined) {
+    if (!isIdleMinutes(patch.idleStopMinutes)) throw new DevServerError('idleStopMinutes must be a whole number of minutes from 0 to 1440', 400)
+    out.idleStopMinutes = patch.idleStopMinutes
   }
   if (patch.osSkip !== undefined) out.osSkip = cleanOsSkip(patch.osSkip, current)
   return out

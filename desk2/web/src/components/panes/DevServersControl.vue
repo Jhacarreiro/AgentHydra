@@ -116,6 +116,19 @@ async function saveRuntime(runtime: 'auto' | 'node' | 'bun') {
   await props.ctx.save({ runtime })
 }
 
+const IDLE_STOP_OPTIONS = [
+  { minutes: 0, label: 'Off', title: 'Never stop' },
+  { minutes: 15, label: '15m', title: 'After 15 minutes unused' },
+  { minutes: 30, label: '30m', title: 'After 30 minutes unused' },
+  { minutes: 60, label: '1h', title: 'After 1 hour unused' },
+  { minutes: 120, label: '2h', title: 'After 2 hours unused' }
+] as const
+
+async function saveIdleStop(minutes: number) {
+  if (!s.value) return
+  await props.ctx.save({ idleStopMinutes: minutes })
+}
+
 function saveText(e: Event) {
   const box = e.target as HTMLInputElement
   const v = box.value.trim()
@@ -185,6 +198,22 @@ function saveExclude(e: Event) {
   </div>
 
   <PaneSwitch v-else-if="id === 'dwMonitor'" label="Resource monitoring" :model-value="s.monitorResources" @update:model-value="(v) => props.ctx.save({ monitorResources: v })" />
+
+  <div v-else-if="id === 'dwIdleStop'" role="radiogroup" aria-label="Stop idle servers" class="flex h-7 shrink-0 items-center gap-px rounded-(--radius-7) bg-fill-5 p-px">
+    <button
+      v-for="opt in IDLE_STOP_OPTIONS"
+      :key="opt.minutes"
+      type="button"
+      role="radio"
+      :aria-checked="s.idleStopMinutes === opt.minutes"
+      :tabindex="s.idleStopMinutes === opt.minutes ? 0 : -1"
+      :title="opt.title"
+      class="flex h-6.5 cursor-default items-center rounded-(--radius-5) px-2.5 text-ui leading-4.75 text-text-2 transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring) focus-visible:outline-none aria-checked:bg-(--fill-secondary) aria-checked:text-text"
+      @click="saveIdleStop(opt.minutes)"
+    >
+      {{ opt.label }}
+    </button>
+  </div>
 
   <input
     v-else-if="id === 'dwLinkHost'"

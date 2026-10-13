@@ -101,6 +101,7 @@ export type SettingsRowId =
   | 'dwFreePort'
   | 'dwRestartRunning'
   | 'dwMonitor'
+  | 'dwIdleStop'
   | 'dwLinkHost'
   | 'dwAutoScan'
   | 'dwSkip'
@@ -476,6 +477,7 @@ export const SETTINGS_ROWS: SettingsRow[] = [
   { id: 'dwFreePort', section: 'devservers', group: 'Starting servers', label: 'Free a port on start', description: 'End a program holding the port if it is not a tool daemon or OS service.' },
   { id: 'dwRestartRunning', section: 'devservers', group: 'Starting servers', label: 'Restart running servers', description: 'Restart servers to apply a changed runtime or new settings.' },
   { id: 'dwMonitor', section: 'devservers', group: 'Monitoring', label: 'Resource monitoring', description: 'Sample CPU and memory of every running server.' },
+  { id: 'dwIdleStop', section: 'devservers', group: 'Monitoring', label: 'Stop idle servers', description: 'Stop a server nobody has used for this long.' },
   { id: 'dwLinkHost', section: 'devservers', group: 'Monitoring', label: 'Link host', description: 'A LAN name or IP to open server links on (blank is localhost).' },
   { id: 'dwAutoScan', section: 'devservers', group: 'Finding projects', label: 'Scan on launch', description: 'Scan for projects each time the dev-servers service starts.' },
   {

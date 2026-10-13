@@ -70,6 +70,7 @@ function fakeDevServers(over: Partial<DevServers> = {}): DevServers & { stopped:
     restoreTakeover: async () => ({ ok: true as const, restored: [] }),
     startAllServers: async () => ({ ok: true as const, started: [] }),
     stopAllServers: async () => ({ ok: true as const, stopped: [] }),
+    checkIdle: async () => [],
     logPage: async () => ({ lines: [], more: false }),
     freePort: async () => ({ ok: true }),
     errors: async () => [],
