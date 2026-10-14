@@ -105,6 +105,49 @@ function injectOn(dir) {
   return existsSync(file) && readFileSync(file, "utf8").trim() === "ON";
 }
 
+function placementOf(dir) {
+  const file = path.join(dir, "PLACEMENT");
+  if (!existsSync(file)) return "off";
+  const raw = readFileSync(file, "utf8").trim();
+  return raw === "slot" || raw === "file" || raw === "attach" ? raw : "off";
+}
+
+// Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had.
+async function placedPrompt(input, env, dir) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.trimStart().startsWith("/")) return null;
+  const { key } = recordPrompt(input, env, dir, prompt);
+  try {
+    const match = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt, placement: placementOf(dir) },
+      env,
+    );
+    return match.text ? output("UserPromptSubmit", match.text) : null;
+  } catch {
+    return null;
+  }
+}
+
+// A file chat's first turn either opened its pack.md or did not: one pack_read line per session.
+function logPackRead(input, env, dir) {
+  if (placementOf(dir) !== "file" || input.stop_hook_active === true) return;
+  try {
+    const key = chatKey(input, env);
+    const chatDir = path.join(dir, "chats", key);
+    const session = String(input.session_id ?? key);
+    const marker = path.join(chatDir, "pack-read.txt");
+    if (existsSync(marker) && readFileSync(marker, "utf8") === session) return;
+    const { tools } = lastTurn(input);
+    const packPath = path.resolve(chatDir, "pack.md");
+    const read = tools.some((tool) => tool.name === "Read" && path.resolve(String(tool.input?.file_path ?? "")) === packPath);
+    writeFileSync(marker, session);
+    appendFileSync(
+      path.join(dir, "log.jsonl"),
+      `${JSON.stringify({ at: new Date().toISOString(), event: "pack_read", chat: key, session, read, firstTool: tools[0]?.name ?? null })}\n`,
+    );
+  } catch {}
+}
+
 async function requestPack(req, env) {
   const base = env.AGENTHYDRA_DAEMON_URL || "http://127.0.0.1:7787";
   const res = await fetch(`${base}/api/core/pack`, {
@@ -293,8 +336,17 @@ export async function run(input, env = process.env) {
   if (isWorker(env)) return null;
   const dir = coreDir(env);
   if (!existsSync(path.join(dir, "ON"))) return null;
-  if (event === "Stop") return stopCheck(input, env, dir);
-  if (injectOn(dir)) return event === "UserPromptSubmit" ? injectPrompt(input, env, dir) : injectSession(input, env, dir);
+  if (event === "Stop") {
+    logPackRead(input, env, dir);
+    return stopCheck(input, env, dir);
+  }
+  const placement = placementOf(dir);
+  if (placement === "slot" || placement === "file") {
+    return event === "UserPromptSubmit" ? placedPrompt(input, env, dir) : null;
+  }
+  if (injectOn(dir) || placement === "attach") {
+    return event === "UserPromptSubmit" ? injectPrompt(input, env, dir) : injectSession(input, env, dir);
+  }
   return event === "UserPromptSubmit" ? userPromptSubmit(input, env, dir) : sessionStart(input, env, dir);
 }
 

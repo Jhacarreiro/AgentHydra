@@ -91,7 +91,7 @@ import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
-import { packFor } from './hydra-core/pack'
+import { matchFor, packFor } from './hydra-core/pack'
 import { coreDir } from './hydra-core/paths'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
@@ -433,6 +433,9 @@ app.post('/api/core/pack', async (c) => {
   }
   if (!req.chat || !req.session) return c.json({ error: 'chat and session are required' }, 400)
   try {
+    if (b.placement === 'slot' || b.placement === 'file') {
+      return c.json(matchFor(coreDir(), { ...req, placement: b.placement }))
+    }
     return c.json(packFor(coreDir(), req))
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)

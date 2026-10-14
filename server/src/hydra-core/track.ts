@@ -67,6 +67,7 @@ export interface Row {
   project: string
   turn: number
   at: string
+  placement: string | null
   scopes: Scope[]
   method: Method
   compliant: boolean
@@ -76,6 +77,14 @@ export interface Row {
   unusedPicks: string[]
   usedNotOffered: string[]
   reports: Reported[]
+}
+
+export interface PlacementSummary {
+  launches: number
+  messages: number
+  meanChars: number
+  reuseRate: number | null
+  readRate: number | null
 }
 
 export interface Summary {
@@ -93,6 +102,7 @@ export interface Summary {
     meanBytes: number
     meanMs: number
   }
+  placements: { slot: PlacementSummary; file: PlacementSummary }
   reports: {
     runs: number
     reported: number
@@ -258,6 +268,11 @@ function packsOf(s: Session, turn: Turn, events: Json[]): Json[] {
   )
 }
 
+function placementOf(s: Session, events: Json[]): string | null {
+  const last = events.findLast((e) => e.event === 'placement' && str(e.session) === s.id)
+  return last ? str(last.placement) : null
+}
+
 function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
   const scopes = turn.calls
     .filter((c) => c.name === `${CORE_PREFIX}scope`)
@@ -291,6 +306,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     project: s.project,
     turn: index,
     at: new Date(turn.at).toISOString(),
+    placement: placementOf(s, events),
     scopes,
     method,
     compliant: method !== 'none',
@@ -332,11 +348,33 @@ function handoffsOf(
   return { chats, handoffs, kept, lost, linkedFiles }
 }
 
+function mean(xs: number[]): number {
+  return xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0
+}
+
+function ratio(part: number, whole: number): number | null {
+  return whole ? Math.round((part / whole) * 1000) / 1000 : null
+}
+
+function placementSummary(events: Json[]): Summary['placements'] {
+  const one = (name: 'slot' | 'file'): PlacementSummary => {
+    const mine = events.filter((e) => e.event === 'placement' && e.placement === name)
+    const launches = mine.filter((e) => e.phase === 'launch')
+    const reads = name === 'file' ? events.filter((e) => e.event === 'pack_read') : []
+    return {
+      launches: launches.length,
+      messages: mine.length - launches.length,
+      meanChars: mean(mine.map((e) => num(e.chars))),
+      reuseRate: ratio(launches.filter((e) => e.reused === true).length, launches.length),
+      readRate: ratio(reads.filter((e) => e.read === true).length, reads.length),
+    }
+  }
+  return { slot: one('slot'), file: one('file') }
+}
+
 function packSummary(events: Json[]): Summary['packs'] {
   const packs = events.filter((e) => e.event === 'pack')
   const delta = packs.filter((e) => e.mode === 'delta')
-  const mean = (xs: number[]): number =>
-    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0
   return {
     total: packs.length,
     first: packs.filter((e) => e.mode === 'first').length,
@@ -390,6 +428,7 @@ function summarize(
       none: scopes.filter((s) => s.verdict === null).length,
     },
     packs: packSummary(events),
+    placements: placementSummary(events),
     reports: {
       runs: runs.size,
       reported: [...runs.keys()].filter((k) => reported.has(k)).length,
@@ -458,7 +497,7 @@ export function writeTrack(dir: string, opts: TrackOptions = {}): Summary {
     join(out, 'ledger.jsonl'),
     rows.map((r) => JSON.stringify(r)).join('\n') + (rows.length ? '\n' : ''),
   )
-  writeFileSync(join(out, 'summary.json'), JSON.stringify(summary, null, 2) + '\n')
+  writeFileSync(join(out, 'summary.json'), `${JSON.stringify(summary, null, 2)}\n`)
   return summary
 }
 

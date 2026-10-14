@@ -69,6 +69,8 @@ import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
+import { chatKeyOk, coreDir } from './hydra-core/paths'
+import { placeChat, placementOf } from './hydra-core/placement'
 import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
@@ -692,11 +694,34 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
   return !rel.startsWith('..') && !isAbsolute(rel)
 }
 
+/** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
+function corePromptText(w: CliMayteWorker): string {
+  const head = [CORE_CHAT_NOTE, w.desk?.append]
+  const chat = w.desk?.chatId ?? w.sessionId
+  const placement = placementOf(coreDir())
+  if (
+    roleOf(w) !== 'prime' ||
+    (placement !== 'slot' && placement !== 'file') ||
+    !chat ||
+    !chatKeyOk(chat)
+  ) {
+    return head.filter(Boolean).join('\n\n')
+  }
+  const placed = placeChat(coreDir(), {
+    chat,
+    session: chat,
+    cwd: w.cwd,
+    prompt: w.prompt,
+    placement,
+  })
+  return [...head, placed.text].filter(Boolean).join('\n\n')
+}
+
 /** A chat's appended prompt: CHAT_NOTE, then the Desk's append when the task carried one (it has
  *  the media sentence, so CHAT_NOTE's own is left out), then the owner's global CLAUDE.md unless
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
 export function chatPromptText(w: CliMayteWorker): string {
-  if (coreModeOn()) return w.desk ? `${CORE_CHAT_NOTE}\n\n${w.desk.append}` : CORE_CHAT_NOTE
+  if (coreModeOn()) return corePromptText(w)
   const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')

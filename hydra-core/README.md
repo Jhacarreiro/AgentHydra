@@ -45,6 +45,18 @@ The installer writes these entries (the command path is the absolute path of `ho
 
 Other hooks are left alone. A Manager Hydra router entry (any command ending in `managers/router.mjs`) is removed, and its group is saved in `router-entry.json`. `--uninstall` removes only the core entries and puts the router back where it was.
 
+## Placement
+
+`<core dir>/PLACEMENT` says where a chat's pack (the folder's rules and what the chat needs) reaches the model. Absent means the INJECT behaviour above, unchanged.
+
+- `slot`: the pack goes into a Prime chat's appended system prompt, at most 9,500 characters. It is stored in `chats/<key>/slot.md` with a hash of its inputs and reused on each resume, so the prompt cache holds. It is recomputed only when the hash changes.
+- `file`: the pack is written to `chats/<key>/pack.md` (same reuse rule). The appended prompt gets one line that names the file's absolute path and asks the chat to read it before it acts.
+- `attach`: the INJECT path.
+- Under `slot` and `file` the per-message hook sends no scope line and no full pack. It attaches only strong matches not already placed, at most 2,000 characters, else nothing. The SessionStart re-injection of `hydra.md` is off under every placement.
+- Logged to `log.jsonl`: `placement` at each Prime launch or resume, the hook's per-message placement with the match ids and characters added, and under `file` a `pack_read` on the first Stop of a session, recording whether the chat read `pack.md` and whether that was its first tool call. `track` shows counts, mean characters, reuse rate and read rate per placement.
+
+Set it with `placement <slot|attach|file|off>` in the core's `switch.mjs`.
+
 ## Failures
 
 A hook error is written into the injected context as `Hydra Core hook error: ...`. An unknown event or unreadable stdin exits 1 with the message on stderr.
