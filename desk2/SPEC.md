@@ -970,7 +970,7 @@ drafts are saved as they are typed).
 `GET /api/server/update` on every hello and every minute (`server/src/plugins/60-update.ts`,
 `web/src/lib/server-update.ts`): `stale` once a `.ts` file under `server/src` or `shared/` was saved after the
 server started or the file count changed, `restartable` when `~/.hydra-desk-2/server.pid` names this server
-(the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
+or its parent, the cmd wrapper `start.ps1` records at once (the launcher started it; Windows only). While stale, Menu has a blue dot and **Restart to update**, which
 `POST /api/server/restart` turns into `launcher/restart.ps1`, told this server's `HYDRA_DESK_HOME` and
 `HYDRA_DESK_PORT` (it starts through WMI with none of the server's environment, so untold it restarts the default
 Desk), started hidden outside the server's process tree

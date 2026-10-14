@@ -31,6 +31,8 @@ export interface UpdateDeps {
   stamp(): CodeStamp
   platform: NodeJS.Platform
   pid: number
+  /** The process that started this server: start.ps1's cmd wrapper, when the launcher did. */
+  ppid: number
   /** The port this server listens on (HYDRA_DESK_PORT, which start.ps1 sets): the restart's stop and start use it. */
   port: number
   /** Starts argv hidden and outside the server's process tree (stop.ps1 ends that tree); `failed` hears a start that did not happen. */
@@ -54,11 +56,16 @@ export function codeStamp(dirs: string[] = CODE_DIRS): CodeStamp {
   return { newest, count }
 }
 
-/** True when the launcher started this very server: server.pid (PowerShell writes it with a BOM) names it. */
-export function startedByLauncher(home: string, pid: number): boolean {
+/**
+ * True when the launcher started this very server: server.pid (PowerShell writes it with a BOM) names it, or names its
+ * parent, the cmd wrapper start.ps1 records the moment it starts it. bun's own pid lands only once the server answers
+ * and the tray is checked: 2026-10-14, a server restart.ps1 had just started read restartable:false for that second or
+ * two, so an agent's restart to put new code live would have been refused.
+ */
+export function startedByLauncher(home: string, pid: number, ppid: number): boolean {
   try {
-    const info = JSON.parse(readFileSync(join(home, 'server.pid'), 'utf8').replace(/^﻿/, '')) as { serverPid?: unknown }
-    return Number(info.serverPid) === pid
+    const info = JSON.parse(readFileSync(join(home, 'server.pid'), 'utf8').replace(/^﻿/, '')) as { serverPid?: unknown; wrapperPid?: unknown }
+    return Number(info.serverPid) === pid || (ppid > 0 && Number(info.wrapperPid) === ppid)
   } catch {
     return false
   }
@@ -83,6 +90,7 @@ function realDeps(): UpdateDeps {
     stamp: cachedStamp(),
     platform: process.platform,
     pid: process.pid,
+    ppid: process.ppid,
     port: Number(process.env.HYDRA_DESK_PORT) || 7798,
     start(argv, failed) {
       const plan = detachedCommand(process.platform, argv)
@@ -103,7 +111,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   setTimeout(() => {
     atBoot ??= deps.stamp()
   }, 0)
-  const restartable = () => deps.platform === 'win32' && startedByLauncher(ctx.home, deps.pid)
+  const restartable = () => deps.platform === 'win32' && startedByLauncher(ctx.home, deps.pid, deps.ppid)
   const stale = (): boolean => {
     const boot = (atBoot ??= deps.stamp())
     const now = deps.stamp()

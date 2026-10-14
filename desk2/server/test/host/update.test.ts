@@ -33,14 +33,15 @@ async function boot(over: Partial<UpdateDeps> & { stamp?: () => CodeStamp } = {}
   const plugins = temp('desk-update-plugins-')
   writeFileSync(join(plugins, '60-update.ts'), `export { default } from ${JSON.stringify(pathToFileURL(PLUGIN).href)}\n`)
   const started: string[][] = []
-  const deps: UpdateDeps = { bootedAt: 1000, stamp: () => ({ newest: 900, count: 3 }), platform: 'win32', pid: 4242, port: 7899, start: (argv) => started.push(argv), ...over }
+  const deps: UpdateDeps = { bootedAt: 1000, stamp: () => ({ newest: 900, count: 3 }), platform: 'win32', pid: 4242, ppid: 4100, port: 7899, start: (argv) => started.push(argv), ...over }
   const desk: DeskServer = await createServer({ port: 0, home, pluginsDir: plugins, deps: { update: deps } })
   stops.push(() => desk.stop())
   return { desk, home, started }
 }
 
 /** server.pid as start.ps1 writes it: Set-Content -Encoding UTF8 on Windows PowerShell puts a BOM first. */
-const pidFile = (home: string, serverPid: number) => writeFileSync(join(home, 'server.pid'), `﻿${JSON.stringify({ serverPid, wrapperPid: 1, port: 7798 })}`)
+const pidFile = (home: string, serverPid: number, wrapperPid = 1) =>
+  writeFileSync(join(home, 'server.pid'), `﻿${JSON.stringify({ serverPid, wrapperPid, port: 7798 })}`)
 
 test('stale once a file of the server is newer than its start, or one was added or removed', async () => {
   let stamp: CodeStamp = { newest: 900, count: 3 }
@@ -204,6 +205,20 @@ test('an agent or script may not stop the server: shutdown answers 409 and stops
   expect(shutdowns).toBe(0)
 })
 
+// 2026-10-14: start.ps1 writes the pid file with its cmd wrapper's pid at once and bun's own only after the server
+// answers and the tray is checked, so a server restart.ps1 had just started read restartable:false for a second or two.
+test('a server whose pid file so far names only its parent, the cmd wrapper, is restartable', async () => {
+  const { desk, home, started } = await boot({ stamp: () => ({ newest: 1500, count: 3 }) })
+  const agentAsk = () => fetch(`${desk.url}/api/server/restart`, { method: 'POST', headers: { 'User-Agent': 'curl/8.4' } })
+  pidFile(home, 0, 4999)
+  expect((await (await fetch(`${desk.url}/api/server/update`)).json()).restartable).toBe(false)
+  expect((await agentAsk()).status).toBe(409)
+  pidFile(home, 0, 4100)
+  expect(await (await fetch(`${desk.url}/api/server/update`)).json()).toEqual({ stale: true, restartable: true })
+  expect((await agentAsk()).status).toBe(202)
+  expect(started).toHaveLength(1)
+})
+
 test('not restartable off Windows: the launcher scripts are PowerShell', async () => {
   const { desk, home } = await boot({ platform: 'linux' })
   pidFile(home, 4242)
@@ -220,7 +235,7 @@ test('codeStamp counts .ts files and finds the newest; startedByLauncher reads a
   utimesSync(join(dir, 'y.ts'), 1000, 1000)
   expect(codeStamp([dir, join(dir, 'missing')])).toEqual({ count: 2, newest: 2_000_000 })
   pidFile(dir, 77)
-  expect(startedByLauncher(dir, 77)).toBe(true)
-  expect(startedByLauncher(dir, 78)).toBe(false)
-  expect(startedByLauncher(join(dir, 'missing'), 77)).toBe(false)
+  expect(startedByLauncher(dir, 77, 0)).toBe(true)
+  expect(startedByLauncher(dir, 78, 0)).toBe(false)
+  expect(startedByLauncher(join(dir, 'missing'), 77, 0)).toBe(false)
 })
