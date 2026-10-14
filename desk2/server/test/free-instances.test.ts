@@ -495,8 +495,8 @@ describe('Free jobs and routes', () => {
     expect(service.get(chat.id).result?.ok).toBe(true)
     expect(instance.usageReadAt).toBeNumber()
   })
-  test('a move between free and paid marks the row and tells the window once; a log out forgets the plan', async () => {
-    // Owner, 2026-10-09: "If they change to not free ... let me know", so a paid account can be promoted to CLI/Desktop.
+  test('a move that changes what a Claude account can be promoted to marks the row and tells the window once; a log out forgets the plan', async () => {
+    // Owner, 2026-10-09: "If they change to not free ... let me know"; 2026-10-14: Pro suggests a CLI, Max a Desktop.
     const plans: (string | null)[] = []
     const { service, app, op, instance } = fixture(async (_c, r) => r.command === 'usage'
       ? output({ ok: true, available: true, windows: [], plan: plans.shift() ?? null })
@@ -506,13 +506,14 @@ describe('Free jobs and routes', () => {
     const read = async (plan: string | null) => { plans.push(plan); service.start(op({ command: 'usage' })); await tick(); await tick() }
     await read('free')  // the first reading, free: nothing to tell
     await read(null)  // a reading with no plan changes nothing
-    await read('go')
-    await read('plus')  // paid to paid: the badge follows, no second notice
-    expect(told).toEqual(['free->go'])
-    expect(instance.plan).toBe('plus')
-    expect(instance.planChange).toMatchObject({ from: 'free', to: 'go' })
+    await read('pro')
+    await read('team')  // a CLI either way: the plan badge follows, no second notice
+    expect(told).toEqual(['free->pro'])
+    expect(instance.plan).toBe('team')
+    expect(instance.planChange).toMatchObject({ from: 'free', to: 'pro' })
+    await read('max')  // now a Desktop
     await read('free')
-    expect(told).toEqual(['free->go', 'plus->free'])
+    expect(told).toEqual(['free->pro', 'team->max', 'max->free'])
     const seen = await app.request(`/api/free/instances/${instance.id}/plan-seen`, { method: 'POST' })
     expect(seen.status).toBe(200)
     expect(instance.planChange).toBeNull()
@@ -521,6 +522,37 @@ describe('Free jobs and routes', () => {
     expect(instance.plan).toBeNull()
     await read('pro')  // the next sign-in may be another account: a first reading that is already paid is told
     expect(told.at(-1)).toBe('null->pro')
+  })
+  test('a ChatGPT account is told only above Go, and on its way back below', async () => {
+    // Owner, 2026-10-14: "don't show that badge ... unless it is higher than go".
+    const plans: (string | null)[] = []
+    const { service } = fixture(async () => output({ ok: true, available: true, windows: [], plan: plans.shift() ?? null }))
+    const gpt = service.create({ provider: 'chatgpt', name: 'Example GPT' })
+    const told: string[] = []
+    service.onPlanChange = i => told.push(`${i.planChange?.from}->${i.planChange?.to}`)
+    const read = async (plan: string) => { plans.push(plan); service.start(operation({ instanceId: gpt.id, provider: 'chatgpt', command: 'usage' })); await tick(); await tick() }
+    await read('go')  // a first reading on Go
+    await read('free')
+    await read('go')
+    expect(told).toEqual([])
+    expect(gpt.planChange ?? null).toBeNull()
+    await read('plus')
+    await read('pro')
+    await read('go')
+    expect(told).toEqual(['go->plus', 'pro->go'])
+  })
+  test('a stored mark that changed nothing to promote ("Now on Go") is dropped on load; one that did stays', () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-free-'))
+    dirs.push(home)
+    mkdirSync(join(home, 'free'), { recursive: true })
+    const row = (id: string, provider: 'claude' | 'chatgpt', from: string | null, to: string) =>
+      ({ id, num: 1, provider, name: 'Example account', loggedIn: true, checkedAt: 1, lastActiveAt: null, usage: null, plan: to, planChange: { from, to, at: 1 } })
+    const go = row(INSTANCE, 'chatgpt', null, 'go')
+    const pro = row(CHAT, 'claude', 'free', 'pro')
+    writeFileSync(join(home, 'free', 'accounts.json'), JSON.stringify({ instances: [go, pro], threads: [] }))
+    const [loadedGo, loadedPro] = new FreeStorage(home).data.instances
+    expect(loadedGo!.planChange).toBeNull()
+    expect(loadedPro!.planChange).toEqual({ from: 'free', to: 'pro', at: 1 })
   })
   test('a row whose plan is known only from a reading before plans were kept is not told as newly paid', async () => {
     const { service, op, instance } = fixture(async () => output({ ok: true, available: true, windows: [], plan: 'go' }))

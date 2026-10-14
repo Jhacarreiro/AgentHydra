@@ -423,7 +423,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   from its last reply's usage in its .jsonl, with no share, since the file never names the window, and for an outside Codex
   chat the share and "51K of 258K", from its rollout's last `token_count`), To-dos (the session's checklist, TodoWrite's or
   Claude Desktop's update_plan), Connectors (the ones a chat gets, or for an outside session the MCP servers its tools
-  called, as letter tiles, three and Show more) and Background tasks (what runs, with a Stop on hover, greyed with its
+  called, as letter tiles, three and Show more, each with how often its tools were called, the most first), Tools (every
+  tool the session called, the most first, five and Show all: its name, a bar against the most called with its failed share
+  red at the end, and its calls, counted over the whole transcript; owner, 2026-10-14: "if I see you access, like, two tools
+  a billion times, maybe I would ask if there was, like, a better way to consolidate") and Background tasks (what runs, with a Stop on hover, greyed with its
   reason for a task only the session that started it can stop; a click on a task slides the full list in). Each card
   folds with a click on its name and then says what it holds on the right ("1 running", "3 of 5 done"), and remembers
   it. Each fact is one row of a gray icon and the fact, as Claude Desktop draws them. It takes from the chat only the
@@ -856,14 +859,19 @@ Claude reports no usage for a free account until it sends a message, so such a r
 If they change to not free, I guess let me know ... promote them"). Every usage read keeps the account's `plan`:
 ChatGPT's from its session, Claude's from its organization's capabilities (`claude_max` Max, `claude_pro` Pro,
 `raven` Team, `enterprise` Enterprise, only `chat` Free; `server/src/free-instances/harness/claudfree/usage.py`). A paid plan shows as a
-badge after the name, Free as a small gift icon. A move across the free/paid line (Go counts as paid) marks the row
-"Now on Pro" or "Back on Free" and broadcasts a `notice` event, which the window shows as a desktop notification
+badge after the name, Free as a small gift icon. What a plan can be promoted to decides the rest (owner, 2026-10-14:
+"don't show that badge ... unless it is higher than go ... If it's a pro, it can suggest upgrade to a CLI, and if
+it's a 5X or higher ... a desktop"; `promotionFor` in `shared/free-instances.ts`): a ChatGPT plan above Go (Plus, Pro,
+Team, Enterprise) a Codex instance, Claude's Max (5x and 20x, which Claude reports as one plan) a Desktop instance and
+its other paid plans (Pro, Team, Enterprise) a CLI instance; Free and Go nothing. A move that changes it marks the row
+"Now on Plus" or "Back on Go" and broadcasts a `notice` event, which the window shows as a desktop notification
 when its notifications are on (`notePlan` in `server/src/free-instances/service.ts`, `plugins/55-free-instances.ts`).
-A first reading that is already paid is told too; a row read before plans were kept starts from its last reading, so
-an update does not flag every Go account at once. The row's menu then offers **Promote to CLI or Desktop…** (Claude)
-or **Promote to a Codex instance…** (ChatGPT), which opens the New CLI or New Codex dialog (a CLI or Codex login
-needs a person's own sign-in, so nothing promotes itself), and **Dismiss plan change**
-(`POST /api/free/instances/:id/plan-seen`). A log out forgets the plan.
+A first reading that is already promotable is told too; a row read before plans were kept starts from its last
+reading, so an update does not flag every account at once, and a mark from before 2026-10-14 that changed nothing to
+promote ("Now on Go") is dropped when the store loads. The row's menu offers **Promote to a CLI instance…**,
+**Promote to a Desktop instance…** or **Promote to a Codex instance…**, which opens the New CLI, New Claude or New
+Codex dialog (a CLI, Desktop or Codex login needs a person's own sign-in, so nothing promotes itself), and **Dismiss
+plan change** (`POST /api/free/instances/:id/plan-seen`). A log out forgets the plan.
 
 **Desk keeps the readings current itself** (owner, 2026-10-06: the 5-hour and week cells "keep spinning every
 time I view the page"; `server/src/free-instances/refresh.ts`). One read a minute, from 90 s after Desk starts,

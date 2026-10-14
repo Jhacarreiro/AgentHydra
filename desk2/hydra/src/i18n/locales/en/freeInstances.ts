@@ -37,13 +37,16 @@ export default {
   // A paid plan the site reports, beside the name (ChatGPT Go, read 2026-10-08: the same models as Free, more room).
   planLabel: '{provider} {plan}',
   planHint: 'A paid plan, as ChatGPT reports it. AgentHydra sends it the same unlimited model as a Free account, and the plan gives each chat more room.',
-  planHintClaude: 'A paid plan, as Claude reports it, so this is no longer a free account. It can run as a CLI or Desktop instance: Promote in its menu.',
+  planHintClaude: 'A paid plan, as Claude reports it, so this is no longer a free account. Promote it in its menu.',
   // Each account's plan is checked when it signs in and on every reading after (owner, 2026-10-09).
   planFree: 'Free plan', planFreeHint: '{provider} reports the Free plan: this account costs nothing.',
-  planChangedPaid: 'Now on {plan}', planChangedFree: 'Back on Free',
+  // Only a move that changes what the account can be promoted to (owner, 2026-10-14: never "Now on Go").
+  planChangedPaid: 'Now on {plan}', planChangedBack: 'Back on {plan}',
   planChangedHint: 'Since {when}; it was {from}. Promote it or dismiss this in its menu.',
   planFirstPaidHint: 'Its first check found a paid plan ({when}). Promote it or dismiss this in its menu.',
-  promoteCli: 'Promote to CLI or Desktop…', promoteCodex: 'Promote to a Codex instance…', planDismiss: 'Dismiss plan change',
+  planChangedBackHint: 'Since {when}; it was {from}. Dismiss this in its menu.',
+  promoteCli: 'Promote to a CLI instance…', promoteDesktop: 'Promote to a Desktop instance…', promoteCodex: 'Promote to a Codex instance…',
+  planDismiss: 'Dismiss plan change',
   working: 'Working…', recover: 'Check operation',
   // The account's last hour (server/src/free-instances/health.ts): a note in the name's hover, a mark only when failing.
   lastHour: 'last hour: {sent} sent, {failed} failed',

@@ -1996,7 +1996,7 @@ onUnmounted(() => {
           v-if="freeShown"
           ref="freeRows"
           :columns="columns"
-          @promote="(p) => onCreateFor(p === 'claude' ? CLI_CREATE_ID : 'codex')"
+          @promote="(to) => onCreateFor(to === 'cli' ? CLI_CREATE_ID : to === 'desktop' ? 'claude' : 'codex')"
         />
       </InstanceTable>
     </InstanceCard>

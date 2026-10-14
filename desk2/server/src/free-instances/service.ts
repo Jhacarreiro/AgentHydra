@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, isPaidPlan, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -406,13 +406,14 @@ export class FreeInstances {
     // Read the quota again so the window the nudge started shows.
     if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal))) } catch { /* the nudge worked; the next refresh reads it */ }
   }
-  /** Keep the plan a reading reports; a move between free and paid (a first reading that is already paid included) is
-   *  kept on the row and told to onPlanChange. A reading with no plan changes nothing. */
+  /** Keep the plan a reading reports; a move that changes what the account can be promoted to (promotionFor: Free to
+   *  Go does not, Go to Plus does, and so does a first reading already on Plus) is kept on the row and told to
+   *  onPlanChange. A reading with no plan changes nothing. */
   private notePlan(instance: FreeInstance, plan: string | null): void {
     if (!plan || plan === instance.plan) return
     const before = instance.plan ?? null
     instance.plan = plan
-    if (isPaidPlan(plan) === isPaidPlan(before)) return
+    if (promotionFor(instance.provider, plan) === promotionFor(instance.provider, before)) return
     instance.planChange = { from: before, to: plan, at: Date.now() }
     this.onPlanChange?.(instance)
   }

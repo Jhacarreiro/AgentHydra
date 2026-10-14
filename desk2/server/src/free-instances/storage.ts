@@ -1,7 +1,7 @@
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, statSync } from 'node:fs'
 import { isAbsolute, join } from 'node:path'
-import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
+import { FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, promotionFor, type FreeDeleted, type FreeInstance, type FreeProvider, type FreeSettings, type FreeThread } from '@shared/free-instances'
 import { seedStats, type StatsData, validStats } from './stats'
 import { type TokenLedger, validLedger } from './tokens'
 import { AsyncFile } from '../async-file'
@@ -46,6 +46,8 @@ function load(text: string): Data {
   // Older records lack lastSignedInAt: a signed-in account was last signed in when it was last checked.
   for (const i of value.instances) if (typeof i.lastSignedInAt !== 'number') i.lastSignedInAt = i.loggedIn ? i.checkedAt ?? null : null
   for (const i of value.instances) if (typeof i.autoName !== 'boolean') i.autoName = generic(i.name)
+  // Marks made while every paid plan counted ("Now on Go", before 2026-10-14) go once the move changed nothing to promote.
+  for (const i of value.instances) if (i.planChange && promotionFor(i.provider, i.planChange.from) === promotionFor(i.provider, i.planChange.to)) i.planChange = null
   for (const t of value.threads) if (t.status === 'running') { t.status = 'failed'; t.error = 'Desk restarted during the request. Read this chat before sending again.' }
   return value
 }
