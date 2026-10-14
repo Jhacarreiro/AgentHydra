@@ -868,6 +868,11 @@ export class ChatManager {
     return { queued: true }
   }
 
+  /** After any status change: once the old service's reply is over, what waited for it goes to the service the chat is pinned to now. */
+  private sendWaiting(e: Entry | undefined): void {
+    if (e?.crossing?.length && !this.replyElsewhere(e)) void this.sendCrossing(e)
+  }
+
   /** The old service's reply ended: the messages that waited go, in order, to the service the chat is pinned to now. */
   private async sendCrossing(e: Entry): Promise<void> {
     const waiting = e.crossing ?? []
@@ -2435,8 +2440,7 @@ export class ChatManager {
       if (e.runtime?.startedAs) e.ranIn = e.runtime.startedAs.configDir
       // A closed runtime took its background tasks with it: their items say so, and stop counting.
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
-      // The old service's reply is over: what waited for it goes to the service the chat is pinned to now.
-      if (e.crossing?.length && !this.replyElsewhere(e)) void this.sendCrossing(e)
+      this.sendWaiting(e)
       this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
@@ -2505,6 +2509,8 @@ export class ChatManager {
   private changed(chat: ChatSummary): void {
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
+    // A CliMayte worker's status arrives here, not as a runtime event.
+    this.sendWaiting(this.chats.get(chat.id))
   }
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */

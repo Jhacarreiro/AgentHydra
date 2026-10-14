@@ -333,6 +333,33 @@ test('a message sent after the pin moved while Codex was still replying waits, s
   expect(items.filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Step one, step two.', 'Two steps.'])
 })
 
+test("a message sent after the pin moved while a CliMayte worker was still replying goes to Codex once the worker's reply ends, with that reply", async () => {
+  const home = temp('desk-pin-worker-')
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const fake = fakeCodex()
+  const codex: CodexDirectory = { instances: async () => [ALPHA], usage: async () => ({ snapshot: { session: { pct: 10 }, weekAll: { pct: 5 } } }) }
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, codex, openCodex: fake.open })
+  managers.push(m)
+  const chat = await m.create({ cwd: home, prompt: 'Remember the word KIWI' })
+  await waitFor(() => !!m.get(chat.id).workerId)
+  const row = b.state.rows[0]!
+  Object.assign(row, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  await m.patch(chat.id, { service: 'codex' })
+  expect(await m.send(chat.id, 'Which word?')).toEqual({ queued: true })
+  expect(fake.turnStarts()).toEqual([])
+
+  // The worker's status comes from AgentHydra's list, not a runtime event: its reply ending sends what waited.
+  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Noted: KIWI.' }]
+  Object.assign(row, { status: 'done' })
+  await m.syncWorkers(chat.id)
+  await waitFor(() => fake.turnStarts().length === 1)
+  const text = String(fake.turnStarts()[0]!.input[0]!.text)
+  expect(text).toContain('Noted: KIWI.')
+  expect(text.endsWith(`${ANSWER_NOW}Which word?`)).toBe(true)
+})
+
 test('a ChatGPT chat deleted mid-message stops that message and sends nothing it had queued', async () => {
   const f = fakeFree([GPT(3, 'alpha', true)])
   const { m, chat } = await setup({ free: f.free })
