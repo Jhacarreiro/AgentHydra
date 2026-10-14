@@ -128,11 +128,13 @@ test('ledger rows follow each turn: scope, compliance, picks and offered capabil
   expect(rows.some((r) => r.project === 'corch-w1')).toBe(false)
   const [compliant, skipped] = rows
   expect(compliant?.compliant).toBe(true)
+  expect(compliant?.method).toBe('scope')
   expect(compliant?.scopes).toEqual([{ chat: 'alpha', run: 1, verdict: 'go' }])
   expect(compliant?.offered).toContain('person:iris-ui')
   expect(compliant?.unusedPicks).toEqual(['person:ops-lead'])
   expect(compliant?.reports.map((r) => r.score)).toEqual([4])
   expect(skipped?.compliant).toBe(false)
+  expect(skipped?.method).toBe('none')
   expect(skipped?.used).toEqual(['brand-notes'])
   expect(skipped?.usedNotOffered).toEqual(['brand-notes'])
 })
@@ -147,6 +149,104 @@ test('summary counts compliance, verdicts, reports, handoffs and skipped workers
   expect(summary.usedNotOffered).toBe(1)
   expect(summary.missing).toEqual([{ chat: 'alpha', run: 1, text: 'no ops data' }])
   expect(summary.handoffs).toEqual({ chats: 1, handoffs: 1, kept: 1, lost: 0, linkedFiles: 0 })
+})
+
+test('a pack-only turn counts as pack and its pack ids are offered', () => {
+  appendFileSync(
+    join(dir, 'log.jsonl'),
+    logRow({
+      at: iso(T + 10500),
+      event: 'pack',
+      chat: 'alpha',
+      session: 'sa',
+      mode: 'delta',
+      ids: ['skill:brand-notes'],
+      bytes: 300,
+      ms: 5,
+    }) +
+      logRow({
+        at: iso(T + 10600),
+        event: 'pack',
+        chat: 'beta',
+        session: 'zz',
+        mode: 'first',
+        ids: ['person:other-chat'],
+        bytes: 300,
+        ms: 5,
+      }),
+  )
+  const { rows } = buildTrack(dir, { roots, handoffsDir, now: T })
+  const packed = rows[1]
+  expect(packed?.method).toBe('pack')
+  expect(packed?.compliant).toBe(true)
+  expect(packed?.offered).toContain('skill:brand-notes')
+  expect(packed?.offered).not.toContain('person:other-chat')
+  expect(packed?.usedNotOffered).toEqual([])
+})
+
+test('a turn with a scope call and a matched pack counts as both', () => {
+  appendFileSync(
+    join(dir, 'log.jsonl'),
+    logRow({
+      at: iso(T + 1200),
+      event: 'pack',
+      chat: 'alpha',
+      session: 'sa',
+      mode: 'first',
+      ids: ['person:iris-ui'],
+      bytes: 400,
+      ms: 10,
+    }),
+  )
+  const { rows } = buildTrack(dir, { roots, handoffsDir, now: T })
+  expect(rows[0]?.method).toBe('both')
+  expect(rows[0]?.compliant).toBe(true)
+})
+
+test('the packs summary counts first, delta and empty delta packs and their means', () => {
+  appendFileSync(
+    join(dir, 'log.jsonl'),
+    logRow({
+      at: iso(T + 1000),
+      event: 'pack',
+      chat: 'alpha',
+      session: 'sa',
+      mode: 'first',
+      ids: ['person:iris-ui'],
+      bytes: 400,
+      ms: 10,
+    }) +
+      logRow({
+        at: iso(T + 11000),
+        event: 'pack',
+        chat: 'alpha',
+        session: 'sa',
+        mode: 'delta',
+        ids: [],
+        bytes: 0,
+        ms: 2,
+      }) +
+      logRow({
+        at: iso(T + 12000),
+        event: 'pack',
+        chat: 'alpha',
+        session: 'sa',
+        mode: 'delta',
+        ids: ['skill:brand-notes'],
+        bytes: 200,
+        ms: 7,
+      }),
+  )
+  const { summary } = buildTrack(dir, { roots, handoffsDir, now: T })
+  expect(summary.packs).toEqual({
+    total: 3,
+    first: 1,
+    delta: 2,
+    emptyDelta: 1,
+    meanBytes: 200,
+    meanMs: 6,
+  })
+  expect(summary.methods).toEqual({ scope: 1, pack: 1, both: 1, none: 0 })
 })
 
 test('a handoff whose hydra.md is gone counts as lost', () => {

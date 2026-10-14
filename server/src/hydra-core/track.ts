@@ -60,12 +60,15 @@ export interface Reported {
   missing: string | null
 }
 
+export type Method = 'scope' | 'pack' | 'both' | 'none'
+
 export interface Row {
   session: string
   project: string
   turn: number
   at: string
   scopes: Scope[]
+  method: Method
   compliant: boolean
   used: string[]
   offered: string[]
@@ -80,7 +83,16 @@ export interface Summary {
   onAt: string | null
   sessions: { transcripts: number; workers: number; noCore: number; eligible: number }
   turns: { total: number; compliant: number; compliancePct: number }
+  methods: { scope: number; pack: number; both: number; none: number }
   scopes: { total: number; go: number; hydra: number; none: number }
+  packs: {
+    total: number
+    first: number
+    delta: number
+    emptyDelta: number
+    meanBytes: number
+    meanMs: number
+  }
   reports: {
     runs: number
     reported: number
@@ -106,6 +118,7 @@ const ID_RE = /\b[a-z]+:[a-z0-9][a-z0-9_-]*/g
 const CHAT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
+const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '')
 
 function same(a: string, b: string): boolean {
@@ -236,8 +249,8 @@ function reportOf(chat: string, run: number, events: Json[]): Reported | null {
   }
 }
 
-function packedAt(s: Session, turn: Turn, events: Json[]): boolean {
-  return events.some(
+function packsOf(s: Session, turn: Turn, events: Json[]): Json[] {
+  return events.filter(
     (e) =>
       e.event === 'pack' &&
       str(e.session) === s.id &&
@@ -249,6 +262,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
   const scopes = turn.calls
     .filter((c) => c.name === `${CORE_PREFIX}scope`)
     .map((c) => scopeOf(str(c.input.chat), c.at, events))
+  const packs = packsOf(s, turn, events)
   const core = turn.calls.filter((c) => c.name.startsWith(CORE_PREFIX))
   const offered = new Set<string>()
   for (const c of core) for (const m of c.result.matchAll(ID_RE)) offered.add(m[0])
@@ -256,6 +270,10 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     for (const e of events)
       if (str(e.chat) === sc.chat && e.run === sc.run && Array.isArray(e.shown))
         for (const id of e.shown) offered.add(str(id))
+  for (const p of packs) if (Array.isArray(p.ids)) for (const id of p.ids) offered.add(str(id))
+  const byScope = scopes.length > 0
+  const byPack = packs.length > 0
+  const method: Method = byScope && byPack ? 'both' : byScope ? 'scope' : byPack ? 'pack' : 'none'
   const used = turn.calls.flatMap(usedOf)
   const picks = core
     .filter((c) => c.name === `${CORE_PREFIX}use`)
@@ -274,7 +292,8 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     turn: index,
     at: new Date(turn.at).toISOString(),
     scopes,
-    compliant: scopes.length > 0 || packedAt(s, turn, events),
+    method,
+    compliant: method !== 'none',
     used,
     offered: offeredList,
     picks,
@@ -313,13 +332,33 @@ function handoffsOf(
   return { chats, handoffs, kept, lost, linkedFiles }
 }
 
+function packSummary(events: Json[]): Summary['packs'] {
+  const packs = events.filter((e) => e.event === 'pack')
+  const delta = packs.filter((e) => e.mode === 'delta')
+  const mean = (xs: number[]): number =>
+    xs.length ? Math.round(xs.reduce((a, b) => a + b, 0) / xs.length) : 0
+  return {
+    total: packs.length,
+    first: packs.filter((e) => e.mode === 'first').length,
+    delta: delta.length,
+    emptyDelta: delta.filter((e) => {
+      const ids = Array.isArray(e.ids) ? e.ids : []
+      return ids.length === 0 || e.bytes === 0
+    }).length,
+    meanBytes: mean(packs.map((e) => num(e.bytes))),
+    meanMs: mean(packs.map((e) => num(e.ms))),
+  }
+}
+
 function summarize(
   rows: Row[],
   sessions: Summary['sessions'],
   handoffs: Summary['handoffs'],
   onAt: number | null,
   now: number,
+  events: Json[],
 ): Summary {
+  const methodCount = (m: Method): number => rows.filter((r) => r.method === m).length
   const scopes = rows.flatMap((r) => r.scopes)
   const runs = new Map<string, Scope>()
   for (const sc of scopes) if (sc.run !== null) runs.set(`${sc.chat}#${sc.run}`, sc)
@@ -338,12 +377,19 @@ function summarize(
       compliant,
       compliancePct: rows.length ? Math.round((compliant / rows.length) * 1000) / 10 : 0,
     },
+    methods: {
+      scope: methodCount('scope'),
+      pack: methodCount('pack'),
+      both: methodCount('both'),
+      none: methodCount('none'),
+    },
     scopes: {
       total: scopes.length,
       go: scopes.filter((s) => s.verdict === 'go').length,
       hydra: scopes.filter((s) => s.verdict === 'hydra').length,
       none: scopes.filter((s) => s.verdict === null).length,
     },
+    packs: packSummary(events),
     reports: {
       runs: runs.size,
       reported: [...runs.keys()].filter((k) => reported.has(k)).length,
@@ -401,7 +447,7 @@ export function buildTrack(
     chatSessions,
     opts.handoffsDir ?? join(homedir(), '.agenthydra', 'corch', 'handoffs'),
   )
-  return { rows, summary: summarize(rows, sessions, handoffs, onAt, now) }
+  return { rows, summary: summarize(rows, sessions, handoffs, onAt, now, events) }
 }
 
 export function writeTrack(dir: string, opts: TrackOptions = {}): Summary {
