@@ -6,7 +6,7 @@ import { pathToFileURL } from 'node:url'
 import { Hono, type MiddlewareHandler } from 'hono'
 import type { ClientEvent, ServerEvent } from '@shared/protocol'
 import pkg from '../package.json'
-import { type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
+import { type HelloEvent, type HelloProvider, type HostRoute, type Plugin, type ServerContext, setContext, type WsRoute } from './context'
 import { REAL_HOME } from './real-home'
 import { createSettingsStore, SettingsError } from './settings'
 import { indexReader } from './static-index'
@@ -144,6 +144,12 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const routeOf = (ws: WsClient) => (ws.data as { route: WsRoute; data: unknown } | undefined) ?? null
   // No chat list until the engine registers its own: an empty one would read as every chat gone.
   let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, settings: settings.get() })
+  const helloExtensions: ((h: HelloEvent) => HelloEvent | Promise<HelloEvent>)[] = []
+  const helloNow = async (): Promise<HelloEvent> => {
+    let h = await hello()
+    for (const extend of helloExtensions) h = await extend(h)
+    return h
+  }
 
   let base = `http://127.0.0.1:${opts.port}`
   const ctx: ServerContext = {
@@ -160,6 +166,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
     registerHello: (fn) => {
       hello = fn
     },
+    extendHello: (fn) => void helloExtensions.push(fn),
     wsClientCount: hub.clientCount,
     wsVisibleCount: hub.visibleCount,
     onWsVisibility: hub.onVisibility,
@@ -251,7 +258,7 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
         if (own) return own.route.open(ws, own.data)
         hub.addClient(ws)
         try {
-          hub.send(ws, await hello())
+          hub.send(ws, await helloNow())
         } catch (err) {
           console.error('[ws] hello provider failed:', err)
         }

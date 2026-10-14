@@ -594,7 +594,7 @@ export const settingsFixtures: DeskSettings = {
   projectRoots: [],
   hiddenProjects: [],
   pinnedProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off'
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false
 }
 
 export const routinesFixtures: RoutinesStatus = {

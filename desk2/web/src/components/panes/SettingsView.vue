@@ -621,6 +621,13 @@ onBeforeUnmount(() => {
                 />
 
                 <PaneSwitch
+                  v-else-if="r.id === 'coreEngine'"
+                  label="New core"
+                  :model-value="local.coreEngine"
+                  @update:model-value="(v: boolean) => save({ coreEngine: v })"
+                />
+
+                <PaneSwitch
                   v-else-if="r.id === 'routines'"
                   label="Routines"
                   :model-value="local.routines"

@@ -35,6 +35,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: s
 ]
 
 export type SettingsRowId =
+  | 'coreEngine'
   | 'model'
   | 'effort'
   | 'permission'
@@ -189,6 +190,16 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Watching chats',
     label: 'Orchestrator model',
     description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
+  },
+  // The new core (core/README.md) behind the window: owner, 2026-10-14, "switch it over behind the toggle with the old
+  // engine kept for rollback".
+  {
+    id: 'coreEngine',
+    section: 'managers',
+    group: 'Chat engine',
+    label: 'New core',
+    description:
+      'New chats run on the new core, which gives each message to an account with room. Chats you already have stay where they are. Turn it off and new chats start on the old engine again.'
   },
   // The routine manager (shared/routines.ts): the routines run on this PC on their schedule, through AgentHydra's own CLI and accounts.
   {

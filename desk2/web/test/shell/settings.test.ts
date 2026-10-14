@@ -13,6 +13,7 @@ describe('settings search', () => {
     ])
     expect(settingsGroups('managers', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['Watching chats', ['babysitter', 'orchestrator', 'orchestratorModel']],
+      ['Chat engine', ['coreEngine']],
       ['Routines', ['routines']]
     ])
     // The working animation is no longer a setting: the window picks a look itself (lib/working-mark.ts).

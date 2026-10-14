@@ -39,6 +39,8 @@ export interface ServerContext {
   updateSettings(patch: Partial<DeskSettings>): DeskSettings
   /** Replaces the provider of the `hello` event each window gets on connect (the engine registers one). */
   registerHello(fn: HelloProvider): void
+  /** Passes every window's `hello` through fn, whichever provider is registered, now or later (the new core adds its chats). */
+  extendHello(fn: (hello: HelloEvent) => HelloEvent | Promise<HelloEvent>): void
   wsClientCount(): number
   /** Windows connected to /ws and on screen; one that never said counts as on screen. */
   wsVisibleCount(): number

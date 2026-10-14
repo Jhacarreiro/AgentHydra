@@ -36,7 +36,7 @@ const SETTINGS: DeskSettings = {
   projectRoots: [],
   hiddenProjects: [],
   pinnedProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off',
+  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false,
 }
 
 /** A Query whose messages the test pushes; records every control call and every prompt it reads. */

@@ -24,6 +24,7 @@ export const DEFAULT_SETTINGS: DeskSettings = {
   orchestratorModel: 'opus',
   routines: true,
   collapseMode: 'off',
+  coreEngine: false,
 }
 
 const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
@@ -49,6 +50,7 @@ const CHECKS: { [K in keyof DeskSettings]: [Check, string] } = {
   orchestratorModel: [isOrchestratorModel, "'opus', 'sonnet', 'haiku' or a full model id such as claude-opus-5-5"],
   routines: [(v) => typeof v === 'boolean', 'true or false'],
   collapseMode: [(v) => COLLAPSE_MODES.includes(v as CollapseMode), `one of ${COLLAPSE_MODES.join(', ')}`],
+  coreEngine: [(v) => typeof v === 'boolean', 'true or false'],
 }
 
 function isPathList(v: unknown): boolean {

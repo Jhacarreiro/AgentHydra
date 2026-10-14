@@ -120,6 +120,13 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
   let excludeSessionIds: () => Ids = opts.excludeSessionIds ?? (() => [])
+  /** More session ids to leave out, beside the engine's (the new core's chats, plugins/19-core.ts). */
+  const moreExcluded: (() => Ids)[] = []
+  const excludedIds = async (): Promise<Set<string>> => {
+    const out = new Set(await excludeSessionIds())
+    for (const more of moreExcluded) for (const id of await more()) out.add(id)
+    return out
+  }
   let extraWorkerIds: () => string[] = () => []
   let sessionMeta: (list: ExternalSession[], onAccount?: ReadonlySet<string>) => ExternalSession[] = (list) => list
   /** The sessions kept listed however old: pinned, or in the Unassigned holding area (session-meta.ts listedIds). */
@@ -478,7 +485,7 @@ export function createBridge(opts: BridgeOptions = {}) {
   async function externalSessions(o: { strict?: boolean; throwaway?: boolean } = {}): Promise<ExternalSession[]> {
     const inp = await externalInputs(o.strict)
     if (!inp) return []
-    const exclude = new Set(await excludeSessionIds())
+    const exclude = await excludedIds()
     const who = await resumeData()
     // A pinned session stays listed however old: the index answer is only the last 24 h, so a pinned id
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
@@ -999,7 +1006,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     setExcludeSessionIds(fn: () => Ids): void {
       excludeSessionIds = fn
     },
-    excludeIds: (): Ids => excludeSessionIds(),
+    addExcludedSessionIds(fn: () => Ids): void {
+      moreExcluded.push(fn)
+    },
+    excludeIds: async (): Promise<Iterable<string>> => excludedIds(),
     extraIds: (): string[] => extraWorkerIds(),
     /** Registers Hydra Desk's marks on outside sessions (the engine's session-meta store); externalSessions() applies them. */
     setSessionMeta(fn: (list: ExternalSession[], onAccount?: ReadonlySet<string>) => ExternalSession[], pinned: () => string[] = () => []): void {

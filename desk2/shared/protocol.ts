@@ -602,6 +602,8 @@ export interface DeskSettings {
   routines: boolean
   /** The window folds to the screen's right edge, showing only the chats (web/src/components/sidebar/collapse.ts). Off by default. */
   collapseMode: CollapseMode
+  /** New chats run on the new core (core/, server/src/plugins/19-core.ts); chats made before stay where they are. */
+  coreEngine: boolean
 }
 
 // REST request bodies (see SPEC.md "REST API" for the routes)
