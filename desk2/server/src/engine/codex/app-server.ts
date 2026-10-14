@@ -2,8 +2,11 @@
 // Desk chat pinned to Codex on that account. A Codex login is <home>/auth.json and its refresh token rotates on
 // each refresh: two processes refreshing at once leave a token the server has retired, signing the account out
 // (AgentHydra's server/src/core/codex-rpc.ts). So Desk never opens a second one on a home it already has open,
-// and ends it a minute after the last chat lets go. Its stderr and raw lines are never logged: they can hold
-// private chat text.
+// and ends it as soon as the last chat lets go: Codex lets one program write a thread at a time, and only the
+// process's exit frees a thread it loaded (measured 2026-10-14: after `thread/unsubscribe` answered "unsubscribed"
+// the thread stayed loaded and another program's archive was still refused, "already has an active writer"; once
+// the process exited it went through). A new one starts in under half a second. Its stderr and raw lines are never
+// logged: they can hold private chat text.
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import { resolve } from 'node:path'
@@ -23,15 +26,15 @@ export interface AppServer {
   call<T>(method: string, params?: Record<string, unknown>, timeoutMs?: number): Promise<T>
   /** Routes this thread's notifications and requests to `l` until the returned function is called. */
   listen(threadId: string, l: ThreadListener): () => void
-  /** This holder is done with it; the process ends a while after the last one is. */
+  /** This holder is done with it; the process ends when the last one is. */
   release(): void
 }
 
 export type OpenAppServer = (home: string) => Promise<AppServer>
 
-/** How long an app-server no chat holds stays up (a chat that sends again soon reuses it). */
-export const APP_SERVER_IDLE_MS = 60_000
 const CALL_TIMEOUT_MS = 60_000
+/** How long an app-server whose input was closed gets to finish writing its threads and exit before it is killed. */
+const EXIT_GRACE_MS = 5_000
 
 interface Pending {
   resolve(value: unknown): void
@@ -43,14 +46,17 @@ interface Shared {
   child: ChildProcess
   ready: Promise<void>
   refs: number
-  idle: ReturnType<typeof setTimeout> | null
   nextId: number
   pending: Map<number, Pending>
   listeners: Map<string, ThreadListener>
   dead: string | null
+  /** Settles when the process has gone. */
+  exited: Promise<void>
 }
 
 const open = new Map<string, Shared>()
+/** App-servers asked to end and not gone yet: a new one on the same home waits, or it would find the threads still held. */
+const exiting = new Map<string, Promise<void>>()
 
 const keyOf = (home: string): string => (process.platform === 'win32' ? resolve(home).toLowerCase() : resolve(home))
 
@@ -120,7 +126,6 @@ function onLine(s: Shared, line: string): void {
 function end(key: string, s: Shared, why: string): void {
   if (s.dead) return
   s.dead = why
-  if (s.idle) clearTimeout(s.idle)
   if (open.get(key) === s) open.delete(key)
   for (const p of s.pending.values()) {
     clearTimeout(p.timer)
@@ -141,9 +146,16 @@ function start(home: string, key: string): Shared {
     // An npm shim is a .cmd, which only a shell starts.
     shell: /\.cmd$/i.test(exe),
   })
-  const s: Shared = { child, ready: Promise.resolve(), refs: 0, idle: null, nextId: 0, pending: new Map(), listeners: new Map(), dead: null }
-  child.on('error', () => end(key, s, 'Could not start Codex. Check that the Codex app or CLI is installed.'))
-  child.on('exit', () => end(key, s, 'Codex stopped.'))
+  const { promise: exited, resolve: gone } = Promise.withResolvers<void>()
+  const s: Shared = { child, ready: Promise.resolve(), refs: 0, nextId: 0, pending: new Map(), listeners: new Map(), dead: null, exited }
+  child.on('error', () => {
+    end(key, s, 'Could not start Codex. Check that the Codex app or CLI is installed.')
+    gone()
+  })
+  child.on('exit', () => {
+    end(key, s, 'Codex stopped.')
+    gone()
+  })
   child.stdin?.on('error', () => end(key, s, 'The connection to Codex closed.'))
   if (child.stdout) createInterface({ input: child.stdout }).on('line', (line) => onLine(s, line))
   s.ready = call(s, 'initialize', { clientInfo: { name: 'hydra_desk', title: 'AgentHydra', version: '2.0.0' }, capabilities: { experimentalApi: true } }, 30_000).then(() =>
@@ -152,14 +164,30 @@ function start(home: string, key: string): Shared {
   return s
 }
 
+/**
+ * Ends the process: its input closes, so Codex finishes writing its threads and exits (an npm shim's shell would be
+ * all a kill reaches); one still running after the grace is killed.
+ */
 function stop(key: string, s: Shared): void {
   end(key, s, 'Codex was closed.')
   try {
     s.child.stdin?.end()
-    s.child.kill()
   } catch {
     // already gone
   }
+  const kill = setTimeout(() => {
+    try {
+      s.child.kill()
+    } catch {
+      // already gone
+    }
+  }, EXIT_GRACE_MS)
+  ;(kill as { unref?: () => void }).unref?.()
+  const done = s.exited.then(() => clearTimeout(kill))
+  exiting.set(key, done)
+  void done.then(() => {
+    if (exiting.get(key) === done) exiting.delete(key)
+  })
 }
 
 /** The app-server for `home`, started when none runs; every caller releases its own. */
@@ -167,29 +195,27 @@ export const openAppServer: OpenAppServer = async (home) => {
   const key = keyOf(home)
   let s = open.get(key)
   if (!s || s.dead) {
-    s = start(home, key)
-    open.set(key, s)
+    await exiting.get(key)
+    s = open.get(key)
+    if (!s || s.dead) {
+      s = start(home, key)
+      open.set(key, s)
+    }
   }
   const shared = s
   shared.refs++
-  if (shared.idle) {
-    clearTimeout(shared.idle)
-    shared.idle = null
-  }
   let released = false
   const release = () => {
     if (released) return
     released = true
     shared.refs--
-    if (shared.refs > 0 || shared.dead) return
-    shared.idle = setTimeout(() => stop(key, shared), APP_SERVER_IDLE_MS)
-    ;(shared.idle as { unref?: () => void }).unref?.()
+    if (shared.refs === 0 && !shared.dead) stop(key, shared)
   }
   try {
     await shared.ready
   } catch (err) {
+    // Every holder waiting on it fails the same way; the last one's release ends it.
     release()
-    stop(key, shared)
     throw err
   }
   return {

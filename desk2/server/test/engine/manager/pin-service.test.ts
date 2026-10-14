@@ -44,11 +44,11 @@ const BETA: AhCodexInstance = { id: 'cx-beta', num: 8, name: 'beta', codexHome: 
 
 /** App-servers the test drives: each records its calls and holds the thread listeners Desk registers. */
 function fakeCodex(o: { resumeError?: string } = {}) {
-  const servers: { home: string; calls: { method: string; params: Record<string, unknown> }[]; listeners: Map<string, ThreadListener> }[] = []
+  const servers: { home: string; calls: { method: string; params: Record<string, unknown> }[]; listeners: Map<string, ThreadListener>; released: boolean }[] = []
   let threads = 0
   let turns = 0
   const open: OpenAppServer = async (home) => {
-    const s = { home, calls: [] as { method: string; params: Record<string, unknown> }[], listeners: new Map<string, ThreadListener>() }
+    const s = { home, calls: [] as { method: string; params: Record<string, unknown> }[], listeners: new Map<string, ThreadListener>(), released: false }
     servers.push(s)
     return {
       call: async <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
@@ -62,13 +62,17 @@ function fakeCodex(o: { resumeError?: string } = {}) {
         s.listeners.set(threadId, l)
         return () => s.listeners.delete(threadId)
       },
-      release: () => {},
+      release: () => {
+        s.released = true
+      },
     }
   }
+  /** The homes whose app-server a chat still holds. */
+  const held = () => servers.filter((s) => !s.released).map((s) => s.home)
   const turnStarts = () => servers.flatMap((s) => s.calls.filter((c) => c.method === 'turn/start').map((c) => ({ home: s.home, ...c.params }) as { home: string; threadId: string; input: { text?: string }[] }))
   const thread = (id: string): ThreadListener => servers.findLast((s) => s.listeners.has(id))!.listeners.get(id)!
   const calls = (method: string): Record<string, unknown>[] => servers.flatMap((s) => s.calls.filter((c) => c.method === method).map((c) => ({ home: s.home, ...c.params })))
-  return { open, turnStarts, thread, calls }
+  return { open, turnStarts, thread, calls, held }
 }
 
 async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats } = {}) {
@@ -215,8 +219,9 @@ test('a Codex chat run outside Desk continues here in its own thread, on the acc
   expect(start.input[0]!.text).toBe('Carry on')
   expect(fake.calls('thread/resume')).toEqual([expect.objectContaining({ home: BETA.codexHome, threadId })])
   expect(fake.calls('thread/start')).toEqual([])
-  // Let go once the turn ends: Codex lets one program write a thread at a time, and its Codex app is the other.
-  expect(fake.calls('thread/unsubscribe')).toEqual([{ home: BETA.codexHome, threadId }])
+  // Let go once the turn ends: Codex lets one program write a thread at a time, its Codex app is the other, and only
+  // the app-server's exit frees the thread, so the chat holds no app-server between turns.
+  expect(fake.held()).toEqual([])
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Two files.', 'Carrying on.'])
 })
 

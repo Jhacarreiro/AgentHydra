@@ -136,7 +136,7 @@ test('CliMayte worker and other sessions are read-only, and a Codex chat continu
   ] as const) {
     const err = await refusal(t.m.importSession({ sessionId: id, cwd: w.cwd, title: 'From elsewhere' }))
     expect(err.status).toBe(400)
-    expect(err.message).toBe(`This ${name} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
+    expect(err.message).toBe(`This ${name} session is read-only: only Claude Desktop, terminal and Codex chats can be continued in AgentHydra.`)
   }
   const fork = await refusal(t.m.importSession({ sessionId: 'codex-sess-1', fork: true }))
   expect([fork.status, fork.message]).toEqual([400, 'This Codex chat continues in place: Fork works on Claude chats.'])
@@ -150,7 +150,7 @@ test('a read-only session older than the 24-hour list is refused too: it is look
   const t = boot(w, { older: [outside('worker-old-1', 'climayte', w.cwd)] })
   const err = await refusal(t.m.importSession({ sessionId: 'worker-old-1', cwd: w.cwd, title: 'Last week' }))
   expect(err.status).toBe(400)
-  expect(err.message).toBe('This CliMayte worker session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.')
+  expect(err.message).toBe('This CliMayte worker session is read-only: only Claude Desktop, terminal and Codex chats can be continued in AgentHydra.')
   expect(t.m.list()).toEqual([])
 })
 

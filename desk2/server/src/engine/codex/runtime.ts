@@ -400,11 +400,10 @@ export class CodexRuntime extends ServiceRuntime {
   /**
    * Between turns the thread is let go: Codex lets one program write a thread at a time, so a thread Desk kept
    * loaded would lock its Codex app out of it (measured 2026-10-13: the app refused to archive a thread Desk held,
-   * "already has an active writer"). The next message resumes it.
+   * "already has an active writer"). Only the app-server's exit frees it, so the chat releases its app-server, which
+   * ends once no other chat holds it (app-server.ts). The next message resumes the thread.
    */
   private letGo(): void {
-    const threadId = this.thread?.threadId
-    if (threadId) void this.server?.call('thread/unsubscribe', { threadId }).catch(() => {})
     this.detach()
   }
 

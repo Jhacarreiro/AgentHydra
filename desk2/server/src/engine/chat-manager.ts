@@ -1701,7 +1701,7 @@ export class ChatManager {
     // A Claude Code session resumes, and a Codex chat on Codex; the rest are read-only. One AgentHydra does not
     // know is let through: its send refuses it when no folder here has it.
     if (outside && outside.source !== 'desktop' && outside.source !== 'cli' && outside.source !== 'codex') {
-      throw new ChatError(400, `This ${READ_ONLY_SOURCES[outside.source]} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
+      throw new ChatError(400, `This ${READ_ONLY_SOURCES[outside.source]} session is read-only: only Claude Desktop, terminal and Codex chats can be continued in AgentHydra.`)
     }
     return outside
   }
