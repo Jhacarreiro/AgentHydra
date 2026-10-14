@@ -10,9 +10,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Codex chats can be continued in AgentHydra's window.** An idle Codex chat now opens with a composer instead
   of "read-only". Your message goes on in that same chat, on the Codex account that holds it, and its replies,
   commands and approvals show up the way a Claude chat's do.
-- **A chat can be pinned to Codex.** Right-click a chat, then Pin service, then Codex: its messages run on one of your
-  Codex accounts, the emptiest, and move to another if one hits its limit. Pinned back to Claude, Claude first
-  catches up on what was said. ChatGPT comes next.
+- **A chat can be pinned to Codex or ChatGPT.** Right-click a chat, then Pin service: pinned to Codex, its messages
+  run on one of your Codex accounts, the emptiest; pinned to ChatGPT, on one of your Free ChatGPT accounts, as a
+  ChatGPT chat that answers in words. Either moves to another account if one hits its limit, and pinned back to
+  Claude, Claude first catches up on what was said.
 - **A moved Codex chat shows its whole history.** Newer Codex saves a long chat as a chain of files, and the window
   read only the newest one, so a chat moved to another account showed just its last few messages. It now reads back
   through the chain.

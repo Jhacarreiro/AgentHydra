@@ -18,6 +18,7 @@ import { createClient } from '../bridge/client'
 import { findSessionJsonl } from '../bridge/session-jsonl'
 import { type CodexDirectory, codexDirectory } from '../engine/codex/accounts'
 import type { OpenAppServer } from '../engine/codex/app-server'
+import type { FreeChats } from '../engine/chatgpt/runtime'
 import { startIdleBrowserClose } from '../browser/idle-close'
 import { closeChatTabs, startTabSweep } from '../browser/tab-sweep'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
@@ -139,6 +140,8 @@ function createManager(ctx: ServerContext, toQueue: { fn: (event: ServerEvent) =
     // A test's Desk (a fake bridge) reaches no real Codex account unless it gives its own.
     codex: (deps.codex as CodexDirectory | undefined) ?? (deps.bridge ? undefined : codexDirectory(createClient())),
     openCodex: deps.openCodex as OpenAppServer | undefined,
+    // The Free plugin (55) puts its service here when it starts, after this one: read at each use.
+    free: () => deps.freeInstances as FreeChats | undefined,
   })
 }
 

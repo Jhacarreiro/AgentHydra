@@ -9,7 +9,9 @@ import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AccountInfo, ExternalSession, ServerEvent, TranscriptItem } from '@shared/protocol'
+import type { FreeInstance, FreeJob, FreeResult } from '@shared/free-instances'
 import type { AhCodexInstance } from '../../../src/bridge/client'
+import type { FreeChats } from '../../../src/engine/chatgpt/runtime'
 import { ChatManager, type ManagerBridge } from '../../../src/engine/chat-manager'
 import type { CodexDirectory } from '../../../src/engine/codex/accounts'
 import type { OpenAppServer, ThreadListener } from '../../../src/engine/codex/app-server'
@@ -69,7 +71,7 @@ function fakeCodex(o: { resumeError?: string } = {}) {
   return { open, turnStarts, thread, calls }
 }
 
-async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string } = {}) {
+async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats } = {}) {
   const home = temp('desk-pin-home-')
   const cwd = temp('desk-pin-cwd-')
   mkdirSync(cwd, { recursive: true })
@@ -83,7 +85,7 @@ async function setup(o: { external?: ExternalSession[]; items?: Record<string, T
   const q = fakeQueries()
   const events: ServerEvent[] = []
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [], external: o.external, items: o.items }).bridge, listAccounts: async () => [account] }
-  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', codex, openCodex: fake.open })
+  const m = new ChatManager({ home, claudeHome: home, emit: (e) => events.push(e), settings: () => ({ ...DEFAULT_SETTINGS }), bridge, queryImpl: q.queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk', codex, openCodex: fake.open, free: () => o.free })
   managers.push(m)
   const chat = await m.create({ cwd, title: 'Pinned', accountId: 'acct-1', permissionMode: 'bypassPermissions' })
   return { m, q, fake, chat, cwd }
@@ -229,4 +231,66 @@ test("a Codex chat its Codex app holds open waits, in a sentence, and is never s
   expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: false, error: 'The Codex app on #8 beta has this chat open, so only it can write to it now. Close the chat there, then send again.' })
   expect(fake.calls('thread/start')).toEqual([])
   expect(m.get(chat.id).serviceThreads?.codex?.threadId).toBe(threadId)
+})
+
+const GPT = (n: number, name: string, unlimited: boolean): FreeInstance => ({ id: `0000000${n}-aaaa-4bbb-8ccc-000000000000`, num: n, provider: 'chatgpt', name, autoName: false, loggedIn: true, checkedAt: 1, lastSignedInAt: 1, lastActiveAt: n, usage: unlimited ? { available: true, unlimited_text: true, plan: 'free', is_snapshot: false, observed_at: null, note: '', windows: [] } : null })
+
+/** Free instances the test drives: each message is a job the test finishes. */
+function fakeFree(instances: FreeInstance[]) {
+  const jobs = new Map<string, FreeJob>()
+  const asked: Record<string, unknown>[] = []
+  const free: FreeChats = {
+    allInstances: () => instances,
+    start: (r) => {
+      const req = r as Record<string, unknown>
+      asked.push(req)
+      const job: FreeJob = { id: String(req.requestId), instanceId: String(req.instanceId), provider: 'chatgpt', command: req.command as FreeJob['command'], state: 'running', phase: 'working', startedAt: 1 }
+      jobs.set(job.id, job)
+      return job
+    },
+    get: (id) => jobs.get(id)!,
+    cancel: () => {},
+  }
+  const finish = (result: FreeResult) => Object.assign([...jobs.values()].at(-1)!, { state: 'done', result })
+  return { free, asked, finish }
+}
+
+test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that ChatGPT chat, and a limit moves it to another account', async () => {
+  const A = GPT(3, 'alpha', true)
+  const B = GPT(4, 'beta', false)
+  const f = fakeFree([B, A])
+  const { m, chat } = await setup({ free: f.free })
+  expect((await m.services()).find((s) => s.kind === 'chatgpt')).toMatchObject({ ready: true, accounts: 2 })
+  await m.patch(chat.id, { service: 'chatgpt' })
+
+  const ask = async (text: string, result: FreeResult) => {
+    const n = f.asked.length
+    await m.send(chat.id, text)
+    await waitFor(() => f.asked.length > n)
+    f.finish(result)
+  }
+  const chatId = '11111111-2222-4333-8444-555555555555'
+  // The account with unlimited text first; a new ChatGPT chat named for this one.
+  await ask('Name three rivers', { ok: true, chat_id: chatId, is_temporary: true, response: 'Nile, Amazon, Danube.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  expect(f.asked[0]).toMatchObject({ instanceId: A.id, provider: 'chatgpt', command: 'chat', name: 'Pinned', prompt: 'Name three rivers' })
+  expect(m.get(chat.id).serviceThreads?.chatgpt).toEqual({ accountId: A.id, label: '#3 alpha', threadId: chatId })
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Nile, Amazon, Danube.'])
+  expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: true })
+
+  // The next message goes on in that ChatGPT chat; at its limit, in a new one on the other account that first reads the chat.
+  await ask('Which is longest?', { ok: false, error: { code: 'rate_limited', message: 'ChatGPT limit reached.' } })
+  expect(f.asked[1]).toMatchObject({ instanceId: A.id, command: 'resume', chatId, prompt: 'Which is longest?' })
+  await waitFor(() => f.asked.length === 3)
+  const moved = f.asked[2]!
+  expect(moved).toMatchObject({ instanceId: B.id, command: 'chat' })
+  const prompt = String(moved.prompt)
+  expect(prompt.startsWith(`${PIN_INTRO}ChatGPT, which has not seen it yet: until now it ran on another ChatGPT account (#3 alpha).`)).toBe(true)
+  expect(prompt).toContain('Nile, Amazon, Danube.')
+  expect(prompt.endsWith(`${ANSWER_NOW}Which is longest?`)).toBe(true)
+  f.finish({ ok: true, chat_id: '66666666-2222-4333-8444-555555555555', is_temporary: true, response: 'The Nile.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  expect(systemTexts(m.listItems(chat.id))).toContain('#3 alpha hit its ChatGPT limit, so this chat goes on on another ChatGPT account.')
+  expect(m.get(chat.id).serviceThreads?.chatgpt?.accountId).toBe(B.id)
+  expect(m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => (i as { text: string }).text)).toEqual(['Name three rivers', 'Which is longest?'])
 })

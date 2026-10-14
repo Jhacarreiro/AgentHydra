@@ -263,8 +263,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   Codex account, through that account's `codex app-server` (one per CODEX_HOME, shared, closed 60 s after its last
   chat; `server/src/engine/codex/`), and a usage limit moves the message to another account, whose new thread first
   reads a condensed handoff of the chat. Pinned back to Claude, the next message carries what was said on Codex,
-  and the chat shows only what was typed plus "Caught up on what was said on Codex." ChatGPT is listed, not yet
-  pickable. An idle outside Codex chat continues the same way (owner, 2026-10-13: "why are they only read-only? ...
+  and the chat shows only what was typed plus "Caught up on what was said on Codex." Pinned to ChatGPT, each message
+  goes to a ChatGPT chat on a signed-in Free ChatGPT account (unlimited text first, then the one used longest ago),
+  sent as a Free instances job and read every 250 ms (`server/src/engine/chatgpt/`); it answers in words, no tools,
+  and a `rate_limited` answer moves the message to another account with the handoff. Both share
+  `engine/service-runtime.ts` (the record, the queue, the idle close). An idle outside Codex chat continues the same way (owner, 2026-10-13: "why are they only read-only? ...
   It should function similar to Claude"): its first message imports it as a chat pinned to Codex on its own thread
   and account, resumed in place (`codexImport` in `chat-manager.ts`); Fork stays on Claude chats. Opening a session from a search while the
   session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps

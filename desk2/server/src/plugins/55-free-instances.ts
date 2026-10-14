@@ -11,6 +11,8 @@ import { isRealHome } from '../real-home'
 /** Root /api, independent of the upstream AgentHydra daemon and its CLI/Desktop accounts. */
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const service = (ctx.deps.freeInstances as FreeInstances | undefined) ?? new FreeInstances(ctx.home)
+  // Chats pinned to ChatGPT send through it (the engine reads it from here).
+  ctx.deps.freeInstances = service
   ctx.onStop(() => service.stop())
   service.onPlanChange = (instance) => {
     const notice = planNotice(instance)
