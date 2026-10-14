@@ -17,6 +17,7 @@ import { Tip } from '@/components/ui/tooltip'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
 import { displayPrefs } from '@/components/session-header/state'
+import { advanceCursor, cursorMoved, EXTERNAL_PAGE, externalIndexBySession, mergeRecent, prependPage, startCursor, unloadedCount, type OlderCursor } from './paging'
 import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, whereLabel } from './logic'
 
 // A session running outside Hydra Desk, in the same column as a chat. A Claude Code session from Claude
@@ -35,17 +36,15 @@ const desk = useDesk()
 const api = usePaneApi()
 // Replaced whole on each read, never edited in place: a shallow ref keeps a big transcript out of deep proxies.
 // A long session comes in two parts (owner, 2026-10-11: a 56 MB session showed only its last 8 MiB, "It just stops"):
-// `recent`, the newest part, which the polls read again, and `older`, what its file holds before that, read once
-// behind it for each place the recent part begins (`olderFor`).
+// `recent`, the newest part, which the polls read again, and `older`, the pages above it of 200, each fetched only when
+// the transcript nears its top (paging.ts), joined to the recent part by id.
 const recent = shallowRef<TranscriptItem[]>([])
 const older = shallowRef<TranscriptItem[]>([])
-let olderFor = 0
-let olderAsked = 0
-const items = computed(() => {
-  if (!older.value.length) return recent.value
-  const mine = new Set(recent.value.map((i) => i.id))
-  return [...older.value.filter((i) => !mine.has(i.id)), ...recent.value]
-})
+let cursor: OlderCursor = startCursor(0)
+const loadingOlder = ref(false)
+const items = computed(() => mergeRecent(older.value, recent.value))
+const olderCount = computed(() => unloadedCount(cursor0.value, externalIndexBySession.get(props.sessionId)?.total, items.value.length))
+const cursor0 = shallowRef<OlderCursor>(cursor)
 const loading = ref(true)
 const error = ref<string | null>(null)
 let pollInterval: ReturnType<typeof setInterval> | null = null
@@ -159,9 +158,11 @@ async function loadItems(quiet = false) {
     error.value = null
     const from = performance.now()
     const { items: next, olderBefore } = await api.externalItems(props.sessionId, session.value?.cwd)
-    void loadOlder(props.sessionId, olderBefore)
+    placeCursor(olderBefore)
     if (quiet && sameItems(recent.value, next)) return
     recent.value = next
+    // The index on open, and again when a poll changed what is there (its total moves with the items).
+    void loadIndex()
     // The open as the window draws it (polls are not opens).
     if (!quiet) reportAtPaint('open_to_paint', from, props.sessionId)
   } catch (err) {
@@ -171,24 +172,48 @@ async function loadItems(quiet = false) {
   }
 }
 
-/** What the session's file holds before its recent part, read once for each place that part begins; 0: there is none. */
-async function loadOlder(id: string, before: number) {
-  if (!before) {
-    if (olderFor) older.value = []
-    olderFor = 0
-    return
+/** The recent part begins at `before` in the file: when that is elsewhere than the pages held, they are dropped. */
+function placeCursor(before: number) {
+  if (cursorMoved(cursor, before)) {
+    if (older.value.length) older.value = []
+    cursor = startCursor(before)
+    cursor0.value = cursor
   }
-  if (before === olderFor || before === olderAsked) return
-  olderAsked = before
+}
+
+/** The page above the loaded items, asked for when the transcript nears its top. */
+async function loadOlderPage() {
+  const id = props.sessionId
+  const at = cursor
+  if (at.done || loadingOlder.value || !api.externalOlderPage) return
+  loadingOlder.value = true
   try {
-    const got = await api.externalOlder(id, before, session.value?.cwd)
-    if (id !== props.sessionId || olderAsked !== before) return
-    older.value = got
-    olderFor = before
+    const page = await api.externalOlderPage(id, at.before, EXTERNAL_PAGE, at.end, session.value?.cwd)
+    if (id !== props.sessionId || cursor !== at) return
+    const next = prependPage(older.value, page.items)
+    const added = next.length - older.value.length
+    older.value = next
+    cursor = advanceCursor(at, page.above, added)
+    cursor0.value = cursor
   } catch {
-    // Asked again at the next read: a poll, or the session opened again.
+    // Asked again when the transcript nears the top again.
   } finally {
-    if (olderAsked === before) olderAsked = 0
+    loadingOlder.value = false
+  }
+}
+
+let indexAsked = false
+async function loadIndex() {
+  const id = props.sessionId
+  if (indexAsked || !api.externalIndex) return
+  indexAsked = true
+  try {
+    const idx = await api.externalIndex(id, session.value?.cwd)
+    if (idx && Array.isArray(idx.userMessages)) externalIndexBySession.set(id, idx)
+  } catch {
+    // The index is a convenience: the pages still show.
+  } finally {
+    indexAsked = false
   }
 }
 
@@ -201,7 +226,8 @@ watch(
   () => props.sessionId,
   () => {
     older.value = []
-    olderFor = olderAsked = 0
+    cursor = startCursor(0)
+    cursor0.value = cursor
     void loadItems()
   },
   { immediate: true }
@@ -291,6 +317,9 @@ onUnmounted(() => {
         :compact="displayPrefs.compact"
         :inset-top="inset"
         :running="isWorking"
+        :older-count="olderCount"
+        :loading-older="loadingOlder"
+        @load-older="loadOlderPage"
       />
     </div>
 

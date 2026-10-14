@@ -8,6 +8,8 @@ import {
   type GitStatus,
   type ModelChoice,
   OLDER_BEFORE_HEADER,
+  OLDER_END_HEADER,
+  type TranscriptIndex,
   type TranscriptItem
 } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
@@ -37,6 +39,10 @@ export interface PaneApi {
   externalItems(sessionId: string, cwd?: string | null): Promise<{ items: TranscriptItem[]; olderBefore: number }>
   /** What an outside session's file holds before byte `before` (a long session's items are only its newest part). */
   externalOlder(sessionId: string, before: number, cwd?: string | null): Promise<TranscriptItem[]>
+  /** The newest `limit` items before byte `before`; `above` is how many remain above them (pass it as `end` for the next page). */
+  externalOlderPage?(sessionId: string, before: number, limit: number, end?: number, cwd?: string | null): Promise<{ items: TranscriptItem[]; above: number }>
+  /** An outside session's index (every message sent, the to-do list, tasks, the total). */
+  externalIndex?(sessionId: string, cwd?: string | null): Promise<TranscriptIndex>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
    *  POST of it (the orchestrator's Arm). */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
@@ -104,6 +110,17 @@ export const httpPaneApi: PaneApi = {
   },
   externalOlder: (sessionId, before, cwd) =>
     json(`/external/sessions/${encodeURIComponent(sessionId)}/older?before=${before}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`),
+  externalOlderPage: async (sessionId, before, limit, end, cwd) => {
+    let above = 0
+    const items = await json<TranscriptItem[]>(
+      `/external/sessions/${encodeURIComponent(sessionId)}/older?before=${before}&limit=${limit}${end === undefined ? '' : `&end=${end}`}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`,
+      undefined,
+      '/api',
+      (res) => (above = Number(res.headers.get(OLDER_END_HEADER)) || 0)
+    )
+    return { items, above }
+  },
+  externalIndex: (sessionId, cwd) => json(`/external/sessions/${encodeURIComponent(sessionId)}/index${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
   diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))
