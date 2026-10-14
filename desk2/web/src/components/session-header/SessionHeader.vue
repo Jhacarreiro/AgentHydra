@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ChevronDown, ChevronUp, Coins, MessagesSquare, Monitor, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
+import type { SearchResult } from '@shared/find'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { actionError } from '@/lib/action-error'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
@@ -70,6 +71,10 @@ const props = defineProps<{
   items: TranscriptItem[]
   /** What the transcript shows (the display filters applied): what Find searches. */
   shown: TranscriptItem[]
+  /** Find over the whole transcript on the server (the items loaded are only its newest part); null when it cannot answer. */
+  search?: (query: string) => Promise<SearchResult | null>
+  /** Loads the page holding the item, so the transcript can scroll to it. */
+  reveal?: (itemId: string) => Promise<void>
 }>()
 const emit = defineEmits<{
   'update:find': [find: { query: string; active: FindHit | null } | null]
@@ -293,7 +298,22 @@ const findInput = ref<HTMLInputElement | null>(null)
 // The scan follows the typed query about 150 ms after the last keystroke; an emptied box answers at once.
 const searched = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
-const hits = computed(() => (findOpen.value ? findHits(props.shown, searched.value) : []))
+// The server's answer (the whole transcript) is used while the display filters hide nothing; else, or while it is
+// out, the loaded items are scanned.
+const served = ref<{ query: string; result: SearchResult } | null>(null)
+const serverUsable = computed(() => !!props.search && props.shown.length === props.items.length)
+const hits = computed<FindHit[]>(() => {
+  if (!findOpen.value) return []
+  if (serverUsable.value && served.value?.query === searched.value) return served.value.result.hits
+  return findHits(props.shown, searched.value)
+})
+const total = computed(() => (serverUsable.value && served.value?.query === searched.value ? served.value.result.total : hits.value.length))
+watch([searched, findOpen], async ([q, open]) => {
+  served.value = null
+  if (!open || !q.trim() || !props.search) return
+  const result = await props.search(q).catch(() => null)
+  if (result && searched.value === q) served.value = { query: q, result }
+})
 watch(query, (q) => {
   index.value = 0
   if (searchTimer) clearTimeout(searchTimer)
@@ -302,9 +322,18 @@ watch(query, (q) => {
   else searchTimer = setTimeout(() => (searched.value = query.value), 150)
 })
 onBeforeUnmount(() => searchTimer && clearTimeout(searchTimer))
+let revealing = 0
 watch(
   [findOpen, searched, index, hits],
-  () => emit('update:find', findOpen.value ? { query: searched.value, active: hits.value[wrapIndex(index.value, hits.value.length)] ?? null } : null),
+  async () => {
+    const active = findOpen.value ? (hits.value[wrapIndex(index.value, hits.value.length)] ?? null) : null
+    const mine = ++revealing
+    if (active && props.reveal && !props.items.some((i) => i.id === active.itemId)) {
+      await props.reveal(active.itemId).catch(() => {})
+      if (mine !== revealing) return
+    }
+    emit('update:find', findOpen.value ? { query: searched.value, active } : null)
+  },
   { immediate: true }
 )
 function openFind() {
@@ -386,7 +415,7 @@ const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
           class="h-6 min-w-0 flex-1 bg-transparent px-1 text-ui text-text outline-none placeholder:text-text-muted"
           @keydown="onFindKey"
         />
-        <span class="shrink-0 tnum text-text-muted" role="status">{{ searched.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${hits.length}` : 'No matches') : '' }}</span>
+        <span class="shrink-0 tnum text-text-muted" role="status">{{ searched.trim() ? (hits.length ? `${wrapIndex(index, hits.length) + 1} of ${total}` : 'No matches') : '' }}</span>
         <Tip label="Previous match (Shift + Enter)">
           <button type="button" :class="BTN" aria-label="Previous match" :disabled="!hits.length" @click="step(-1)"><ChevronUp class="size-4" /></button>
         </Tip>

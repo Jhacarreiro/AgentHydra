@@ -14,6 +14,7 @@ import { useClock } from '@/lib/clock'
 import { reportAtPaint } from '@/lib/timing'
 import Composer from '@/components/composer/Composer.vue'
 import { Tip } from '@/components/ui/tooltip'
+import type { SearchResult } from '@shared/find'
 import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
 import { displayPrefs } from '@/components/session-header/state'
@@ -208,6 +209,23 @@ const fetchItem = async (id: string): Promise<TranscriptItem | null> => {
   return res.ok ? ((await res.json()) as TranscriptItem) : null
 }
 
+/** Find over the whole session on the server. */
+const searchSession = async (q: string): Promise<SearchResult | null> => {
+  const cwd = session.value?.cwd
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/search?q=${encodeURIComponent(q)}${cwd ? `&cwd=${encodeURIComponent(cwd)}` : ''}`)
+  return res.ok ? ((await res.json()) as SearchResult) : null
+}
+/** Pages in above the loaded items until the one with this id is among them. */
+async function revealItem(itemId: string) {
+  const id = props.sessionId
+  for (let guard = 0; guard < 200 && id === props.sessionId; guard++) {
+    if (items.value.some((i) => i.id === itemId) || cursor.done) return
+    const before = older.value.length
+    await loadOlderPage()
+    if (older.value.length === before) return
+  }
+}
+
 let indexAsked = false
 async function loadIndex() {
   const id = props.sessionId
@@ -300,6 +318,8 @@ onUnmounted(() => {
         :session="session ?? null"
         :items="items"
         :shown="shown"
+        :search="searchSession"
+        :reveal="revealItem"
         @update:find="(f) => (find = f)"
         @update:inset="(h: number) => (inset = h)"
       />

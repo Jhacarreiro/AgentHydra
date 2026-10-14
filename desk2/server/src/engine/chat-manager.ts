@@ -7,6 +7,7 @@
 // cannot take. Loads the saved chats at start (all 'closed'), interrupts, answers the runtime's
 // permission / question / plan requests, patches, deletes, and keeps climayteActive current.
 
+import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
@@ -476,6 +477,11 @@ export class ChatManager {
       while (this.itemIndexes.size > 50) this.itemIndexes.delete(this.itemIndexes.keys().next().value as string)
     }
     return index
+  }
+
+  /** Find over the whole chat: the hits (capped) and the total, over the text the window's Find matches. */
+  search(id: string, query: string): SearchResult {
+    return searchResult(this.listItems(id), query)
   }
 
   /** One item of the chat by id, or null. */

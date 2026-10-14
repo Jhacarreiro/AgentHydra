@@ -284,6 +284,7 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
     }
   })
   app.get('/api/chats/:id/index', (c) => answer(c, () => manager.transcriptIndex(c.req.param('id'))))
+  app.get('/api/chats/:id/search', (c) => answer(c, () => manager.search(c.req.param('id'), c.req.query('q') ?? '')))
   app.get('/api/chats/:id/items/:itemId', (c) =>
     answer(c, () => {
       const item = manager.itemById(c.req.param('id'), c.req.param('itemId'))

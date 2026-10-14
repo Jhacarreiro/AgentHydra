@@ -1,6 +1,7 @@
 // What the session header says, worked out from AgentHydra's answers (ah.ts): the same wording and
 // rules as AgentHydra's Sessions tab (hydra/src/components/SessionsView.vue and its composables), which
 // Desk 2's header replaces. Pure, so the window and the tests share it.
+import { searchItems } from '@shared/find'
 import type { TranscriptItem } from '@shared/protocol'
 
 /** AgentHydra's SessionSummary, the fields the header reads (server/src/types.ts). */
@@ -222,28 +223,9 @@ export interface FindHit {
   nth: number
 }
 
-function searchable(i: TranscriptItem): string | null {
-  if (i.parentToolUseId) return null
-  if (i.kind === 'user' || i.kind === 'note' || i.kind === 'assistant_text' || i.kind === 'thinking' || i.kind === 'system') return i.text
-  return null
-}
-
 /** Every match of `query` in what the transcript says, in order; case-insensitive, nothing for a blank query. */
 export function findHits(items: readonly TranscriptItem[], query: string): FindHit[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
-  const hits: FindHit[] = []
-  for (const i of items) {
-    const text = searchable(i)?.toLowerCase()
-    if (!text) continue
-    let at = text.indexOf(q)
-    let nth = 0
-    while (at !== -1) {
-      hits.push({ itemId: i.id, nth: nth++ })
-      at = text.indexOf(q, at + q.length)
-    }
-  }
-  return hits
+  return searchItems(items, query).map(({ itemId, nth }) => ({ itemId, nth }))
 }
 
 /** The match `n` steps along, wrapping both ways. */

@@ -15,6 +15,7 @@
 // to the default login, sessions and workers to []. Writes (cancel, send) and a single transcript read
 // do throw a BridgeError.
 
+import { type SearchResult, searchResult } from '@shared/find'
 import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
@@ -696,6 +697,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     return (await externalWhole(sessionId, cwd)).index
   }
 
+  async function externalSearch(sessionId: string, query: string, cwd: string | null = null): Promise<SearchResult> {
+    return searchResult((await externalWhole(sessionId, cwd)).items, query)
+  }
+
   async function externalItem(sessionId: string, itemId: string, cwd: string | null = null): Promise<TranscriptItem | null> {
     return (await externalWhole(sessionId, cwd)).items.find((i) => i.id === itemId) ?? null
   }
@@ -1017,6 +1022,7 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalOlderPage,
     externalHistory,
     externalIndex,
+    externalSearch,
     externalItem,
     search,
     sessionRoots,

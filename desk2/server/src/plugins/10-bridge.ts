@@ -207,6 +207,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     }),
   )
   app.get('/api/external/sessions/:id/index', (c) => guarded(c, b, async () => c.json(await b.externalIndex(c.req.param('id'), c.req.query('cwd') || null))))
+  app.get('/api/external/sessions/:id/search', (c) => guarded(c, b, async () => c.json(await b.externalSearch(c.req.param('id'), c.req.query('q') ?? '', c.req.query('cwd') || null))))
   app.get('/api/external/sessions/:id/items/:itemId', (c) =>
     guarded(c, b, async () => {
       const item = await b.externalItem(c.req.param('id'), c.req.param('itemId'), c.req.query('cwd') || null)
