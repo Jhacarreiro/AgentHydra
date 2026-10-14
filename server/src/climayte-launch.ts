@@ -695,7 +695,7 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
 }
 
 /** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
-function corePromptText(w: CliMayteWorker): string {
+function corePromptText(w: CliMayteWorker, cli: CliSession): string {
   const head = [CORE_CHAT_NOTE, w.desk?.append]
   const chat = w.desk?.chatId ?? w.sessionId
   const placement = placementOf(coreDir())
@@ -709,7 +709,8 @@ function corePromptText(w: CliMayteWorker): string {
   }
   const placed = placeChat(coreDir(), {
     chat,
-    session: chat,
+    session: cli.id,
+    fresh: !cli.resume,
     cwd: w.cwd,
     prompt: w.prompt,
     placement,
@@ -720,8 +721,8 @@ function corePromptText(w: CliMayteWorker): string {
 /** A chat's appended prompt: CHAT_NOTE, then the Desk's append when the task carried one (it has
  *  the media sentence, so CHAT_NOTE's own is left out), then the owner's global CLAUDE.md unless
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
-export function chatPromptText(w: CliMayteWorker): string {
-  if (coreModeOn()) return corePromptText(w)
+export function chatPromptText(w: CliMayteWorker, cli: CliSession): string {
+  if (coreModeOn()) return corePromptText(w, cli)
   const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
@@ -738,10 +739,10 @@ export function chatPromptText(w: CliMayteWorker): string {
 
 /** Write a chat's appended prompt (`--append-system-prompt-file`): a file, so the owner's CLAUDE.md
  *  never meets the Windows command line's length limit. */
-function writeChatPrompt(w: CliMayteWorker): string {
+function writeChatPrompt(w: CliMayteWorker, cli: CliSession): string {
   const file = workerFiles(w.id)[2]
   mkdirSync(HOOKS, { recursive: true })
-  writeFileSync(file, chatPromptText(w))
+  writeFileSync(file, chatPromptText(w, cli))
   return file
 }
 
@@ -757,7 +758,7 @@ function ownerHome(): string | null {
  *  owner's skills, or a sealed worker's own system prompt in place of the CLI's, with no settings
  *  source (no CLAUDE.md, hook or user setting; `--settings` is still read), no built-in tool, and
  *  no MCP server but its config's (docs/CLIMAYTE.md, "Sealed tasks"). */
-function briefArgs(w: CliMayteWorker): string[] {
+function briefArgs(w: CliMayteWorker, cli: CliSession): string[] {
   if (w.sealed)
     return [
       '--strict-mcp-config',
@@ -797,7 +798,17 @@ function briefArgs(w: CliMayteWorker): string[] {
   }
   const home = ownerHome()
   // --add-dir is variadic: the option after it ends its list.
-  return [...(home ? ['--add-dir', home] : []), '--append-system-prompt-file', writeChatPrompt(w)]
+  return [
+    ...(home ? ['--add-dir', home] : []),
+    '--append-system-prompt-file',
+    writeChatPrompt(w, cli),
+  ]
+}
+
+/** The CLI session a launch runs. A resume keeps the system prompt the session started with; only a fresh start reads the new one. */
+export interface CliSession {
+  id: string
+  resume: boolean
 }
 
 export function cliArgv(
@@ -822,7 +833,7 @@ export function cliArgv(
     ...(mcpFile ? ['--mcp-config', mcpFile] : []),
     '--settings',
     hookFile,
-    ...briefArgs(w),
+    ...briefArgs(w, { id: sessionId, resume }),
   ]
 }
 

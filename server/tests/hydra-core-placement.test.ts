@@ -17,6 +17,7 @@ const T = Date.parse('2026-10-14T09:00:00Z')
 const CWD = 'C:/Users/me/app'
 const RULES = 'Repo rules: the invented test app uses one button style.'
 const PRICING = 'Pricing tables: the invented plans cost 3, 5 and 8 coins a month.'
+const PRICING_PROMPT = 'pricing plans for the product'
 
 let dir: string
 let savedFetch: typeof fetch
@@ -94,6 +95,7 @@ describe('placeChat slot', () => {
     const req = {
       chat: 'alpha',
       session: 'sa1',
+      fresh: true,
       cwd: CWD,
       prompt: 'hello',
       placement: 'slot' as const,
@@ -120,6 +122,7 @@ describe('placeChat slot', () => {
     const req = {
       chat: 'lead',
       session: 'sl1',
+      fresh: true,
       cwd: CWD,
       prompt: 'hello',
       placement: 'slot' as const,
@@ -137,7 +140,7 @@ describe('placeChat file', () => {
   test('writes pack.md and returns the one line naming its absolute path', () => {
     const placed = placeChat(
       dir,
-      { chat: 'beta', session: 'fb1', cwd: CWD, prompt: 'hello', placement: 'file' },
+      { chat: 'beta', session: 'fb1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'file' },
       new Date(T),
     )
     const file = resolve(chatPaths(dir, 'beta').pack)
@@ -151,28 +154,173 @@ describe('placeChat file', () => {
 })
 
 describe('matchFor', () => {
-  test('returns strong, unsent matches only, never a person and never one over the cap', () => {
+  test('a session that started with the pack gets only the matches the pack did not hold', () => {
+    placeChat(
+      dir,
+      { chat: 'gamma', session: 's1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'slot' },
+      new Date(T),
+    )
     const req = {
       chat: 'gamma',
       session: 's1',
       cwd: CWD,
-      prompt: 'pricing plans for the product',
+      prompt: PRICING_PROMPT,
       placement: 'slot' as const,
     }
-    const first = matchFor(dir, req, new Date(T))
+    const first = matchFor(dir, req, new Date(T + 1))
     expect(first.ids).toContain('knowledge:pricing-tables')
+    expect(first.ids).not.toContain('knowledge:repo-rules')
     expect(first.ids.some((id) => id.startsWith('person:'))).toBe(false)
-    expect(first.ids).not.toContain('knowledge:pricing-long')
+    expect(first.text).toContain(PRICING)
+    expect(first.text).not.toContain(RULES)
+    expect(first.text).toContain('knowledge:pricing-long - Pricing notes')
+    expect(first.text).not.toContain('x'.repeat(100))
     expect(first.chars).toBeLessThanOrEqual(2000)
 
-    const same = matchFor(dir, req, new Date(T + 1))
+    const same = matchFor(dir, req, new Date(T + 2))
     expect(same.ids).not.toContain('knowledge:pricing-tables')
-
-    const other = matchFor(dir, { ...req, session: 's2' }, new Date(T + 2))
-    expect(other.ids).toContain('knowledge:pricing-tables')
   })
 
-  test('a weak prompt gets nothing', () => {
+  test('a session that started with the pack gets no repeat of what the pack held', () => {
+    placeChat(
+      dir,
+      {
+        chat: 'pack',
+        session: 'p1',
+        fresh: true,
+        cwd: CWD,
+        prompt: PRICING_PROMPT,
+        placement: 'slot',
+      },
+      new Date(T),
+    )
+    const next = matchFor(
+      dir,
+      { chat: 'pack', session: 'p1', cwd: CWD, prompt: PRICING_PROMPT, placement: 'slot' },
+      new Date(T + 1),
+    )
+    expect(next.ids).toEqual([])
+    expect(next.text).toBe('')
+  })
+
+  test('a resumed session that did not start with the pack gets the full pack once, then only new matches', () => {
+    writeFileSync(join(dir, 'shipping.md'), 'Shipping notes: invented couriers take 2 days.\n')
+    writeFileSync(
+      join(dir, 'catalog', 'hand-shipping-fixture.json'),
+      JSON.stringify([
+        {
+          id: 'knowledge:shipping-notes',
+          kind: 'knowledge',
+          name: 'Shipping Notes',
+          when: 'Shipping notes for courier deliveries',
+          tags: ['shipping'],
+          cost: 'free',
+          how: 'read the shipping notes',
+          load: { type: 'file', path: join(dir, 'shipping.md') },
+        },
+      ]),
+    )
+    placeChat(
+      dir,
+      {
+        chat: 'resumed',
+        session: 'r1',
+        fresh: false,
+        cwd: CWD,
+        prompt: 'hello',
+        placement: 'slot',
+      },
+      new Date(T),
+    )
+    const req = {
+      chat: 'resumed',
+      session: 'r1',
+      cwd: CWD,
+      prompt: PRICING_PROMPT,
+      placement: 'slot' as const,
+    }
+    const first = matchFor(dir, req, new Date(T + 1))
+    expect(first.text).toContain('Hydra Core attached for this chat and message')
+    expect(first.text).toContain(RULES)
+    expect(first.text).toContain('knowledge:pricing-tables - Pricing tables')
+    expect(first.ids).toContain('knowledge:repo-rules')
+    expect(first.ids).toContain('knowledge:pricing-tables')
+
+    const repeat = matchFor(dir, req, new Date(T + 2))
+    expect(repeat.ids).not.toContain('knowledge:pricing-tables')
+    expect(repeat.text).toBe('')
+
+    const later = matchFor(
+      dir,
+      { ...req, prompt: 'shipping notes for courier deliveries' },
+      new Date(T + 3),
+    )
+    expect(later.ids).toContain('knowledge:shipping-notes')
+    expect(later.ids).not.toContain('knowledge:repo-rules')
+    expect(later.ids).not.toContain('knowledge:pricing-tables')
+    expect(later.text).not.toContain(RULES)
+    expect(later.text).not.toContain('Hydra Core attached')
+  })
+
+  test('an entry with no text is a pointer, never an empty block, and inline matches are capped at five', () => {
+    const quota: unknown[] = []
+    for (let i = 0; i < 8; i++) {
+      writeFileSync(join(dir, `quota-${i}.md`), `Quota note ${i}: invented widget quota is ${i}.\n`)
+      quota.push({
+        id: `knowledge:quota-${i}`,
+        kind: 'knowledge',
+        name: `Quota ${i}`,
+        when: 'Quota notes for the invented widget',
+        tags: ['widget'],
+        cost: 'free',
+        how: 'read the quota note',
+        load: { type: 'file', path: join(dir, `quota-${i}.md`) },
+      })
+    }
+    for (let i = 0; i < 3; i++)
+      quota.push({
+        id: `instrument:empty-${i}`,
+        kind: 'instrument',
+        name: `Empty ${i}`,
+        when: 'Quota notes for the invented widget',
+        tags: ['widget'],
+        cost: 'free',
+        how: 'no text',
+        load: { type: 'none' },
+      })
+    writeFileSync(join(dir, 'catalog', 'hand-quota-fixture.json'), JSON.stringify(quota))
+    placeChat(
+      dir,
+      { chat: 'cap', session: 'c1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'slot' },
+      new Date(T),
+    )
+    const got = matchFor(
+      dir,
+      {
+        chat: 'cap',
+        session: 'c1',
+        cwd: CWD,
+        prompt: 'quota notes for the invented widget',
+        placement: 'slot',
+      },
+      new Date(T + 1),
+    )
+    const headers = got.text.match(/^--- .*$/gm) ?? []
+    expect(headers.length).toBe(5)
+    for (const header of headers) expect(header).toMatch(/^--- knowledge:quota-\d /)
+    expect(got.text).not.toMatch(/^--- instrument:/m)
+    expect(got.text).toMatch(/- instrument:empty-\d - Quota notes/)
+    expect(got.text).toContain('Also matching (core_find { need, chat } loads any of them):')
+    expect(got.ids.length).toBe(10)
+    expect(got.chars).toBeLessThanOrEqual(2000)
+  })
+
+  test('a weak prompt gets nothing once the session has the pack', () => {
+    placeChat(
+      dir,
+      { chat: 'delta', session: 'w1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'slot' },
+      new Date(T),
+    )
     const weak = matchFor(
       dir,
       { chat: 'delta', session: 'w1', cwd: CWD, prompt: 'hello there', placement: 'slot' },
@@ -201,6 +349,18 @@ describe('hook under slot and file', () => {
   test('under slot the prompt gets strong matches only, and no core_scope line', async () => {
     writeFileSync(join(dir, 'ON'), '')
     writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
+    placeChat(
+      dir,
+      {
+        chat: 'hook-s1',
+        session: 'hook-s1',
+        fresh: true,
+        cwd: CWD,
+        prompt: 'hello',
+        placement: 'slot',
+      },
+      new Date(T),
+    )
     mockDaemon()
     const out = await run(
       {
@@ -278,7 +438,14 @@ describe('tracking', () => {
     mkdirSync(handoffsDir, { recursive: true })
     placeChat(
       dir,
-      { chat: 'track-a', session: 'tp1', cwd: CWD, prompt: 'hello', placement: 'slot' },
+      {
+        chat: 'track-a',
+        session: 'tp1',
+        fresh: true,
+        cwd: CWD,
+        prompt: 'hello',
+        placement: 'slot',
+      },
       new Date(T),
     )
     writeFileSync(
@@ -339,11 +506,13 @@ describe('chatPromptText under file', () => {
       sessionId: 'prime-1',
       prompt: 'hello',
     } as unknown as CliMayteWorker
-    const text = chatPromptText(prime)
+    const text = chatPromptText(prime, { id: 'prime-1', resume: false })
     expect(text).toContain('Before you act on any message, read ')
     expect(text).toContain('pack.md: it holds this folder')
 
     const drone = { cwd: CWD, sessionId: 'drone-1', prompt: 'hello' } as unknown as CliMayteWorker
-    expect(chatPromptText(drone)).not.toContain('Before you act on any message')
+    expect(chatPromptText(drone, { id: 'drone-1', resume: false })).not.toContain(
+      'Before you act on any message',
+    )
   })
 })

@@ -24,6 +24,7 @@ const REFUSAL =
 
 const savedCoreDir = process.env.AGENTHYDRA_CORE_DIR
 const worker = (desk?: { append: string }) => ({ cwd: CWD, desk }) as unknown as CliMayteWorker
+const CLI = { id: 'mode-session', resume: false }
 const setFlag = (on: boolean) => {
   if (on) writeFileSync(join(CORE, 'ON'), '')
   else rmSync(join(CORE, 'ON'), { force: true })
@@ -48,7 +49,7 @@ describe('flag off', () => {
   test('the chat note and the owner CLAUDE.md are as before', () => {
     setFlag(false)
     expect(coreModeOn()).toBe(false)
-    const text = chatPromptText(worker())
+    const text = chatPromptText(worker(), CLI)
     expect(text.startsWith(CHAT_NOTE)).toBe(true)
     expect(text).toContain(OWNER_RULES)
   })
@@ -69,7 +70,7 @@ describe('flag off', () => {
 describe('flag on', () => {
   test('the chat note is the two core sentences, with no manager wording and no owner CLAUDE.md', () => {
     setFlag(true)
-    const text = chatPromptText(worker())
+    const text = chatPromptText(worker(), CLI)
     expect(text).toBe(CORE_NOTE)
     expect(text).not.toContain(OWNER_RULES)
     expect(text).not.toMatch(/manager|orchestrat|successor/i)
@@ -77,7 +78,7 @@ describe('flag on', () => {
 
   test('the Desk append that a chat carries follows the note', () => {
     setFlag(true)
-    const text = chatPromptText(worker({ append: 'DESK APPEND' }))
+    const text = chatPromptText(worker({ append: 'DESK APPEND' }), CLI)
     expect(text).toBe(`${CORE_NOTE}\n\nDESK APPEND`)
   })
 

@@ -43,14 +43,24 @@ export function packLine(file: string): string {
 /** Writes a chat's slot.md or pack.md (reusing it while the folder rules and the hydra.md lead are unchanged) and returns what the prompt gets. */
 export function placeChat(
   dir: string,
-  req: { chat: string; session: string; cwd: string; prompt: string; placement: 'slot' | 'file' },
+  req: {
+    chat: string
+    session: string
+    fresh: boolean
+    cwd: string
+    prompt: string
+    placement: 'slot' | 'file'
+  },
   now = new Date(),
 ): PlacedChat {
   const files = chatPaths(dir, req.chat)
   const target = req.placement === 'slot' ? files.slot : files.pack
   const hash = inputsHash(dir, req.cwd, files.hydraMd)
   const old = readPlaced(files.placed)
-  const reused = !!old && old.placement === req.placement && old.hash === hash && existsSync(target)
+  const sameInputs = !!old && old.placement === req.placement && old.hash === hash
+  const reused = sameInputs && existsSync(target)
+  const started = sameInputs && old ? [...old.started] : []
+  if (req.fresh && !started.includes(req.session)) started.push(req.session)
 
   let body: string
   let ids: string[]
@@ -73,11 +83,11 @@ export function placeChat(
     ids = pack.ids
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, body)
-    writeFileSync(
-      files.placed,
-      JSON.stringify({ placement: req.placement, hash, ids, chars: body.length }, null, 2),
-    )
   }
+  writeFileSync(
+    files.placed,
+    JSON.stringify({ placement: req.placement, hash, ids, chars: body.length, started }, null, 2),
+  )
 
   const text = req.placement === 'slot' ? body : packLine(resolve(target))
   appendLog(
@@ -92,6 +102,7 @@ export function placeChat(
       ids,
       hash,
       reused,
+      fresh: req.fresh,
     },
     now,
   )

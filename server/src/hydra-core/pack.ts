@@ -15,6 +15,10 @@ const INLINE_MIN = 20
 const LEAD_MIN = 4
 /** What a slot or file chat gets per message from the hook: strong matches only, at most this many characters. */
 export const MATCH_CAP = 2000
+/** Per message: at most this many full texts, then at most MATCH_POINTERS one-line pointers. */
+const MATCH_INLINE = 5
+const MATCH_POINTERS = 5
+const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
 
 export type PackMode = 'first' | 'full' | 'delta'
 
@@ -31,6 +35,7 @@ export interface Placed {
   hash: string
   ids: string[]
   chars: number
+  started: string[]
 }
 
 export interface PackRequest {
@@ -98,9 +103,7 @@ function entryBlock(e: CatalogEntry): string {
 function matchParts(inline: string[], pointers: string[]): string[] {
   return [
     inline.length ? `Rulings and knowledge for this message:\n\n${inline.join('\n\n')}` : '',
-    pointers.length
-      ? `Also matching (core_find { need, chat } loads any of them):\n${pointers.join('\n')}`
-      : '',
+    pointers.length ? `${ALSO_MATCHING}\n${pointers.join('\n')}` : '',
   ].filter(Boolean)
 }
 
@@ -114,6 +117,9 @@ export function readPlaced(file: string): Placed | null {
       hash: data.hash,
       ids: Array.isArray(data.ids) ? data.ids.filter((id) => typeof id === 'string') : [],
       chars: typeof data.chars === 'number' ? data.chars : 0,
+      started: Array.isArray(data.started)
+        ? data.started.filter((id) => typeof id === 'string')
+        : [],
     }
   } catch {
     return null
@@ -249,12 +255,37 @@ export interface Match {
   chars: number
 }
 
-/** Per-message matches for a slot or file chat: strong hits not yet sent this session, at most MATCH_CAP characters. */
+function matchText(inline: string[], pointers: string[]): string {
+  return [
+    'Hydra Core, new for this message:',
+    inline.join('\n\n'),
+    pointers.length ? `${ALSO_MATCHING}\n${pointers.join('\n')}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
+/**
+ * Per-message matches for a slot or file chat, at most MATCH_CAP characters. A session that started with the
+ * pack (placement.json `started`) gets only what the pack did not hold; any other session gets the full pack
+ * on its first message, then only what it has not been sent.
+ */
 export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Match {
   const files = chatPaths(dir, req.chat)
-  const entries = [...loadCatalog(dir).entries.values()]
   const sent = readSent(files.sent)
-  const seen = new Set([...(sent[req.session] ?? []), ...(readPlaced(files.placed)?.ids ?? [])])
+  const placed = readPlaced(files.placed)
+  const inPrompt = placed?.started.includes(req.session) ?? false
+  if (!inPrompt && !(req.session in sent)) {
+    const pack = packFor(
+      dir,
+      { chat: req.chat, session: req.session, cwd: req.cwd, prompt: req.prompt },
+      now,
+    )
+    return { text: pack.text, ids: pack.ids, chars: pack.text.length }
+  }
+
+  const entries = [...loadCatalog(dir).entries.values()]
+  const seen = new Set([...(sent[req.session] ?? []), ...(inPrompt ? (placed?.ids ?? []) : [])])
   const folderAll = folderKnowledgeOf(entries, req.cwd)
   const mainIds = new Set(mainRules(folderAll).map((e) => e.id))
   const here = new Set(folderAll.map((e) => e.id))
@@ -268,15 +299,27 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       !foreign(s.entry) &&
       !seen.has(s.entry.id),
   )
-  const head = 'Hydra Core, new for this message:\n\n'
-  let text = ''
+  const inline: string[] = []
+  const pointers: string[] = []
   const ids: string[] = []
   for (const { entry } of hits) {
-    const next = text ? `${text}\n\n${entryBlock(entry)}` : `${head}${entryBlock(entry)}`
-    if (next.length > MATCH_CAP) continue
-    text = next
-    ids.push(entry.id)
+    if (loadText(entry).trim() && inline.length < MATCH_INLINE) {
+      const next = matchText([...inline, entryBlock(entry)], pointers)
+      if (next.length <= MATCH_CAP) {
+        inline.push(entryBlock(entry))
+        ids.push(entry.id)
+        continue
+      }
+    }
+    if (pointers.length < MATCH_POINTERS) {
+      const line = `- ${entry.id} - ${entry.when} (${loadRef(entry)})`
+      if (matchText(inline, [...pointers, line]).length <= MATCH_CAP) {
+        pointers.push(line)
+        ids.push(entry.id)
+      }
+    }
   }
+  const text = ids.length ? matchText(inline, pointers) : ''
 
   if (ids.length) {
     sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...ids])]
