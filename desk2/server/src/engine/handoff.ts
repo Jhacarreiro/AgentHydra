@@ -16,6 +16,11 @@ export const HANDOFF_TOKENS = 150_000
 export const FRESH_TOKENS = 200_000
 /** HandoffInput.why for a session left because it grew past FRESH_TOKENS, not because of a move. */
 export const GROWN = 'grown'
+/** HandoffInput.why for a turn on a service the chat's pin just moved it to (Pin service), which has not seen the chat. */
+export const PINNED = 'pinned'
+/** How a PINNED handoff opens and where the owner's own message starts in it: the transcript shows only that message. */
+export const PIN_INTRO = 'This chat now runs on '
+export const ANSWER_NOW = "\n\n## The owner's message to answer now\n"
 /** The handoff's hard cap, in characters (about 4k tokens). */
 export const MAX_HANDOFF_CHARS = 16_000
 
@@ -75,6 +80,8 @@ export interface HandoffInput {
   why: string
   /** Hydra Desk's own address, for the transcript route. */
   deskUrl: string
+  /** With why PINNED: the service this message runs on, and what ran the record before it ("Claude", "another Codex account"). */
+  services?: { from: string; to: string }
 }
 
 const squash = (s: string): string => s.replace(/\s+/g, ' ').trim()
@@ -121,6 +128,9 @@ function finishedTurns(items: TranscriptItem[], inTail: Set<string>, max: number
 
 function introSection(h: HandoffInput): string {
   const rest = 'Continue exactly where it left off; do not redo finished steps. Check its claims with cheap commands (git status, git log -3, reading a file); do not re-run a test suite or build it reports passing unless you change what it covers.'
+  if (h.why === PINNED && h.services) {
+    return `${PIN_INTRO}${h.services.to}, which has not seen it yet: until now it ran on ${h.services.from}. Instead of that history you start from this condensed handoff, which Hydra Desk built from the chat's full record. Answer the owner's message at the end; the sections before it are what you knew. ${rest.replace('Continue exactly where it left off; ', '')}`
+  }
   if (h.why === GROWN) {
     return `This chat's session had grown to about ${Math.round((h.tokens ?? 0) / 1000)}k tokens, so Hydra Desk continues it in a fresh session on the same account: instead of re-reading it you start from this condensed handoff, which Hydra Desk built from the chat's full record. Answer the owner's message at the end; the sections before it are what you knew. ${rest.replace('Continue exactly where it left off; ', '')}`
   }

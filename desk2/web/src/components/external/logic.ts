@@ -14,9 +14,9 @@ export const isExternalChatId = (id: string): boolean => id.startsWith(EXTERNAL_
 export const externalChatId = (sessionId: string): string => `${EXTERNAL_CHAT_PREFIX}${sessionId}`
 export const sessionOfChatId = (id: string): string => id.slice(EXTERNAL_CHAT_PREFIX.length)
 
-/** A Claude Code session from Claude Desktop or a terminal: one Hydra Desk can carry on once it is idle. */
-export function resumable(s: Pick<ExternalSession, 'source'>): boolean {
-  return s.source === 'desktop' || s.source === 'cli'
+/** A Claude Code session from Claude Desktop or a terminal, or a Codex chat whose account is known: one Hydra Desk can carry on once it is idle. */
+export function resumable(s: Pick<ExternalSession, 'source' | 'codexAccountId'>): boolean {
+  return s.source === 'desktop' || s.source === 'cli' || (s.source === 'codex' && !!s.codexAccountId)
 }
 
 /** An account as the composer shows it. */
@@ -53,7 +53,9 @@ export function resumeAccountRef(s: Pick<ExternalSession, 'accountId'>, accounts
  * has room to continue this session now.' I am uncertain as to what it is saying"). One `picked` in the
  * title bar is where it goes. '' while the account is unknown.
  */
-export function continueLine(s: Pick<ExternalSession, 'accountId'>, account: AccountRef | null, picked = false): string {
+export function continueLine(s: Pick<ExternalSession, 'accountId'> & Partial<Pick<ExternalSession, 'source' | 'instance'>>, account: AccountRef | null, picked = false): string {
+  // A Codex chat goes on in its own thread, on the Codex account that holds it.
+  if (s.source === 'codex') return `Continues in place on Codex${s.instance ? ` ${s.instance}` : ''}.`
   if (!account) return ''
   const name = accountLabel(account.label, /\(([^()]+)\)\s*$/.exec(account.label)?.[1]?.trim() ?? null, account.id)
   if (account.id === s.accountId) return `Continues in place on ${name}.`
@@ -70,6 +72,10 @@ export function externalChat(s: ExternalSession, accounts: AccountInfo[], patch:
     cwd: s.cwd ?? '',
     account: resumeAccountRef(s, accounts, patch.accountId, landing),
     accountAuto: false,
+    // A Codex chat's stand-in is pinned to Codex on its own thread, as the chat it becomes is.
+    ...(s.source === 'codex' && s.codexAccountId
+      ? { service: 'codex' as const, serviceThreads: { codex: { accountId: s.codexAccountId, label: s.instance ?? '', threadId: s.id } } }
+      : {}),
     model: patch.model !== undefined ? patch.model : s.model,
     effort: patch.effort ?? null,
     permissionMode: patch.permissionMode ?? 'default',

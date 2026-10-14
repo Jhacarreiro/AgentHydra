@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { SERVICE_WORDS } from '@/components/sidebar/logic'
 // The composer dock, laid out like the real Claude Desktop Code tab (docs/reference/real DESIGN.md
 // "Composer"): 768 wide, gap 6, top to bottom: Hydra Desk's status row (pending, queued;
 // ours), the repo strip, the box, the toolbar row below the box.
@@ -280,6 +281,8 @@ async function patch(p: { model?: string | null; effort?: Effort | null; permiss
 const models = shallowRef<ModelChoice[]>([])
 const modelSplit = computed(() => splitModels(models.value))
 const modelText = computed(() => modelTriggerLabel(model.value, models.value))
+// A chat pinned to Codex or ChatGPT runs its turns there: its word stands in for the Claude model, which does not apply.
+const pinnedWord = computed(() => (props.chat?.service ? SERVICE_WORDS[props.chat.service] : null))
 function pickModel(value: string | null) {
   patch({ model: value })
   openMenu.value = null
@@ -1452,7 +1455,7 @@ onBeforeUnmount(() => {
         <div class="flex-1" />
 
         <div class="flex items-center gap-1">
-          <DropdownMenu v-bind="menuModel('model')" :modal="!nonModal">
+          <DropdownMenu v-if="!pinnedWord" v-bind="menuModel('model')" :modal="!nonModal">
             <DropdownMenuTrigger as-child>
               <button type="button" :class="TOOL_VALUE" :aria-label="`Model: ${modelText}`">{{ modelText }}</button>
             </DropdownMenuTrigger>
@@ -1499,6 +1502,7 @@ onBeforeUnmount(() => {
               </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
+          <span v-else :class="TOOL_VALUE" :aria-label="`Model: ${pinnedWord}`">{{ pinnedWord }}</span>
 
           <ContextRing :pct="chat?.contextPct ?? null" />
         </div>

@@ -34,9 +34,14 @@ import type {
   RewindChatRequest,
   CancelQueuedRequest,
   CancelQueuedResult,
+  ChatServiceInfo,
+  ExternalSession,
+  ChatServiceKind,
+  PinnedService,
   SendNowRequest,
   SendNowResult,
   ServerEvent,
+  ServiceThread,
   SessionMeta,
   SessionMetaPatch,
   SlashCommandInfo,
@@ -67,9 +72,12 @@ import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
-import { buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, sessionTokens } from './handoff'
+import { ANSWER_NOW, buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 import { currentManager, forgetManager, MANAGER_SLUG } from './managers'
+import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
+import { closeAppServers, type OpenAppServer } from './codex/app-server'
+import { CodexRuntime } from './codex/runtime'
 
 export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
@@ -108,7 +116,17 @@ export interface ChatManagerOptions {
   titleGenerator?: TitleGenerator | null
   /** How long a CliMayte chat's message AgentHydra did not take waits before it is sent again (send-retry.ts). */
   retryDelays?: RetryDelays
+  /** AgentHydra's Codex accounts, for chats pinned to Codex (Pin service); absent, Codex is not offered. */
+  codex?: CodexDirectory
+  /** Default: one shared app-server per Codex home (codex/app-server.ts); tests give a fake. */
+  openCodex?: OpenAppServer
 }
+
+/** What answers a chat's open requests: its Claude runtime, or its Codex one. */
+type RequestAnswerer = Pick<ChatRuntime, 'respondPermission' | 'answerQuestion' | 'respondPlan' | 'answerElicitation'>
+
+/** The names Pin service gives each service, in the chat's lines and in a handoff. */
+const SERVICE_LABEL: Record<ChatServiceKind, string> = { claude: 'Claude', codex: 'Codex', chatgpt: 'ChatGPT' }
 
 /** A request the manager refuses, with the HTTP status the route answers. */
 export class ChatError extends Error {
@@ -155,7 +173,7 @@ const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
 const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
 const IMPORT_TITLE = 'Claude Code session'
 /** Outside sessions that cannot be continued here, as their refusal names them. */
-const READ_ONLY_SOURCES: Record<'climayte' | 'codex' | 'other', string> = { climayte: 'CliMayte worker', codex: 'Codex', other: 'outside' }
+const READ_ONLY_SOURCES: Record<'climayte' | 'other', string> = { climayte: 'CliMayte worker', other: 'outside' }
 /** The CliMayte group Hydra Desk's chats run in. */
 export const WORKER_GROUP = 'hydra-desk'
 /** What a worker chat shows as its model: AgentHydra's chat mode launches it on Opus (xhigh), and Desk forces nothing. */
@@ -188,6 +206,8 @@ const workerKeys = new WeakMap<readonly CliMayteWorker[], string>()
 interface Entry {
   chat: ChatSummary
   runtime: ChatRuntime | null
+  /** The runtime of a chat pinned to Codex (Pin service); kept while it winds down after the pin moved on. */
+  codex?: CodexRuntime | null
   /** The query the runtime runs now (for supportedCommands / supportedModels). */
   query: Query | null
   /** Set while the chat's worker is being started: a second send waits for it instead of starting another. */
@@ -329,6 +349,10 @@ export class ChatManager {
   private closing = false
   private readonly titleGen: TitleGenerator | null
   private readonly retryDelays: RetryDelays
+  private readonly codexDir: CodexDirectory | null
+  private readonly openCodex: OpenAppServer | undefined
+  /** Codex accounts a chat's turn hit the usage limit on, until when: new threads go elsewhere meanwhile. */
+  private readonly codexHeld = new Map<string, number>()
 
   /** The projects folder of a config folder (null: the default one), under the given home so every read and seed agree on it. */
   private root(configDir: string | null): string {
@@ -359,14 +383,16 @@ export class ChatManager {
     // A test that fakes the query gets no title queries unless it fakes the generator too.
     this.titleGen = o.titleGenerator === undefined ? (o.queryImpl ? null : sdkTitleGenerator(this.queryImpl, o.env, undefined, () => claudeCodeBinaryFor(o.home).path())) : o.titleGenerator
     this.retryDelays = o.retryDelays ?? RETRY_DELAYS
+    this.codexDir = o.codex ?? null
+    this.openCodex = o.openCodex
     for (const stored of this.store.loadChats()) {
       const e = entryOf(stored as StoredRecord)
       this.chats.set(e.chat.id, e)
     }
     // Messages AgentHydra had not taken when the server stopped are sent again, in order, with their own ids.
     for (const e of this.chats.values()) if (e.retrying?.length) this.retryHeld(e)
-    // Our own chats are not "Elsewhere".
-    this.bridge.setExcludeSessionIds(() => [...this.sessionIds(), ...this.sessionMeta.tombstoned()])
+    // Our own chats are not "Elsewhere", nor are the Codex threads chats pinned to Codex run in.
+    this.bridge.setExcludeSessionIds(() => [...this.sessionIds(), ...this.serviceThreadIds(), ...this.sessionMeta.tombstoned()])
     this.bridge.setExtraWorkerIds(() => this.workerIdsOfChats())
     // Outside sessions are listed with Hydra Desk's marks on them; the pinned and Unassigned ones however old.
     this.bridge.setSessionMeta((list, onAccount) => this.sessionMeta.apply(list, onAccount), () => this.sessionMeta.listedIds())
@@ -428,7 +454,7 @@ export class ChatManager {
       // A request stored 'pending' that no running runtime waits on was left by a process that died (a
       // hard stop, a crash): nothing can answer it, so it is expired, on disk and in every window.
       let done = settled(item)
-      if (done !== item && e.runtime?.isPending(item.id)) done = item
+      if (done !== item && (e.runtime?.isPending(item.id) || e.codex?.isPending(item.id))) done = item
       // So is a task still 'running' with no runtime running: its session ended (a restart, a crash), and the task with it.
       if (!live) done = endedTask(done)
       if (done === item) return item
@@ -509,6 +535,28 @@ export class ChatManager {
 
   sessionIds(): string[] {
     return [...this.chats.values()].flatMap((e) => [...(e.pastSessions ?? []), ...(e.chat.sessionId ? [e.chat.sessionId] : [])])
+  }
+
+  /** The Codex threads and ChatGPT chats Desk's pinned chats run in. */
+  private serviceThreadIds(): string[] {
+    return [...this.chats.values()].flatMap((e) => Object.values(e.chat.serviceThreads ?? {}).map((t) => t.threadId))
+  }
+
+  /** What Pin service offers (GET /api/chat-services): Claude always; Codex when one of its accounts is signed in. */
+  async services(): Promise<ChatServiceInfo[]> {
+    const claude = (await this.bridge.listAccounts().catch(() => [])).filter((a) => a.signedIn).length
+    const codex = this.codexDir ? await this.codexDir.instances().then((l) => l.filter((i) => i.loggedIn).length, () => null) : null
+    return [
+      { kind: 'claude', label: SERVICE_LABEL.claude, ready: true, accounts: claude },
+      {
+        kind: 'codex',
+        label: SERVICE_LABEL.codex,
+        ready: !!codex,
+        accounts: codex ?? 0,
+        ...(codex ? {} : { why: codex === null ? 'AgentHydra is not answering, so Desk cannot see the Codex accounts.' : 'No Codex account is signed in.' }),
+      },
+      { kind: 'chatgpt', label: SERVICE_LABEL.chatgpt, ready: false, accounts: 0, why: 'ChatGPT comes in the next update.' },
+    ]
   }
 
   /** Every Claude session id of a chat, current first then the earlier ones it continued from (a browser page a chat drove stays its own); [] for an unknown chat. */
@@ -728,7 +776,16 @@ export class ChatManager {
       this.changed(e.chat)
       this.autoTitle(e, text)
     }
-    if (e.chat.workerId !== undefined) return this.sendToWorker(e, text, images, opts)
+    // Pinned to Codex (Pin service): the turn runs there, whatever ran the chat before.
+    if (e.chat.service === 'codex') {
+      if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
+      return this.codexOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+    }
+    // Back on Claude after its pin moved it elsewhere: the message first carries what was said there. A worker's
+    // copy of it reads back as the message and a muted line (userTurns); a runtime's shows what was typed.
+    const lead = e.chat.serviceLeftAt?.claude !== undefined ? this.serviceHandoff(e, 'claude', !e.chat.sessionId && !e.chat.workerId, null) : null
+    if (e.chat.serviceLeftAt?.claude !== undefined) this.clearLeftAt(e, 'claude')
+    if (e.chat.workerId !== undefined) return this.sendToWorker(e, lead ? `${lead.text}${ANSWER_NOW}${text}` : text, images, opts, text)
     // Awaited only when there is something to wait for: a new chat's first send starts its process at once.
     if (e.moving) {
       while (e.moving) await e.moving
@@ -762,7 +819,10 @@ export class ChatManager {
     e.moved = undefined // a new message starts its own tries
     this.timings.sdkSent(e.chat, e.runtime?.running === true)
     if (sdk) return this.runtimeOf(e).send(sdk.text, sdk.images, opts.messageId, text)
-    return this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+    if (!lead) return this.runtimeOf(e).send(text, images?.length ? images : undefined, opts.messageId)
+    const sent = this.runtimeOf(e).send(`${lead.text}${ANSWER_NOW}${text}`, images?.length ? images : undefined, opts.messageId, text)
+    this.systemLine(id, 'caught-up', 'info', `Caught up on what was said on ${lead.from}.`)
+    return sent
   }
 
   /**
@@ -772,7 +832,7 @@ export class ChatManager {
    */
   async warm(id: string): Promise<{ started: boolean }> {
     const e = this.entry(id)
-    if (e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived || e.moving) return { started: false }
+    if (e.chat.service || e.chat.workerId !== undefined || e.runtime?.running || e.chat.archived || e.moving) return { started: false }
     // Its next message starts a fresh session (freshIfGrown): resuming the old one now would be thrown away.
     if (this.bigSession(e, this.freshTokens)) return { started: false }
     if (await this.seedResume(e)) return { started: false }
@@ -793,12 +853,13 @@ export class ChatManager {
    * A CliMayte chat's message: the first starts its worker, every later one goes to that worker (CliMayte
    * holds one sent while a turn runs and delivers it as the next turn of the same session). Text only.
    */
-  private async sendToWorker(e: Entry, text: string, images: ImageRef[] | undefined, opts: SendOptions): Promise<{ queued: boolean }> {
+  private async sendToWorker(e: Entry, text: string, images: ImageRef[] | undefined, opts: SendOptions, typed = text): Promise<{ queued: boolean }> {
     // A worker takes text: each picture is saved in the media cache and named by a line
     // `[Image: source: <path>]` (the form Claude Code uses, so the model opens it with Read).
     const shown = images?.length ? images.map((img) => toStoredImage(img, mediaCache(this.store.home))) : undefined
-    // The stand-in keeps what the person typed: the worker's copy reads with its picture lines shown as pictures.
-    const said = text
+    // The stand-in keeps what the person typed (`typed`, without a handoff it carries): the worker's copy reads with
+    // its picture lines shown as pictures.
+    const said = typed
     if (images?.length) text =answersWithPictures({ m: text }, { m: images }, mediaCache(this.store.home)).m!
     while (e.starting) await e.starting
     const chat = e.chat
@@ -1070,7 +1131,7 @@ export class ChatManager {
    */
   async sendNow(id: string, itemId?: string): Promise<SendNowResult> {
     const e = this.entry(id)
-    if (e.chat.workerId) {
+    if (e.chat.workerId && !e.codex?.busy) {
       const standIn = e.sent?.find((s) => s.id === itemId && s.queued)
       let r: { stopped: boolean; message: string }
       try {
@@ -1086,8 +1147,9 @@ export class ChatManager {
         : r.message || 'Nothing was stopped: the message had already gone on.'
       return { ok: true, stopped: false, message }
     }
-    if (!e.runtime?.running || e.chat.queuedCount === 0) return { ok: true, stopped: false, message: 'Nothing was stopped: the message had already gone on.' }
-    await e.runtime.interrupt()
+    const live = e.codex?.busy ? e.codex : e.runtime?.running ? e.runtime : null
+    if (!live || e.chat.queuedCount === 0) return { ok: true, stopped: false, message: 'Nothing was stopped: the message had already gone on.' }
+    await live.interrupt()
     return { ok: true, stopped: true }
   }
 
@@ -1097,8 +1159,10 @@ export class ChatManager {
     const tooLate = { ok: true as const, cancelled: false, message: 'Too late to cancel: it already went into this turn.' }
     const retrying = e.retrying?.find((r) => r.itemId === itemId)
     if (retrying) return this.cancelRetrying(e, retrying)
-    if (e.chat.workerId) return this.cancelHeld(e, itemId, tooLate)
-    if (!e.runtime?.running || !(await e.runtime.cancelQueued(itemId))) return tooLate
+    const codex = e.codex?.busy ? e.codex : null
+    if (e.chat.workerId && !codex) return this.cancelHeld(e, itemId, tooLate)
+    const live = codex ?? (e.runtime?.running ? e.runtime : null)
+    if (!live || !(await live.cancelQueued(itemId))) return tooLate
     this.store.keepItems(id, new Set(this.listItems(id).map((i) => i.id).filter((x) => x !== itemId)))
     this.emitEvent({ type: 'item.removed', chatId: id, itemId })
     this.changed(e.chat)
@@ -1175,6 +1239,8 @@ export class ChatManager {
 
   async interrupt(id: string): Promise<void> {
     const e = this.entry(id)
+    // A Codex turn, also one still running after the pin moved back to Claude.
+    if (e.codex?.busy) return e.codex.interrupt()
     if (e.chat.workerId) {
       // Stopping a worker cancels it; the next message revives it in the same session. A refused or
       // timed-out cancel reaches the window, which says so and restores the chat's state.
@@ -1240,6 +1306,7 @@ export class ChatManager {
     if (chat.workerId !== undefined) p = { ...p, accountId: undefined, model: undefined, effort: undefined, permissionMode: undefined }
     const resolved = p.accountId !== undefined ? await this.resolveAccount(p.accountId) : null
     const live = e.runtime?.running ? e.runtime : null
+    if (p.service !== undefined) await this.pinService(e, p.service)
     const relocated = this.applyMarks(id, e, p, resolved)
     await this.applyRuntimeSettings(e, live, p)
     // The process keeps the login it started under: it ends once its turn is over (a limited or idle
@@ -1278,6 +1345,7 @@ export class ChatManager {
     }
     if (p.unread === false) {
       if (e.runtime) e.runtime.markViewed()
+      else if (e.codex) e.codex.markViewed()
       else chat.unread = false
     } else if (p.unread === true) chat.unread = true
     return relocated
@@ -1308,6 +1376,7 @@ export class ChatManager {
     const rt = e.runtime
     e.runtime = null
     if (rt) await rt.close().catch(() => {})
+    await e.codex?.close().catch(() => {})
     // Its worker goes too while it still runs; a finished one stays in CliMayte's list.
     if (e.chat.workerId && e.workerLive !== false) await this.bridge.cancelWorker(e.chat.workerId).catch(() => {})
     this.store.deleteChat(id)
@@ -1423,6 +1492,8 @@ export class ChatManager {
    */
   async rewind(id: string, at: string): Promise<ChatSummary> {
     const e = this.entry(id)
+    // Undo cuts the Claude session; a Codex thread keeps its turns, so the two would disagree.
+    if (e.chat.service) throw new ChatError(409, `Undo works on Claude chats, and this one runs on ${SERVICE_LABEL[e.chat.service]}.`)
     if (e.starting) throw new ChatError(409, 'This chat is starting its worker: undo once it has started.')
     if (e.retrying?.length) throw new ChatError(409, 'This chat is still sending a message AgentHydra did not answer: undo once it is sent.')
     const chat = e.chat
@@ -1528,18 +1599,22 @@ export class ChatManager {
   /**
    * Adopts a session run elsewhere: a closed chat with its history; the next send resumes it. With
    * `fork` the chat forks it at its first message instead, and the original stays listed as it is; with
-   * `at` too the fork leaves out that message of the owner's and all after it (forkBefore).
+   * `at` too the fork leaves out that message of the owner's and all after it (forkBefore). A Codex chat
+   * becomes one pinned to Codex on its own thread and account (codexImport): its next send resumes it there.
    */
   async importSession(req: ImportSessionRequest): Promise<ChatSummary> {
-    const adopted = () => (req.fork ? undefined : [...this.chats.values()].find((e) => e.chat.sessionId === req.sessionId))
+    const adopted = () =>
+      req.fork ? undefined : [...this.chats.values()].find((e) => e.chat.sessionId === req.sessionId || e.chat.serviceThreads?.codex?.threadId === req.sessionId)
     const existing = adopted()
     if (existing) return { ...existing.chat }
 
     const outside = await this.outsideSession(req.sessionId)
+    const codex = outside?.source === 'codex' ? await this.codexImport(req, outside) : null
     const rawCwd = req.cwd ?? outside?.cwd
     if (!rawCwd) throw new ChatError(400, `cwd is required: AgentHydra does not know the folder of session ${req.sessionId}`)
     const cwd = checkCwd(rawCwd)
-    const { account, auto, note } = await this.importAccount(req.configDir)
+    // A Codex chat's Claude account is only where it would go if pinned back to Claude: the default, never refused.
+    const { account, auto, note } = codex ? { ...(await this.resolveAccount(this.settingsOf().defaultAccountId)), note: null } : await this.importAccount(req.configDir)
     const loaded = await this.externalItemsOf(req.sessionId)
     const loadError = loaded.error
     // Another import of the same session (a second window) may have landed during the awaits above: two
@@ -1555,8 +1630,9 @@ export class ChatManager {
     const { title, generate, firstAsk } = importTitle(req, items, meta?.title, outside?.title)
     const chat: ChatSummary = {
       id: randomUUID(),
-      sessionId: req.fork ? null : req.sessionId,
+      sessionId: req.fork || codex ? null : req.sessionId,
       forkedFrom: req.fork && cut?.cut !== null ? req.sessionId : null,
+      ...(codex ? { service: 'codex' as const, serviceThreads: { codex: codex } } : {}),
       group: meta?.group ?? null,
       ...(meta?.note ? { note: meta.note } : {}),
       title: req.fork ? forkTitle(title) : title,
@@ -1605,12 +1681,26 @@ export class ChatManager {
     const outside =
       (await this.bridge.externalSessions().catch(() => [])).find((s) => s.id === sessionId) ??
       (await this.bridge.externalSession(sessionId).catch(() => undefined))
-    // Only a Claude Code session resumes; the rest are read-only. One AgentHydra does not know is let
-    // through: its send refuses it when no folder here has it.
-    if (outside && outside.source !== 'desktop' && outside.source !== 'cli') {
+    // A Claude Code session resumes, and a Codex chat on Codex; the rest are read-only. One AgentHydra does not
+    // know is let through: its send refuses it when no folder here has it.
+    if (outside && outside.source !== 'desktop' && outside.source !== 'cli' && outside.source !== 'codex') {
       throw new ChatError(400, `This ${READ_ONLY_SOURCES[outside.source]} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
     }
     return outside
+  }
+
+  /**
+   * The thread an outside Codex chat goes on in: its own, on the Codex account whose folder holds it, signed in. It
+   * continues in place, so a fork is refused (Fork works on Claude chats), as is an account Desk cannot reach.
+   */
+  private async codexImport(req: ImportSessionRequest, outside: ExternalSession): Promise<ServiceThread> {
+    const where = outside.instance ? `Codex ${outside.instance}` : 'its Codex account'
+    if (req.fork) throw new ChatError(400, 'This Codex chat continues in place: Fork works on Claude chats.')
+    if (!this.codexDir) throw new ChatError(409, 'Codex chats cannot continue here: this Desk has no Codex accounts.')
+    if (!outside.codexAccountId) throw new ChatError(409, 'AgentHydra does not say which Codex account holds this chat, so it cannot continue here.')
+    const found = (await this.codexDir.instances().catch(() => [])).find((i) => i.id === outside.codexAccountId)
+    if (!found?.loggedIn) throw new ChatError(409, `${where} is signed out, so this chat cannot continue here.`)
+    return { accountId: found.id, label: codexAccount(found).label, threadId: req.sessionId }
   }
 
   /** The account an imported session continues on: the one asked for, else the default one, never the bare ~/.claude login. */
@@ -1901,6 +1991,8 @@ export class ChatManager {
     this.closing = true
     await this.syncing?.catch(() => {})
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
+    await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.codex?.close() : e.codex?.shutdown())?.catch(() => {})))
+    closeAppServers()
     releaseHosts(this.store.home)
     this.store.saveChats(this.stored())
     this.store.flush()
@@ -1929,6 +2021,83 @@ export class ChatManager {
     const e = this.chats.get(id)
     if (!e) throw new ChatError(404, `no chat ${id}`)
     return e
+  }
+
+  /**
+   * Pin service: the chat's next turns run on `to` (null: Claude again). The turn running now finishes where it
+   * is; the next one runs on the new service and first reads what was said since the chat was last there.
+   */
+  private async pinService(e: Entry, to: PinnedService | null): Promise<void> {
+    const chat = e.chat
+    const from: ChatServiceKind = chat.service ?? 'claude'
+    const target: ChatServiceKind = to ?? 'claude'
+    if (from === target) return
+    if (to === 'chatgpt') throw new ChatError(409, 'ChatGPT comes in the next update.')
+    if (to === 'codex' && !this.codexDir) throw new ChatError(409, 'Codex is not set up in this Desk.')
+    chat.serviceLeftAt = { ...chat.serviceLeftAt, [from]: this.now() }
+    chat.service = to
+    // The Claude process keeps running its turn; it ends once that turn is over.
+    if (from === 'claude' && e.runtime?.running) await e.runtime.closeWhenIdle()
+    if (from === 'codex' && e.codex && !e.codex.busy) await e.codex.close()
+    this.systemLine(chat.id, 'service', 'info', to ? `This chat now runs on ${SERVICE_LABEL[target]}.` : 'This chat runs on Claude again.')
+  }
+
+  /** The chat caught up on `kind`: the next turn there reads nothing more. */
+  private clearLeftAt(e: Entry, kind: ChatServiceKind): void {
+    const { [kind]: _gone, ...rest } = e.chat.serviceLeftAt ?? {}
+    e.chat.serviceLeftAt = Object.keys(rest).length ? rest : undefined
+  }
+
+  /**
+   * What a turn on `kind` first reads (Pin service): a condensed handoff of the chat's record since its pin last
+   * left `kind`, or of all of it for a thread there that is new (`fresh`), and what ran it meanwhile. Null when no
+   * reply came in that stretch. `sentId`, the message being sent, is the handoff's last line, not part of it.
+   */
+  private serviceHandoff(e: Entry, kind: ChatServiceKind, fresh: boolean, sentId: string | null, movedFrom?: string): { text: string; from: string } | null {
+    const chat = e.chat
+    const left = chat.serviceLeftAt?.[kind]
+    if (!fresh && left === undefined) return null
+    const since = fresh ? 0 : left!
+    const items = this.store.loadItems(chat.id).filter((i) => i.ts > since && i.id !== sentId && !(i.kind === 'user' && i.queued))
+    if (!items.some((i) => i.kind === 'assistant_text')) return null
+    const last = Object.entries(chat.serviceLeftAt ?? {})
+      .filter(([k]) => k !== kind)
+      .sort((a, b) => b[1] - a[1])[0]
+    const from = movedFrom ?? (last ? SERVICE_LABEL[last[0] as ChatServiceKind] : SERVICE_LABEL.claude)
+    const text = buildHandoff({
+      chatId: chat.id,
+      title: chat.title,
+      cwd: chat.cwd,
+      items,
+      sessions: this.browserSessions(chat.id),
+      tokens: null,
+      why: PINNED,
+      deskUrl: this.deskUrl(),
+      services: { from, to: SERVICE_LABEL[kind] },
+    })
+    return { text, from }
+  }
+
+  private codexOf(e: Entry): CodexRuntime {
+    if (e.codex) return e.codex
+    const dir = this.codexDir
+    e.codex = new CodexRuntime({
+      chat: e.chat,
+      store: this.store,
+      emit: (event) => this.onRuntimeEvent(event),
+      settings: this.settingsOf,
+      now: this.now,
+      open: this.openCodex,
+      pickAccount: (avoid) => (dir ? pickCodexAccount(dir, avoid, this.codexHeld, this.now()) : Promise.resolve({ why: 'Codex is not set up in this Desk.' })),
+      findAccount: async (id) => {
+        const found = (await dir?.instances().catch(() => []))?.find((i) => i.id === id && i.loggedIn)
+        return found ? codexAccount(found) : null
+      },
+      handoff: (fresh, sentId, movedFrom) => this.serviceHandoff(e, 'codex', fresh, sentId, movedFrom),
+      caughtUp: () => this.clearLeftAt(e, 'codex'),
+      hold: (accountId, until) => this.codexHeld.set(accountId, until),
+    })
+    return e.codex
   }
 
   private runtimeOf(e: Entry): ChatRuntime {
@@ -2227,11 +2396,12 @@ export class ChatManager {
     return this.clearTasks(e)
   }
 
-  private answer(id: string, kind: string, requestId: string, fn: (rt: ChatRuntime) => void): void {
+  private answer(id: string, kind: string, requestId: string, fn: (rt: RequestAnswerer) => void): void {
     const e = this.entry(id)
-    if (!e.runtime) throw new ChatError(404, `no pending ${kind} request ${requestId}: the chat is not running`)
+    const rt: RequestAnswerer | null = e.codex?.isPending(requestId) ? e.codex : e.runtime
+    if (!rt) throw new ChatError(404, `no pending ${kind} request ${requestId}: the chat is not running`)
     try {
-      fn(e.runtime)
+      fn(rt)
     } catch (err) {
       // A form answer its fields refuse is the caller's to fix; anything else means no such open request.
       if (err instanceof ElicitationAnswerError || err instanceof QuestionPictureError) throw new ChatError(400, err.message)
@@ -2695,7 +2865,8 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service']
+const PINNABLE: PinnedService[] = ['codex', 'chatgpt']
 
 /** POST /api/chats/import-desk: `ids`, the chats to copy (every one when absent). */
 export function parseImportDesk(body: unknown): { ids?: string[] } {
@@ -2739,6 +2910,10 @@ export function parsePatch(body: unknown): ChatPatch {
   }
   const note = optNote(b)
   if (note !== undefined) p.note = note
+  if (b.service !== undefined) {
+    if (b.service !== null && !PINNABLE.includes(b.service as PinnedService)) throw new ChatError(400, `service is one of ${PINNABLE.join(', ')}, or null for Claude`)
+    p.service = b.service as PinnedService | null
+  }
   return p
 }
 

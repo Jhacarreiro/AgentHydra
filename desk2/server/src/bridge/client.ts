@@ -91,6 +91,24 @@ export interface AhCodexChatRow {
   lastActivityAt: string | null // ISO
 }
 
+/** GET /api/codex-instances: one Codex account, only what Desk reads (no identity: its sign-in stays AgentHydra's). */
+export interface AhCodexInstance {
+  id: string
+  num?: number
+  name?: string
+  codexHome: string
+  loggedIn?: boolean
+  isDesktopRunning?: boolean
+}
+
+/** GET /api/codex-instances/:id/usage, AgentHydra's cached reading: each window's use in percent and its reset (ISO). */
+export interface AhCodexUsage {
+  snapshot?: {
+    session?: { pct?: number; resetsAt?: string } | null
+    weekAll?: { pct?: number; resetsAt?: string } | null
+  } | null
+}
+
 /** GET /api/sessions: the transcript index (SessionSummary), trimmed. */
 export interface AhSessionRow {
   session_id: string
@@ -478,6 +496,10 @@ export function createClient(opts: HydraClientOptions = {}) {
       (await get<{ rows: AhChatRow[] }>(`/api/chats?limit=1000${archived === 'include' ? '&archived=include' : ''}`)).rows,
     /** The transcript index of the last 24 hours (its default window), newest first. */
     codexChats: async () => (await get<{ rows: AhCodexChatRow[] }>('/api/codex-chats')).rows,
+    /** Every Codex account (Pin service picks one for a pinned chat's thread). */
+    codexInstances: () => get<AhCodexInstance[]>('/api/codex-instances'),
+    /** Its cached usage: never a fresh read, which would refresh the login beside an app-server Desk holds. */
+    codexUsage: (id: string) => get<AhCodexUsage>(`/api/codex-instances/${enc(id)}/usage`),
     sessions: () => get<AhSessionRow[]>('/api/sessions?limit=200&period=24h'),
     cliInstances: () => get<AhCliInstance[]>('/api/cli-instances'),
     desktopInstances: () => get<AhDesktopInstance[]>('/api/instances'),

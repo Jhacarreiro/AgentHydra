@@ -258,7 +258,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   when open), a move out of Unassigned restores it there first (and archives it again if the move does not finish),
   and Duplicate is the move with the original kept (`keepSource`), to any other Codex account. Every row also has **Add note… N**: a note of up to
   2,000 characters on the chat (Desk's own chats keep it on the chat, an outside session in Desk's marks), drawn as
-  a note mark beside the title, its text in the row's tooltip. Opening a session from a search while the
+  a note mark beside the title, its text in the row's tooltip. **Pin service ›** (Claude, Codex, ChatGPT) runs a
+  chat's turns on another service: pinned to Codex, each message is a turn of a Codex thread on the emptiest signed-in
+  Codex account, through that account's `codex app-server` (one per CODEX_HOME, shared, closed 60 s after its last
+  chat; `server/src/engine/codex/`), and a usage limit moves the message to another account, whose new thread first
+  reads a condensed handoff of the chat. Pinned back to Claude, the next message carries what was said on Codex,
+  and the chat shows only what was typed plus "Caught up on what was said on Codex." ChatGPT is listed, not yet
+  pickable. An idle outside Codex chat continues the same way (owner, 2026-10-13: "why are they only read-only? ...
+  It should function similar to Claude"): its first message imports it as a chat pinned to Codex on its own thread
+  and account, resumed in place (`codexImport` in `chat-manager.ts`); Fork stays on Claude chats. Opening a session from a search while the
   session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
   it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of

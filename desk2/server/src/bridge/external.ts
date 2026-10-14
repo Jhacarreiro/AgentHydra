@@ -158,7 +158,7 @@ export function mapExternal(
   const fromIndex = (
     id: string,
     source: ExternalSession['source'],
-    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean; parentId?: string },
+    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean; parentId?: string; codexAccountId?: string },
   ) => {
     const row = index.get(id)
     const h = hooks.get(id)
@@ -183,7 +183,8 @@ export function mapExternal(
       lastActivityAt: last,
       model: null,
       accountId,
-      canResume: canResume({ status, source }),
+      ...(base.codexAccountId ? { codexAccountId: base.codexAccountId } : {}),
+      canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
       // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
       fromPc: row?.from_pc || null,
       ...(base.parentId ? { parentId: base.parentId } : {}),
@@ -195,7 +196,8 @@ export function mapExternal(
 
   for (const c of chats.values())
     fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
-  for (const c of inp.codexChats ?? []) fromIndex(c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt) })
+  for (const c of inp.codexChats ?? [])
+    fromIndex(c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId })
   // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript
   // whose chat runs as another session is a spare one Claude Desktop left running, nothing to show (owner, 2026-10-10:
   // "ddc6fc99 ... shows nothing, like cannot load"; a second engine of a listed chat, started with no prompt, was a row

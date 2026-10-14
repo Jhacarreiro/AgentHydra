@@ -2,7 +2,7 @@ import { afterEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { readCodexHistory } from '../src/core/codex-transcript-lineage'
+import { readCodexHistory, readCodexTail } from '../src/core/codex-transcript-lineage'
 
 const ID = '0f0f0f0f-1111-4222-8333-444444444444'
 const roots: string[] = []
@@ -67,4 +67,34 @@ test('a history rolled over twice reads as one file, without rows past each boun
   expect(history.text).not.toContain('abandoned')
   expect(history.segments.map((s) => s.bytes)).toEqual([bytes(first), bytes(second), bytes(newest)])
   expect(history.lastOrdinal).toBe(7)
+})
+
+test('the tail of a continued chat reads back into its earlier rollout, up to the boundary and within the budget', async () => {
+  const home = mkdtempSync(join(tmpdir(), 'codex-lineage-'))
+  roots.push(home)
+  const first = [meta(0), row(1), row(2)]
+  const newest = [meta(3, { end: bytes(first), endOrdinal: 3 }), row(4)]
+  const day = join(home, 'sessions', '2026', '10', '13')
+  mkdirSync(day, { recursive: true })
+  writeFileSync(
+    join(day, `rollout-a-${ID}.jsonl`),
+    `${[...first, row(3, { abandoned: true })].join('\n')}\n`,
+  )
+  const path = join(day, `rollout-b-${ID}_w2.jsonl`)
+  writeFileSync(path, `${newest.join('\n')}\n`)
+
+  const ordinals = (text: string) =>
+    text.split('\n').flatMap((line) => {
+      try {
+        return [JSON.parse(line).ordinal]
+      } catch {
+        return []
+      }
+    })
+  // Before, the tail read the newest file alone: the chat's earlier messages were gone from its view.
+  expect(ordinals(await readCodexTail(path, 1 << 20))).toEqual([0, 1, 2, 3, 4])
+  expect(await readCodexTail(path, 1 << 20)).not.toContain('abandoned')
+  // A budget that ends inside the earlier rollout keeps its newest rows only.
+  const budget = bytes(newest) + bytes([row(2)])
+  expect(ordinals(await readCodexTail(path, budget))).toEqual([2, 3, 4])
 })

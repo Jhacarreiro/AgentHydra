@@ -88,7 +88,8 @@ export function resumeAccount(q: ResumeQuery, data: ResumeData): string | null {
   return null
 }
 
-/** Idle there and a Claude Code session: the composer carries it on, in place or as a copy. */
-export function canResume(s: Pick<ExternalSession, 'status' | 'source'>): boolean {
-  return (s.status === 'idle' || s.status === 'stale') && (s.source === 'desktop' || s.source === 'cli')
+/** Idle there, and a Claude Code session (in place or as a copy) or a Codex chat whose account is known (in place, on Codex): the composer carries it on. */
+export function canResume(s: Pick<ExternalSession, 'status' | 'source' | 'codexAccountId'>): boolean {
+  const idle = s.status === 'idle' || s.status === 'stale'
+  return idle && (s.source === 'desktop' || s.source === 'cli' || (s.source === 'codex' && !!s.codexAccountId))
 }

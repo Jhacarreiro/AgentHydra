@@ -7,6 +7,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, statusGlyph, type RowMenuItem } from '@/components/sidebar/logic'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, focusFirstItem, runShortcut } from '@/components/sidebar/menuClasses'
 import RowMenuList from '@/components/sidebar/RowMenuList.vue'
+import { chatServices } from '@/components/sidebar/services'
 import { resumable } from '@/components/external/logic'
 import AccountSubmenu from './AccountSubmenu.vue'
 import WorkspacePicker from './WorkspacePicker.vue'
@@ -59,7 +60,7 @@ const emit = defineEmits<{
   'toggle-tasks': []
 }>()
 
-const menu = computed(() => (props.chat ? rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups) : []))
+const menu = computed(() => (props.chat ? rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups, null, null, chatServices.value) : []))
 // The right block's floor: its buttons. An alert shrinks into whatever room is left beside them.
 const side = computed(() => `${props.chat ? 146 : props.external ? 58 : 0}px`)
 
@@ -192,7 +193,8 @@ const PANE_BTN =
         <DropdownMenuContent align="start" :class="MENU_CONTENT" @open-auto-focus="focusFirstItem" @close-auto-focus="onMenuClosed" @keydown.capture="(e: KeyboardEvent) => runShortcut(e, menu)">
           <p class="max-w-72 truncate px-2 py-1 text-ui-sm leading-4 text-text-muted" :title="chat.cwd">{{ chat.cwd }}</p>
           <RowMenuList :entries="menu" kind="dropdown" @run="run" />
-          <template v-if="accounts.length">
+          <!-- A chat pinned to another service runs on its account there, so Claude's account is not offered. -->
+          <template v-if="accounts.length && !chat.service">
             <DropdownMenuSeparator :class="MENU_SEPARATOR" />
             <AccountSubmenu :accounts="accounts" :current="chat.account.id" note="Applies at the chat's next start" @pick="(id: string) => emit('account', id)" />
           </template>

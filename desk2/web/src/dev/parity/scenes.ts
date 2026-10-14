@@ -216,6 +216,7 @@ export function sceneSource(scene: ParityScene): ShellSource {
     select: (v) => (selected.value = v),
     openSettings: () => (selected.value = { kind: 'settings' }),
     updateChat: async (id, p) => patch(id, p as Partial<ChatSummary>),
+    chatServices: async () => [],
     removeChat: async (id) => (chats.value = chats.value.filter((c) => c.id !== id)),
     interrupt: async () => {},
     loadItems: async () => {},

@@ -1,5 +1,5 @@
-// Continuing a session that ran under another account or outside Hydra Desk (SPEC "Elsewhere"): only a
-// Claude Code session is adopted, never onto the default login unasked, in place when its account folder
+// Continuing a session that ran under another account or outside Hydra Desk (SPEC "Elsewhere"): a
+// Claude Code session is adopted (a Codex chat too, on Codex: pin-service.test.ts), never onto the default login unasked, in place when its account folder
 // holds it, else as a copy (sidecar folder included) taken from the folder the chat last ran in, also
 // after a restart; a session no folder here has is refused at its send, in words.
 
@@ -127,11 +127,10 @@ const uuid = () => `40000000-0000-4000-8000-${String(++n).padStart(12, '0')}`
 const init = (sessionId: string): SDKMessage =>
   ({ type: 'system', subtype: 'init', session_id: sessionId, uuid: uuid(), cwd: '/', tools: [], mcp_servers: [], model: 'm', permissionMode: 'default', slash_commands: [], apiKeySource: 'none', output_style: 'default', skills: [], plugins: [], claude_code_version: '2' }) as unknown as SDKMessage
 
-test('Codex, CliMayte worker and other sessions are read-only: the import, or a fork of one, is refused in a sentence', async () => {
+test('CliMayte worker and other sessions are read-only, and a Codex chat continues only in place: the import, or a fork, is refused in a sentence', async () => {
   const w = world()
   const t = boot(w, { external: [outside('codex-sess-1', 'codex', w.cwd), outside('worker-sess-1', 'climayte', w.cwd), outside('other-sess-1', 'other', w.cwd)] })
   for (const [id, name] of [
-    ['codex-sess-1', 'Codex'],
     ['worker-sess-1', 'CliMayte worker'],
     ['other-sess-1', 'outside'],
   ] as const) {
@@ -139,16 +138,19 @@ test('Codex, CliMayte worker and other sessions are read-only: the import, or a 
     expect(err.status).toBe(400)
     expect(err.message).toBe(`This ${name} session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.`)
   }
-  expect((await refusal(t.m.importSession({ sessionId: 'codex-sess-1', fork: true }))).status).toBe(400)
+  const fork = await refusal(t.m.importSession({ sessionId: 'codex-sess-1', fork: true }))
+  expect([fork.status, fork.message]).toEqual([400, 'This Codex chat continues in place: Fork works on Claude chats.'])
+  // This Desk has no Codex accounts, so the chat cannot go on here.
+  expect((await refusal(t.m.importSession({ sessionId: 'codex-sess-1', cwd: w.cwd }))).status).toBe(409)
   expect(t.m.list()).toEqual([])
 })
 
 test('a read-only session older than the 24-hour list is refused too: it is looked up on its own', async () => {
   const w = world()
-  const t = boot(w, { older: [outside('codex-old-1', 'codex', w.cwd)] })
-  const err = await refusal(t.m.importSession({ sessionId: 'codex-old-1', cwd: w.cwd, title: 'Last week' }))
+  const t = boot(w, { older: [outside('worker-old-1', 'climayte', w.cwd)] })
+  const err = await refusal(t.m.importSession({ sessionId: 'worker-old-1', cwd: w.cwd, title: 'Last week' }))
   expect(err.status).toBe(400)
-  expect(err.message).toBe('This Codex session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.')
+  expect(err.message).toBe('This CliMayte worker session is read-only: only Claude Desktop and terminal sessions can be continued in Hydra Desk.')
   expect(t.m.list()).toEqual([])
 })
 

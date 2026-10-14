@@ -6,7 +6,8 @@ import { shellGlyphs } from '@/lib/icons'
 import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, statusGlyph, type RowMenuItem, type StatusGlyph } from './logic'
+import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, SERVICE_WORDS, statusGlyph, type RowMenuItem, type StatusGlyph } from './logic'
+import { chatServices } from './services'
 import ProjectRing from './ProjectRing.vue'
 import { Tip } from '@/components/ui/tooltip'
 import { createReusableTemplate } from '@vueuse/core'
@@ -33,7 +34,9 @@ const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [tit
 
 const glyph = computed(() => props.dot ?? statusGlyph(props.chat))
 const speaker = computed(() => isMuted(props.chat.id) || isAudible(props.chat.id))
-const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups))
+const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups, null, null, chatServices.value))
+// The service a pinned chat runs on, as its word (Codex, ChatGPT); Claude, the default, is not named.
+const serviceWord = computed(() => (props.chat.service ? SERVICE_WORDS[props.chat.service] : null))
 // The clock is read only while the row shows a time that moves (a working chat's elapsed time, a limited
 // one's reset), so an idle row never redraws on the tick.
 const clock = useClock()
@@ -130,8 +133,9 @@ defineExpose({ startRename })
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->
           <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (account !== null || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+          <span v-if="!renaming && (account !== null || serviceWord || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
             <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ account }}</span>
+            <span v-if="serviceWord" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted">{{ serviceWord }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
             <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>

@@ -236,6 +236,7 @@ export function demoSource(start: View = { kind: 'chat', id: 'ccd' }): ShellSour
     },
     openSettings: () => (selected.value = { kind: 'settings' }),
     updateChat: async (id, p) => patch(id, p as Partial<ChatSummary>),
+    chatServices: async () => [],
     removeChat: async (id) => {
       chats.value = chats.value.filter((c) => c.id !== id)
     },

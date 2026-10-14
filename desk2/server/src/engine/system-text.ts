@@ -6,6 +6,7 @@
 
 import { CONTINUED_LINE, type ImageRef, type TranscriptItem } from '@shared/protocol'
 import type { MediaCache } from '../media/cache'
+import { ANSWER_NOW, PIN_INTRO } from './handoff'
 
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
@@ -403,6 +404,14 @@ function carriedEntries(text: string): Array<{ from: string; text: string } | st
  * I didn't."
  */
 export function userTurns(raw: UserItem, media: Pick<MediaCache, 'fileRef'> | null): Array<UserItem | NoteItem | SystemItem> {
+  // A pinned chat's first turn on a service that had not seen it (Pin service): his message, and one muted line
+  // for the handoff it carried.
+  const answer = raw.text.startsWith(PIN_INTRO) ? raw.text.indexOf(ANSWER_NOW) : -1
+  if (answer >= 0) {
+    const from = /^This chat now runs on [^\n,]+, which has not seen it yet: until now it ran on ([^.\n]+)\./.exec(raw.text)?.[1] ?? 'the other service'
+    const line: SystemItem = { kind: 'system', id: `${raw.id}:caught-up`, ts: raw.ts, parentToolUseId: raw.parentToolUseId, level: 'info', text: `Caught up on what was said on ${from}.` }
+    return [personTurn({ ...raw, text: raw.text.slice(answer + ANSWER_NOW.length) }, media), line]
+  }
   const continued = continuationOf(raw.text)
   if (continued?.said) return continuedChatTurns(raw, { ...continued, said: continued.said }, media)
   const turn = userTurn(raw, media)

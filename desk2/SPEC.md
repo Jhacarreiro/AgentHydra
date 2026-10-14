@@ -795,8 +795,9 @@ config folder before the resume, so it never fails with "No conversation found".
   places the copy on an account with room at the first message). A failed import leaves the stand-in open with the server's
   reason.
 - Working elsewhere, the strip is a quiet line (the session is not resumed while its owner's process works
-  on it). Only Claude Desktop and terminal sessions continue; Codex, CliMayte and other sources stay
-  read-only, and the server refuses to import them (400).
+  on it). Claude Desktop and terminal sessions continue, and an idle Codex chat continues in place on Codex (a
+  chat pinned to Codex on its own thread and account; a fork of it is refused, 400); CliMayte and other sources
+  stay read-only, and the server refuses to import them (400).
 
 **Diff pane** (`components/panes/DiffPane.vue`, props `{ cwd: string }`): changed files with +/- counts,
 click a file to see its unified diff (green/red lines), refresh button, auto-refresh when a chat in that

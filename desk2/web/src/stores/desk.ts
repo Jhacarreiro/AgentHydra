@@ -20,6 +20,7 @@ import type {
   QuestionAnswer,
   PlanDecision,
   ChatPatch,
+  ChatServiceInfo,
   ImportSessionRequest,
   ForkChatRequest,
   RewindChatRequest,
@@ -1167,6 +1168,11 @@ export function useDesk() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(patch)
       })
+    },
+
+    /** Pin service's list: each service, and whether one of its accounts can take a chat now (GET /api/chat-services). */
+    async chatServices(): Promise<ChatServiceInfo[]> {
+      return fetchJson<ChatServiceInfo[]>('/chat-services')
     },
 
     async removeChat(chatId: string): Promise<{ ok: boolean }> {

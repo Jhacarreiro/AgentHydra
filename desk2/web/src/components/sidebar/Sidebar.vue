@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
-import { NOTE_MAX, type ChatSummary, type CliMayteWorker, type CloudSession, type ExternalSession, type SessionMetaPatch, type SwarmJob } from '@shared/protocol'
+import { NOTE_MAX, type ChatSummary, type CliMayteWorker, type CloudSession, type ExternalSession, type PinnedService, type SessionMetaPatch, type SwarmJob } from '@shared/protocol'
 import { icons, shellGlyphs, sidebarIcons } from '@/lib/icons'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Input } from '@/components/ui/input'
@@ -126,6 +126,7 @@ import {
   emptyListText
 } from './logic'
 import { useSidebarOrder } from './order'
+import { chatServices } from './services'
 import { useHiddenGroups } from './hidden'
 import { compactSidebar } from './compact'
 import { MENU_CONTENT, MENU_ITEM, focusFirstItem } from './menuClasses'
@@ -655,6 +656,10 @@ function mark(row: Row, patch: SessionMetaPatch & { title?: string }) {
   if (patch.unread !== undefined) unreadHold.mark(row.kind === 'chat' ? row.chat.id : row.session.id, patch.unread)
   attempt('The change', row.kind === 'chat' ? src.updateChat(row.chat.id, patch) : src.updateSessionMeta(row.session.id, patch))
 }
+/** The service a Pin service item names; Claude, the default, is no pin (null). */
+function pinned(value: string | undefined): PinnedService | null {
+  return value === 'codex' || value === 'chatgpt' ? value : null
+}
 function act(row: Row, item: RowMenuItem) {
   const state = stateOf(row)
   const patch = rowPatch(item, state)
@@ -662,6 +667,7 @@ function act(row: Row, item: RowMenuItem) {
   if (item.action === 'stop' && row.kind === 'chat') attempt('Stop', src.interrupt(row.chat.id))
   else if (item.action === 'delete' && row.kind === 'chat') deleting.value = row.chat
   else if (item.action === 'fork') attempt('Fork', row.kind === 'chat' ? src.forkChat(row.chat.id) : src.forkExternal(row.session.id))
+  else if (item.action === 'pinService' && row.kind === 'chat') attempt('Pin service', src.updateChat(row.chat.id, { service: pinned(item.value) }))
   else if (item.action === 'newGroup') {
     groupDraft.value = ''
     naming.value = row
@@ -895,7 +901,7 @@ function cloudMenu(r: CloudSession): RowMenuEntry[] {
     if (kind) out.push('separator', accountMenu(r.instanceNum, accounts, kind))
     return out
   }
-  return rowMenu(stateOf(row), groupNames.value, accountChoices.value, codexAccountChoices.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
+  return rowMenu(stateOf(row), groupNames.value, accountChoices.value, codexAccountChoices.value, chatServices.value).filter((e) => e === 'separator' || !('action' in e) || e.action !== 'rename')
 }
 /** A Claude or Codex session on this PC only the cloud list has (a past one): AgentHydra here can move it, not one of the other PC's. */
 function cloudMovable(r: CloudSession): 'desktop' | 'codex' | null {

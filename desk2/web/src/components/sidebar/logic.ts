@@ -1,5 +1,5 @@
 // Pure sidebar logic (tested in web/test/shell). No Vue, no store.
-import type { ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
+import type { ChatServiceInfo, ChatServiceKind, ChatStatus, ChatSummary, ExternalSession, ProjectEntry } from '@shared/protocol'
 import { accountTitle } from '../accounts/format'
 
 /** The folder a chat belongs to, as the real sidebar labels it: the basename, case kept. */
@@ -769,6 +769,10 @@ export interface RowState {
   note?: string | null
   /** In the Unassigned holding area (on no account): Move to account ticks Unassigned, and its first line says so. */
   unassigned?: boolean
+  /** Which service the chat runs its turns on (Pin service): Claude unless pinned. Left out for a session run outside, which gets no Pin service entry. */
+  service?: ChatServiceKind
+  /** The account the pinned service runs the chat on, as the window names it; null when not known yet. */
+  serviceLabel?: string | null
 }
 export interface RowAccount {
   num: number | null
@@ -800,7 +804,9 @@ export function chatRow(chat: ChatSummary): RowState {
     id: chat.sessionId ?? chat.id,
     account: { num: chat.account.number ?? null, title: accountTitle(chat.account) },
     movable: null,
-    note: chat.note ?? null
+    note: chat.note ?? null,
+    service: chat.service ?? 'claude',
+    serviceLabel: chat.service ? (chat.serviceThreads?.[chat.service]?.label ?? null) : null
   }
 }
 
@@ -856,6 +862,7 @@ export type RowAction =
   | 'rename'
   | 'note'
   | 'fork'
+  | 'pinService'
   | 'moveTo'
   | 'newGroup'
   | 'removeFromGroup'
@@ -976,12 +983,40 @@ export function duplicateMenu(
   return { label: 'Duplicate to account', items: accountItems(accounts, item) }
 }
 
-/** `codexAccounts` are a Codex chat's: its first line and Move to account name those instead of the desktop ones. */
+/** A service's name as the window shows it (the row's meta line, the session header, Pin service). */
+export const SERVICE_WORDS: Record<ChatServiceKind, string> = { claude: 'Claude', codex: 'Codex', chatgpt: 'ChatGPT' }
+
+/**
+ * Pin service ›: Claude (the default), Codex, ChatGPT. A pinned service is ticked, and names the account it runs on.
+ * A non-Claude service is offered only when one of its accounts can take a chat now (`services`, AgentHydra's answer);
+ * `services` null: the answer is not in yet, so those two are off until it is.
+ */
+function serviceMenu(service: ChatServiceKind, serviceLabel: string | null, services: readonly ChatServiceInfo[] | null): RowMenuEntry {
+  const items = (['claude', 'codex', 'chatgpt'] as const).map((kind): RowMenuItem => {
+    const info = services?.find((s) => s.kind === kind)
+    const checked = service === kind
+    const unchecked = kind !== 'claude' && !info?.ready
+    const title = kind === 'claude' ? undefined : services ? info?.why : 'Checking which services are signed in…'
+    return {
+      action: 'pinService',
+      label: SERVICE_WORDS[kind],
+      value: kind,
+      checked,
+      disabled: unchecked,
+      ...(title ? { title } : {}),
+      ...(checked && kind !== 'claude' && serviceLabel ? { hint: serviceLabel } : {})
+    }
+  })
+  return { label: 'Pin service', items }
+}
+
+/** `codexAccounts` are a Codex chat's: its first line and Move to account name those instead of the desktop ones. `services`: Pin service's answer, null until it is in. */
 export function rowMenu(
   row: RowState,
   groups: string[] = [],
   desktopAccounts: readonly AccountChoice[] | null = null,
-  codexAccounts: readonly AccountChoice[] | null = null
+  codexAccounts: readonly AccountChoice[] | null = null,
+  services: readonly ChatServiceInfo[] | null = null
 ): RowMenuEntry[] {
   const accounts = row.movable === 'codex' ? codexAccounts : desktopAccounts
   const current = (row.group ?? folderLabel(row.cwd)).toLowerCase()
@@ -1011,6 +1046,7 @@ export function rowMenu(
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'note', label: row.note ? 'Edit note…' : 'Add note…', shortcut: 'N' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
+  if (row.service) out.push(serviceMenu(row.service, row.serviceLabel ?? null, services))
   out.push('separator', { label: 'Move to group', items: moveTo })
   // An Unassigned chat is on no account: none is ticked, and Unassigned is. A Codex one still has the account it left
   // (archived there), which its copy cannot go to.

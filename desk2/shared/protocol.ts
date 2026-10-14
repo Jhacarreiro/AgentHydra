@@ -28,6 +28,29 @@ export interface AccountRef {
   number?: number // AgentHydra's permanent instance number
 }
 
+/** A service a chat's own turns can run on (the row menu's Pin service). Claude, through the chat's account, is every chat's own. */
+export type ChatServiceKind = 'claude' | 'codex' | 'chatgpt'
+/** A service a chat can be pinned to instead of Claude. */
+export type PinnedService = Exclude<ChatServiceKind, 'claude'>
+
+/** Where a pinned chat's conversation goes on in a service: the account Desk picked there and the thread on it. */
+export interface ServiceThread {
+  accountId: string // AgentHydra's Codex instance id, or the Free ChatGPT account's id
+  label: string // the account as the window names it: '#196 example', a Free account's name
+  threadId: string // the Codex thread id, or the ChatGPT chat id
+}
+
+/** GET /api/chat-services: each service Pin service offers, and whether one of its accounts can take a chat now. */
+export interface ChatServiceInfo {
+  kind: ChatServiceKind
+  label: string // 'Claude', 'Codex', 'ChatGPT'
+  ready: boolean
+  /** Why it is not ready, in plain words ("No Codex account is signed in"); absent when ready. */
+  why?: string
+  /** How many of its accounts are signed in. */
+  accounts: number
+}
+
 /** A CliMayte worker that waits for an account to start on: `reason` in plain words (no addresses), `until` the epoch ms it is expected to start, when known. */
 export interface ChatWait {
   reason: string
@@ -60,6 +83,12 @@ export interface ChatSummary {
   group: string | null // the sidebar group it was moved to; null = its project folder's group
   /** The person's own note on the chat (the row menu's Add note…); absent or null = none. */
   note?: string | null
+  /** Pin service: Codex or ChatGPT runs the chat's own turns instead of Claude. Absent or null = Claude, on `account`. */
+  service?: PinnedService | null
+  /** The chat's thread on each service it ran on, kept when the pin moves on: pinned there again, it goes on in that thread. */
+  serviceThreads?: Partial<Record<PinnedService, ServiceThread>>
+  /** When the pin last left each service (epoch ms): the next turn there first reads what was said since, then this is cleared. */
+  serviceLeftAt?: Partial<Record<ChatServiceKind, number>>
   forkedFrom: string | null // the session it was forked from: until it has its own, its next message resumes a fork of that one
   createdAt: number
   updatedAt: number // last activity of any kind
@@ -270,7 +299,9 @@ export interface ExternalSession {
   model: string | null
   /** The signed-in CLI instance whose folder already holds this session: it continues there in place. null: it continues as a copy under the account the window lands it on. */
   accountId: string | null
-  /** Idle in someone else's window and a Claude Code session: the composer can carry it on. */
+  /** A Codex chat's: the Codex account (AgentHydra's instance id) whose folder holds it, where it continues in place. */
+  codexAccountId?: string
+  /** Idle in someone else's window, and a Claude Code session or a Codex chat whose account is known: the composer can carry it on. */
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
   fromPc: string | null
@@ -628,6 +659,7 @@ export interface ChatPatch {
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
   note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note
+  service?: PinnedService | null // Pin service; null = back to Claude. A running turn ends where it is; the next one runs there
 }
 
 export interface ImportSessionRequest {

@@ -10,6 +10,7 @@ import type {
   ExternalSession,
   HomeStats,
   HomeStatsRange,
+  ChatServiceInfo,
   ProjectChoiceKind,
   ProjectsResponse,
   QueueAddRequest,
@@ -42,6 +43,7 @@ export interface ShellSource {
   /** The footer gear, the chrome menu and the account popup's Settings row. */
   openSettings(): void
   updateChat(id: string, patch: ChatPatch): Promise<unknown>
+  chatServices(): Promise<ChatServiceInfo[]>
   removeChat(id: string): Promise<unknown>
   interrupt(id: string): Promise<unknown>
   loadItems(id: string): Promise<unknown>

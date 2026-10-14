@@ -10,6 +10,7 @@ import { basename, dirname, join } from 'node:path'
 import { extraRootsWithFormat } from './agent-catalog'
 import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } from './config'
 import { codexInstanceStores } from './core/codex-instances'
+import { readCodexTail } from './core/codex-transcript-lineage'
 import { dshInstanceStores } from './core/dsh-instances'
 import { walkFolderTree } from './core/folder-tree'
 import { fsSlot } from './core/fs-slots'
@@ -2235,7 +2236,12 @@ export async function tailTranscript(
   ].join('\u0000')
   const hit = sig ? tailMemo.get(memoKey) : undefined
   if (hit && hit.sig === sig) return hit.result
-  const result = tailFromJsonl(sessionId, tf, opts, await readTailBytes(tf.path, 6 * 1024 * 1024), {
+  // A Codex chat's newest rollout can hold only the rows since an earlier one (history_base): its tail reads back into that.
+  const raw =
+    tf.source === 'codex'
+      ? await readCodexTail(tf.path, 6 * 1024 * 1024)
+      : await readTailBytes(tf.path, 6 * 1024 * 1024)
+  const result = tailFromJsonl(sessionId, tf, opts, raw, {
     filter,
     keep,
     limit,

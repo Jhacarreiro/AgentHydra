@@ -1,5 +1,6 @@
 import { createHash } from 'node:crypto'
 import { existsSync, readdirSync, readFileSync, realpathSync } from 'node:fs'
+import { open, readdir, realpath, stat } from 'node:fs/promises'
 import { join } from 'node:path'
 import { isPathInside, normalizeInstancePath } from './paths'
 
@@ -158,4 +159,118 @@ export function readCodexHistory(transcriptPath: string, codexHome: string): Cod
     segments,
     lastOrdinal: previous,
   }
+}
+
+/** Bytes `start` to `end` of a file, fewer when it is shorter. */
+async function readRange(path: string, start: number, end: number): Promise<Buffer> {
+  const file = await open(path, 'r')
+  try {
+    const buf = Buffer.alloc(Math.max(0, end - start))
+    const { bytesRead } = await file.read(buf, 0, buf.length, start)
+    return buf.subarray(0, bytesRead)
+  } finally {
+    await file.close()
+  }
+}
+
+/** A file's first row, read in growing windows rather than whole. */
+async function firstRowOf(path: string): Promise<{ payload?: Record<string, unknown> } | null> {
+  for (let size = 64 * 1024; ; size *= 4) {
+    const bytes = await readRange(path, 0, size)
+    if (bytes.indexOf(10) >= 0 || bytes.length < size) return firstRow(bytes, path)
+  }
+}
+
+/** The row that ends exactly at `end` in a file, read back in growing windows; null when `end` is not a row boundary. */
+async function rowEndingAtFile(path: string, end: number): Promise<{ ordinal?: unknown } | null> {
+  for (let size = 64 * 1024; ; size *= 4) {
+    const start = Math.max(0, end - size)
+    const bytes = await readRange(path, start, end)
+    if (bytes.length !== end - start) return null
+    if (bytes.lastIndexOf(10, bytes.length - 2) >= 0 || start === 0)
+      return rowEndingAt(bytes, bytes.length)
+  }
+}
+
+/** The CODEX_HOME a rollout sits in: everything before its `sessions` or `archived_sessions` folder. */
+function codexHomeOf(path: string): string | null {
+  const norm = path.replaceAll('\\', '/')
+  const at = Math.max(norm.lastIndexOf('/sessions/'), norm.lastIndexOf('/archived_sessions/'))
+  return at > 0 ? path.slice(0, at) : null
+}
+
+/** Where each earlier history was found, so a chat's poll scans its account's folders once, not every 4 s. */
+const baseFound = new Map<string, string>()
+
+/** findBase for the tail: the same checks, by windows, and null rather than an error when it is not there. */
+async function findBaseAsync(
+  codexHome: string,
+  base: HistoryBase,
+  seen: Set<string>,
+): Promise<string | null> {
+  const key = `${normalizeInstancePath(codexHome)}|${base.thread_id}|${base.end_byte_offset}`
+  const holds = async (path: string): Promise<boolean> => {
+    try {
+      const [home, real] = await Promise.all([realpath(codexHome), realpath(path)])
+      return (
+        isPathInside(home, real) &&
+        (await firstRowOf(path))?.payload?.id === base.thread_id &&
+        (await rowEndingAtFile(path, base.end_byte_offset))?.ordinal ===
+          base.end_ordinal_exclusive - 1
+      )
+    } catch {
+      return false
+    }
+  }
+  const known = baseFound.get(key)
+  if (known && !seen.has(normalizeInstancePath(known)) && (await holds(known))) return known
+  baseFound.delete(key)
+  const found: string[] = []
+  for (const dir of ['sessions', 'archived_sessions']) {
+    const root = join(codexHome, dir)
+    const entries = await readdir(root, { recursive: true }).catch(() => [] as string[])
+    for (const entry of entries.map(String))
+      if (entry.endsWith('.jsonl') && entry.includes(base.thread_id)) {
+        const path = join(root, entry)
+        if (!seen.has(normalizeInstancePath(path)) && (await holds(path))) found.push(path)
+      }
+  }
+  if (found.length !== 1) return null
+  baseFound.set(key, found[0]!)
+  return found[0]!
+}
+
+/**
+ * The last `maxBytes` of a Codex chat's history as one text, earliest first, for the tail an open chat polls. A
+ * paginated rollout (`history_base`) holds only the rows since it continued an earlier one, so reading it alone showed
+ * a moved chat as its last few messages (2026-10-13: 14 events of a 26-turn chat whose copy held all 2,382 items).
+ * Each earlier rollout adds its rows up to the boundary while the budget lasts. The first line may be cut, which the
+ * tail's parser skips; a missing or unreadable earlier history leaves what was read. Windows only, never whole files.
+ */
+export async function readCodexTail(transcriptPath: string, maxBytes: number): Promise<string> {
+  const parts: string[] = []
+  const seen = new Set<string>()
+  let path = transcriptPath
+  let end = (await stat(path)).size
+  let left = maxBytes
+  while (left > 0 && parts.length < MAX_SEGMENTS) {
+    seen.add(normalizeInstancePath(path))
+    const start = Math.max(0, end - left)
+    const bytes = await readRange(path, start, end)
+    parts.unshift(bytes.toString('utf8'))
+    left -= bytes.length
+    if (start > 0) break
+    let base: HistoryBase | null
+    try {
+      base = historyBase(firstRow(bytes, path))
+    } catch {
+      break
+    }
+    const home = base ? codexHomeOf(path) : null
+    const earlier = base && home ? await findBaseAsync(home, base, seen) : null
+    if (!base || !earlier) break
+    path = earlier
+    end = base.end_byte_offset
+  }
+  return parts.join('')
 }

@@ -1,0 +1,635 @@
+// A Desk chat pinned to Codex (Pin service): each of its turns is a turn of a Codex thread on one of the owner's
+// Codex accounts, run through that account's app-server (app-server.ts). The chat keeps its own record as a Claude
+// chat does (the store, the same transcript items, the same status machine), so the window draws it the same way.
+// The thread is the chat's `serviceThreads.codex`: a later turn, a restart of Desk or a pin back here goes on in
+// it. A new thread (the chat's first Codex turn, or its account gone or at its limit) starts from a condensed
+// handoff of the chat so far (the manager's `handoff`), so Codex knows what was said on Claude.
+
+import { randomUUID } from 'node:crypto'
+import { join } from 'node:path'
+import type { ChatSummary, DeskSettings, ImageRef, PermissionDecision, PermissionMode, QuestionAnswer, ServerEvent, ServiceThread, TranscriptItem } from '@shared/protocol'
+import { mediaCache, toStoredImage } from '../../media/cache'
+import { ANSWER_NOW } from '../handoff'
+import { nextStatus, type StatusEvent } from '../status'
+import type { ChatStore } from '../store'
+import { userTurns } from '../system-text'
+import type { CodexAccount, CodexPick } from './accounts'
+import { type AppServer, type OpenAppServer, openAppServer, type ThreadListener } from './app-server'
+import { activityOf, type CodexItem, codexItems, planTodos, shownCommand } from './items'
+
+export interface CodexRuntimeDeps {
+  chat: ChatSummary
+  store: ChatStore
+  emit(event: ServerEvent): void
+  settings: () => DeskSettings
+  now?: () => number
+  /** Default: the shared app-server per Codex home; tests give a fake one. */
+  open?: OpenAppServer
+  /** The account a new thread starts on; `avoid`: accounts this message already hit a limit on. */
+  pickAccount(avoid: ReadonlySet<string>): Promise<CodexPick>
+  /** The account the chat's thread is on, as AgentHydra lists it now; null when it is gone or signed out. */
+  findAccount(id: string): Promise<CodexAccount | null>
+  /**
+   * What the message `sentId` starts with: a condensed handoff of what was said since the chat was last on Codex
+   * (`fresh`: a new thread, the whole chat before it) and what ran it meanwhile ("Claude", or `movedFrom` after a
+   * usage limit moved it off another Codex account); null for nothing.
+   */
+  handoff(fresh: boolean, sentId: string, movedFrom?: string): { text: string; from: string } | null
+  /** The handoff went out with a turn: the thread has caught up. */
+  caughtUp(): void
+  /** The account hit its usage limit: kept out of picks until `until` (epoch ms). */
+  hold(accountId: string, until: number): void
+  onClosed?(): void
+  onFailure?(f: { message: string; durationMs: number | null }): void
+}
+
+type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>
+type QuestionItem = Extract<TranscriptItem, { kind: 'question' }>
+type Streamed = { kind: 'assistant_text' | 'thinking'; text: string; ts: number }
+type Sent = { id: string; text: string; images?: ImageRef[] }
+type Ask =
+  | { item: PermissionItem; resolve(result: unknown): void }
+  | { item: QuestionItem; ids: string[]; resolve(result: unknown): void }
+type CodexTurn = { id: string; status: string; error?: { message?: string; codexErrorInfo?: unknown } | null; durationMs?: number | null }
+
+/** How long a Stop waits for Codex's own end of the turn before the chat ends it. */
+const STOP_GRACE_MS = 5_000
+/** How often a running command's output line is sent to the window. */
+const PROGRESS_EVERY_MS = 400
+/** How long an account that hit its usage limit is left out of picks when Codex does not say. */
+const LIMIT_HOLD_MS = 60 * 60_000
+
+/** Codex's approval and sandbox for Desk's permission mode. */
+function policy(mode: PermissionMode): { approvalPolicy: string; sandbox: string; sandboxPolicy: Record<string, unknown> } {
+  if (mode === 'bypassPermissions') return { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } }
+  if (mode === 'plan') return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly', networkAccess: true } }
+  return {
+    approvalPolicy: 'on-request',
+    sandbox: 'workspace-write',
+    sandboxPolicy: { type: 'workspaceWrite', writableRoots: [], networkAccess: true, excludeTmpdirEnvVar: false, excludeSlashTmp: false },
+  }
+}
+
+/** A chat model only Codex knows (a Claude id stays with Claude). */
+const codexModel = (model: string | null): string | null => (model && /^(?:gpt-|o\d|codex)/i.test(model) ? model : null)
+
+const isLimit = (info: unknown): boolean => info === 'usageLimitExceeded' || info === 'sessionBudgetExceeded'
+
+export class CodexRuntime {
+  readonly chat: ChatSummary
+  private readonly deps: CodexRuntimeDeps
+  private readonly now: () => number
+  private readonly open: OpenAppServer
+  private server: AppServer | null = null
+  private home: string | null = null
+  private unlisten: (() => void) | null = null
+  /** The thread loaded on `server`. */
+  private thread: ServiceThread | null = null
+  /** The send the running turn answers; null when no turn runs. */
+  private current: Sent | null = null
+  private turnId: string | null = null
+  private turnStarted = 0
+  /** Sends that came while a turn ran, oldest first: each is the next turn. */
+  private queue: Sent[] = []
+  private readonly queued = new Map<string, UserItem>()
+  /** Accounts the message in flight hit a limit on; cleared when a turn ends. */
+  private readonly avoid = new Set<string>()
+  private readonly streams = new Map<string, Streamed>()
+  /** Items under way: their start time, and the item (a file change's approval names its files). */
+  private readonly running = new Map<string, { item: CodexItem; startedAt: number; output: string; sentAt: number }>()
+  private readonly storedRunning = new Set<string>()
+  private readonly asks = new Map<string, Ask>()
+  private lastText = ''
+  /** The account a usage limit just moved the chat off: the new thread's handoff names it. */
+  private movedFrom: string | null = null
+  private idleTimer: ReturnType<typeof setTimeout> | null = null
+
+  constructor(deps: CodexRuntimeDeps) {
+    this.deps = deps
+    this.chat = deps.chat
+    this.now = deps.now ?? Date.now
+    this.open = deps.open ?? openAppServer
+  }
+
+  /** An app-server is held: the chat has run here since it last closed. */
+  get alive(): boolean {
+    return this.server !== null || this.current !== null
+  }
+
+  /** A turn runs. */
+  get busy(): boolean {
+    return this.current !== null
+  }
+
+  isPending(requestId: string): boolean {
+    return this.asks.has(requestId)
+  }
+
+  /** Codex makes no plan or MCP form requests of a Desk chat (forms are declined), so none can be open. */
+  respondPlan(requestId: string): void {
+    throw new Error(`no pending plan request ${requestId}`)
+  }
+
+  answerElicitation(requestId: string): void {
+    throw new Error(`no pending elicitation request ${requestId}`)
+  }
+
+  /** Sends a message: the next turn now, or queued behind the running one. */
+  send(text: string, images?: ImageRef[], messageId?: string, shown?: string): { queued: boolean } {
+    this.clearIdle()
+    const sent: Sent = { id: messageId ?? randomUUID(), text, ...(images?.length ? { images } : {}) }
+    const busy = this.current !== null
+    this.dispatch({ type: 'userSent', now: this.now() })
+    const item: UserItem = { kind: 'user', id: sent.id, ts: this.now(), text: shown ?? text }
+    if (images?.length) item.images = images.map((i) => toStoredImage(i))
+    if (busy) {
+      item.queued = true
+      this.queued.set(item.id, item)
+      this.queue.push(sent)
+      this.chat.queuedCount = this.queue.length
+    }
+    this.upsert(item)
+    this.publish()
+    if (!busy) void this.run(sent)
+    return { queued: busy }
+  }
+
+  async cancelQueued(itemId: string): Promise<boolean> {
+    if (!this.queued.has(itemId)) return false
+    this.queued.delete(itemId)
+    this.queue = this.queue.filter((s) => s.id !== itemId)
+    this.chat.queuedCount = this.queue.length
+    return true
+  }
+
+  /** Stops the running turn; the chat reads stopped at once. Queued sends go on after it. */
+  interrupt(): void {
+    const sent = this.current
+    if (!sent) return
+    if (this.server && this.thread && this.turnId) void this.server.call('turn/interrupt', { threadId: this.thread.threadId, turnId: this.turnId }).catch(() => {})
+    this.expireAsks()
+    this.dispatch({ type: 'interrupted' })
+    this.publish()
+    // Codex ends the turn as interrupted; one that never says so is ended here.
+    const timer = setTimeout(() => {
+      if (this.current === sent) this.endTurn(sent, { id: this.turnId ?? `stop-${this.now()}`, status: 'interrupted' })
+    }, STOP_GRACE_MS)
+    ;(timer as { unref?: () => void }).unref?.()
+    if (!this.turnId) this.endTurn(sent, { id: `stop-${this.now()}`, status: 'interrupted' })
+  }
+
+  respondPermission(requestId: string, d: PermissionDecision): void {
+    const ask = this.asks.get(requestId)
+    if (!ask || ask.item.kind !== 'permission') throw new Error(`no pending permission request ${requestId}`)
+    this.asks.delete(requestId)
+    const state = d.decision === 'allow' ? 'allowed' : d.decision === 'deny' ? 'denied' : d.decision
+    this.upsert({ ...ask.item, state })
+    this.dispatch({ type: 'requestClosed' })
+    this.publish()
+    ask.resolve({ decision: d.decision === 'allow' ? 'accept' : d.decision === 'deny' ? 'decline' : 'acceptForSession' })
+  }
+
+  answerQuestion(requestId: string, a: QuestionAnswer): void {
+    const ask = this.asks.get(requestId)
+    if (!ask || ask.item.kind !== 'question' || !('ids' in ask)) throw new Error(`no pending question request ${requestId}`)
+    this.asks.delete(requestId)
+    const answers: Record<string, { answers: string[] }> = {}
+    if (!a.skip)
+      ask.item.questions.forEach((q, i) => {
+        const said = a.answers?.[q.question]
+        if (said) answers[ask.ids[i]!] = { answers: q.multiSelect ? said.split(',').map((s) => s.trim()).filter(Boolean) : [said] }
+      })
+    this.upsert({ ...ask.item, state: a.skip ? 'skipped' : 'answered', ...(a.answers ? { answers: a.answers } : {}) })
+    this.dispatch({ type: 'requestClosed' })
+    this.publish()
+    ask.resolve({ answers })
+  }
+
+  markViewed(): void {
+    this.dispatch({ type: 'viewed' })
+    this.publish()
+  }
+
+  /** Ends the runtime: the turn stops, the app-server is let go, the chat reads closed. The thread stays the chat's. */
+  async close(): Promise<void> {
+    this.clearIdle()
+    if (this.current && this.server && this.thread && this.turnId) void this.server.call('turn/interrupt', { threadId: this.thread.threadId, turnId: this.turnId }).catch(() => {})
+    this.current = null
+    this.turnId = null
+    this.expireAsks()
+    this.unqueueAll()
+    this.detach()
+    this.dispatch({ type: 'closed' })
+    this.publish()
+    this.deps.onClosed?.()
+  }
+
+  /** Desk is stopping: a turn under way stops with it, and the chat says so. */
+  async shutdown(): Promise<void> {
+    if (this.current) this.line('warn', 'AgentHydra restarted while Codex was working, so the turn stopped. Send a message to go on.')
+    await this.close()
+  }
+
+  // The turn
+
+  private async run(sent: Sent): Promise<void> {
+    this.current = sent
+    this.turnId = null
+    this.turnStarted = this.now()
+    this.lastText = ''
+    this.dispatch({ type: 'activity', activity: 'Starting Codex' })
+    this.publish()
+    try {
+      const fresh = await this.ensureThread()
+      if (this.current !== sent) return
+      const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
+      this.movedFrom = null
+      const text = lead ? `${lead.text}${ANSWER_NOW}${sent.text}` : sent.text
+      const input: Record<string, unknown>[] = [{ type: 'text', text, text_elements: [] }, ...this.pictures(sent.images)]
+      const { approvalPolicy, sandboxPolicy } = policy(this.chat.permissionMode)
+      const effort = this.chat.effort === 'max' ? 'xhigh' : this.chat.effort
+      const model = codexModel(this.chat.model)
+      const started = await this.server!.call<{ turn: { id: string } }>('turn/start', {
+        threadId: this.thread!.threadId,
+        input,
+        approvalPolicy,
+        sandboxPolicy,
+        ...(effort ? { effort } : {}),
+        ...(model ? { model } : {}),
+      })
+      if (lead) {
+        this.deps.caughtUp()
+        this.line('info', `Caught up on what was said on ${lead.from}.`)
+      }
+      if (this.current !== sent) {
+        // Stopped while Codex took the turn: it stops there too.
+        void this.server?.call('turn/interrupt', { threadId: this.thread?.threadId, turnId: started.turn.id }).catch(() => {})
+        return
+      }
+      this.turnId ??= started.turn.id
+      this.dispatch({ type: 'stateChanged', state: 'running', now: this.now() })
+      this.dispatch({ type: 'activity', activity: 'Thinking' })
+      this.publish()
+    } catch (err) {
+      if (this.current !== sent) return
+      const message = err instanceof Error ? err.message : String(err)
+      if (this.avoid.size && /usage limit/.test(message)) return this.allLimited(message)
+      this.endTurn(sent, { id: `failed-${this.now()}`, status: 'failed', error: { message } })
+    }
+  }
+
+  /** The chat's thread loaded on its account's app-server; true when it is a new thread. */
+  private async ensureThread(): Promise<boolean> {
+    if (this.server && this.thread && !this.avoid.has(this.thread.accountId)) return false
+    const { approvalPolicy, sandbox } = policy(this.chat.permissionMode)
+    const model = codexModel(this.chat.model)
+    const settings = { cwd: this.chat.cwd, approvalPolicy, sandbox, ...(model ? { model } : {}) }
+    const bound = this.chat.serviceThreads?.codex
+    if (bound && !this.avoid.has(bound.accountId)) {
+      const account = await this.deps.findAccount(bound.accountId)
+      if (account) {
+        await this.attach(account)
+        try {
+          await this.server!.call('thread/resume', { threadId: bound.threadId, ...settings, excludeTurns: true })
+          this.bind({ ...bound, label: account.label })
+          return false
+        } catch {
+          // Gone from that account (archived there, deleted): the chat goes on in a new thread.
+        }
+      }
+    }
+    const pick = await this.deps.pickAccount(this.avoid)
+    if ('why' in pick) throw new Error(pick.why)
+    await this.attach(pick.account)
+    const r = await this.server!.call<{ thread: { id: string } }>('thread/start', settings)
+    this.bind({ accountId: pick.account.id, label: pick.account.label, threadId: r.thread.id })
+    void this.server!.call('thread/name/set', { threadId: r.thread.id, name: this.chat.title }).catch(() => {})
+    return true
+  }
+
+  private async attach(account: CodexAccount): Promise<void> {
+    if (this.server && this.home === account.home) return
+    this.detach()
+    this.server = await this.open(account.home)
+    this.home = account.home
+  }
+
+  private bind(thread: ServiceThread): void {
+    this.unlisten?.()
+    this.unlisten = this.server!.listen(thread.threadId, this.listener)
+    this.thread = thread
+    this.chat.serviceThreads = { ...this.chat.serviceThreads, codex: thread }
+    this.publish()
+  }
+
+  private detach(): void {
+    this.unlisten?.()
+    this.unlisten = null
+    this.server?.release()
+    this.server = null
+    this.home = null
+    this.thread = null
+  }
+
+  private readonly listener: ThreadListener = {
+    notify: (method, params) => this.onNotify(method, params),
+    request: (method, params) => this.onRequest(method, params),
+    exited: (why) => {
+      this.unlisten = null
+      this.server = null
+      this.home = null
+      this.thread = null
+      if (this.current) this.endTurn(this.current, { id: `exit-${this.now()}`, status: 'failed', error: { message: `Codex stopped while it was working (${why})` } })
+    },
+  }
+
+  private onNotify(method: string, p: Record<string, unknown>): void {
+    if (!this.current) return
+    const now = this.now()
+    switch (method) {
+      case 'turn/started':
+        this.turnId = (p.turn as { id: string }).id
+        return
+      case 'item/started': {
+        const item = p.item as CodexItem
+        const startedAt = typeof p.startedAtMs === 'number' ? p.startedAtMs : now
+        this.running.set(item.id, { item, startedAt, output: '', sentAt: 0 })
+        if (item.type !== 'agentMessage' && item.type !== 'reasoning') for (const i of codexItems(item, { now, startedAt })) this.upsert(i)
+        const activity = activityOf(item)
+        if (activity) this.dispatch({ type: 'activity', activity })
+        this.publish()
+        return
+      }
+      case 'item/agentMessage/delta':
+        return this.stream(String(p.itemId), 'assistant_text', String(p.delta ?? ''))
+      case 'item/reasoning/summaryTextDelta':
+        return this.stream(String(p.itemId), 'thinking', String(p.delta ?? ''))
+      case 'item/commandExecution/outputDelta':
+        return this.progress(String(p.itemId), String(p.delta ?? ''))
+      case 'item/completed': {
+        const item = p.item as CodexItem
+        const was = this.running.get(item.id)
+        this.running.delete(item.id)
+        const stream = this.streams.get(item.id)
+        this.streams.delete(item.id)
+        const startedAt = stream?.ts ?? was?.startedAt
+        for (const i of codexItems(item, { now, startedAt, endedAt: typeof p.completedAtMs === 'number' ? p.completedAtMs : now })) this.upsert(i)
+        // A message that ended with no text (only its deltas were seen) keeps what streamed.
+        if (stream && !codexItems(item, { now }).length && stream.text.trim()) this.upsert({ kind: stream.kind, id: item.id, ts: stream.ts, text: stream.text })
+        if (item.type === 'agentMessage' && item.text.trim()) this.lastText = item.text
+        return
+      }
+      case 'turn/plan/updated':
+        this.upsert({ kind: 'todos', id: 'todos', ts: now, todos: planTodos((p.plan as { step: string; status: string }[]) ?? []) })
+        return
+      case 'thread/tokenUsage/updated': {
+        const u = p.tokenUsage as { last?: { totalTokens?: number }; modelContextWindow?: number | null } | undefined
+        const used = u?.last?.totalTokens
+        if (typeof used === 'number' && u?.modelContextWindow) {
+          this.chat.contextPct = Math.min(100, Math.round((used / u.modelContextWindow) * 100))
+          this.publish()
+        }
+        return
+      }
+      case 'error': {
+        const e = p.error as { message?: string } | undefined
+        if (p.willRetry && e?.message) {
+          this.dispatch({ type: 'activity', activity: `Codex is trying again: ${e.message.slice(0, 80)}` })
+          this.publish()
+        }
+        return
+      }
+      case 'turn/completed':
+        return this.endTurn(this.current, p.turn as CodexTurn)
+    }
+  }
+
+  private stream(itemId: string, kind: Streamed['kind'], delta: string): void {
+    if (!delta) return
+    const s = this.streams.get(itemId)
+    if (!s) {
+      const ts = this.running.get(itemId)?.startedAt ?? this.now()
+      this.streams.set(itemId, { kind, text: delta, ts })
+      this.upsert({ kind, id: itemId, ts, text: delta, streaming: true })
+      if (kind === 'assistant_text') this.dispatch({ type: 'activity', activity: 'Writing' })
+      this.publish()
+      return
+    }
+    s.text += delta
+    this.deps.emit({ type: 'item.delta', chatId: this.chat.id, itemId, text: delta })
+  }
+
+  /** A running command's newest output line on its row, a few times a second at most. */
+  private progress(itemId: string, delta: string): void {
+    const r = this.running.get(itemId)
+    if (!r) return
+    r.output = (r.output + delta).slice(-4000)
+    const now = this.now()
+    if (now - r.sentAt < PROGRESS_EVERY_MS) return
+    r.sentAt = now
+    const line = r.output.trimEnd().split('\n').pop()?.slice(0, 200)
+    for (const i of codexItems(r.item, { now, startedAt: r.startedAt })) if (i.kind === 'tool_use' && line) this.upsert({ ...i, progress: line })
+  }
+
+  /** A turn is over (done, stopped, failed): its result line, the chat's state, then the next queued send. */
+  private endTurn(sent: Sent, turn: CodexTurn): void {
+    if (this.current !== sent) return
+    const now = this.now()
+    for (const [id, s] of this.streams) this.upsert({ kind: s.kind, id, ts: s.ts, text: s.text })
+    this.streams.clear()
+    this.running.clear()
+    this.expireAsks()
+    const info = turn.error?.codexErrorInfo
+    if (turn.status === 'failed' && isLimit(info)) return this.limited(sent)
+    const ok = turn.status === 'completed'
+    const durationMs = turn.durationMs ?? now - this.turnStarted
+    const error = ok ? undefined : turn.status === 'interrupted' ? 'Interrupted' : turn.error?.message || 'Codex could not finish the turn.'
+    this.upsert({ kind: 'result', id: `result:${turn.id}`, ts: now, ok, durationMs, costUsd: 0, turns: 1, ...(error ? { error } : {}) })
+    this.current = null
+    this.turnId = null
+    this.avoid.clear()
+    if (turn.status === 'interrupted') this.dispatch({ type: 'interrupted' })
+    else if (!ok) {
+      this.dispatch({ type: 'turnError', message: error! })
+      this.deps.onFailure?.({ message: error!, durationMs })
+      this.notify('error', error!)
+    } else this.dispatch({ type: 'stateChanged', state: 'idle', now })
+    const next = this.queue.shift()
+    if (next) {
+      this.unqueue(next.id)
+      this.dispatch({ type: 'userSent', now })
+      this.chat.queuedCount = this.queue.length
+      this.publish()
+      void this.run(next)
+      return
+    }
+    if (ok) this.notify('finished', this.lastText.trim().slice(0, 200) || 'Codex finished.')
+    this.publish()
+    this.armIdle()
+  }
+
+  /** The thread's account hit its usage limit: it is held out, and the same message goes on in a new thread on another account. */
+  private limited(sent: Sent): void {
+    const thread = this.thread
+    if (thread) {
+      this.deps.hold(thread.accountId, this.now() + LIMIT_HOLD_MS)
+      this.avoid.add(thread.accountId)
+      this.movedFrom = `another Codex account (${thread.label})`
+      this.line('warn', `${thread.label} hit its Codex usage limit, so this chat goes on on another Codex account.`)
+    }
+    this.detach()
+    void this.run(sent)
+  }
+
+  /** Every Codex account is at its limit: the chat waits, limited; the message is in its record to send again. */
+  private allLimited(why: string): void {
+    this.line('warn', why)
+    this.current = null
+    this.turnId = null
+    this.avoid.clear()
+    this.unqueueAll()
+    this.queue = []
+    this.dispatch({ type: 'usageLimit', resetsAt: null })
+    this.notify('limited', why)
+    this.publish()
+  }
+
+  // Requests Codex makes of the chat
+
+  private async onRequest(method: string, p: Record<string, unknown>): Promise<unknown> {
+    if (method === 'item/commandExecution/requestApproval') {
+      const shown = shownCommand(typeof p.command === 'string' ? p.command : '')
+      return this.ask(String(p.itemId ?? randomUUID()), shown.name, { command: shown.command }, typeof p.reason === 'string' ? p.reason : undefined)
+    }
+    if (method === 'item/fileChange/requestApproval') {
+      const item = this.running.get(String(p.itemId))?.item
+      const files = item?.type === 'fileChange' ? item.changes.map((c) => c.path) : []
+      return this.ask(String(p.itemId ?? randomUUID()), 'Edit', { file_path: files.join(', ') }, typeof p.reason === 'string' ? p.reason : undefined)
+    }
+    if (method === 'item/tool/requestUserInput') {
+      const qs = (p.questions as { id: string; header?: string; question: string; options?: { label: string; description?: string }[] | null }[]) ?? []
+      const id = `codex-q:${String(p.itemId ?? randomUUID())}`
+      const item: QuestionItem = {
+        kind: 'question',
+        id,
+        ts: this.now(),
+        questions: qs.map((q) => ({ question: q.question, header: q.header ?? '', multiSelect: false, options: q.options ?? [] })),
+        state: 'pending',
+      }
+      return new Promise((resolve) => {
+        this.asks.set(id, { item, ids: qs.map((q) => q.id), resolve })
+        this.opened(item)
+      })
+    }
+    // An MCP server's form: Desk shows none for Codex chats yet, so it is declined rather than left waiting.
+    if (method === 'mcpServer/elicitation/request') return { action: 'decline', content: null, _meta: null }
+    throw new Error('Desk does not answer this request.')
+  }
+
+  private ask(itemId: string, toolName: string, input: Record<string, unknown>, reason?: string): Promise<unknown> {
+    const id = `codex-ask:${itemId}`
+    const item: PermissionItem = {
+      kind: 'permission',
+      id,
+      ts: this.now(),
+      toolName,
+      toolUseId: itemId,
+      input,
+      canAlwaysAllow: true,
+      alwaysRules: ['This kind of request, for the rest of this Codex thread'],
+      state: 'pending',
+      ...(reason ? { reason } : {}),
+    }
+    return new Promise((resolve) => {
+      this.asks.set(id, { item, resolve })
+      this.opened(item)
+    })
+  }
+
+  private opened(item: PermissionItem | QuestionItem): void {
+    this.upsert(item)
+    this.dispatch({ type: 'requestOpened' })
+    this.publish()
+    if (this.asks.size === 1) this.notify('needs_you', item.kind === 'question' ? 'Codex has a question.' : `Codex asks to use ${item.toolName}.`)
+  }
+
+  /** Every open request ends unanswered (the turn stopped or ended): Codex is told no. */
+  private expireAsks(): void {
+    for (const [id, ask] of this.asks) {
+      this.asks.delete(id)
+      this.upsert({ ...ask.item, state: 'expired' })
+      this.dispatch({ type: 'requestClosed' })
+      ask.resolve(ask.item.kind === 'question' ? { answers: {} } : { decision: 'decline' })
+    }
+  }
+
+  // The chat's record
+
+  /** Pictures go to Codex as files: the media cache holds each. */
+  private pictures(images?: ImageRef[]): Record<string, unknown>[] {
+    const cache = mediaCache(this.deps.store.home)
+    if (!images?.length || !cache) return []
+    return images.flatMap((img) => {
+      const ref = img.dataBase64 ? cache.putBase64(img.dataBase64, img.name) : img
+      const file = ref?.url?.split('/').pop()
+      return file ? [{ type: 'localImage', path: join(cache.dir, file) }] : []
+    })
+  }
+
+  private upsert(item: TranscriptItem): void {
+    for (const shown of item.kind === 'user' ? userTurns(item, mediaCache(this.deps.store.home)) : [item]) this.deps.emit({ type: 'item.upsert', chatId: this.chat.id, item: shown })
+    if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
+    if (item.kind === 'tool_use' && item.status === 'running') {
+      if (this.storedRunning.has(item.id)) return
+      this.storedRunning.add(item.id)
+    }
+    this.deps.store.appendItem(this.chat.id, item)
+  }
+
+  private line(level: 'info' | 'warn', text: string): void {
+    const ts = this.now()
+    this.upsert({ kind: 'system', id: `codex:${ts}:${randomUUID().slice(0, 8)}`, ts, level, text })
+  }
+
+  private unqueue(id: string): void {
+    const item = this.queued.get(id)
+    if (!item) return
+    this.queued.delete(id)
+    const { queued: _q, ...rest } = item
+    this.upsert(rest)
+  }
+
+  private unqueueAll(): void {
+    for (const id of [...this.queued.keys()]) this.unqueue(id)
+    this.queue = []
+    this.chat.queuedCount = 0
+  }
+
+  private dispatch(e: StatusEvent): void {
+    Object.assign(this.chat, nextStatus(this.chat, e))
+    this.chat.updatedAt = this.now()
+  }
+
+  private publish(): void {
+    this.deps.emit({ type: 'chat.upsert', chat: { ...this.chat } })
+  }
+
+  private notify(reason: Extract<ServerEvent, { type: 'notify' }>['reason'], body: string): void {
+    this.deps.emit({ type: 'notify', chatId: this.chat.id, reason, title: this.chat.title, body })
+  }
+
+  private armIdle(): void {
+    this.clearIdle()
+    this.idleTimer = setTimeout(() => {
+      this.idleTimer = null
+      if (!this.current) void this.close()
+    }, this.deps.settings().idleCloseMinutes * 60_000)
+    ;(this.idleTimer as { unref?: () => void }).unref?.()
+  }
+
+  private clearIdle(): void {
+    if (this.idleTimer) clearTimeout(this.idleTimer)
+    this.idleTimer = null
+  }
+}

@@ -19,7 +19,9 @@ import {
   DropdownMenuSubTrigger
 } from '@/components/ui/dropdown-menu'
 import { refreshAhInstances } from '@/components/session-header/instances'
+import { useShellSource } from '@/components/shell/source'
 import type { RowMenuEntry, RowMenuItem } from './logic'
+import { refreshChatServices } from './services'
 import { MENU_CONTENT, MENU_ITEM, MENU_SEPARATOR, MENU_SHORTCUT } from './menuClasses'
 
 // The row menu's entries inside a right-click menu or a "..." menu: one list, either primitive set.
@@ -34,8 +36,12 @@ const ui =
 // The first line's account name, Move to account and Duplicate to account read AgentHydra's account list: an opened menu
 // asks for it (the list mounts with the menu), and the entries follow when it answers.
 const ACCOUNT_ACTIONS = new Set<RowMenuItem['action']>(['moveToAccount', 'duplicateToAccount'])
+// Pin service's Codex and ChatGPT are offered once AgentHydra's services have answered (sidebar/services.ts), read the same way.
+const src = useShellSource()
 onMounted(() => {
   if (props.entries.some((e) => e !== 'separator' && ('items' in e ? e.items.some((s) => s !== 'separator' && ACCOUNT_ACTIONS.has(s.action)) : e.identity))) void refreshAhInstances()
+  if (props.entries.some((e) => e !== 'separator' && 'items' in e && e.items.some((s) => s !== 'separator' && s.action === 'pinService')))
+    void refreshChatServices(() => src.chatServices())
 })
 </script>
 

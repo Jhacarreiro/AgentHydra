@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'bun:test'
-import type { ChatSummary, ExternalSession } from '@shared/protocol'
+import type { ChatServiceInfo, ChatSummary, ExternalSession } from '@shared/protocol'
 import {
   accountFace,
   chatRow,
@@ -426,7 +426,30 @@ describe('row menu', () => {
     ...over
   })
 
-  it('is the real menu for an idle chat under a line naming it: Open in, Pin, Mark as unread, Rename, Fork, Move to group, Archive, Delete', () => {
+  it('offers Pin service on a Desk chat: Claude ticked, Codex and ChatGPT by what is signed in, the pinned one naming its account', () => {
+    const services: ChatServiceInfo[] = [
+      { kind: 'claude', label: 'Claude', ready: true, accounts: 1 },
+      { kind: 'codex', label: 'Codex', ready: true, accounts: 1 },
+      { kind: 'chatgpt', label: 'ChatGPT', ready: false, why: 'No Free ChatGPT login is signed in', accounts: 0 }
+    ]
+    const pinItems = (entries: RowMenuEntry[]) => (entries.find((e) => e !== 'separator' && 'items' in e && e.label === 'Pin service') as { items: RowMenuItem[] }).items
+    const menu = rowMenu(chatRow(chat('a', { sessionId: 's1' })), [], null, null, services)
+    expect(show(menu)).toContain('Pin service >')
+    expect(pinItems(menu).map((i) => [i.label, i.checked, i.disabled])).toEqual([
+      ['Claude', true, false],
+      ['Codex', false, false],
+      ['ChatGPT', false, true]
+    ])
+    expect(pinItems(menu)[2].title).toBe('No Free ChatGPT login is signed in')
+
+    const pinned = chat('a', { sessionId: 's1', service: 'codex', serviceThreads: { codex: { accountId: 'codex-1', label: '#196 example', threadId: 't1' } } })
+    expect(pinItems(rowMenu(chatRow(pinned), [], null, null, services)).find((i) => i.checked)).toMatchObject({ label: 'Codex', hint: '#196 example' })
+    expect(pinItems(rowMenu(chatRow(pinned), [], null, null, null)).map((i) => i.disabled)).toEqual([false, true, true])
+
+    expect(show(rowMenu(externalRow(ext()), [], null, null, services))).not.toContain('Pin service >')
+  })
+
+  it('is the real menu for an idle chat under a line naming it: Open in, Pin, Mark as unread, Rename, Fork, Pin service, Move to group, Archive, Delete', () => {
     expect(show(rowMenu(chatRow(chat('a', { sessionId: 's1' }))))).toEqual([
       's1',
       '-',
@@ -437,6 +460,7 @@ describe('row menu', () => {
       'Rename R',
       'Add note… N',
       'Fork F',
+      'Pin service >',
       '-',
       'Move to group >',
       '-',
@@ -460,6 +484,7 @@ describe('row menu', () => {
       'Rename R',
       'Add note… N',
       'Fork F',
+      'Pin service >',
       '-',
       'Move to group >',
       '-',

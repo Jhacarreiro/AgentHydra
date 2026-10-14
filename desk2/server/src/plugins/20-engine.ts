@@ -14,7 +14,10 @@ import type { DeskSettings, ServerEvent } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { callerKind, describeCaller, logRestartAsk, OWNER_ONLY_STOP } from '../caller'
 import { bridge } from '../bridge'
+import { createClient } from '../bridge/client'
 import { findSessionJsonl } from '../bridge/session-jsonl'
+import { type CodexDirectory, codexDirectory } from '../engine/codex/accounts'
+import type { OpenAppServer } from '../engine/codex/app-server'
 import { startIdleBrowserClose } from '../browser/idle-close'
 import { closeChatTabs, startTabSweep } from '../browser/tab-sweep'
 import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/chat-runtime'
@@ -133,6 +136,9 @@ function createManager(ctx: ServerContext, toQueue: { fn: (event: ServerEvent) =
     claudeHome: deps.claudeHome as string | undefined,
     storeDebounceMs: typeof deps.storeDebounceMs === 'number' ? deps.storeDebounceMs : undefined,
     newChats: deps.newChats === 'sdk' ? 'sdk' : undefined,
+    // A test's Desk (a fake bridge) reaches no real Codex account unless it gives its own.
+    codex: (deps.codex as CodexDirectory | undefined) ?? (deps.bridge ? undefined : codexDirectory(createClient())),
+    openCodex: deps.openCodex as OpenAppServer | undefined,
   })
 }
 
@@ -357,6 +363,7 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
   )
   app.get('/api/chats/:id/commands', (c) => answer(c, () => manager.commands(c.req.param('id'))))
   app.get('/api/models', (c) => answer(c, () => manager.models()))
+  app.get('/api/chat-services', (c) => answer(c, () => manager.services()))
 }
 
 /** The project list, its folders, roots, hidden and pinned choices, and each project's icon. */

@@ -1,6 +1,6 @@
 import { afterAll, describe, expect, test } from 'bun:test'
 import type { AccountInfo, ExternalSession, ServerEvent, TranscriptItem } from '@shared/protocol'
-import { externalChat, externalChatId, isExternalChatId, resumable, sessionOfChatId, whereLabel } from '../../src/components/external/logic'
+import { continueLine, externalChat, externalChatId, isExternalChatId, resumable, sessionOfChatId, whereLabel } from '../../src/components/external/logic'
 import { draftImages } from '../../src/components/composer/draft-images'
 import { saveGlobals } from '../save-globals'
 
@@ -63,11 +63,21 @@ describe('the stand-in chat of a resumable outside session', () => {
     expect(externalChat(session({ accountId: 'cli-7' }), [account('cli-7', 7)], {}, landing).account.id).toBe('cli-7')
   })
 
-  test('resumable: a desktop or terminal session, whatever account holds it', () => {
+  test('resumable: a desktop or terminal session, whatever account holds it, and a Codex chat whose Codex account is known', () => {
     expect(resumable(session())).toBe(true)
     expect(resumable(session({ source: 'cli' }))).toBe(true)
     expect(resumable(session({ source: 'climayte', accountId: 'cli-7' }))).toBe(false)
     expect(resumable(session({ source: 'codex' }))).toBe(false)
+    expect(resumable(session({ source: 'codex', codexAccountId: 'codex-7' }))).toBe(true)
+  })
+
+  test("a Codex chat's stand-in is pinned to Codex on its own thread, and says it continues in place there", () => {
+    const s = session({ source: 'codex', instance: '#7 alpha', codexAccountId: 'codex-7' })
+    const c = externalChat(s, [])
+    expect(c.service).toBe('codex')
+    expect(c.serviceThreads?.codex).toEqual({ accountId: 'codex-7', label: '#7 alpha', threadId: s.id })
+    expect(continueLine(s, null)).toBe('Continues in place on Codex #7 alpha.')
+    expect(externalChat(session(), []).service).toBeUndefined()
   })
 
   test('labels', () => {
