@@ -16,6 +16,7 @@ import {
   type CodexMoveRequest,
   moveCodexChat,
   planCodexChatMove,
+  setCodexChatArchived,
 } from '../src/core/codex-chat-move'
 import type { CodexRpc } from '../src/core/codex-rpc'
 import { copyCodexTranscript } from '../src/core/codex-transcript-copy'
@@ -211,6 +212,10 @@ function fixture() {
       },
       'thread/read': read,
       'thread/archive': archive,
+      'thread/unarchive': () => {
+        state.archived = false
+        return {}
+      },
       'thread/turns/list': () => ({
         data: turnsOf(
           side === 'source'
@@ -526,6 +531,66 @@ describe('Codex chat move', () => {
     })
     expect(f.calls).not.toContain('source-app:restore')
     expect(f.state.archived).toBe(true)
+  })
+  test('a duplicate copies and verifies as a move does and keeps the original; a later move still archives it', async () => {
+    const f = fixture()
+    const copy = await moveCodexChat('0', { ...f.request, keepSource: true }, f.deps)
+    expect(copy).toEqual({
+      ok: true,
+      destinationThreadId: copy.destinationThreadId,
+      history: VERIFIED,
+    })
+    expect(f.calls).toContain('target:showDestination')
+    expect(f.calls).not.toContain('source:thread/archive')
+    expect(f.state.archived).toBe(false)
+    // Asking again makes another copy: a finished duplicate is not answered from its receipt.
+    const again = await moveCodexChat('0', { ...f.request, keepSource: true }, f.deps)
+    expect(again.ok).toBe(true)
+    expect(again.destinationThreadId).not.toBe(copy.destinationThreadId)
+    expect(f.copies()).toHaveLength(2)
+    // A duplicate's receipt never reads as a finished move: moving it copies once more and archives the original.
+    const moved = await moveCodexChat('0', f.request, f.deps)
+    expect(moved.ok).toBe(true)
+    expect(f.state.archived).toBe(true)
+    expect(f.copies()).toHaveLength(3)
+  })
+  test('Unassigned archives a chat on its account and puts it back: app-server when the app is closed, the app when open', async () => {
+    const f = fixture()
+    expect(await setCodexChatArchived('0', 'chat-1', true, f.deps)).toEqual({ ok: true })
+    expect(f.calls).toContain('source:thread/archive')
+    expect(f.state.archived).toBe(true)
+    // Already off its account: nothing more is asked.
+    const asked = f.calls.length
+    expect(await setCodexChatArchived('0', 'chat-1', true, f.deps)).toEqual({ ok: true })
+    expect(f.calls.slice(asked)).not.toContain('source:thread/archive')
+    expect(await setCodexChatArchived('0', 'chat-1', false, f.deps)).toEqual({ ok: true })
+    expect(f.calls).toContain('source:thread/unarchive')
+    expect(f.state.archived).toBe(false)
+    // An open app does it itself: a disk archive under it is one it never sees.
+    f.state.appOpen = true
+    expect(await setCodexChatArchived('0', 'chat-1', true, f.deps)).toEqual({ ok: true })
+    expect(await setCodexChatArchived('0', 'chat-1', false, f.deps)).toEqual({ ok: true })
+    expect(f.calls.filter((c) => c.startsWith('source-app:'))).toEqual([
+      'source-app:archive',
+      'source-app:restore',
+    ])
+    expect(f.state.archived).toBe(false)
+  })
+  test('Unassigned refuses a chat with an unfinished turn, and an account whose app state is unknown', async () => {
+    const f = fixture()
+    appendFileSync(
+      f.thread.path,
+      `${JSON.stringify({ type: 'event_msg', payload: { type: 'task_started', thread_id: 'chat-1', turn_id: 'turn-2' } })}\n`,
+    )
+    expect((await setCodexChatArchived('0', 'chat-1', true, f.deps)).error).toContain(
+      'unfinished turn',
+    )
+    f.state.running = true
+    expect((await setCodexChatArchived('0', 'chat-1', true, f.deps)).error).toContain(
+      'Could not tell',
+    )
+    expect(f.calls).not.toContain('source:thread/archive')
+    expect(f.state.archived).toBe(false)
   })
   test('an unknown process state, changed login, or same home refuses before connecting', async () => {
     const f = fixture()

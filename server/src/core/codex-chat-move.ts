@@ -62,6 +62,8 @@ export interface CodexMoveRequest {
   updatedAt: number
   sourceAccountId: string | null
   targetAccountId: string | null
+  /** Duplicate to account (owner, 2026-10-13): copy and verify as a move does, and leave the original where it is. */
+  keepSource?: boolean
 }
 
 /** The displayed history compared before the source was archived. */
@@ -330,6 +332,33 @@ function moveKey(from: CodexInstance, request: CodexMoveRequest): string {
       ]),
     )
     .digest('hex')
+}
+
+/** A duplicate's receipt, apart from the chat's move: a finished copy must never read as a finished move (which would
+ *  answer a later move "done" with the original never archived), and each destination keeps its own. */
+function copyKey(from: CodexInstance, request: CodexMoveRequest, destination: string): string {
+  return createHash('sha256')
+    .update(
+      JSON.stringify([
+        normalizeInstancePath(realpathSync(from.codexHome)),
+        request.sourceAccountId,
+        request.threadId,
+        'copy',
+        destination,
+      ]),
+    )
+    .digest('hex')
+}
+
+/** A finished duplicate is not repeated by its receipt: asking again makes another copy. An unfinished one is kept, so
+ *  an interrupted copy resumes into the destination it planned. */
+function dropFinishedCopy(file: string, key: string): void {
+  const result = mutateJsonStore(receiptStore(file), (rows) => {
+    if (rows[key]?.phase !== 'done') return { result: null, changed: false }
+    delete rows[key]
+    return { result: null, changed: true }
+  })
+  if (!result.ok) throw new Error(describeStoreRefusal('Codex move history', file, result))
 }
 
 function destinationKey(to: CodexInstance, request: CodexMoveRequest): string {
@@ -908,8 +937,8 @@ async function archiveSourceThread(
   }
 }
 
-/** Import into the destination's own home, verify it, then archive the source. No turn is started,
- * credentials are never copied, and an archive failure resumes from the saved destination id. */
+/** Import into the destination's own home, verify it, then archive the source (a duplicate, `keepSource`, leaves it).
+ * No turn is started, credentials are never copied, and an archive failure resumes from the saved destination id. */
 export async function moveCodexChat(
   fromId: string,
   request: CodexMoveRequest,
@@ -925,9 +954,13 @@ export async function moveCodexChat(
     assertAccountsMatch(from, to, request)
     await assertSourceKnown(from, deps)
     source = await deps.connect(from.codexHome)
-    key = moveKey(from, request)
+    const copyOnly = request.keepSource === true
     const destination = destinationKey(to, request)
-    const already = alreadyMovedReceipt(deps.journalPath, key, destination, request.updatedAt)
+    key = copyOnly ? copyKey(from, request, destination) : moveKey(from, request)
+    if (copyOnly) dropFinishedCopy(deps.journalPath, key)
+    const already = copyOnly
+      ? null
+      : alreadyMovedReceipt(deps.journalPath, key, destination, request.updatedAt)
     if (already) {
       receipt = already
       if (!already.destinationThreadId)
@@ -992,12 +1025,21 @@ export async function moveCodexChat(
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'shown' })
     let stopped: string[] = []
-    if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
-      stopped = await archiveThroughApp(source, from, deps, thread, fingerprint, transcript.length)
-    else await archiveSourceThread(source, from, thread, fingerprint)
+    if (!copyOnly) {
+      if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
+        stopped = await archiveThroughApp(
+          source,
+          from,
+          deps,
+          thread,
+          fingerprint,
+          transcript.length,
+        )
+      else await archiveSourceThread(source, from, thread, fingerprint)
+    }
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
-    deps.onProgress({ step: 'archived' })
+    if (!copyOnly) deps.onProgress({ step: 'archived' })
     return {
       ok: true,
       destinationThreadId,
@@ -1021,5 +1063,64 @@ export async function moveCodexChat(
         /* keep the durable receipt */
       }
     }
+  }
+}
+
+/**
+ * Takes one chat off its Codex account without moving it, or (`archived` false) puts it back: Desk's Move to account >
+ * Unassigned, "not assigned to an account, but it's not archived" (owner, 2026-10-13). Codex has no account-less chat,
+ * so the chat is archived on its account while Desk holds it, and restored there before it moves on. An open app
+ * archives or restores it itself, since a disk archive under a running app is one it never sees; a closed one through
+ * app-server. A chat with an unfinished turn is refused: the archive would stop it. Already in the state asked: done.
+ */
+export async function setCodexChatArchived(
+  instanceId: string,
+  threadId: string,
+  archived: boolean,
+  overrides: Partial<MoveDependencies> = {},
+): Promise<{ ok: boolean; error?: string }> {
+  const deps = { ...defaults, ...overrides }
+  let rpc: CodexRpc | undefined
+  try {
+    const inst = deps.getInstance(instanceId)
+    if (!inst || inst.isExternal) throw new Error('Choose a managed Codex instance.')
+    const app = await deps.runState(inst)
+    if (app.state === 'unknown')
+      throw new Error('Could not tell whether its Codex desktop is open. Try again.')
+    const conn = await deps.connect(inst.codexHome)
+    rpc = conn
+    const active = async () => (await activeThreads(conn)).find((row) => row.id === threadId)
+    const listed = await active()
+    if (!!listed !== archived) return { ok: true }
+    if (
+      listed?.path &&
+      existsSync(listed.path) &&
+      hasUnfinishedTurn(readFileSync(listed.path, 'utf8'))
+    )
+      throw new Error(
+        'This chat has an unfinished turn. Stop or finish it in Codex before taking it off its account.',
+      )
+    if (app.state === 'running') await deps.setArchivedInApp(inst, threadId, archived)
+    else await conn.call(archived ? 'thread/archive' : 'thread/unarchive', { threadId })
+    // The app archives in the background (~0.6 s, measured 2026-10-13); app-server answers once it is done.
+    const deadline = Date.now() + 15_000
+    while (!!(await active()) === archived) {
+      if (Date.now() > deadline)
+        throw new Error(
+          `Its Codex ${app.state === 'running' ? 'app' : 'account'} did not confirm the chat was ${archived ? 'archived' : 'restored'}.`,
+        )
+      await Bun.sleep(250)
+    }
+    return { ok: true }
+  } catch (error) {
+    return {
+      ok: false,
+      error:
+        error instanceof Error
+          ? error.message
+          : `Could not ${archived ? 'archive' : 'restore'} the Codex chat.`,
+    }
+  } finally {
+    await rpc?.close()
   }
 }

@@ -920,8 +920,8 @@ const CLOSED_DESKTOP_TITLE = 'Its app is not running: the chat lands in its stor
  * Move to account ›: every desktop (or, for a Codex chat, Codex) account, those whose app runs first, then by number;
  * the one the session is on now is ticked and off. A closed desktop account's app is not started: the chat lands in
  * its store for when it starts. A Codex move opens the destination's app to show the chat there.
- * `accounts` null: AgentHydra's list is not read yet (or did not answer). `unassigned` (a Claude chat's): Unassigned
- * first, the holding area on no account, ticked and off while the chat is there; null leaves it out.
+ * `accounts` null: AgentHydra's list is not read yet (or did not answer). `unassigned`: Unassigned first, the holding
+ * area on no account, ticked and off while the chat is there; null leaves it out.
  */
 export function accountMenu(
   current: number | null,
@@ -947,14 +947,31 @@ export function accountMenu(
 
 /**
  * Duplicate to account ›: a second chat holding the whole conversation, landed on the account picked, the original left
- * where it is. Every desktop account, the one it is on now included (marked "current"): the copy is a chat of its own.
+ * where it is. Every account of the chat's kind, the one it is on (`current`) marked "current": a desktop copy is a chat
+ * of its own there; a Codex copy cannot go to the account its original is on (the mover copies between two homes), so
+ * that one is off.
  */
-export function duplicateMenu(current: number | null, accounts: readonly AccountChoice[] | null): { label: string; items: (RowMenuItem | 'separator')[] } {
+export function duplicateMenu(
+  current: number | null,
+  accounts: readonly AccountChoice[] | null,
+  kind: 'desktop' | 'codex' = 'desktop'
+): { label: string; items: (RowMenuItem | 'separator')[] } {
   if (!accounts?.length)
-    return { label: 'Duplicate to account', items: [{ action: 'duplicateToAccount', label: accounts ? 'No desktop accounts' : 'Reading accounts…', disabled: true }] }
+    return {
+      label: 'Duplicate to account',
+      items: [{ action: 'duplicateToAccount', label: accounts ? `No ${kind === 'codex' ? 'Codex' : 'desktop'} accounts` : 'Reading accounts…', disabled: true }]
+    }
+  const closedTitle = kind === 'codex' ? 'Its app is not running: the copy opens it to show the chat' : CLOSED_DESKTOP_TITLE
   const item = (a: AccountChoice): RowMenuItem => {
     const hint = [a.num === current ? 'current' : '', a.running ? '' : 'closed'].filter(Boolean).join(' · ')
-    return { action: 'duplicateToAccount', label: `#${a.num} ${a.name}`, value: a.ref, ...(hint ? { hint } : {}), ...(a.running ? {} : { title: CLOSED_DESKTOP_TITLE }) }
+    return {
+      action: 'duplicateToAccount',
+      label: `#${a.num} ${a.name}`,
+      value: a.ref,
+      ...(hint ? { hint } : {}),
+      ...(kind === 'codex' && a.num === current ? { disabled: true } : {}),
+      ...(a.running ? {} : { title: closedTitle })
+    }
   }
   return { label: 'Duplicate to account', items: accountItems(accounts, item) }
 }
@@ -995,10 +1012,14 @@ export function rowMenu(
   out.push({ action: 'note', label: row.note ? 'Edit note…' : 'Add note…', shortcut: 'N' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
   out.push('separator', { label: 'Move to group', items: moveTo })
-  // An Unassigned chat is on no account: none is ticked, and Unassigned is.
-  const onAccount = row.unassigned ? null : accountNum(row.account, accounts)
-  if (row.movable) out.push(accountMenu(onAccount, accounts, row.movable, row.movable === 'desktop' ? !!row.unassigned : null))
-  if (row.movable === 'desktop') out.push(duplicateMenu(onAccount, accounts))
+  // An Unassigned chat is on no account: none is ticked, and Unassigned is. A Codex one still has the account it left
+  // (archived there), which its copy cannot go to.
+  const home = accountNum(row.account, accounts)
+  const onAccount = row.unassigned ? null : home
+  if (row.movable) {
+    out.push(accountMenu(onAccount, accounts, row.movable, !!row.unassigned))
+    out.push(duplicateMenu(row.movable === 'codex' ? home : onAccount, accounts, row.movable))
+  }
   out.push('separator')
   out.push(
     row.archived

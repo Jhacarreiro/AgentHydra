@@ -35,7 +35,7 @@ import {
 } from '../core/cli-login-sync'
 import { logoutCliInstance } from '../core/cli-logout'
 import { redeemCodexResetCredit, resolveCodexAccount } from '../core/codex-account'
-import { moveCodexChat, planCodexChatMove } from '../core/codex-chat-move'
+import { moveCodexChat, planCodexChatMove, setCodexChatArchived } from '../core/codex-chat-move'
 import {
   createCodexInstance,
   deleteCodexInstance,
@@ -884,7 +884,8 @@ app.post('/api/codex-instances/:id/move-chat', async (c) => {
     typeof body.updatedAt !== 'number' ||
     !Number.isFinite(body.updatedAt) ||
     !(typeof body.sourceAccountId === 'string' || body.sourceAccountId === null) ||
-    !(typeof body.targetAccountId === 'string' || body.targetAccountId === null)
+    !(typeof body.targetAccountId === 'string' || body.targetAccountId === null) ||
+    !(body.keepSource === undefined || typeof body.keepSource === 'boolean')
   ) {
     return c.json({ error: 'A reviewed source chat and destination account are required.' }, 400)
   }
@@ -895,8 +896,16 @@ app.post('/api/codex-instances/:id/move-chat', async (c) => {
       updatedAt: body.updatedAt,
       sourceAccountId: body.sourceAccountId,
       targetAccountId: body.targetAccountId,
+      ...(body.keepSource ? { keepSource: true } : {}),
     }),
   )
+})
+// Archive one chat on its Codex account, or restore it there (`archived: false`): Desk's Unassigned holding area.
+app.post('/api/codex-instances/:id/archive-chat', async (c) => {
+  const body = await jsonBody(c)
+  if (typeof body.threadId !== 'string' || !body.threadId || typeof body.archived !== 'boolean')
+    return c.json({ ok: false, error: 'threadId and archived are required.' }, 400)
+  return c.json(await setCodexChatArchived(c.req.param('id'), body.threadId, body.archived))
 })
 // Identity, on demand. The LIST already carries a local identity for every row (auth.json is plain
 // JSON, so that read is nearly free), so this route exists for the LIVE refresh: it re-reads the

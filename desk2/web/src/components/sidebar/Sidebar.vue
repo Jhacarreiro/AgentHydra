@@ -17,7 +17,7 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { duplicateSession, moveCodexSession, moveSession, unassignSession } from '@/components/session-header/ah'
+import { duplicateSession, moveCodexSession, moveSession, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
 import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -671,8 +671,8 @@ function act(row: Row, item: RowMenuItem) {
   else if (item.action === 'copyId' && item.value) attempt('Copy', navigator.clipboard.writeText(item.value))
   else if (item.action === 'moveToAccount' && state.movable) void moveToAccount(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
   else if (item.action === 'note') openNote(row)
-  else if (item.action === 'unassign' && row.kind === 'external' && state.movable === 'desktop') void unassign(row.session, state)
-  else if (item.action === 'duplicateToAccount' && state.movable === 'desktop') void duplicate(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
+  else if (item.action === 'unassign' && row.kind === 'external' && state.movable) void unassign(row.session, state)
+  else if (item.action === 'duplicateToAccount' && state.movable) void duplicate(state.id, row.kind === 'chat' ? row.chat.title : row.session.title, item)
 }
 
 // Move to account: AgentHydra's migrate, as the session header's Migrate runs it (one move at a time, a move ends a
@@ -704,9 +704,10 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
   moving.value = true
   rowError.value = null
   noteRow(`Moving “${title}” to ${item.label}…`)
+  const before = src.external.value.find((s) => s.id === sessionId)
   try {
-    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; stoppedCommands?: string[] } = codex
-      ? await moveCodexSession(sessionId, item.value)
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; stoppedCommands?: string[]; restored?: boolean; destinationThreadId?: string } = codex
+      ? await moveCodexSession(sessionId, item.value, { unassigned: !!before?.unassigned })
       : await moveSession(sessionId, item.value)
     const stopped = x.stoppedCommands?.length
       ? ` Archiving the original stopped ${x.stoppedCommands.length === 1 ? 'a command' : `${x.stoppedCommands.length} commands`} it still ran: ${x.stoppedCommands.map((c) => (c.length > 60 ? `${c.slice(0, 60)}…` : c)).join('; ')}.`
@@ -716,11 +717,15 @@ async function moveToAccount(sessionId: string, title: string, item: RowMenuItem
       rowError.value = `Move failed: ${x.error ?? 'AgentHydra did not say why'}`
     } else {
       // Out of the holding area: it is on an account now.
-      if (src.external.value.some((s) => s.id === sessionId && s.unassigned)) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
+      if (before?.unassigned) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
+      // A Codex move makes a new chat (a new id): the note goes with it.
+      if (before?.note && x.destinationThreadId) await src.updateSessionMeta(x.destinationThreadId, { note: before.note }).catch(() => {})
       noteRow(
-        x.sourceStillShown?.length
-          ? `Moved to ${item.label}. An old account still lists it.`
-          : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`,
+        x.restored
+          ? `Back on ${item.label}.`
+          : x.sourceStillShown?.length
+            ? `Moved to ${item.label}. An old account still lists it.`
+            : `Moved to ${item.label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`,
         stopped ? 15000 : 8000
       )
     }
@@ -744,6 +749,11 @@ async function unassign(s: ExternalSession, state: RowState) {
     rowError.value = 'Another move is still running. Try again when it ends.'
     return
   }
+  // Archiving a Codex chat would stop its turn, so AgentHydra refuses it; this says so before any call.
+  if (codexBusy(s)) {
+    rowError.value = 'Unassign failed: it is still working in Codex. Let the turn finish first.'
+    return
+  }
   moving.value = true
   rowError.value = null
   noteRow(`Taking “${s.title}” off its account…`)
@@ -756,7 +766,7 @@ async function unassign(s: ExternalSession, state: RowState) {
   }
   try {
     await src.updateSessionMeta(s.id, { unassigned: true, archived: false })
-    const x = await unassignSession(s.id, ref)
+    const x = s.source === 'codex' ? await unassignCodexSession(s.id) : await unassignSession(s.id, ref)
     if (!x.ok) await failed(x.error)
     else noteRow(x.stillShown ? 'Unassigned. Its old account’s app shows it until that app restarts.' : 'Unassigned. It waits there until you move it to an account.', 8000)
   } catch (err) {
@@ -778,10 +788,26 @@ async function duplicate(sessionId: string, title: string, item: RowMenuItem) {
     rowError.value = 'Another move is still running. Try again when it ends.'
     return
   }
+  const codex = item.value.startsWith('codex:')
+  const s = src.external.value.find((r) => r.id === sessionId)
+  if (codex && s && codexBusy(s)) {
+    rowError.value = 'Duplicate failed: it is still working in Codex. Let the turn finish, then duplicate it.'
+    return
+  }
   moving.value = true
   rowError.value = null
   noteRow(`Duplicating “${title}” to ${item.label}…`)
   try {
+    if (codex) {
+      // AgentHydra's Codex move with the original kept: the copy is a new chat on that account, under the same name.
+      const x = await moveCodexSession(sessionId, item.value, { keepSource: true, unassigned: !!s?.unassigned })
+      if (x.ok) noteRow(`Duplicated to ${item.label}. It is in that Codex app now.`, 8000)
+      else {
+        noteRow(null)
+        rowError.value = `Duplicate failed: ${x.error ?? 'AgentHydra did not say why'}`
+      }
+      return
+    }
     const x = await duplicateSession(sessionId, item.value)
     if (x.ok) noteRow(`Duplicated to ${item.label} as “${x.title}”.`, 8000)
     else {

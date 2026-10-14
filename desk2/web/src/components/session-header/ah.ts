@@ -65,10 +65,19 @@ export const ah = {
   /** Every active chat of one Codex account, as the move to `targetId` would take it; moves nothing. */
   codexMovePlan: (fromId: string, targetId: string) =>
     call<AhCodexMovePlan>(`/codex-instances/${encodeURIComponent(fromId)}/move-chats?targetId=${encodeURIComponent(targetId)}`),
-  /** Copies one planned chat to the target account, checks it landed whole, then archives the original. */
-  moveCodexChat: (fromId: string, body: { targetId: string; threadId: string; updatedAt: number; sourceAccountId: string | null; targetAccountId: string | null }) =>
-    call<{ ok: boolean; error?: string }>(`/codex-instances/${encodeURIComponent(fromId)}/move-chat`, { method: 'POST', body: JSON.stringify(body) })
+  /** Copies one planned chat to the target account, checks it landed whole, then archives the original (`keepSource`: keeps it). */
+  moveCodexChat: (
+    fromId: string,
+    body: { targetId: string; threadId: string; updatedAt: number; sourceAccountId: string | null; targetAccountId: string | null; keepSource?: boolean }
+  ) =>
+    call<CodexLanding>(`/codex-instances/${encodeURIComponent(fromId)}/move-chat`, { method: 'POST', body: JSON.stringify(body) }),
+  /** Archives one chat on its Codex account, or restores it there (`archived` false): the Unassigned holding area. */
+  setCodexArchived: (instanceId: string, threadId: string, archived: boolean) =>
+    call<{ ok: boolean; error?: string }>(`/codex-instances/${encodeURIComponent(instanceId)}/archive-chat`, { method: 'POST', body: JSON.stringify({ threadId, archived }) })
 }
+
+/** A Codex move's answer: the copy's new id, and the background commands archiving the original stopped. */
+type CodexLanding = { ok: boolean; error?: string; destinationThreadId?: string; stoppedCommands?: string[] }
 
 type Landing = { ok: boolean; error?: string; sourceStillShown?: string[] }
 
@@ -125,23 +134,57 @@ export async function duplicateSession(sessionId: string, instanceRef: string): 
  * came back from a plan, with its updatedAt and both accounts, so the plan is read first, at the moment of the click:
  * a chat Codex does not list as active on its account is refused here rather than guessed at. Either account's Codex
  * app may be open: an open one archives the original itself (owner, 2026-10-13).
+ *
+ * `keepSource`: Duplicate to account, the same copy with the original kept. `unassigned`: the chat waits in Unassigned,
+ * archived on the account it left (the mover takes only active chats), so it is restored there first; moved back to that
+ * account it is only restored (`restored`). A duplicate leaves it Unassigned, and so does a move that did not finish:
+ * it is archived again, never left on its old account's list.
  */
 export async function moveCodexSession(
   sessionId: string,
-  instanceRef: string
-): Promise<{ ok: boolean; error?: string; stoppedCommands?: string[] }> {
+  instanceRef: string,
+  opts: { keepSource?: boolean; unassigned?: boolean } = {}
+): Promise<CodexLanding & { restored?: boolean }> {
   const targetId = instanceRef.replace(/^codex:/, '')
-  const from = (await ah.session(sessionId, 'codex')).instance_ref?.match(/^codex:(.+)$/)?.[1]
+  const from = await codexAccountOf(sessionId)
   if (!from) return { ok: false, error: 'AgentHydra does not know which Codex account this chat is on.' }
-  if (from === targetId) return { ok: false, error: 'It is already on that account.' }
-  const plan = await ah.codexMovePlan(from, targetId)
-  const chat = plan.chats.find((c) => c.id === sessionId)
-  if (!chat) return { ok: false, error: 'Codex does not list it as an active chat on its account.' }
-  return ah.moveCodexChat(from, {
-    targetId,
-    threadId: chat.id,
-    updatedAt: chat.updatedAt,
-    sourceAccountId: plan.sourceAccountId,
-    targetAccountId: plan.targetAccountId
-  })
+  if (from === targetId && opts.keepSource) return { ok: false, error: 'A copy goes to another Codex account.' }
+  if (from === targetId && !opts.unassigned) return { ok: false, error: 'It is already on that account.' }
+  if (opts.unassigned) {
+    const back = await ah.setCodexArchived(from, sessionId, false)
+    if (!back.ok) return { ok: false, error: `It could not be restored on its old account first: ${back.error ?? 'AgentHydra did not say why'}` }
+    if (from === targetId) return { ok: true, restored: true }
+  }
+  let x: CodexLanding
+  try {
+    const plan = await ah.codexMovePlan(from, targetId)
+    const chat = plan.chats.find((c) => c.id === sessionId)
+    x = chat
+      ? await ah.moveCodexChat(from, {
+          targetId,
+          threadId: chat.id,
+          updatedAt: chat.updatedAt,
+          sourceAccountId: plan.sourceAccountId,
+          targetAccountId: plan.targetAccountId,
+          ...(opts.keepSource ? { keepSource: true } : {})
+        })
+      : { ok: false, error: 'Codex does not list it as an active chat on its account.' }
+  } catch (err) {
+    x = { ok: false, error: err instanceof Error ? err.message : String(err) }
+  }
+  if (opts.unassigned && (opts.keepSource || !x.ok)) await ah.setCodexArchived(from, sessionId, true).catch(() => null)
+  return x
+}
+
+/** Move to account > Unassigned for a Codex chat: archived on its Codex account (through its app when open). */
+export async function unassignCodexSession(sessionId: string): Promise<{ ok: true; stillShown: false } | { ok: false; error: string }> {
+  const from = await codexAccountOf(sessionId)
+  if (!from) return { ok: false, error: 'AgentHydra does not know which Codex account this chat is on.' }
+  const x = await ah.setCodexArchived(from, sessionId, true)
+  return x.ok ? { ok: true, stillShown: false } : { ok: false, error: x.error ?? 'AgentHydra did not say why' }
+}
+
+/** The Codex account (instance id) a chat is on, by AgentHydra's row; an archived chat's too. */
+async function codexAccountOf(sessionId: string): Promise<string | null> {
+  return (await ah.session(sessionId, 'codex')).instance_ref?.match(/^codex:(.+)$/)?.[1] ?? null
 }

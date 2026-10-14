@@ -484,7 +484,7 @@ describe('row menu', () => {
     // a Codex session has no claude --resume and no fork
     const codex = rowMenu(externalRow(ext({ source: 'codex', cwd: null })))
     expect(show(codex)).toContain('Fork F (off)')
-    expect(show(codex)).not.toContain('Duplicate to account >')
+    expect(show(codex)).toContain('Duplicate to account >')
     expect(sub(codex, 'Open in')).toEqual(['File Explorer (off)', 'Copy resume command (off)', 'Copy session ID'])
   })
 
@@ -528,9 +528,14 @@ describe('row menu', () => {
     ]
     // AgentHydra's list names a Codex chat's account by the instance's own name, which `tag` matches
     const entries = rowMenu(externalRow(ext({ source: 'codex', instance: 'work' })), [], desktop, codex)
-    expect(sub(entries, 'Move to account')).toEqual(['#61 Example Owner * (off)', '-', '#196 spare'])
+    expect(sub(entries, 'Move to account')).toEqual(['Unassigned', '-', '#61 Example Owner * (off)', '-', '#196 spare'])
     expect((entries[0] as RowMenuItem).hint).toBe('#61 Example Owner')
-    expect(sub(rowMenu(externalRow(ext({ source: 'codex' })), [], desktop, []), 'Move to account')).toEqual(['No Codex accounts (off)'])
+    expect(sub(rowMenu(externalRow(ext({ source: 'codex' })), [], desktop, []), 'Move to account')).toEqual(['Unassigned', '-', 'No Codex accounts (off)'])
+    // A Codex copy goes to another Codex account: the one the chat is on is off, Unassigned or not.
+    expect(sub(entries, 'Duplicate to account')).toEqual(['#61 Example Owner (off)', '-', '#196 spare'])
+    const parked = rowMenu(externalRow(ext({ source: 'codex', instance: 'work', unassigned: true })), [], desktop, codex)
+    expect(sub(parked, 'Move to account')).toEqual(['Unassigned * (off)', '-', '#61 Example Owner', '-', '#196 spare'])
+    expect(sub(parked, 'Duplicate to account')).toEqual(['#61 Example Owner (off)', '-', '#196 spare'])
   })
 
   it('a desktop chat AgentHydra names by its account’s own name is on that account: ticked to move, current to duplicate', () => {

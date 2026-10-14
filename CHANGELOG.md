@@ -65,10 +65,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **Restart to update restarts AgentHydra itself too.** On a copy run from source, the update click fetched the new
   code and restarted the window, but AgentHydra kept running the old code until you restarted it by hand. It now
   restarts onto the update by itself, as it already did on its own schedule.
-- **Park a chat on no account.** Move to account on a Claude chat now starts with Unassigned: the chat leaves its account,
+- **Park a chat on no account.** Move to account now starts with Unassigned, on Claude and Codex chats: the chat leaves its account,
   is not archived, and waits in an Unassigned group at the bottom of the sidebar until you move it to an account.
-- **Duplicate a chat to any account.** Right-click a Claude chat, Duplicate to account, and pick one: a full copy of
-  the chat, titled "(copy)", lands there, and the original stays where it was.
+- **Duplicate a chat to any account.** Right-click a chat, Duplicate to account, and pick one: a full copy of the
+  chat lands there, and the original stays where it was. A Claude copy is titled "(copy)"; a Codex copy goes to
+  another Codex account.
 - **Add a note to any chat.** Right-click, Add note (or press N with the menu open). A small note mark shows beside the
   title, and pointing at the row shows the note.
 - **Right-click a Codex chat to move it to another Codex account.** Codex chats in the sidebar now have Move to account,
