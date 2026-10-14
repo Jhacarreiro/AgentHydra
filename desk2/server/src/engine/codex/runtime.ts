@@ -75,6 +75,8 @@ export class CodexRuntime extends ServiceRuntime {
   /** The thread loaded on `server`. */
   private thread: ServiceThread | null = null
   private turnId: string | null = null
+  /** The turn's thread still loading (its app-server opening, its resume or start in flight), which a close waits for. */
+  private starting: Promise<boolean> | null = null
   /** Accounts the message in flight hit a limit on; cleared when a turn ends. */
   private readonly avoid = new Set<string>()
   private readonly streams = new Map<string, Streamed>()
@@ -150,6 +152,10 @@ export class CodexRuntime extends ServiceRuntime {
     this.turnId = null
     this.expireAsks()
     this.unqueueAll()
+    // Closed while the thread still loads, the app-server and thread it lands on would be held by no one (2026-10-14:
+    // a chat deleted as its app-server started kept that thread's writer for good), so they are let go once it lands.
+    // Only then is there a wait: a close with nothing loading says closed at once, before what the chat runs next.
+    if (this.starting) await this.starting.catch(() => {})
     this.detach()
     this.dispatch({ type: 'closed' })
     this.publish()
@@ -172,7 +178,11 @@ export class CodexRuntime extends ServiceRuntime {
     this.dispatch({ type: 'activity', activity: 'Starting Codex' })
     this.publish()
     try {
-      const fresh = await this.ensureThread()
+      const starting = this.ensureThread()
+      this.starting = starting
+      const fresh = await starting.finally(() => {
+        if (this.starting === starting) this.starting = null
+      })
       if (this.current !== sent) return
       const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
       this.movedFrom = null

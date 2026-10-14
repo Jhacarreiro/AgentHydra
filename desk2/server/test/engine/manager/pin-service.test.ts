@@ -43,12 +43,16 @@ const ALPHA: AhCodexInstance = { id: 'cx-alpha', num: 7, name: 'alpha', codexHom
 const BETA: AhCodexInstance = { id: 'cx-beta', num: 8, name: 'beta', codexHome: 'C:/Users/me/.agenthydra/codex-instances/cx-beta', loggedIn: true }
 
 /** App-servers the test drives: each records its calls and holds the thread listeners Desk registers. */
-function fakeCodex(o: { resumeError?: string } = {}) {
+function fakeCodex(o: { resumeError?: string; up?: Promise<void> } = {}) {
   const servers: { home: string; calls: { method: string; params: Record<string, unknown> }[]; listeners: Map<string, ThreadListener>; released: boolean }[] = []
   let threads = 0
   let turns = 0
+  let opening = 0
   const open: OpenAppServer = async (home) => {
-    const s = { home, calls: [] as { method: string; params: Record<string, unknown> }[], listeners: new Map<string, ThreadListener>(), released: false }
+    opening++
+    // An app-server still starting answers once `up` settles.
+    await o.up
+    const s ={ home, calls: [] as { method: string; params: Record<string, unknown> }[], listeners: new Map<string, ThreadListener>(), released: false }
     servers.push(s)
     return {
       call: async <T>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
@@ -72,10 +76,10 @@ function fakeCodex(o: { resumeError?: string } = {}) {
   const turnStarts = () => servers.flatMap((s) => s.calls.filter((c) => c.method === 'turn/start').map((c) => ({ home: s.home, ...c.params }) as { home: string; threadId: string; input: { text?: string }[] }))
   const thread = (id: string): ThreadListener => servers.findLast((s) => s.listeners.has(id))!.listeners.get(id)!
   const calls = (method: string): Record<string, unknown>[] => servers.flatMap((s) => s.calls.filter((c) => c.method === method).map((c) => ({ home: s.home, ...c.params })))
-  return { open, turnStarts, thread, calls, held }
+  return { open, turnStarts, thread, calls, held, opening: () => opening }
 }
 
-async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats } = {}) {
+async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string; free?: FreeChats; up?: Promise<void> } = {}) {
   const home = temp('desk-pin-home-')
   const cwd = temp('desk-pin-cwd-')
   mkdirSync(cwd, { recursive: true })
@@ -85,7 +89,7 @@ async function setup(o: { external?: ExternalSession[]; items?: Record<string, T
     instances: async () => [ALPHA, BETA],
     usage: async (id) => ({ snapshot: { session: { pct: id === ALPHA.id ? 10 : 40 }, weekAll: { pct: 5 } } }),
   }
-  const fake = fakeCodex({ resumeError: o.resumeError })
+  const fake = fakeCodex({ resumeError: o.resumeError, up: o.up })
   const q = fakeQueries()
   const events: ServerEvent[] = []
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [], external: o.external, items: o.items }).bridge, listAccounts: async () => [account] }
@@ -487,4 +491,17 @@ test('a ChatGPT chat deleted mid-message stops that message and sends nothing it
   await m.delete(chat.id)
   expect(f.asked.map((a) => a.prompt)).toEqual(['First'])
   expect(f.cancelled).toEqual([String(f.asked[0]!.requestId)])
+})
+
+test('a Codex chat deleted while its app-server is still starting lets that app-server go once it is up, and starts no turn', async () => {
+  let up = () => {}
+  const { m, fake, chat } = await setup({ up: new Promise<void>((r) => (up = r)) })
+  await m.patch(chat.id, { service: 'codex' })
+  await m.send(chat.id, 'Show me the status')
+  await waitFor(() => fake.opening() === 1)
+  const gone = m.delete(chat.id)
+  up()
+  await gone
+  expect(fake.held()).toEqual([])
+  expect(fake.turnStarts()).toEqual([])
 })
