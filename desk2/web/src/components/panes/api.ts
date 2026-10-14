@@ -43,10 +43,6 @@ export interface PaneApi {
   externalOlderPage?(sessionId: string, before: number, limit: number, end?: number, cwd?: string | null): Promise<{ items: TranscriptItem[]; above: number }>
   /** An outside session's index (every message sent, the to-do list, tasks, the total). */
   externalIndex?(sessionId: string, cwd?: string | null): Promise<TranscriptIndex>
-  /** One item of an outside session, by id (the peek of a message not loaded). */
-  externalItem?(sessionId: string, itemId: string, cwd?: string | null): Promise<TranscriptItem | null>
-  /** One item of a Desk chat, by id. */
-  chatItem?(chatId: string, itemId: string): Promise<TranscriptItem | null>
   /** GET /api/diagnostics/<name>?<params>: every Diagnostics section reads its data through this; with `body`, a
    *  POST of it (the orchestrator's Arm). */
   diagnostics<T>(name: string, params?: Record<string, string | number | undefined>, body?: unknown): Promise<T>
@@ -125,9 +121,6 @@ export const httpPaneApi: PaneApi = {
     return { items, above }
   },
   externalIndex: (sessionId, cwd) => json(`/external/sessions/${encodeURIComponent(sessionId)}/index${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
-  externalItem: (sessionId, itemId, cwd) =>
-    json(`/external/sessions/${encodeURIComponent(sessionId)}/items/${encodeURIComponent(itemId)}${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`),
-  chatItem: (chatId, itemId) => json(`/chats/${encodeURIComponent(chatId)}/items/${encodeURIComponent(itemId)}`),
   diagnostics: (name, params = {}, body) => {
     const q = new URLSearchParams()
     for (const [k, v] of Object.entries(params)) if (v !== undefined) q.set(k, String(v))

@@ -1,10 +1,9 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect, type Ref } from 'vue'
-import type { ChatSummary, TranscriptIndex } from '@shared/protocol'
+import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
-import { usePaneApi } from '@/components/panes/api'
 import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
 import { OPEN_BROWSER_EVENT, type BrowserOpenRequest } from '@shared/browser'
@@ -81,7 +80,6 @@ type LazyMembers = {
   hasOlder?(id: string): boolean
 }
 const src = useShellSource() as ReturnType<typeof useShellSource> & LazyMembers
-const paneApi = usePaneApi()
 // A reload (a right-click Refresh, a new build) comes back to the same screen: the store keeps Desk's view,
 // and the rest is kept here (lib/view-memory.ts): the view under Settings, the AgentHydra pane, the Settings
 // page. The demo window starts from its props.
@@ -150,7 +148,11 @@ const olderCount = computed(() => {
   if (olderStalledAt.value?.id === id && olderStalledAt.value.n === items.value.length) return 0
   return Math.max(0, (src.indexByChat?.value.get(id)?.total ?? 0) - items.value.length)
 })
-const fetchChatItem = async (id: string) => (chat.value ? ((await paneApi.chatItem?.(chat.value.id, id)) ?? null) : null)
+const fetchChatItem = async (id: string): Promise<TranscriptItem | null> => {
+  if (!chat.value) return null
+  const res = await fetch(`/api/chats/${encodeURIComponent(chat.value.id)}/items/${encodeURIComponent(id)}`)
+  return res.ok ? ((await res.json()) as TranscriptItem) : null
+}
 async function loadOlder() {
   const id = chat.value?.id
   if (!id || loadingOlder.value || !src.loadOlder) return

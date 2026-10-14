@@ -202,7 +202,11 @@ async function loadOlderPage() {
   }
 }
 
-const fetchItem = async (id: string) => (await api.externalItem?.(props.sessionId, id, session.value?.cwd)) ?? null
+const fetchItem = async (id: string): Promise<TranscriptItem | null> => {
+  const cwd = session.value?.cwd
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/items/${encodeURIComponent(id)}${cwd ? `?cwd=${encodeURIComponent(cwd)}` : ''}`)
+  return res.ok ? ((await res.json()) as TranscriptItem) : null
+}
 
 let indexAsked = false
 async function loadIndex() {
