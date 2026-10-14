@@ -529,7 +529,8 @@ export function sourceLabel(source: ExternalSession['source']): string {
  * The status dot. The real language: idle is a hollow ring, running a solid blinking dot. Yellow is
  * for what needs the owner: a question or permission (pulsing). A finished turn not looked at yet is
  * green (solid; the real app uses blue there). Error is red, a usage limit a pink hollow ring (it waits
- * for the reset, not for you). Running sub-tasks look like running (THREADS_RUNNING), never like done.
+ * for the reset, not for you). A chat that replied while its workers still run is solid orange (THREADS_RUNNING),
+ * never green: green is done with nothing left running.
  * Blue is HSwarm's alone: only a row that stands for a running HSwarm job has it (`swarm`, SWARM_RUNNING).
  */
 export interface StatusGlyph {
@@ -587,10 +588,12 @@ export function statusGlyph(chat: Pick<ChatSummary, 'status' | 'unread'> & { wai
 /**
  * The dot of a row whose sub-tasks run while the row itself does not: its CliMayte tasks, its HSwarm jobs, its own
  * background tasks less the long-lived ones (a dev server never ends, so it does not count), its nested rows that run.
- * It looks as a running row does, the strobing outline (owner, 2026-10-10: "some of them have sub-tasks running, but
- * have no icon"; "never look done while its workers run", the rule Jacob's desk kept).
+ * Solid orange, read or not: the chat the owner talks to has finished its reply and only its workers run (owner,
+ * 2026-10-14: "when my point of contact is done speaking, it changes to orange if there is still drones or
+ * sub-personalities managed by my point of contact"; green only when nothing is left running). A question keeps the
+ * pulsing orange, so the two differ by motion. It never looks idle or done while its workers run (owner, 2026-10-10).
  */
-export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' }
+export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' }
 
 /**
  * A row's dot with its running sub-tasks counted (Sidebar.vue's runningThreads): a row whose own dot is not running,
@@ -603,8 +606,8 @@ export function withThreads(glyph: StatusGlyph, running: number): StatusGlyph {
 }
 
 /**
- * A chat that is not running. Its background work still running keeps it running, read or not: its CliMayte workers,
- * and its own background tasks less the long-lived ones. Done and not looked at is green.
+ * A chat that is not running. Its background work still running makes it orange, read or not: its CliMayte workers,
+ * and its own background tasks less the long-lived ones. Done with nothing running and not looked at is green.
  */
 function settledGlyph(chat: Pick<ChatSummary, 'unread'> & { climayteActive?: number; backgroundActive?: number }, idle: string): StatusGlyph {
   const background = (chat.climayteActive ?? 0) + (chat.backgroundActive ?? 0) > 0

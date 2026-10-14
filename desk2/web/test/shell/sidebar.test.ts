@@ -319,15 +319,18 @@ describe('status glyph language', () => {
     expect(statusGlyph({ status: 'needs_you', unread: true })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'pulse' })
   })
 
-  it('a replied chat whose background tasks still run has the running look, read or not, never the calm ring', () => {
+  it('a replied chat whose background tasks still run is solid orange, read or not, never green or the calm ring', () => {
+    // Owner, 2026-10-14: done speaking with workers still running is orange; green is done with nothing running.
     for (const status of ['idle', 'stopped', 'closed'] as const)
-      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
-    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'muted', label: 'Sub-tasks running' })
+      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' })
+    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'warning', motion: 'none', label: 'Replied, workers still running' })
+    // A question pulses; the replied-with-workers dot does not, so the two oranges differ.
+    expect(statusGlyph({ status: 'needs_you', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'warning', motion: 'pulse' })
   })
 
   it("a replied chat whose own background commands still run has the running look, with no CliMayte worker", () => {
     // The NexusCode chat, 2026-10-04: read, deploy still building, a gray ring; it must never look done while it runs.
-    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink' })
+    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none' })
   })
 
   it('once read, a finished chat is the calm idle ring again', () => {
@@ -352,18 +355,19 @@ describe('status glyph language', () => {
       expect(dimText(g, false)).toBe('')
   })
 
-  it('an idle row whose sub-tasks run has the running look and is not dimmed; a row with none keeps its ring', () => {
+  it('an idle row whose sub-tasks run is solid orange and is not dimmed; a row with none keeps its ring', () => {
     // The sub-tasks are CliMayte tasks, HSwarm jobs or nested rows; Sidebar.vue counts them and passes the count here.
     const idle = statusGlyph({ status: 'idle', unread: false })
     expect(withThreads(idle, 0)).toBe(idle)
-    expect(withThreads(idle, 2)).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
+    expect(withThreads(idle, 2)).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' })
     expect(dimText(withThreads(idle, 1), false)).toBe('')
   })
 
-  it('sub-tasks never take a question its yellow or an error its red; a green unread row with sub-tasks runs', () => {
+  it('sub-tasks never take a question its pulse or an error its red; a green unread row with sub-tasks turns orange', () => {
     expect(withThreads(statusGlyph({ status: 'needs_you', unread: false }), 2)).toMatchObject({ tone: 'warning', motion: 'pulse' })
     expect(withThreads(statusGlyph({ status: 'error', unread: false }), 2)).toMatchObject({ tone: 'danger' })
-    expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ label: 'Sub-tasks running' })
+    expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ tone: 'warning', motion: 'none', label: 'Replied, workers still running' })
+    expect(withThreads(statusGlyph({ status: 'working', unread: false }), 1)).toMatchObject({ tone: 'muted', motion: 'blink' })
   })
 
   it('a usage limit is its own pink ring, unread or not; error stays red', () => {
@@ -373,7 +377,7 @@ describe('status glyph language', () => {
 
   it('draws each glyph with its own token', () => {
     expect(glyphDotClass(statusGlyph({ status: 'idle', unread: true }))).toBe('bg-[var(--status-done)]')
-    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-working)] run-pulse')
+    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-needs-you)]')
     expect(glyphDotClass(statusGlyph({ status: 'needs_you', unread: true }))).toBe('bg-[var(--status-needs-you)] animate-dot-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'working', unread: false }))).toBe('bg-[var(--status-working)] run-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'limited', unread: true }))).toBe('border-[1.5px] border-[var(--status-limited)]')
