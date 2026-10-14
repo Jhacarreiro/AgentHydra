@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The window can sit behind a sign-in proxy.** List the proxy's address in `HYDRA_DESK_PUBLIC_ORIGINS` and the
+  window answers there too, so you can reach it from your phone through Cloudflare Access or a similar sign-in. Other
+  sites and names are still refused.
 - **A routine that fails or breaks now tells you.** When a scheduled routine's run fails or times out, or its file
   stops checking out, AgentHydra opens an incident and pings you the way other incidents do. The next good run, or the
   fixed file, clears it.
