@@ -125,7 +125,6 @@ export const MANAGER_TOOLS: HydraTool[] = [
   {
     name: 'manager_open',
     callerChat: 'deskChat',
-    listed: true,
     description:
       "MUTATES: opens a sub-manager chat for a manager (a Manager Hydra manager, named by its slug) under THIS Hydra Desk chat, which the sidebar nests directly below it, and sends it the first prompt. The chat runs with that manager's persona. Its title is '<Name> · <title>' (the manager's name, then the topic); cwd defaults to this chat's folder. Answers the new chat's id and title; then use manager_ask or manager_read to follow it. Refused outside a Desk chat, or for a slug with no persona.json.",
     inputSchema: S(
@@ -171,7 +170,6 @@ export const MANAGER_TOOLS: HydraTool[] = [
   },
   {
     name: 'manager_ask',
-    listed: true,
     description:
       'MUTATES: sends a message to a sub-manager chat (a Hydra Desk chat, named by its Desk id, session id or title fragment) and waits up to wait_seconds (at most 35) for its turn to end. Answers {status: "done", reply} with the chat\'s final reply text, or {status: "working"} when it is still going: call manager_read later for the reply.',
     inputSchema: S(
@@ -200,7 +198,6 @@ export const MANAGER_TOOLS: HydraTool[] = [
   },
   {
     name: 'manager_read',
-    listed: true,
     description:
       'Reads a sub-manager chat (a Hydra Desk chat, named by its Desk id, session id or title fragment) without sending anything: waits up to wait_seconds (at most 35) for its turn to end, then answers {status: "done", reply} with its latest reply text, or {status: "working"} while it is still going. Read-only.',
     inputSchema: S(

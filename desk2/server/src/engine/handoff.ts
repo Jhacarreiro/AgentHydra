@@ -146,7 +146,7 @@ function historySection(h: HandoffInput): string {
     '## Where the full history is',
     `Hydra Desk chat "${h.title}" (id ${h.chatId}), folder ${h.cwd}. If you need a detail left out here:`,
     `- the agenthydra MCP's hydra_run { tool: "desk_transcript", args: { chat: "${h.chatId}" } } (the whole chat as Desk keeps it, oldest first; \`last\` keeps the newest N)`,
-    ...(current ? [`- the agenthydra MCP's history_search / history_read tools with session_id ${current}${older.length ? ` (earlier sessions of this chat: ${older.join(', ')})` : ''}`] : []),
+    ...(current ? [`- the agenthydra MCP's history_search tool, then hydra_run { tool: "history_read" } for a hit, with session_id ${current}${older.length ? ` (earlier sessions of this chat: ${older.join(', ')})` : ''}`] : []),
   ].join('\n')
 }
 

@@ -2458,7 +2458,7 @@ Check your own quota before heavy work, without being asked: check_my_usage {} t
 
 Always name the account when you quote a percentage. A number a person gives you for an instance overrules the detection. list_usage {} shows every account. Tools that change state say MUTATES: in their description.
 
-Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained tasks on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens visible chats on other accounts; fan_out_status reads them and fan_out_send steers them. Delete a probe chat you create afterwards with fan_out_delete {group}. move_chat moves a chat to another account. add_queue_item and launch_terminal_session refuse every call.
+Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained tasks on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens visible chats on other accounts; fan_out_status reads them and fan_out_send steers them. Delete a probe chat you create afterwards with hydra_run { tool: 'fan_out_delete', args: { group } }. move_chat moves a chat to another account. add_queue_item and launch_terminal_session refuse every call.
 
 Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.`
 

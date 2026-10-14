@@ -682,7 +682,6 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
   },
   {
     name: 'fan_out_delete',
-    listed: true,
     description:
       "MUTATES: DELETE every chat of a fan_out group from the account it lives in — the cleanup a probe or drill fan-out owes (owner rule, 2026-09-04: \"all ping requests or account identification requests must be deleted after they are created and not left in the account\"). Per member, delete_chat.py: an IDLE engine is stopped first (a working or stuck one refuses and that member is reported), an undo copy of the meta record(s) and transcript is taken into orchestrator/state/trash/<sessionId>/, then the running app's OWN Delete control is driven (row menu Delete + the app's confirm button, both by label), then the record and the transcript are removed everywhere, and the result is VERIFIED (dossier empty, transcript gone) — anything left is named, never claimed. A HELD chat is skipped; `force` is a PERSON's word past a hold. `orchestrator_run delete_chat --undo <sessionId>` restores one from its undo copy.",
     inputSchema: S(

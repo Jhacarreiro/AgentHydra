@@ -731,10 +731,10 @@ describe('fan_out_delete - the cleanup a probe fan-out owes', () => {
 
   test('fan_out itself and the standing instructions both say a probe must be deleted', () => {
     expect(tool('fan_out').description).toContain('fan_out_delete')
+    // Unlisted since 2026-10-14 (the listed set's cap), so the instruction names the call that reaches it.
     expect(SERVER_INSTRUCTIONS).toContain(
-      'Delete a probe chat you create afterwards with fan_out_delete',
+      "Delete a probe chat you create afterwards with hydra_run { tool: 'fan_out_delete', args: { group } }",
     )
-    expect(SERVER_INSTRUCTIONS).toContain('fan_out_delete {group}')
   })
 })
 
