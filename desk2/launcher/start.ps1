@@ -195,7 +195,8 @@ function Start-Server {
     $wrapperPid = $wrapper.Id
   }
 
-  # The wrapper's pid at once, so a second launch waits for this server instead of starting another;
+  # The wrapper's pid at once, so a second launch waits for this server instead of starting another, and the server
+  # counts itself launcher-started (restartable) from its first answer, its parent being this wrapper (60-update.ts);
   # bun's own is added by Save-ServerPid once the window is up, off the path to it.
   $info = [ordered]@{
     wrapperPid = $wrapperPid
