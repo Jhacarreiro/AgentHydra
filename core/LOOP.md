@@ -3,13 +3,13 @@
 ## Status
 
 <!-- rewritten by frontier.py on every `next`; hand notes go in the Log -->
-<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null], ["codex-held-elsewhere", null], ["codex-held-elsewhere", null], ["claude-to-codex-mid-turn", null]], "iteration": 6, "last": {"at": "2026-10-14T08:01Z", "frontier": {"detail": {"last": "Unknown", "pin": 200, "queued": true, "status": "idle", "wasBusy": true}, "failed": null, "failures": [], "mode": "FIX", "name": "claude-to-codex-mid-turn", "passed": null}, "green": 21, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
+<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null], ["codex-held-elsewhere", null], ["codex-held-elsewhere", null], ["claude-to-codex-mid-turn", null], null, null], "iteration": 8, "last": {"at": "2026-10-14T08:15Z", "frontier": null, "green": 23, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
 - goal: A fresh AgentHydra core (accounts + a message -> the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it
 - probe: `C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run "bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts"`
-- updated: 2026-10-14T08:01Z
-- frontier: `claude-to-codex-mid-turn` FIX
-- stages green: 21/23
-- iterations: 6
+- updated: 2026-10-14T08:15Z
+- frontier: none: every stage green (done)
+- stages green: 23/23
+- iterations: 8
 - stalled: no
 
 ## Log
@@ -36,4 +36,7 @@
 - 2026-10-14T07:49Z probe: frontier `codex-held-elsewhere` FIX [20/23 green]
 - 2026-10-14T08:01Z probe: frontier `claude-to-codex-mid-turn` FIX [21/23 green]
 - 2026-10-14T08:02Z verify: Round 6 (65497d03): 21/23. codex-held-elsewhere passes (its throttled second send waited on its own thread). Left: claude-to-codex-mid-turn and handoff-roundtrip, both answered 'Unknown' on Codex: the throttle move rebuilt the catch-up from this turn's start only, nothing was said yet, so the catch-up from Claude was dropped.
-- 2026-10-14T08:02Z fix: A turn moved to another login's new thread is caught up on the whole chat (handoff from 0), its own partial words included.
+- 2026-10-14T08:04Z probe: all 23 stages green - done
+- 2026-10-14T08:15Z probe: all 23 stages green - done
+- 2026-10-14T08:16Z verify: Round 7 (b5d1b1d4): 23/23 green. Round 8, a confirmation on the same code: 23/23 again, while two Codex logins still answered 429s (the core waited them out: 8 throttle lines, no failed stage). Desk lists 0 probe rows and 0 probe chats after both. CI: the desk2 job passes on 65497d03; the root job is red on main since before these commits, on server/tests/mcp-tools-shape.test.ts (37 listed MCP tools against a cap of 32, from 80e2d373 and 336f1b51, other sessions' work) and a CI-only race in mcp-stale-pointer.test.ts; flagged as its own task.
+- 2026-10-14T08:16Z note: Switch-over (the Desk window onto the core, the old engine retired) is the owner's call: the CreAitor was 0% sure for him. Size: core/src is 2,458 lines against CliMayte 20,322 + HSwarm 41,903 + Desk engine 12,226 = 74,451 (3.3%).
