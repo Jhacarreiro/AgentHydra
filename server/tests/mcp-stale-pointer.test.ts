@@ -21,6 +21,7 @@ import {
   useOwnDaemon,
   withDaemonWarning,
 } from '../src/mcp'
+import { setCallerTranscriptResolver } from '../src/mcp-self'
 
 const DEFAULT_BASE = `http://127.0.0.1:${PORT}`
 const DEAD = 'http://127.0.0.1:1'
@@ -181,7 +182,18 @@ describe('the daemon serving the MCP is the daemon its tools read', () => {
     process.env.AGENTHYDRA_URL = STRAY
     useOwnDaemon(OWN)
     stubFetch({ [OWN]: { body: [] }, [STRAY]: { body: [] } })
-    await tool('climayte_status').run({ group: 'odin-w14' })
+    // The calling chat, named here: traced from the process tree, it is found only under a Claude parent, which CI has not.
+    setCallerTranscriptResolver(async () => ({
+      sessionId: 'sess-own',
+      path: 'C:/Users/me/t.jsonl',
+      home: 'C:/Users/me/.claude',
+      how: 'test caller',
+    }))
+    try {
+      await tool('climayte_status').run({ group: 'odin-w14' })
+    } finally {
+      setCallerTranscriptResolver(null)
+    }
     // Every climayte_status first asks its daemon which chats have unread pings (docs/CLIMAYTE.md
     // "Pings to the dispatching chat"), then marks what it showed as seen; both go to the same
     // daemon as the status read.

@@ -385,6 +385,8 @@ export function buildTrack(
         chatSessions.set(chat, set)
       }
   }
+  // In the order the turns happened, not the order the folders list in (Linux and Windows list them differently).
+  rows.sort((x, y) => x.at.localeCompare(y.at))
   const handoffs = handoffsOf(
     dir,
     chatSessions,
