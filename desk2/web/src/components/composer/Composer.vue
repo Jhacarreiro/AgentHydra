@@ -61,8 +61,11 @@ import { holdFocus } from '@/lib/hold-focus'
 import { warmChat } from '@/lib/timing'
 import { isExternalChatId } from '@/components/external/logic'
 import { draftImages, draftImagesReady, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from './draft-images'
-import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON, TOOL_VALUE } from './menu'
+import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON } from './menu'
 import SendSplit from './SendSplit.vue'
+import SusSwitch from './SusSwitch.vue'
+import { susStatus } from './sus'
+import type { SusLevel } from '@shared/protocol'
 import QueueTray from './QueueTray.vue'
 import QueueChip from './QueueChip.vue'
 import { aheadInLine, queuedForChat, sendOrEnqueue, sendWords, type QueuedMessage } from './queue'
@@ -76,7 +79,7 @@ import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
-import { Info } from '@lucide/vue'
+import { EllipsisVertical, Info } from '@lucide/vue'
 import { ANNOTATED_EVENT, openViewerAt, tileKey, viewerKindOf, type Annotated, type ViewerPicture } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
@@ -249,6 +252,7 @@ const newAccount = ref('auto')
 const newModel = ref<string | null>(null)
 const newEffort = ref<Effort | null>(null)
 const newMode = ref<PermissionMode>('bypassPermissions')
+const newSus = ref<SusLevel>('fine')
 
 function resetNewSession() {
   const s = desk.settings.value
@@ -258,16 +262,18 @@ function resetNewSession() {
   newModel.value = s?.defaultModel ?? null
   newEffort.value = s?.defaultEffort ?? null
   newMode.value = s?.defaultPermissionMode ?? 'bypassPermissions'
+  newSus.value = 'fine'
 }
 
 const model = computed(() => (props.chat ? props.chat.model : newModel.value))
 const cwd = computed(() => props.chat?.cwd ?? newCwd.value)
 
-async function patch(p: { model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode }) {
+async function patch(p: { model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode; sus?: SusLevel }) {
   if (!props.chat) {
     if ('model' in p) newModel.value = p.model ?? null
     if ('effort' in p) newEffort.value = p.effort ?? null
     if (p.permissionMode) newMode.value = p.permissionMode
+    if (p.sus) newSus.value = p.sus
     return
   }
   try {
@@ -283,6 +289,17 @@ const modelSplit = computed(() => splitModels(models.value))
 const modelText = computed(() => modelTriggerLabel(model.value, models.value))
 // A chat pinned to Codex or ChatGPT runs its turns there: its word stands in for the Claude model, which does not apply.
 const pinnedWord = computed(() => (props.chat?.service ? SERVICE_WORDS[props.chat.service] : null))
+const SUS_CHIP = 'shrink-0 whitespace-nowrap rounded-[var(--radius-5)] px-1.5 text-ui-sm leading-[18px]'
+const SUS_TONE = {
+  muted: 'text-(--text-muted)',
+  sus: 'bg-(--warning-bg) text-(--warning-text)',
+  bad: 'bg-(--danger-bg) text-(--danger-text)',
+}
+const susLevel = computed<SusLevel>(() => (props.chat ? (props.chat.sus ?? 'fine') : newSus.value))
+const susChip = computed(() => susStatus(susLevel.value, modelText.value, props.chat?.susPick, models.value, pinnedWord.value))
+function pickSus(level: SusLevel) {
+  if (level !== susLevel.value) void patch({ sus: level })
+}
 function pickModel(value: string | null) {
   patch({ model: value })
   openMenu.value = null
@@ -1004,7 +1021,8 @@ async function createNewChat(body: string, refs: ImageRef[], enqueue: boolean, s
     accountId: newAccount.value,
     model: newModel.value,
     effort: newEffort.value,
-    permissionMode: newMode.value
+    permissionMode: newMode.value,
+    sus: newSus.value
   }
   if (enqueue) {
     // The server starts it when an account has room; the screen stays for the next one.
@@ -1452,9 +1470,17 @@ onBeforeUnmount(() => {
         <div class="flex-1" />
 
         <div class="flex items-center gap-1">
+          <SusSwitch :level="susLevel" @pick="pickSus" />
+          <Tip v-if="susChip.tip" :label="susChip.tip" side="top">
+            <span :class="[SUS_CHIP, SUS_TONE[susChip.tone]]">{{ susChip.text }}</span>
+          </Tip>
+          <span v-else :class="[SUS_CHIP, SUS_TONE[susChip.tone]]">{{ susChip.text }}</span>
+
           <DropdownMenu v-if="!pinnedWord" v-bind="menuModel('model')" :modal="!nonModal">
             <DropdownMenuTrigger as-child>
-              <button type="button" :class="TOOL_VALUE" :aria-label="`Model: ${modelText}`">{{ modelText }}</button>
+              <button type="button" :class="TOOL_ICON" :aria-label="`Model: ${modelText}`" title="More model options">
+                <EllipsisVertical class="size-3.5" />
+              </button>
             </DropdownMenuTrigger>
             <DropdownMenuContent
               side="top"
@@ -1499,7 +1525,6 @@ onBeforeUnmount(() => {
               </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
-          <span v-else :class="TOOL_VALUE" :aria-label="`Model: ${pinnedWord}`">{{ pinnedWord }}</span>
 
           <ContextRing :pct="chat?.contextPct ?? null" />
         </div>
