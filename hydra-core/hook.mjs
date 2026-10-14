@@ -133,8 +133,11 @@ async function injectPrompt(input, env, dir) {
   }
 }
 
+// A resumed session still holds every pack it was sent (a chat that resumes for each message would otherwise get
+// the full pack every time); a session that never got one gets its first pack with its next message. Only a
+// compaction drops what was sent, so only a compaction resends it.
 async function injectSession(input, env, dir) {
-  if (input.source !== "compact" && input.source !== "resume") return null;
+  if (input.source !== "compact") return null;
   const key = chatKey(input, env);
   try {
     const pack = await requestPack(

@@ -147,13 +147,22 @@ test("INJECT on: a SessionStart on a fresh startup injects nothing and asks noth
     }),
   ));
 
-test("INJECT on: a failed SessionStart resume keeps hydra.md and names the error", () =>
+test("INJECT on: a SessionStart resume injects nothing and asks nothing (the session still holds its packs)", () =>
+  withCore((dir) =>
+    withDaemon(json(200, { text: "x" }), async (daemon, calls) => {
+      switchOn(dir);
+      assert.equal(await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "resume" }, envFor(dir, daemon)), null);
+      assert.equal(calls.length, 0);
+    }),
+  ));
+
+test("INJECT on: a failed SessionStart compact keeps hydra.md and names the error", () =>
   withCore(async (dir) => {
     switchOn(dir);
     const chat = path.join(dir, "chats", "sess-1");
     mkdirSync(chat, { recursive: true });
     writeFileSync(path.join(chat, "hydra.md"), "# hydra.md\nUpdated: x  Tier: 2\n## Lead (become)\nnone\n## Plan\nKEEP THIS PLAN\n");
-    const text = (await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "resume" }, envFor(dir, UNREACHABLE))).hookSpecificOutput.additionalContext;
+    const text = (await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "compact" }, envFor(dir, UNREACHABLE))).hookSpecificOutput.additionalContext;
     assert.match(text, /KEEP THIS PLAN/);
     assert.match(text, /Hydra Core pack unavailable: /);
   }));
