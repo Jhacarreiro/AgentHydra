@@ -2,11 +2,11 @@
 // Desk chat pinned to Codex on that account. A Codex login is <home>/auth.json and its refresh token rotates on
 // each refresh: two processes refreshing at once leave a token the server has retired, signing the account out
 // (AgentHydra's server/src/core/codex-rpc.ts). So Desk never opens a second one on a home it already has open,
-// and ends it as soon as the last chat lets go: Codex lets one program write a thread at a time, and only the
-// process's exit frees a thread it loaded (measured 2026-10-14: after `thread/unsubscribe` answered "unsubscribed"
-// the thread stayed loaded and another program's archive was still refused, "already has an active writer"; once
-// the process exited it went through). A new one starts in under half a second. Its stderr and raw lines are never
-// logged: they can hold private chat text.
+// and ends it as soon as the last chat lets go: Codex lets one program write a thread at a time, and the process's
+// exit frees every thread it loaded at once, while `thread/unsubscribe` frees one only about a minute later
+// (measured 2026-10-14: still loaded and refused to another program's archive, "already has an active writer", 55 s
+// after the unsubscribe; unloaded and archived at 60 s). A new one starts in under half a second. Its stderr and raw
+// lines are never logged: they can hold private chat text.
 
 import { type ChildProcess, spawn } from 'node:child_process'
 import { resolve } from 'node:path'

@@ -220,9 +220,11 @@ test('a Codex chat run outside Desk continues here in its own thread, on the acc
   expect(start.input[0]!.text).toBe('Carry on')
   expect(fake.calls('thread/resume')).toEqual([expect.objectContaining({ home: BETA.codexHome, threadId })])
   expect(fake.calls('thread/start')).toEqual([])
-  // Let go once the turn ends: Codex lets one program write a thread at a time, its Codex app is the other, and only
-  // the app-server's exit frees the thread, so the chat holds no app-server between turns.
+  // Let go once the turn ends: Codex lets one program write a thread at a time, its Codex app is the other. The chat
+  // holds no app-server between turns (its exit frees the thread at once) and unsubscribes the thread, which a server
+  // other chats keep up unloads a minute later.
   expect(fake.held()).toEqual([])
+  expect(fake.calls('thread/unsubscribe')).toEqual([{ home: BETA.codexHome, threadId }])
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Two files.', 'Carrying on.'])
 })
 

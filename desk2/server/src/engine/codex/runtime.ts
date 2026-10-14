@@ -259,6 +259,11 @@ export class CodexRuntime extends ServiceRuntime {
   }
 
   private detach(): void {
+    // Unsubscribed, the thread is unloaded about a minute later even while other chats keep this app-server up
+    // (measured 2026-10-14: still loaded 55 s after thread/unsubscribe, gone at 60 s, and another program's archive
+    // went through); with no other chat on it, the release below ends the app-server, which frees it at once.
+    const threadId = this.thread?.threadId
+    if (threadId) void this.server?.call('thread/unsubscribe', { threadId }).catch(() => {})
     this.unlisten?.()
     this.unlisten = null
     this.server?.release()
@@ -400,8 +405,9 @@ export class CodexRuntime extends ServiceRuntime {
   /**
    * Between turns the thread is let go: Codex lets one program write a thread at a time, so a thread Desk kept
    * loaded would lock its Codex app out of it (measured 2026-10-13: the app refused to archive a thread Desk held,
-   * "already has an active writer"). Only the app-server's exit frees it, so the chat releases its app-server, which
-   * ends once no other chat holds it (app-server.ts). The next message resumes the thread.
+   * "already has an active writer"). The chat unsubscribes and releases its app-server (detach): the app-server ends
+   * once no other chat holds it, freeing the thread at once; one other chats still use unloads it about a minute
+   * after the unsubscribe. The next message resumes the thread.
    */
   private letGo(): void {
     this.detach()
