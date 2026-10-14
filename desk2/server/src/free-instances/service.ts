@@ -283,6 +283,11 @@ export class FreeInstances {
     return job
   }
   cancel(id: string): void { this.get(id); this.controllers.get(id)?.abort() }
+  /** True while start() would refuse an operation a person or a chat asks for on the account: one of theirs runs
+   *  there, or its log out does (a read of Desk's own does not count: that one is waited for). */
+  occupied(id: string): boolean {
+    return this.forgetting.has(id) || [...this.jobs.values()].some(j => j.instanceId === id && j.state === 'running' && !j.auto)
+  }
   /** `auto`: Desk's own job (FreeJob.auto). It never waits: it is refused while the account runs anything; an operation a
    *  person or a chat asks for while it runs waits for it instead of being refused. */
   start(value: unknown, auto = false): FreeJob {

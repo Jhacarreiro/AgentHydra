@@ -16,6 +16,8 @@ export interface FreeChats {
   start(request: unknown): FreeJob
   get(id: string): FreeJob
   cancel(id: string): void
+  /** An account runs one message at a time: true while another one runs there. */
+  occupied(instanceId: string): boolean
 }
 
 export interface ChatgptRuntimeDeps extends ServiceRuntimeDeps {
@@ -32,19 +34,21 @@ export const chatgptLabel = (i: Pick<FreeInstance, 'num' | 'name'>): string => `
 
 /**
  * The account a new ChatGPT chat starts on: a signed-in Free ChatGPT account this message has not hit a limit on and
- * not held after one; of those, one with unlimited text first, then the one used longest ago.
+ * not held after one; of those, one running no other message first, then one with unlimited text, then the one used
+ * longest ago.
  */
 export function pickChatgptAccount(
   all: readonly FreeInstance[],
   avoid: ReadonlySet<string>,
   held: ReadonlyMap<string, number>,
   now: number,
+  occupied: (id: string) => boolean,
 ): FreeInstance | { why: string; limited: boolean } {
   const signedIn = all.filter((i) => i.provider === 'chatgpt' && i.loggedIn)
   if (!signedIn.length) return { why: 'No ChatGPT account is signed in. Sign one in on the Free page.', limited: false }
   const open = signedIn.filter((i) => !avoid.has(i.id) && (held.get(i.id) ?? 0) <= now)
   if (!open.length) return { why: 'Every ChatGPT account is at its limit. Wait for one to reset, then send again.', limited: true }
-  open.sort((a, b) => Number(b.usage?.unlimited_text === true) - Number(a.usage?.unlimited_text === true) || (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0))
+  open.sort((a, b) => Number(occupied(a.id)) - Number(occupied(b.id)) || Number(b.usage?.unlimited_text === true) - Number(a.usage?.unlimited_text === true) || (a.lastActiveAt ?? 0) - (b.lastActiveAt ?? 0))
   return open[0]!
 }
 
@@ -113,11 +117,13 @@ export class ChatgptRuntime extends ServiceRuntime {
       const all = this.deps.free.allInstances()
       const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
       const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
-      const account = holder ?? pickChatgptAccount(all, this.avoid, this.deps.held, this.now())
-      if ('why' in account) {
-        if (account.limited) return this.allLimited(account.why)
-        throw new Error(account.why)
+      const picked = holder ?? pickChatgptAccount(all, this.avoid, this.deps.held, this.now(), this.occupied)
+      if ('why' in picked) {
+        if (picked.limited) return this.allLimited(picked.why)
+        throw new Error(picked.why)
       }
+      const account = await this.whenFree(picked, !!holder, sent)
+      if (!account) return
       const fresh = !holder
       const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
       const prompt = lead ? fit(lead.text, sent.text) : sent.text
@@ -161,6 +167,29 @@ export class ChatgptRuntime extends ServiceRuntime {
     } catch (err) {
       if (this.current !== sent) return
       this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
+    }
+  }
+
+  private readonly occupied = (id: string): boolean => this.deps.free.occupied(id)
+
+  /**
+   * An account runs one message at a time, and Free instances refuse a second (live, 2026-10-14: two chats picked the
+   * same account and the second failed, "This account already has an operation running."). A message for a busy
+   * account waits for it: a new ChatGPT chat takes whichever account frees first, a chat's own waits for that one.
+   * Null when the message stopped meanwhile.
+   */
+  private async whenFree(account: FreeInstance, bound: boolean, sent: Sent): Promise<FreeInstance | null> {
+    if (!this.occupied(account.id)) return account
+    this.dispatch({ type: 'activity', activity: `Waiting for ${chatgptLabel(account)} to finish another message` })
+    this.publish()
+    for (;;) {
+      await new Promise((resolve) => setTimeout(resolve, POLL_MS))
+      if (this.current !== sent) return null
+      if (!bound) {
+        const next = pickChatgptAccount(this.deps.free.allInstances(), this.avoid, this.deps.held, this.now(), this.occupied)
+        if (!('why' in next)) account = next
+      }
+      if (!this.occupied(account.id)) return account
     }
   }
 

@@ -248,10 +248,13 @@ function fakeFree(instances: FreeInstance[]) {
   const jobs = new Map<string, FreeJob>()
   const asked: Record<string, unknown>[] = []
   const cancelled: string[] = []
+  const running = (id: string) => [...jobs.values()].some((j) => j.instanceId === id && j.state === 'running')
   const free: FreeChats = {
     allInstances: () => instances,
     start: (r) => {
       const req = r as Record<string, unknown>
+      // As Free instances: one operation a chat asks for at a time per account.
+      if (running(String(req.instanceId))) throw new Error('This account already has an operation running.')
       asked.push(req)
       const job: FreeJob = { id: String(req.requestId), instanceId: String(req.instanceId), provider: 'chatgpt', command: req.command as FreeJob['command'], state: 'running', phase: 'working', startedAt: 1 }
       jobs.set(job.id, job)
@@ -261,8 +264,10 @@ function fakeFree(instances: FreeInstance[]) {
     cancel: (id) => {
       cancelled.push(id)
     },
+    occupied: running,
   }
-  const finish = (result: FreeResult) => Object.assign([...jobs.values()].at(-1)!, { state: 'done', result })
+  /** Ends a job: the last one started, else the one with that request id. */
+  const finish = (result: FreeResult, requestId?: unknown) => Object.assign(requestId === undefined ? [...jobs.values()].at(-1)! : jobs.get(String(requestId))!, { state: 'done', result })
   return { free, asked, finish, cancelled }
 }
 
@@ -304,6 +309,31 @@ test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that Chat
   expect(systemTexts(m.listItems(chat.id))).toContain('#3 alpha hit its ChatGPT limit, so this chat goes on on another ChatGPT account.')
   expect(m.get(chat.id).serviceThreads?.chatgpt?.accountId).toBe(B.id)
   expect(m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => (i as { text: string }).text)).toEqual(['Name three rivers', 'Which is longest?'])
+})
+
+test("two chats on ChatGPT's one free account: the second chat's message waits for the first's to end, then goes, never refused", async () => {
+  const f = fakeFree([GPT(3, 'alpha', true)])
+  const { m, chat, cwd } = await setup({ free: f.free })
+  const other = await m.create({ cwd, title: 'Second', accountId: 'acct-1', permissionMode: 'bypassPermissions' })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.patch(other.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'First question')
+  await waitFor(() => f.asked.length === 1)
+  await m.send(other.id, 'Second question')
+  await waitFor(() => m.get(other.id).activity === 'Waiting for #3 alpha to finish another message')
+  expect(f.asked).toHaveLength(1)
+
+  f.finish({ ok: true, chat_id: '77777777-2222-4333-8444-000000000001', is_temporary: true, response: 'First answer.' }, f.asked[0]!.requestId)
+  await waitFor(() => f.asked.length === 2)
+  expect(String(f.asked[1]!.prompt)).toBe('Second question')
+  f.finish({ ok: true, chat_id: '77777777-2222-4333-8444-000000000002', is_temporary: true, response: 'Second answer.' }, f.asked[1]!.requestId)
+  await waitFor(() => m.get(other.id).status === 'idle')
+  expect(m.get(chat.id).status).toBe('idle')
+  for (const [id, answer] of [[chat.id, 'First answer.'], [other.id, 'Second answer.']] as const) {
+    const items = m.listItems(id)
+    expect(items.filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual([answer])
+    expect(items.find((i) => i.kind === 'result')).toMatchObject({ ok: true })
+  }
 })
 
 test('a message sent after the pin moved while Codex was still replying waits, shown queued and able to be taken back, and goes to ChatGPT with what Codex said once that reply ends', async () => {
