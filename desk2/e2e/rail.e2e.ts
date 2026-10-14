@@ -6,7 +6,7 @@
 // On a Desk chat with a running task: every control on the cards and on the panel is what a click at its centre hits; hovering a
 // running task shows its Stop; a click on the task slides the panel in, its back arrow slides the cards back, Expand gives the
 // panel the chat's place and Restore gives it back, and Close shuts the rail. On an outside session: its facts are rows (no chips)
-// and every control on its cards is hit.
+// and every control on its cards is hit, and its Context card starts with its tokens in context.
 import { mkdirSync, mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join, resolve } from 'node:path'
@@ -165,6 +165,9 @@ try {
   // The scene's folder and model (its source and account need AgentHydra's session row, which this server has none of).
   const rows = (await ev(`[...document.querySelectorAll('[data-rail-card="environment"] li')].map((li) => !!li.querySelector('svg') && li.getBoundingClientRect().height <= 28)`)) as boolean[]
   result(rows.length >= 2 && rows.every(Boolean), `the Environment card's facts are rows, each with its icon (${rows.length})`)
+  // The scene's index says 84,300 tokens, as a session file's last reply would (bridge lastContextTokens).
+  const ctx = (await ev(`(() => { const r = document.querySelector('[data-rail-card="context"] [data-testid="rail-context-tokens"]'); return r ? { text: r.textContent.trim(), icon: !!r.querySelector('svg') } : null })()`)) as { text: string; icon: boolean } | null
+  result(!!ctx && ctx.icon && /^84\.3K tokens in context$/i.test(ctx.text), "the Context card's first row is the session's tokens in context, with its icon", JSON.stringify(ctx))
   await allHit("an outside session's cards")
 } finally {
   for (const s of sockets) s.close()

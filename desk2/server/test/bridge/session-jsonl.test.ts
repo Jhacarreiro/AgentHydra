@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { historyToItems, parseJsonl } from '../../src/engine/normalize'
-import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, readTail, sessionJsonlItems, sessionJsonlOlder, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
+import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, lastContextTokens, readTail, sessionJsonlItems, sessionJsonlOlder, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
 
 const temps: string[] = []
 const temp = () => {
@@ -79,6 +79,24 @@ describe('outside session .jsonl', () => {
     const items = sessionJsonlItems(f)
     expect(items.length).toBe(2)
     expect(readTail(f, lastTwo.length + 5).endsWith(lastTwo)).toBe(true)
+  })
+
+  test("its context is the last main-thread reply's prompt and answer, not a subagent's or a synthetic one, and none without usage", () => {
+    const dir = temp()
+    const f = join(dir, 's.jsonl')
+    const reply = (n: number, usage: object, extra: object = {}) =>
+      JSON.stringify({ type: 'assistant', uuid: `a${n}`, timestamp: at(n), message: { id: `msg_${n}`, role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], usage }, ...extra })
+    writeFileSync(f, lines())
+    expect(lastContextTokens(f)).toBeNull()
+    appendFileSync(f, '\n' + [
+      reply(3, { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 50 }),
+      reply(4, { input_tokens: 900_000, output_tokens: 1 }, { isSidechain: true }),
+      userRec(5, 'and now?'),
+      reply(6, { input_tokens: 4, cache_read_input_tokens: 1250, cache_creation_input_tokens: 30, output_tokens: 80 }),
+      JSON.stringify({ type: 'assistant', uuid: 'a7', timestamp: at(7), message: { id: 'msg_7', role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }], usage: { input_tokens: 0, output_tokens: 0 } } }),
+      reply(8, { input_tokens: 0, output_tokens: 0 }, { isSidechain: true }),
+    ].join('\n'))
+    expect(lastContextTokens(f)).toBe(4 + 1250 + 30 + 80)
   })
 
   test('reads on from where it stopped: an appended line, a line finished later, a byte that is not UTF-8', () => {

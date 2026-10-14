@@ -9,7 +9,7 @@
 // outside session's facts and actions are its session header's, drawn into the cards here (RAIL_TARGETS). DeskFrame places the
 // rail and keeps the chat's text column clear of it.
 import { computed, effectScope, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
-import { CircleCheck, LoaderCircle, Sparkles, UserRound, X } from '@lucide/vue'
+import { CircleCheck, Gauge, LoaderCircle, Sparkles, UserRound, X } from '@lucide/vue'
 import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { newSessionGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
@@ -27,6 +27,7 @@ import { cleared } from '@/components/tasks/api'
 import { canStop, elapsedOf, latestTodoList, panelLists, type TaskUnit } from '@/components/tasks/logic'
 import { useSessionTasks } from '@/components/tasks/session'
 import { holdPeek } from '@/components/session-header/state'
+import { formatCompact } from '@/components/session-header/logic'
 import RailCard from './RailCard.vue'
 import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN, RAIL_TILE } from './classes'
 import { RAIL_TARGETS, railTargets } from './state'
@@ -92,6 +93,11 @@ const revealFolder = () => props.chat && void src.revealFolder(props.chat.cwd).c
 const context = computed(() => (props.chat?.contextPct == null ? null : Math.round(props.chat.contextPct)))
 const contextColor = computed(() => (context.value === null ? '' : context.value >= 90 ? 'var(--danger)' : context.value >= 75 ? 'var(--warning)' : 'var(--accent)'))
 const cost = computed(() => (props.chat && props.chat.costUsd > 0 ? `$${props.chat.costUsd.toFixed(2)} spent` : ''))
+// An outside session's context is its last reply's tokens (the index's), with no share: its file never names the window.
+const outsideContext = computed(() => (props.outside && props.index?.contextTokens ? props.index.contextTokens : null))
+const contextSummary = computed(() =>
+  outsideContext.value !== null ? `${formatCompact(outsideContext.value)} tokens` : context.value === null ? undefined : `${context.value}% used`
+)
 
 // To-dos: the session's latest checklist, while it has one.
 const todos = computed(() => latestTodoList(props.items, props.index))
@@ -216,7 +222,17 @@ const NO_STOP = 'Only the session that started it can stop this task'
           </ul>
         </RailCard>
 
-        <RailCard v-if="outside || context !== null" id="context" title="Context" :summary="context === null ? undefined : `${context}% used`">
+        <RailCard v-if="outside || context !== null" id="context" title="Context" :summary="contextSummary">
+          <ul v-if="outsideContext !== null" class="flex flex-col">
+            <li>
+              <Tip :label="`${outsideContext.toLocaleString()} tokens in context after the last reply: its prompt and its answer. The session's file does not name the model's context window, so no share is shown.`">
+                <span :class="RAIL_ROW" tabindex="0" data-testid="rail-context-tokens">
+                  <Gauge :class="RAIL_ICON" aria-hidden="true" />
+                  <span class="tnum min-w-0 flex-1 truncate text-text">{{ formatCompact(outsideContext) }} tokens in context</span>
+                </span>
+              </Tip>
+            </li>
+          </ul>
           <div v-if="outside" :id="RAIL_TARGETS.context" class="flex flex-col" />
           <div v-else class="px-1.5 pb-1.5">
             <div class="flex h-6.5 items-center gap-2">

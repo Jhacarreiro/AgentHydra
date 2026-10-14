@@ -150,6 +150,35 @@ export function lastCwd(path: string): string | null {
 }
 
 /**
+ * The tokens in context after the session's last reply: that call's prompt (input, cache read, cache write) and its
+ * answer, from the newest main-thread assistant line with usage (a subagent's and a synthetic one are not the
+ * session's). Claude Code's file never names the model's window, so there is no share of it. Null when none is in the
+ * file's end.
+ */
+export function lastContextTokens(path: string): number | null {
+  const size = statSync(path).size
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  for (const max of [256 * 1024, TAIL_BYTES]) {
+    const lines = readTail(path, max).split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!
+      if (!line.includes('"usage"')) continue
+      try {
+        const rec = JSON.parse(line) as { type?: unknown; isSidechain?: unknown; message?: { model?: unknown; usage?: Record<string, unknown> } }
+        const u = rec.message?.usage
+        if (rec.type !== 'assistant' || rec.isSidechain === true || rec.message?.model === '<synthetic>' || !u) continue
+        const tokens = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens) + n(u.output_tokens)
+        if (tokens > 0) return tokens
+      } catch {
+        // the tail's first line may be cut
+      }
+    }
+    if (size <= max) break
+  }
+  return null
+}
+
+/**
  * The `cwd` of the first whole line written at or after byte `offset` that has one (reads at most 256 KB
  * from there): the folder the session was in when its next turn began. Null when no such line exists yet.
  */

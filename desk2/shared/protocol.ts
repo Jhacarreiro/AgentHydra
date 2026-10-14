@@ -295,6 +295,9 @@ export interface TranscriptIndex {
   /** The last 20 finished tasks, oldest first. */
   recentTasks: TranscriptItem[]
   lastUserText: string
+  /** An outside session's: the tokens in context after its last reply, read from its .jsonl (no window, so no share); null when
+   *  its file has none, absent on a Desk chat (whose ChatSummary.contextPct is the share). */
+  contextTokens?: number | null
 }
 
 /** `GET /api/external/sessions/:id/older?before=<offset>&limit=<n>` answers the newest n items before the offset and this

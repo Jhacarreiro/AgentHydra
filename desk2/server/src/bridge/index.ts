@@ -40,7 +40,7 @@ import {
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '../engine/transcript-index'
-import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
+import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
@@ -684,7 +684,14 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
     const kept = wholeKept.get(sessionId)
     if (key && kept && kept.key === key) return kept
-    const built = { key, items, index: buildTranscriptIndex(items) }
+    // Its context comes from the file's usage lines, which no item carries; a session with no .jsonl (a Codex chat) has none.
+    let contextTokens: number | null = null
+    try {
+      contextTokens = key && file ? lastContextTokens(file) : null
+    } catch {
+      // gone since the stat: no context, the rest of the index stands
+    }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)

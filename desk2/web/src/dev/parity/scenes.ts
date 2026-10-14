@@ -4,6 +4,7 @@ import { ref } from 'vue'
 import type { Dashboard } from '@shared/dashboards'
 import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import type { HeadlessAudioState } from '@shared/headless-audio'
 import { routinesFixtures, cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
 import type { ShellSource } from '@/components/shell/source'
@@ -326,6 +327,8 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     pickAccount: async () => scenePick(scene),
     externalItems: async () => ({ items: scene.items(), olderBefore: 0 }),
     externalOlder: async () => [],
+    // The context a session's file would give (bridge lastContextTokens), so the rail's Context card has its row.
+    externalIndex: async () => ({ ...buildTranscriptIndex(scene.items()), contextTokens: 84_300 }),
     diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
     agentHydra: async () => {
       throw new Error('AgentHydra is not running')
