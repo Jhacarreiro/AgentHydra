@@ -142,6 +142,25 @@ test("allows on a broken transcript (fail open)", () =>
     assert.equal(fire(input, envFor(dir)), null);
   }));
 
+test("decides from the last turn alone: a broken line before it changes nothing, and a turn over a chunk parses whole", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const transcript = path.join(dir, "long.jsonl");
+    const big = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "é".repeat(600_000) }] } };
+    const lines = [
+      "{not json",
+      prompt("old message"),
+      says("Old question?"),
+      prompt("fix it"),
+      uses("Bash", { command: "ls" }),
+      big,
+      says("Should I delete the old folder?"),
+    ].map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)));
+    writeFileSync(transcript, lines.join("\n"));
+    const input = { hook_event_name: "Stop", session_id: "sess-stop", stop_hook_active: false, transcript_path: transcript };
+    assert.equal(fire(input, envFor(dir)).decision, "block");
+  }));
+
 test("install adds Stop beside an existing Stop hook and uninstall removes only ours", () =>
   withCore((dir) => {
     const settingsPath = path.join(dir, "settings.json");

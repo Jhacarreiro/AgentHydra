@@ -1,11 +1,23 @@
 #!/usr/bin/env node
-import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  appendFileSync,
+  closeSync,
+  existsSync,
+  fstatSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  readSync,
+  writeFileSync,
+} from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
 export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
 const LEAD_CAP = 20000;
+const TAIL_CHUNK = 1 << 20;
 const NAME_CAP = 60;
 const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
 const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
@@ -96,15 +108,48 @@ function isRealPrompt(entry) {
 
 const blocksOf = (entry) => (Array.isArray(entry?.message?.content) ? entry.message.content : []);
 
+/**
+ * The entries after the transcript's last real prompt, read backwards from the end, so a long chat's
+ * history is never read or parsed (a 375 MB transcript took 11 s and 1.1 GB when read whole).
+ * Lines are cut at newline bytes before decoding, so a chunk edge inside a character is harmless.
+ */
+function turnEntries(file) {
+  const fd = openSync(file, "r");
+  try {
+    const entries = [];
+    let pos = fstatSync(fd).size;
+    let carry = Buffer.alloc(0);
+    const take = (bytes) => {
+      const line = bytes.toString("utf8").trim();
+      if (!line) return false;
+      const entry = JSON.parse(line);
+      if (isRealPrompt(entry)) return true;
+      entries.push(entry);
+      return false;
+    };
+    while (pos > 0) {
+      const size = Math.min(TAIL_CHUNK, pos);
+      pos -= size;
+      const chunk = Buffer.alloc(size);
+      readSync(fd, chunk, 0, size, pos);
+      const buf = Buffer.concat([chunk, carry]);
+      let end = buf.length;
+      for (let i = buf.length - 1; i >= 0; i--) {
+        if (buf[i] !== 0x0a) continue;
+        if (take(buf.subarray(i + 1, end))) return entries.reverse();
+        end = i;
+      }
+      carry = buf.subarray(0, end);
+    }
+    take(carry);
+    return entries.reverse();
+  } finally {
+    closeSync(fd);
+  }
+}
+
 function lastTurn(input) {
-  const entries = readFileSync(input.transcript_path, "utf8")
-    .split(/\r?\n/)
-    .filter((line) => line.trim())
-    .map((line) => JSON.parse(line));
-  let start = -1;
-  entries.forEach((entry, index) => {
-    if (isRealPrompt(entry)) start = index;
-  });
+  const entries = turnEntries(input.transcript_path);
   const assistant = entries.filter((entry) => entry.message?.role === "assistant");
   const last = assistant.at(-1);
   const text =
@@ -114,10 +159,7 @@ function lastTurn(input) {
           .filter((block) => block?.type === "text")
           .map((block) => block.text)
           .join("\n");
-  const tools = entries
-    .slice(start + 1)
-    .filter((entry) => entry.message?.role === "assistant")
-    .flatMap((entry) => blocksOf(entry).filter((block) => block?.type === "tool_use"));
+  const tools = assistant.flatMap((entry) => blocksOf(entry).filter((block) => block?.type === "tool_use"));
   return { text, tools };
 }
 
