@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A search no longer comes back empty while its index is being opened.** The first search after AgentHydra
+  started opened the search index itself, and when another program held a new index file (a virus scan, say), the
+  opening could use up all seven seconds a search gets, so it found nothing. AgentHydra now opens the index once it
+  has started, and a search that finds it not open yet reads the transcripts directly.
 - **A new transcript is no longer missed.** The folder tree behind the transcript index and the kit's ingest read a
   folder again only when its modified time moved, so a file created in the same clock tick as the last read (a
   subagent's transcript, say) stayed invisible until something else touched that folder. A folder whose modified time

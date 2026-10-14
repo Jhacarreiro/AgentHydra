@@ -1033,6 +1033,13 @@ left are:
   once, never waiting, to a deferred transaction that read before it asked to write. The index's
   upgrade and rebuild now `BEGIN IMMEDIATE` (`server/src/search-index.ts`). Log what a `catch`
   swallows before sizing anything.
+- **A budgeted search spends its budget only on searching.** The root suite's first search opened
+  the search index itself, a fresh file on GitHub's Windows runner, and that synchronous open waited
+  out `busy_timeout` for the held file until the search's 7 s budget was gone: 7,249 ms and no
+  result (2026-10-13). A search now consults the index only once it is open (`indexState` in
+  `server/src/session-search.ts`) and warms it after answering; the daemon opens it once listening.
+  A test that holds a SQLite file locks it before pointing the code at it (`holdSqlite`), or a warm-up
+  an earlier search queued opens it first.
 - **A test that fails only after another failed is a cascade.** Give it a clean start in its own
   `beforeAll` or first lines (`resetFreeHealth()` in `mcp-free.test.ts`; the wave-judging tests in
   `climayte-wave.test.ts` check out `main` whatever the test before left checked out).
