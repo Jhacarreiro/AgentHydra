@@ -244,6 +244,7 @@ const GPT = (n: number, name: string, unlimited: boolean): FreeInstance => ({ id
 function fakeFree(instances: FreeInstance[]) {
   const jobs = new Map<string, FreeJob>()
   const asked: Record<string, unknown>[] = []
+  const cancelled: string[] = []
   const free: FreeChats = {
     allInstances: () => instances,
     start: (r) => {
@@ -254,10 +255,12 @@ function fakeFree(instances: FreeInstance[]) {
       return job
     },
     get: (id) => jobs.get(id)!,
-    cancel: () => {},
+    cancel: (id) => {
+      cancelled.push(id)
+    },
   }
   const finish = (result: FreeResult) => Object.assign([...jobs.values()].at(-1)!, { state: 'done', result })
-  return { free, asked, finish }
+  return { free, asked, finish, cancelled }
 }
 
 test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that ChatGPT chat, and a limit moves it to another account', async () => {
@@ -298,4 +301,46 @@ test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that Chat
   expect(systemTexts(m.listItems(chat.id))).toContain('#3 alpha hit its ChatGPT limit, so this chat goes on on another ChatGPT account.')
   expect(m.get(chat.id).serviceThreads?.chatgpt?.accountId).toBe(B.id)
   expect(m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => (i as { text: string }).text)).toEqual(['Name three rivers', 'Which is longest?'])
+})
+
+test('a message sent after the pin moved while Codex was still replying waits, shown queued, and goes to ChatGPT with what Codex said once that reply ends', async () => {
+  const f = fakeFree([GPT(3, 'alpha', true)])
+  const { m, fake, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'codex' })
+  await m.send(chat.id, 'Draft the plan')
+  await waitFor(() => fake.turnStarts().length === 1)
+  const l = fake.thread('thread-1')
+  await m.patch(chat.id, { service: 'chatgpt' })
+  expect(await m.send(chat.id, 'Now shorten it')).toEqual({ queued: true })
+  // Codex's reply is not cut off, and ChatGPT is not asked while it runs.
+  expect(fake.calls('turn/interrupt')).toEqual([])
+  expect(f.asked).toEqual([])
+  expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'Now shorten it')).toMatchObject({ queued: true })
+
+  l.notify('item/completed', { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'msg-1', text: 'Step one, step two.' } })
+  l.notify('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', durationMs: 900 } })
+  await waitFor(() => f.asked.length === 1)
+  const prompt = String(f.asked[0]!.prompt)
+  expect(prompt).toContain('Step one, step two.')
+  expect(prompt.endsWith(`${ANSWER_NOW}Now shorten it`)).toBe(true)
+  f.finish({ ok: true, chat_id: '77777777-2222-4333-8444-555555555555', is_temporary: true, response: 'Two steps.' })
+  await waitFor(() => m.get(chat.id).status === 'idle')
+  const items = m.listItems(chat.id)
+  expect(items.flatMap((i) => (i.kind === 'user' ? [[i.text, i.queued ?? false]] : []))).toEqual([
+    ['Draft the plan', false],
+    ['Now shorten it', false],
+  ])
+  expect(items.filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Step one, step two.', 'Two steps.'])
+})
+
+test('a ChatGPT chat deleted mid-message stops that message and sends nothing it had queued', async () => {
+  const f = fakeFree([GPT(3, 'alpha', true)])
+  const { m, chat } = await setup({ free: f.free })
+  await m.patch(chat.id, { service: 'chatgpt' })
+  await m.send(chat.id, 'First')
+  await waitFor(() => f.asked.length === 1)
+  expect(await m.send(chat.id, 'Second')).toEqual({ queued: true })
+  await m.delete(chat.id)
+  expect(f.asked.map((a) => a.prompt)).toEqual(['First'])
+  expect(f.cancelled).toEqual([String(f.asked[0]!.requestId)])
 })

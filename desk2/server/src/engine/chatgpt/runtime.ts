@@ -82,19 +82,17 @@ export class ChatgptRuntime extends ServiceRuntime {
   override interrupt(): void {
     const sent = this.current
     if (!sent) return
-    if (this.job) {
-      try {
-        this.deps.free.cancel(this.job)
-      } catch {
-        // Already over.
-      }
-    }
+    this.cancelJob()
     this.endTurn(sent, { ok: false, interrupted: true, durationMs: this.now() - this.turnStarted })
   }
 
+  /** Ends the runtime: the message under way stops, and nothing queued starts after it (as interrupt's turn end would). */
   override async close(): Promise<void> {
     this.clearIdle()
-    if (this.current) this.interrupt()
+    this.cancelJob()
+    this.current = null
+    this.job = null
+    this.avoid.clear()
     this.unqueueAll()
     this.dispatch({ type: 'closed' })
     this.publish()
@@ -163,6 +161,16 @@ export class ChatgptRuntime extends ServiceRuntime {
     } catch (err) {
       if (this.current !== sent) return
       this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
+    }
+  }
+
+  /** Stops the running message's job; the turn's end (or close) lets go of its id. */
+  private cancelJob(): void {
+    if (!this.job) return
+    try {
+      this.deps.free.cancel(this.job)
+    } catch {
+      // Already over.
     }
   }
 

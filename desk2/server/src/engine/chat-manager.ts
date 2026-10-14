@@ -210,9 +210,10 @@ const workerKeys = new WeakMap<readonly CliMayteWorker[], string>()
 interface Entry {
   chat: ChatSummary
   runtime: ChatRuntime | null
-  /** The runtime of a chat pinned to Codex (Pin service); kept while it winds down after the pin moved on. */
-  /** The runtime of the service the chat is pinned to (Pin service), once it has run there. */
+  /** The runtime of the service the chat is pinned to (Pin service), once it has run there; kept while it winds down after the pin moved on. */
   pinned?: ServiceRuntime | null
+  /** Messages sent after the pin moved while the old service was still replying: they wait, shown queued, and go to the new one once that reply ends. */
+  crossing?: { item: UserItem; text: string; images?: ImageRef[]; opts: SendOptions }[]
   /** The query the runtime runs now (for supportedCommands / supportedModels). */
   query: Query | null
   /** Set while the chat's worker is being started: a second send waits for it instead of starting another. */
@@ -457,7 +458,7 @@ export class ChatManager {
   listItems(id: string): TranscriptItem[] {
     const e = this.entry(id)
     // A CliMayte chat: its worker's transcript, with the lines Hydra Desk wrote (a move, a failure) in time order.
-    if (e.chat.workerId !== undefined) return this.deskItems(e)
+    if (e.chat.workerId !== undefined) return this.withWaiting(e, this.deskItems(e))
     const live = e.runtime?.running === true
     const items = this.store.loadItems(id).map((item) => {
       // A request stored 'pending' that no running runtime waits on was left by a process that died (a
@@ -472,7 +473,7 @@ export class ChatManager {
       return done
     })
     if (!live && this.clearTasks(e)) this.changed(e.chat)
-    return items
+    return this.withWaiting(e, items)
   }
 
   /** A CliMayte chat's whole transcript from its Desk file (chats/<id>.jsonl), oldest first, without touching any account folder. */
@@ -500,6 +501,11 @@ export class ChatManager {
       }
     }
     return e.sent?.length ? [...items, ...e.sent.map((s) => withNamedFiles(s, mediaCache(this.store.home)))] : items
+  }
+
+  /** The messages waiting for another service's reply to end (waitForReply), shown queued after the rest. */
+  private withWaiting(e: Entry, items: TranscriptItem[]): TranscriptItem[] {
+    return e.crossing?.length ? [...items, ...e.crossing.map((w) => withNamedFiles(w.item, mediaCache(this.store.home)))] : items
   }
 
   /**
@@ -793,6 +799,11 @@ export class ChatManager {
       this.changed(e.chat)
       this.autoTitle(e, text)
     }
+    // The pin moved while the old service was still replying: the message waits for that reply, then goes to the new one.
+    if (this.replyElsewhere(e)) {
+      if (opts.onlyIfReady) throw new ChatBusyError()
+      return this.waitForReply(e, text, images, opts)
+    }
     // Pinned to Codex or ChatGPT (Pin service): the turn runs there, whatever ran the chat before.
     if (e.chat.service) {
       if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
@@ -840,6 +851,36 @@ export class ChatManager {
     const sent = this.runtimeOf(e).send(`${lead.text}${ANSWER_NOW}${text}`, images?.length ? images : undefined, opts.messageId, text)
     this.systemLine(id, 'caught-up', 'info', `Caught up on what was said on ${lead.from}.`)
     return sent
+  }
+
+  /** A reply is running on a service the chat is no longer pinned to (Claude's, or another pinned runtime's). */
+  private replyElsewhere(e: Entry): boolean {
+    const to = e.chat.service ?? null
+    if (e.pinned?.busy) return e.pinned.kind !== to
+    return to !== null && (!!e.runtime?.running || e.chat.workerId !== undefined) && busy(e.chat)
+  }
+
+  /** Holds a message until the old service's reply ends (onRuntimeEvent sends it on); it shows queued meanwhile. */
+  private waitForReply(e: Entry, text: string, images: ImageRef[] | undefined, opts: SendOptions): { queued: boolean } {
+    const item: UserItem = { kind: 'user', id: opts.messageId ?? randomUUID(), ts: this.now(), text, queued: true, ...(images?.length ? { images: images.map((i) => toStoredImage(i)) } : {}) }
+    ;(e.crossing ??= []).push({ item, text, ...(images?.length ? { images } : {}), opts: { ...opts, messageId: item.id } })
+    this.emitEvent({ type: 'item.upsert', chatId: e.chat.id, item: withNamedFiles(item, mediaCache(this.store.home)) })
+    return { queued: true }
+  }
+
+  /** The old service's reply ended: the messages that waited go, in order, to the service the chat is pinned to now. */
+  private async sendCrossing(e: Entry): Promise<void> {
+    const waiting = e.crossing ?? []
+    e.crossing = undefined
+    for (const w of waiting) {
+      if (this.chats.get(e.chat.id) !== e) return
+      try {
+        await this.send(e.chat.id, w.text, w.images, w.opts)
+      } catch (err) {
+        this.emitEvent({ type: 'item.removed', chatId: e.chat.id, itemId: w.item.id })
+        this.systemLine(e.chat.id, `crossing:${w.item.id}`, 'warn', `A message that waited for the last reply was not sent: ${err instanceof Error ? err.message : String(err)}`)
+      }
+    }
   }
 
   /**
@@ -1176,6 +1217,12 @@ export class ChatManager {
     const tooLate = { ok: true as const, cancelled: false, message: 'Too late to cancel: it already went into this turn.' }
     const retrying = e.retrying?.find((r) => r.itemId === itemId)
     if (retrying) return this.cancelRetrying(e, retrying)
+    const waiting = e.crossing?.findIndex((w) => w.item.id === itemId) ?? -1
+    if (waiting >= 0) {
+      e.crossing!.splice(waiting, 1)
+      this.emitEvent({ type: 'item.removed', chatId: id, itemId })
+      return { ok: true, cancelled: true, message: 'Taken back: it is not sent.' }
+    }
     const pinned = e.pinned?.busy ? e.pinned : null
     if (e.chat.workerId && !pinned) return this.cancelHeld(e, itemId, tooLate)
     const live = pinned ?? (e.runtime?.running ? e.runtime : null)
@@ -2388,6 +2435,8 @@ export class ChatManager {
       if (e.runtime?.startedAs) e.ranIn = e.runtime.startedAs.configDir
       // A closed runtime took its background tasks with it: their items say so, and stop counting.
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
+      // The old service's reply is over: what waited for it goes to the service the chat is pinned to now.
+      if (e.crossing?.length && !this.replyElsewhere(e)) void this.sendCrossing(e)
       this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
