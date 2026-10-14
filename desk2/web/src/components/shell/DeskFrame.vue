@@ -722,6 +722,10 @@ const railShown = computed(
 )
 const railAt = computed(() => railWidthIn(railWidth.value, stageWidth.value))
 const railRoom = computed(() => (railFloats.value ? 0 : railReserve(railAt.value, stageWidth.value)))
+// How far the open rail lies over the chat (its width past the room it takes), as --rail-over on the chat: the transcript's step
+// arrows and peek keep that far in from its right edge (owner, 2026-10-14: the rail "hides the peek and previous message buttons").
+// Not while it only peeks for a moment: the arrows would jump out and back.
+const railOver = computed(() => (railShown.value && !railFloats.value ? Math.max(0, railAt.value + RAIL_INSET - railRoom.value) : 0))
 function toggleRail() {
   if (railShown.value && !railFloats.value) {
     tasks.value = null
@@ -1098,7 +1102,7 @@ function moveSidebar(side: SidebarSide) {
           <main
             class="col-start-1 row-start-2 flex min-h-0 min-w-0"
             :class="railSlide && ['will-change-transform', railSlide.at === 'to' && SLIDE_EASE]"
-            :style="railSlide ? { transform: `translateX(${railShift}px)` } : undefined"
+            :style="{ '--rail-over': `${railOver}px`, ...(railSlide ? { transform: `translateX(${railShift}px)` } : {}) }"
           >
             <!-- data-file-drop: a file dropped anywhere on the chat attaches to its composer -->
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>

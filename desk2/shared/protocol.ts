@@ -300,6 +300,15 @@ export interface TranscriptIndex {
   contextTokens?: number | null
   /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
   contextWindow?: number | null
+  /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
+  tools?: ToolTally[]
+}
+
+/** One tool's calls in a transcript (a tool_use item each) and how many of them failed. */
+export interface ToolTally {
+  name: string
+  calls: number
+  errors: number
 }
 
 /** `GET /api/external/sessions/:id/older?before=<offset>&limit=<n>` answers the newest n items before the offset and this

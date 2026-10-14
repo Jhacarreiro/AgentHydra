@@ -877,8 +877,8 @@ watch(
          opens between them. -->
     <div
       v-if="prevStep !== null || showStepDown || peekItem"
-      class="pointer-events-none absolute right-5 z-[9] flex flex-col gap-1"
-      :style="{ top: `${(insetTop ?? 0) + 12}px` }"
+      class="pointer-events-none absolute z-[9] flex flex-col gap-1 transition-[right] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
+      :style="{ top: `${(insetTop ?? 0) + 12}px`, right: 'calc(var(--rail-over, 0px) + 1.25rem)' }"
     >
       <span class="flex size-6">
         <Tip v-if="prevStep !== null" label="Previous message you sent" side="left">

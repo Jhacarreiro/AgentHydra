@@ -10,7 +10,8 @@
 // rail and keeps the chat's text column clear of it.
 import { computed, effectScope, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
 import { CircleCheck, Gauge, LoaderCircle, Sparkles, UserRound, X } from '@lucide/vue'
-import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, ToolTally, TranscriptIndex, TranscriptItem } from '@shared/protocol'
+import { tallyTools } from '@shared/transcript-index'
 import { newSessionGlyphs } from '@/lib/icons'
 import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
@@ -109,29 +110,53 @@ const contextSummary = computed(() =>
 const todos = computed(() => latestTodoList(props.items, props.index))
 const todosDone = computed(() => todos.value?.filter((t) => t.status === 'completed').length ?? 0)
 
+// Tools: how often the session called each tool, the most first, so a tool called far more than the rest shows (owner,
+// 2026-10-14: "if I see you access, like, two tools a billion times, maybe I would ask if there was ... a better way"). Over
+// the whole transcript (the index's) while the window holds only its newest part, else counted from the items, which are newer.
+const tally = computed<ToolTally[]>(() => (props.index?.tools && props.index.total > props.items.length ? props.index.tools : tallyTools(props.items)))
+const TOOLS_SHOWN = 5
+const toolsOpen = ref(false)
+const toolsShown = computed(() => (toolsOpen.value ? tally.value : tally.value.slice(0, TOOLS_SHOWN)))
+const toolCalls = computed(() => tally.value.reduce((n, t) => n + t.calls, 0))
+const mostCalls = computed(() => tally.value[0]?.calls ?? 1)
+/** "Bash"; an MCP tool as its server and its own name, "Hswarm · hswarm_run". */
+const toolLabel = (name: string) => {
+  if (!name.startsWith('mcp__')) return name
+  const [server = '', ...rest] = name.slice(5).split('__')
+  return `${serverName(server)} · ${rest.join('__') || server}`
+}
+const callsText = (n: number) => `${n.toLocaleString()} ${n === 1 ? 'call' : 'calls'}`
+const toolTip = (t: ToolTally) => `${t.name}: ${callsText(t.calls)}${t.errors ? `, ${t.errors.toLocaleString()} failed` : ''}`
+
 // Connectors: a Desk chat's are the ones a chat started now gets; an outside session's app keeps its own list, so its card
-// names the MCP servers its tools came from (mcp__<server>__<tool>), first used first.
+// names the MCP servers its tools came from (mcp__<server>__<tool>). Each says how often its tools were called, the most first.
 interface RailConnector {
   id: string
   name: string
   state?: string
   reason?: string
+  calls: number
 }
 const CONNECTORS_SHOWN = 3
 const serverName = (id: string) => {
   const words = id.replace(/[-_]+/g, ' ').trim()
   return words.charAt(0).toUpperCase() + words.slice(1)
 }
-const usedServers = computed<RailConnector[]>(() => {
-  const seen = new Map<string, RailConnector>()
-  for (const it of props.items) {
-    if (it.kind !== 'tool_use' || !it.name.startsWith('mcp__')) continue
-    const id = it.name.slice(5).split('__')[0]
-    if (id && !seen.has(id)) seen.set(id, { id, name: serverName(id) })
+const serverCalls = computed(() => {
+  const calls = new Map<string, number>()
+  for (const t of tally.value) {
+    if (!t.name.startsWith('mcp__')) continue
+    const id = t.name.slice(5).split('__')[0]
+    if (id) calls.set(id, (calls.get(id) ?? 0) + t.calls)
   }
-  return [...seen.values()]
+  return calls
 })
-const connectors = computed<RailConnector[]>(() => (props.chat ? (connectorList.value ?? []).filter((c) => c.givesChats) : usedServers.value))
+const connectors = computed<RailConnector[]>(() => {
+  const list: RailConnector[] = props.chat
+    ? (connectorList.value ?? []).filter((c) => c.givesChats).map((c) => ({ id: c.id, name: c.name, state: c.state, reason: c.reason, calls: serverCalls.value.get(c.id) ?? 0 }))
+    : [...serverCalls.value].map(([id, calls]) => ({ id, name: serverName(id), calls }))
+  return list.sort((a, b) => b.calls - a.calls)
+})
 const connectorsOpen = ref(false)
 const connectorsShown = computed(() => (connectorsOpen.value ? connectors.value : connectors.value.slice(0, CONNECTORS_SHOWN)))
 let stopConnectors: (() => void) | null = null
@@ -268,6 +293,9 @@ const NO_STOP = 'Only the session that started it can stop this task'
                 <X class="size-4 shrink-0 text-danger-text" aria-label="Not running" />
               </Tip>
               <LoaderCircle v-else-if="c.state === 'starting' || c.state === 'installing'" class="size-4 shrink-0 animate-spin text-text-muted" aria-label="Starting" />
+              <Tip v-else-if="c.calls" :label="`${c.name}'s tools: ${callsText(c.calls)} in this session`">
+                <span class="tnum shrink-0 text-text-muted" data-testid="rail-connector-calls" tabindex="0">{{ formatCompact(c.calls) }}</span>
+              </Tip>
             </li>
           </ul>
           <button
@@ -278,6 +306,34 @@ const NO_STOP = 'Only the session that started it can stop this task'
             @click="connectorsOpen = !connectorsOpen"
           >
             {{ connectorsOpen ? 'Show less' : 'Show more' }}
+          </button>
+        </RailCard>
+
+        <!-- Each tool a row: its name, a bar against the most called (its failed share red at the end), and its calls. -->
+        <RailCard v-if="tally.length" id="tools" title="Tools" :summary="callsText(toolCalls)">
+          <ul class="flex flex-col" aria-label="Tool calls, the most first">
+            <li v-for="t in toolsShown" :key="t.name">
+              <Tip :label="toolTip(t)" side="left">
+                <span :class="RAIL_ROW" tabindex="0" data-testid="rail-tool">
+                  <span class="min-w-0 flex-1 truncate text-text">{{ toolLabel(t.name) }}</span>
+                  <span class="flex h-1.5 w-16 shrink-0 overflow-hidden rounded-full bg-(--fill-secondary)" aria-hidden="true">
+                    <span class="flex h-full justify-end overflow-hidden rounded-full bg-(--accent)" :style="{ width: `${Math.max(4, (t.calls / mostCalls) * 100)}%` }">
+                      <span v-if="t.errors" class="h-full bg-danger" :style="{ width: `${(t.errors / t.calls) * 100}%` }" />
+                    </span>
+                  </span>
+                  <span class="tnum w-9 shrink-0 text-end text-text-muted">{{ formatCompact(t.calls) }}</span>
+                </span>
+              </Tip>
+            </li>
+          </ul>
+          <button
+            v-if="tally.length > TOOLS_SHOWN"
+            type="button"
+            class="mb-0.5 cursor-default rounded-(--radius-6) px-1.5 text-text-muted outline-none transition-colors duration-60 hover:text-text focus-visible:shadow-(--focus-ring)"
+            :aria-expanded="toolsOpen"
+            @click="toolsOpen = !toolsOpen"
+          >
+            {{ toolsOpen ? 'Show less' : `Show all ${tally.length}` }}
           </button>
         </RailCard>
 

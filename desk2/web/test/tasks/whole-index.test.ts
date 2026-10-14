@@ -33,10 +33,14 @@ describe('facts above the loaded window', () => {
   })
 })
 
-describe('the shared builder agrees with the server builder', () => {
-  test('same index for the same items', async () => {
-    const { buildTranscriptIndex: server } = await import('../../../server/src/engine/transcript-index')
-    const items = [task('a', 'running'), todos('t'), user('u1'), task('b', 'completed'), user('u2')]
-    expect(buildTranscriptIndex(items)).toEqual(server(items))
+describe('tool calls over the whole transcript', () => {
+  const call = (id: string, name: string, status: 'done' | 'error' = 'done'): TranscriptItem => ({ id, ts: 1, kind: 'tool_use', name, input: {}, status, startedAt: 1 })
+  test('each tool counts its calls and its failed ones, the most called first, then by name', () => {
+    const items = [call('1', 'Read'), user('u1'), call('2', 'Bash', 'error'), call('3', 'mcp__hswarm__hswarm_run'), call('4', 'Bash'), call('5', 'Read'), call('6', 'Bash')]
+    expect(buildTranscriptIndex(items).tools).toEqual([
+      { name: 'Bash', calls: 3, errors: 1 },
+      { name: 'Read', calls: 2, errors: 0 },
+      { name: 'mcp__hswarm__hswarm_run', calls: 1, errors: 0 }
+    ])
   })
 })

@@ -39,7 +39,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { buildTranscriptIndex } from '../engine/transcript-index'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import { findCodexRollout, lastCodexContext } from './codex-rollout'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'

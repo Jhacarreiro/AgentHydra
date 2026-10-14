@@ -3,7 +3,8 @@
 // twice over: the rail lets clicks through to the chat under it and only the cards took them back; and the panel's
 // scrollIntoView of its chosen task scrolled the rail's overflow-hidden box 299px sideways, so the panel sat under the chat.
 // el.click() ignores pointer-events, so every click here is a real mouse event at the control's centre.
-// On a Desk chat with a running task: every control on the cards and on the panel is what a click at its centre hits; hovering a
+// On a Desk chat with a running task: every control on the cards and on the panel is what a click at its centre hits, and so are
+// the transcript's step arrows beside the rail on a wide window; hovering a
 // running task shows its Stop; a click on the task slides the panel in, its back arrow slides the cards back, Expand gives the
 // panel the chat's place and Restore gives it back, and Close shuts the rail. On an outside session: its facts are rows (no chips)
 // and every control on its cards is hit, and its Context card starts with its tokens in context.
@@ -138,6 +139,20 @@ try {
   if (await panelOpen()) await click('Back to session details')
   result(!(await panelOpen()), 'the back arrow slides the cards back')
   await allHit('the cards')
+  // On a wide window the rail lies over the chat's empty margin, where the transcript's step arrows sit (owner, 2026-10-14: it
+  // "hides the peek and previous message buttons"): each must still be what a click at its centre hits.
+  await send('Emulation.setDeviceMetricsOverride', { width: 2400, height: 900, deviceScaleFactor: 1, mobile: false })
+  await sleep(SETTLE)
+  const steps = (await ev(`['Previous message you sent', 'Peek at the previous message you sent'].map((l) => {
+    const b = document.querySelector('button[aria-label="' + l + '"]')
+    if (!b) return l + ': none'
+    const r = b.getBoundingClientRect()
+    const t = document.elementFromPoint(r.left + r.width / 2, r.top + r.height / 2)
+    return t === b || b.contains(t) ? '' : l + ': under ' + (t && t.closest('aside') ? t.closest('aside').getAttribute('aria-label') : t ? t.tagName : 'nothing')
+  }).filter(Boolean)`)) as string[]
+  result(!steps.length, 'on a wide window the step arrows take a click beside the open rail', steps.join(', '))
+  await send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 900, deviceScaleFactor: 1, mobile: false })
+  await sleep(SETTLE)
   const task = ', show it in Background tasks'
   const row = (await ev(centre(task, false))) as { x: number; y: number; name: string } | null
   if (!row) result(false, 'a running task on the Background tasks card')
@@ -168,6 +183,13 @@ try {
   // The scene's index says 84,300 tokens, as a session file's last reply would (bridge lastContextTokens).
   const ctx = (await ev(`(() => { const r = document.querySelector('[data-rail-card="context"] [data-testid="rail-context-tokens"]'); return r ? { text: r.textContent.trim(), icon: !!r.querySelector('svg') } : null })()`)) as { text: string; icon: boolean } | null
   result(!!ctx && ctx.icon && /^84\.3K tokens in context$/i.test(ctx.text), "the Context card's first row is the session's tokens in context, with its icon", JSON.stringify(ctx))
+  // How often each tool and each connector was called (owner, 2026-10-14: "show how many times each was accessed"), the most first.
+  const calls = (await ev(`({
+    tools: [...document.querySelectorAll('[data-rail-card="tools"] [data-testid="rail-tool"]')].map((r) => Number(r.lastElementChild.textContent.trim())),
+    connectors: [...document.querySelectorAll('[data-rail-card="connectors"] [data-testid="rail-connector-calls"]')].map((r) => Number(r.textContent.trim()))
+  })`)) as { tools: number[]; connectors: number[] }
+  const ranked = (ns: number[]) => ns.length > 0 && ns.every((n, i) => n > 0 && (i === 0 || n <= ns[i - 1]!))
+  result(ranked(calls.tools) && ranked(calls.connectors), "the Tools and Connectors cards give each one's calls, the most first", JSON.stringify(calls))
   await allHit("an outside session's cards")
 } finally {
   for (const s of sockets) s.close()

@@ -340,12 +340,13 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
         <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-(--text)' : 'text-(--text-muted)']" :aria-pressed="all" @click="toggleAll">All</button>
       </div>
 
+      <!-- Rows of 24px, not 32 (owner, 2026-10-14: "make it more compact ... make some more fit in the same height"). -->
       <ul v-if="finishedOpen" class="mt-1 flex flex-col" aria-label="Finished">
         <li
           v-for="u in lists.finished"
           :key="u.id"
           :data-unit="u.id"
-          class="flex h-8 items-center gap-2 rounded-md px-2 text-(--text-muted) hover:bg-(--fill-5)"
+          class="flex h-6 items-center gap-2 rounded-(--radius-6) px-2 text-(--text-muted) hover:bg-(--fill-5)"
         >
           <Check v-if="!u.failed && u.phases.every((p) => p.agents.every((a) => a.state === 'done'))" class="size-3 shrink-0" :stroke-width="1.5" />
           <X v-else class="size-3 shrink-0 text-(--danger-text)" :stroke-width="1.5" />

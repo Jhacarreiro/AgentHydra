@@ -49,7 +49,7 @@ import type {
   TranscriptItem,
 } from '@shared/protocol'
 import { NOTE_MAX, type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
-import { buildTranscriptIndex } from './transcript-index'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
