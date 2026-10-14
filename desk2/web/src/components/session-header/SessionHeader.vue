@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
-import { ChevronDown, ChevronUp, Coins, Copy, FileText, Hash, MessagesSquare, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
+import { ChevronDown, ChevronUp, Coins, MessagesSquare, Monitor, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
 import { actionError } from '@/lib/action-error'
 import { icons, newSessionGlyphs, shellGlyphs } from '@/lib/icons'
@@ -39,7 +39,6 @@ import {
   instanceName,
   instanceTarget,
   sourceName,
-  SOURCE_TONE,
   turnCount,
   usageDetail,
   usageSummary,
@@ -51,14 +50,16 @@ import {
 } from './logic'
 import { displayPrefs, restartPeek } from './state'
 import { RAIL_TARGETS, railTargets } from '@/components/rail/state'
+import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN } from '@/components/rail/classes'
 
 // Hydra Desk 2's session header for an outside session: what AgentHydra's Sessions tab said and offered
-// about the open session, which this replaces (Michael, 2026-10-04). Its facts, each its own colour (the
-// source, the id, the account, the folder, the branch, the model; turns, tokens and cost, credentials it
-// printed), and its actions (Find, Copy file location, Copy ID, the ⋯ menu: account, display, session file,
-// terminal, migrate, close) are drawn into the session rail's Environment and Context cards (components/rail,
-// owner 2026-10-14: the bar across the top became the rail) while the rail is on screen. The folder chip
-// opens the folder; the account chip shows that account in AgentHydra's Instances.
+// about the open session, which this replaces (Michael, 2026-10-04). Its facts, rows of a gray icon and the
+// fact as Claude Desktop's rail draws them (the source with its short id, the account, the folder, the branch,
+// the model; turns, tokens and cost, credentials it printed), and its actions (Find and the ⋯ menu: account,
+// display, session file, terminal, migrate, close) are drawn into the session rail's
+// Environment and Context cards (components/rail, owner 2026-10-14: the bar across the top became the rail)
+// while the rail is on screen. The source row copies the id, the folder row opens the folder (its dashboard
+// on hover), the account row shows that account in AgentHydra's Instances.
 //
 // The Find bar (Ctrl + F) lies over the top of the transcript; the transcript keeps its first row clear of
 // it through the inset this reports (update:inset).
@@ -369,20 +370,6 @@ watch(inset, (px) => emit('update:inset', px), { immediate: true })
 const BTN_SHAPE =
   'flex size-[26px] shrink-0 items-center justify-center rounded-[var(--radius-6)] transition-colors duration-[60ms] hover:bg-fill-hover disabled:opacity-40 disabled:hover:bg-transparent aria-expanded:bg-fill-hover'
 const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
-// Each fact its own colour (Michael, 2026-10-04: "a little bit more color"); the clickable ones brighten on hover.
-const CHIP = 'flex h-[22px] min-w-0 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-1.5 text-ui-sm leading-4 transition-colors duration-[60ms]'
-const TONE = {
-  id: 'bg-[var(--fill-secondary)] text-text-2 hover:bg-[var(--fill-secondary-hover)] hover:text-text',
-  account: 'bg-[#8B5CF6]/14 text-[#C4B5FD]',
-  accountLink: 'bg-[#8B5CF6]/14 text-[#C4B5FD] hover:bg-[#8B5CF6]/26',
-  folder: 'bg-[#F59E0B]/12 text-[#FCD34D] hover:bg-[#F59E0B]/24',
-  dashboard: 'bg-[#EC4899]/12 text-[#F9A8D4] hover:bg-[#EC4899]/24',
-  branch: 'bg-[#22C55E]/12 text-[#86EFAC]',
-  turns: 'bg-[#0EA5E9]/12 text-[#7DD3FC]',
-  usage: 'bg-[#10B981]/12 text-[#6EE7B7]',
-  model: 'bg-[#2A78D6]/16 text-[#93C5FD]',
-  secrets: 'bg-warning-bg text-warning-text hover:brightness-125'
-}
 </script>
 
 <template>
@@ -418,16 +405,6 @@ const TONE = {
         <Tip label="Find in session (Ctrl + F)">
           <button type="button" :class="findOpen ? `${BTN_SHAPE} text-accent-text` : BTN" aria-label="Find in session" :aria-pressed="findOpen" @click="findOpen ? closeFind() : openFind()">
             <Search class="size-4" />
-          </button>
-        </Tip>
-        <Tip v-if="row && hasFile(row.source)" label="Copy session file location">
-          <button type="button" :class="BTN" aria-label="Copy session file location" :disabled="copyingLocation" :aria-busy="copyingLocation" @click="copyLocation()">
-            <FileText class="size-4" />
-          </button>
-        </Tip>
-        <Tip label="Copy session id">
-          <button type="button" :class="BTN" aria-label="Copy session id" @click="copyId">
-            <Copy class="size-4" />
           </button>
         </Tip>
         <Tip :label="filtered ? 'Part of this transcript is hidden by a display filter' : 'More actions'">
@@ -527,76 +504,87 @@ const TONE = {
         </Tip>
       </Teleport>
       <Teleport defer :to="`#${RAIL_TARGETS.environment}`">
-        <span
-          v-if="row"
-          class="flex h-5.5 shrink-0 items-center rounded-(--radius-6) border px-1.5 text-ui-sm font-medium"
-          :class="SOURCE_TONE[row.source] ?? 'border-border bg-(--fill-secondary) text-text-2'"
-        >{{ sourceName(row) }}</span>
-        <Tip label="Copy session id">
-          <button type="button" :class="[CHIP, TONE.id]" class="font-mono" :aria-label="`Session ${sessionId}, copy id`" @click="copyId">
-            <Hash class="size-3 shrink-0 opacity-70" />{{ shortId }}
-          </button>
-        </Tip>
-        <Tip v-if="account" :label="accountTip">
-          <button
-            v-if="target"
-            type="button"
-            :class="[CHIP, TONE.accountLink]"
-            :aria-label="`Account ${account.name}, show it in AgentHydra's Instances`"
-            @click="showAccount"
-          >
-            <UserRound class="size-3.5 shrink-0" />
-            <span v-if="row?.instance_num" class="tnum opacity-80">#{{ row.instance_num }}</span>
-            <span class="max-w-48 truncate">{{ account.name }}</span>
-          </button>
-          <span v-else :class="[CHIP, TONE.account]" class="cursor-default" tabindex="0">
-            <UserRound class="size-3.5 shrink-0" />
-            <span class="max-w-48 truncate">{{ account.name }}</span>
-          </span>
-        </Tip>
-        <Tip v-else-if="target" label="Show this account in AgentHydra's Instances">
-          <button type="button" :class="[CHIP, TONE.accountLink]" class="tnum" :aria-label="`Instance #${target.num}, show it in AgentHydra's Instances`" @click="showAccount">
-            <UserRound class="size-3.5 shrink-0" />#{{ target.num }}
-          </button>
-        </Tip>
-        <Tip v-if="cwd" :label="`Open ${cwd}`">
-          <button type="button" :class="[CHIP, TONE.folder]" :aria-label="`Folder ${folderLabel(cwd)}, open it`" @click="openFolder">
-            <component :is="newSessionGlyphs.folder" class="size-3.5 shrink-0" />
-            <span class="max-w-48 truncate">{{ folderLabel(cwd) }}</span>
-          </button>
-        </Tip>
-        <Tip v-if="cwd" label="Project dashboard">
-          <button type="button" :class="[CHIP, TONE.dashboard]" aria-label="Project dashboard" @click="openDashboard(cwd)">
-            <DashboardGlyph class="size-3.5 shrink-0" aria-hidden="true" />
-          </button>
-        </Tip>
-        <Tip v-if="row?.git_branch && row.git_branch !== 'HEAD'" label="Git branch">
-          <span :class="[CHIP, TONE.branch]" class="cursor-default" tabindex="0">
-            <component :is="newSessionGlyphs.branch" class="size-3.5 shrink-0" />
-            <span class="max-w-40 truncate">{{ row.git_branch }}</span>
-          </span>
-        </Tip>
-        <span v-if="model" :class="[CHIP, TONE.model]" class="cursor-default">
-          <Sparkles class="size-3.5 shrink-0" />{{ model }}
-        </span>
+        <ul class="flex flex-col">
+          <li v-if="row">
+            <Tip label="Copy session id">
+              <button type="button" :class="RAIL_ROW_BTN" :aria-label="`${sourceName(row)} session ${sessionId}, copy id`" @click="copyId">
+                <Monitor :class="RAIL_ICON" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-text">{{ sourceName(row) }}</span>
+                <span class="font-mono text-ui-sm text-text-muted">{{ shortId }}</span>
+              </button>
+            </Tip>
+          </li>
+          <li v-if="account || target">
+            <Tip :label="account ? accountTip : 'Show this account in AgentHydra\'s Instances'">
+              <button
+                v-if="target"
+                type="button"
+                :class="RAIL_ROW_BTN"
+                :aria-label="account ? `Account ${account.name}, show it in AgentHydra's Instances` : `Instance #${target.num}, show it in AgentHydra's Instances`"
+                @click="showAccount"
+              >
+                <UserRound :class="RAIL_ICON" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-text">{{ account?.name ?? `Instance #${target.num}` }}</span>
+                <span v-if="account && row?.instance_num" class="tnum text-ui-sm text-text-muted">#{{ row.instance_num }}</span>
+              </button>
+              <span v-else :class="RAIL_ROW" tabindex="0">
+                <UserRound :class="RAIL_ICON" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-text">{{ account?.name }}</span>
+              </span>
+            </Tip>
+          </li>
+          <li v-if="cwd" class="group/row relative">
+            <Tip :label="`Open ${cwd}`">
+              <button type="button" :class="RAIL_ROW_BTN" class="pe-8" :aria-label="`Folder ${folderLabel(cwd)}, open it`" @click="openFolder">
+                <component :is="newSessionGlyphs.folder" :class="RAIL_ICON" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-text">{{ folderLabel(cwd) }}</span>
+              </button>
+            </Tip>
+            <span class="absolute inset-y-0 right-0.5 flex items-center opacity-0 transition-opacity duration-60 group-hover/row:opacity-100 group-focus-within/row:opacity-100">
+              <Tip label="Project dashboard">
+                <button type="button" :class="RAIL_ICON_BTN" aria-label="Project dashboard" @click="openDashboard(cwd)">
+                  <DashboardGlyph class="size-3.5" aria-hidden="true" />
+                </button>
+              </Tip>
+            </span>
+          </li>
+          <li v-if="row?.git_branch && row.git_branch !== 'HEAD'" :class="RAIL_ROW">
+            <component :is="newSessionGlyphs.branch" :class="RAIL_ICON" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate text-text">{{ row.git_branch }}</span>
+          </li>
+          <li v-if="model" :class="RAIL_ROW">
+            <Sparkles :class="RAIL_ICON" aria-hidden="true" />
+            <span class="min-w-0 flex-1 truncate text-text">{{ model }}</span>
+          </li>
+        </ul>
       </Teleport>
       <Teleport defer :to="`#${RAIL_TARGETS.context}`">
-        <Tip :label="turnsTip">
-          <span :class="[CHIP, TONE.turns]" class="tnum cursor-default" tabindex="0">
-            <MessagesSquare class="size-3.5 shrink-0" />{{ turns }} {{ turns === 1 ? 'turn' : 'turns' }}
-          </span>
-        </Tip>
-        <Tip v-if="usageText" :label="usageTip">
-          <span :class="[CHIP, TONE.usage]" class="tnum cursor-default" tabindex="0" aria-label="Tokens and cost">
-            <Coins class="size-3.5 shrink-0" />{{ usageText }}
-          </span>
-        </Tip>
-        <Tip v-if="secrets && secrets.count > 0" :label="`This session printed ${secrets.count} thing${secrets.count === 1 ? '' : 's'} that look like credentials. Click for the list.`">
-          <button type="button" :class="[CHIP, TONE.secrets]" @click="secretsOpen = true">
-            <ShieldAlert class="size-3.5 shrink-0" />
-            <span class="tnum">{{ secrets.count }} {{ secrets.count === 1 ? 'secret' : 'secrets' }}</span>
-          </button>
-        </Tip>
+        <ul class="flex flex-col">
+          <li>
+            <Tip :label="turnsTip">
+              <span :class="RAIL_ROW" tabindex="0">
+                <MessagesSquare :class="RAIL_ICON" aria-hidden="true" />
+                <span class="tnum min-w-0 flex-1 truncate text-text">{{ turns.toLocaleString() }} {{ turns === 1 ? 'turn' : 'turns' }}</span>
+              </span>
+            </Tip>
+          </li>
+          <li v-if="usageText">
+            <Tip :label="usageTip">
+              <span :class="RAIL_ROW" tabindex="0" aria-label="Tokens and cost">
+                <Coins :class="RAIL_ICON" aria-hidden="true" />
+                <span class="tnum min-w-0 flex-1 truncate text-text">{{ usageText }}</span>
+              </span>
+            </Tip>
+          </li>
+          <li v-if="secrets && secrets.count > 0">
+            <Tip :label="`This session printed ${secrets.count} thing${secrets.count === 1 ? '' : 's'} that look like credentials. Click for the list.`">
+              <button type="button" :class="RAIL_ROW_BTN" @click="secretsOpen = true">
+                <ShieldAlert class="size-4 shrink-0 text-warning-text" aria-hidden="true" />
+                <span class="tnum min-w-0 flex-1 truncate text-warning-text">{{ secrets.count }} {{ secrets.count === 1 ? 'secret' : 'secrets' }} printed</span>
+              </button>
+            </Tip>
+          </li>
+        </ul>
       </Teleport>
     </template>
 

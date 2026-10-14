@@ -73,15 +73,6 @@ const SOURCE_NAME: Record<string, string> = {
   zswarm: 'HSwarm',
   foreign: 'Other'
 }
-/** Each product's own colour, as AgentHydra's source badge wears it. */
-export const SOURCE_TONE: Record<string, string> = {
-  claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#E9A287]',
-  codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#65D4B3]',
-  opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#9AA6FF]',
-  hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#F5C067]',
-  dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]',
-  zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]'
-}
 
 /** Where the account chip takes you in AgentHydra: the row's instance by its number, on the CLI table for
  *  a CLI instance's session and the desktop table (Claude Desktop, Codex) otherwise; null without one. */

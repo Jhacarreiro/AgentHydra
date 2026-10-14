@@ -419,17 +419,20 @@ sidebar on the left stays put, and only the pane on the right changes.
   end, shows or hides a column of cards at the chat's right, for Desk's own chats and for any session running outside Desk:
   Environment (the folder, which opens on a click; the account; the model and effort), Context (how full the context
   window is, amber from 75% and red from 90%, and what the chat has cost), To-dos (the session's checklist, TodoWrite's or
-  Claude Desktop's update_plan, folded away with a click on its name like any card), Connectors (the ones a chat gets,
-  three and Show more) and Background tasks. It takes from the chat only the room the centred text column needs: on a
-  wide window it lies over the empty margin and the text stays centred, and as the window narrows it pushes the text
-  over (`railReserve` in `web/src/components/shell/logic.ts`). Its left edge drags its width, which the window keeps. For
-  a session running outside Desk the cards hold what AgentHydra's Sessions tab said about it, each fact in its own
-  colour: the product, the short id (click to copy), the instance number and account (its address in the tooltip; click
-  to see that account's row in AgentHydra's Instances, marked), the folder, the git branch, the model, turns, tokens and
-  cost (the breakdown in the tooltip; a "+" when a model has no published price), and any credentials the transcript
-  printed (redacted). The Environment card's buttons are Find (Ctrl + F; Enter and Shift + Enter step through the
-  matches, marked in the transcript, the Find bar over the transcript's top), Copy session file location, Copy session
-  id, and a ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
+  Claude Desktop's update_plan), Connectors (the ones a chat gets, or for an outside session the MCP servers its tools
+  called, as letter tiles, three and Show more) and Background tasks (what runs, with a Stop on hover, greyed with its
+  reason for a task only the session that started it can stop; a click on a task slides the full list in). Each card
+  folds with a click on its name and then says what it holds on the right ("1 running", "3 of 5 done"), and remembers
+  it. Each fact is one row of a gray icon and the fact, as Claude Desktop draws them. It takes from the chat only the
+  room the centred text column needs: on a wide window it lies over the empty margin and the text stays centred, and
+  as the window narrows it pushes the text over (`railReserve` in `web/src/components/shell/logic.ts`). Its left edge
+  drags its width, which the window keeps. For a session running outside Desk the cards hold what AgentHydra's
+  Sessions tab said about it: the product and short id (click to copy the id), the instance number and account (its
+  address in the tooltip; click to see that account's row in AgentHydra's Instances, marked), the folder (its project
+  dashboard on hover), the git branch, the model, turns, tokens and cost (the breakdown in the tooltip; a "+" when a
+  model has no published price), and any credentials the transcript printed (redacted). The Environment card's buttons
+  are Find (Ctrl + F; Enter and Shift + Enter step through the matches, marked in the transcript, the Find bar over the
+  transcript's top) and a ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
   activity, reasoning, compact layout), the session file (open it, save it as Markdown, a web page or the raw .jsonl,
   copy the file itself, copy its path), for Claude sessions Reopen in a terminal and Migrate to another account, and
   Close. The chat title in the title bar is centred. It reads AgentHydra through Desk 2's `/ah/api`.
