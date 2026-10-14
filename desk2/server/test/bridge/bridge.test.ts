@@ -128,6 +128,22 @@ describe('bridge', () => {
     expect(ids.length).toBe(6)
   })
 
+  // Owner, 2026-10-14: a live probe round's chats filled the sidebar until its cleanup ran.
+  test("the live probe's own sessions are left out, however the folder is written, unless asked for", async () => {
+    const f = await fake()
+    const at = (n: number, cwd: string) => ({ ...f.state.sessions[0], session_id: sid(n), source: 'claude', cwd, last_activity_at: NOW })
+    f.state.sessions.push(
+      at(960, 'C:/Users/me/AppData/Local/Temp/agenthydra-smoke/held'),
+      at(961, 'C:\\Users\\me\\AppData\\Local\\Temp\\AGENTHYDRA-SMOKE\\queue'),
+      at(962, 'C:/Users/me/AppData/Local/Temp/agenthydra-smoke-notes'),
+    )
+    const b = createBridge({ url: f.url, now: () => NOW })
+    const ids = (await b.externalSessions()).map((s) => s.id)
+    expect([ids.includes(sid(960)), ids.includes(sid(961)), ids.includes(sid(962))]).toEqual([false, false, true])
+    const all = (await b.externalSessions({ throwaway: true })).map((s) => s.id)
+    expect([all.includes(sid(960)), all.includes(sid(961))]).toEqual([true, true])
+  })
+
   test('a pinned session stays listed however old; unpinned it ages out again', async () => {
     const f = await fake()
     const old = { ...f.state.sessions[0], session_id: sid(901), source: 'claude', last_activity_at: NOW - 3 * 24 * 3600_000 }

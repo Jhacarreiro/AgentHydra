@@ -70,10 +70,15 @@ async function get<T>(base: string, path: string): Promise<T> {
   return (await res.json()) as T
 }
 
-/** The room left: 100 minus the higher of the two windows' use; 0 when neither window is read. */
+/** Each account's last reading: a read that fails or times out keeps the one before it. */
+const lastUsed = new Map<string, Used>()
+
+/** The room left: 100 minus the higher of the two windows' use. An account never read counts as half full, as Desk's
+ *  pick does (2026-10-14: counted as full, every Codex login whose read timed out under load was skipped, and the
+ *  probe's Codex chats got "No Codex account has room now"). */
 function roomOf(used: Used | null): number {
   const pcts = [used?.session, used?.week].filter((p): p is number => typeof p === 'number')
-  return pcts.length ? Math.max(0, 100 - Math.max(...pcts)) : 0
+  return pcts.length ? Math.max(0, 100 - Math.max(...pcts)) : 50
 }
 
 /** "#<num> <name>", never an email: a name holding an @ falls back to the service's name. */
@@ -92,15 +97,15 @@ function account(
   return { id, service, label, home, room: roomOf(used) }
 }
 
-async function usageOf(path: string): Promise<Used | null> {
+async function usageOf(id: string, path: string): Promise<Used | null> {
   try {
     const res = await get<{
       snapshot?: { session?: { pct?: number } | null; weekAll?: { pct?: number } | null } | null
     }>(DAEMON, path)
-    return { session: res.snapshot?.session?.pct, week: res.snapshot?.weekAll?.pct }
-  } catch {
-    return null
-  }
+    const used = { session: res.snapshot?.session?.pct, week: res.snapshot?.weekAll?.pct }
+    if (typeof used.session === 'number' || typeof used.week === 'number') lastUsed.set(id, used)
+  } catch {}
+  return lastUsed.get(id) ?? null
 }
 
 async function claudeAccounts(): Promise<Account[]> {
@@ -109,7 +114,7 @@ async function claudeAccounts(): Promise<Account[]> {
   )
   const used = await Promise.all(
     live.map((row) =>
-      usageOf(`/api/usage?instance=${encodeURIComponent(String(row.num ?? row.id))}`),
+      usageOf(row.id, `/api/usage?instance=${encodeURIComponent(String(row.num ?? row.id))}`),
     ),
   )
   return live.map((row, i) =>
@@ -122,7 +127,7 @@ async function codexAccounts(): Promise<Account[]> {
   desktopOpen.clear()
   for (const row of live) if (row.isDesktopRunning) desktopOpen.add(row.id)
   const used = await Promise.all(
-    live.map((row) => usageOf(`/api/codex-instances/${encodeURIComponent(row.id)}/usage`)),
+    live.map((row) => usageOf(row.id, `/api/codex-instances/${encodeURIComponent(row.id)}/usage`)),
   )
   return live.map((row, i) =>
     account('codex', row.id, row.codexHome, labelOf(row.num, row.name, 'Codex'), used[i]),

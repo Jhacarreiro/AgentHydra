@@ -1,5 +1,6 @@
 // The core's server (core/README.md): the chat API under /api on 127.0.0.1, and one WebSocket at /ws that sends every
 // change as Desk's ServerEvent. Bad input is 400, an unknown chat or session 404, and nothing answers 5xx.
+import { isThrowawayCwd } from '../../desk2/shared/throwaway'
 import { accounts } from './accounts'
 import { chatgptBackend } from './backends/chatgpt'
 import { claudeBackend } from './backends/claude'
@@ -128,7 +129,17 @@ const routes: Route[] = [
     /^\/api\/chats\/([^/]+)\/cancel-queued$/,
     async (m, req) => json(chats.cancelQueued(id(m), await body(req))),
   ],
-  ['GET', /^\/api\/external\/sessions$/, async () => json(await outside.list())],
+  // ?throwaway=1: the live probe's own threads too (desk2/shared/throwaway.ts); a person's list never has them.
+  [
+    'GET',
+    /^\/api\/external\/sessions$/,
+    async (_m, _req, url) => {
+      const all = await outside.list()
+      return json(
+        url.searchParams.get('throwaway') === '1' ? all : all.filter((s) => !isThrowawayCwd(s.cwd)),
+      )
+    },
+  ],
   ['GET', /^\/api\/external\/sessions\/([^/]+)\/items$/, (m) => page(outside.tail(id(m)))],
   [
     'GET',
@@ -166,6 +177,8 @@ async function handle(req: Request, url: URL): Promise<Response> {
 server = Bun.serve({
   hostname: '127.0.0.1',
   port: PORT,
+  // A task wait holds its request up to 50 s; Bun closes one idle for 10 s by default (2026-10-14: ECONNRESET).
+  idleTimeout: 120,
   async fetch(req, srv) {
     const url = new URL(req.url)
     if (url.pathname === '/ws')

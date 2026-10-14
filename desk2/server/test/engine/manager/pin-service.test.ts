@@ -290,10 +290,11 @@ test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that Chat
     f.finish(result)
   }
   const chatId = '11111111-2222-4333-8444-555555555555'
-  // The account with unlimited text first; a new ChatGPT chat named for this one.
+  // The account with unlimited text first; a new ChatGPT chat named for this one, its id making the name the account's
+  // own (the Free runtime refuses a name one of its chats has).
   await ask('Name three rivers', { ok: true, chat_id: chatId, is_temporary: true, response: 'Nile, Amazon, Danube.' })
   await waitFor(() => m.get(chat.id).status === 'idle')
-  expect(f.asked[0]).toMatchObject({ instanceId: A.id, provider: 'chatgpt', command: 'chat', name: 'Pinned', prompt: 'Name three rivers' })
+  expect(f.asked[0]).toMatchObject({ instanceId: A.id, provider: 'chatgpt', command: 'chat', name: `Pinned ${chat.id.slice(0, 8)}`, prompt: 'Name three rivers' })
   expect(m.get(chat.id).serviceThreads?.chatgpt).toEqual({ accountId: A.id, label: '#3 alpha', threadId: chatId })
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Nile, Amazon, Danube.'])
   expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: true })

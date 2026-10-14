@@ -16,6 +16,7 @@
 // do throw a BridgeError.
 
 import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptItem } from '@shared/protocol'
+import { isThrowawayCwd } from '@shared/throwaway'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
@@ -472,7 +473,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
   }
 
-  async function externalSessions(o: { strict?: boolean } = {}): Promise<ExternalSession[]> {
+  /** `throwaway`: also the live probe's own sessions (shared/throwaway.ts), which every other caller, the window's
+   *  list above all, never sees; only the probe asks for them, to find a thread it made. */
+  async function externalSessions(o: { strict?: boolean; throwaway?: boolean } = {}): Promise<ExternalSession[]> {
     const inp = await externalInputs(o.strict)
     if (!inp) return []
     const exclude = new Set(await excludeSessionIds())
@@ -487,7 +490,8 @@ export function createBridge(opts: BridgeOptions = {}) {
       (r): r is NonNullable<typeof r> => r !== null,
     )
     const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
-    const list = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
+    const mapped = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
+    const list = o.throwaway ? mapped : mapped.filter((s) => !isThrowawayCwd(s.cwd))
     rememberTitles(list)
     return sessionMeta(list, onAccountIds(inp))
   }

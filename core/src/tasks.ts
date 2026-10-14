@@ -149,7 +149,9 @@ function hswarmAsk(t: Live): Promise<{ ok: boolean; text?: string; error?: strin
     child.on('close', () => {
       t.stop = null
       try {
-        const r = JSON.parse(out.trim().split('\n').pop() ?? '')
+        // `--json` prints the answer indented, after any notice lines: it starts at the last line opening with `{`.
+        const at = out.lastIndexOf('\n{')
+        const r = JSON.parse(at >= 0 ? out.slice(at) : out)
         resolveAsk(
           r.status === 'ok' && typeof r.answer === 'string'
             ? { ok: true, text: r.answer }
@@ -195,6 +197,7 @@ async function route(t: Live): Promise<void> {
       if (end.ok) return finish(t, 'done', { result: end.text ?? '', error: null })
       if (t.row.status !== 'running') return
       last = end.error ?? 'The turn failed.'
+      console.warn(`[core:tasks] ${t.row.id.slice(0, 8)} ${step} ${picked.id.slice(0, 8)}: ${last}`)
     }
   }
   finish(t, 'failed', { error: last })

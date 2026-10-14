@@ -3,13 +3,13 @@
 ## Status
 
 <!-- rewritten by frontier.py on every `next`; hand notes go in the Log -->
-<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null]], "iteration": 2, "last": {"at": "2026-10-14T06:44Z", "frontier": {"detail": {"queued": [false, true], "queuedCount": 0, "replies": ["ONE"], "status": "error", "stillMarkedQueued": [false, false]}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-queue", "passed": null}, "green": 14, "stalled": false, "total": 22}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
+<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null]], "iteration": 3, "last": {"at": "2026-10-14T07:09Z", "frontier": {"detail": {"queued": [false, true], "queuedCount": 0, "replies": [], "status": "error", "stillMarkedQueued": [false, false]}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-queue", "passed": null}, "green": 16, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
 - goal: A fresh AgentHydra core (accounts + a message -> the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it
 - probe: `C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run "bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts"`
-- updated: 2026-10-14T06:44Z
+- updated: 2026-10-14T07:09Z
 - frontier: `codex-queue` FIX
-- stages green: 14/22
-- iterations: 2
+- stages green: 16/23
+- iterations: 3
 - stalled: no
 
 ## Log
@@ -28,3 +28,7 @@
 - 2026-10-14T06:52Z verify: Round 2: 14/22 green. history-paging PASS (sessionJsonlPage). Failing: codex-queue, codex-interrupt (a 429), chatgpt-image, chatgpt-oversize, codex-held-elsewhere, switch-while-busy, claude-to-codex-mid-turn, handoff-roundtrip. task-* all PASS. Landed 3b845eec; d70144ba hides the probe's throwaway folder from every list.
 - 2026-10-14T06:52Z fix: core-fix3 sent: chat.ts (queue drain, pin on a queued turn, handoff back to a service), chatgpt.ts (images, oversize), codex.ts (429 moves the turn, held-elsewhere).
 - 2026-10-14T06:58Z analyze: Round 2 WHY lines: 6 stages failed on 'exceeded retry limit, last status: 429 Too Many Requests' (parallel Codex turns all picked the emptiest login) and 3 on Desk's 409 'This account already has an operation running' (two chats on one Free account). Fix (orchestrator): accounts.ts picks round the accounts (least recently picked; a Codex login with its app open last, as Desk's pickCodexAccount); codex.ts holds a throttled login 2 min so the turn moves (README: a failure moves it to the next A); chatgpt.ts waits up to 3 min for a busy Free account (the thread lives there). smoke.ts gains stage 'unlisted': Desk's outside list holds nothing from the run, read before cleanup.
+- 2026-10-14T07:09Z probe: frontier `codex-queue` FIX [16/23 green]
+- 2026-10-14T07:19Z analyze: Round 3 (16/23): 4 Codex stages 'No Codex account has room now' (an unread usage window counted as room 0, so a login whose read timed out was never picked); codex-import-race and codex-held-elsewhere 'thread never listed as outside' (the probe-folder filter sat in the shared mapExternal, so the core hid the probe's own threads); task-many empty (HSwarm --json is indented, the parse read only its last line; every ChatGPT account refused the name 'Reply with exactly...' with name_conflict, since earlier rounds made a chat of that name on each).
+- 2026-10-14T07:19Z fix: accounts.ts: unread counts as half full (Desk's rule) and each account keeps its last good reading. The throwaway filter moved out of mapExternal into Desk's externalSessions and the core's route, both with ?throwaway=1 for the probe. tasks.ts parses the indented answer and logs each failed attempt. A ChatGPT chat's name is its title plus the chat id's start, in the core and in Desk's live runtime (the same name_conflict hit two Desk chats with one title on one account). Core idleTimeout 120 s (Bun's 10 s default reset a 30 s task wait).
+- 2026-10-14T07:19Z verify: task-many and task-api alone on the core: 2 of 2 (task-many 6/6 in 9 s, all on ChatGPT).

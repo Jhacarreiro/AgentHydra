@@ -202,28 +202,6 @@ describe('external sessions', () => {
     expect(row).toMatchObject({ source: 'codex', title: 'Invented Codex chat', instance: 'codex-1', cwd: 'C:/Users/me/project', status: 'stale' })
   })
 
-  // Owner, 2026-10-14: a live probe round's throwaway chats filled the sidebar until its cleanup ran.
-  test("nothing in the live probe's throwaway folder is listed, however its path is written", () => {
-    const codex = (n: number, cwd: string) => ({
-      instance: 'codex-1',
-      instanceNum: 61,
-      instanceId: 'b0000000-0000-4000-8000-000000000001',
-      threadId: sid(n),
-      title: 'Invented Codex chat',
-      cwd,
-      lastActivityAt: new Date(NOW - 60_000).toISOString(),
-    })
-    const codexChats = [
-      codex(893, '\\\\?\\C:\\Users\\me\\AppData\\Local\\Temp\\AGENTHYDRA-SMOKE\\interrupt'),
-      codex(894, 'C:/Users/me/AppData/Local/Temp/agenthydra-smoke/held/'),
-      codex(895, 'C:/Users/me/AppData/Local/Temp/agenthydra-smoke-notes'),
-    ]
-    const ids = mapExternal({ ...inputs, codexChats }, new Set(), NOW).map((x) => x.id)
-    expect(ids).not.toContain(sid(893))
-    expect(ids).not.toContain(sid(894))
-    expect(ids).toContain(sid(895))
-  })
-
   test('a chat started from a chip is parented to the chat it names; an unknown parent leaves it out', () => {
     const chat = (n: number, spawnedFrom: string | null) => ({
       instance: 'Claude-9',

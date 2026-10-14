@@ -152,7 +152,8 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/bridge/status', async (c) => c.json(await b.status()))
   app.get('/api/accounts', (c) => guarded(c, b, async () => c.json(await b.listAccounts())))
   app.get('/api/accounts/pick', async (c) => c.json(await b.pickAccount()))
-  app.get('/api/external/sessions', async (c) => c.json(await b.externalSessions()))
+  // ?throwaway=1: the live probe's own sessions too (shared/throwaway.ts); the window's list never has them.
+  app.get('/api/external/sessions', async (c) => c.json(await b.externalSessions({ throwaway: c.req.query('throwaway') === '1' })))
   // One session by id, however old (the list only holds the last day's): a search hit opens with it.
   app.get('/api/external/sessions/:id', (c) => guarded(c, b, async () => c.json(await b.externalSession(c.req.param('id')))))
   // The window sends the session's cwd, so its folder is looked in first. The open is timed: where its time went goes to timings.jsonl.

@@ -305,7 +305,8 @@ async function outsideThread(name: string): Promise<Thread> {
   chats.splice(chats.indexOf(c.id), 1)
   const listed = await until(
     async () =>
-      ((await ok<{ id: string }[]>('GET', '/external/sessions')) ?? []).some(
+      // Its own thread: the default list never shows the probe's folder (desk2/shared/throwaway.ts).
+      ((await ok<{ id: string }[]>('GET', '/external/sessions?throwaway=1')) ?? []).some(
         (s) => s.id === t.threadId,
       ),
     300_000,

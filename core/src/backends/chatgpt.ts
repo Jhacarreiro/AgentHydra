@@ -47,12 +47,15 @@ class DeskError extends Error {
 const BUSY_WAIT_MS = 3 * 60_000
 const BUSY_POLL_MS = 3000
 
-/** A ChatGPT chat's name: 1 to 100 printable characters (runtime.ts chatName). */
-const chatName = (title: string): string =>
-  title
-    .replace(/\p{Cc}/gu, ' ')
-    .trim()
-    .slice(0, 100) || 'Desk chat'
+/** A ChatGPT chat's name: 1 to 100 printable characters, unique on its account (runtime.ts chatName; 2026-10-14: every
+ *  account already had a chat named for the probe's prompt, so each refused it with name_conflict). */
+const chatName = (title: string, id: string): string =>
+  `${
+    title
+      .replace(/\p{Cc}/gu, ' ')
+      .trim()
+      .slice(0, 91) || 'Desk chat'
+  } ${id.slice(0, 8)}`
 
 function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
   const started = Date.now()
@@ -95,7 +98,7 @@ function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
         prompt: task.text,
         ...(bound
           ? { command: 'resume', chatId: bound }
-          : { command: 'chat', name: chatName(task.title) }),
+          : { command: 'chat', name: chatName(task.title, task.chatId) }),
         ...(model ? { model } : {}),
       } as FreeRequest
       sink.activity('Asking ChatGPT')

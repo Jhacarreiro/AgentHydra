@@ -58,8 +58,10 @@ const POLL_MS = 250
 const LIMIT_HOLD_MS = 60 * 60_000
 /** The longest message Free instances take. */
 const PROMPT_MAX = 100_000
-/** A ChatGPT chat's name: 1 to 100 printable characters. */
-const chatName = (title: string): string => title.replace(/[\x00-\x1f]/g, ' ').trim().slice(0, 100) || 'Desk chat'
+/** A ChatGPT chat's name: 1 to 100 printable characters, and unique on its account, since the Free runtime refuses a
+ *  name one of its chats already has (name_conflict; 2026-10-14, two chats with one title on one account): the title,
+ *  then the start of the Desk chat's id. */
+const chatName = (title: string, id: string): string => `${title.replace(/[\x00-\x1f]/g, ' ').trim().slice(0, 91) || 'Desk chat'} ${id.slice(0, 8)}`
 /** The answers that say the ChatGPT chat is not there any more. */
 const GONE = new Set(['unknown_chat', 'not_found', 'invalid_chat_id'])
 
@@ -135,7 +137,7 @@ export class ChatgptRuntime extends ServiceRuntime {
         instanceId: account.id,
         provider: 'chatgpt',
         prompt,
-        ...(fresh ? { command: 'chat', name: chatName(this.chat.title) } : { command: 'resume', chatId: bound!.threadId }),
+        ...(fresh ? { command: 'chat', name: chatName(this.chat.title, this.chat.id) } : { command: 'resume', chatId: bound!.threadId }),
         ...(model ? { model } : {}),
       })
       this.job = job.id
