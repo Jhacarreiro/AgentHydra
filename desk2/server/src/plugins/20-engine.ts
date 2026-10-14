@@ -267,6 +267,13 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
       // The Desk file answers at once; the worker's live JSONL is read behind it and its new items come over /ws.
       const id = c.req.param('id')
       void manager.syncWorkers(id)
+      const q = c.req.query()
+      if (q.before !== undefined || q.limit !== undefined) {
+        const before = q.before === undefined ? undefined : Number(q.before)
+        const limit = q.limit === undefined ? 200 : Number(q.limit)
+        if ((before !== undefined && !Number.isFinite(before)) || !Number.isFinite(limit) || limit < 1) return c.json({ error: 'before and limit must be numbers (limit at least 1)' }, 400)
+        return c.json(manager.itemsPage(id, before, limit))
+      }
       const from = Date.now()
       const { body, count } = manager.itemsBody(id)
       manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: id, n: count })

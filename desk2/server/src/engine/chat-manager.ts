@@ -47,7 +47,7 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
-import { NOTE_MAX } from '@shared/protocol'
+import { NOTE_MAX, type ChatItemsPage } from '@shared/protocol'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
@@ -450,6 +450,14 @@ export class ChatManager {
       }
     }
     return { body, count: items.length }
+  }
+
+  /** One page of the chat's items ending before `before` (default: the newest page). Never stored in the whole-chat body cache. */
+  itemsPage(id: string, before: number | undefined, limit: number): ChatItemsPage {
+    const all = this.listItems(id)
+    const end = before === undefined ? all.length : Math.min(all.length, Math.max(0, Math.floor(before)))
+    const start = Math.max(0, end - Math.max(1, Math.floor(limit)))
+    return { items: all.slice(start, end), total: all.length, olderBefore: start }
   }
 
   private dropItemsBody(id: string): void {

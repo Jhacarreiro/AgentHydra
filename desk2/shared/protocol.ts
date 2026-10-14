@@ -277,6 +277,14 @@ export type TranscriptItem =
       error?: string
     })
 
+/** `GET /api/chats/:id/items?before=<position>&limit=<n>`: one page of a chat's items, oldest first. `position` is an
+ *  index in the whole list; `olderBefore` is where this page's first item sits (0 = nothing older), `total` the whole count. */
+export interface ChatItemsPage {
+  items: TranscriptItem[]
+  total: number
+  olderBefore: number
+}
+
 /** A whole transcript in brief (`GET /api/external/sessions/:id/index`): a window holding only the newest page still has every
  *  user message (`position` is its place among all `total` items), the newest checklist and the background tasks. */
 export interface TranscriptIndex {
