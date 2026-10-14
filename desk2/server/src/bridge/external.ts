@@ -298,7 +298,7 @@ export function mapExternal(
   addDesktopChats(st, chats)
   for (const c of inp.codexChats ?? [])
     // A chat another PC pushed to the Codex hub lives on that PC: listed and readable, never resumed on an account here.
-    fromIndex(st, c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), ...(c.fromPc ? { fromPc: c.fromPc } : { codexAccountId: c.instanceId }) })
+    fromIndex(st, c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId, ...(c.fromPc ? { fromPc: c.fromPc } : {}) })
   addLiveSessions(st)
   for (const h of hooks.values())
     if (h.state !== 'done') fromIndex(st, h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
