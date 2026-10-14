@@ -387,10 +387,26 @@ test("a message sent after the pin moved while a CliMayte worker was still reply
   expect(await m.send(chat.id, 'Which word?')).toEqual({ queued: true })
   expect(fake.turnStarts()).toEqual([])
 
-  // The worker's status comes from AgentHydra's list, not a runtime event: its reply ending sends what waited.
+  // The worker's status comes from AgentHydra's list, not a runtime event: its reply ending sends what waited. A
+  // change to the chat while its transcript is still being read (a rename here) does not send it early.
   b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Noted: KIWI.' }]
   Object.assign(row, { status: 'done' })
-  await m.syncWorkers(chat.id)
+  const read = b.bridge.workerItems
+  let reading = false
+  let release = () => {}
+  const held = new Promise<void>((r) => (release = r))
+  b.bridge.workerItems = async (...args) => {
+    reading = true
+    await held
+    return read(...args)
+  }
+  const sync = m.syncWorkers(chat.id)
+  await waitFor(() => reading)
+  await m.patch(chat.id, { title: 'Renamed' })
+  await new Promise((r) => setTimeout(r, 50))
+  expect(fake.turnStarts()).toEqual([])
+  release()
+  await sync
   await waitFor(() => fake.turnStarts().length === 1)
   const text = String(fake.turnStarts()[0]!.input[0]!.text)
   expect(text).toContain('Noted: KIWI.')

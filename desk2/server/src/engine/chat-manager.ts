@@ -1854,7 +1854,6 @@ export class ChatManager {
     const freshSession = !!before.sessionId && !!w.sessionId && w.sessionId !== before.sessionId
     if (moved || freshSession) this.endTasks(e)
     if (w.accountId && w.accountId !== chat.account.id) this.applyWorkerAccount(e, w)
-    const next = this.applyWorkerStatus(e, w, was)
 
     // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
     // Desk file is read once, for what it already holds (emitted), not on every poll.
@@ -1866,6 +1865,10 @@ export class ChatManager {
     if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
     e.readAccount = w.accountId
     const newReply = this.syncWorkerItems(e, items)
+    // The status after the transcript: a chat never reads done before its reply is in. A message waiting for that
+    // reply goes once the chat is not busy, and a status set before the read let any change during it send the
+    // message without the reply (live, 2026-10-14: Codex was asked 'What code word did I give you?' bare).
+    const next = this.applyWorkerStatus(e, w, was)
     if (next.status === 'error') this.undelivered(e)
     else if (next.waiting) this.markQueued(e)
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
