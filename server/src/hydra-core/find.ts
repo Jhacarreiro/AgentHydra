@@ -4,6 +4,8 @@ import type { CatalogEntry, Kind } from './catalog'
 export interface FindOpts {
   kinds?: readonly Kind[]
   mode?: string
+  /** Keep only these tiers, and rank the earlier ones first. */
+  tiers?: readonly string[]
   start?: number
   limit?: number
 }
@@ -13,6 +15,8 @@ export interface Match {
   kind: Kind
   name: string
   title?: string
+  tier?: string
+  family?: string
   when: string
   cost: string
   how: string
@@ -53,15 +57,17 @@ export function findPage(
   opts: FindOpts = {},
 ): { ids: string[]; total: number } {
   const t = terms(need)
-  const scored: { id: string; score: number }[] = []
+  const scored: { id: string; rank: number; score: number }[] = []
   if (t.size)
     for (const e of entries) {
       if (opts.kinds && !opts.kinds.includes(e.kind)) continue
       if (opts.mode && !modesOf(e).includes(opts.mode)) continue
+      const rank = opts.tiers ? opts.tiers.indexOf(e.tier ?? '') : 0
+      if (rank < 0) continue
       const score = scoreEntry(e, t)
-      if (score > 0) scored.push({ id: e.id, score })
+      if (score > 0) scored.push({ id: e.id, rank, score })
     }
-  scored.sort((a, b) => b.score - a.score || a.id.localeCompare(b.id))
+  scored.sort((a, b) => a.rank - b.rank || b.score - a.score || a.id.localeCompare(b.id))
   const start = opts.start ?? 0
   const limit = opts.limit ?? PAGE
   return { ids: scored.slice(start, start + limit).map((s) => s.id), total: scored.length }
@@ -70,5 +76,7 @@ export function findPage(
 export function matchOf(e: CatalogEntry): Match {
   const m: Match = { id: e.id, kind: e.kind, name: e.name, when: e.when, cost: e.cost, how: e.how }
   if (e.title) m.title = e.title
+  if (e.tier) m.tier = e.tier
+  if (e.family) m.family = e.family
   return m
 }

@@ -1,6 +1,6 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { rmSync } from 'node:fs'
-import { loadCatalog } from '../src/hydra-core/catalog'
+import { LEAD_TIERS, loadCatalog } from '../src/hydra-core/catalog'
 import { findPage, matchOf } from '../src/hydra-core/find'
 import { findTool } from '../src/hydra-core/tree'
 import { scratch } from './hydra-core-fixture'
@@ -55,4 +55,16 @@ test('findTool returns matches and says whether a next page exists', () => {
 
 test('findTool refuses an unknown kind', () => {
   expect(() => findTool(dir, { need: 'dashboard', kind: 'boss' })).toThrow('kind must be one of')
+})
+
+test('a person match carries its tier and family', () => {
+  const m = matchOf(loadCatalog(dir).entries.get('person:design-lead')!)
+  expect(m).toMatchObject({ tier: 'manager', family: 'manager', title: 'Design lead' })
+})
+
+test('the tiers option keeps lead tiers only and ranks managers ahead of employees', () => {
+  const r = findPage(entries(), 'redesign the pricing page', { mode: 'become', tiers: LEAD_TIERS })
+  expect(r.ids.slice(0, 2)).toEqual(['person:design-lead', 'person:pricing-expert'])
+  expect(r.ids).not.toContain('person:owner-olga')
+  expect(r.ids).not.toContain('person:intern-ivan')
 })

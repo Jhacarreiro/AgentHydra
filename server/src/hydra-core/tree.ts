@@ -1,6 +1,14 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { type CatalogEntry, KINDS, type Kind, loadCatalog, loadRef, loadText } from './catalog'
+import {
+  type CatalogEntry,
+  KINDS,
+  type Kind,
+  LEAD_TIERS,
+  loadCatalog,
+  loadRef,
+  loadText,
+} from './catalog'
 import { findPage, matchOf, PAGE } from './find'
 import {
   addPick,
@@ -35,6 +43,7 @@ interface Group {
   need: string
   kinds?: Kind[]
   mode?: string
+  tiers?: readonly string[]
   start: number
   ids: string[]
 }
@@ -108,6 +117,11 @@ const EXAMPLE: Record<Exclude<Step, 'done'>, string> = {
   q8pick: '`1`, `more`, or `none`',
   q9: '`Rebuild the layout first, then test it with two visitors.`',
 }
+
+/** q1 on a chat's first message: the difficulty rides along; 2 or more gets a persona. */
+const FIRST_Q1 =
+  "Do you need anything you don't already have, and how hard is this message, 1-5? Answer `no 1`, or `yes 3: <what you need>`. 2 or more gets a persona."
+const FIRST_EXAMPLE_Q1 = '`no 1`, or `yes 3: move the notes into the archive folder`'
 
 const PEOPLE_AND_TOOLS: Kind[] = ['person', 'instrument', 'worker']
 const KNOWLEDGE: Kind[] = ['knowledge', 'skill']
@@ -186,7 +200,7 @@ export function scope(dir: string, chat: string, now = new Date()) {
   return {
     run: state.run,
     step: 'q1' as Step,
-    question: QUESTIONS.q1,
+    question: questionOf('q1', doc),
     context: {
       hydraMd: doc
         ? { exists: true, path: files.hydraMd, lead: leadName(doc), tier: doc.tier }
@@ -200,8 +214,17 @@ function group(label: string, need: string, kinds?: Kind[], mode?: string): Grou
   return { label, need, kinds, mode, start: 0, ids: [] }
 }
 
+function leadGroup(need: string): Group {
+  return { ...group('lead', need, ['person'], 'become'), tiers: LEAD_TIERS }
+}
+
 function fill(ctx: Ctx, g: Group): void {
-  g.ids = findPage(ctx.cat.values(), g.need, { kinds: g.kinds, mode: g.mode, start: g.start }).ids
+  g.ids = findPage(ctx.cat.values(), g.need, {
+    kinds: g.kinds,
+    mode: g.mode,
+    tiers: g.tiers,
+    start: g.start,
+  }).ids
   if (!g.ids.length)
     appendLog(ctx.dir, { chat: ctx.chat, event: 'find', need: g.need, empty: true }, ctx.now)
 }
@@ -228,6 +251,7 @@ function view(ctx: Ctx, state: RunState) {
 
 function questionOf(step: Step, doc: HydraDoc | null): string {
   if (step === 'done') return ''
+  if (step === 'q1' && !doc) return FIRST_Q1
   if (step === 'q2') {
     const head = doc?.plan[0] ?? 'no plan line yet'
     return `Mid-project (this message fits your hydra.md: ${doc ? leadName(doc) : 'none'}, ${head}) or new work? \`mid\` or \`new\`.`
@@ -317,9 +341,31 @@ function finishPlan(ctx: Ctx, state: RunState, prev: HydraDoc | null, plan: stri
   return end(ctx, state, doc, 'hydra', { become: lead ? loadText(lead) : null })
 }
 
+function firstQ1(ctx: Ctx, state: RunState, p: Parsed): Reply {
+  if (p.kw === 'no' && p.n === 1) return end(ctx, state, null, 'go', { say: 'Go do it.' })
+  if (p.n === undefined) {
+    state.groups = [group('need', p.text ?? state.msg)]
+    fill(ctx, state.groups[0])
+    state.step = 'q3'
+    return next(ctx, state, null)
+  }
+  state.tier = String(p.n)
+  if (p.n >= 2) {
+    state.groups = [leadGroup(p.text ?? state.msg)]
+    fill(ctx, state.groups[0])
+    state.step = 'q6pick'
+    return next(ctx, state, null)
+  }
+  state.groups = [group('need', p.text ?? state.msg)]
+  fill(ctx, state.groups[0])
+  state.step = 'q3'
+  return next(ctx, state, null)
+}
+
 function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
   switch (state.step) {
     case 'q1': {
+      if (!doc) return firstQ1(ctx, state, p)
       if (p.kw === 'no') return end(ctx, state, doc, 'go', { say: 'Go do it.' })
       state.groups = [group('need', p.text ?? state.msg)]
       fill(ctx, state.groups[0])
@@ -342,7 +388,7 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
     case 'q3': {
       if (p.kw === 'myself')
         return end(ctx, state, doc, 'go', { picks: pickHows(ctx, state) }, false)
-      state.step = 'q4'
+      state.step = state.tier ? 'q5' : 'q4'
       return next(ctx, state, doc)
     }
     case 'q4':
@@ -355,14 +401,14 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
       state.step = 'q6'
       return next(ctx, state, doc)
     case 'q6': {
-      state.groups = [group('lead', p.text ?? state.msg, ['person'], 'become')]
+      state.groups = [leadGroup(p.text ?? state.msg)]
       fill(ctx, state.groups[0])
       state.step = 'q6pick'
       return next(ctx, state, doc)
     }
     case 'q6pick': {
       if (p.kw === 'none' && p.text) {
-        state.groups = [group('lead', p.text, ['person'], 'become')]
+        state.groups = [leadGroup(p.text)]
         fill(ctx, state.groups[0])
         return next(ctx, state, doc)
       }
@@ -382,6 +428,13 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
             state,
             doc,
             'no person matched: pick a number or an id from the matches',
+          )
+        if (!(LEAD_TIERS as readonly string[]).includes(ctx.cat.get(lead)?.tier ?? ''))
+          return reject(
+            ctx,
+            state,
+            doc,
+            'only a manager or an employee can lead: owners are consulted, interns are hired under a lead',
           )
         state.lead = lead
       }
@@ -453,10 +506,18 @@ function parseRole(line: string): { label: string; need: string } {
   return m ? { label: m[1].trim(), need: m[2].trim() } : { label: line.slice(0, 60), need: line }
 }
 
-function parse(step: Step, raw: string): Parsed | null {
+function parse(step: Step, raw: string, first = false): Parsed | null {
   const t = squash(raw)
   switch (step) {
     case 'q1': {
+      if (first) {
+        const no = t.match(/^no\b(?:\s+([1-5])\b)?/i)
+        if (no) return { kw: 'no', n: Number(no[1] ?? 1) }
+        const yes = t.match(/^yes\b\s*(?:([1-5])\b)?\s*:?\s*(.+)$/i)
+        return yes
+          ? { kw: 'yes', n: yes[1] ? Number(yes[1]) : undefined, text: yes[2].trim() }
+          : null
+      }
       if (/^no\b/i.test(t)) return { kw: 'no' }
       const y = t.match(/^yes\b\s*:?\s*(.+)$/i)
       return y ? { kw: 'yes', text: y[1].trim() } : null
@@ -540,16 +601,18 @@ export function answer(
   const step = state.step
   const extra = resolve(input.picks ?? [], state, cat)
   addPicks(state, extra.ids)
-  let parsed = parse(step, input.answer ?? '')
+  let parsed = parse(step, input.answer ?? '', !doc)
   if (!parsed) {
     if (!state.retried) {
       state.retried = true
       writeText(files.state, JSON.stringify(state, null, 2))
       const shown = squash(input.answer ?? '').slice(0, 80)
+      const example =
+        step === 'q1' && !doc ? FIRST_EXAMPLE_Q1 : EXAMPLE[step as Exclude<Step, 'done'>]
       return {
         step,
         question: questionOf(step, doc),
-        retry: `Could not read "${shown}". Example: ${EXAMPLE[step as Exclude<Step, 'done'>]}`,
+        retry: `Could not read "${shown}". Example: ${example}`,
         matches: view(ctx, state),
       }
     }

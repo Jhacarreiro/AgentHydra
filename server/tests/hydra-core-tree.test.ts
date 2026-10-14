@@ -138,3 +138,50 @@ test('matches are shown once: a later question does not repeat the same list', (
   expect(q4.step).toBe('q4')
   expect(q4.matches).toBeUndefined()
 })
+
+test('a first message asks for difficulty, and "no 1" ends at q1 with nothing loaded', () => {
+  startChat(dir, chat, 'fix the typo in README')
+  expect(scope(dir, chat, now).question).toContain('1-5')
+  expect(answer(dir, chat, { answer: 'no 1' }, now)).toMatchObject({ verdict: 'go' })
+  expect(existsSync(chatPaths(dir, chat).hydraMd)).toBe(false)
+})
+
+test('a first message with a bare "no" still means go', () => {
+  startChat(dir, chat, 'fix the typo in README')
+  scope(dir, chat, now)
+  expect(answer(dir, chat, { answer: 'no' }, now)).toMatchObject({ verdict: 'go' })
+})
+
+test('difficulty 3 on a first message goes straight to the lead, managers first, with tier and family', () => {
+  startChat(dir, chat, 'redesign the pricing page')
+  scope(dir, chat, now)
+  const q6 = answer(dir, chat, { answer: 'yes 3: redesign the pricing page' }, now)
+  expect(q6.step).toBe('q6pick')
+  const list = q6.matches as { id: string; tier?: string; family?: string }[]
+  const ids = list.map((m) => m.id)
+  expect(ids.indexOf('person:design-lead')).toBeGreaterThanOrEqual(0)
+  expect(ids.indexOf('person:design-lead')).toBeLessThan(ids.indexOf('person:pricing-expert'))
+  expect(list).toContainEqual(
+    expect.objectContaining({ id: 'person:design-lead', tier: 'manager', family: 'manager' }),
+  )
+  expect(list).toContainEqual(
+    expect.objectContaining({ id: 'person:pricing-expert', tier: 'employee', family: 'expert' }),
+  )
+})
+
+test('owners and interns are never offered as a lead', () => {
+  startChat(dir, chat, 'pricing numbers for the page')
+  scope(dir, chat, now)
+  const q6 = answer(dir, chat, { answer: 'yes 3: pricing numbers for the page' }, now)
+  const ids = (q6.matches as { id: string }[]).map((m) => m.id)
+  expect(ids).toContain('person:pricing-expert')
+  expect(ids).not.toContain('person:owner-olga')
+  expect(ids).not.toContain('person:intern-ivan')
+})
+
+test('a chat with a hydra.md keeps the old q1 wording', () => {
+  startChat(dir, chat, 'Rebuild the dashboard layout')
+  writeFileSync(chatPaths(dir, chat).hydraMd, renderHydra(emptyDoc(new Date(0))))
+  expect(scope(dir, chat, now).question).not.toContain('1-5')
+  expect(answer(dir, chat, { answer: 'no' }, now)).toMatchObject({ verdict: 'go' })
+})
