@@ -589,8 +589,12 @@ onBeforeUnmount(() => {
 })
 
 // Follow new items, streaming growth and re-measured rows while pinned; scrolled up, they only tell the jump button how far down the bottom is.
+// The window moving follows too: a jump to the bottom is written against the rows on screen before it, and when those
+// were estimated taller than they render the browser stops short; the rows that replace them at the bottom are already
+// measured, so no offset changes and nothing else would take it the rest of the way (a chat whose history loaded again
+// under it sat 185px above its bottom, 2026-10-14).
 watch(
-  [offsets, showWorking, () => props.items[props.items.length - 1]],
+  [offsets, showWorking, () => props.items[props.items.length - 1], () => range.value.start],
   () => {
     if (pinned.value) return void nextTick(follow)
     trimSlack()
