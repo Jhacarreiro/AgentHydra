@@ -104,6 +104,9 @@ const leakMessage = (file: string, changed: string[]) =>
 // this, desk-* folders piled up in %TEMP% (2026-10-14: 587, about 200 a day).
 const TEMP_VARS = ['TMPDIR', 'TEMP', 'TMP'] as const
 const runTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'desk2-tests-'))
+// Hydra Core mode reads ~/.agenthydra/core unless this is set, and core mode switched on there strips a paragraph from
+// the Desk append, so 7 tests failed on a PC that runs it. A folder that does not exist reads as core mode off.
+process.env.AGENTHYDRA_CORE_DIR = path.join(runTemp, 'core')
 let fileTemp: string | null = null
 let fileTempCount = 0
 
