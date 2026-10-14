@@ -40,6 +40,10 @@ import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@
 import { panelLists } from '@/components/tasks/logic'
 import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
+import { PUT_BACK_EVENT, type PutBack } from '@/components/composer/draft-images'
+import { putBackDraft } from '@/components/composer/change-project'
+import { loadDraft, saveDraft } from '@/components/composer/logic'
+import { readOnlyChild, LOCKED_TITLE } from './readonly-child'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
 import { CAPTION_W, appFocused, canCollapse, collapseWindow, collapsed, expandWindow, ownFrame, startOwnFrame } from '@/lib/host-window'
@@ -812,6 +816,25 @@ function unarchive() {
   void run.catch((err: unknown) => (actionError.value = `The change failed: ${err instanceof Error ? err.message : String(err)}`))
 }
 const standIn = computed(() => (external.value && src.standInOf?.(external.value.id)) || null)
+// A chat another chat opened is run by that parent: the person reads it here and talks to the parent.
+const lockedChild = computed(() => (chat.value ? readOnlyChild(chat.value, src.chats.value) : null))
+const lockedParentFound = computed(() => !!lockedChild.value && src.chats.value.some((c) => c.id === lockedChild.value?.parentId))
+function tellParent() {
+  const locked = lockedChild.value
+  if (!locked) return
+  desk.select({ kind: 'chat', id: locked.parentId })
+  void nextTick(() => {
+    const put: PutBack = { chatId: locked.parentId, text: locked.draft, images: [] }
+    window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: put }))
+    if (!put.taken) saveDraft(storage, locked.parentId, putBackDraft(locked.draft, loadDraft(storage, locked.parentId)))
+  })
+}
+// Composer owns the window file-drop listeners and is unmounted for a locked chat, so refuse file drops here.
+function refuseFileDrop(e: DragEvent) {
+  if (!lockedChild.value || !e.dataTransfer?.types.includes('Files')) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'none'
+}
 
 // The title bar's Account menu: a chat's next start, or where a stand-in continues.
 function pickAccount(id: string) {
@@ -892,6 +915,8 @@ onMounted(() => {
   window.addEventListener('pointerup', releasePointer)
   window.addEventListener('pointercancel', releasePointer)
   window.addEventListener('blur', releasePointer)
+  window.addEventListener('dragover', refuseFileDrop)
+  window.addEventListener('drop', refuseFileDrop)
 })
 function holdPointer() {
   pointerHeld.value = true
@@ -903,6 +928,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', releasePointer)
   window.removeEventListener('pointercancel', releasePointer)
   window.removeEventListener('blur', releasePointer)
+  window.removeEventListener('dragover', refuseFileDrop)
+  window.removeEventListener('drop', refuseFileDrop)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
@@ -1108,7 +1135,7 @@ function moveSidebar(side: SidebarSide) {
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="fetchChatItem" @load-older="loadOlder" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :read-only="!!lockedChild" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="fetchChatItem" @load-older="loadOlder" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
@@ -1121,9 +1148,16 @@ function moveSidebar(side: SidebarSide) {
                 </p>
               </div>
 
+              <div v-if="lockedChild" role="status" data-testid="readonly-child-notice" class="shrink-0 bg-(--bg-page) px-4 pb-1.5 pt-1">
+                <p class="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-x-2 text-center text-ui leading-4.75 text-text-muted">
+                  <span>{{ lockedChild.parentTitle }} runs this chat. To change anything, tell it.</span>
+                  <button type="button" class="rounded-(--radius-6) text-text-2 underline-offset-2 transition-colors duration-60 hover:text-(--accent-text) hover:underline focus-visible:underline disabled:cursor-default disabled:opacity-50 disabled:no-underline" :disabled="!lockedParentFound" :title="lockedParentFound ? undefined : LOCKED_TITLE" @click="tellParent">Tell {{ lockedChild.parentTitle }}</button>
+                </p>
+              </div>
+
               <Composer
                 ref="composer"
-                v-if="chat || isNew"
+                v-if="(chat || isNew) && !lockedChild"
                 :chat="isNew ? null : chat"
                 :demo="props.demo ? { cwd: view.kind === 'new' ? view.cwd : undefined } : undefined"
               />
