@@ -329,6 +329,7 @@ watch(
     const active = findOpen.value ? (hits.value[wrapIndex(index.value, hits.value.length)] ?? null) : null
     const mine = ++revealing
     if (active && props.reveal && !props.items.some((i) => i.id === active.itemId)) {
+      // floor-ok: a reveal that throws still lets Find move on; the page it could not load is asked again near the top
       await props.reveal(active.itemId).catch(() => {})
       if (mine !== revealing) return
     }

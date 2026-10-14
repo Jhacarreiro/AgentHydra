@@ -250,7 +250,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   **Unassigned**, a holding area on no account (owner, 2026-10-13: "it's not assigned to an account, but it's not
   archived"): the chat is marked, then archived in its account's app (AgentHydra's `desktop-archive`, through the
   app when it runs), and waits in an Unassigned group after the folders, listed however old, until Move to account
-  lands it on one. A refusal takes the mark back; a mark on a chat an account shows again for over two minutes
+  lands it on one; its name starts with `*` wherever it is listed, Pinned included (owner, 2026-10-14). A refusal takes the mark back; a mark on a chat an account shows again for over two minutes
   (moved there some other way) is dropped (`server/src/engine/session-meta.ts`). **Duplicate to account ›** copies
   the whole chat under a new id, "<title> (copy)" (AgentHydra's `branch` with `whole: true`), and lands the copy on
   the account picked, the current one included; the original is not touched, and a copy that could not land waits

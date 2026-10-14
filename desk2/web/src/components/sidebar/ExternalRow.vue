@@ -159,7 +159,8 @@ function onMenuClosed(e: Event) {
             @keydown.escape.stop="renaming = false"
             @blur="commitRename"
           />
-          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.title }}</span>
+          <!-- An Unassigned chat (on no account) starts its name with a star wherever it is listed (owner, 2026-10-14). -->
+          <span v-else class="ext-title min-w-0 flex-1 overflow-hidden whitespace-nowrap" :class="{ 'ext-title-open': menuOpen, 'ext-title-audio': speaker }">{{ session.unassigned ? '*' : '' }}{{ session.title }}</span>
           <!-- A note on the chat (Add note…): its mark here, its text in the row's tooltip. -->
           <StickyNote v-if="!renaming && session.note" role="img" aria-label="Has a note" class="size-3 shrink-0 text-text-muted" />
 
