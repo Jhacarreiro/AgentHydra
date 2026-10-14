@@ -580,7 +580,7 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
   writeFileSync(
     hookFile,
     JSON.stringify({
-      ...(w.chat ? chatSettings(acct) : w.sealed ? QUIET_SETTINGS : WORKER_ONLY_SETTINGS),
+      ...(w.chat ? chatSettings(acct) : w.sealed ? QUIET_SETTINGS : workerSettings(acct)),
       // The signal hook is written in its shell form here; the worker's runner answers it over http
       // instead, before the CLI starts (climayte-signal.ts, RunnerSpec.signal).
       hooks: workerHooks({
@@ -627,6 +627,21 @@ const WORKER_ONLY_SETTINGS = {
     ...WORKER_DENIED_MCP_URLS.map((serverUrl) => ({ serverUrl })),
   ],
   ...QUIET_SETTINGS,
+}
+
+/** An ordinary worker's settings: WORKER_ONLY_SETTINGS, and in core mode no CLAUDE.md at all. The
+ *  core switch leaves the account's CLAUDE.md and the owner's holding only the Hydra Core line, which
+ *  orders a core_scope call; a worker has no AgentHydra MCP and no chat key, so it read an order it
+ *  could not follow (2026-10-13). Its brief (WORKER_BRIEF and the task) is its whole scope. */
+function workerSettings(acct: CliMayteAccount): typeof WORKER_ONLY_SETTINGS & {
+  claudeMdExcludes?: string[]
+} {
+  if (!coreModeOn()) return WORKER_ONLY_SETTINGS
+  const owner = ownerClaudeDir ? [slashed(join(ownerClaudeDir, 'CLAUDE.md'))] : []
+  return {
+    ...WORKER_ONLY_SETTINGS,
+    claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md')), ...owner, ...coreChatExcludes()],
+  }
 }
 
 /** A chat's settings: the account folder's CLAUDE.md left out. syncOwnerClaude fills that file with

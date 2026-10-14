@@ -28,10 +28,15 @@ const HOME = join(scratch, 'home')
 const OWNER = join(HOME, '.claude')
 const CWD = join(scratch, 'repo')
 const OWNER_RULES = 'Read Connections first: call lane_brief.'
+// Hydra Core's folder, off (no ON file) unless a test turns it on: the real one is on wherever core mode is live.
+const CORE = join(scratch, 'core')
+const savedCoreDir = process.env.AGENTHYDRA_CORE_DIR
 
 beforeAll(() => {
   mkdirSync(OWNER, { recursive: true })
   mkdirSync(CWD, { recursive: true })
+  mkdirSync(CORE, { recursive: true })
+  process.env.AGENTHYDRA_CORE_DIR = CORE
   writeFileSync(join(OWNER, 'CLAUDE.md'), OWNER_RULES)
   setCliMayteAccountsProvider(() => [])
   setCliMayteClaudeCommand(['claude'])
@@ -43,6 +48,8 @@ afterAll(async () => {
   setCliMayteOwnerDir(null)
   setCliMayteClaudeCommand(null)
   setCliMayteAccountsProvider(null)
+  if (savedCoreDir === undefined) delete process.env.AGENTHYDRA_CORE_DIR
+  else process.env.AGENTHYDRA_CORE_DIR = savedCoreDir
   rmSync(scratch, { recursive: true, force: true })
 })
 
@@ -239,6 +246,26 @@ describe('chat workers', () => {
     rmSync(join(OWNER, 'settings.json'))
     const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
     expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
+  })
+
+  // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a
+  // worker (no AgentHydra MCP, no chat key) cannot make; its settings leave both files out.
+  test("in core mode a worker's settings leave out the account's and the owner's CLAUDE.md", () => {
+    writeFileSync(join(CORE, 'ON'), '')
+    writeFileSync(join(CORE, 'excludes.json'), JSON.stringify(['C:/p/**/CLAUDE.md']))
+    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
+    const excludes = (file: string) =>
+      JSON.parse(readFileSync(file, 'utf8')).claudeMdExcludes as unknown
+    const core = dispatch({ title: 'a core task' })
+    rmSync(join(CORE, 'ON'))
+    expect(excludes(writeWorkerSettings(core, acct))).toBeUndefined()
+    writeFileSync(join(CORE, 'ON'), '')
+    expect(excludes(writeWorkerSettings(core, acct))).toEqual([
+      join(scratch, 'acct', 'CLAUDE.md').replace(/\\/g, '/'),
+      join(OWNER, 'CLAUDE.md').replace(/\\/g, '/'),
+      'C:/p/**/CLAUDE.md',
+    ])
+    rmSync(join(CORE, 'ON'))
   })
 
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light
