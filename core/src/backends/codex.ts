@@ -39,6 +39,11 @@ interface Live {
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** A login OpenAI is throttling ('exceeded retry limit, last status: 429 Too Many Requests') is not at its usage limit:
+ *  it is held this long and the turn moves to another account (README: a limit or a failure moves it to the next A). */
+const THROTTLE_HOLD_MS = 2 * 60_000
+const throttled = (message: string): boolean => /\b429\b|too many requests/i.test(message)
+
 let media: MediaCache | null = null
 
 /** The task's pictures as Codex reads them: each cached as a local file, the way Desk's runtime sends them. */
@@ -118,7 +123,12 @@ export function codexBackend(): Backend {
           : turn.status === 'interrupted'
             ? 'Interrupted'
             : turn.error?.message || 'Codex could not finish the turn.'
-        end({ ok, durationMs: turn.durationMs ?? now - started, ...(error ? { error } : {}) })
+        end({
+          ok,
+          durationMs: turn.durationMs ?? now - started,
+          ...(error ? { error } : {}),
+          ...(error && throttled(error) ? { limitedUntil: now + THROTTLE_HOLD_MS } : {}),
+        })
       }
 
       const onNotify = (method: string, p: Record<string, unknown>): void => {
@@ -165,6 +175,13 @@ export function codexBackend(): Backend {
               todos: planTodos((p.plan as { step: string; status: string }[]) ?? []),
             })
             return
+          case 'error': {
+            // Codex retries a 429 or a dropped stream itself: the chat says so while it does (Desk 2's runtime does too).
+            const e = p.error as { message?: string } | undefined
+            if (p.willRetry && e?.message)
+              sink.activity(`Codex is trying again: ${e.message.slice(0, 80)}`)
+            return
+          }
           case 'turn/completed':
             endTurn(p.turn as CodexTurn)
             return
@@ -262,7 +279,9 @@ export function codexBackend(): Backend {
           end(
             /usage limit/.test(message)
               ? { ok: false, error: message, limitedUntil: Date.now() + LIMIT_HOLD_MS }
-              : { ok: false, error: message },
+              : throttled(message)
+                ? { ok: false, error: message, limitedUntil: Date.now() + THROTTLE_HOLD_MS }
+                : { ok: false, error: message },
           )
         } finally {
           // The thread stays held until the turn ends (Codex's notifications come while it runs), then it is let go.

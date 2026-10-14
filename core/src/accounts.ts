@@ -28,6 +28,8 @@ interface CodexRow {
   name?: string
   codexHome: string
   loggedIn?: boolean
+  /** The Codex app is open on this login: Desk's pick (pickCodexAccount) takes one whose app is closed first. */
+  isDesktopRunning?: boolean
 }
 
 /** GET /api/free/status: `instances` and `jobs` (desk2/server/src/free-instances/service.ts, status()). */
@@ -56,6 +58,11 @@ interface Used {
 let cache: { at: number; pools: Record<Service, Account[]> } | null = null
 let inflight: Promise<Record<Service, Account[]>> | null = null
 const holds = new Map<string, number>()
+/** When this core last picked each account: picks go round the accounts, so turns started together do not all land on
+ *  one login (2026-10-14: the probe's parallel Codex chats all took the emptiest account and it answered 429). */
+const lastPicked = new Map<string, number>()
+/** Codex logins whose app is open now (the last read). */
+const desktopOpen = new Set<string>()
 
 async function get<T>(base: string, path: string): Promise<T> {
   const res = await fetch(base + path, { signal: AbortSignal.timeout(5000) })
@@ -112,6 +119,8 @@ async function claudeAccounts(): Promise<Account[]> {
 
 async function codexAccounts(): Promise<Account[]> {
   const live = (await get<CodexRow[]>(DAEMON, '/api/codex-instances')).filter((row) => row.loggedIn)
+  desktopOpen.clear()
+  for (const row of live) if (row.isDesktopRunning) desktopOpen.add(row.id)
   const used = await Promise.all(
     live.map((row) => usageOf(`/api/codex-instances/${encodeURIComponent(row.id)}/usage`)),
   )
@@ -156,7 +165,20 @@ function chatgptOrder(x: Account, y: Account): number {
   return (
     Number(a.busy) - Number(b.busy) ||
     Number(b.unlimited) - Number(a.unlimited) ||
+    picked(x) - picked(y) ||
     a.lastActiveAt - b.lastActiveAt
+  )
+}
+
+const picked = (a: Account): number => lastPicked.get(a.id) ?? 0
+
+/** Claude and Codex: a Codex login whose app is closed first, then the one this core picked longest ago, then the
+ *  emptiest. */
+function agentOrder(x: Account, y: Account): number {
+  return (
+    Number(desktopOpen.has(x.id)) - Number(desktopOpen.has(y.id)) ||
+    picked(x) - picked(y) ||
+    y.room - x.room
   )
 }
 
@@ -202,8 +224,10 @@ export function accounts(): Accounts {
       const [best] =
         service === 'chatgpt'
           ? free.sort(chatgptOrder)
-          : free.filter((a) => a.room > MIN_ROOM).sort((x, y) => y.room - x.room)
-      return best ?? { why: `No ${NAME[service]} account has room now.` }
+          : free.filter((a) => a.room > MIN_ROOM).sort(agentOrder)
+      if (!best) return { why: `No ${NAME[service]} account has room now.` }
+      lastPicked.set(best.id, now)
+      return best
     },
     async find(service, id) {
       return (await current())[service].find((a) => a.id === id) ?? null

@@ -27,9 +27,25 @@ async function desk<T>(method: string, path: string, body?: unknown): Promise<T>
     headers: body === undefined ? undefined : { 'content-type': 'application/json' },
     body: body === undefined ? undefined : JSON.stringify(body),
   })
-  if (!res.ok) throw new Error(`Desk 2 answered ${res.status} to ${method} /api/free${path}`)
+  if (!res.ok)
+    throw new DeskError(res.status, `Desk 2 answered ${res.status} to ${method} /api/free${path}`)
   return (await res.json()) as T
 }
+
+class DeskError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message)
+  }
+}
+
+/** Desk runs one job per Free account and answers 409 while one runs (another chat's, or a person's). The chat's
+ *  ChatGPT thread lives on that account, so the turn waits for it, up to this long (2026-10-14: two probe chats on
+ *  one account, and the second failed at once). */
+const BUSY_WAIT_MS = 3 * 60_000
+const BUSY_POLL_MS = 3000
 
 /** A ChatGPT chat's name: 1 to 100 printable characters (runtime.ts chatName). */
 const chatName = (title: string): string =>
@@ -83,7 +99,17 @@ function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
         ...(model ? { model } : {}),
       } as FreeRequest
       sink.activity('Asking ChatGPT')
-      let job = await desk<FreeJob>('POST', '/jobs', body)
+      let job: FreeJob | null = null
+      for (const until = Date.now() + BUSY_WAIT_MS; !job; ) {
+        try {
+          job = await desk<FreeJob>('POST', '/jobs', { ...body, requestId: randomUUID() })
+        } catch (err) {
+          if (!(err instanceof DeskError) || err.status !== 409 || Date.now() > until) throw err
+          sink.activity('Waiting for this ChatGPT account to finish another job')
+          await new Promise((resolve) => setTimeout(resolve, BUSY_POLL_MS))
+          if (over) return
+        }
+      }
       jobId = job.id
       sink.activity('Waiting for ChatGPT')
       while (job.state !== 'done') {

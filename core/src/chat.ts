@@ -347,6 +347,11 @@ export class Chats {
       if ('why' in picked) return { ok: false, error: picked.why }
       if (e.interrupted) return { ok: false }
       this.bindAccount(e, service, picked)
+      // The turn before this one may still hold the thread: its backend lets go only after it has ended (Codex's
+      // unsubscribe), so a queued message waits for that here instead of resuming the thread under it.
+      await backend.release(e.chat.id)
+      if (!this.alive(e)) return { ok: false }
+      if (e.interrupted) return { ok: false }
       const task: Task = {
         chatId: e.chat.id,
         cwd: e.chat.cwd,

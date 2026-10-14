@@ -10,7 +10,7 @@ import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { THROWAWAY_DIR } from '../../desk2/shared/throwaway'
+import { isThrowawayCwd, THROWAWAY_DIR } from '../../desk2/shared/throwaway'
 import { connectCodexRpc } from '../../server/src/core/codex-rpc'
 
 const BASE = process.env.CORE_URL ?? 'http://127.0.0.1:7789/api'
@@ -20,6 +20,8 @@ const AH = process.env.AH_URL ?? BASE
 const ROOT = join(tmpdir(), THROWAWAY_DIR)
 /** AgentHydra's daemon, which lists every Codex thread on this PC (the cleanup's sweep of the run's folders). */
 const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:7787/api'
+/** The Desk that serves the owner's window, whose sidebar must never show this run (stage unlisted). */
+const DESK = process.env.DESK_URL ?? 'http://127.0.0.1:7798/api'
 const CODEX_HOMES = join(homedir(), '.agenthydra', 'codex-instances')
 const args = process.argv.slice(2)
 const asJson = args.includes('--json')
@@ -51,6 +53,8 @@ const STAGES = [
   'task-api',
   'task-many',
   'task-cancel',
+  // Last: nothing the run made shows in the window (desk2/shared/throwaway.ts).
+  'unlisted',
 ]
 
 type Item = {
@@ -993,6 +997,17 @@ if (up)
       }
     }),
   ])
+
+// Read before the cleanup, while every session the run made still exists (owner, 2026-10-14: a round's chats filled
+// the sidebar until its cleanup ran): Desk's outside list holds none of them.
+await scenario('unlisted', async () => {
+  const listed = (await req('GET', '/external/sessions', undefined, DESK).catch(() => null))
+    ?.json as { id: string; cwd?: string | null }[] | null
+  if (!Array.isArray(listed))
+    return { pass: false, detail: 'Desk did not answer /external/sessions' }
+  const shown = listed.filter((s) => isThrowawayCwd(s.cwd)).map((s) => s.id.slice(0, 8))
+  return { pass: shown.length === 0, detail: { checked: listed.length, shown } }
+})
 
 // Cleanup: every chat made here, then every thread, then (on the old Desk) the CliMayte workers its chats ran on.
 /** A cleanup call, retried for a minute while the server restarts. */
