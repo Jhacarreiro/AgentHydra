@@ -258,6 +258,8 @@ interface Entry {
   workerCwd?: string
   /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile; kept with the chat record, never in the Desk's items file. */
   sent?: UserItem[]
+  /** A CliMayte chat: when its worker first read done while its JSONL did not show what was sent yet (applyWorker). */
+  endHeldSince?: number
   /** A CliMayte chat: the messages AgentHydra has not taken yet (it did not answer), oldest first, each sent again
    *  with its own request id until it is (retryHeld); a later message waits behind them. Kept with the chat record. */
   retrying?: RetryItem[]
@@ -297,6 +299,8 @@ const MAX_MOVES = 4
 
 /** How long placement skips an account whose sign-in failed (CliMayte's identity wall retries every 6 hours). */
 const SIGN_IN_HOLD_MS = 6 * 60 * 60 * 1000
+/** How long a worker that read done stays busy while its JSONL does not show what was sent yet (applyWorker). */
+const WORKER_END_GRACE_MS = 15_000
 
 /** '#126' for a numbered account, else its label. */
 const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
@@ -1858,7 +1862,11 @@ export class ChatManager {
     // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
     // Desk file is read once, for what it already holds (emitted), not on every poll.
     if (!e.emitted) this.deskItems(e)
-    const rescan = e.readAccount !== w.accountId
+    // The turn ended: its JSONL is looked for afresh. A new session's file is missing when its first poll looks, and
+    // the bridge leaves a missed file 5 s, then 10, before looking again, so a short first turn was never read while
+    // it ran and its done came in before its reply (live, 2026-10-14: idle at 11.4 s, the reply read at 12.4 s).
+    const ending = LIVE_STATUSES.has(was) && workerChatStatus(w).status === 'idle'
+    const rescan = e.readAccount !== w.accountId || ending
     const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
     const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
     // Deleted meanwhile, or Undo let this worker go.
@@ -1867,7 +1875,13 @@ export class ChatManager {
     const newReply = this.syncWorkerItems(e, items)
     // The status after the transcript: a chat never reads done before its reply is in. A message waiting for that
     // reply goes once the chat is not busy, and a status set before the read let any change during it send the
-    // message without the reply (live, 2026-10-14: Codex was asked 'What code word did I give you?' bare).
+    // message without the reply (live, 2026-10-14: Codex was asked 'What code word did I give you?' bare). A JSONL
+    // that does not show what was sent yet is behind the worker: the chat stays busy, at most WORKER_END_GRACE_MS.
+    if (ending && e.sent?.length && this.now() - (e.endHeldSince ??= this.now()) < WORKER_END_GRACE_MS) {
+      if (chatDiffers(before, chat)) this.changed(chat)
+      return
+    }
+    e.endHeldSince = undefined
     const next = this.applyWorkerStatus(e, w, was)
     if (next.status === 'error') this.undelivered(e)
     else if (next.waiting) this.markQueued(e)

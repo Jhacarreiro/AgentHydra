@@ -76,6 +76,7 @@ test('a follow-up AgentHydra answered too late is queued once, however many trie
   const chat = await m.create({ cwd: home, prompt: 'first' })
   await until(() => !!m.get(chat.id).workerId, 'the worker')
   // The first turn is over: the follow-up runs as soon as AgentHydra has it.
+  b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 1, text: 'first' }]
   Object.assign(b.state.rows[0]!, { status: 'done' })
   await m.syncWorkers(chat.id)
   b.state.requestIds.length = 0

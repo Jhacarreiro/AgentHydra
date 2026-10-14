@@ -37,7 +37,10 @@ test('a new chat starts a worker, a follow-up goes to that worker, and its statu
 
   const row = b.state.rows[0]!
   Object.assign(row, { status: 'running', accountId: 'cli-2', account: '#61 acct2' })
-  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 10, text: 'pong' }]
+  b.state.workerItems['worker-session-1'] = [
+    { kind: 'user', id: 'u-1', ts: 9, text: 'reply with the word pong' },
+    { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'pong' },
+  ]
   await m.syncWorkers(chat.id)
   expect(m.get(chat.id)).toMatchObject({ status: 'working', account: { id: 'cli-2' } })
   expect(m.listItems(chat.id).find((i) => i.id === 'a-1')).toMatchObject({ text: 'pong' })
@@ -46,6 +49,7 @@ test('a new chat starts a worker, a follow-up goes to that worker, and its statu
   expect(b.state.sentToWorker).toEqual([{ id: 'w1', text: 'now reply with ping' }])
   expect(b.state.started.length).toBe(1)
 
+  b.state.workerItems['worker-session-1']!.push({ kind: 'user', id: 'u-2', ts: 11, text: 'now reply with ping' })
   Object.assign(row, { status: 'done', accountId: 'cli-3', account: '#62 acct3' })
   await m.syncWorkers(chat.id)
   expect(m.get(chat.id)).toMatchObject({ status: 'idle', unread: true, account: { id: 'cli-3' } })

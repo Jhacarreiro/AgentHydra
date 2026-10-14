@@ -91,7 +91,7 @@ async function workerChat(s: ReturnType<typeof setup>) {
   await waitFor(() => !!s.m.get(chat.id).workerId)
   const row = s.b.state.rows[0]!
   Object.assign(row, { status: 'running', accountId: 'cli-110', account: '#110 a' })
-  s.b.state.workerItems['worker-session-1'] = [task('t1', 'Land the almanac note'), task('t2', 'serve on localhost:8000')]
+  s.b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 1, text: 'land the almanac' }, task('t1', 'Land the almanac note'), task('t2', 'serve on localhost:8000')]
   await s.m.syncWorkers(chat.id)
   expect(s.m.get(chat.id).backgroundActive).toBe(1)
   expect(taskOf(s.m.listItems(chat.id), 't1')?.status).toBe('running')

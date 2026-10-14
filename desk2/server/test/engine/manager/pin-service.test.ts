@@ -370,6 +370,70 @@ test('a message sent after the pin moved while Codex was still replying waits, s
   expect(f.asked).toHaveLength(1)
 })
 
+/** The worker's JSONL once its first turn is written: the message it was started with, then its reply. */
+const KIWI_TURN: TranscriptItem[] = [
+  { kind: 'user', id: 'u-1', ts: 9, text: 'Remember the word KIWI' },
+  { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Noted: KIWI.' },
+]
+
+/** A CliMayte chat whose worker is replying, pinned to Codex, with 'Which word?' waiting for that reply. */
+async function workerCrossing(now?: () => number) {
+  const home = temp('desk-pin-worker-')
+  process.env.HYDRA_DESK_HOME = home
+  const b = fakeBridge()
+  const fake = fakeCodex()
+  const codex: CodexDirectory = { instances: async () => [ALPHA], usage: async () => ({ snapshot: { session: { pct: 10 }, weekAll: { pct: 5 } } }) }
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, codex, openCodex: fake.open, ...(now ? { now } : {}) })
+  managers.push(m)
+  const chat = await m.create({ cwd: home, prompt: 'Remember the word KIWI' })
+  await waitFor(() => !!m.get(chat.id).workerId)
+  const row = b.state.rows[0]!
+  Object.assign(row, { status: 'running' })
+  await m.syncWorkers(chat.id)
+  await m.patch(chat.id, { service: 'codex' })
+  expect(await m.send(chat.id, 'Which word?')).toEqual({ queued: true })
+  return { b, fake, m, chat, row }
+}
+
+// Live, 2026-10-14: a new session's file is not there at its first poll, and the bridge waits 5 s, then 10, before
+// looking for a missed file again; the worker's done came in while that wait hid its reply, and Codex was asked bare.
+test("a CliMayte worker's turn end reads its transcript afresh, so the message waiting for its reply carries it", async () => {
+  const { b, fake, m, chat, row } = await workerCrossing()
+  const read = b.bridge.workerItems
+  b.bridge.workerItems = async (ids, cwd, o) => (o?.rescan ? read(ids, cwd, o) : [])
+  b.state.workerItems['worker-session-1'] = KIWI_TURN
+  Object.assign(row, { status: 'done' })
+  await m.syncWorkers(chat.id)
+  await waitFor(() => fake.turnStarts().length === 1)
+  expect(String(fake.turnStarts()[0]!.input[0]!.text)).toContain('Noted: KIWI.')
+})
+
+test("a CliMayte worker that reads done before its transcript shows the turn stays busy until it does, and what waited goes with the reply", async () => {
+  const { b, fake, m, chat, row } = await workerCrossing()
+  Object.assign(row, { status: 'done' })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).status).toBe('working')
+  expect(fake.turnStarts()).toEqual([])
+
+  b.state.workerItems['worker-session-1'] = KIWI_TURN
+  await m.syncWorkers(chat.id)
+  await waitFor(() => fake.turnStarts().length === 1)
+  expect(String(fake.turnStarts()[0]!.input[0]!.text)).toContain('Noted: KIWI.')
+})
+
+test('a CliMayte worker whose transcript never shows the turn reads done 15 s after its worker did, and what waited goes', async () => {
+  let skew = 0
+  const { fake, m, chat, row } = await workerCrossing(() => Date.now() + skew)
+  Object.assign(row, { status: 'done' })
+  await m.syncWorkers(chat.id)
+  expect(m.get(chat.id).status).toBe('working')
+  expect(fake.turnStarts()).toEqual([])
+  skew = 15_000
+  await m.syncWorkers(chat.id)
+  await waitFor(() => fake.turnStarts().length === 1)
+  expect(String(fake.turnStarts()[0]!.input[0]!.text)).toContain('Which word?')
+})
+
 test("a message sent after the pin moved while a CliMayte worker was still replying goes to Codex once the worker's reply ends, with that reply", async () => {
   const home = temp('desk-pin-worker-')
   process.env.HYDRA_DESK_HOME = home
@@ -389,7 +453,7 @@ test("a message sent after the pin moved while a CliMayte worker was still reply
 
   // The worker's status comes from AgentHydra's list, not a runtime event: its reply ending sends what waited. A
   // change to the chat while its transcript is still being read (a rename here) does not send it early.
-  b.state.workerItems['worker-session-1'] = [{ kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Noted: KIWI.' }]
+  b.state.workerItems['worker-session-1'] = KIWI_TURN
   Object.assign(row, { status: 'done' })
   const read = b.bridge.workerItems
   let reading = false
