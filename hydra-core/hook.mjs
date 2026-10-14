@@ -23,7 +23,7 @@ export const PACK_TIMEOUT_MS = 1500;
 const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
 const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
 const BLOCK_REASON =
-  'Before you ask Jacob, ask the owner tier (core_use { mode: "consult", id: "person:creaitor", question } or the creaitor.py ask command); ask Jacob only if that answer says it needs him (a credential, money, a physical step); otherwise act on the answer.';
+  'Before you ask the person, ask the owner tier (core_use { mode: "consult", id: "person:creaitor", question } or the creaitor.py ask command); ask the person only if that answer says it needs them (a credential, money, a physical step); otherwise act on the answer.';
 
 export function coreDir(env = process.env) {
   return env.AGENTHYDRA_CORE_DIR || path.join(os.homedir(), ".agenthydra", "core");

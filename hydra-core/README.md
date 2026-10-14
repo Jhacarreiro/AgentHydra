@@ -24,7 +24,7 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 
 ## President rule (Stop)
 
-When a chat's last message asks a question and the turn made no owner consult, the `Stop` hook blocks the stop once. The reason tells Claude to ask the owner tier first: `core_use { mode: "consult", id: "person:creaitor" }` or `creaitor.py ask`. Jacob is asked only when that answer says it needs him. An owner consult is a `core_use` consult of an owner-tier person in `catalog/`, or a Bash/PowerShell `creaitor.py ask`. Each block is appended to `log.jsonl` as `president-block`. The hook allows the stop when `stop_hook_active` is set, for CliMayte workers, when the final paragraph has no question (code blocks are ignored), and on any error.
+When a chat's last message asks a question and the turn made no owner consult, the `Stop` hook blocks the stop once. The reason tells Claude to ask the owner tier first: `core_use { mode: "consult", id: "person:creaitor" }` or `creaitor.py ask`. The person is asked only when that answer says it needs them. An owner consult is a `core_use` consult of an owner-tier person in `catalog/`, or a Bash/PowerShell `creaitor.py ask`. Each block is appended to `log.jsonl` as `president-block`. The hook allows the stop when `stop_hook_active` is set, for CliMayte workers, when the final paragraph has no question (code blocks are ignored), and on any error.
 
 ## Install
 

@@ -5,7 +5,7 @@ export const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill'] as
 export type Kind = (typeof KINDS)[number]
 export const MODES = ['become', 'consult', 'hire'] as const
 const COSTS = ['free', 'low', 'medium', 'high']
-/** The company ladder, lowest first: 1 intern, 2 employee, 3 manager, 4 owner. Tier 5, the real Jacob, is a rule, never an entry. */
+/** The company ladder, lowest first: 1 intern, 2 employee, 3 manager, 4 owner. Tier 5, the real person, is a rule, never an entry. */
 export const TIERS = ['intern', 'employee', 'manager', 'owner'] as const
 /** The tiers a lead is offered from, best first; owners are consulted and interns are hired under a lead. */
 export const LEAD_TIERS = ['manager', 'employee'] as const
