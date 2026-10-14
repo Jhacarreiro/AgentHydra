@@ -51,6 +51,8 @@ import {
   withFileLines,
   dismissTip,
   draftSlot,
+  EFFORTS,
+  effortLabel,
   modelTriggerLabel,
   nextTip,
   prAsk,
@@ -261,6 +263,7 @@ function resetNewSession() {
 }
 
 const model = computed(() => (props.chat ? props.chat.model : newModel.value))
+const effort = computed(() => (props.chat ? props.chat.effort : newEffort.value))
 const cwd = computed(() => props.chat?.cwd ?? newCwd.value)
 
 async function patch(p: { model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode }) {
@@ -293,6 +296,21 @@ function onModelKey(e: KeyboardEvent) {
   if (Number.isInteger(i) && m) {
     e.preventDefault()
     pickModel(m.value)
+  }
+}
+
+// Effort: Default (null) leaves it to the account, then the five stops from logic.ts
+const effortText = computed(() => effortLabel(effort.value))
+function pickEffort(value: Effort | null) {
+  patch({ effort: value })
+  openMenu.value = null
+}
+function onEffortKey(e: KeyboardEvent) {
+  const i = Number(e.key) - 1
+  const x = EFFORTS[i]
+  if (Number.isInteger(i) && x) {
+    e.preventDefault()
+    pickEffort(x.value)
   }
 }
 
@@ -1503,6 +1521,39 @@ onBeforeUnmount(() => {
             </DropdownMenuContent>
           </DropdownMenu>
           <span v-else :class="TOOL_VALUE" :aria-label="`Model: ${pinnedWord}`">{{ pinnedWord }}</span>
+
+          <DropdownMenu v-if="!pinnedWord" v-bind="menuModel('effort')" :modal="!nonModal">
+            <DropdownMenuTrigger as-child>
+              <button type="button" :class="TOOL_VALUE" :aria-label="`Effort: ${effortText}`">{{ effortText }}</button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent
+              side="top"
+              align="end"
+              :side-offset="6"
+              :class="MENU"
+              @keydown="onEffortKey"
+              data-composer-menu="effort"
+            >
+              <div :class="HEADER">Effort</div>
+              <DropdownMenuItem
+                v-for="(x, i) in EFFORTS"
+                :key="x.value"
+                role="menuitemradio"
+                :aria-checked="effort === x.value"
+                :class="ITEM"
+                @select="pickEffort(x.value)"
+              >
+                <span class="flex-1 whitespace-nowrap">{{ x.label }}</span>
+                <Check v-if="effort === x.value" class="-me-1 ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
+                <span v-else :class="SHORTCUT">{{ i + 1 }}</span>
+              </DropdownMenuItem>
+              <div role="separator" :class="SEPARATOR" />
+              <DropdownMenuItem role="menuitemradio" :aria-checked="!effort" :class="ITEM" @select="pickEffort(null)">
+                <span class="flex-1 whitespace-nowrap">Default</span>
+                <Check v-if="!effort" class="-me-1 ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
+              </DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
 
           <ContextRing :pct="chat?.contextPct ?? null" />
         </div>
