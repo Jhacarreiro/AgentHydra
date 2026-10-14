@@ -1,6 +1,8 @@
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
-import { answer, findTool, report, scope } from './hydra-core/tree'
+import { reportRun } from './hydra-core/report-row'
+import { trackSummary } from './hydra-core/track'
+import { answer, findTool, scope } from './hydra-core/tree'
 import { defaultDaemon, use } from './hydra-core/use'
 import { api, type HydraTool, S, str } from './mcp-client'
 
@@ -95,23 +97,35 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_report',
     listed: true,
     description:
-      'MUTATES: report how the run went (done, partial or failed), with a note and any entries that were overruled.',
+      'MUTATES: report how the run went (done, partial or failed), with a note and any entries that were overruled. Optional score (1-5) rates the help and missing names what was lacking.',
     inputSchema: S(
       {
         chat: { type: 'string' },
         outcome: { type: 'string', enum: OUTCOMES },
         note: { type: 'string' },
         overruled: { type: 'array', items: { type: 'string' } },
+        score: { type: 'integer', minimum: 1, maximum: 5 },
+        missing: { type: 'string' },
       },
       ['outcome', 'note'],
     ),
     run: async (a: Record<string, unknown>) =>
-      report(coreDir(), {
+      reportRun(coreDir(), {
         chat: chatOf(a),
         outcome: str(a.outcome),
         note: str(a.note),
         overruled: stringList(a.overruled),
+        score: typeof a.score === 'number' ? a.score : undefined,
+        missing: typeof a.missing === 'string' ? a.missing : undefined,
       }),
+  },
+  {
+    name: 'core_track',
+    listed: false,
+    description:
+      'Hydra Core usage ledger summary: compliance, picks, reports, scores and handoffs. Rebuilt when older than 10 minutes.',
+    inputSchema: S({}),
+    run: async () => trackSummary(coreDir()),
   },
   {
     name: 'core_stats',

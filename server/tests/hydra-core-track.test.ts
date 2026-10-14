@@ -1,0 +1,176 @@
+import { afterEach, beforeEach, expect, test } from 'bun:test'
+import { appendFileSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { chatPaths } from '../src/hydra-core/paths'
+import { reportRun } from '../src/hydra-core/report-row'
+import { buildTrack, trackSummary } from '../src/hydra-core/track'
+import { scratch } from './hydra-core-fixture'
+
+const T = Date.parse('2026-10-13T12:00:00Z')
+const iso = (ms: number) => new Date(ms).toISOString()
+const line = (o: object) => `${JSON.stringify(o)}\n`
+const user = (sid: string, cwd: string, at: number, text: string) =>
+  line({
+    type: 'user',
+    sessionId: sid,
+    cwd,
+    timestamp: iso(at),
+    message: { role: 'user', content: text },
+  })
+const call = (sid: string, at: number, id: string, name: string, input: object) =>
+  line({
+    type: 'assistant',
+    sessionId: sid,
+    timestamp: iso(at),
+    message: { role: 'assistant', content: [{ type: 'tool_use', id, name, input }] },
+  })
+const result = (sid: string, at: number, id: string, text: string) =>
+  line({
+    type: 'user',
+    sessionId: sid,
+    timestamp: iso(at),
+    message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: id, content: text }] },
+  })
+const logRow = (o: object) => line(o)
+
+let dir: string
+let roots: string[]
+let handoffsDir: string
+
+beforeEach(() => {
+  dir = scratch()
+  roots = [join(dir, 'projects')]
+  handoffsDir = join(dir, 'handoffs')
+  mkdirSync(handoffsDir, { recursive: true })
+  const cwd = 'C:/Users/me/app'
+  const write = (project: string, name: string, text: string) => {
+    mkdirSync(join(dir, 'projects', project), { recursive: true })
+    writeFileSync(join(dir, 'projects', project, name), text)
+  }
+  // compliant turn, unused pick, then a skipped scope that uses a capability never offered
+  write(
+    'proj-main',
+    'sa.jsonl',
+    user('sa', cwd, T, 'first') +
+      call('sa', T + 1000, 's1', 'mcp__agenthydra__core_scope', { chat: 'alpha' }) +
+      result('sa', T + 1500, 's1', 'in scope: person:iris-ui') +
+      call('sa', T + 3000, 'p1', 'mcp__agenthydra__core_use', {
+        chat: 'alpha',
+        id: 'person:ops-lead',
+        mode: 'consult',
+      }) +
+      result('sa', T + 3500, 'p1', 'ok') +
+      user('sa', cwd, T + 10000, 'second') +
+      call('sa', T + 11000, 'k1', 'Skill', { skill: 'brand-notes' }) +
+      result('sa', T + 11500, 'k1', 'done'),
+  )
+  // second session on the same chat key: a handoff
+  write(
+    'proj-two',
+    'sc.jsonl',
+    user('sc', cwd, T + 100000, 'again') +
+      call('sc', T + 101000, 's2', 'mcp__agenthydra__core_scope', { chat: 'alpha' }) +
+      result('sc', T + 101500, 's2', 'in scope: person:iris-ui'),
+  )
+  // worker session: excluded from the ledger
+  write(
+    'corch-w1',
+    'w.jsonl',
+    user('w', 'C:/Users/me/corch', T + 200000, 'do the task') +
+      call('w', T + 201000, 'w1', 'mcp__agenthydra__core_scope', { chat: 'worker' }) +
+      result('w', T + 201500, 'w1', 'in scope'),
+  )
+  // plain session with no core use
+  write(
+    'proj-plain',
+    'n.jsonl',
+    user('n', cwd, T + 300000, 'hello') +
+      call('n', T + 300500, 'b1', 'Bash', { command: 'ls' }) +
+      result('n', T + 301000, 'b1', 'x'),
+  )
+  appendFileSync(
+    join(dir, 'log.jsonl'),
+    logRow({ at: iso(T + 1000), chat: 'alpha', run: 1, step: 'start' }) +
+      logRow({
+        at: iso(T + 1100),
+        chat: 'alpha',
+        run: 1,
+        step: 'q1',
+        answer: 'x',
+        shown: ['person:iris-ui'],
+      }) +
+      logRow({ at: iso(T + 2000), chat: 'alpha', run: 1, step: 'end', verdict: 'go' }) +
+      logRow({
+        at: iso(T + 2500),
+        chat: 'alpha',
+        run: 1,
+        event: 'report',
+        outcome: 'done',
+        note: '',
+        overruled: [],
+        score: 4,
+        missing: 'no ops data',
+      }) +
+      logRow({ at: iso(T + 101000), chat: 'alpha', run: 2, step: 'start' }) +
+      logRow({ at: iso(T + 102000), chat: 'alpha', run: 2, step: 'end', verdict: 'hydra' }),
+  )
+  mkdirSync(chatPaths(dir, 'alpha').root, { recursive: true })
+  writeFileSync(chatPaths(dir, 'alpha').hydraMd, 'kept\n')
+})
+
+afterEach(() => {
+  rmSync(dir, { recursive: true, force: true })
+})
+
+test('ledger rows follow each turn: scope, compliance, picks and offered capabilities', () => {
+  const { rows } = buildTrack(dir, { roots, handoffsDir, now: T })
+  expect(rows.length).toBe(3)
+  expect(rows.some((r) => r.project === 'corch-w1')).toBe(false)
+  const [compliant, skipped] = rows
+  expect(compliant?.compliant).toBe(true)
+  expect(compliant?.scopes).toEqual([{ chat: 'alpha', run: 1, verdict: 'go' }])
+  expect(compliant?.offered).toContain('person:iris-ui')
+  expect(compliant?.unusedPicks).toEqual(['person:ops-lead'])
+  expect(compliant?.reports.map((r) => r.score)).toEqual([4])
+  expect(skipped?.compliant).toBe(false)
+  expect(skipped?.used).toEqual(['brand-notes'])
+  expect(skipped?.usedNotOffered).toEqual(['brand-notes'])
+})
+
+test('summary counts compliance, verdicts, reports, handoffs and skipped workers', () => {
+  const { summary } = buildTrack(dir, { roots, handoffsDir, now: T })
+  expect(summary.sessions).toEqual({ transcripts: 4, workers: 1, noCore: 1, eligible: 2 })
+  expect(summary.turns).toEqual({ total: 3, compliant: 2, compliancePct: 66.7 })
+  expect(summary.scopes).toEqual({ total: 2, go: 1, hydra: 1, none: 0 })
+  expect(summary.reports).toEqual({ runs: 2, reported: 1, rate: 0.5, scored: 1, meanScore: 4 })
+  expect(summary.picks).toEqual({ total: 1, unused: 1 })
+  expect(summary.usedNotOffered).toBe(1)
+  expect(summary.missing).toEqual([{ chat: 'alpha', run: 1, text: 'no ops data' }])
+  expect(summary.handoffs).toEqual({ chats: 1, handoffs: 1, kept: 1, lost: 0, linkedFiles: 0 })
+})
+
+test('a handoff whose hydra.md is gone counts as lost', () => {
+  rmSync(chatPaths(dir, 'alpha').hydraMd)
+  const { summary } = buildTrack(dir, { roots, handoffsDir, now: T })
+  expect(summary.handoffs).toEqual({ chats: 1, handoffs: 1, kept: 0, lost: 1, linkedFiles: 0 })
+})
+
+test('trackSummary reuses a summary younger than ten minutes and rebuilds an older one', () => {
+  const base = Date.now()
+  const first = trackSummary(dir, base, { roots, handoffsDir })
+  expect(trackSummary(dir, base + 60_000, { roots, handoffsDir }).builtAt).toBe(first.builtAt)
+  const later = trackSummary(dir, base + 11 * 60_000, { roots, handoffsDir })
+  expect(later.builtAt).toBe(new Date(base + 11 * 60_000).toISOString())
+})
+
+test('reportRun writes a score and missing note and rejects a score outside 1-5', () => {
+  expect(() => reportRun(dir, { chat: 'alpha', outcome: 'done', note: '', score: 6 })).toThrow()
+  reportRun(
+    dir,
+    { chat: 'alpha', outcome: 'done', note: 'ok', score: 5, missing: ' a tool ' },
+    new Date(T),
+  )
+  const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
+  expect(log.trimEnd().split('\n').at(-1)).toContain('"score":5')
+  expect(log.trimEnd().split('\n').at(-1)).toContain('"missing":"a tool"')
+})
