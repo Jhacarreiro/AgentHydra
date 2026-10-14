@@ -202,6 +202,8 @@ async function loadOlderPage() {
   }
 }
 
+const fetchItem = async (id: string) => (await api.externalItem?.(props.sessionId, id, session.value?.cwd)) ?? null
+
 let indexAsked = false
 async function loadIndex() {
   const id = props.sessionId
@@ -320,7 +322,7 @@ onUnmounted(() => {
         :older-count="olderCount"
         :loading-older="loadingOlder"
         :index="externalIndexBySession.get(sessionId) ?? null"
-        :fetch-item="(id: string) => api.externalItem?.(sessionId, id, session?.cwd) ?? Promise.resolve(null)"
+        :fetch-item="fetchItem"
         @load-older="loadOlderPage"
       />
     </div>

@@ -150,6 +150,7 @@ const olderCount = computed(() => {
   if (olderStalledAt.value?.id === id && olderStalledAt.value.n === items.value.length) return 0
   return Math.max(0, (src.indexByChat?.value.get(id)?.total ?? 0) - items.value.length)
 })
+const fetchChatItem = async (id: string) => (chat.value ? ((await paneApi.chatItem?.(chat.value.id, id)) ?? null) : null)
 async function loadOlder() {
   const id = chat.value?.id
   if (!id || loadingOlder.value || !src.loadOlder) return
@@ -1098,7 +1099,7 @@ function moveSidebar(side: SidebarSide) {
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="(id: string) => paneApi.chatItem?.(chat!.id, id) ?? Promise.resolve(null)" @load-older="loadOlder" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="fetchChatItem" @load-older="loadOlder" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
