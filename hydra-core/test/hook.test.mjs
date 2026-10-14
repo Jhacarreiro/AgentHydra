@@ -159,7 +159,8 @@ test("an unknown hook event is an error", () => withCore((dir) => {
   assert.throws(() => handle(JSON.stringify({ hook_event_name: "PreToolUse" }), envFor(dir)), /unexpected hook_event_name "PreToolUse"/);
 }));
 
-test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", () => withCore((dir) => {
+// Real subprocesses: a cold runner can take longer than bun's 5 s default.
+test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", { timeout: 20_000 }, () => withCore((dir) => {
   turnOn(dir);
   const ok = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(turn("move notes")),

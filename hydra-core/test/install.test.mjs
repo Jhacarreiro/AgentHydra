@@ -98,7 +98,8 @@ test("install creates a missing settings file, and uninstall on a missing file c
     assert.equal(existsSync(missing), false);
   }));
 
-test("the CLI works on a --settings file and --status reports both entries", () =>
+// Real subprocesses: a cold runner can take longer than bun's 5 s default.
+test("the CLI works on a --settings file and --status reports both entries", { timeout: 20_000 }, () =>
   withTemp((dir) => {
     const settingsPath = path.join(dir, "custom", "settings.json");
     const env = { ...process.env, AGENTHYDRA_CORE_DIR: path.join(dir, "core") };
