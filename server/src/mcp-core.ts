@@ -1,4 +1,3 @@
-import { roleOf } from './climayte-lib'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
 import { reportRun } from './hydra-core/report-row'
@@ -6,21 +5,12 @@ import { trackSummary } from './hydra-core/track'
 import { answer, findTool, scope } from './hydra-core/tree'
 import { defaultDaemon, use } from './hydra-core/use'
 import { api, type HydraTool, S, str } from './mcp-client'
+import { callerRole } from './mcp-self'
 
 function chatOf(a: Record<string, unknown>): string {
   const chat = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
   if (!chat) throw new Error('no chat: pass chat, or run inside a Desk chat (HYDRA_DESK_CHAT_ID)')
   return chat
-}
-
-/** This session's CliMayte role (its worker id rides in the env); undefined outside a worker. */
-async function callerRole() {
-  const id = process.env.AGENTHYDRA_CLIMAYTE_WORKER?.trim()
-  if (!id) return undefined
-  const w = (await api(`/api/corch/workers/${encodeURIComponent(id)}`)) as Parameters<
-    typeof roleOf
-  >[0]
-  return roleOf(w)
 }
 
 const stringList = (v: unknown): string[] | undefined =>
@@ -106,7 +96,7 @@ export const CORE_TOOLS: HydraTool[] = [
           question: str(a.question).trim() || undefined,
           job: str(a.job).trim() || undefined,
           cwd: str(a.cwd).trim() || undefined,
-          caller: mode === 'consult' || mode === 'hire' ? await callerRole() : undefined,
+          caller: mode === 'consult' || mode === 'hire' ? await callerRole(a) : undefined,
         },
         defaultDaemon(api),
       )
