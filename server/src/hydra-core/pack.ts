@@ -4,7 +4,7 @@ import { type CatalogEntry, LEAD_TIERS, loadCatalog, loadRef, loadText } from '.
 import { rankEntries } from './find'
 import { leadName, parseHydra } from './hydra-md'
 import { appendLog } from './log'
-import { chatPaths, ownerContextPath } from './paths'
+import { chatPaths } from './paths'
 import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 import { folderKnowledgeOf, mainRules } from './tree'
 
@@ -20,7 +20,6 @@ export const MATCH_CAP = 2000
 const MATCH_INLINE = 5
 const MATCH_POINTERS = 5
 const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
-const OWNER_CAP = 2000
 
 export type PackMode = 'first' | 'full' | 'delta'
 
@@ -71,14 +70,6 @@ function cutHead(body: string, room: number, where: string): { text: string; kep
   if (/[\uD800-\uDBFF]/.test(body[kept - 1] ?? '')) kept--
   if (kept === 0) return { text: '', kept: 0 }
   return { text: body.slice(0, kept) + note(kept), kept }
-}
-
-function ownerContext(dir: string): string {
-  const file = ownerContextPath(dir)
-  if (!existsSync(file)) return ''
-  const body = readFileSync(file, 'utf8').trim()
-  if (!body) return ''
-  return `Owner context:\n\n${cutHead(body, OWNER_CAP, 'owner-context.md').text}`
 }
 
 function hydraLead(file: string): { name: string; path: string } | null {
@@ -148,7 +139,6 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const mode: PackMode = req.full ? 'full' : first ? 'first' : 'delta'
   const seen = new Set(mode === 'delta' ? sent[req.session] : [])
   const fresh = (id: string) => !seen.has(id)
-  const owner = ownerContext(dir)
 
   const folderAll = folderKnowledgeOf(entries, req.cwd)
   const main = mainRules(folderAll)
@@ -198,7 +188,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
           `More is one core_find { need: "<what you need>", chat: "${req.chat}" } away; no other manager call is needed.`,
         ].join('\n\n')
   const parts = (s: Sections) =>
-    [owner, s.folder, ...matchParts(s.inline, s.pointers), s.lead].filter(Boolean)
+    [s.folder, ...matchParts(s.inline, s.pointers), s.lead].filter(Boolean)
   const fits = (s: Sections) => frame(parts(s)).length <= TOTAL_CAP
 
   let s: Sections = { folder: '', lead: '', inline: [], pointers: [] }
@@ -209,7 +199,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     const blocks = folder.map(entryBlock)
     const cut = cutHead(
       blocks.join('\n\n'),
-      TOTAL_CAP - frame([owner, prefix].filter(Boolean)).length,
+      TOTAL_CAP - frame([prefix]).length,
       folder.map(loadRef).join(', '),
     )
     if (cut.kept > 0) {
