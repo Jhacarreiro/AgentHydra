@@ -303,7 +303,7 @@ test('a chat pinned to ChatGPT asks a Free ChatGPT account, goes on in that Chat
   expect(m.listItems(chat.id).filter((i) => i.kind === 'user').map((i) => (i as { text: string }).text)).toEqual(['Name three rivers', 'Which is longest?'])
 })
 
-test('a message sent after the pin moved while Codex was still replying waits, shown queued, and goes to ChatGPT with what Codex said once that reply ends', async () => {
+test('a message sent after the pin moved while Codex was still replying waits, shown queued and able to be taken back, and goes to ChatGPT with what Codex said once that reply ends', async () => {
   const f = fakeFree([GPT(3, 'alpha', true)])
   const { m, fake, chat } = await setup({ free: f.free })
   await m.patch(chat.id, { service: 'codex' })
@@ -316,6 +316,9 @@ test('a message sent after the pin moved while Codex was still replying waits, s
   expect(fake.calls('turn/interrupt')).toEqual([])
   expect(f.asked).toEqual([])
   expect(m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'Now shorten it')).toMatchObject({ queued: true })
+  await m.send(chat.id, 'Never mind')
+  const takenBack = m.listItems(chat.id).find((i) => i.kind === 'user' && i.text === 'Never mind')!
+  expect(await m.cancelQueued(chat.id, takenBack.id)).toMatchObject({ cancelled: true })
 
   l.notify('item/completed', { threadId: 'thread-1', turnId: 'turn-1', item: { type: 'agentMessage', id: 'msg-1', text: 'Step one, step two.' } })
   l.notify('turn/completed', { threadId: 'thread-1', turn: { id: 'turn-1', status: 'completed', durationMs: 900 } })
@@ -331,6 +334,7 @@ test('a message sent after the pin moved while Codex was still replying waits, s
     ['Now shorten it', false],
   ])
   expect(items.filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Step one, step two.', 'Two steps.'])
+  expect(f.asked).toHaveLength(1)
 })
 
 test("a message sent after the pin moved while a CliMayte worker was still replying goes to Codex once the worker's reply ends, with that reply", async () => {
