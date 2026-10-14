@@ -246,6 +246,19 @@ export function resolveIncident(id: string): boolean {
   return Number(r.changes ?? 0) > 0
 }
 
+/** Resolve every open or acked incident for (scope, key), whatever its error signature: the caller
+ *  knows the thing that recovered (a routine id) but not the error its incident was opened with.
+ *  Returns how many it resolved. */
+export function resolveIncidentsFor(scope: string, key: string): number {
+  const now = new Date().toISOString()
+  const r = db
+    .query(
+      "update incidents set state = 'resolved', resolved_at = ?, acked_at = coalesce(acked_at, ?) where scope = ? and key = ? and state != 'resolved'",
+    )
+    .run(now, now, scope, key)
+  return Number(r.changes ?? 0)
+}
+
 function stateFilter(state: IncidentState | undefined): [string, string[]] {
   return state ? [' where state = ?', [state]] : ['', []]
 }

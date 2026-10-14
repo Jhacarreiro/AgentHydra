@@ -767,4 +767,36 @@ describe('settings (a stale key from the manager\'s old name)', () => {
     expect(settings.routines).toBe(true)
     expect(old in settings).toBe(false)
   })
+
+  // A failed run opens its routine's incident (AgentHydra pings the owner); the routine's next ok run resolves it.
+  // A busy run is not a failure and touches no incident. The incidents seam records the calls.
+  test("a failed run opens the routine's incident, its next ok run resolves it, a busy run touches none", async () => {
+    const sent: unknown[][] = []
+    const d = desk({
+      incidents: {
+        record: async (body) => void sent.push(['record', body]),
+        resolve: async (scope, key) => void sent.push(['resolve', scope, key]),
+      },
+    })
+    d.routine('example-inbox', { name: 'Example inbox', askedBy, schedule: '0 9 * * *', run: [process.execPath, '-e', "console.log('boom'); process.exit(1)"], timeoutMinutes: 5 })
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-inbox' })).status).toBe(200)
+    const failed = await settle(d.app, (s) => s.routines[0].runs.length === 1)
+    expect(failed.routines[0].runs[0]).toMatchObject({ outcome: 'failed' })
+    expect(sent).toEqual([['record', { scope: 'routine', key: 'example-inbox', message: expect.stringMatching(/^Example inbox: /) }]])
+
+    d.routine('example-inbox', { name: 'Example inbox', askedBy, schedule: '0 9 * * *', run: d.argv('tick'), timeoutMinutes: 5 })
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-inbox' })).status).toBe(200)
+    await settle(d.app, (s) => s.routines[0].runs.length === 2)
+    expect(sent.at(-1)).toEqual(['resolve', 'routine', 'example-inbox'])
+
+    sent.length = 0
+    d.routine('example-inbox', { name: 'Example inbox', askedBy, schedule: '0 9 * * *', run: d.argv('busy'), timeoutMinutes: 5 })
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-inbox' })).status).toBe(200)
+    const busy = await settle(d.app, (s) => s.routines[0].runs.length === 3)
+    expect(busy.routines[0].runs[0]).toMatchObject({ outcome: 'busy' })
+    expect(sent).toEqual([])
+  }, 60_000)
 })

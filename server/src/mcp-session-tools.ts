@@ -726,6 +726,28 @@ export const SESSION_TOOLS: HydraTool[] = [
     inputSchema: S({ id: { type: 'string' } }, ['id']),
     run: (a) => api(`/api/incidents/${encodeURIComponent(str(a.id))}/resolve`, { method: 'POST' }),
   },
+  {
+    name: 'ask_owner_help',
+    description:
+      "MUTATES: ask the owner for help when a job is stuck and only the owner can unstick it. Opens an incident in AgentHydra's Incidents panel and pings the owner (desktop notification, and email when set up). Say in plain English what is stuck and what the owner must do. A repeat while the same incident is still open is counted, not pinged again. Returns { id, notified }.",
+    inputSchema: S(
+      {
+        key: { type: 'string', description: 'The routine id, or a short slug for what is stuck.' },
+        message: {
+          type: 'string',
+          description: 'What is stuck and what the owner must do, in plain English.',
+        },
+        scope: { type: 'string', description: "Default 'routine'." },
+      },
+      ['key', 'message'],
+    ),
+    run: (a) =>
+      api('/api/incidents', {
+        method: 'POST',
+        headers: JSON_HEADERS,
+        body: JSON.stringify({ key: str(a.key), message: str(a.message), scope: a.scope }),
+      }),
+  },
 
   // --- live agent status (server/src/agent-status.ts) ----------------------------
   // Working / waiting on you / done per session, fed by Claude Code's own hooks and the rate-limit

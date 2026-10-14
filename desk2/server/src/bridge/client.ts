@@ -528,6 +528,12 @@ export function createClient(opts: HydraClientOptions = {}) {
       get<AhSessionRow>(`/api/sessions/${enc(sessionId)}${source ? `?source=${enc(source)}` : ''}`, undefined, signal),
     cancelWorker: (id: string) =>
       post<{ cancelled: string[]; keptMessages: Record<string, number> }>('/api/corch/cancel', { id }),
+    /** Open (or count a repeat of) an incident and ping the owner: a routine's failed or timed-out run. */
+    recordIncident: (body: { scope: string; key: string; message: string }) =>
+      post<{ id: string; notified: boolean }>('/api/incidents', body),
+    /** Resolve every open incident for one (scope, key): a routine's next ok run. */
+    resolveIncidents: (scope: string, key: string) =>
+      post<{ resolved: number }>('/api/incidents/resolve-by-key', { scope, key }),
     /** These workers however old (a chat's worker that finished a week ago), in one read. */
     workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1`),
     /** The workers that ran in these sessions (current or earlier), however old, without reading every worker. */

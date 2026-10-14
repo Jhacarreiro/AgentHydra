@@ -25,7 +25,7 @@ import {
 import type { ServerContext } from '../context'
 import { AsyncFile } from '../async-file'
 import { bridge } from '../bridge'
-import type { AhWorker, StartWorker } from '../bridge/client'
+import { createClient, type AhWorker, type StartWorker } from '../bridge/client'
 import { isActiveWorkerStatus } from '../bridge/climayte'
 import { callerKind } from '../caller'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
@@ -34,6 +34,7 @@ import { killHostTree, pidAlive, recordedPidOwner, startDetached } from '../host
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
 import { sdkDescriber, type Describer } from '../routines/describe'
 import { checkDefinition, kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
+import { routineIncidentAction } from '../routines/incident'
 import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
 import { readJson, RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunResult, type RunSpec } from '../routines/runner'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
@@ -75,6 +76,17 @@ export interface RoutineWorkers {
   cancel(id: string): Promise<void>
 }
 
+/** AgentHydra's incidents, as a routine's failed, timed-out or ok run opens or resolves them. The default is the daemon. */
+export interface RoutineIncidents {
+  record(body: { scope: string; key: string; message: string }): Promise<unknown>
+  resolve(scope: string, key: string): Promise<unknown>
+}
+
+const liveIncidents: RoutineIncidents = {
+  record: (body) => createClient().recordIncident(body),
+  resolve: (scope, key) => createClient().resolveIncidents(scope, key),
+}
+
 /** Windows' scheduled tasks, as a windowsTask routine uses them. The default is PowerShell and schtasks. */
 export interface RoutineTasks {
   read(paths: string[]): Promise<TaskReading[]>
@@ -91,6 +103,8 @@ export interface RoutinesOptions {
   workers?: RoutineWorkers
   /** Test seam: the Windows tasks a windowsTask routine uses. */
   tasks?: RoutineTasks
+  /** Test seam: the incidents a failed or timed-out run opens and an ok run resolves. The server posts to AgentHydra. */
+  incidents?: RoutineIncidents
   /** Test seam: the platform a windowsTask routine needs. */
   platform?: NodeJS.Platform
   /** Test seam: what describes a run. The server asks Haiku 5.5 (routines/describe.ts). */
@@ -192,6 +206,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const clock = opts.now ?? Date.now
   const platform = opts.platform ?? process.platform
   const workers = opts.workers ?? liveWorkers
+  const incidents = opts.incidents ?? liveIncidents
   const tasks = opts.tasks ?? liveTasks
   const describer = opts.describer ?? sdkDescriber(ctx.home, () => bridge().listAccounts(), () => claudeCodeBinaryFor(ctx.home).path())
   const memory = load(file)
@@ -243,7 +258,19 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     mem.runs.splice(RUNS_KEPT)
     mem.running = null
     save()
+    reportIncident(id, def?.name ?? id, r)
     if (described) void describeRun(id, def, r, output)
+  }
+
+  /** A failed or timed-out run opens the routine's incident and pings the owner; an ok run resolves it. Best effort:
+   *  an AgentHydra that is down keeps the incident as it was, and the next run of this routine settles it. */
+  function reportIncident(id: string, name: string, r: RoutineRun): void {
+    const action = routineIncidentAction({ id, name }, r)
+    if (!action) return
+    const sent = action.kind === 'record'
+      ? incidents.record({ scope: action.scope, key: action.key, message: action.message })
+      : incidents.resolve(action.scope, action.key)
+    sent.catch(() => undefined)
   }
 
   /** Asks for a run's description and keeps it on the run, found again by its start. A failure keeps its reason. */
