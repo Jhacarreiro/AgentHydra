@@ -43,12 +43,16 @@ their smoke test (owner, 2026-10-14: "it's literally A plus B equals C").
 Over 14 days (2026-10-14) sessions called 138 AgentHydra and HSwarm tools 42,622 times; twelve carried 74% of it, and
 a third of all calls only asked whether a run had finished. A task is the whole of it:
 
-- `POST /api/tasks {prompt, cwd, tools: none | read | edit | all, title?}` answers the task: `{id, status}`.
+- `POST /api/tasks {prompt, cwd, tools: none | read | edit | all, title?, kind?}` answers the task: `{id, status}`.
 - `GET /api/tasks/:id` and `GET /api/tasks/:id/wait?seconds=N` (answers when it settles, or after N seconds; no
-  polling) give `{id, status: queued | running | done | failed | cancelled, backend, account, result, error}`.
-- `POST /api/tasks/:id/cancel`, `POST /api/tasks/:id/send {text}` (a follow-up in the same thread) and
-  `POST /api/tasks/:id/verdict {pass}` (which teaches the picker what each kind of task needs).
-- The same six as MCP tools: run, wait, send, cancel, verdict, usage.
+  polling) give `{id, status: queued | running | done | failed | cancelled, backend, account, result, error,
+  verdict}`; `GET /api/tasks?limit=N` lists them, newest first.
+- `POST /api/tasks/:id/cancel`; `POST /api/tasks/:id/send {text}`, a follow-up in the same thread on the same
+  account once it has settled (202 and the row; 409 while it runs, or for an HSwarm task, which keeps no thread);
+  `POST /api/tasks/:id/verdict {pass, note?}` once it is done or failed, which teaches the picker what each kind
+  of task needs.
+- `GET /api/usage`: every account with its room. `GET /api/health` names the server (`agenthydra-core`).
+- The same six as MCP tools (`bun core/src/mcp.ts`, stdio): run, wait, send, cancel, verdict, usage.
 
 A task with tools runs on an agent login (Claude, Codex); a tool-free one on the cheapest route with room (a Free web
 login, then an API model). The smoke stages `task-*` are its bar.

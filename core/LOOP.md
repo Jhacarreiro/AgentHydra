@@ -3,13 +3,13 @@
 ## Status
 
 <!-- rewritten by frontier.py on every `next`; hand notes go in the Log -->
-<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [], "iteration": 0, "probe": "bun D:/PublicProjects/AgentHydra/app/core/smoke/smoke.ts --json"} -->
+<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null]], "iteration": 2, "last": {"at": "2026-10-14T06:44Z", "frontier": {"detail": {"queued": [false, true], "queuedCount": 0, "replies": ["ONE"], "status": "error", "stillMarkedQueued": [false, false]}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-queue", "passed": null}, "green": 14, "stalled": false, "total": 22}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
 - goal: A fresh AgentHydra core (accounts + a message -> the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it
-- probe: `bun D:/PublicProjects/AgentHydra/app/core/smoke/smoke.ts --json`
-- updated: -
-- frontier: not probed yet
-- stages green: -/-
-- iterations: 0
+- probe: `C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run "bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts"`
+- updated: 2026-10-14T06:44Z
+- frontier: `codex-queue` FIX
+- stages green: 14/22
+- iterations: 2
 - stalled: no
 
 ## Log
@@ -23,3 +23,5 @@
 - 2026-10-14T06:15Z port: claude 100 / chatgpt 105 / accounts 142 / history 112 lines done; server+chat loop and codex still building. Fix-round items: (1) accounts: the daemon sends no in-use flag (accountInUse inputs handsOnAgoMs/otherSessions computed in climayte-core.ts:554 but no route returns them), so the core cannot avoid an account a person is using; (2) accounts: a Free ChatGPT account with no usage reading reads room 0 and is never picked; follow Desk's ChatGPT pick; (3) claude backend imports isUsageLimitText from the whole chat-runtime.ts graph. Recon D: CliMayte essentials ~2.5k of 20.3k lines; HSwarm essentials ~6.5k of 43k.
 - 2026-10-14T06:16Z fix: core-fix1 sent: daemon inUse on /api/cli-instances (+accounts uses it); ChatGPT pick as Desk does; export Codex helpers and move isUsageLimitText to a small module (no copies). codex-hold.ts cap timer cleared on stdin end (review finding).
 - 2026-10-14T06:18Z port: Probe gains task-claude/task-api/task-many/task-cancel (todo until POST /tasks). core-build2 sent: core/src/tasks.ts (taskRoutes(): CliMayte and HSwarm as one picker over agent logins, Free web logins, then HSwarm's CLI); main.ts wiring is one line after the server builder lands.
+- 2026-10-14T06:35Z probe: frontier `history-paging` FIX [15/22 green]
+- 2026-10-14T06:44Z probe: frontier `codex-queue` FIX [14/22 green]

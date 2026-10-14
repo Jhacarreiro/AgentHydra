@@ -13,9 +13,8 @@ import { mapExternal, tailToItems } from '../../desk2/server/src/bridge/external
 import {
   claudeProjectRoots,
   findSessionJsonlAsync,
-  sessionJsonlItems,
   sessionJsonlOlder,
-  sessionJsonlStart,
+  sessionJsonlPage,
 } from '../../desk2/server/src/bridge/session-jsonl'
 import type { ExternalSession, History, Page } from './types'
 
@@ -106,8 +105,8 @@ export function history(): History {
       const file = await jsonlOf(row)
       if (file) {
         // The whole session file's last page; what is above it is older()'s, from the byte the page begins at.
-        const start = sessionJsonlStart(file)
-        return { items: sessionJsonlItems(file), olderBefore: start > 0 ? start : null }
+        const { items, start } = sessionJsonlPage(file)
+        return { items, olderBefore: start > 0 ? start : null }
       }
       const t = await client.tail(id, TAIL_LIMIT).catch(() => null)
       return t && !t.error ? tailPage(t) : null

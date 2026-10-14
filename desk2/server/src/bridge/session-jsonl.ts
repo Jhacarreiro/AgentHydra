@@ -541,9 +541,17 @@ export function sessionJsonlItems(path: string, cwd?: string | null): Transcript
   return readSession(path, cwd)
 }
 
-/** Where sessionJsonlItems' last answer for the file begins; what is before it is sessionJsonlOlder's. 0: the whole file. */
+/** Where sessionJsonlItems' last answer for the file begins; what is before it is sessionJsonlOlder's. 0: the whole file,
+ *  and also a file not read yet: ask it after sessionJsonlItems, or use sessionJsonlPage, which does both in order. */
 export function sessionJsonlStart(path: string): number {
   return readSession.startOf(path)
+}
+
+/** A session file's last page and the byte it begins at (0: the whole file), read in the one order that answers right
+ *  (2026-10-14: the core asked the start first, got 0 for every file, and offered no older page). */
+export function sessionJsonlPage(path: string, cwd?: string | null): { items: TranscriptItem[]; start: number } {
+  const items = readSession(path, cwd)
+  return { items, start: readSession.startOf(path) }
 }
 
 /** Source bytes parsed between two yields of an older read, beside LINES_PER_SLICE: a transcript line can be megabytes. */

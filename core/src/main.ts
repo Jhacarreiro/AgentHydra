@@ -64,9 +64,10 @@ const outside = parts.history()
 const tasks = taskRoutes()
 const store = new Store()
 let server: ReturnType<typeof Bun.serve>
+const pool = parts.accounts()
 const chats = new Chats({
   store,
-  accounts: parts.accounts(),
+  accounts: pool,
   history: outside,
   backends: parts.backends.map((make) => make()),
   emit: (event) => server.publish('events', JSON.stringify(event)),
@@ -81,7 +82,17 @@ type Route = [
 const id = (m: RegExpMatchArray): string => decodeURIComponent(m[1]!)
 
 const routes: Route[] = [
+  // Says which server this is: on 2026-10-14 the orchestrator's dashboard held the core's old port and answered /api/chats.
+  ['GET', /^\/api\/health$/, () => json({ ok: true, name: 'agenthydra-core' })],
   ['GET', /^\/api\/chats$/, () => json(chats.list())],
+  [
+    'GET',
+    /^\/api\/usage$/,
+    async () =>
+      json(
+        (await pool.list()).map(({ id, service, label, room }) => ({ id, service, label, room })),
+      ),
+  ],
   ['POST', /^\/api\/chats$/, async (_m, req) => json(chats.create(await body(req)), 201)],
   [
     'POST',

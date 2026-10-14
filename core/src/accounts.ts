@@ -208,6 +208,9 @@ export function accounts(): Accounts {
     async find(service, id) {
       return (await current())[service].find((a) => a.id === id) ?? null
     },
+    async list() {
+      return Object.values(await current()).flat()
+    },
     hold(id, until) {
       holds.set(id, until)
     },

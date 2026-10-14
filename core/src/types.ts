@@ -81,6 +81,8 @@ export interface Accounts {
   find(service: Service, id: string): Promise<Account | null>
   /** The account ran into a limit: no picks until `until` (epoch ms). */
   hold(id: string, until: number): void
+  /** Every account of every service as it reads now (the usage tool). */
+  list(): Promise<Account[]>
 }
 
 /** A page of an outside chat's transcript, and the `before` that reads the page above it (null at the start). */

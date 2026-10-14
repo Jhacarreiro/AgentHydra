@@ -3,7 +3,7 @@
 // line is smoke's stages, or a failed boot that says why (the typecheck's errors, or the core's own log).
 //   bun core/smoke/verify.ts [scenario ...]
 import { spawn, spawnSync } from 'node:child_process'
-import { openSync, readFileSync } from 'node:fs'
+import { openSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
@@ -14,9 +14,12 @@ const bootFail = (detail: unknown) => {
   console.log(JSON.stringify({ stages: [{ name: 'boot', status: 'fail', detail }] }))
   process.exit(1)
 }
+// Only the core counts as up: another server on the port (2026-10-14: the orchestrator's dashboard on 7799 answered
+// /api/chats with []) fails the boot instead of being probed.
 const answers = async () => {
   try {
-    return (await fetch(`${base}/chats`, { signal: AbortSignal.timeout(2000) })).status === 200
+    const r = await fetch(`${base}/health`, { signal: AbortSignal.timeout(2000) })
+    return ((await r.json()) as { name?: string }).name === 'agenthydra-core'
   } catch {
     return false
   }
@@ -51,13 +54,27 @@ if (!(await answers())) {
     bootFail({ log: readFileSync(log, 'utf8').trim().split('\n').slice(-30) })
   }
 }
+// The whole round is also kept (tmpdir/agenthydra-core-smoke.out): the loop file keeps only its frontier, and the
+// next round's workers need every stage that is not green yet.
+const out = join(tmpdir(), 'agenthydra-core-smoke.out')
 try {
   const smoke = spawn(
     process.execPath,
     [join(import.meta.dir, 'smoke.ts'), '--json', ...process.argv.slice(2)],
-    { cwd: root, env: { ...process.env, CORE_URL: base }, stdio: 'inherit', windowsHide: true },
+    {
+      cwd: root,
+      env: { ...process.env, CORE_URL: base },
+      stdio: ['ignore', 'pipe', 'inherit'],
+      windowsHide: true,
+    },
   )
+  const chunks: Buffer[] = []
+  smoke.stdout?.on('data', (b: Buffer) => {
+    chunks.push(b)
+    process.stdout.write(b)
+  })
   await new Promise((r) => smoke.once('exit', r))
+  writeFileSync(out, Buffer.concat(chunks))
 } finally {
   core?.kill()
 }
