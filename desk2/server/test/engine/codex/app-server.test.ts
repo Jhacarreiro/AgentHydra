@@ -1,5 +1,5 @@
-// The shared Codex app-server ends as soon as its last chat lets go (Codex frees a thread only when the process
-// exits), and a new one on the same home waits for the old one to be gone. A stand-in app-server, started the way
+// The shared Codex app-server ends as soon as its last chat lets go (its exit frees a thread at once, where
+// thread/unsubscribe frees it about a minute later), and a new one on the same home waits for the old one to be gone. A stand-in app-server, started the way
 // CODEX_PATH starts a shim, logs when it starts, when its input closes and when it exits.
 
 import { afterAll, expect, test } from 'bun:test'
@@ -10,10 +10,21 @@ import { openAppServer } from '../../../src/engine/codex/app-server'
 
 const dir = mkdtempSync(join(tmpdir(), 'desk-codex-app-'))
 const before = process.env.CODEX_PATH
-afterAll(() => {
+afterAll(async () => {
   if (before === undefined) delete process.env.CODEX_PATH
   else process.env.CODEX_PATH = before
-  if (dir) rmSync(dir, { recursive: true, force: true })
+  if (!dir) return
+  // The stand-in logs 'exit' just before it exits, and on Windows it and the shim's shell hold the folder until they
+  // are gone: EBUSY failed the suite on 2026-10-14. Bun's rmSync takes no maxRetries, so it is tried again here.
+  for (let i = 0; ; i++) {
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      return
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException).code !== 'EBUSY' || i >= 30) throw err
+      await new Promise((r) => setTimeout(r, 100))
+    }
+  }
 })
 
 // Answers every request; once its input closes it takes a moment (writing its threads) before it exits.
