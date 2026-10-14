@@ -12,7 +12,7 @@
 // its back arrow slides them back.
 import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
-import type { TranscriptItem } from '@shared/protocol'
+import type { TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
@@ -27,6 +27,8 @@ const props = defineProps<{
   sessionId: string | null | undefined
   workerIds?: readonly string[]
   items: TranscriptItem[]
+  /** The whole transcript's index (null where none was read). */
+  index?: TranscriptIndex | null
   /** The Hydra Desk chat the items are of (its tasks get Stop); null for a session outside it. */
   chatId?: string | null
   /** That chat is a CliMayte worker: stopping one of its tasks stops the worker, turn and all. */
@@ -62,7 +64,7 @@ function toggleAll() {
 // The session's own workers and jobs, read while the panel is open: they outlast the window's lists.
 const own = useSessionTasks(toRef(props, 'sessionId'))
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
+  panelLists({ workers: src.workers.value, items: props.items, index: props.index, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
 )
 
 // The progress squares of every phase on show, worked out once per list change.

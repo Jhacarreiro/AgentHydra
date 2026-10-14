@@ -642,7 +642,7 @@ function recallLast(): string | null {
     const it = items[i]
     if (it.kind === 'user' && !it.parentToolUseId) return it.text
   }
-  return null
+  return desk.indexByChat.value.get(id)?.lastUserText || null
 }
 
 /** Up in an empty box takes this chat's last queued message back into the box to edit, like the CLI. */

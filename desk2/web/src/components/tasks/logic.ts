@@ -3,7 +3,8 @@
 // the chat's own background tasks, running and finished, and the HSwarm jobs the chat called, one unit
 // each (the same jobs the sidebar's HSwarm badge counts), and the session's own of both that the server read for it
 // (session.ts), which outlast the window's lists. Pure, so the grouping and the labels are tested.
-import type { CliMayteWorker, SessionTasks, SwarmJob, TranscriptItem } from '@shared/protocol'
+import type { CliMayteWorker, SessionTasks, SwarmJob, TranscriptIndex, TranscriptItem } from '@shared/protocol'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import { modelName } from '@/components/shell/logic'
 import { chatWorkers } from '@/components/climayte/dock'
 
@@ -248,6 +249,25 @@ export interface PanelLists {
   finished: TaskUnit[]
 }
 
+/** The transcript's background tasks: the index's (every one running, the last finished) under the loaded items' own, which are newer. */
+export function wholeTasks(items: readonly TranscriptItem[], index?: TranscriptIndex | null): TaskItem[] {
+  const own = items.filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? ''))
+  if (!index) return own
+  const ids = new Set(own.map((t) => t.id))
+  const above = [...index.recentTasks, ...index.runningTasks].filter((t): t is TaskItem => t.kind === 'task' && !ids.has(t.id))
+  return [...above, ...own]
+}
+
+/** The newest to-do list: the loaded items' when they hold one, else the index's, else one built from the items. */
+export function latestTodoList(items: readonly TranscriptItem[], index?: TranscriptIndex | null) {
+  for (let i = items.length - 1; i >= 0; i--) {
+    const it = items[i]!
+    if (it.kind === 'todos') return it.todos.length ? it.todos : null
+  }
+  const t = (index ?? buildTranscriptIndex(items)).latestTodos
+  return t && t.kind === 'todos' && t.todos.length ? t.todos : null
+}
+
 /**
  * What the panel lists. `workerIds` (the server's match) scope it to the workers this chat dispatched (`all`:
  * every worker AgentHydra lists); `items` adds the chat's own task items, running or finished
@@ -262,6 +282,8 @@ export interface PanelLists {
 export function panelLists(o: {
   workers: CliMayteWorker[]
   items?: TranscriptItem[]
+  /** The whole transcript's index: its running and recent tasks outlast the loaded rows (the loaded items win by id). */
+  index?: TranscriptIndex | null
   jobs?: readonly SwarmJob[]
   own?: SessionTasks | null
   sessionId: string | null | undefined
@@ -273,7 +295,7 @@ export function panelLists(o: {
 }): PanelLists {
   const own = o.own && o.own.sessionId === o.sessionId ? o.own : null
   const scoped = withOwn(o.all ? o.workers : chatWorkers(o.workers, o.sessionId, o.workerIds), own?.workers ?? [], o.workers)
-  const tasks = (o.items ?? []).filter((i): i is TaskItem => i.kind === 'task' && TASK_STATUSES.has(i.status ?? '')).map((t) => taskUnit(t, !!o.chatId))
+  const tasks = wholeTasks(o.items ?? [], o.index).map((t) => taskUnit(t, !!o.chatId))
   const jobs = withOwn(chatJobs(o.jobs ?? [], o.sessionId), own?.jobs ?? [], o.jobs ?? []).map(jobUnit)
   const units = [...workerUnits(scoped), ...tasks, ...jobs]
   const cleared = o.cleared ?? new Set<string>()

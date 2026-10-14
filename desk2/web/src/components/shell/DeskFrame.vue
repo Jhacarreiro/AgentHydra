@@ -57,6 +57,7 @@ import { headerPeek } from '@/components/session-header/state'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
+import { externalIndexBySession } from '@/components/external/paging'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel, prefetchPanels } from '@/lib/lazy-panel'
 import { waitForNextPaint } from '@/lib/wait-for-next-paint'
@@ -172,6 +173,7 @@ const tasksSessionId = computed(() => outsideId.value ?? chat.value?.sessionId)
 const tasksItems = computed(() =>
   outsideId.value ? (outsideTasks.value?.sessionId === outsideId.value ? outsideTasks.value.items : []) : items.value
 )
+const tasksIndex = computed(() => (outsideId.value ? externalIndexBySession.get(outsideId.value) : chat.value ? src.indexByChat?.value.get(chat.value.id) : null) ?? null)
 const tasksWorkerIds = computed(() => (outsideId.value ? undefined : chat.value?.workerIds))
 
 // The list of outside sessions holds the last 24 hours; a search hit can open an older one, which is
@@ -692,6 +694,7 @@ const tasksRunningCount = computed(
     panelLists({
       workers: src.workers.value,
       items: tasksItems.value,
+      index: tasksIndex.value,
       jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value],
       own: tasksSessionId.value ? sessionTasks.value.get(tasksSessionId.value) : null,
       sessionId: tasksSessionId.value,
@@ -1158,6 +1161,7 @@ function moveSidebar(side: SidebarSide) {
               :session-id="tasksSessionId"
               :worker-ids="tasksWorkerIds"
               :items="tasksItems"
+              :index="tasksIndex"
               :chat-id="outsideId ? null : chat?.id"
               :climayte="!outsideId && chat?.workerId !== undefined"
               :focus-id="tasks.focus"
@@ -1196,6 +1200,7 @@ function moveSidebar(side: SidebarSide) {
                 :chat="outsideId ? null : chat"
                 :outside="!!outsideId"
                 :items="tasksItems"
+                :index="tasksIndex"
                 :session-id="tasksSessionId"
                 :worker-ids="tasksWorkerIds"
                 :chat-id="outsideId ? null : chat?.id"
