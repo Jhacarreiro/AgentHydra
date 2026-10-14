@@ -60,3 +60,28 @@ export function lastCodexContext(path: string): { tokens: number; window: number
   }
   return null
 }
+
+/** The event_msg types that open and close a Codex turn: every turn starts with `task_started` and ends with `task_complete`, or
+ *  `turn_aborted` when it was stopped (read 2026-10-14 over the 40 newest rollouts: 176 started, 174 complete, 1 aborted, 1 open). */
+const TURN_MARK = /"type":"(task_started|task_complete|turn_aborted)"/
+export const TURN_TAIL_BYTES = 256 * 1024
+
+/** Whether the thread's last turn is still open: its newest turn mark is `task_started`. A tail holding no mark at all, from a
+ *  file longer than the tail, is a turn whose own output has filled the tail since it started, so open too. */
+export function codexTurnOpen(path: string): boolean {
+  const size = statSync(path).size
+  const lines = readTail(path, TURN_TAIL_BYTES).split('\n')
+  for (let i = lines.length - 1; i >= 0; i--) {
+    const line = lines[i]!
+    if (!line.includes('"event_msg"')) continue
+    const mark = TURN_MARK.exec(line)?.[1]
+    if (!mark) continue
+    try {
+      if ((JSON.parse(line) as { payload?: { type?: unknown } }).payload?.type !== mark) continue
+    } catch {
+      continue // the tail's first line may be cut
+    }
+    return mark === 'task_started'
+  }
+  return size > TURN_TAIL_BYTES
+}

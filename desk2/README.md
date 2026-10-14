@@ -270,7 +270,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   and a `rate_limited` answer moves the message to another account with the handoff. Both share
   `engine/service-runtime.ts` (the record, the queue, the idle close). An idle outside Codex chat continues the same way (owner, 2026-10-13: "why are they only read-only? ...
   It should function similar to Claude"): its first message imports it as a chat pinned to Codex on its own thread
-  and account, resumed in place (`codexImport` in `chat-manager.ts`); Fork stays on Claude chats. Opening a session from a search while the
+  and account, resumed in place (`codexImport` in `chat-manager.ts`); Fork stays on Claude chats. Whether an outside Codex
+  chat is at work comes from its rollout's turn marks (`task_started` until `task_complete` or `turn_aborted`;
+  `codexTurnOpen` in `bridge/codex-rollout.ts`), not from how recently it wrote: a command that ran a minute wrote
+  nothing, so the chat read as idle after 30 s and its composer came and went (owner, 2026-10-14). An open turn quiet for
+  30 minutes counts as ended. Opening a session from a search while the
   session rail is shut shows the rail for two seconds, lying over the chat, then shuts it again; the pointer on it
   keeps it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of

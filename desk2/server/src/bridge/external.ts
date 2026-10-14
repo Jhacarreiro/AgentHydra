@@ -53,6 +53,9 @@ export interface ExternalInputs {
   wanted?: ReadonlySet<string>
   /** A title the bridge knows for a session when neither its chat record nor its index row has one (index.ts knownTitle). */
   knownTitle?: (id: string) => string | undefined
+  /** Whether a Codex thread's last turn is open, read from its rollout (codex-rollout.ts codexTurnOpen), for the threads
+   *  active lately; a thread missing here goes by how recently it wrote. */
+  codexTurns?: ReadonlyMap<string, boolean>
 }
 
 const STATUS_ORDER: Record<ExternalSession['status'], number> = { needs_you: 0, working: 1, idle: 2, stale: 3 }
@@ -78,6 +81,18 @@ function recencyStatus(last: number | null, now: number): ExternalSession['statu
   if (last !== null && now - last <= WORKING_WINDOW_MS) return 'working'
   if (last === null || now - last > STALE_AFTER_MS) return 'stale'
   return 'idle'
+}
+
+/** An open Codex turn that has written nothing for this long is taken as ended (an app closed mid-turn writes no end). */
+export const OPEN_TURN_QUIET_MS = 30 * 60 * 1000
+
+/** A Codex thread by its turn marks, not by how recently it wrote: a command running for a minute writes nothing, and read by
+ *  recency the chat went idle after 30 s and its composer came back until the next write took it away (owner, 2026-10-14: "the
+ *  input bar ... keeps disappearing. And reappearing"). Null when the rollout was not read. */
+function turnStatus(open: boolean | undefined, last: number | null, now: number): ExternalSession['status'] | null {
+  if (open === undefined) return null
+  if (open && last !== null && now - last <= OPEN_TURN_QUIET_MS) return 'working'
+  return last === null || now - last > STALE_AFTER_MS ? 'stale' : 'idle'
 }
 
 function hookStatus(
@@ -163,7 +178,7 @@ export function mapExternal(
     const row = index.get(id)
     const h = hooks.get(id)
     const last = maxOf(base.last, row?.last_activity_at, iso(h?.at))
-    const status = hookStatus(h, last, now) ?? recencyStatus(last, now)
+    const status = hookStatus(h, last, now) ?? (source === 'codex' ? turnStatus(inp.codexTurns?.get(id), last, now) : null) ?? recencyStatus(last, now)
     const accountId = resume({
       source,
       instance: base.instance ?? row?.instance ?? null,

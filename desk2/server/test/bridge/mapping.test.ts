@@ -202,6 +202,18 @@ describe('external sessions', () => {
     expect(row).toMatchObject({ source: 'codex', title: 'Invented Codex chat', instance: 'codex-1', cwd: 'C:/Users/me/project', status: 'stale' })
   })
 
+  // Owner, 2026-10-14: a Codex chat's composer "keeps disappearing. And reappearing": a command that ran a minute wrote nothing.
+  test('a Codex chat is working while its rollout holds an open turn, however long since it wrote, and idle once it closed', () => {
+    const codexChats = [{ instance: 'codex-1', instanceNum: 61, instanceId: 'b0000000-0000-4000-8000-000000000001', threadId: sid(893),
+      title: 'Invented Codex chat', cwd: null, lastActivityAt: new Date(NOW - 60_000).toISOString() }]
+    const at = (turns?: Map<string, boolean>, ago = 60_000) => mapExternal({ ...inputs, codexChats: [{ ...codexChats[0]!, lastActivityAt: new Date(NOW - ago).toISOString() }], codexTurns: turns }, new Set(), NOW)
+      .find((x) => x.id === sid(893))
+    expect(at(new Map([[sid(893), true]]))).toMatchObject({ status: 'working', canResume: false })
+    expect(at(new Map([[sid(893), false]]), 5_000)).toMatchObject({ status: 'idle', canResume: true })
+    expect(at(new Map([[sid(893), true]]), 40 * 60_000)).toMatchObject({ status: 'idle' })  // an app closed mid-turn wrote no end
+    expect(at(undefined)).toMatchObject({ status: 'idle' })  // no rollout read: by how recently it wrote, as before
+  })
+
   test('a chat started from a chip is parented to the chat it names; an unknown parent leaves it out', () => {
     const chat = (n: number, spawnedFrom: string | null) => ({
       instance: 'Claude-9',

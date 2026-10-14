@@ -37,10 +37,10 @@ import {
   type HydraClientOptions,
   type StartWorker,
 } from './client'
-import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
+import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '@shared/transcript-index'
-import { findCodexRollout, lastCodexContext } from './codex-rollout'
+import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
@@ -484,7 +484,37 @@ export function createBridge(opts: BridgeOptions = {}) {
       codexChats: got.codexChats ?? [],
       sessions: got.sessions ?? [],
       workers: got.workers ?? [],
+      codexTurns: await codexTurns(got.codexChats ?? []),
     }
+  }
+
+  /** Whether each Codex thread active in the last STALE_AFTER_MS has its last turn open (codex-rollout.ts codexTurnOpen),
+   *  kept by the rollout's size and mtime, so a file that has not changed is not read again. */
+  const turnKept = new Map<string, { key: string; open: boolean }>()
+  async function codexTurns(chats: readonly AhCodexChatRow[]): Promise<Map<string, boolean>> {
+    const out = new Map<string, boolean>()
+    const recent = chats.filter((c) => {
+      const at = c.lastActivityAt ? Date.parse(c.lastActivityAt) : Number.NaN
+      return Number.isFinite(at) && now() - at <= STALE_AFTER_MS
+    })
+    for (const id of turnKept.keys()) if (!recent.some((c) => c.threadId === id)) turnKept.delete(id)
+    await Promise.all(
+      recent.map(async (c) => {
+        const path = await codexRollout(c.threadId).catch(() => null)
+        if (!path) return
+        try {
+          const st = await stat(path)
+          const key = `${path}|${st.size}|${st.mtimeMs}`
+          const kept = turnKept.get(c.threadId)
+          const open = kept?.key === key ? kept.open : codexTurnOpen(path)
+          turnKept.set(c.threadId, { key, open })
+          out.set(c.threadId, open)
+        } catch {
+          // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
+        }
+      }),
+    )
+    return out
   }
 
   /** `throwaway`: also the live probe's own sessions (shared/throwaway.ts), which every other caller, the window's

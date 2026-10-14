@@ -2,7 +2,7 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { findCodexRollout, lastCodexContext } from '../../src/bridge/codex-rollout'
+import { codexTurnOpen, findCodexRollout, lastCodexContext, TURN_TAIL_BYTES } from '../../src/bridge/codex-rollout'
 
 const temps: string[] = []
 const temp = () => {
@@ -45,5 +45,20 @@ describe('a Codex chat rollout', () => {
     expect(lastCodexContext(f)).toEqual({ tokens: 9_000, window: null })
     writeFileSync(f, count(null))
     expect(lastCodexContext(f)).toBeNull()
+  })
+
+  test('its last turn is open from task_started until task_complete or turn_aborted; a tail of turn output with no mark is open', () => {
+    const f = join(temp(), 'rollout.jsonl')
+    const mark = (type: string) => JSON.stringify({ timestamp: '2026-10-14T10:00:00Z', type: 'event_msg', payload: { type } })
+    const item = JSON.stringify({ timestamp: '2026-10-14T10:00:01Z', type: 'response_item', payload: { type: 'function_call_output', output: 'x' } })
+    const open = (...lines: string[]) => (writeFileSync(f, lines.join('\n') + '\n'), codexTurnOpen(f))
+    expect(open(mark('task_started'), item, count(null), item)).toBe(true)
+    expect(open(mark('task_started'), item, mark('task_complete'))).toBe(false)
+    expect(open(mark('task_complete'), mark('task_started'), item)).toBe(true)
+    expect(open(mark('task_started'), item, mark('turn_aborted'))).toBe(false)
+    // An event whose own type is another, with a mark's type nested in it, is not a mark.
+    expect(open(mark('task_complete'), JSON.stringify({ type: 'event_msg', payload: { type: 'item_completed', item: { type: 'task_started' } } }))).toBe(false)
+    expect(open(item)).toBe(false)
+    expect(open(mark('task_complete'), ...Array.from({ length: Math.ceil(TURN_TAIL_BYTES / item.length) + 10 }, () => item))).toBe(true)
   })
 })
