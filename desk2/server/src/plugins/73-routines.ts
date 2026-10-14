@@ -34,7 +34,7 @@ import { killHostTree, pidAlive, recordedPidOwner, startDetached } from '../host
 import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type Reading, type Seen } from '../routines/decide'
 import { sdkDescriber, type Describer } from '../routines/describe'
 import { checkDefinition, kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
-import { routineIncidentAction } from '../routines/incident'
+import { routineBrokenMessage, routineIncidentAction } from '../routines/incident'
 import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
 import { readJson, RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunResult, type RunSpec } from '../routines/runner'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
@@ -210,6 +210,8 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const tasks = opts.tasks ?? liveTasks
   const describer = opts.describer ?? sdkDescriber(ctx.home, () => bridge().listAccounts(), () => claudeCodeBinaryFor(ctx.home).path())
   const memory = load(file)
+  /** The routines whose broken file this Desk has reported and not yet seen check out (in memory: a restart re-reports). */
+  const reportedBroken = new Set<string>()
   /** The prompt runs this Desk is starting (`<id>@<startedAt>`): their chat id is not known yet. */
   const startingPrompts = new Set<string>()
   let settling: Promise<void> | null = null
@@ -271,6 +273,30 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       ? incidents.record({ scope: action.scope, key: action.key, message: action.message })
       : incidents.resolve(action.scope, action.key)
     sent.catch(() => undefined)
+  }
+
+  /** A routine whose file does not check out, its Windows task is missing, or it is a Windows task off Windows: its reason, else null. */
+  function brokenReason(s: Seen): string | null {
+    if (s.entry.broken !== null) return s.entry.broken
+    if (s.task !== null && !s.task.found) return `no Windows task ${s.entry.def?.windowsTask}`
+    return null
+  }
+
+  /** A broken routine opens one incident until it checks out again, then resolves it. A failed last run keeps its incident open. */
+  function reportBroken(s: Seen): void {
+    const id = s.entry.id
+    const reason = brokenReason(s)
+    if (reason !== null) {
+      if (reportedBroken.has(id)) return
+      reportedBroken.add(id)
+      const name = s.entry.def?.name ?? (s.entry.broken === null ? undefined : s.entry.name) ?? id
+      incidents.record({ scope: 'routine', key: id, message: routineBrokenMessage({ id, name }, reason) }).catch(() => undefined)
+      return
+    }
+    if (!reportedBroken.delete(id)) return
+    const last = memory[id]?.runs[0]
+    if (last?.outcome === 'failed' || last?.outcome === 'timed-out') return
+    incidents.resolve('routine', id).catch(() => undefined)
   }
 
   /** Asks for a run's description and keeps it on the run, found again by its start. A failure keeps its reason. */
@@ -574,6 +600,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         lastError = null
         checkedAt = t
         for (const s of seen) {
+          reportBroken(s)
           const mem = memOf(s.entry, t)
           recordTaskRun(s, mem)
           const j = judge(s, mem, t, enabled(), false)

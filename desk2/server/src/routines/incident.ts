@@ -16,6 +16,11 @@ export type RoutineIncidentAction =
   | { kind: 'record'; scope: 'routine'; key: string; message: string }
   | { kind: 'resolve'; scope: 'routine'; key: string }
 
+/** The incident message for a routine whose file does not check out: where to fix it. */
+export function routineBrokenMessage(routine: RoutineIncidentRoutine, reason: string): string {
+  return `${routine.name}: routine file is broken: ${reason}. Fix ~/.hydra-desk-2/routines/${routine.id}.json`
+}
+
 export function routineIncidentAction(routine: RoutineIncidentRoutine, run: RoutineIncidentRun): RoutineIncidentAction | null {
   if (run.outcome === 'failed' || run.outcome === 'timed-out') {
     const reason = run.lastLine.trim() || run.outcome

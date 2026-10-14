@@ -799,4 +799,31 @@ describe('settings (a stale key from the manager\'s old name)', () => {
     expect(busy.routines[0].runs[0]).toMatchObject({ outcome: 'busy' })
     expect(sent).toEqual([])
   }, 60_000)
+
+  // A routine whose file breaks opens one incident (not one per look), and checks out again: its incident resolves,
+  // unless its last run failed, whose incident shares the key and stays open.
+  test('a broken routine file opens one incident until it checks out; a failed last run keeps its incident open', async () => {
+    const sent: unknown[][] = []
+    const d = desk({
+      incidents: {
+        record: async (body) => void sent.push(['record', body]),
+        resolve: async (scope, key) => void sent.push(['resolve', scope, key]),
+      },
+    })
+    const body = { name: 'Example inbox', askedBy, schedule: '0 9 * * *', run: [process.execPath, '-e', "console.log('boom'); process.exit(1)"], timeoutMinutes: 5 }
+    d.routine('example-inbox', body)
+    await get(d.app, true)
+    expect((await post(d.app, { run: 'example-inbox' })).status).toBe(200)
+    await settle(d.app, (s) => s.routines[0].runs.length === 1)
+    expect(sent.map((c) => c[0])).toEqual(['record'])
+
+    d.routine('example-inbox', { ...body, notAKey: true })
+    await get(d.app, true)
+    await get(d.app, true)
+    expect(sent.slice(1)).toEqual([['record', { scope: 'routine', key: 'example-inbox', message: expect.stringMatching(/^Example inbox: routine file is broken: .+\. Fix ~\/\.hydra-desk-2\/routines\/example-inbox\.json$/) }]])
+
+    d.routine('example-inbox', body)
+    await get(d.app, true)
+    expect(sent.map((c) => c[0])).toEqual(['record', 'record'])
+  }, 60_000)
 })

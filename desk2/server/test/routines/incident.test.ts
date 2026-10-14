@@ -1,11 +1,17 @@
 // routines/incident.ts - which routine outcomes open an incident and which resolve it. busy and interrupted
 // runs are not failures, so they must touch no incident at all.
 import { describe, expect, test } from 'bun:test'
-import { routineIncidentAction } from '../../src/routines/incident'
+import { routineBrokenMessage, routineIncidentAction } from '../../src/routines/incident'
 
 const routine = { id: 'example-inbox', name: 'Example inbox' }
 
 describe('routine outcome to incident (routines/incident.ts)', () => {
+  test('a broken routine file names the routine, the reason, and the file to fix', () => {
+    expect(routineBrokenMessage(routine, 'askedBy must be at most 500 characters')).toBe(
+      'Example inbox: routine file is broken: askedBy must be at most 500 characters. Fix ~/.hydra-desk-2/routines/example-inbox.json',
+    )
+  })
+
   test('a failed or timed-out run opens the routine incident, with the run reason', () => {
     expect(routineIncidentAction(routine, { outcome: 'failed', lastLine: 'exit 1: no account has room' })).toEqual({
       kind: 'record',
