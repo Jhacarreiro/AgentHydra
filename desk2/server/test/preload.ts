@@ -14,6 +14,7 @@
 import { afterAll, beforeEach, mock } from 'bun:test'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -98,6 +99,34 @@ const leakMessage = (file: string, changed: string[]) =>
   `${path.relative(process.cwd(), file)} left globalThis.${changed.join(', globalThis.')} swapped when it ended (put ` +
   'back by the preload): restore it in that file, in an afterAll or afterEach, or every later file in the run gets it'
 
+// Each test file gets its own temp folder under one run folder, removed when the next file starts and again at the
+// run's end. Windows can hold a file a just-stopped child still has open, so each remove retries briefly. Without
+// this, desk-* folders piled up in %TEMP% (2026-10-14: 587, about 200 a day).
+const TEMP_VARS = ['TMPDIR', 'TEMP', 'TMP'] as const
+const runTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'desk2-tests-'))
+let fileTemp: string | null = null
+let fileTempCount = 0
+
+function removeTree(dir: string): void {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+      return
+    } catch {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
+
+function startFileTemp(): void {
+  if (fileTemp) removeTree(fileTemp)
+  fileTemp = path.join(runTemp, String(++fileTempCount))
+  fs.mkdirSync(fileTemp, { recursive: true })
+  for (const name of TEMP_VARS) process.env[name] = fileTemp
+}
+
+startFileTemp()
+
 let currentFile = ''
 let leak: string | null = null
 Bun.plugin({
@@ -106,6 +135,7 @@ Bun.plugin({
     build.onResolve({ filter: /\.(test|spec)\.[cm]?[jt]sx?$/ }, (args) => {
       const changed = putBackGlobals()
       if (changed.length && currentFile) leak = leakMessage(currentFile, changed)
+      if (args.path !== currentFile) startFileTemp()
       currentFile = args.path
       return undefined
     })
@@ -118,6 +148,8 @@ beforeEach(() => {
   throw new Error(message)
 })
 afterAll(() => {
+  if (fileTemp) removeTree(fileTemp)
+  removeTree(runTemp)
   const changed = putBackGlobals()
   if (changed.length) throw new Error(leakMessage(currentFile, changed))
 })
