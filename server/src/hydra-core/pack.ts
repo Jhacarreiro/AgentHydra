@@ -1,10 +1,11 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname, isAbsolute } from 'node:path'
+import { existsSync, readFileSync } from 'node:fs'
+import { isAbsolute } from 'node:path'
 import { type CatalogEntry, LEAD_TIERS, loadCatalog, loadRef, loadText } from './catalog'
 import { rankEntries } from './find'
 import { leadName, parseHydra } from './hydra-md'
 import { appendLog } from './log'
 import { chatPaths } from './paths'
+import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 import { folderKnowledgeOf, mainRules } from './tree'
 
 export const TOTAL_CAP = 9500
@@ -54,22 +55,11 @@ export interface Pack {
   ms: number
 }
 
-type Sent = Record<string, string[]>
-
 interface Sections {
   folder: string
   lead: string
   inline: string[]
   pointers: string[]
-}
-
-function readSent(file: string): Sent {
-  if (!existsSync(file)) return {}
-  try {
-    return JSON.parse(readFileSync(file, 'utf8')) as Sent
-  } catch {
-    return {}
-  }
 }
 
 function cutHead(body: string, room: number, where: string): { text: string; kept: number } {
@@ -88,6 +78,15 @@ function hydraLead(file: string): { name: string; path: string } | null {
   if (!doc?.lead) return null
   const path = /Full text: (.+)$/.exec(doc.lead)?.[1]?.trim() ?? ''
   return { name: leadName(doc), path }
+}
+
+function hydraLeadEntry(
+  entries: CatalogEntry[],
+  path: string,
+  name: string,
+): CatalogEntry | undefined {
+  const people = entries.filter((e) => e.kind === 'person')
+  return people.find((e) => loadRef(e) === path) ?? people.find((e) => e.name === name)
 }
 
 function leadFileText(path: string): string {
@@ -167,12 +166,13 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const persona = hydra
     ? undefined
     : rankEntries(entries, req.prompt, { kinds: ['person'], mode: 'become', tiers: LEAD_TIERS })[0]
-  let lead: { key: string; name: string; text: string } | null = null
-  if (hydra && fresh(`lead:${hydra.name}`))
-    lead = { key: `lead:${hydra.name}`, name: hydra.name, text: leadFileText(hydra.path) }
-  else if (persona && persona.score >= LEAD_MIN && fresh(persona.entry.id))
+  let lead: { id: string; name: string; text: string } | null = null
+  if (hydra) {
+    const id = hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`
+    if (fresh(id)) lead = { id, name: hydra.name, text: leadFileText(hydra.path) }
+  } else if (persona && persona.score >= LEAD_MIN && fresh(persona.entry.id))
     lead = {
-      key: persona.entry.id,
+      id: persona.entry.id,
       name: persona.entry.name,
       text: loadText(persona.entry),
     }
@@ -212,9 +212,14 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
 
   if (lead) {
     const full = `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd()
-    const pointer = `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.key}", mode: "become" }.`
-    if (fits({ ...s, lead: full })) s = { ...s, lead: full }
-    else if (fits({ ...s, lead: pointer })) s = { ...s, lead: pointer }
+    const pointer = `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
+    if (fits({ ...s, lead: full })) {
+      s = { ...s, lead: full }
+      clearLeadOwed(sent)
+    } else if (fits({ ...s, lead: pointer })) {
+      s = { ...s, lead: pointer }
+      setLeadOwed(sent, lead.id)
+    }
   }
 
   const overflow: CatalogEntry[] = []
@@ -237,11 +242,10 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   }
 
   const text = frame(parts(s))
-  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.key] : []))
+  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.id] : []))
   const record = mode === 'delta' ? [...seen, ...ids] : ids
   sent[req.session] = [...new Set(record)]
-  mkdirSync(dirname(files.sent), { recursive: true })
-  writeFileSync(files.sent, JSON.stringify(sent, null, 2))
+  writeSent(files.sent, sent)
 
   const bytes = Buffer.byteLength(text, 'utf8')
   const ms = Math.round(performance.now() - started)
@@ -323,8 +327,7 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
 
   if (ids.length) {
     sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...ids])]
-    mkdirSync(dirname(files.sent), { recursive: true })
-    writeFileSync(files.sent, JSON.stringify(sent, null, 2))
+    writeSent(files.sent, sent)
   }
   appendLog(
     dir,

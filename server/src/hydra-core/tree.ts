@@ -22,6 +22,7 @@ import {
 } from './hydra-md'
 import { appendLog } from './log'
 import { chatPaths } from './paths'
+import { takeLeadOwed } from './sent'
 
 export type Step =
   | 'q1'
@@ -293,6 +294,10 @@ function end(
 ): Reply {
   state.step = 'done'
   const reply: Reply = { verdict, ...body }
+  if (verdict === 'go') {
+    const lead = takeLeadOwed(ctx.files.sent, ctx.cat)
+    if (lead) reply.lead = lead
+  }
   if (doc && write) {
     doc.updated = ctx.now.toISOString()
     doc.scopeLog.push(scopeLine(ctx.now, state.msg, verdict, state.steps))

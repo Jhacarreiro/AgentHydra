@@ -44,7 +44,13 @@ function readDoc(file: string): HydraDoc | null {
 }
 
 function entryOf(dir: string, id: string): CatalogEntry {
-  const e = loadCatalog(dir).entries.get(id)
+  const entries = loadCatalog(dir).entries
+  const name = id.startsWith('lead:') ? id.slice('lead:'.length) : null
+  const e =
+    entries.get(id) ??
+    (name === null
+      ? undefined
+      : [...entries.values()].find((x) => x.kind === 'person' && x.name === name))
   if (!e) throw new Error(`no catalog entry ${id}: use core_find to get an id`)
   return e
 }
