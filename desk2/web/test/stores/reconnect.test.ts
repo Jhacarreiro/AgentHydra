@@ -83,9 +83,11 @@ const desk = useDesk()
 desk.disconnect()
 await desk.init()
 // What init() started stops, and the real globals come back, before the next file runs.
-afterAll(() => {
-  // The store is one per process: the chats made here go, so the next file starts from an empty list.
+afterAll(async () => {
+  // The store is one per process: the chats made here go, so the next file starts from an empty list. The watchers that
+  // removal wakes (the window title) run before the real globals come back.
   for (const c of desk.chats.value) push({ type: 'chat.removed', chatId: c.id })
+  await new Promise((r) => setTimeout(r, 0))
   desk.disconnect()
   restoreGlobals()
 })
@@ -141,6 +143,13 @@ describe("a hello's list is the whole list", () => {
     push(hello([{ ...summary('rc-merge'), title: 'Renamed' }]))
     expect(desk.chats.value.map((c) => c.id)).not.toContain('rc-gone')
     expect(desk.chats.value.find((c) => c.id === 'rc-merge')?.title).toBe('Renamed')
+  })
+
+  test("a chat in the live probe's throwaway folder is never shown", async () => {
+    push(hello([summary('rc-real'), { ...summary('rc-probe'), cwd: 'C:/Users/me/AppData/Local/Temp/agenthydra-smoke/queue' }]))
+    const ids = desk.chats.value.map((c) => c.id)
+    expect(ids).toContain('rc-real')
+    expect(ids).not.toContain('rc-probe')
   })
 
   test('a hello from a server still loading its chats keeps the list', async () => {

@@ -10,12 +10,14 @@ import { spawn } from 'node:child_process'
 import { mkdirSync } from 'node:fs'
 import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { THROWAWAY_DIR } from '../../desk2/shared/throwaway'
 import { connectCodexRpc } from '../../server/src/core/codex-rpc'
 
 const BASE = process.env.CORE_URL ?? 'http://127.0.0.1:7789/api'
 /** Where the session-tail probes go: the core itself, or AgentHydra's daemon when the target is the old Desk. */
 const AH = process.env.AH_URL ?? BASE
-const ROOT = join(tmpdir(), 'agenthydra-smoke')
+// The one folder the window and Desk never list (desk2/shared/throwaway.ts): every chat here runs under it.
+const ROOT = join(tmpdir(), THROWAWAY_DIR)
 /** AgentHydra's daemon, which lists every Codex thread on this PC (the cleanup's sweep of the run's folders). */
 const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:7787/api'
 const CODEX_HOMES = join(homedir(), '.agenthydra', 'codex-instances')

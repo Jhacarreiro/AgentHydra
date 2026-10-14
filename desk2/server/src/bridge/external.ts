@@ -27,6 +27,7 @@
 // put it in the list and each pause of 30 s took it out again.
 
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
+import { isThrowawayCwd } from '@shared/throwaway'
 import { MAX_TOOL_RESULT_CHARS } from '@shared/protocol'
 import type { AhAgentStatus, AhChatRow, AhCodexChatRow, AhLiveSession, AhSessionRow, AhTail, AhWorker, AhWorkerDetail } from './client'
 import { isActiveWorkerStatus, workerAccountLabel } from './climayte'
@@ -127,7 +128,7 @@ export function mapExternal(
   }
   const out = new Map<string, ExternalSession>()
   const add = (s: ExternalSession) => {
-    if (!s.id || exclude.has(s.id) || out.has(s.id)) return
+    if (!s.id || exclude.has(s.id) || out.has(s.id) || isThrowawayCwd(s.cwd)) return
     out.set(s.id, s)
   }
 

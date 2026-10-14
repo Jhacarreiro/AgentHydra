@@ -42,6 +42,7 @@ import type {
   ExternalBranchResult
 } from '@shared/protocol'
 import { newChatTitle } from '@shared/chat-title'
+import { isThrowawayCwd } from '@shared/throwaway'
 import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { sameFolder } from '@/components/composer/folders'
@@ -993,7 +994,8 @@ function makeChat(placeholder: string, req: CreateChatRequest): Promise<ChatSumm
 export function useDesk() {
   return {
     // State
-    chats: computed(() => store.chats),
+    // A chat in the live probe's throwaway folder is never shown (shared/throwaway.ts).
+    chats: computed(() => store.chats.filter((c) => !isThrowawayCwd(c.cwd))),
     itemsByChat: computed(() => itemsByChat),
     itemsError: computed(() => itemsError),
     external: computed(allExternal),
