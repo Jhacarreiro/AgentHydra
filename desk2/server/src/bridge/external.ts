@@ -130,6 +130,7 @@ interface IndexedBase {
   parentId?: string
   codexAccountId?: string
   model?: string | null
+  fromPc?: string
 }
 
 /** What the mapping reads while it runs: the inputs, the clock, the resume lookup, the rows by session id and the list it fills. */
@@ -226,7 +227,7 @@ function fromIndex(st: MapState, id: string, source: ExternalSession['source'], 
     ...(base.codexAccountId ? { codexAccountId: base.codexAccountId } : {}),
     canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
     // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
-    fromPc: row?.from_pc || null,
+    fromPc: base.fromPc || row?.from_pc || null,
     ...(base.parentId ? { parentId: base.parentId } : {}),
     ...limitOf(row),
     ...UNMARKED,
@@ -296,7 +297,8 @@ export function mapExternal(
   addWorkers(st)
   addDesktopChats(st, chats)
   for (const c of inp.codexChats ?? [])
-    fromIndex(st, c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId })
+    // A chat another PC pushed to the Codex hub lives on that PC: listed and readable, never resumed on an account here.
+    fromIndex(st, c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), ...(c.fromPc ? { fromPc: c.fromPc } : { codexAccountId: c.instanceId }) })
   addLiveSessions(st)
   for (const h of hooks.values())
     if (h.state !== 'done') fromIndex(st, h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
