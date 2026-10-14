@@ -277,6 +277,22 @@ export type TranscriptItem =
       error?: string
     })
 
+/** A whole transcript in brief (`GET /api/external/sessions/:id/index`): a window holding only the newest page still has every
+ *  user message (`position` is its place among all `total` items), the newest checklist and the background tasks. */
+export interface TranscriptIndex {
+  total: number
+  userMessages: { id: string; position: number; firstLine: string; images: number }[]
+  latestTodos: TranscriptItem | null
+  runningTasks: TranscriptItem[]
+  /** The last 20 finished tasks, oldest first. */
+  recentTasks: TranscriptItem[]
+  lastUserText: string
+}
+
+/** `GET /api/external/sessions/:id/older?before=<offset>&limit=<n>` answers the newest n items before the offset and this
+ *  header: how many items are still above that page. Pass it as `&end=<it>` for the next page; 0 or absent: that was the first. */
+export const OLDER_END_HEADER = 'x-older-end'
+
 export const MAX_TOOL_RESULT_CHARS = 20_000
 
 /** `GET /api/external/sessions/:id/items` answers a long session's newest part; this header says where in its file

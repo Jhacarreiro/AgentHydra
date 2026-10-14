@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopStopResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER } from '@shared/protocol'
+import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopStopResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER, OLDER_END_HEADER } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -189,9 +189,28 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       const before = Number(c.req.query('before'))
       if (!Number.isSafeInteger(before) || before < 0) return c.json({ error: 'before must be the byte offset the items header gave' }, 400)
       const from = Date.now()
+      const limitQ = c.req.query('limit')
+      if (limitQ !== undefined) {
+        const limit = Number(limitQ)
+        const endQ = c.req.query('end')
+        const end = endQ === undefined ? undefined : Number(endQ)
+        if (!Number.isSafeInteger(limit) || limit < 1) return c.json({ error: 'limit must be a positive whole number' }, 400)
+        if (end !== undefined && (!Number.isSafeInteger(end) || end < 0)) return c.json({ error: 'end must be the count the last page header gave' }, 400)
+        const page = await b.externalOlderPage(c.req.param('id'), before, c.req.query('cwd') || null, limit, end)
+        timings.span({ stage: 'external_older', ms: Date.now() - from, chatId: c.req.param('id'), n: page.items.length })
+        c.header(OLDER_END_HEADER, String(page.above))
+        return c.json(page.items)
+      }
       const items = await b.externalOlder(c.req.param('id'), before, c.req.query('cwd') || null)
       timings.span({ stage: 'external_older', ms: Date.now() - from, chatId: c.req.param('id'), n: items.length })
       return c.json(items)
+    }),
+  )
+  app.get('/api/external/sessions/:id/index', (c) => guarded(c, b, async () => c.json(await b.externalIndex(c.req.param('id'), c.req.query('cwd') || null))))
+  app.get('/api/external/sessions/:id/items/:itemId', (c) =>
+    guarded(c, b, async () => {
+      const item = await b.externalItem(c.req.param('id'), c.req.param('itemId'), c.req.query('cwd') || null)
+      return item ? c.json(item) : c.json({ error: 'no such item' }, 404)
     }),
   )
   app.post('/api/external/sessions/:id/message', (c) => desktopMessage(c, b))

@@ -15,7 +15,7 @@
 // to the default login, sessions and workers to []. Writes (cancel, send) and a single transcript read
 // do throw a BridgeError.
 
-import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptItem } from '@shared/protocol'
+import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
 import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
@@ -38,6 +38,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
+import { buildTranscriptIndex } from './transcript-index'
 import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
@@ -659,6 +660,46 @@ export function createBridge(opts: BridgeOptions = {}) {
     return older.length ? [...older, ...items] : items
   }
 
+  /** The newest `limit` items of what externalOlder answers that end before item `end` (default: the last), and how many are above them. */
+  async function externalOlderPage(sessionId: string, before: number, cwd: string | null, limit: number, end?: number): Promise<{ items: TranscriptItem[]; above: number }> {
+    const all = await externalOlder(sessionId, before, cwd)
+    const to = Math.min(Math.max(end ?? all.length, 0), all.length)
+    const from = Math.max(0, to - Math.max(1, limit))
+    return { items: all.slice(from, to), above: from }
+  }
+
+  /** A whole outside session's history, kept by file size and mtime (a file that grew is read again). */
+  const wholeKept = new Map<string, { key: string; items: TranscriptItem[]; index: TranscriptIndex }>()
+  const WHOLE_KEPT = 3
+  async function externalWhole(sessionId: string, cwd: string | null): Promise<{ items: TranscriptItem[]; index: TranscriptIndex }> {
+    const items = await externalHistory(sessionId, cwd)
+    const file = foundAt.get(sessionId)
+    let key = ''
+    try {
+      const st = file ? await stat(file) : null
+      if (st) key = `${st.size}|${st.mtimeMs}`
+    } catch {
+      // gone: not kept
+    }
+    const kept = wholeKept.get(sessionId)
+    if (key && kept && kept.key === key) return kept
+    const built = { key, items, index: buildTranscriptIndex(items) }
+    if (key) {
+      wholeKept.delete(sessionId)
+      wholeKept.set(sessionId, built)
+      while (wholeKept.size > WHOLE_KEPT) wholeKept.delete(wholeKept.keys().next().value!)
+    }
+    return built
+  }
+
+  async function externalIndex(sessionId: string, cwd: string | null = null): Promise<TranscriptIndex> {
+    return (await externalWhole(sessionId, cwd)).index
+  }
+
+  async function externalItem(sessionId: string, itemId: string, cwd: string | null = null): Promise<TranscriptItem | null> {
+    return (await externalWhole(sessionId, cwd)).items.find((i) => i.id === itemId) ?? null
+  }
+
   const searchRows = new Map<string, { at: number; row: AhSessionRow | null }>()
 
   function rememberRow(key: string, row: AhSessionRow | null): void {
@@ -973,7 +1014,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalSession,
     externalItems,
     externalOlder,
+    externalOlderPage,
     externalHistory,
+    externalIndex,
+    externalItem,
     search,
     sessionRoots,
     workers,
