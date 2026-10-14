@@ -28,11 +28,22 @@ export function modesOf(e: CatalogEntry): string[] {
   return e.kind === 'person' ? (e.modes ?? []) : ['load']
 }
 
+/** Words a chat says about a look, mapped to the words the persona entries use, on top of the tool finder's
+ *  SYNONYMS (2026-10-13: "redesign the pricing page" never reached Iris, whose entry says design, screen, ui). */
+const CORE_SYNONYMS: Record<string, string[]> = {
+  redesign: ['design', 'ui', 'screen'],
+  restyle: ['design', 'visual', 'ui'],
+  look: ['design', 'visual'],
+  page: ['screen', 'layout', 'ui'],
+  pages: ['screen', 'layout', 'ui'],
+}
+
 function terms(need: string): Map<string, number> {
   const out = new Map<string, number>()
   for (const w of words(need)) {
     out.set(w, 1)
-    for (const s of SYNONYMS[w] ?? []) out.set(s, Math.max(out.get(s) ?? 0, 0.6))
+    for (const s of [...(SYNONYMS[w] ?? []), ...(CORE_SYNONYMS[w] ?? [])])
+      out.set(s, Math.max(out.get(s) ?? 0, 0.6))
   }
   return out
 }
