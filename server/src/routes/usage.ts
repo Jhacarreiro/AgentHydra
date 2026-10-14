@@ -60,6 +60,7 @@ import {
   launchOptionError,
 } from '../core/launch-options'
 import { readLoginUuid } from '../core/login-state'
+import { normalizeInstancePath } from '../core/paths'
 import { db, getSetting, setSetting } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { deepseekBalance } from '../hswarm-cost'
@@ -97,7 +98,7 @@ import {
   lastSampleSnapshot,
   usageHistoryKeys,
 } from '../usage-history'
-import { withLimitWall, withLiveReading } from '../usage-live'
+import { withLimitWall, withLinkedReading, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
@@ -249,6 +250,17 @@ app.get('/api/usage/cache', (c) => {
   for (const [id, wall] of climayteLimitWalls()) {
     const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
     if (walled) cache[cliKey(id)] = walled
+  }
+  // A desktop row and its linked CLI login are one account: the newer reading of the two is the desktop row's
+  // (usage-live.ts withLinkedReading), so long as the login is still signed in to that desktop's account.
+  for (const cli of listCliInstances()) {
+    if (!cli.associatedDesktopDir) continue
+    const own = readLoginUuid(cli.associatedDesktopDir)
+    const theirs = cliAccountUuid(cli.configDir, cli.loggedIn)
+    if (own && theirs && own !== theirs) continue
+    const key = desktopKey(cli.associatedDesktopDir)
+    const linked = withLinkedReading(cache[key] ?? null, cache[cliKey(cli.id)] ?? null)
+    if (linked) cache[key] = linked
   }
   // A row whose usage was cleared shows only what was read after (the tables; nothing is deleted).
   const cleared = usageClearedAt()
@@ -576,9 +588,17 @@ app.get('/api/cli-instances', async (c) => {
   )
   // Someone else is on the account now (CliMayte's accountInUse): CliMayte leaves it out for new work.
   const busy = cliInstancesInUse(rows.map((r) => r.i))
+  // A link names its desktop in the desktop row's own spelling, so the windows' lookups by dir find it (a link
+  // stored as `c:\users\me\...` against a row listed as `C:\Users\me\...` drew no terminal badge, 2026-10-14).
+  const desktopDirs = new Map(
+    (await listInstances()).map((d) => [normalizeInstancePath(d.dir), d.dir]),
+  )
   return c.json(
     rows.map(({ i, uuid, lastUsageCheck }, k) => ({
       ...i,
+      associatedDesktopDir: i.associatedDesktopDir
+        ? (desktopDirs.get(normalizeInstancePath(i.associatedDesktopDir)) ?? i.associatedDesktopDir)
+        : null,
       inUse: busy.has(i.id),
       lastNudge: nudges[i.id] ?? null,
       liveSessions: liveSessions[k],

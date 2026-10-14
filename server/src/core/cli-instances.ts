@@ -48,7 +48,7 @@ import {
   windowsTerminalArgv,
 } from './launch-options'
 import { ownerClaudeDir } from './owner-claude-dir'
-import { isPathInside } from './paths'
+import { isPathInside, normalizeInstancePath } from './paths'
 import { type CMActionResult, prettyTier, resolvePlanLabel } from './shared'
 
 export type { CliInstance } from '../types'
@@ -670,7 +670,7 @@ export function linkCliInstanceToDesktop(
     if (!rec) return { result: null, changed: false }
     if (desktopDir) {
       for (const other of store.instances) {
-        if (other.id !== id && other.associatedDesktopDir === desktopDir) {
+        if (other.id !== id && sameDesktopDir(other.associatedDesktopDir, desktopDir)) {
           other.associatedDesktopDir = null
           other.associatedDesktopLabel = null
         }
@@ -698,10 +698,19 @@ export function linkCliInstanceToDesktop(
   }
 }
 
+/** One desktop profile folder however it is spelled: a link stored as `c:\users\me\...` is the profile listed as
+ *  `C:\Users\me\...` (2026-10-14: 6 of 7 links here were stored lower-cased, so an exact compare found none of them). */
+export function sameDesktopDir(
+  a: string | null | undefined,
+  b: string | null | undefined,
+): boolean {
+  return !!a && !!b && normalizeInstancePath(a) === normalizeInstancePath(b)
+}
+
 /** The CLI instance linked to this desktop instance dir, or null. The reverse of the link above —
  *  used by the desktop usage route to find a backup credential when the desktop token can't be used. */
 export function cliInstanceForDesktop(desktopDir: string): CliInstance | null {
-  const rec = readStore().instances.find((i) => i.associatedDesktopDir === desktopDir)
+  const rec = readStore().instances.find((i) => sameDesktopDir(i.associatedDesktopDir, desktopDir))
   return rec ? hydrate(rec) : null
 }
 
