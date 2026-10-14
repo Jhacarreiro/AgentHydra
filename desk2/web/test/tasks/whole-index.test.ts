@@ -32,3 +32,11 @@ describe('facts above the loaded window', () => {
     expect(index.lastUserText).toBe('say u3')
   })
 })
+
+describe('the shared builder agrees with the server builder', () => {
+  test('same index for the same items', async () => {
+    const { buildTranscriptIndex: server } = await import('../../../server/src/engine/transcript-index')
+    const items = [task('a', 'running'), todos('t'), user('u1'), task('b', 'completed'), user('u2')]
+    expect(buildTranscriptIndex(items)).toEqual(server(items))
+  })
+})
