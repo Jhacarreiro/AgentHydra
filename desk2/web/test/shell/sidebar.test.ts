@@ -40,6 +40,7 @@ import {
   type SidebarGroups,
   type RowMenuItem
 } from '@/components/sidebar/logic'
+import { accountChoices, ahInstances } from '@/components/session-header/instances'
 import { runShortcut } from '@/components/sidebar/menuClasses'
 import { dimText } from '@/components/sidebar/rowClasses'
 
@@ -530,6 +531,24 @@ describe('row menu', () => {
     expect(sub(entries, 'Move to account')).toEqual(['#61 Example Owner * (off)', '-', '#196 spare'])
     expect((entries[0] as RowMenuItem).hint).toBe('#61 Example Owner')
     expect(sub(rowMenu(externalRow(ext({ source: 'codex' })), [], desktop, []), 'Move to account')).toEqual(['No Codex accounts (off)'])
+  })
+
+  it('a desktop chat AgentHydra names by its account’s own name is on that account: ticked to move, current to duplicate', () => {
+    // AgentHydra's list gives a named desktop instance's chats its name ("work"), not "#61"; on 2026-10-13 such a row
+    // was on no account (nothing ticked, and Unassign named no account to archive it on).
+    ahInstances.value = [
+      { num: 61, name: 'work', dir: 'C:/p/61', isRunning: true, account: null },
+      { num: 9, name: 'nine', dir: 'C:/p/9', isRunning: false, account: null }
+    ]
+    try {
+      const entries = rowMenu(externalRow(ext({ instance: 'work' })), [], accountChoices.value)
+      expect((entries[0] as RowMenuItem).hint).toBe('#61 work')
+      expect(sub(entries, 'Move to account')).toEqual(['Unassigned', '-', '#61 work * (off)', '-', '#9 nine'])
+      const items = (entries.find((e) => e !== 'separator' && 'items' in e && e.label === 'Duplicate to account') as Extract<RowMenuEntry, { items: unknown }>).items
+      expect(items[0]).toMatchObject({ label: '#61 work', hint: 'current' })
+    } finally {
+      ahInstances.value = null
+    }
   })
 
   it('an Unassigned chat is on no account: its first line says so, Move to account ticks Unassigned and no account', () => {

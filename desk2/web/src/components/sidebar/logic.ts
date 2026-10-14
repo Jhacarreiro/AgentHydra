@@ -781,7 +781,7 @@ export interface AccountChoice {
   num: number
   name: string
   running: boolean
-  /** The name AgentHydra's session list gives the account's chats when it is not `#num` (a Codex instance's own name). */
+  /** The name AgentHydra's session list gives the account's chats when it is not `#num` (the instance's own name). */
   tag?: string
 }
 
@@ -882,7 +882,7 @@ export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (
 const OUTSIDE_ARCHIVE = 'Hides it in Hydra Desk. Sessions run outside are never deleted here: their files belong to the app that ran them.'
 
 /** The number of the account a row is on: its own, else the account whose chats go by its name (a Codex chat's). */
-function accountNum(account: RowAccount | null, accounts: readonly AccountChoice[] | null): number | null {
+export function accountNum(account: RowAccount | null, accounts: readonly AccountChoice[] | null): number | null {
   if (!account) return null
   return account.num ?? (account.title ? (accounts?.find((a) => a.tag === account.title)?.num ?? null) : null)
 }

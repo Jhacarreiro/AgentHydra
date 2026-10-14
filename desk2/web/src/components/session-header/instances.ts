@@ -43,9 +43,13 @@ export function setInstanceAccount(dir: string, account: AhInstance['account']):
   if (ahInstances.value) ahInstances.value = ahInstances.value.map((x) => (x.dir === dir ? { ...x, account } : x))
 }
 
-/** What Move to account offers, by the name the header's Migrate uses; null until the list is read. */
+/**
+ * What Move to account offers, by the name the header's Migrate uses; null until the list is read. `tag` is the
+ * instance's own name, which AgentHydra's session list gives a desktop chat's account when it is not `#num` ("moarz"
+ * for #194): without it such a chat was on no account, so nothing was ticked and Unassign named no account.
+ */
 export const accountChoices = computed<AccountChoice[] | null>(
-  () => ahInstances.value?.map((i) => ({ ref: `desktop:${i.dir}`, num: i.num, name: instanceName(i), running: i.isRunning })) ?? null
+  () => ahInstances.value?.map((i) => ({ ref: `desktop:${i.dir}`, num: i.num, name: instanceName(i), running: i.isRunning, tag: i.name })) ?? null
 )
 
 /**

@@ -81,6 +81,7 @@ import {
 import {
   accountFace,
   accountMenu,
+  accountNum,
   chatRow,
   childrenByRow,
   entryKey,
@@ -746,7 +747,8 @@ async function unassign(s: ExternalSession, state: RowState) {
   moving.value = true
   rowError.value = null
   noteRow(`Taking “${s.title}” off its account…`)
-  const ref = state.account?.num != null ? (accountChoices.value?.find((a) => a.num === state.account?.num)?.ref ?? null) : null
+  const num = accountNum(state.account, accountChoices.value)
+  const ref = num != null ? (accountChoices.value?.find((a) => a.num === num)?.ref ?? null) : null
   const failed = async (why: string) => {
     await src.updateSessionMeta(s.id, { unassigned: false }).catch(() => {})
     noteRow(null)
