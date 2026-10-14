@@ -7,6 +7,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A routine that fails or breaks now tells you.** When a scheduled routine's run fails or times out, or its file
+  stops checking out, AgentHydra opens an incident and pings you the way other incidents do. The next good run, or the
+  fixed file, clears it.
+- **Scripts and agents can ask you for help.** A job stuck on something only you can fix can raise an incident with
+  the new `ask_owner_help` tool or a local HTTP call, instead of failing quietly.
 - **Codex chats can be continued in AgentHydra's window.** An idle Codex chat now opens with a composer instead
   of "read-only". Your message goes on in that same chat, on the Codex account that holds it, and its replies,
   commands and approvals show up the way a Claude chat's do. Between messages AgentHydra lets go of the chat, so
