@@ -49,7 +49,7 @@ import {
   type AhUsage,
   type FindHit
 } from './logic'
-import { displayPrefs, restartPeek } from './state'
+import { displayPrefs, findAsk, findShown, restartPeek } from './state'
 import { RAIL_TARGETS, railTargets } from '@/components/rail/state'
 import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN } from '@/components/rail/classes'
 
@@ -368,7 +368,11 @@ function onKey(e: KeyboardEvent) {
   }
 }
 onMounted(() => window.addEventListener('keydown', onKey))
+// The title bar's search button (state.ts findAsk) opens and closes it, and shows it pressed while it is open.
+watch(findAsk, () => (findOpen.value ? closeFind() : openFind()))
+watch(findOpen, (open) => (findShown.value = open), { immediate: true })
 onBeforeUnmount(() => {
+  findShown.value = false
   window.removeEventListener('keydown', onKey)
   if (noteTimer) clearTimeout(noteTimer)
 })
@@ -432,11 +436,6 @@ const BTN = `${BTN_SHAPE} text-text-2 hover:text-text aria-expanded:text-text`
     <!-- In the session rail's cards while it is on screen (RAIL_TARGETS); the rail sets railTargets once they are in the page. -->
     <template v-if="railTargets">
       <Teleport defer :to="`#${RAIL_TARGETS.actions}`">
-        <Tip label="Find in session (Ctrl + F)">
-          <button type="button" :class="findOpen ? `${BTN_SHAPE} text-accent-text` : BTN" aria-label="Find in session" :aria-pressed="findOpen" @click="findOpen ? closeFind() : openFind()">
-            <Search class="size-4" />
-          </button>
-        </Tip>
         <Tip :label="filtered ? 'Part of this transcript is hidden by a display filter' : 'More actions'">
           <span class="inline-flex">
             <DropdownMenu @update:open="menuOpened">

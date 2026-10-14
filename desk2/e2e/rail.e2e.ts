@@ -132,6 +132,25 @@ try {
     await sleep(SETTLE)
     if (!(await ev(`!!document.querySelector('aside[aria-label="Session details"]')`))) await click('Show session details')
   }
+  /** At each window width, the px between the text column's right edge and the step arrows (at least 12 is a clear lane). */
+  async function laneClear(what: string, widths: number[]) {
+    const gaps: string[] = []
+    let ok = true
+    for (const width of widths) {
+      await send('Emulation.setDeviceMetricsOverride', { width, height: 900, deviceScaleFactor: 1, mobile: false })
+      await sleep(SETTLE)
+      const gap = (await ev(`(() => {
+        const up = document.querySelector('button[aria-label="Previous message you sent"]')
+        const col = document.querySelector('[data-transcript-scroller] > div')
+        if (!up || !col) return null
+        const c = col.getBoundingClientRect()
+        return Math.round(up.getBoundingClientRect().left - (c.right - parseFloat(getComputedStyle(col).paddingRight)))
+      })()`)) as number | null
+      gaps.push(`${width}: ${gap ?? 'no arrows'}`)
+      if (gap === null || gap < 11) ok = false
+    }
+    result(ok, `${what}, the step arrows stay 12px clear of the text at every width`, gaps.join(', '))
+  }
   const panelOpen = () => ev(`(() => { const b = [...document.querySelectorAll('button')].find((x) => x.getAttribute('aria-label') === 'Back to session details'); return !!b && !b.closest('[inert]') })()`)
 
   // A Desk chat with a running CliMayte task.
@@ -151,6 +170,9 @@ try {
     return t === b || b.contains(t) ? '' : l + ': under ' + (t && t.closest('aside') ? t.closest('aside').getAttribute('aria-label') : t ? t.tagName : 'nothing')
   }).filter(Boolean)`)) as string[]
   result(!steps.length, 'on a wide window the step arrows take a click beside the open rail', steps.join(', '))
+  // The step arrows keep a lane of their own beside the text at every width (owner, 2026-10-14: "issue with the ... gap
+  // around the peek/previous chat thingy"; they sat over the column's last 28px, on a right-hand message's picture).
+  await laneClear('beside the open rail', [2400, 1500, 1200, 1000])
   await send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 900, deviceScaleFactor: 1, mobile: false })
   await sleep(SETTLE)
   const task = ', show it in Background tasks'
@@ -173,6 +195,9 @@ try {
     result(!!(await panelOpen()), 'Restore puts the panel back in the rail')
     await click('Close')
     result(!(await ev(`!!document.querySelector('aside[aria-label="Session details"]')`)), 'Close shuts the rail')
+    await laneClear('with the rail shut', [1500, 1000, 820, 700])
+    await send('Emulation.setDeviceMetricsOverride', { width: 1500, height: 900, deviceScaleFactor: 1, mobile: false })
+    await sleep(SETTLE)
   }
 
   // An outside session: its facts are rows in the cards.
@@ -191,6 +216,20 @@ try {
   const ranked = (ns: number[]) => ns.length > 0 && ns.every((n, i) => n > 0 && (i === 0 || n <= ns[i - 1]!))
   result(ranked(calls.tools) && ranked(calls.connectors), "the Tools and Connectors cards give each one's calls, the most first", JSON.stringify(calls))
   await allHit("an outside session's cards")
+  // Find sits in the title bar beside Session details, not on the Environment card (owner, 2026-10-14: "move the search
+  // here"), and opens the Find bar with the rail shut too.
+  const place = (await ev(`(() => {
+    const f = document.querySelector('button[aria-label="Find in session"]')
+    const r = document.querySelector('button[aria-label="Hide session details"], button[aria-label="Show session details"]')
+    if (!f || !r) return null
+    const a = f.getBoundingClientRect()
+    const b = r.getBoundingClientRect()
+    return { inRail: !!f.closest('aside'), beside: Math.abs(a.top - b.top) < 4 && b.left - a.right >= 0 && b.left - a.right < 16 }
+  })()`)) as { inRail: boolean; beside: boolean } | null
+  result(!!place && !place.inRail && place.beside, 'Find sits in the title bar beside Session details', JSON.stringify(place))
+  await click('Hide session details')
+  await click('Find in session')
+  result(!!(await ev(`!!document.querySelector('input[aria-label="Find in this session"]')`)), 'with the rail shut, Find opens the Find bar')
 } finally {
   for (const s of sockets) s.close()
   edge?.kill()

@@ -294,9 +294,11 @@ export const splitColumns = (want: number): string => `max(${CHAT_MIN}px, min(${
 export const RAIL_MIN = 260
 export const RAIL_MAX = 640
 export const RAIL_DEFAULT = 320
-/** The rail's gap to the stage's right edge, and the least gap it keeps to the text column. */
+/** The rail's gap to the stage's right edge, and the least gap it keeps to the text column: the transcript's step arrows'
+ *  lane (12px off the rail, 24 wide, 12 clear of the text). At 16 the arrows sat over the column's last 28px, on a right-hand
+ *  user message's picture (owner, 2026-10-14: "issue with the ... gap around the peek/previous chat thingy"). */
 export const RAIL_INSET = 8
-export const RAIL_GAP = 16
+export const RAIL_GAP = 48
 /** The transcript's and the composer's text column. */
 export const TEXT_COLUMN = 768
 

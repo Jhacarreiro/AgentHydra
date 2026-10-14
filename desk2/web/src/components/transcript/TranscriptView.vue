@@ -831,9 +831,11 @@ watch(
       @contextmenu.capture="onContextCapture"
     >
       <!-- The real column: 840 wide; text 768 at x 1151-1919 in whole-window.png, so 36px gutters (16 under a 560px pane).
+           The right one is 48 once the pane is too narrow to centre the text 48 clear of its edge: the step arrows' lane
+           (12px in, 24 wide, 12 clear of the text; owner, 2026-10-14: they sat on a right-hand message's picture).
            Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
-      <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[864px]:pr-12 @max-[560px]:pl-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
         <div class="relative" :style="{ height: `${padTop}px` }">
           <div v-if="loadingOlder" class="absolute inset-x-0 bottom-0 flex justify-center py-3 text-text-muted" role="status" aria-label="Loading earlier messages" data-testid="older-spinner">
@@ -878,7 +880,7 @@ watch(
     <div
       v-if="prevStep !== null || showStepDown || peekItem"
       class="pointer-events-none absolute z-[9] flex flex-col gap-1 transition-[right] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
-      :style="{ top: `${(insetTop ?? 0) + 12}px`, right: 'calc(var(--rail-over, 0px) + 1.25rem)' }"
+      :style="{ top: `${(insetTop ?? 0) + 12}px`, right: 'calc(var(--rail-over, 0px) + 0.75rem)' }"
     >
       <span class="flex size-6">
         <Tip v-if="prevStep !== null" label="Previous message you sent" side="left">

@@ -14,7 +14,8 @@ import WorkspacePicker from './WorkspacePicker.vue'
 import ConnectionsChip from '@/components/connectors/ConnectionsChip.vue'
 import { connectorList } from '@/components/connectors/connections-api'
 import { CONNECTIONS_LOGO_URL, showConnectionsChip } from '@/components/connectors/connections-logic'
-import { ListTodo, PanelRightClose, PanelRightOpen } from '@lucide/vue'
+import { ListTodo, PanelRightClose, PanelRightOpen, Search } from '@lucide/vue'
+import { findAsk, findShown } from '@/components/session-header/state'
 import { fourmanAvailable } from '@/components/fourman/store'
 import { openDashboard } from '@/components/dashboard/store'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
@@ -295,6 +296,13 @@ const PANE_BTN =
         </span>
       </Tip>
     </div>
+    <!-- Find in an outside session, beside Session details whether the rail is open or shut (owner, 2026-10-14: "move the
+         search here"); the session header holds the Find bar (session-header/state.ts findAsk). -->
+    <Tip v-if="external" label="Find in session (Ctrl + F)">
+      <button type="button" :class="PANE_BTN" class="shrink-0" aria-label="Find in session" :aria-pressed="findShown" @click="findAsk++">
+        <Search class="size-4" />
+      </button>
+    </Tip>
     <!-- The session rail (components/rail, owner 2026-10-14), at the end as Claude Desktop has it: Background tasks are in it. -->
     <Tip v-if="chat || external" :label="railOpen ? 'Hide session details' : 'Show session details'">
       <button
