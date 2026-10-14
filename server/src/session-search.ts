@@ -15,6 +15,7 @@ import {
   refreshSearchIndex,
   searchIndexCandidates,
   searchIndexCoverage,
+  searchIndexIsOpen,
 } from './search-index'
 import { dedupeKey } from './session-locator'
 import {
@@ -517,6 +518,23 @@ function warmIndexInBackground(files: TranscriptFile[]) {
   void refreshSearchIndex(files, { budgetMs: INDEX_REFRESH_BUDGET_MS })
 }
 
+/**
+ * Whether the conversation index answers for `files`: 'ready' when it is open and covers them, 'cold'
+ * when the scan answers and the index is warmed after, null when it never applies (a forced scan, or
+ * nothing in scope).
+ *
+ * A search never opens the index. bun:sqlite is synchronous, and an open of a file another process
+ * holds waits out busy_timeout statement by statement: on GitHub's Windows runner the first search of
+ * a run spent 7.2 s of its 7 s budget opening a fresh index file, then scanned nothing and missed a
+ * one-file match (2026-10-13). The daemon opens it once listening (openSearchIndex).
+ */
+function indexState(opts: SearchOptions, files: TranscriptFile[]): 'ready' | 'cold' | null {
+  if ((opts.mode ?? 'auto') !== 'auto' || files.length === 0) return null
+  if (!searchIndexIsOpen()) return 'cold'
+  const coverage = searchIndexCoverage(files)
+  return coverage.covered / files.length >= INDEX_READY_RATIO ? 'ready' : 'cold'
+}
+
 /** Newest-active first, the order both paths return results in.
  *
  *  Keyed by dedupeKey, not `${source}:${session_id}` (audit AH-35): two stores sharing a format and
@@ -572,9 +590,8 @@ function resolveSearchFiles(opts: SearchOptions): TranscriptFile[] {
 /**
  * The fast path: let the conversation index say WHICH sessions, then read only those. Split out of
  * searchSessionBodies, which otherwise had this whole block ahead of (and at the same nesting
- * level as) the scan loop below. Returns null when the index isn't ready or the mode forces a
- * scan, meaning the caller must fall through to searchViaScan — exactly like the original `if`
- * that fell out the bottom without returning.
+ * level as) the scan loop below. Called only when indexState says 'ready'; returns null when the
+ * index cannot answer this query, meaning the caller must fall through to searchViaScan.
  *
  * The index holds no text of its own, so snippets and match counts still come from the real
  * transcripts. That keeps one source of truth for what a match looks like, and it is why the
@@ -595,17 +612,11 @@ async function searchViaIndex(
   deadline: number,
   budgetMs: number,
 ): Promise<SessionSearchResponse | null> {
-  if ((opts.mode ?? 'auto') !== 'auto' || files.length === 0) return null
-  const coverage = searchIndexCoverage(files)
-  const ready = coverage.covered / files.length >= INDEX_READY_RATIO
-  if (!ready) warmIndexInBackground(files)
-  const answer = ready
-    ? searchIndexCandidates(query, {
-        regex: opts.regex,
-        source: opts.source,
-        exact: opts.caseSensitive,
-      })
-    : null
+  const answer = searchIndexCandidates(query, {
+    regex: opts.regex,
+    source: opts.source,
+    exact: opts.caseSensitive,
+  })
   if (!answer) return null
   const candidates = answer.keys
   // A looser rung answered (all the words apart, a typo the index spells otherwise, any word): none
@@ -731,18 +742,33 @@ export async function searchSessionBodies(opts: SearchOptions): Promise<SessionS
     found.push(...kept)
   }
 
-  const indexResult = await searchViaIndex(
-    opts,
-    query,
-    matcher,
+  const index = indexState(opts, files)
+  if (index === 'ready') {
+    const indexResult = await searchViaIndex(
+      opts,
+      query,
+      matcher,
+      files,
+      found,
+      limit,
+      perFileLimit,
+      deadline,
+      budgetMs,
+    )
+    if (indexResult) return indexResult
+  }
+
+  const scanned = await searchViaScan(
     files,
+    matcher,
     found,
     limit,
     perFileLimit,
     deadline,
     budgetMs,
   )
-  if (indexResult) return indexResult
-
-  return searchViaScan(files, matcher, found, limit, perFileLimit, deadline, budgetMs)
+  // After this search has answered, never before its scan: the warm-up opens and writes the index
+  // synchronously, which inside the search would spend its budget (see indexState).
+  if (index === 'cold') setImmediate(() => warmIndexInBackground(files))
+  return scanned
 }

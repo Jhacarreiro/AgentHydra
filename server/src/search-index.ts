@@ -193,6 +193,17 @@ function open(): Database | null {
   }
 }
 
+/** True once the index file is open. A search consults the index only then (session-search.ts). */
+export const searchIndexIsOpen = (): boolean => db !== null
+
+/**
+ * Open the index outside any search: the daemon does it once it is listening. The open is synchronous
+ * and waits out busy_timeout statement by statement for a held file, which a search must never pay.
+ */
+export function openSearchIndex(): boolean {
+  return open() !== null
+}
+
 /** Close and forget the handle, so the file can be replaced or deleted underneath us. */
 function close() {
   try {

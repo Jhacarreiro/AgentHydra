@@ -30,6 +30,7 @@ import {
   upkeepSearchIndex,
 } from '../src/search-index'
 import { dedupeKey } from '../src/session-locator'
+import { holdSqlite } from './hold-sqlite'
 
 // The keys the index answers with; which rung answered is pinned in the ladder tests below.
 const candidateKeys = (query: string) => searchIndexCandidates(query)?.keys ?? null
@@ -90,38 +91,8 @@ function session(id: string, lines: string[]): IndexableFile {
   return { session_id: id, source: 'claude', path, mtime_ms: st.mtimeMs, size_bytes: st.size }
 }
 
-/** A second process that opens the index at `path`, runs `sql` (the last statement takes the lock) and
- *  lets go 500 ms later. Answers once the lock is held, with the child, for its exit code. */
-async function holdIndex(path: string, ...sql: string[]) {
-  const holder = Bun.spawn(
-    [
-      process.execPath,
-      '-e',
-      `const { Database } = require('bun:sqlite')
-const db = new Database(process.argv[1], { create: true })
-db.exec('pragma busy_timeout = 2000')
-db.exec('pragma journal_mode = delete')
-db.exec('create table if not exists hold (x integer)')
-for (const sql of process.argv.slice(2)) db.exec(sql)
-console.log('locked')
-setTimeout(() => { db.exec('commit'); db.close() }, 500)`,
-      path,
-      ...sql,
-    ],
-    { stdout: 'pipe', stderr: 'pipe' },
-  )
-  const lines = holder.stdout.pipeThrough(new TextDecoderStream()).getReader()
-  let seen = ''
-  while (!seen.includes('locked')) {
-    const { value, done } = await lines.read()
-    if (done) break
-    seen += value
-  }
-  // A child that dies before taking the lock says why on stderr, which is otherwise never read.
-  if (!seen.includes('locked')) throw new Error(await new Response(holder.stderr).text())
-  expect(seen).toContain('locked')
-  return holder
-}
+/** Another process holding the index at `path` for 500 ms, from the last of `sql`. */
+const holdIndex = (path: string, ...sql: string[]) => holdSqlite(path, 500, ...sql)
 
 describe('conversationText', () => {
   test('keeps what was said', () => {

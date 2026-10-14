@@ -22,7 +22,11 @@ import {
   DEFAULT_CODEX_INSTANCE_ID,
   deleteCodexInstance,
 } from '../src/core/codex-instances'
-import { refreshSearchIndex } from '../src/search-index'
+import {
+  refreshSearchIndex,
+  searchIndexPath,
+  setSearchIndexPathForTests,
+} from '../src/search-index'
 import { searchSessionBodies } from '../src/session-search'
 import { listSessions } from '../src/sessions'
 import {
@@ -32,6 +36,7 @@ import {
   listTranscriptFiles,
   tailTranscript,
 } from '../src/transcript'
+import { holdSqlite } from './hold-sqlite'
 
 const NAME = `codex-sessions-${crypto.randomUUID().slice(0, 8)}`
 const created = createCodexInstance(NAME)
@@ -282,6 +287,39 @@ test(
     await indexReady()
     const found = await searchSessionBodies({ query: NEEDLE, instance: NAME, limit: 10 })
     expect(found.results.some((r) => r.session_id === LIVE_ID)).toBe(true)
+  },
+  SWEEP_TIMEOUT_MS,
+)
+
+// Regression (CI, windows-latest, 2026-10-13, commit 5b0fa0fa): the test above ran 7,249 ms of a 7,000 ms
+// budget and found nothing. It is the first search of the serial run, so it opened the conversation index
+// itself, on a fresh file; that open is synchronous and waits out busy_timeout for a held file (an antivirus
+// pass on the runner), so the budget was gone before the scan read one line. A search never opens the
+// index: another process holds it here, for longer than this search's whole budget, and it is not open.
+test(
+  'a search answers from the scan while another process holds the unopened conversation index',
+  async () => {
+    await indexReady()
+    const own = searchIndexPath()
+    const held = join(CODEX_INSTANCE_HOME, 'held-search-index.db')
+    // 3 s: past the 2 s an open waits for it, so the warm-up's open after the answer fails rather than
+    // going on to write. Held BEFORE the index points at it, so the warm-up the search above queued
+    // cannot open it first.
+    const holder = await holdSqlite(held, 3000, 'begin exclusive')
+    setSearchIndexPathForTests(held)
+    try {
+      const found = await searchSessionBodies({
+        query: NEEDLE,
+        instance: NAME,
+        limit: 10,
+        budgetMs: 1000,
+      })
+      expect(found.results.some((r) => r.session_id === LIVE_ID)).toBe(true)
+      expect(found.budgetExhausted).toBe(false)
+      expect(await holder.exited).toBe(0)
+    } finally {
+      setSearchIndexPathForTests(own)
+    }
   },
   SWEEP_TIMEOUT_MS,
 )

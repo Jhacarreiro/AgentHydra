@@ -165,6 +165,7 @@ import {
   startResetWatch,
 } from './reset-watch'
 import { jsonBody } from './route-helpers'
+import { openSearchIndex } from './search-index'
 import { warmSessionScanCache } from './sessions'
 import { peerDaemon, setPeerDaemon, sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, skipSingleInstanceGuard } from './single-instance'
@@ -1701,6 +1702,12 @@ disarmBootWatchdog()
 // build's table, and never awaited: a daemon that cannot reach the network still prices every
 // model it shipped knowing about.
 startPriceCatalog()
+
+// The conversation index is opened here, once listening, because a search never opens it
+// (session-search.ts indexState): the open is synchronous and can wait seconds for a held file,
+// which inside a search spent its budget. Without this the first search after a restart would scan
+// instead of answering from the index.
+openSearchIndex()
 
 // --- warm the sessions list (see server/src/sessions.ts warmSessionScanCache) ------------------
 // Deliberately AFTER Bun.serve: parsing transcripts is the slowest thing this daemon does, and the
