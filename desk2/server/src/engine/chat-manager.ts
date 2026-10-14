@@ -54,7 +54,7 @@ import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
-import type { AhWorker } from '../bridge/client'
+import type { AhWorker, WorkerSendSetting } from '../bridge/client'
 import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
@@ -63,7 +63,7 @@ import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
-import { classifyTurn, PushbackStore, type PushbackRow } from './pushback'
+import { classifyTurn, PushbackStore, type PushbackRow, workerTurnKey } from './pushback'
 import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
@@ -666,8 +666,34 @@ export class ChatManager {
 
   /** Seeds the pushback counts once from the transcripts of the chats this Desk knows; a second run adds nothing. */
   backfillPushback(): { chats: number; turns: number } {
-    const chats = [...this.chats.values()].filter((e) => !e.chat.service && !e.chat.workerId)
-    return this.pushback.backfill(chats.map((e) => ({ id: e.chat.id, model: e.chat.model, effort: e.chat.effort, items: () => this.store.loadItems(e.chat.id) })))
+    const chats = [...this.chats.values()].filter((e) => !e.chat.service)
+    return this.pushback.backfill(
+      chats.map((e) => {
+        if (e.chat.workerId === undefined) return { id: e.chat.id, model: e.chat.model, effort: e.chat.effort, items: () => this.store.loadItems(e.chat.id) }
+        const w = e.chat.workerId ? this.workerRows.get(e.chat.workerId) : undefined
+        const ran = w ? workerTurnSetting(w) : { model: e.chat.model, effort: e.chat.effort }
+        return { id: e.chat.id, ...ran, items: () => this.store.loadItems(e.chat.id), worker: { busy: busy(e.chat) } }
+      }),
+    )
+  }
+
+  /** A worker chat's turn that just ended, counted once under the setting its attempt ran on (no stop reason reaches the Desk). */
+  private countWorkerTurn(e: Entry, w: AhWorker, items: TranscriptItem[]): void {
+    const opened = items.findLastIndex((i) => i.kind === 'user' && !i.queued)
+    const reply = items.slice(opened + 1).findLast((i) => i.kind === 'assistant_text')
+    const turn = reply?.id ?? items[opened]?.id
+    if (!turn) return
+    const v = classifyTurn(null, reply?.kind === 'assistant_text' ? reply.text : '')
+    const ran = workerTurnSetting(w)
+    this.pushback.recordOnce(workerTurnKey(e.chat.id, turn), { service: 'claude', model: ran.model, effort: ran.effort }, v.cls, { chat: e.chat.id, label: v.label })
+    this.refreshSusPick(e.chat)
+  }
+
+  /** What 'sus' sends a worker chat's next message with, as CliMayte's send takes it; null for no override. */
+  private workerSusSetting(chat: ChatSummary): WorkerSendSetting | null {
+    if (chat.sus !== 'sus') return null
+    const pick = this.pushback.pick()
+    return pick ? climayteSetting(pick.model, pick.effort) : null
   }
 
   /** What 'sus' runs a chat's next Claude turn on: the least-pushing setting with enough turns, else the chat's own. */
@@ -779,9 +805,9 @@ export class ChatManager {
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
       delegateToCliMayte: req.delegateToCliMayte ?? settings.delegateToCliMayte,
-      ...(!worker && req.sus && req.sus !== 'fine' ? { sus: req.sus } : {}),
+      ...(req.sus && req.sus !== 'fine' ? { sus: req.sus } : {}),
       // Born on 'bad': pinned to Codex from the first message, with nothing to catch up on.
-      ...(!worker && req.sus === 'bad' ? { service: 'codex' as const } : {}),
+      ...(req.sus === 'bad' ? { service: 'codex' as const } : {}),
       ...(req.parentId ? { parentId: req.parentId } : {}),
       ...(req.managerSlug ? { managerSlug: req.managerSlug } : {}),
       status: 'closed',
@@ -1226,7 +1252,8 @@ export class ChatManager {
     // A worker started before the connectors' first probe pass lands would run without their MCP servers.
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId)
+    const sus = this.workerSusSetting(chat)
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? undefined)
     this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
@@ -1236,7 +1263,16 @@ export class ChatManager {
     const chat = e.chat
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), ...(requestId ? { requestId } : {}) })
+    const sus = this.workerSusSetting(chat)
+    const w = await this.bridge.startWorker({
+      prompt: text,
+      cwd: chat.cwd,
+      title: chat.title,
+      group: WORKER_GROUP,
+      desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug),
+      ...(requestId ? { requestId } : {}),
+      ...(sus ? { ...sus, modelWhy: SUS_WHY } : {}),
+    })
     e.workerCwd = chat.cwd
     chat.workerId = w.id
     chat.sessionId = w.sessionId
@@ -1464,7 +1500,7 @@ export class ChatManager {
     if (chat.workerId !== undefined) p = { ...p, accountId: undefined, model: undefined, effort: undefined, permissionMode: undefined }
     const resolved = p.accountId !== undefined ? await this.resolveAccount(p.accountId) : null
     const live = e.runtime?.running ? e.runtime : null
-    if (p.sus !== undefined && chat.workerId === undefined) await this.applySus(e, p.sus)
+    if (p.sus !== undefined) await this.applySus(e, p.sus)
     if (p.service !== undefined) await this.pinService(e, p.service)
     const relocated = this.applyMarks(id, e, p, resolved)
     await this.applyRuntimeSettings(e, live, p)
@@ -1983,6 +2019,7 @@ export class ChatManager {
     }
     e.endHeldSince = undefined
     const next = this.applyWorkerStatus(e, w, was)
+    if (ending && next.status === 'idle') this.countWorkerTurn(e, w, items)
     if (next.status === 'error') this.undelivered(e)
     else if (next.waiting) this.markQueued(e)
     this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
@@ -2817,6 +2854,21 @@ function accountRef(a: AccountRef): AccountRef {
 }
 
 const LIVE_STATUSES = new Set<ChatSummary['status']>(['starting', 'working', 'needs_you'])
+
+const WORKER_EFFORTS: readonly WorkerSendSetting['effort'][] = ['low', 'medium', 'high', 'xhigh', 'max']
+const SUS_WHY = 'Hydra Desk sus meter: the setting that pushes back least.'
+
+/** A counted setting ('claude-opus-5-5', 'high') as CliMayte's send takes it; null when it cannot say it. */
+export function climayteSetting(model: string, effort: string): WorkerSendSetting | null {
+  const family = /opus/i.test(model) ? 'opus' : /sonnet/i.test(model) ? 'sonnet' : /haiku/i.test(model) ? 'haiku' : null
+  const level = WORKER_EFFORTS.find((x) => x === effort)
+  return family && level ? { model: family, effort: level } : null
+}
+
+/** The setting a worker's turn ran on, named as a Claude turn's is: the model its attempt reported, else the one it was given. */
+function workerTurnSetting(w: AhWorker): { model: string; effort: string } {
+  return { model: w.reportedModel || w.model || 'default', effort: w.effort ?? 'default' }
+}
 
 /** The account a worker runs on now, as a chat shows it ('#68'). */
 function workerAccount(w: AhWorker): AccountRef {

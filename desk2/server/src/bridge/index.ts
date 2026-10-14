@@ -36,6 +36,7 @@ import {
   type HydraClient,
   type HydraClientOptions,
   type StartWorker,
+  type WorkerSendSetting,
 } from './client'
 import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
@@ -979,9 +980,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     return items
   }
 
-  /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). */
-  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string): Promise<boolean> {
-    const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId)
+  /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). `setting`: the model and effort its turn runs on. */
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting): Promise<boolean> {
+    const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId, setting)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()

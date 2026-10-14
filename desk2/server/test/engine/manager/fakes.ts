@@ -153,7 +153,7 @@ export function fakeBridge(
     workers: o.workers ?? [],
     /** CliMayte: the workers started (their tasks), the messages sent, the cancels, and what workersByIds answers. */
     started: [] as StartWorker[],
-    sentToWorker: [] as { id: string; text: string; cwd?: string; urgent?: true }[],
+    sentToWorker: [] as { id: string; text: string; cwd?: string; urgent?: true; setting?: { model: string; effort: string } }[],
     /** Send now on a worker's held message: what was asked, and whether the fake stops a turn for it (an urgent message's too). */
     sentNow: [] as { id: string; text?: string }[],
     nowStops: true,
@@ -200,11 +200,11 @@ export function fakeBridge(
       if (fail) throw fail.err
       return row
     },
-    sendToWorker: async (id, text, cwd, urgent, _desk, requestId) => {
+    sendToWorker: async (id, text, cwd, urgent, _desk, requestId, setting) => {
       if (requestId) state.requestIds.push(requestId)
       const fail = state.failNext.shift()
       if (fail && !fail.took) throw fail.err
-      if (!requestId || !sendIds.has(requestId)) state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}) })
+      if (!requestId || !sendIds.has(requestId)) state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}), ...(setting ? { setting } : {}) })
       if (requestId) sendIds.add(requestId)
       if (fail) throw fail.err
       return urgent === true && state.nowStops

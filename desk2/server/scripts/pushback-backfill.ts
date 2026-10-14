@@ -10,5 +10,16 @@ if (!home) {
 }
 const store = new ChatStore(home, {})
 const pushback = new PushbackStore(home)
-const chats = store.loadChats().filter((c) => !c.service && !c.workerId)
-console.log(pushback.backfill(chats.map((c) => ({ id: c.id, model: c.model, effort: c.effort, items: () => store.loadItems(c.id) }))))
+const AT_WORK = new Set(['starting', 'working', 'needs_you'])
+const chats = store.loadChats().filter((c) => !c.service)
+console.log(
+  pushback.backfill(
+    chats.map((c) => ({
+      id: c.id,
+      model: c.model,
+      effort: c.effort,
+      items: () => store.loadItems(c.id),
+      ...(c.workerId !== undefined ? { worker: { busy: AT_WORK.has(c.status) } } : {}),
+    })),
+  ),
+)

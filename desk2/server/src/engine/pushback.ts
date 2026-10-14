@@ -65,6 +65,8 @@ interface FileShape {
   settings: Record<string, SettingKey & Counts>
   /** Chats whose existing transcript the backfill counted already. */
   backfilled: string[]
+  /** The turns counted by their own key (`recordOnce`), newest last: a reload or replay of one adds nothing. */
+  counted?: string[]
   /** The newest classified turns that were not clean, with the phrase label that matched, for auditing the counts. */
   audit: AuditEntry[]
 }
@@ -80,6 +82,10 @@ export interface AuditEntry {
 }
 
 const AUDIT_MAX = 2000
+const COUNTED_MAX = 5000
+
+/** A worker chat's turn, by the id of its closing reply (else of its message): the same key live and in the backfill. */
+export const workerTurnKey = (chatId: string, itemId: string): string => `worker:${chatId}:${itemId}`
 
 const keyOf = (k: SettingKey): string => `${k.service}\u0000${k.model}\u0000${k.effort}`
 
@@ -92,7 +98,13 @@ export class PushbackStore {
     try {
       const raw = JSON.parse(readFileSync(this.path, 'utf8')) as Partial<FileShape>
       if (raw && typeof raw === 'object' && raw.settings && typeof raw.settings === 'object') {
-        this.data = { v: 1, settings: raw.settings, backfilled: Array.isArray(raw.backfilled) ? raw.backfilled : [], audit: Array.isArray(raw.audit) ? raw.audit : [] }
+        this.data = {
+          v: 1,
+          settings: raw.settings,
+          backfilled: Array.isArray(raw.backfilled) ? raw.backfilled : [],
+          counted: Array.isArray(raw.counted) ? raw.counted : [],
+          audit: Array.isArray(raw.audit) ? raw.audit : [],
+        }
       }
     } catch {
       // No file yet, or an unreadable one: counting starts again.
@@ -111,6 +123,16 @@ export class PushbackStore {
       if (this.data.audit.length > AUDIT_MAX) this.data.audit.splice(0, this.data.audit.length - AUDIT_MAX)
     }
     if (save) this.save()
+  }
+
+  /** Counts the turn `turn` names once; false when it was counted already. */
+  recordOnce(turn: string, key: SettingKey, cls: TurnClass, audit?: { chat: string | null; label: string | null }, save = true): boolean {
+    const counted = (this.data.counted ??= [])
+    if (counted.includes(turn)) return false
+    counted.push(turn)
+    if (counted.length > COUNTED_MAX) counted.splice(0, counted.length - COUNTED_MAX)
+    this.record(key, cls, audit, save)
+    return true
   }
 
   rows(): PushbackRow[] {
@@ -138,25 +160,38 @@ export class PushbackStore {
   /**
    * Seeds the counts once from the transcripts of chats the Desk knows. `chats` lists each chat's id and its own
    * model/effort (a transcript does not say which setting ran a turn); a chat already counted is skipped, so a
-   * second run adds nothing. A transcript has no stop reasons, so only pushback turns are found here.
+   * second run adds nothing. A transcript has no stop reasons, so only pushback turns are found here. A worker
+   * chat's transcript has no results: its turn ends at the next message, or at the end once it is not at work,
+   * and is keyed as its live count is (`workerTurnKey`), so a turn counted live is not counted again.
    */
-  backfill(chats: { id: string; model: string | null; effort: string | null; items: () => TranscriptItem[] }[]): { chats: number; turns: number } {
+  backfill(chats: { id: string; model: string | null; effort: string | null; items: () => TranscriptItem[]; worker?: { busy: boolean } }[]): { chats: number; turns: number } {
     let n = 0
     let turns = 0
     const done = new Set(this.data.backfilled)
     for (const c of chats) {
       if (done.has(c.id)) continue
       const key: SettingKey = { service: 'claude', model: c.model ?? 'default', effort: c.effort ?? 'default' }
-      let last = ''
-      for (const i of c.items()) {
-        if (i.kind === 'assistant_text') last = i.text
-        else if (i.kind === 'result') {
-          const v = classifyTurn(null, last)
+      let last: { id: string; text: string } | null = null
+      let opened: string | null = null
+      const count = (): void => {
+        const v = classifyTurn(null, last?.text ?? '')
+        const turn = last?.id ?? opened
+        if (!c.worker) {
           this.record(key, v.cls, { chat: c.id, label: v.label }, false)
           turns++
-          last = ''
+        } else if (turn && this.recordOnce(workerTurnKey(c.id, turn), key, v.cls, { chat: c.id, label: v.label }, false)) turns++
+        last = null
+        opened = null
+      }
+      for (const i of c.items()) {
+        if (i.kind === 'assistant_text') last = { id: i.id, text: i.text }
+        else if (i.kind === 'result' && !c.worker) count()
+        else if (i.kind === 'user' && c.worker && !i.queued) {
+          if (opened || last) count()
+          opened = i.id
         }
       }
+      if (c.worker && !c.worker.busy && (opened || last)) count()
       this.data.backfilled.push(c.id)
       done.add(c.id)
       n++

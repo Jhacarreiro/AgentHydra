@@ -432,6 +432,15 @@ instead of a model. Server half; the composer draws the three levels.
 - **Backfill.** `ChatManager.backfillPushback()` / `bun server/scripts/pushback-backfill.ts <data folder>` seeds the counts
   once from the transcripts of the Claude chats the Desk knows, under each chat's own model and effort (a transcript has no
   stop reasons, so only pushbacks are found). A chat counted is recorded, so a second run adds nothing.
+- **CliMayte worker chats.** A worker's turn is counted when the chat goes from at work to idle, under `service: 'claude'`,
+  the model the worker's last attempt reported (`reportedModel`, else its `model`, else `default`) and its `effort`
+  (`default` when none), with its final reply's text and no stop reason (none reaches the Desk). It is keyed by its
+  closing reply's id (`counted` in `pushback.json`, newest 5000), so a second read, a restart or the backfill never counts
+  it again. The backfill reads a worker chat's transcript as turns that end at the next message, the last one only once
+  the chat is not at work. `sus` on a worker chat sends each message (and the worker's start) with the pick as CliMayte's
+  `model` (`opus`, `sonnet`, `haiku`, by the family the id names) and `effort` (`low` to `max`); a pick it cannot name,
+  no pick yet, and `fine` send none. CliMayte keeps a sent setting from that launch on, so a worker left `sus` stays on
+  the last pick until another is sent. `bad` pins a worker chat to Codex as any other.
 - **Levels.** `ChatSummary.sus` is `fine | sus | bad` (absent = `fine`); set on `PATCH /api/chats/:id` (`{ sus }`) and on
   `POST /api/chats` (`{ sus }`).
   - `fine`: the chat's own model and effort, exactly as before.

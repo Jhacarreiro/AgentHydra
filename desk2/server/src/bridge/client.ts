@@ -440,6 +440,12 @@ export interface StartWorker {
   requestId?: string
 }
 
+/** A model and effort as CliMayte's send takes them. */
+export interface WorkerSendSetting {
+  model: 'opus' | 'sonnet' | 'haiku'
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+}
+
 export function createClient(opts: HydraClientOptions = {}) {
   const url = (opts.url ?? process.env.HYDRA_URL ?? DEFAULT_HYDRA_URL).replace(/\/+$/, '')
   const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS
@@ -564,10 +570,12 @@ export function createClient(opts: HydraClientOptions = {}) {
      *  `urgent`: a running worker is stopped and the same session continues at once with this message first
      *  (`urgent: true` in the answer when it stopped; every AgentHydra with CliMayte has it).
      *  `desk`: the chat's add-ons now (`chatAddOns`), which replace what AgentHydra keeps from the next launch on.
-     *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it). */
-    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string) =>
+     *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it).
+     *  `setting`: the model and effort the worker runs on from the launch that takes this message. */
+    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting) =>
       request<{ ok: boolean; message: string; urgent?: boolean }>('POST', `/api/corch/workers/${enc(id)}/send`, {
         text,
+        ...(setting ? { model: setting.model, effort: setting.effort } : {}),
         ...(cwd ? { cwd } : {}),
         ...(desk ? { desk } : {}),
         ...(urgent ? { urgent: true } : {}),

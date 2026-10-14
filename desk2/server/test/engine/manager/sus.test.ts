@@ -6,9 +6,10 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AccountInfo } from '@shared/protocol'
-import { ChatManager, ChatError, parsePatch } from '../../../src/engine/chat-manager'
+import type { AccountInfo, TranscriptItem } from '@shared/protocol'
+import { ChatManager, ChatError, climayteSetting, parsePatch } from '../../../src/engine/chat-manager'
 import type { CodexDirectory } from '../../../src/engine/codex/accounts'
+import type { OpenAppServer } from '../../../src/engine/codex/app-server'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
 
@@ -155,4 +156,130 @@ test('the pushback list holds every setting with turns, lowest rate first', asyn
     ['model-good', 1 / 30],
     ['model-poor', 0.5],
   ])
+})
+
+// CliMayte worker chats (the Desk's default): their turns run as a worker, not a ChatRuntime.
+
+/** The home's pushback file with settings CliMayte's send can name: Sonnet high pushes back least. */
+function seedClaude(home: string): void {
+  const row = (model: string, effort: string, turns: number, pushback: number) => [`k-${model}`, { service: 'claude', model, effort, turns, pushback, refusals: 0 }] as const
+  const settings = Object.fromEntries([row('claude-sonnet-5-5', 'high', 30, 1), row('claude-opus-5-5', 'xhigh', 30, 15)])
+  writeFileSync(join(home, 'pushback.json'), JSON.stringify({ v: 1, settings, backfilled: [] }))
+}
+
+async function workerSetup(o: { seed?: 'claude' | 'unnamed' | 'none'; codex?: boolean } = {}) {
+  const home = temp('desk-sus-worker-')
+  process.env.HYDRA_DESK_HOME = home
+  if ((o.seed ?? 'claude') === 'claude') seedClaude(home)
+  if (o.seed === 'unnamed') seed(home)
+  const b = fakeBridge({ roots: [] })
+  const codexTurns: string[] = []
+  const openCodex: OpenAppServer = async () => ({
+    call: async <T,>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
+      if (method === 'thread/start') return { thread: { id: 'thread-1' } } as T
+      if (method === 'turn/start') {
+        codexTurns.push(String((params.input as { text?: string }[])[0]?.text ?? ''))
+        return { turn: { id: `turn-${codexTurns.length}` } } as T
+      }
+      return {} as T
+    },
+    listen: () => () => {},
+    release: () => {},
+  })
+  const codex: CodexDirectory | undefined = o.codex ? { instances: async () => [ALPHA], usage: async () => ({ snapshot: { session: { pct: 10 }, weekAll: { pct: 5 } } }) } : undefined
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, ...(codex ? { codex, openCodex } : {}) })
+  managers.push(m)
+  return { m, b, home, codexTurns }
+}
+
+/** A worker chat started with `prompt`, its worker running on `ran`. */
+async function workerChat(w: Awaited<ReturnType<typeof workerSetup>>, req: { prompt: string; sus?: 'sus' | 'bad' }, ran = { reportedModel: 'claude-opus-5-5', effort: 'xhigh' }) {
+  const chat = await w.m.create({ cwd: w.home, ...req })
+  await waitFor(() => !!w.m.get(chat.id).workerId)
+  const row = w.b.state.rows[0]!
+  Object.assign(row, { status: 'running', ...ran })
+  await w.m.syncWorkers(chat.id)
+  return { chat, row }
+}
+
+const TURN: TranscriptItem[] = [
+  { kind: 'user', id: 'u-1', ts: 9, text: 'Restart the production database' },
+  { kind: 'assistant_text', id: 'a-1', ts: 10, text: "I can't help with that without a backup." },
+]
+const PUSHED = { service: 'claude' as const, model: 'claude-opus-5-5', effort: 'xhigh', turns: 1, pushback: 1, refusals: 0, pushbackRate: 1 }
+
+test("a worker chat's finished turn is counted once, under the model and effort its attempt ran on", async () => {
+  const w = await workerSetup({ seed: 'none' })
+  const { chat, row } = await workerChat(w, { prompt: 'Restart the production database' })
+  w.b.state.workerItems['worker-session-1'] = TURN
+  Object.assign(row, { status: 'done' })
+  await w.m.syncWorkers(chat.id)
+  await waitFor(() => w.m.get(chat.id).status === 'idle')
+  expect(w.m.pushbackRows()).toEqual([PUSHED])
+  // Read again, and the backfill over the same transcript: the turn is not counted a second time.
+  await w.m.syncWorkers(chat.id)
+  expect(w.m.backfillPushback()).toEqual({ chats: 1, turns: 0 })
+  expect(w.m.pushbackRows()).toEqual([PUSHED])
+})
+
+test('the backfill counts a worker chat by its transcript, leaving the turn still at work', async () => {
+  const w = await workerSetup({ seed: 'none' })
+  const { chat } = await workerChat(w, { prompt: 'Restart the production database' })
+  w.b.state.workerItems['worker-session-1'] = [...TURN, { kind: 'user', id: 'u-2', ts: 11, text: 'There is one.' }, { kind: 'assistant_text', id: 'a-2', ts: 12, text: 'Restarting.' }]
+  await w.m.syncWorkers(chat.id)
+  expect(w.m.get(chat.id).status).toBe('working')
+  expect(w.m.backfillPushback()).toEqual({ chats: 1, turns: 1 })
+  expect(w.m.pushbackRows()).toEqual([PUSHED])
+})
+
+test('sus on a worker chat starts and sends its worker on the least-pushing setting; fine sends no override', async () => {
+  const w = await workerSetup()
+  const { chat, row } = await workerChat(w, { prompt: 'go', sus: 'sus' })
+  expect(w.b.state.started[0]).toMatchObject({ model: 'sonnet', effort: 'high' })
+  expect(w.m.get(chat.id)).toMatchObject({ sus: 'sus', susPick: { model: 'claude-sonnet-5-5', effort: 'high', pushbackRate: 1 / 30, turns: 30 } })
+  Object.assign(row, { status: 'done' })
+  w.b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 9, text: 'go' }, { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Done.' }]
+  await w.m.syncWorkers(chat.id)
+  await w.m.send(chat.id, 'again')
+  await w.m.patch(chat.id, { sus: 'fine' })
+  await w.m.send(chat.id, 'once more')
+  expect(w.b.state.sentToWorker.map((s) => [s.text, s.setting ?? null])).toEqual([
+    ['again', { model: 'sonnet', effort: 'high' }],
+    ['once more', null],
+  ])
+})
+
+test('sus on a worker chat sends no override while no setting qualifies or the pick is one CliMayte cannot name', async () => {
+  for (const seedAs of ['none', 'unnamed'] as const) {
+    const w = await workerSetup({ seed: seedAs })
+    const { chat } = await workerChat(w, { prompt: 'go', sus: 'sus' })
+    expect(w.b.state.started[0]!.model).toBeUndefined()
+    expect(w.b.state.started[0]!.effort).toBeUndefined()
+    expect(w.m.get(chat.id).susPick ?? null).toEqual(seedAs === 'none' ? null : { model: 'model-good', effort: 'low', pushbackRate: 1 / 30, turns: 30 })
+  }
+  expect(climayteSetting('claude-haiku-5-5', 'medium')).toEqual({ model: 'haiku', effort: 'medium' })
+  expect(climayteSetting('opus', 'default')).toBeNull()
+  expect(climayteSetting('default', 'high')).toBeNull()
+})
+
+test('bad on a worker chat sends its next turns to Codex, and leaving it goes back to the worker', async () => {
+  const w = await workerSetup({ codex: true })
+  const { chat, row } = await workerChat(w, { prompt: 'Remember the word KIWI' })
+  Object.assign(row, { status: 'done' })
+  w.b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 9, text: 'Remember the word KIWI' }, { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Noted: KIWI.' }]
+  await w.m.syncWorkers(chat.id)
+  expect(await w.m.patch(chat.id, { sus: 'bad' })).toMatchObject({ sus: 'bad', service: 'codex' })
+  await w.m.send(chat.id, 'Which word?')
+  await waitFor(() => w.codexTurns.length === 1)
+  expect(w.codexTurns[0]).toContain('Noted: KIWI.')
+  expect(w.b.state.sentToWorker).toEqual([])
+  const back = await w.m.patch(chat.id, { sus: 'fine' })
+  expect(back.service ?? null).toBeNull()
+  expect(back.sus).toBeUndefined()
+})
+
+test('a worker chat is created on sus or bad', async () => {
+  const w = await workerSetup({ codex: true })
+  expect(await w.m.create({ cwd: w.home, sus: 'bad' })).toMatchObject({ sus: 'bad', service: 'codex', workerId: null })
+  expect(await w.m.create({ cwd: w.home, sus: 'sus' })).toMatchObject({ sus: 'sus', workerId: null, susPick: { model: 'claude-sonnet-5-5' } })
 })
