@@ -37,3 +37,7 @@ export function chatPaths(dir: string, raw: string) {
 export function logPath(dir: string): string {
   return join(dir, 'log.jsonl')
 }
+
+export function ownerContextPath(dir: string): string {
+  return join(dir, 'owner-context.md')
+}
