@@ -69,7 +69,7 @@ import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pair
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
-import { serveDashboardSite, setDashboardSelfUrl } from './dashboards'
+import { serveDashboardSite, setDashboardSelfUrl, startDeclaredBackends } from './dashboards'
 import { getSetting, setSetting } from './db'
 import { desk2 } from './desk2'
 import { buildDetachedSpawn } from './detached-spawn.mjs'
@@ -1690,6 +1690,7 @@ const server = Bun.serve({
 })
 // Desk 2 is told this address (HYDRA_URL), so a daemon that hopped off 7787 is the one it talks to.
 desk2.setDaemonUrl(`http://127.0.0.1:${server.port}`)
+void startDeclaredBackends()
 // Boot reached a live, listening port - the failure mode this watchdog exists for (a hang before
 // this line) is no longer possible. Everything after here (price catalog, session-scan warm,
 // analytics) is a deliberate background continuation, not boot proper - see the comments below on
