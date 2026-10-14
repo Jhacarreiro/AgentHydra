@@ -70,6 +70,7 @@ export interface Row {
   placement: string | null
   scopes: Scope[]
   method: Method
+  served: boolean
   compliant: boolean
   used: string[]
   offered: string[]
@@ -259,10 +260,11 @@ function reportOf(chat: string, run: number, events: Json[]): Reported | null {
   }
 }
 
-function packsOf(s: Session, turn: Turn, events: Json[]): Json[] {
+// A turn is served when the core delivered something for it: a pack, or a per-message answer (even an empty one).
+function deliveriesOf(s: Session, turn: Turn, events: Json[]): Json[] {
   return events.filter(
     (e) =>
-      e.event === 'pack' &&
+      (e.event === 'pack' || (e.event === 'placement' && e.phase === 'message')) &&
       str(e.session) === s.id &&
       Math.abs(Date.parse(str(e.at)) - turn.at) <= 60_000,
   )
@@ -277,7 +279,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
   const scopes = turn.calls
     .filter((c) => c.name === `${CORE_PREFIX}scope`)
     .map((c) => scopeOf(str(c.input.chat), c.at, events))
-  const packs = packsOf(s, turn, events)
+  const deliveries = deliveriesOf(s, turn, events)
   const core = turn.calls.filter((c) => c.name.startsWith(CORE_PREFIX))
   const offered = new Set<string>()
   for (const c of core) for (const m of c.result.matchAll(ID_RE)) offered.add(m[0])
@@ -285,9 +287,9 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     for (const e of events)
       if (str(e.chat) === sc.chat && e.run === sc.run && Array.isArray(e.shown))
         for (const id of e.shown) offered.add(str(id))
-  for (const p of packs) if (Array.isArray(p.ids)) for (const id of p.ids) offered.add(str(id))
+  for (const p of deliveries) if (Array.isArray(p.ids)) for (const id of p.ids) offered.add(str(id))
   const byScope = scopes.length > 0
-  const byPack = packs.length > 0
+  const byPack = deliveries.length > 0
   const method: Method = byScope && byPack ? 'both' : byScope ? 'scope' : byPack ? 'pack' : 'none'
   const used = turn.calls.flatMap(usedOf)
   const picks = core
@@ -309,6 +311,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     placement: placementOf(s, events),
     scopes,
     method,
+    served: deliveries.length > 0,
     compliant: method !== 'none',
     used,
     offered: offeredList,
@@ -464,7 +467,10 @@ export function buildTrack(
       sessions.workers++
       continue
     }
-    if (!s.turns.some((t) => t.calls.some((c) => c.name.startsWith(CORE_PREFIX)))) {
+    const injected = events.some(
+      (e) => (e.event === 'pack' || e.event === 'placement') && str(e.session) === s.id,
+    )
+    if (!injected && !s.turns.some((t) => t.calls.some((c) => c.name.startsWith(CORE_PREFIX)))) {
       sessions.noCore++
       continue
     }

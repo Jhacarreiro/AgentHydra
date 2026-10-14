@@ -274,3 +274,51 @@ test('reportRun writes a score and missing note and rejects a score outside 1-5'
   expect(log.trimEnd().split('\n').at(-1)).toContain('"score":5')
   expect(log.trimEnd().split('\n').at(-1)).toContain('"missing":"a tool"')
 })
+
+test('a turn served only by a per-message placement answer counts as served, even when the answer is empty', () => {
+  const own = scratch()
+  try {
+    const projects = join(own, 'projects', 'proj-slot')
+    mkdirSync(projects, { recursive: true })
+    mkdirSync(join(own, 'handoffs'), { recursive: true })
+    writeFileSync(
+      join(projects, 'sl.jsonl'),
+      user('sl', 'C:/Users/me/app', T, 'hello') + user('sl', 'C:/Users/me/app', T + 50000, 'again'),
+    )
+    appendFileSync(
+      join(own, 'log.jsonl'),
+      logRow({
+        at: iso(T + 500),
+        event: 'placement',
+        phase: 'message',
+        chat: 'slot',
+        session: 'sl',
+        placement: 'slot',
+        chars: 0,
+        ids: [],
+      }) +
+        logRow({
+          at: iso(T + 50500),
+          event: 'placement',
+          phase: 'message',
+          chat: 'slot',
+          session: 'sl',
+          placement: 'slot',
+          chars: 40,
+          ids: ['knowledge:x'],
+        }),
+    )
+    const { rows } = buildTrack(own, {
+      roots: [join(own, 'projects')],
+      handoffsDir: join(own, 'handoffs'),
+      now: T,
+    })
+    const served = rows.filter((r) => r.session === 'sl')
+    expect(served.map((r) => r.served)).toEqual([true, true])
+    expect(served.map((r) => r.compliant)).toEqual([true, true])
+    expect(served.map((r) => r.method)).toEqual(['pack', 'pack'])
+    expect(served[1]?.offered).toContain('knowledge:x')
+  } finally {
+    rmSync(own, { recursive: true, force: true })
+  }
+})

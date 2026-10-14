@@ -18,7 +18,6 @@ import { fileURLToPath } from "node:url";
 export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
 const LEAD_CAP = 20000;
 const TAIL_CHUNK = 1 << 20;
-const NAME_CAP = 60;
 export const PACK_TIMEOUT_MS = 1500;
 const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
 const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
@@ -55,14 +54,10 @@ export function parseHydraMd(text) {
   return { lead: name && name.toLowerCase() !== "none" ? name : null, leadPath: leadPath || null, tier };
 }
 
-function promptBlock(key, hydraPath, hydraText) {
-  let state = "none yet";
-  if (hydraText !== null) {
-    const { lead, tier } = parseHydraMd(hydraText);
-    state = `lead ${(lead ?? "none").slice(0, NAME_CAP)}, tier ${tier ?? "?"}`;
-  }
-  return `Hydra Core: before you act on this message, call core_scope { chat: "${key}" } (agenthydra MCP) and answer its questions with core_answer until it says go. hydra.md: ${hydraPath} (${state}).`;
-}
+// Pings the manager sends into a chat (task notifications, "Not from the user") are not the owner's words.
+const NOT_OWNER = /^(<task-notification>|\[[^\]\n]*\] Not from the user\.)/;
+
+const fromOwner = (prompt) => !NOT_OWNER.test(prompt.trimStart());
 
 function sessionText(hydraPath, hydraText) {
   const { leadPath } = parseHydraMd(hydraText);
@@ -95,9 +90,9 @@ function recordPrompt(input, env, dir, prompt) {
 
 function userPromptSubmit(input, env, dir) {
   const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/")) return null;
-  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
-  return output("UserPromptSubmit", promptBlock(key, hydraPath, hydraText));
+  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  recordPrompt(input, env, dir, prompt);
+  return null;
 }
 
 function injectOn(dir) {
@@ -115,17 +110,16 @@ function placementOf(dir) {
 // Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had.
 async function placedPrompt(input, env, dir) {
   const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/")) return null;
-  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
-  const scope = promptBlock(key, hydraPath, hydraText);
+  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  const { key } = recordPrompt(input, env, dir, prompt);
   try {
     const match = await requestPack(
       { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt, placement: placementOf(dir) },
       env,
     );
-    return output("UserPromptSubmit", match.text ? `${scope}\n${match.text}` : scope);
-  } catch {
-    return output("UserPromptSubmit", scope);
+    return match.text ? output("UserPromptSubmit", match.text) : null;
+  } catch (error) {
+    return output("UserPromptSubmit", `Hydra Core pack unavailable: ${error.message}`);
   }
 }
 
@@ -164,8 +158,8 @@ async function requestPack(req, env) {
 
 async function injectPrompt(input, env, dir) {
   const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/")) return null;
-  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
+  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  const { key } = recordPrompt(input, env, dir, prompt);
   try {
     const pack = await requestPack(
       { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt },
@@ -173,7 +167,7 @@ async function injectPrompt(input, env, dir) {
     );
     return pack.text ? output("UserPromptSubmit", pack.text) : null;
   } catch (error) {
-    return output("UserPromptSubmit", `${promptBlock(key, hydraPath, hydraText)}\nHydra Core pack unavailable: ${error.message}`);
+    return output("UserPromptSubmit", `Hydra Core pack unavailable: ${error.message}`);
   }
 }
 

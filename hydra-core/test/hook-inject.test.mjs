@@ -96,20 +96,20 @@ test("INJECT on: a slash command asks the daemon for nothing", () =>
     }),
   ));
 
-test("INJECT on: when the daemon is down the message gets today's core_scope line and the error", () =>
+test("INJECT on: when the daemon is down the message gets the error note and no core_scope line", () =>
   withCore(async (dir) => {
     switchOn(dir);
     const text = (await run(turn("hello"), envFor(dir, UNREACHABLE))).hookSpecificOutput.additionalContext;
-    assert.match(text, /core_scope \{ chat: "sess-1" \}/);
-    assert.match(text, /Hydra Core pack unavailable: /);
+    assert.doesNotMatch(text, /core_scope/);
+    assert.match(text, /^Hydra Core pack unavailable: /);
   }));
 
-test("INJECT on: a daemon error reply falls back to the core_scope line and names the error", () =>
+test("INJECT on: a daemon error reply gives the error note and names the error", () =>
   withCore((dir) =>
     withDaemon(json(500, { error: "boom" }), async (daemon) => {
       switchOn(dir);
       const text = (await run(turn("hello"), envFor(dir, daemon))).hookSpecificOutput.additionalContext;
-      assert.match(text, /core_scope \{ chat: "sess-1" \}/);
+      assert.doesNotMatch(text, /core_scope/);
       assert.match(text, /Hydra Core pack unavailable: boom/);
     }),
   ));
@@ -121,7 +121,7 @@ test("INJECT on: a pack slower than the timeout falls back instead of blocking t
       const started = Date.now();
       const text = (await run(turn("hello"), envFor(dir, daemon))).hookSpecificOutput.additionalContext;
       const took = Date.now() - started;
-      assert.match(text, /core_scope \{ chat: "sess-1" \}/);
+      assert.doesNotMatch(text, /core_scope/);
       assert.match(text, /Hydra Core pack unavailable: /);
       assert.ok(took < PACK_TIMEOUT_MS + 2000, `took ${took} ms`);
     }),
@@ -167,28 +167,23 @@ test("INJECT on: a failed SessionStart compact keeps hydra.md and names the erro
     assert.match(text, /Hydra Core pack unavailable: /);
   }));
 
-test("INJECT file not containing ON leaves today's behaviour and asks the daemon nothing", () =>
+test("INJECT file not containing ON asks the daemon nothing and injects nothing", () =>
   withCore((dir) =>
     withDaemon(json(200, { text: "x" }), async (daemon, calls) => {
       switchOn(dir, "OFF");
-      const text = (await run(turn("hello"), envFor(dir, daemon))).hookSpecificOutput.additionalContext;
-      assert.match(text, /core_scope \{ chat: "sess-1" \}/);
+      assert.equal(await run(turn("hello"), envFor(dir, daemon)), null);
       assert.equal(calls.length, 0);
     }),
   ));
 
-test("no INJECT file leaves today's behaviour and asks the daemon nothing", () =>
+test("no INJECT file asks the daemon nothing and adds no core_scope line", () =>
   withCore((dir) =>
     withDaemon(json(200, { text: "x" }), async (daemon, calls) => {
       writeFileSync(path.join(dir, "ON"), "");
-      const text = (await run(turn("hello"), envFor(dir, daemon))).hookSpecificOutput.additionalContext;
-      assert.match(text, /core_scope \{ chat: "sess-1" \}/);
+      assert.equal(await run(turn("hello"), envFor(dir, daemon)), null);
       assert.equal(calls.length, 0);
     }),
   ));
-
-const scopeLine = (dir) =>
-  `Hydra Core: before you act on this message, call core_scope { chat: "sess-1" } (agenthydra MCP) and answer its questions with core_answer until it says go. hydra.md: ${path.join(dir, "chats", "sess-1", "hydra.md")} (none yet).`;
 
 function placeOn(dir, mode) {
   writeFileSync(path.join(dir, "ON"), "");
@@ -196,44 +191,44 @@ function placeOn(dir, mode) {
 }
 
 for (const mode of ["slot", "file"]) {
-  test(`PLACEMENT ${mode}: the first and a later message both start with the core_scope line`, () =>
+  test(`PLACEMENT ${mode}: the per-message text is the strong matches only, never a core_scope line`, () =>
     withCore((dir) => {
       let replies = 0;
       return withDaemon(
         (res) => {
           replies += 1;
-          const reply = replies === 1 ? { mode: "first", text: "Hydra Core attached:\n\nRULE TEXT" } : { mode: "delta", text: "Hydra Core: one new strong match." };
+          const reply = replies === 1 ? { mode: "first", text: "Hydra Core attached:\n\nRULE TEXT" } : { mode: "delta", text: "Hydra Core, new for this message:\n- one strong match" };
           json(200, reply)(res);
         },
         async (daemon, calls) => {
           placeOn(dir, mode);
           const one = await run(turn("hello there"), envFor(dir, daemon));
           assert.equal(one.hookSpecificOutput.hookEventName, "UserPromptSubmit");
-          assert.equal(one.hookSpecificOutput.additionalContext, `${scopeLine(dir)}\nHydra Core attached:\n\nRULE TEXT`);
+          assert.equal(one.hookSpecificOutput.additionalContext, "Hydra Core attached:\n\nRULE TEXT");
           assert.equal(calls[0].body.placement, mode);
           const two = await run(turn("again"), envFor(dir, daemon));
-          assert.equal(two.hookSpecificOutput.additionalContext, `${scopeLine(dir)}\nHydra Core: one new strong match.`);
+          assert.equal(two.hookSpecificOutput.additionalContext, "Hydra Core, new for this message:\n- one strong match");
+          assert.doesNotMatch(two.hookSpecificOutput.additionalContext, /core_scope/);
           assert.equal(calls.length, 2);
         },
       );
     }));
 }
 
-test("PLACEMENT slot: an empty pack still gives the core_scope line", () =>
+test("PLACEMENT slot: an empty pack injects nothing", () =>
   withCore((dir) =>
     withDaemon(json(200, { mode: "delta", text: "", ids: [], bytes: 0, ms: 2 }), async (daemon) => {
       placeOn(dir, "slot");
-      const out = await run(turn("again"), envFor(dir, daemon));
-      assert.equal(out.hookSpecificOutput.additionalContext, scopeLine(dir));
+      assert.equal(await run(turn("again"), envFor(dir, daemon)), null);
     }),
   ));
 
-test("PLACEMENT slot: when the daemon is down the message gets the core_scope line alone", () =>
-  withCore((dir) => {
+test("PLACEMENT slot: when the daemon is down the message gets the error note and no core_scope line", () =>
+  withCore(async (dir) => {
     placeOn(dir, "slot");
-    return run(turn("hello"), envFor(dir, UNREACHABLE)).then((out) => {
-      assert.equal(out.hookSpecificOutput.additionalContext, scopeLine(dir));
-    });
+    const text = (await run(turn("hello"), envFor(dir, UNREACHABLE))).hookSpecificOutput.additionalContext;
+    assert.match(text, /^Hydra Core pack unavailable: /);
+    assert.doesNotMatch(text, /core_scope/);
   }));
 
 test("PLACEMENT slot: a slash command gets nothing and asks the daemon for nothing", () =>
@@ -244,3 +239,31 @@ test("PLACEMENT slot: a slash command gets nothing and asks the daemon for nothi
       assert.equal(calls.length, 0);
     }),
   ));
+
+for (const ping of ["<task-notification>\nagent done\n</task-notification>", "[climayte] Not from the user. Status: done."]) {
+  test(`PLACEMENT slot: a non-owner ping (${ping.slice(0, 20)}...) gets nothing and asks the daemon for nothing`, () =>
+    withCore((dir) =>
+      withDaemon(json(200, { text: "Hydra Core, new for this message:\n- x" }), async (daemon, calls) => {
+        placeOn(dir, "slot");
+        assert.equal(await run(turn(ping), envFor(dir, daemon)), null);
+        assert.equal(calls.length, 0);
+        assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), false);
+      }),
+    ));
+}
+
+test("INJECT on: a non-owner ping gets nothing and asks the daemon for nothing", () =>
+  withCore((dir) =>
+    withDaemon(json(200, { text: "x" }), async (daemon, calls) => {
+      switchOn(dir);
+      assert.equal(await run(turn("<task-notification>done</task-notification>"), envFor(dir, daemon)), null);
+      assert.equal(calls.length, 0);
+    }),
+  ));
+
+test("legacy (no placement, no INJECT): the message gets no core_scope ask and no note", () =>
+  withCore(async (dir) => {
+    writeFileSync(path.join(dir, "ON"), "");
+    assert.equal(await run(turn("hello"), envFor(dir, UNREACHABLE)), null);
+    assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), true);
+  }));

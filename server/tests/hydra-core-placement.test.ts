@@ -346,7 +346,7 @@ describe('hook under slot and file', () => {
     }) as unknown as typeof fetch
   }
 
-  test('under slot the prompt starts with the core_scope line and gets strong matches only', async () => {
+  test('under slot the message gets strong matches only, never a core_scope line', async () => {
     writeFileSync(join(dir, 'ON'), '')
     writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
     placeChat(
@@ -372,13 +372,9 @@ describe('hook under slot and file', () => {
       env(),
     )
     const text = out?.hookSpecificOutput?.additionalContext ?? ''
-    expect(text).toContain('Hydra Core, new for this message')
+    expect(text.startsWith('Hydra Core, new for this message')).toBe(true)
     expect(text).toContain('knowledge:pricing-tables')
-    expect(
-      text.startsWith(
-        'Hydra Core: before you act on this message, call core_scope { chat: "hook-s1" }',
-      ),
-    ).toBe(true)
+    expect(text).not.toContain('core_scope')
     expect(text.length).toBeLessThanOrEqual(2000)
 
     const weak = await run(
@@ -390,12 +386,7 @@ describe('hook under slot and file', () => {
       },
       env(),
     )
-    expect(weak?.hookSpecificOutput?.additionalContext).toMatch(
-      /^Hydra Core: before you act on this message, call core_scope \{ chat: "hook-s1" \}/,
-    )
-    expect(weak?.hookSpecificOutput?.additionalContext).not.toContain(
-      'Hydra Core, new for this message',
-    )
+    expect(weak).toBeNull()
   })
 
   test('under slot SessionStart re-injects nothing', async () => {

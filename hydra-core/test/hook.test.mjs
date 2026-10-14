@@ -59,7 +59,8 @@ test("a CliMayte worker gets no output and no files", () => withCore(async (dir)
 test("a CliMayte chat (worker with a chat id) is not skipped", () => withCore(async (dir) => {
   turnOn(dir);
   const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1", AGENTHYDRA_CLIMAYTE_CHAT: "c-1" });
-  assert.ok(await run(turn("move notes"), env));
+  assert.equal(await run(turn("move notes"), env), null);
+  assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), true);
 }));
 
 test("slash commands and a missing ON flag produce no output and write nothing", () => withCore(async (dir) => {
@@ -78,28 +79,19 @@ test("the chat key is the Desk chat id when set, else the session id, made filen
   assert.throws(() => chatKey({}, {}), /no chat key/);
 });
 
-test("UserPromptSubmit writes prompt.txt and cwd.txt and injects a short block naming hydra.md", () => withCore(async (dir) => {
+test("UserPromptSubmit writes prompt.txt and cwd.txt and injects nothing (the core is injected, not asked)", () => withCore(async (dir) => {
   turnOn(dir);
   const out = await run(turn("move notes.txt into the archive"), envFor(dir));
-  assert.equal(out.hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.equal(out, null);
   const chat = path.join(dir, "chats", "sess-1");
   assert.equal(readFileSync(path.join(chat, "prompt.txt"), "utf8"), "move notes.txt into the archive");
   assert.equal(readFileSync(path.join(chat, "cwd.txt"), "utf8"), "C:/Users/me/project");
-  const text = out.hookSpecificOutput.additionalContext;
-  assert.ok(text.length < 400, `block is ${text.length} characters`);
-  assert.match(text, /core_scope \{ chat: "sess-1" \}/);
-  assert.ok(text.includes(path.join(chat, "hydra.md")));
-  assert.match(text, /\(none yet\)/);
 }));
 
-test("the block names the lead and tier from an existing hydra.md", () => withCore(async (dir) => {
+test("a non-owner ping injects nothing and writes no prompt.txt", () => withCore(async (dir) => {
   turnOn(dir);
-  const chat = path.join(dir, "chats", "sess-1");
-  mkdirSync(chat, { recursive: true });
-  writeFileSync(path.join(chat, "hydra.md"), hydraMd(path.join(dir, "lead.md"), 3));
-  const text = (await run(turn("redo the dashboard"), envFor(dir))).hookSpecificOutput.additionalContext;
-  assert.match(text, /lead Example Lead, tier 3\)/);
-  assert.ok(text.length < 400, `block is ${text.length} characters`);
+  assert.equal(await run(turn("[climayte] Not from the user. Status: done."), envFor(dir)), null);
+  assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), false);
 }));
 
 test("parseHydraMd reads the lead name, its full-text path and the tier", () => {
@@ -160,7 +152,7 @@ test("an unknown hook event is an error", () => withCore(async (dir) => {
 }));
 
 // Real subprocesses: a cold runner can take longer than bun's 5 s default.
-test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", { timeout: 20_000 }, () => withCore(async (dir) => {
+test("the hook runs as a process: nothing on stdout for a legacy prompt, exit 1 for an unknown event", { timeout: 20_000 }, () => withCore(async (dir) => {
   turnOn(dir);
   const ok = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(turn("move notes")),
@@ -168,7 +160,7 @@ test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unk
     encoding: "utf8",
   });
   assert.equal(ok.status, 0);
-  assert.equal(JSON.parse(ok.stdout).hookSpecificOutput.hookEventName, "UserPromptSubmit");
+  assert.equal(ok.stdout.trim(), "");
   const bad = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify({ hook_event_name: "PreToolUse" }),
     env: envFor(dir),
