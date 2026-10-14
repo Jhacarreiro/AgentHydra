@@ -31,6 +31,39 @@ function actuatorTurn<T>(run: () => Promise<T>): Promise<T> {
 // live writer, this fires the app's OWN `claude://resume` import targeted at the instance -
 // the app re-renders the chat at the top of its sidebar - then retries the type once. A live
 // unrendered session is refused honestly (resume-importing over a live writer is forbidden).
+// POST /api/sessions/:id/stop: Claude Desktop's own Stop for a working chat, inside its RUNNING app
+// (claude-native-send.ts tryNativeStop). The instance resolves as the message route resolves it. Nothing
+// is retried or typed: unavailable answers 503 with the reason, a refusal 409, an unconfirmed stop 502.
+app.post('/api/sessions/:id/stop', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const { findDesktopChat, desktopChatOn } = await import('../instance-sessions')
+  const { listInstances } = await import('../core/instances')
+  const namedRef = typeof body.instance === 'string' ? body.instance.trim() : ''
+  const named = namedRef
+    ? (await listInstances()).find(
+        (i) => i.name === namedRef || samePathKey(i.dir, namedRef.replace(/^desktop:/, '')),
+      )
+    : undefined
+  const meta = named ? desktopChatOn(named.dir, sessionId) : findDesktopChat(sessionId)
+  if (namedRef && (!named || !meta))
+    return c.json({ ok: false, error: 'not on the named instance' }, 409)
+  const home = named ? named.dir : await desktopHomeFor(sessionId).catch(() => null)
+  if (!meta || !home) return c.json({ ok: false, error: 'no desktop chat holds this session' }, 404)
+  const inst = named ?? (await listInstances()).find((i) => samePathKey(i.dir, home))
+  if (!inst) return c.json({ ok: false, error: `no instance owns ${home}` }, 404)
+  if (!inst.isRunning)
+    return c.json(
+      { ok: false, error: `instance '${inst.name}' is not running - open it first` },
+      409,
+    )
+  const { tryNativeStop } = await import('../claude-native-send')
+  const stopped = await tryNativeStop(inst.dir, sessionId)
+  if (stopped.ok) return c.json({ ok: true, route: 'native', verified: true })
+  const status = stopped.refused ? 409 : stopped.unavailable ? 503 : 502
+  return c.json({ ok: false, error: stopped.reason ?? 'the app did not stop the chat' }, status)
+})
+
 app.post('/api/sessions/:id/message', async (c) => {
   const sessionId = c.req.param('id')
   const body = await jsonBody(c)

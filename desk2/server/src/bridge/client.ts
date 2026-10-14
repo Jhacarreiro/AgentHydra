@@ -23,6 +23,8 @@ export class BridgeError extends Error {
     readonly kind: BridgeErrorKind,
     message: string,
     readonly status: number | null = null,
+    /** An HTTP refusal's own reason, without the wrapping message (the daemon's `error`, `detail` or `message`). */
+    readonly reason?: string,
   ) {
     super(message)
     this.name = 'BridgeError'
@@ -477,6 +479,7 @@ export function createClient(opts: HydraClientOptions = {}) {
         'http',
         `AgentHydra ${method} ${path} failed (${res.status}): ${typeof reason === 'string' ? reason : 'no reason given'}`,
         res.status,
+        typeof reason === 'string' ? reason : undefined,
       )
     }
     return data as T
@@ -584,6 +587,9 @@ export function createClient(opts: HydraClientOptions = {}) {
     // unset, a held note waits up to the 24 h expiry, as a person's note does.
     sendToDesktopChat: (sessionId: string, text: string, holdSecs?: number) =>
       request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true, ...(holdSecs ? { hold_secs: holdSecs } : {}) }, DELIVERY_TIMEOUT_MS),
+    /** Claude Desktop's own Stop for a working chat (the daemon's native stop); answers { ok, verified } or a BridgeError. */
+    stopDesktopChat: (sessionId: string) =>
+      request<{ ok: boolean; verified?: boolean; route?: string }>('POST', `/api/sessions/${enc(sessionId)}/stop`, {}, DELIVERY_TIMEOUT_MS),
     /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
     branchSession: (sessionId: string, uuid: string, title: string) =>
       post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),

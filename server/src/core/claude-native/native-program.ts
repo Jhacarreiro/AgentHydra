@@ -15,7 +15,7 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import' | 'send'
+  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import' | 'send' | 'stop'
   /** send only: the message, sent into the chat named by cliSessionId as a message from another
    *  session (never as the person). */
   text?: string
@@ -1208,6 +1208,43 @@ async function nativeSend(env: any, found: any, request: any, settled: any, stat
   }
 }
 
+/**
+ * The app's own Stop for one running chat: the call its Stop button makes (the renderer's
+ * LocalSessions.interrupt, which calls claudeCodeSessionManager.interruptSession(sessionId, 'user')).
+ * Only a chat with a running turn is stopped; an idle or already-stopping chat is refused before
+ * anything is called. One call, never retried. Verified only when the app's own session state then
+ * shows the turn stopping or stopped; a call that left the state as it was is not verified.
+ */
+async function nativeStop(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (typeof manager.interruptSession !== 'function')
+    nativeRefuse('native method unavailable: interruptSession')
+  const matches = [...manager.sessions.values()].filter(
+    (s: any) => s?.cliSessionId === request.cliSessionId && !s.prewarmHidden,
+  )
+  if (matches.length > 1) nativeRefuse('more than one chat holds this CLI session')
+  const session = matches[0]
+  if (!session) nativeRefuse('no chat in this app holds this CLI session')
+  if (session.isArchived === true) nativeRefuse('the chat is archived')
+  if (session.isStopping === true) nativeRefuse('the chat is already stopping')
+  if (session.isRunning !== true) nativeRefuse('the chat has no running turn to stop')
+  state.dispatch = 'sent'
+  await manager.interruptSession(session.sessionId, 'user')
+  nativeCheckIdentity(env, found, request, settled)
+  const now = manager.sessions.get(session.sessionId) ?? session
+  const verified = now.isStopping === true || now.isRunning !== true
+  return {
+    ok: verified,
+    verified,
+    dispatch: state.dispatch,
+    action: 'stop',
+    sessionId: session.sessionId,
+    reason: verified ? undefined : 'the app did not show the turn stopping or stopped',
+    identity: nativeIdentity(env, found, null),
+    evidence: "the app's own session state after its Stop (interruptSession, 'user')",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -1224,6 +1261,7 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   if (request.action === 'pause') return await nativePause(env, found, request, settled, state)
   if (request.action === 'import') return await nativeImport(env, found, request, settled, state)
   if (request.action === 'send') return await nativeSend(env, found, request, settled, state)
+  if (request.action === 'stop') return await nativeStop(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -1310,6 +1348,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativePause,
     nativeImport,
     nativeSend,
+    nativeStop,
     nativeRun,
     nativeRuntime,
   ]
@@ -1319,17 +1358,19 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 
 export function nativeProgram(request: NativeProgramRequest): string {
   if (
-    !['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import', 'send'].includes(request.action)
+    !['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import', 'send', 'stop'].includes(
+      request.action,
+    )
   )
     throw Error('Unsupported native action')
   if (
-    (request.action === 'import' || request.action === 'send') &&
+    (request.action === 'import' || request.action === 'send' || request.action === 'stop') &&
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       String(request.cliSessionId),
     )
   )
     throw Error(
-      `${request.action === 'send' ? 'Send' : 'Import'} requires the CLI session id (a UUID)`,
+      `${{ send: 'Send', stop: 'Stop' }[request.action as string] ?? 'Import'} requires the CLI session id (a UUID)`,
     )
   if (
     request.action === 'send' &&

@@ -36,7 +36,10 @@ considering Lua, sidebar menus or UIA. The archive and migration scripts already
    `{"archived":true,"instance_ref":"desktop:<full profile path>"}`. For moves, use
    `move_chat` / `move_chats` or the migration scripts; they verify destination landing
    before native source cleanup. General destination import/settings, unarchive and
-   new/start/stop/resume are not fully converted to native control.
+   new/start/stop/resume are not fully converted to native control. Native stop is the exception for one
+   chat: `POST /api/sessions/:id/stop` runs the app's own Stop (`interruptSession(id, 'user')`) once, and
+   refuses an idle, archived or already-stopping chat, a chat no running app holds, or several matches; it
+   never retries, and it answers `verified` only when the app's own state shows the turn stopping or stopped.
 5. Verify the returned result. Native success has `route:"native"`, `ok:true` and
    `verified:true`; the desktop route also has an empty `uiArchive` list. `native-only`
    never falls back to disk/UI, even if the profile is closed or its inspector unavailable.

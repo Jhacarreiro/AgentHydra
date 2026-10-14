@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER } from '@shared/protocol'
+import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopStopResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -54,6 +54,23 @@ async function desktopMessage(c: Context, b: Bridge): Promise<Response> {
     if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
     return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
   } catch (err) {
+    return fail(c, b, err)
+  }
+}
+
+// Claude Desktop's own Stop for a working chat, through AgentHydra's native stop. Only a verified stop answers 200.
+async function desktopStop(c: Context, b: Bridge): Promise<Response> {
+  const id = c.req.param('id') ?? ''
+  try {
+    const r = await b.client.stopDesktopChat(id)
+    if (!r.ok || r.verified !== true) return c.json({ error: `AgentHydra did not stop ${id}` }, 422)
+    return c.json({ ok: true } satisfies DesktopStopResult)
+  } catch (err) {
+    // The daemon's plain reason, not the wrapped message fail() keeps for the other routes.
+    if (err instanceof BridgeError && err.kind === 'http' && err.reason) {
+      const status = err.status && err.status >= 400 && err.status < 500 ? err.status : 502
+      return c.json({ error: err.reason }, status as ContentfulStatusCode)
+    }
     return fail(c, b, err)
   }
 }
@@ -178,6 +195,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     }),
   )
   app.post('/api/external/sessions/:id/message', (c) => desktopMessage(c, b))
+  app.post('/api/external/sessions/:id/stop', (c) => desktopStop(c, b))
   app.post('/api/external/sessions/:id/branch', (c) => branchSession(c, b))
   app.get('/api/search', (c) => search(c, b))
   app.get('/api/climayte/workers', (c) => {

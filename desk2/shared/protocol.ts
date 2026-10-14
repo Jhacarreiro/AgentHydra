@@ -346,6 +346,13 @@ export interface DesktopMessageResult {
   detail: string
 }
 
+/** POST /api/external/sessions/:id/stop: Claude Desktop's own Stop for a working chat. 200 { ok: true } once the app
+ *  shows the turn stopping or stopped; otherwise a non-2xx answer with { error }. */
+export interface DesktopStopResult {
+  ok: boolean
+  reason?: string
+}
+
 /**
  * POST /api/external/sessions/:id/branch: "Copy up to here into a new chat". AgentHydra writes a new Claude Code
  * session beside this one holding it up to the reply `uuid` (its session-branch), titled "<title> (branch)";
