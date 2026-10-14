@@ -2,6 +2,8 @@ import { ref, shallowRef, computed, reactive, shallowReactive, isReactive, toRaw
 import type {
   ChatSummary,
   TranscriptItem,
+  TranscriptIndex,
+  ChatItemsPage,
   ExternalSession,
   HomeStats,
   ProjectChoiceKind,
@@ -141,6 +143,41 @@ const itemsByChat = shallowReactive(new Map<string, TranscriptItem[]>())
 const KEEP_CHATS = 12
 const recentChats: string[] = []
 
+/** The window per chat: where its first item sits in the whole transcript (0 = nothing older), and its index (kept
+ *  when the pages are dropped). */
+const windowStart = new Map<string, number>()
+const indexByChat = shallowReactive(new Map<string, TranscriptIndex>())
+const WINDOW_SIZE = 200
+const INDEX_EVERY_MS = 1000
+const indexTimers = new Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>()
+
+/** Fetches a chat's index at most once a second; a call inside the second runs when it is up. */
+function refreshIndex(chatId: string) {
+  const slot = indexTimers.get(chatId) ?? { at: 0, timer: null }
+  indexTimers.set(chatId, slot)
+  if (slot.timer) return
+  const run = () => {
+    slot.timer = null
+    slot.at = Date.now()
+    fetchJson<TranscriptIndex>(`/chats/${chatId}/index`)
+      .then((idx) => {
+        if (idx && typeof idx === 'object' && Array.isArray(idx.userMessages)) indexByChat.set(chatId, idx)
+      })
+      .catch(() => {}) // floor-ok: the index is a convenience, the window still shows
+  }
+  const wait = slot.at + INDEX_EVERY_MS - Date.now()
+  if (wait <= 0) run()
+  else slot.timer = setTimeout(run, wait)
+}
+
+const hasIndexFacts = (item: TranscriptItem) => item.kind === 'user' || item.kind === 'todos' || item.kind === 'task'
+
+/** The answer of GET /chats/:id/items as a page: an old server answers the whole list as an array. */
+function asPage(raw: ChatItemsPage | TranscriptItem[]): { items: TranscriptItem[]; olderBefore: number; paged: boolean } {
+  if (Array.isArray(raw)) return { items: raw, olderBefore: 0, paged: false }
+  return { items: raw.items ?? [], olderBefore: raw.olderBefore ?? 0, paged: true }
+}
+
 function touchChat(id: string) {
   const at = recentChats.indexOf(id)
   if (at >= 0) recentChats.splice(at, 1)
@@ -152,9 +189,16 @@ function touchChat(id: string) {
       i++
       continue
     }
+    // A chat with a running turn keeps its window: its stream is landing in it.
+    const run = store.chats.find((c) => c.id === old)
+    if (run && TURN_RUNNING.has(run.status)) {
+      i++
+      continue
+    }
     recentChats.splice(i, 1)
     itemsByChat.delete(old)
     indexes.delete(old)
+    windowStart.delete(old)
   }
 }
 
@@ -325,12 +369,13 @@ const placeholderAlias = new Map<string, string>()
 const placeholderMakes = new Map<string, { req: CreateChatRequest; made: Promise<ChatSummary | null> }>()
 
 /** The chat's history with what streamed before and while it was fetched, now its whole cached transcript. */
-function landItems(id: string, snapshot: TranscriptItem[]): TranscriptItem[] {
+function landItems(id: string, snapshot: TranscriptItem[], olderBefore = 0): TranscriptItem[] {
   const since = [...(unloadedUpserts.get(id) ?? []), ...(itemsByChat.get(id) ?? [])]
   unloadedUpserts.delete(id)
   const items = keepNewer(withWindowNotes(id, snapshot), since)
   const kept = shallowReactive(items)
   itemsByChat.set(id, kept)
+  windowStart.set(id, olderBefore)
   itemsError.delete(id)
   reloadTries = 0
   indexes.delete(id)
@@ -440,6 +485,7 @@ function onItemUpsert(event: EventOf<'item.upsert'>) {
       indexes.delete(event.chatId)
     } else appendItem(event.chatId, items, event.item)
   }
+  if (hasIndexFacts(event.item) && chatItems(event.chatId)) refreshIndex(event.chatId)
   // Only the newest few are kept for an unloaded chat: the history fetch already holds the older ones.
   if (!chatItems(event.chatId) && items.length > UNLOADED_UPSERTS_MAX) {
     items.splice(0, items.length - UNLOADED_UPSERTS_MAX)
@@ -549,9 +595,11 @@ function reloadOpenChat() {
   const sel = store.selected
   if (sel.kind !== 'chat' || isPlaceholder(sel.id) || !store.chats.some((c) => c.id === sel.id)) return
   const id = sel.id
-  fetchJson<TranscriptItem[]>(`/chats/${id}/items`)
-    .then((items) => {
-      landItems(id, items)
+  fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${id}/items`)
+    .then((raw) => {
+      const page = asPage(raw)
+      landItems(id, page.items, page.olderBefore)
+      if (page.paged) refreshIndex(id)
     })
     .catch((err: unknown) => retryOpenChat(id, err))
 }
@@ -814,7 +862,9 @@ function withWindowNotes(chatId: string, items: TranscriptItem[]): TranscriptIte
 /** Fetches a chat's history into the cache; on a failure it stays unloaded and opening the chat fetches it. */
 async function landHistory(id: string): Promise<void> {
   try {
-    landItems(id, await fetchJson<TranscriptItem[]>(`/chats/${id}/items`))
+    const page = asPage(await fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${id}/items`))
+    landItems(id, page.items, page.olderBefore)
+    if (page.paged) refreshIndex(id)
   } catch {} // floor-ok: left unloaded, DeskFrame loads it when the chat opens
 }
 
@@ -997,6 +1047,7 @@ export function useDesk() {
     // A chat in the live probe's throwaway folder is never shown (shared/throwaway.ts).
     chats: computed(() => store.chats.filter((c) => !isThrowawayCwd(c.cwd))),
     itemsByChat: computed(() => itemsByChat),
+    indexByChat: computed(() => indexByChat),
     itemsError: computed(() => itemsError),
     external: computed(allExternal),
     workers: computed(() => store.workers),
@@ -1379,15 +1430,36 @@ export function useDesk() {
     async loadItems(chatId: string): Promise<TranscriptItem[]> {
       if (isPlaceholder(resolveChatId(chatId))) return chatItems(resolveChatId(chatId)) ?? []
       const opened = performance.now()
-      const snapshot = await fetchJson<TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
+      const raw = await fetchJson<ChatItemsPage | TranscriptItem[]>(`/chats/${chatId}/items`).catch((err: unknown) => {
         if (store.selected.kind === 'chat' && store.selected.id === chatId) retryOpenChat(chatId, err)
         throw err
       })
-      const items = landItems(chatId, snapshot)
+      const page = asPage(raw)
+      const items = landItems(chatId, page.items, page.olderBefore)
+      if (page.paged) refreshIndex(chatId)
       reportAtPaint('open_to_paint', opened, chatId)
       return items
     },
 
+    /** Fetches the page above the window and puts it in front of it. */
+    async loadOlder(chatId: string): Promise<number> {
+      const before = windowStart.get(chatId) ?? 0
+      const items = chatItems(chatId)
+      if (!items || before <= 0) return 0
+      const page = asPage(await fetchJson<ChatItemsPage>(`/chats/${chatId}/items?before=${before}&limit=${WINDOW_SIZE}`))
+      const now = chatItems(chatId)
+      // The window moved while the page was out (reloaded, dropped): this page no longer joins it.
+      if (!now || windowStart.get(chatId) !== before) return 0
+      const have = new Set(now.map((i) => i.id))
+      const fresh = page.items.filter((i) => !have.has(i.id))
+      now.unshift(...fresh)
+      indexes.delete(chatId)
+      windowStart.set(chatId, page.olderBefore)
+      return fresh.length
+    },
+    hasOlder(chatId: string): boolean {
+      return (windowStart.get(chatId) ?? 0) > 0 && itemsByChat.has(chatId)
+    },
     async loadExternalItems(sessionId: string): Promise<TranscriptItem[]> {
       return fetchJson(`/external/sessions/${sessionId}/items`)
     },
