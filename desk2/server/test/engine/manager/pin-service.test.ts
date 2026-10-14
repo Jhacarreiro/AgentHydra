@@ -41,7 +41,7 @@ const ALPHA: AhCodexInstance = { id: 'cx-alpha', num: 7, name: 'alpha', codexHom
 const BETA: AhCodexInstance = { id: 'cx-beta', num: 8, name: 'beta', codexHome: 'C:/Users/me/.agenthydra/codex-instances/cx-beta', loggedIn: true }
 
 /** App-servers the test drives: each records its calls and holds the thread listeners Desk registers. */
-function fakeCodex() {
+function fakeCodex(o: { resumeError?: string } = {}) {
   const servers: { home: string; calls: { method: string; params: Record<string, unknown> }[]; listeners: Map<string, ThreadListener> }[] = []
   let threads = 0
   let turns = 0
@@ -53,6 +53,7 @@ function fakeCodex() {
         s.calls.push({ method, params })
         if (method === 'thread/start') return { thread: { id: `thread-${++threads}` } } as T
         if (method === 'turn/start') return { turn: { id: `turn-${++turns}` } } as T
+        if (method === 'thread/resume' && o.resumeError) throw new Error(o.resumeError)
         return {} as T
       },
       listen: (threadId, l) => {
@@ -64,11 +65,11 @@ function fakeCodex() {
   }
   const turnStarts = () => servers.flatMap((s) => s.calls.filter((c) => c.method === 'turn/start').map((c) => ({ home: s.home, ...c.params }) as { home: string; threadId: string; input: { text?: string }[] }))
   const thread = (id: string): ThreadListener => servers.findLast((s) => s.listeners.has(id))!.listeners.get(id)!
-  const calls = (method: string) => servers.flatMap((s) => s.calls.filter((c) => c.method === method).map((c) => ({ home: s.home, ...c.params })))
+  const calls = (method: string): Record<string, unknown>[] => servers.flatMap((s) => s.calls.filter((c) => c.method === method).map((c) => ({ home: s.home, ...c.params })))
   return { open, turnStarts, thread, calls }
 }
 
-async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]> } = {}) {
+async function setup(o: { external?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; resumeError?: string } = {}) {
   const home = temp('desk-pin-home-')
   const cwd = temp('desk-pin-cwd-')
   mkdirSync(cwd, { recursive: true })
@@ -78,7 +79,7 @@ async function setup(o: { external?: ExternalSession[]; items?: Record<string, T
     instances: async () => [ALPHA, BETA],
     usage: async (id) => ({ snapshot: { session: { pct: id === ALPHA.id ? 10 : 40 }, weekAll: { pct: 5 } } }),
   }
-  const fake = fakeCodex()
+  const fake = fakeCodex({ resumeError: o.resumeError })
   const q = fakeQueries()
   const events: ServerEvent[] = []
   const bridge: ManagerBridge = { ...fakeBridge({ roots: [], external: o.external, items: o.items }).bridge, listAccounts: async () => [account] }
@@ -212,5 +213,20 @@ test('a Codex chat run outside Desk continues here in its own thread, on the acc
   expect(start.input[0]!.text).toBe('Carry on')
   expect(fake.calls('thread/resume')).toEqual([expect.objectContaining({ home: BETA.codexHome, threadId })])
   expect(fake.calls('thread/start')).toEqual([])
+  // Let go once the turn ends: Codex lets one program write a thread at a time, and its Codex app is the other.
+  expect(fake.calls('thread/unsubscribe')).toEqual([{ home: BETA.codexHome, threadId }])
   expect(m.listItems(chat.id).filter((i) => i.kind === 'assistant_text').map((i) => i.text)).toEqual(['Two files.', 'Carrying on.'])
+})
+
+test("a Codex chat its Codex app holds open waits, in a sentence, and is never started over in a new thread", async () => {
+  const threadId = '0f0f0f0f-1111-4222-8333-555555555555'
+  const cwd = temp('desk-pin-held-')
+  const outside: ExternalSession = { id: threadId, title: 'Held', cwd, source: 'codex', instance: '#8 beta', status: 'idle', activity: null, lastActivityAt: 2, model: null, accountId: null, codexAccountId: BETA.id, canResume: true, fromPc: null, pinned: false, archived: false, unread: false, group: null }
+  const { m, fake } = await setup({ external: [outside], items: { [threadId]: [] }, resumeError: `thread ${threadId} already has an active writer` })
+  const chat = await m.importSession({ sessionId: threadId })
+  await m.send(chat.id, 'Carry on')
+  await waitFor(() => m.listItems(chat.id).some((i) => i.kind === 'result'))
+  expect(m.listItems(chat.id).find((i) => i.kind === 'result')).toMatchObject({ ok: false, error: 'The Codex app on #8 beta has this chat open, so only it can write to it now. Close the chat there, then send again.' })
+  expect(fake.calls('thread/start')).toEqual([])
+  expect(m.get(chat.id).serviceThreads?.codex?.threadId).toBe(threadId)
 })

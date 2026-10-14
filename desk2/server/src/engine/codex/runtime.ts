@@ -294,8 +294,12 @@ export class CodexRuntime {
           await this.server!.call('thread/resume', { threadId: bound.threadId, ...settings, excludeTurns: true })
           this.bind({ ...bound, label: account.label })
           return false
-        } catch {
-          // Gone from that account (archived there, deleted): the chat goes on in a new thread.
+        } catch (err) {
+          const message = err instanceof Error ? err.message : String(err)
+          // Open in that account's Codex app, which alone may write it while it holds it: the chat waits for it.
+          if (/active writer/i.test(message)) throw new Error(`The Codex app on ${account.label} has this chat open, so only it can write to it now. Close the chat there, then send again.`)
+          // Gone from that account (archived there, deleted): the chat goes on in a new thread. Anything else is said.
+          if (!/not found|no rollout|unknown thread|does not exist/i.test(message)) throw err
         }
       }
     }
@@ -465,8 +469,20 @@ export class CodexRuntime {
       return
     }
     if (ok) this.notify('finished', this.lastText.trim().slice(0, 200) || 'Codex finished.')
+    this.letGo()
     this.publish()
     this.armIdle()
+  }
+
+  /**
+   * Between turns the thread is let go: Codex lets one program write a thread at a time, so a thread Desk kept
+   * loaded would lock its Codex app out of it (measured 2026-10-13: the app refused to archive a thread Desk held,
+   * "already has an active writer"). The next message resumes it.
+   */
+  private letGo(): void {
+    const threadId = this.thread?.threadId
+    if (threadId) void this.server?.call('thread/unsubscribe', { threadId }).catch(() => {})
+    this.detach()
   }
 
   /** The thread's account hit its usage limit: it is held out, and the same message goes on in a new thread on another account. */
