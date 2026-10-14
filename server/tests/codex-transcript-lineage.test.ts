@@ -92,9 +92,15 @@ test('the tail of a continued chat reads back into its earlier rollout, up to th
       }
     })
   // Before, the tail read the newest file alone: the chat's earlier messages were gone from its view.
-  expect(ordinals(await readCodexTail(path, 1 << 20))).toEqual([0, 1, 2, 3, 4])
-  expect(await readCodexTail(path, 1 << 20)).not.toContain('abandoned')
-  // A budget that ends inside the earlier rollout keeps its newest rows only.
-  const budget = bytes(newest) + bytes([row(2)])
-  expect(ordinals(await readCodexTail(path, budget))).toEqual([2, 3, 4])
+  const whole = await readCodexTail(path, 1 << 20)
+  expect(ordinals(whole.text)).toEqual([0, 1, 2, 3, 4])
+  expect(whole.text).not.toContain('abandoned')
+  expect(whole.start).toBe(0)
+  // A budget that ends inside a row of the earlier rollout begins at the next whole row; the page above ends there.
+  const budget = bytes(newest) + bytes([row(2)]) + 3
+  const recent = await readCodexTail(path, budget)
+  expect(ordinals(recent.text)).toEqual([2, 3, 4])
+  expect(recent.start).toBe(bytes([meta(0), row(1)]))
+  const above = await readCodexTail(path, 1 << 20, recent.start)
+  expect([ordinals(above.text), above.start]).toEqual([[0, 1], 0])
 })

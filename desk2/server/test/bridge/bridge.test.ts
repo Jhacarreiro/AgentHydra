@@ -168,6 +168,21 @@ describe('bridge', () => {
     expect(await b.externalItems(sid(999)).catch((e) => e)).toMatchObject({ kind: 'http', status: 404 })
   })
 
+  test("a Codex chat's history above its tail is every page the daemon has above it, oldest first", async () => {
+    const f = await fake()
+    const id = sid(77)
+    const say = (t: string, text: string) => ({ kind: 'text', role: 'assistant', text, timestamp: t })
+    const page = (history_start: number, events: unknown[]) => ({ session_id: id, source: 'codex', title: '', cwd: 'C:/Users/me/repo', events, has_more: history_start > 0, history_start })
+    f.state.tailPages = {
+      '': page(900, [say('2026-10-13T10:00:03.000Z', 'Third.')]),
+      '900': page(400, [say('2026-10-13T10:00:02.000Z', 'Second.')]),
+      '400': page(0, [say('2026-10-13T10:00:01.000Z', 'First.')]),
+    }
+    const b = createBridge({ url: f.url, now: () => NOW })
+    const text = (items: { kind: string; text?: string }[]) => items.map((i) => i.text)
+    expect(text(await b.externalHistory(id))).toEqual(['First.', 'Second.', 'Third.'])
+  })
+
   test('workers, activeWorkersFor, cancel and send', async () => {
     const f = await fake()
     const b = createBridge({ url: f.url, now: () => NOW })

@@ -183,10 +183,12 @@ describe('the daemon serving the MCP is the daemon its tools read', () => {
     stubFetch({ [OWN]: { body: [] }, [STRAY]: { body: [] } })
     await tool('climayte_status').run({ group: 'odin-w14' })
     // Every climayte_status first asks its daemon which chats have unread pings (docs/CLIMAYTE.md
-    // "Pings to the dispatching chat"); that read goes to the same daemon as the status read.
+    // "Pings to the dispatching chat"), then marks what it showed as seen; both go to the same
+    // daemon as the status read.
     expect(calls).toEqual([
       `${OWN}/api/corch/pings`,
       `${OWN}/api/corch/workers?group=odin-w14&brief=1`,
+      `${OWN}/api/corch/seen`,
     ])
   })
 })

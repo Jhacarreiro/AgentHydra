@@ -1965,6 +1965,8 @@ export interface TailOptions {
   humanOnly?: boolean
   title?: string
   cwd?: string
+  /** A Codex chat's: the page that ends here in its history (a TailResult.history_start); the newest page when left out. */
+  before?: number
 }
 
 /** The display filter, as one predicate, so the two source paths below cannot drift apart.
@@ -2005,9 +2007,10 @@ export function collectTailEventsFromRaw(
   filter: TailFilter,
   keep: (e: TailEvent) => boolean,
   limit: number,
-): { events: TailEvent[]; cwd: string; more: boolean } {
+): { events: TailEvent[]; cwd: string; more: boolean; firstLine: number } {
   const lines = raw.split('\n')
   const collected: TailEvent[][] = []
+  const lineOf: number[] = []
   const cap = tailEventCap(limit)
   let cwd = ''
   let messages = 0
@@ -2032,11 +2035,24 @@ export function collectTailEventsFromRaw(
       break
     }
     collected.push(tes)
+    lineOf.push(i)
     total += tes.length
     if (message) messages++
   }
   const events = collected.reverse().flat()
-  return { events: more ? dropOrphanWork(events) : events, cwd, more }
+  lineOf.reverse()
+  const kept = more ? dropOrphanWork(events) : events
+  // The line the earliest kept event came from: a page above this window ends there.
+  let dropped = events.length - kept.length
+  let firstLine = lines.length
+  for (let g = 0; g < collected.length; g++) {
+    if (dropped < collected[g].length) {
+      firstLine = lineOf[g]
+      break
+    }
+    dropped -= collected[g].length
+  }
+  return { events: kept, cwd, more, firstLine }
 }
 
 /** A window cut off above opens on whatever survived the cut. Work that sits above YOUR message
@@ -2233,19 +2249,16 @@ export async function tailTranscript(
     `${opts.textOnly ? 1 : 0}${opts.thinking ? 1 : 0}${opts.humanOnly ? 1 : 0}`,
     opts.title ?? '',
     opts.cwd ?? '',
+    opts.before ?? '',
   ].join('\u0000')
   const hit = sig ? tailMemo.get(memoKey) : undefined
   if (hit && hit.sig === sig) return hit.result
-  // A Codex chat's newest rollout can hold only the rows since an earlier one (history_base): its tail reads back into that.
-  const raw =
-    tf.source === 'codex'
-      ? await readCodexTail(tf.path, 6 * 1024 * 1024)
-      : await readTailBytes(tf.path, 6 * 1024 * 1024)
-  const result = tailFromJsonl(sessionId, tf, opts, raw, {
-    filter,
-    keep,
-    limit,
-  })
+  // A Codex chat's newest rollout can hold only the rows since an earlier one (history_base): its tail reads back
+  // through them, and `before` pages above it.
+  const page =
+    tf.source === 'codex' ? await readCodexTail(tf.path, 6 * 1024 * 1024, opts.before) : null
+  const raw = page ? page.text : await readTailBytes(tf.path, 6 * 1024 * 1024)
+  const result = tailFromJsonl(sessionId, tf, opts, raw, { filter, keep, limit }, page?.start)
   if (sig) {
     tailMemo.delete(memoKey)
     tailMemo.set(memoKey, { sig, result })
@@ -2265,12 +2278,24 @@ function tailFromJsonl(
   opts: TailOptions,
   raw: string,
   w: { filter: TailFilter; keep: (e: TailEvent) => boolean; limit: number },
+  /** Where `raw` begins in a Codex chat's history (readCodexTail's `start`); the result then says where it begins. */
+  historyAt?: number,
 ): TailResult {
   const {
     events,
     cwd: rawCwd,
     more,
+    firstLine,
   } = collectTailEventsFromRaw(raw, tf.source, w.filter, w.keep, w.limit)
+  // A window its message limit cut begins at its earliest kept line; one read to its top begins where it was read from.
+  const historyStart =
+    historyAt === undefined
+      ? undefined
+      : more
+        ? historyAt +
+          Buffer.byteLength(raw.split('\n', firstLine).join('\n')) +
+          (firstLine > 0 ? 1 : 0)
+        : historyAt
   const title = opts.title || sessionId
   const cwd = opts.cwd || rawCwd
   return {
@@ -2279,7 +2304,8 @@ function tailFromJsonl(
     title,
     cwd: cwd || decodeProjectKey(tf.project),
     events,
-    has_more: more,
+    has_more: more || (historyStart ?? 0) > 0,
+    ...(historyStart === undefined ? {} : { history_start: historyStart }),
   }
 }
 

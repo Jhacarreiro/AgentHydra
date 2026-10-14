@@ -29,6 +29,7 @@ import {
   type AhLiveSession,
   type AhSearchResult,
   type AhSessionRow,
+  type AhTail,
   type AhWorker,
   type HydraClient,
   type HydraClientOptions,
@@ -75,6 +76,8 @@ const REMOTES_FRESH_MS = 30_000
 const SESSION_TASKS_FRESH_MS = 5000
 /** The sessions whose last read sessionTasks keeps (a window shows one at a time; a few windows, a few more). */
 const SESSION_TASKS_KEPT = 20
+/** At most this many pages of a Codex chat's tail (6 MB each) are read above its newest. */
+const OLDER_PAGES = 32
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
@@ -589,7 +592,11 @@ export function createBridge(opts: BridgeOptions = {}) {
     const t2 = now()
     try {
       const tail = await client.tail(sessionId)
-      if (!tail.error) return tailToItems(tail)
+      if (!tail.error) {
+        // A Codex chat's tail says where it begins in the chat's history: what is above it is externalOlder's.
+        if (tail.history_start) open.older = tail.history_start
+        return tailToItems(tail)
+      }
       // Not in the transcript index: a CliMayte worker's session lives in its CLI instance's folder.
       const held = await client.workersBySession([sessionId])
       const w = held.find((x) => x.sessionId === sessionId || x.sessions?.includes(sessionId))
@@ -608,13 +615,29 @@ export function createBridge(opts: BridgeOptions = {}) {
       file = await findSessionJsonlAsync(sessionId, opts.projectRoots ? await projectRoots() : sessionRoots(), cwd)
       if (file) rememberFile(sessionId, file)
     }
-    if (!file) return []
+    if (!file) return tailOlder(sessionId, before, cwd)
     try {
       return await sessionJsonlOlder(file, before)
     } catch (err) {
       if ((err as NodeJS.ErrnoException).code === 'ENOENT') return []
       throw err
     }
+  }
+
+  /** A chat with no .jsonl whose tail pages (a Codex chat's history_start): every page above `before`, oldest first. */
+  async function tailOlder(sessionId: string, before: number, cwd: string | null): Promise<TranscriptItem[]> {
+    const pages: AhTail[] = []
+    let at = before
+    for (let n = 0; at > 0 && n < OLDER_PAGES; n++) {
+      const tail = await client.tail(sessionId, 200, at)
+      if (tail.error) break
+      pages.unshift(tail)
+      const next = tail.history_start ?? 0
+      if (!(next < at)) break
+      at = next
+    }
+    if (!pages.length) return []
+    return tailToItems({ ...pages[0]!, cwd: pages[0]!.cwd || cwd || '', events: pages.flatMap((p) => p.events) })
   }
 
   /** An outside session's whole history: its items, and what its file holds before them. */

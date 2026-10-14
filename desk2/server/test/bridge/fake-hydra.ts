@@ -24,6 +24,8 @@ export interface FakeState {
   workers: any[]
   detail: any
   tail: any
+  /** A Codex chat's tail pages, by the `before` each is asked with ('' for the newest); set, they answer its tail. */
+  tailPages?: Record<string, any>
   /** What GET /api/sessions/search answers (its results, when an array, cut to `limit`); a string answers that error with a 500. */
   search: any
   /** What GET /api/corch/remote answers; null answers 404 (an AgentHydra without the route), a string that error with a 500. */
@@ -314,6 +316,8 @@ function handleGet(state: FakeState, u: URL): Response {
   const tail = /^\/api\/sessions\/([^/]+)\/tail$/.exec(p)
   if (tail) {
     const id = decodeURIComponent(tail[1])
+    const page = state.tailPages?.[u.searchParams.get('before') ?? '']
+    if (page?.session_id === id) return json(page)
     if (state.tail?.session_id === id) return json(state.tail)
     return json({ session_id: id, source: '', title: '', cwd: '', events: [], error: 'transcript not found' })
   }

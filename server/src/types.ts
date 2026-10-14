@@ -739,6 +739,9 @@ export interface TailResult {
   /** True when older kept turns exist above this window, so the viewer can offer to page them in.
    *  Absent from a "not found" answer; a raised `limit` is how a caller asks for them. */
   has_more?: boolean
+  /** A Codex chat's: where this window begins in the chat's whole history (bytes from its start, across the
+   *  rollouts it continues), 0 when it holds the beginning. The page above is the tail asked with this as `before`. */
+  history_start?: number
   error?: string
 }
 

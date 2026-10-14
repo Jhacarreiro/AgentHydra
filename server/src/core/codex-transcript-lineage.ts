@@ -240,37 +240,59 @@ async function findBaseAsync(
   return found[0]!
 }
 
-/**
- * The last `maxBytes` of a Codex chat's history as one text, earliest first, for the tail an open chat polls. A
- * paginated rollout (`history_base`) holds only the rows since it continued an earlier one, so reading it alone showed
- * a moved chat as its last few messages (2026-10-13: 14 events of a 26-turn chat whose copy held all 2,382 items).
- * Each earlier rollout adds its rows up to the boundary while the budget lasts. The first line may be cut, which the
- * tail's parser skips; a missing or unreadable earlier history leaves what was read. Windows only, never whole files.
- */
-export async function readCodexTail(transcriptPath: string, maxBytes: number): Promise<string> {
-  const parts: string[] = []
-  const seen = new Set<string>()
-  let path = transcriptPath
-  let end = (await stat(path)).size
-  let left = maxBytes
-  while (left > 0 && parts.length < MAX_SEGMENTS) {
-    seen.add(normalizeInstancePath(path))
-    const start = Math.max(0, end - left)
-    const bytes = await readRange(path, start, end)
-    parts.unshift(bytes.toString('utf8'))
-    left -= bytes.length
-    if (start > 0) break
+/** A Codex chat's rollouts, oldest first, each with the bytes of it its history uses: the boundary prefix of each
+ *  earlier one, all of the newest. A missing or unreadable earlier history ends the chain where it stands. */
+async function codexChain(transcriptPath: string): Promise<{ path: string; used: number }[]> {
+  const chain = [{ path: transcriptPath, used: (await stat(transcriptPath)).size }]
+  const seen = new Set([normalizeInstancePath(transcriptPath)])
+  const home = codexHomeOf(transcriptPath)
+  while (home && chain.length < MAX_SEGMENTS) {
     let base: HistoryBase | null
     try {
-      base = historyBase(firstRow(bytes, path))
+      base = historyBase((await firstRowOf(chain.at(-1)!.path)) ?? {})
     } catch {
       break
     }
-    const home = base ? codexHomeOf(path) : null
-    const earlier = base && home ? await findBaseAsync(home, base, seen) : null
+    const earlier = base ? await findBaseAsync(home, base, seen) : null
     if (!base || !earlier) break
-    path = earlier
-    end = base.end_byte_offset
+    seen.add(normalizeInstancePath(earlier))
+    chain.push({ path: earlier, used: base.end_byte_offset })
   }
-  return parts.join('')
+  return chain.reverse()
+}
+
+/**
+ * Up to `maxBytes` of a Codex chat's history, ending at `before` (bytes from the start of the whole history; its end
+ * when left out), for the tail an open chat polls and the pages above it. A paginated rollout (`history_base`) holds
+ * only the rows since it continued an earlier one, so reading it alone showed a moved chat as its last few messages
+ * (2026-10-13: 14 events of a 26-turn chat whose copy held all 2,382 items). `start` is where the text begins in that
+ * history, 0 at its beginning; a window that would begin inside a row begins at the next one, so every line is whole.
+ * Windows only, never whole files.
+ */
+export async function readCodexTail(
+  transcriptPath: string,
+  maxBytes: number,
+  before?: number,
+): Promise<{ text: string; start: number }> {
+  const chain = await codexChain(transcriptPath)
+  const total = chain.reduce((n, s) => n + s.used, 0)
+  const end = Math.min(before ?? total, total)
+  let start = Math.max(0, end - maxBytes)
+  const parts: Buffer[] = []
+  let at = 0
+  for (const s of chain) {
+    const from = Math.max(start, at)
+    const to = Math.min(end, at + s.used)
+    if (from < to) parts.push(await readRange(s.path, from - at, to - at))
+    at += s.used
+  }
+  let bytes = Buffer.concat(parts)
+  if (start > 0) {
+    const nl = bytes.indexOf(10)
+    // One row longer than the window: it is passed over, and the next page goes on above it.
+    if (nl < 0) return { text: '', start }
+    bytes = bytes.subarray(nl + 1)
+    start += nl + 1
+  }
+  return { text: bytes.toString('utf8'), start }
 }

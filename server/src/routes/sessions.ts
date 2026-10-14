@@ -733,6 +733,10 @@ app.get('/api/sessions/:id/tail', async (c) => {
   const rawSource = c.req.query('source')
   const source = isSessionSource(rawSource) ? rawSource : undefined
   const locator = c.req.query('locator') || undefined
+  // A Codex chat's page above another: where that one began in its history (TailResult.history_start).
+  const asked = Number(c.req.query('before'))
+  const before =
+    c.req.query('before') && Number.isSafeInteger(asked) && asked >= 0 ? asked : undefined
   const flag = (name: string) => {
     const v = c.req.query(name)
     return v === '1' || v === 'true'
@@ -744,6 +748,7 @@ app.get('/api/sessions/:id/tail', async (c) => {
       textOnly: flag('textOnly'),
       thinking: flag('thinking'),
       humanOnly: flag('humanOnly'),
+      ...(before === undefined ? {} : { before }),
     },
     source,
     locator,

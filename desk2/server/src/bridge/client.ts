@@ -302,6 +302,8 @@ export interface AhTail {
   cwd: string
   events: AhTailEvent[]
   has_more?: boolean
+  /** A Codex chat's: where this window begins in its whole history (bytes), 0 at its beginning; the page above is asked with it as `before`. */
+  history_start?: number
   error?: string
 }
 
@@ -516,8 +518,8 @@ export function createClient(opts: HydraClientOptions = {}) {
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
     /** The other PCs' CliMayte queues (read-only: AgentHydra cancels and sends only to this PC's workers). */
     remoteQueues: () => get<AhRemoteQueues>('/api/corch/remote'),
-    tail: (sessionId: string, limit = 120) =>
-      get<AhTail>(`/api/sessions/${enc(sessionId)}/tail?limit=${limit}&thinking=1`),
+    tail: (sessionId: string, limit = 120, before?: number) =>
+      get<AhTail>(`/api/sessions/${enc(sessionId)}/tail?limit=${limit}&thinking=1${before === undefined ? '' : `&before=${before}`}`),
     /** The search behind its search_sessions MCP tool: every store, newest-active first (it has no folder filter). */
     search: (q: string, limit: number, signal?: AbortSignal) =>
       get<AhSearchAnswer>(`/api/sessions/search?q=${enc(q)}&limit=${limit}`, SEARCH_TIMEOUT_MS, signal),
