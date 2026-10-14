@@ -37,7 +37,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
+import { claudeProjectRoots, encodeProjectDir, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
 import { resumeAccount, type ResumeData } from './resume'
@@ -800,7 +800,11 @@ export function createBridge(opts: BridgeOptions = {}) {
     let known = o.rescan ? null : foundAt.get(sid)
     if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
       const ownKey = `${ownRoot}|${sid}`
-      const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
+      // Where the chat's folder puts the file the worker writes now: one stat, looked at on every poll. A search
+      // waits after a miss (5 s, then 10, 20), and a new session's file is missing at its first poll, so a new chat
+      // showed nothing of its first turn (2026-10-14: its first line read 33 s after the turn began).
+      const here = cwd ? join(ownRoot, encodeProjectDir(cwd), `${sid}.jsonl`) : null
+      const own = (here && (await statOf(here)) ? here : null) ?? (!o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd))
       if (own) {
         notFound.delete(ownKey)
         rememberFile(sid, own)

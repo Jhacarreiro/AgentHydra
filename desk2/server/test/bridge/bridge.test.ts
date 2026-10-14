@@ -526,6 +526,26 @@ ${line('assistant', 4, 'second answer')}
   })
 })
 
+// 2026-10-14: a new chat's session file is not there at its first poll, and a missed search waits 5 s, then 10, 20
+// before looking again, so its first line read 33 s after its turn began. The clock here never moves: a missed
+// search is "lately" for good, and only a look at the file itself finds it.
+test("a new worker session's file is read the poll after it appears, whatever a missed search waits", async () => {
+  const home = mkdtempSync(join(tmpdir(), 'desk-new-session-'))
+  temps.push(home)
+  const SESSION = sid(78)
+  const CWD = 'C:/Users/me/Desktop/Project/Example'
+  const folder = join(home, 'acct', 'projects', encodeProjectDir(CWD))
+  const f = await fake()
+  f.state.instances = [{ num: 1, id: 'acct', name: 'Example 1', configDir: join(home, 'acct'), loggedIn: true, lastUsageCheck: null }]
+  const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(home, 'acct', 'projects')] })
+  const read = () => b.workerItems([SESSION], CWD, { writing: { sessionId: SESSION, accountId: 'acct' } })
+  expect(await read()).toEqual([])
+  mkdirSync(folder, { recursive: true })
+  const user = { type: 'user', uuid: 'u1', timestamp: new Date(NOW).toISOString(), message: { role: 'user', content: 'first question' } }
+  writeFileSync(join(folder, `${SESSION}.jsonl`), `${JSON.stringify(user)}\n`)
+  expect((await read()).map((i) => i.kind)).toEqual(['user'])
+})
+
 describe('a chat with more session data than the settled cache holds', () => {
   const CWD = 'C:/Users/me/Desktop/Project/Example'
   test('answers an unchanged set of sessions again without reading any of them', async () => {
