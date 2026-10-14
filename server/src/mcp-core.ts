@@ -1,3 +1,4 @@
+import { roleOf } from './climayte-lib'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
 import { reportRun } from './hydra-core/report-row'
@@ -10,6 +11,16 @@ function chatOf(a: Record<string, unknown>): string {
   const chat = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
   if (!chat) throw new Error('no chat: pass chat, or run inside a Desk chat (HYDRA_DESK_CHAT_ID)')
   return chat
+}
+
+/** This session's CliMayte role (its worker id rides in the env); undefined outside a worker. */
+async function callerRole() {
+  const id = process.env.AGENTHYDRA_CLIMAYTE_WORKER?.trim()
+  if (!id) return undefined
+  const w = (await api(`/api/corch/workers/${encodeURIComponent(id)}`)) as Parameters<
+    typeof roleOf
+  >[0]
+  return roleOf(w)
 }
 
 const stringList = (v: unknown): string[] | undefined =>
@@ -69,7 +80,7 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_use',
     listed: true,
     description:
-      'MUTATES: use a catalog entry: become (take the lead), consult (ask it a question through a worker), hire (add it under you), or load (read its text).',
+      'MUTATES: use a catalog entry: become (take the lead), consult (ask it a question), hire (give it a job), or load (read its text). From a Prime chat, consult and hire open one seat per persona in this chat (a sub-chat, reused): consult answers its reply within 30 seconds, or says it is working; call consult again with no question to read it later. Hire returns the seat at once. Only a Prime chat opens seats; a drone or seat is refused.',
     inputSchema: S(
       {
         chat: { type: 'string' },
@@ -77,21 +88,29 @@ export const CORE_TOOLS: HydraTool[] = [
         mode: { type: 'string', enum: MODES },
         question: { type: 'string' },
         job: { type: 'string' },
+        cwd: {
+          type: 'string',
+          description: "The folder a new seat or consult works in. Default: this chat's folder.",
+        },
       },
       ['id', 'mode'],
     ),
-    run: async (a: Record<string, unknown>) =>
-      use(
+    run: async (a: Record<string, unknown>) => {
+      const mode = str(a.mode)
+      return use(
         coreDir(),
         {
           chat: chatOf(a),
           id: str(a.id).trim(),
-          mode: str(a.mode) as 'become' | 'consult' | 'hire' | 'load',
+          mode: mode as 'become' | 'consult' | 'hire' | 'load',
           question: str(a.question).trim() || undefined,
           job: str(a.job).trim() || undefined,
+          cwd: str(a.cwd).trim() || undefined,
+          caller: mode === 'consult' || mode === 'hire' ? await callerRole() : undefined,
         },
         defaultDaemon(api),
-      ),
+      )
+    },
   },
   {
     name: 'core_report',

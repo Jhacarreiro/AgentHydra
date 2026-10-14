@@ -24,7 +24,7 @@ const MANAGER_SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/
 const DEFAULT_WAIT = 30
 const MAX_WAIT = 35
 
-interface DeskChat {
+export interface DeskChat {
   id: string
   sessionId?: string | null
   title?: string
@@ -58,7 +58,7 @@ export function managerName(slug: string): string {
 const UNREACHABLE = (base: string) =>
   `the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`
 
-async function deskChats(): Promise<DeskChat[]> {
+export async function deskChats(): Promise<DeskChat[]> {
   const base = deskBase()
   const res = await fetch(`${base}/api/chats`).catch(() => null)
   if (!res?.ok) throw new Error(UNREACHABLE(base))
@@ -68,7 +68,7 @@ async function deskChats(): Promise<DeskChat[]> {
   return chats as DeskChat[]
 }
 
-async function deskPost(path: string, body: unknown): Promise<Record<string, unknown>> {
+export async function deskPost(path: string, body: unknown): Promise<Record<string, unknown>> {
   const base = deskBase()
   const res = await fetch(`${base}${path}`, {
     method: 'POST',
@@ -81,7 +81,7 @@ async function deskPost(path: string, body: unknown): Promise<Record<string, unk
   return answer
 }
 
-async function transcriptItems(chatId: string): Promise<TranscriptItem[]> {
+export async function transcriptItems(chatId: string): Promise<TranscriptItem[]> {
   const base = deskBase()
   const res = await fetch(`${base}/api/chats/${encodeURIComponent(chatId)}/transcript`).catch(
     () => null,
@@ -100,11 +100,11 @@ function waitSeconds(a: Record<string, unknown>): number {
 
 /** Waits for the chat's turn to end and answers its final reply. `sentAfter` is the transcript length before a message
  *  this call sent (null for a read): only items after it count, and the turn must have taken that message. */
-async function replyWhenDone(
+export async function replyWhenDone(
   chat: DeskChat,
   sentAfter: number | null,
   seconds: number,
-): Promise<Record<string, unknown>> {
+): Promise<{ chat: string; title?: string; status: 'done' | 'working'; reply?: string }> {
   const deadline = Date.now() + seconds * 1000
   for (;;) {
     const current = (await deskChats()).find((c) => c.id === chat.id)

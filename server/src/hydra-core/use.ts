@@ -1,9 +1,12 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
+import type { CliMayteRole } from '../climayte-lib'
+import { replyWhenDone } from '../mcp-managers'
 import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
 import { addPick, emptyDoc, type HydraDoc, leadLine, parseHydra, renderHydra } from './hydra-md'
 import { appendLog } from './log'
 import { chatPaths } from './paths'
+import { openOrSend, seatOf } from './seats'
 
 const WAIT_S = 30
 const TERMINAL = ['done', 'failed', 'cancelled']
@@ -15,7 +18,7 @@ export interface Report {
 }
 
 export interface Daemon {
-  dispatch(prompt: string, title: string): Promise<string>
+  dispatch(prompt: string, title: string, cwd: string): Promise<string>
   report(id: string, waitS: number): Promise<Report | null>
 }
 
@@ -25,7 +28,11 @@ export type UseArgs = {
   mode: 'become' | 'consult' | 'hire' | 'load'
   question?: string
   job?: string
+  cwd?: string
+  caller?: CliMayteRole
 }
+
+type Files = ReturnType<typeof chatPaths>
 
 function writeDoc(file: string, doc: HydraDoc): void {
   mkdirSync(dirname(file), { recursive: true })
@@ -59,14 +66,20 @@ function readText(v: unknown): string | null {
   return null
 }
 
+function folderOf(files: Files, cwd: string | undefined): string {
+  const folder = cwd || (existsSync(files.cwd) ? readFileSync(files.cwd, 'utf8').trim() : '')
+  if (!folder) throw new Error('no folder: pass cwd, the calling chat has none')
+  return folder
+}
+
 export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise<unknown>): Daemon {
   return {
-    async dispatch(prompt, title) {
+    async dispatch(prompt, title, cwd) {
       const reply = (await api('/api/corch/workers', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          tasks: [{ prompt, title, kind: 'review', light: true }],
+          tasks: [{ prompt, title, kind: 'review', light: true, cwd }],
           group: GROUP,
         }),
       })) as { workers?: { id?: unknown }[] }
@@ -100,19 +113,53 @@ function consultPrompt(e: CatalogEntry, question: string): string {
   ].join('\n')
 }
 
+function pick(files: Files, e: CatalogEntry, mode: 'consult' | 'hire'): void {
+  const doc = readDoc(files.hydraMd)
+  if (!doc) return
+  addPick(doc, e, mode)
+  writeDoc(files.hydraMd, doc)
+}
+
 async function consult(dir: string, args: UseArgs, e: CatalogEntry, daemon: Daemon, now: Date) {
   const files = chatPaths(dir, args.chat)
   const job =
-    args.job ?? (await daemon.dispatch(consultPrompt(e, args.question ?? ''), `Consult ${e.name}`))
+    args.job ??
+    (await daemon.dispatch(
+      consultPrompt(e, args.question ?? ''),
+      `Consult ${e.name}`,
+      folderOf(files, args.cwd),
+    ))
   const r = await daemon.report(job, WAIT_S)
-  const doc = readDoc(files.hydraMd)
-  if (doc) {
-    addPick(doc, e, 'consult')
-    writeDoc(files.hydraMd, doc)
-  }
+  pick(files, e, 'consult')
   appendLog(dir, { chat: args.chat, event: 'use', mode: 'consult', id: e.id, job }, now)
   if (!r || !TERMINAL.includes(r.status)) return { job, status: 'working' }
   return { job, status: r.status, text: r.text }
+}
+
+async function seatConsult(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
+  if (!args.question) {
+    const seat = seatOf(dir, args.chat, e)
+    if (!seat) throw new Error(`${e.id} has no seat in this chat yet: consult it with a question`)
+    const r = await replyWhenDone({ id: seat.chat, title: seat.title }, null, WAIT_S)
+    return r.status === 'done'
+      ? { seat, status: 'done', reply: r.reply }
+      : { seat, status: 'working', read: `core_use { chat, id: "${e.id}", mode: "consult" }` }
+  }
+  const { seat, sentAfter } = await openOrSend(dir, args.chat, e, args.question, args.cwd)
+  pick(chatPaths(dir, args.chat), e, 'consult')
+  appendLog(dir, { chat: args.chat, event: 'use', mode: 'consult', id: e.id, seat: seat.chat }, now)
+  const r = await replyWhenDone({ id: seat.chat, title: seat.title }, sentAfter, WAIT_S)
+  return r.status === 'done'
+    ? { seat, status: 'done', reply: r.reply }
+    : { seat, status: 'working', read: `core_use { chat, id: "${e.id}", mode: "consult" }` }
+}
+
+async function seatHire(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
+  if (!args.job) throw new Error('hire needs a job: say what the seat does')
+  const { seat } = await openOrSend(dir, args.chat, e, args.job, args.cwd)
+  pick(chatPaths(dir, args.chat), e, 'hire')
+  appendLog(dir, { chat: args.chat, event: 'use', mode: 'hire', id: e.id, seat: seat.chat }, now)
+  return { status: 'started', seat }
 }
 
 function become(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
@@ -127,11 +174,7 @@ function become(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
 
 function hire(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
   const files = chatPaths(dir, args.chat)
-  const doc = readDoc(files.hydraMd)
-  if (doc) {
-    addPick(doc, e, 'hire')
-    writeDoc(files.hydraMd, doc)
-  }
+  pick(files, e, 'hire')
   appendLog(dir, { chat: args.chat, event: 'use', mode: 'hire', id: e.id }, now)
   const path = loadRef(e)
   const prefix = `You are hired as ${e.name}: ${e.when}. Read your full text at ${path} before you start.`
@@ -141,13 +184,22 @@ function hire(dir: string, args: UseArgs, e: CatalogEntry, now: Date) {
 export async function use(dir: string, args: UseArgs, daemon: Daemon, now = new Date()) {
   const e = entryOf(dir, args.id)
   checkMode(e, args.mode)
+  if (
+    (args.mode === 'consult' || args.mode === 'hire') &&
+    (args.caller === 'drone' || args.caller === 'seat')
+  )
+    throw new Error(
+      `A ${args.caller} cannot ${args.mode} ${e.id}: ask your Prime chat to ${args.mode} it.`,
+    )
   switch (args.mode) {
     case 'become':
       return become(dir, args, e, now)
     case 'consult':
+      if (args.caller === 'prime') return seatConsult(dir, args, e, now)
       if (!args.job && !args.question) throw new Error('consult needs a question')
       return consult(dir, args, e, daemon, now)
     case 'hire':
+      if (args.caller === 'prime') return seatHire(dir, args, e, now)
       return hire(dir, args, e, now)
     case 'load':
       return { id: e.id, text: loadText(e) }

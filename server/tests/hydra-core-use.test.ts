@@ -38,6 +38,7 @@ function writeDoc(): void {
   const files = chatPaths(dir, chat)
   mkdirSync(files.root, { recursive: true })
   writeFileSync(files.hydraMd, renderHydra(emptyDoc(new Date(0))))
+  writeFileSync(files.cwd, 'C:/Users/me/example-folder')
 }
 
 test('become writes the lead line and creates hydra.md when it is missing', async () => {
@@ -131,7 +132,7 @@ test('the daemon client reads the report view, which the daemon answers as a bar
     return [{ id: 'w-1', status: 'done', report: 'Grid is fine.' }]
   }
   const daemon = defaultDaemon(api)
-  expect(await daemon.dispatch('p', 't')).toBe('w-1')
+  expect(await daemon.dispatch('p', 't', 'C:/Users/me/example-folder')).toBe('w-1')
   expect(await daemon.report('w-1', 30)).toEqual({ status: 'done', text: 'Grid is fine.' })
   expect(seen[1]).toContain('ids=w-1')
 })

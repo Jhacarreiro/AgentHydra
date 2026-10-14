@@ -30,6 +30,7 @@ export function chatPaths(dir: string, raw: string) {
     slot: join(root, 'slot.md'),
     pack: join(root, 'pack.md'),
     placed: join(root, 'placement.json'),
+    seats: join(root, 'seats.json'),
   }
 }
 
