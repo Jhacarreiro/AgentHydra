@@ -131,6 +131,30 @@ const chat = computed<ChatSummary | null>(() => {
 // A chat view whose chat is gone (deleted, or nothing picked yet) is the new-session screen.
 const isNew = computed(() => view.value.kind === 'new' || (view.value.kind === 'chat' && !chat.value))
 const items = computed(() => (chat.value ? (src.itemsByChat.value.get(chat.value.id) ?? []) : []))
+// Items the server holds above the loaded ones (the index's total less what is loaded): counted in the transcript's
+// scrollbar, and the page above is fetched as the view nears them. A fetch that adds nothing is not asked again until
+// the loaded items change, so a failing route is not hit in a loop.
+const loadingOlder = ref(false)
+const olderStalledAt = ref<{ id: string; n: number } | null>(null)
+const olderCount = computed(() => {
+  const id = chat.value?.id
+  if (!id || !src.hasOlder?.(id)) return 0
+  if (olderStalledAt.value?.id === id && olderStalledAt.value.n === items.value.length) return 0
+  return Math.max(0, (src.indexByChat?.value.get(id)?.total ?? 0) - items.value.length)
+})
+async function loadOlder() {
+  const id = chat.value?.id
+  if (!id || loadingOlder.value || !src.loadOlder) return
+  loadingOlder.value = true
+  const had = items.value.length
+  try {
+    if ((await src.loadOlder(id)) <= 0) olderStalledAt.value = { id, n: had }
+  } catch {
+    olderStalledAt.value = { id, n: had } // floor-ok: the rows show as they are; the next change of them asks again
+  } finally {
+    loadingOlder.value = false
+  }
+}
 // The Background tasks panel for an outside session: its id, and the transcript its view published.
 const outsideId = computed(() => (view.value.kind === 'external' ? view.value.id : null))
 const tasksSessionId = computed(() => outsideId.value ?? chat.value?.sessionId)
@@ -1066,7 +1090,7 @@ function moveSidebar(side: SidebarSide) {
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" @load-older="loadOlder" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />

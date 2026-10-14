@@ -2,7 +2,7 @@
 // reference images, crops and viewports is docs/reference/real/scenes.json; its routes point here.
 import { ref } from 'vue'
 import type { Dashboard } from '@shared/dashboards'
-import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
 import type { HeadlessAudioState } from '@shared/headless-audio'
 import { routinesFixtures, cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
@@ -66,6 +66,8 @@ export interface ParityScene {
   sidebarWidth?: number
   /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
   audio?: HeadlessAudioState
+  /** Only the newest this many items start loaded; the rest are served a page of 200 at a time as the transcript asks (loadOlder). */
+  windowed?: number
 }
 
 const whole: ParityScene = {
@@ -103,6 +105,25 @@ const headlessAudio: ParityScene = {
     unattributedMuted: false
   }
 }
+
+/** 1,000 invented items (500 questions and answers of varied length) for the lazy-loading transcript: ids lazy-0 ... lazy-999. */
+function lazyItems(): TranscriptItem[] {
+  const out: TranscriptItem[] = []
+  for (let i = 0; i < 500; i++) {
+    const ts = PARITY_NOW - (500 - i) * 60_000
+    out.push({ id: `lazy-${2 * i}`, ts, kind: 'user', text: `Question ${i}: how does the sample ledger handle batch ${i}?` })
+    out.push({
+      id: `lazy-${2 * i + 1}`,
+      ts: ts + 1000,
+      kind: 'assistant_text',
+      text: `Batch ${i} is posted once and then checked. `.repeat(1 + ((i * 7) % 11))
+    })
+  }
+  return out
+}
+
+// Lazy loading: 1,000 items, the newest 200 loaded, the rest a page of 200 at a time as the transcript is scrolled up.
+const lazy: ParityScene = { ...whole, items: lazyItems, windowed: 200 }
 
 export const PARITY_SCENES: Record<string, ParityScene> = {
   dashboard: { ...whole, dashboard: dashboardFixture },
@@ -199,7 +220,12 @@ const scenePick = (scene: ParityScene) => sceneAccounts(scene).find((a) => a.id 
 /** A ShellSource over local refs, like the Gallery's demo source but holding exactly the scene's data. */
 export function sceneSource(scene: ParityScene): ShellSource {
   const chats = ref(scene.chats())
-  const items = ref(new Map<string, TranscriptItem[]>([['ccd', scene.items()]]))
+  const all = scene.items()
+  let start = scene.windowed ? Math.max(0, all.length - scene.windowed) : 0
+  const items = ref(new Map<string, TranscriptItem[]>([['ccd', all.slice(start)]]))
+  const indexByChat = ref(new Map<string, TranscriptIndex>())
+  if (scene.windowed)
+    indexByChat.value.set('ccd', { total: all.length, userMessages: [], latestTodos: null, runningTasks: [], recentTasks: [], lastUserText: '' })
   const selected = ref<View>(scene.view)
   const settings = ref<DeskSettings>({ ...settingsFixtures, defaultAccountId: scene.defaultAccountId ?? '68' })
   const patch = (id: string, p: Partial<ChatSummary>) => {
@@ -208,6 +234,16 @@ export function sceneSource(scene: ParityScene): ShellSource {
   return {
     chats,
     itemsByChat: items,
+    indexByChat,
+    hasOlder: () => start > 0,
+    loadOlder: async (id) => {
+      const from = Math.max(0, start - 200)
+      await new Promise((r) => setTimeout(r, 300)) // a server's answer takes a moment; the spinner shows
+      const page = all.slice(from, start)
+      start = from
+      items.value = new Map(items.value).set(id, [...page, ...(items.value.get(id) ?? [])])
+      return page.length
+    },
     workers: ref(scene.workers?.() ?? cliMayteWorkerFixtures),
     external: ref(scene.external ?? []),
     accounts: ref(sceneAccounts(scene)),
@@ -299,4 +335,5 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
   }
 }
 
+PARITY_SCENES.lazy = lazy
 PARITY_SCENES['header-fit-external'] = { ...PARITY_SCENES['external-session']!, sidebarHidden: true }

@@ -4,6 +4,7 @@
 // or scrolling back down takes it back to the bottom), and a Working row under the last item while the
 // chat's turn runs.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type Directive } from 'vue'
+import { LoaderCircle } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
@@ -53,7 +54,12 @@ const props = defineProps<{
   /** The history is not loaded yet; with `loadError`, the last try at it failed and another is coming. */
   loading?: boolean
   loadError?: string | null
+  /** Items older than the first one given that the server still holds: their height is counted in the scrollbar at the average row height. */
+  olderCount?: number
+  /** The page above is being fetched: a spinner row shows at the top. */
+  loadingOlder?: boolean
 }>()
+const emit = defineEmits<{ loadOlder: [] }>()
 
 const desk = useDesk()
 
@@ -146,9 +152,28 @@ const layout = computed(() => {
   return { gaps, h }
 })
 const gaps = computed(() => layout.value.gaps)
+// Rows not loaded yet (props.olderCount) stand above the first one as blank height at the average row height, so the
+// scrollbar's size is the whole transcript's. The average is taken when the rows are first given and again when rows are
+// put in above (never as rows are measured), so the blank does not drift under someone reading.
+const avgRow = ref(0)
+watch(
+  display,
+  (now, before) => {
+    if (avgRow.value && before?.length && now[0]?.id === before[0]?.id) return
+    const h = layout.value.h
+    let sum = 0
+    for (let i = 0; i < h.length; i++) sum += h[i]
+    avgRow.value = h.length ? sum / h.length : 0
+  },
+  { immediate: true },
+)
+const virtualTop = computed(() => Math.round((props.olderCount ?? 0) * avgRow.value))
 const offsets = computed(() => {
   void version.value
-  return prefixOffsets(layout.value.h)
+  const out = prefixOffsets(layout.value.h)
+  const v = virtualTop.value
+  if (v) for (let i = 0; i < out.length; i++) out[i] += v
+  return out
 })
 const range = computed(() => visibleRange(offsets.value, scrollTop.value, viewHeight.value, 800))
 const visible = computed(() =>
@@ -679,6 +704,17 @@ watch(
   { flush: 'post' },
 )
 
+// Within about two screens of the first loaded row, with more above: ask for the page above (the parent fetches it and
+// puts the rows in front; the anchor below keeps the row on screen still). Asked again as long as it stays near.
+const nearTop = computed(() => scrollTop.value - virtualTop.value < viewHeight.value * 2)
+watch(
+  [nearTop, () => props.olderCount, () => props.loadingOlder, () => props.items.length],
+  () => {
+    if (nearTop.value && (props.olderCount ?? 0) > 0 && !props.loadingOlder && props.items.length) emit('loadOlder')
+  },
+  { flush: 'post', immediate: true },
+)
+
 // Rows put in above what is on screen (a long outside session's older part, read behind its newest): scrolled up, the
 // row at the top of the view stays where it is, as for a row above re-measuring; pinned, the bottom is followed as for
 // any change. It is found again by an item it holds, not its row id: a run of tool calls the new rows go on from
@@ -764,7 +800,11 @@ watch(
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
       <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[560px]:px-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
-        <div :style="{ height: `${padTop}px` }" />
+        <div class="relative" :style="{ height: `${padTop}px` }">
+          <div v-if="loadingOlder" class="absolute inset-x-0 bottom-0 flex justify-center py-3 text-text-muted" role="status" aria-label="Loading earlier messages" data-testid="older-spinner">
+            <LoaderCircle class="size-4 animate-spin" />
+          </div>
+        </div>
         <div v-for="({ r, gap }, k) in visible" :key="r.id" v-measure :data-id="r.id" :style="{ paddingBottom: `${gap}px` }">
           <ToolGroup v-if="r.kind === 'tools'" :id="r.id" :items="r.items" :tasks="r.tasks" />
           <TaskGroup v-else-if="r.kind === 'tasks'" :id="r.id" :items="r.items" />

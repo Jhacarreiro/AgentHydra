@@ -311,6 +311,33 @@ try {
   const landed = await onLine()
   check(!!go && landed.n === here.n - 1 && Math.abs(landed.off) <= 2 && (await peekText()) === null,
     `The peek's arrow lands the peeked message on the line and closes the peek (${said([landed])})`)
+
+  // 13. Lazy loading: a 1,000-item chat starts with its newest 200; at the top the pages above land (a spinner while one
+  // loads) and the row that was on screen stays where it was.
+  await ev('window.__previous = 1')
+  await send('Page.navigate', { url: `${BASE}/?load=${Date.now()}#/parity/lazy` })
+  let lazyUp = false
+  for (let t = 0; t < 100 && !(lazyUp = await ev(`!window.__previous && !!${SC} && !!document.querySelector('[data-id^="lazy-"]')`)); t++) await sleep(100)
+  if (!lazyUp) throw new Error('the lazy parity scene did not load')
+  await sleep(500)
+  const lazyRow = `(() => { const sc = ${SC}, v = sc.getBoundingClientRect();
+    const r = [...sc.querySelectorAll('[data-id]')].find((x) => x.getBoundingClientRect().bottom > v.top + 1);
+    return r ? { id: r.dataset.id, y: r.getBoundingClientRect().top - v.top } : null })()`
+  await ev(`(() => { ${SC}.scrollTop = 0 })()`)
+  await frame()
+  // Up through the blank that stands for the rows not loaded yet, to where the first loaded row is at the top of the view.
+  await ev(`(() => { const sc = ${SC}; sc.scrollTop += ${lazyRow}.y })()`)
+  await frame()
+  const lazyBefore = await ev(lazyRow)
+  const spun = await ev(`!!document.querySelector('[data-testid="older-spinner"]')`)
+  await sleep(1800)
+  const lazyAfter = await ev(lazyRow)
+  const lazyIds = await ev(`[...${SC}.querySelectorAll('[data-id]')].map((x) => Number(x.dataset.id.slice(5)))`)
+  const lowest = Math.min(...lazyIds)
+  const high = await ev(`${SC}.scrollHeight`)
+  check(!!lazyBefore && !!lazyAfter && lazyBefore.id === lazyAfter.id && Math.abs(lazyBefore.y - lazyAfter.y) < 2,
+    `the page above lands without moving the row on screen (${lazyBefore?.id} at ${Math.round(lazyBefore?.y ?? 0)} -> ${lazyAfter?.id} at ${Math.round(lazyAfter?.y ?? 0)}; spinner ${spun}; scroll height ${Math.round(high)})`)
+  check(lowest < 800, `rows older than the first 200 were loaded (lowest rendered lazy-${lowest})`)
 } finally {
   // The Edge launched here may hand its window to another process: close the browser over CDP, then the launcher.
   try {
