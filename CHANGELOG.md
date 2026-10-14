@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The window can start with the daemon.** With `AGENTHYDRA_DESK_AT_BOOT=1`, AgentHydra starts its window's
+  server as soon as it is up, instead of when the first page is asked. Useful on a server or in a container,
+  where nobody opens the window locally.
 - **A routine that fails or breaks now tells you.** When a scheduled routine's run fails or times out, or its file
   stops checking out, AgentHydra opens an incident and pings you the way other incidents do. The next good run, or the
   fixed file, clears it.
