@@ -20,7 +20,6 @@ import type {
   QueueState,
   SearchHit,
   SessionMetaPatch,
-  TranscriptIndex,
   TranscriptItem
 } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
@@ -31,11 +30,6 @@ export interface ShellSource {
   itemsByChat: Readonly<Ref<Map<string, TranscriptItem[]>>>
   /** Why a chat's history did not load, by chat id, while it is tried again. Optional: a fixture source loads all it has. */
   itemsError?: Readonly<Ref<ReadonlyMap<string, string>>>
-  /** Each Desk chat's whole-transcript index (its total says how many items are not loaded). Optional: a fixture source holds all it has. */
-  indexByChat?: Readonly<Ref<ReadonlyMap<string, TranscriptIndex>>>
-  /** Fetches the page above a chat's loaded items and puts it in front; resolves with how many it added. */
-  loadOlder?(id: string): Promise<number>
-  hasOlder?(id: string): boolean
   workers: Readonly<Ref<CliMayteWorker[]>>
   /** Hydra Desk 2: the other PCs' CliMayte workers (each with `pc`), kept apart from `workers` so they never count as this PC's; only the sidebar's task rows read them. A source without them (the Gallery) has none. */
   remoteWorkers?: Readonly<Ref<CliMayteWorker[]>>

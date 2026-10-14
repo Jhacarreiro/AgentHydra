@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
-import type { ChatSummary } from '@shared/protocol'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect, type Ref } from 'vue'
+import type { ChatSummary, TranscriptIndex } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
@@ -73,7 +73,13 @@ const props = defineProps<{
   /** Gallery and parity only: views visited before the current one, so Alt + Left has somewhere to go. */ history?: View[]
 }>()
 
-const src = useShellSource()
+// The lazy-loading members the store (and the parity scene's source) carry beyond ShellSource.
+type LazyMembers = {
+  indexByChat?: Readonly<Ref<ReadonlyMap<string, TranscriptIndex>>>
+  loadOlder?(id: string): Promise<number>
+  hasOlder?(id: string): boolean
+}
+const src = useShellSource() as ReturnType<typeof useShellSource> & LazyMembers
 // A reload (a right-click Refresh, a new build) comes back to the same screen: the store keeps Desk's view,
 // and the rest is kept here (lib/view-memory.ts): the view under Settings, the AgentHydra pane, the Settings
 // page. The demo window starts from its props.

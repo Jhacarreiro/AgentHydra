@@ -236,7 +236,7 @@ export function sceneSource(scene: ParityScene): ShellSource {
     itemsByChat: items,
     indexByChat,
     hasOlder: () => start > 0,
-    loadOlder: async (id) => {
+    loadOlder: async (id: string) => {
       const from = Math.max(0, start - 200)
       await new Promise((r) => setTimeout(r, 300)) // a server's answer takes a moment; the spinner shows
       const page = all.slice(from, start)
@@ -264,7 +264,7 @@ export function sceneSource(scene: ParityScene): ShellSource {
     pickFolder: async () => null,
     changeProjectChoice: async () => {},
     search: async () => []
-  }
+  } as ShellSource
 }
 
 const MODELS = [
