@@ -4,6 +4,7 @@
 // and climayteVerdict in climayte.ts act on those). Split from climayte.ts on 2026-10-08; nothing
 // here imports it.
 
+import { backgroundWaitReason, readBackgroundRuns } from './climayte-background'
 import { changed, journal, load, workers } from './climayte-core'
 import { validateCwd } from './climayte-cwd'
 import { etaTookSeconds, stopDecision } from './climayte-eta'
@@ -103,8 +104,35 @@ const OPTION_MAX = 200
 
 const OPTIONS_MAX = 8
 
+/** How many times one attempt's stop is held for its background runs: a worker that ignores the
+ *  order every time still ends, and its job closes as before (the attempt's `left`). */
+export const BACKGROUND_HOLDS_MAX = 12
+
+const backgroundHolds = new Map<string, number>()
+
+/** The reason to hold a running worker's stop for the background runs its CLI still has, or null.
+ *  A worker that asked a question ends its turn by design, so it is never held. */
+function backgroundHold(w: CliMayteWorker): string | null {
+  const at = w.attempts[w.attempts.length - 1]
+  if (!at?.pid || w.question) return null
+  const key = `${w.id}:${w.attempts.length}`
+  const held = backgroundHolds.get(key) ?? 0
+  if (held >= BACKGROUND_HOLDS_MAX) return null
+  const runs = readBackgroundRuns(at.pid)
+  if (!runs?.length) return null
+  backgroundHolds.set(key, held + 1)
+  journal(w, 'held-for-background', {
+    notice: runs
+      .map((r) => r.command)
+      .join('; ')
+      .slice(0, 300),
+  })
+  return backgroundWaitReason(runs)
+}
+
 /** The Stop hook a worker's CLI calls when its turn is about to end (climayte-signal.ts workerHooks),
- *  answered by the daemon: `{}` lets it stop; `{decision: 'block', reason}` makes it answer, in the
+ *  answered by the daemon: `{}` lets it stop; `{decision: 'block', reason}` holds the turn open while
+ *  a command it started in the background still runs (backgroundHold), else makes it answer, in the
  *  same turn and with its context warm, why its estimate missed (climayte-eta.ts stopDecision). The
  *  estimate settles here, at the moment the work was done, not after the review turn. A worker
  *  that is not running, a chat and a sealed worker are never asked. */
@@ -114,7 +142,10 @@ export function climayteStopHook(
 ): { decision: 'block'; reason: string } | Record<string, never> {
   load()
   const w = workers.get(id)
-  if (!w || w.chat || w.sealed || w.status !== 'running' || !w.eta) return {}
+  if (!w || w.chat || w.sealed || w.status !== 'running') return {}
+  const waiting = backgroundHold(w)
+  if (waiting) return { decision: 'block', reason: waiting }
+  if (!w.eta) return {}
   const now = Date.now()
   const tookS = etaTookSeconds(w.eta, w.attempts, now)
   const reason = stopDecision({

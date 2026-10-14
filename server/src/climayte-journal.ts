@@ -37,6 +37,7 @@ export type CliMayteJournalEvent =
   | 'start-short' // no account had room for it, none refills within five minutes: it started where the most room is (`notice`)
   | 'turn-done' // a turn finished and a queued follow-up comes next
   | 'turn-end' // a turn ended with this text (a Stop hook can force more turns after the report)
+  | 'held-for-background' // the Stop hook held the turn open: a background command still ran (`notice`: which)
   | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
   | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
   | 'priority' // its priority was changed (climayteSetPriority)
@@ -339,6 +340,8 @@ const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
   'start-short': (e, p) => `started short${p.on}: ${e.notice ?? ''}`,
   'turn-done': (e, p) => describeDoneTurnLine(e, p.on, 'turn-done'),
   'turn-end': (e, p) => `turn ended${p.on}${e.said ? `: ${e.said}` : ''}`,
+  'held-for-background': (e, p) =>
+    `turn held open${p.on}: a background command still ran (${e.notice ?? '?'})`,
   check: (e, p) => describeShortLine(e, p.on, 'check'),
   verdict: (e, p) => describeVerdictLine(e, p.runs),
   'cwd-changed': (e) => describeCwdChangedLine(e),
