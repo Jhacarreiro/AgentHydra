@@ -18,6 +18,10 @@
 // fail - "still fails the commit" no longer throws (the drift silently passes), and the call-log
 // assertion in both tests sees only "agenthydra".
 //
+// The same sandbox also proves the hook's first gate: a commit on branch live (the live checkout,
+// scripts/live-checkout.ps1) is refused, since one there on 2026-10-14 left live diverged and every
+// auto-update refused. Revert check: delete that block in .githooks/pre-commit and the live test commits.
+//
 // Moved here from .githooks/tests/ on 2026-09-12: `bun test` skips dot-directories, so for six days
 // this file passed whenever named by path and was never collected by the suite or CI (see
 // hook-tests-live-here.test.ts). The root is now RECOGNISED via tests/repo-root.ts rather than
@@ -166,6 +170,19 @@ describe('.githooks/pre-commit: the kit-sync guard covers both vendored targets 
       expect(result.status).toBe(0)
       expect(git(repo, 'log', '--oneline').trim().split('\n')).toHaveLength(1)
       expect(callsLog(kit)).toEqual(['agenthydra', 'orchestrator'])
+    },
+    HOOK_TEST_TIMEOUT,
+  )
+
+  test(
+    'the same clean commit on branch live is refused: the live checkout takes only fast-forward pulls',
+    () => {
+      writeStub(kit, null, offender)
+      git(repo, 'symbolic-ref', 'HEAD', 'refs/heads/live')
+
+      const result = commit(repo)
+      expect(result.status).not.toBe(0)
+      expect(result.output).toContain('This is the live checkout (branch live)')
     },
     HOOK_TEST_TIMEOUT,
   )
