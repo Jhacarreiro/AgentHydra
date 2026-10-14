@@ -53,17 +53,48 @@ const req = (prompt: string, extra: { session?: string; full?: boolean } = {}) =
   ...(extra.full ? { full: true } : {}),
 })
 
-test('the first pack has the folder rules, the matching knowledge in full, and the closing line', () => {
+test('the first pack has the folder rules, a weak match as a pointer, and the closing line', () => {
   const pack = packFor(dir, req('redo the brand colours on the dashboard'))
   expect(pack.mode).toBe('first')
   expect(pack.text).toContain('PROJECT RULE TEXT')
   expect(pack.text).not.toContain('SIDE RULE TEXT')
-  expect(pack.text).toContain('Brand notes: full text.')
+  expect(pack.text).toContain('- knowledge:brand-notes - ')
+  expect(pack.text).not.toContain('Brand notes: full text.')
   expect(pack.text).toContain('core_find { need: "<what you need>", chat: "chat-1" }')
   expect(pack.ids).toContain('knowledge:project-rules')
   expect(pack.ids).toContain('knowledge:brand-notes')
   expect(pack.bytes).toBe(Buffer.byteLength(pack.text, 'utf8'))
   expect(pack.ms).toBeGreaterThanOrEqual(0)
+})
+
+test('a strong match is pasted in full', () => {
+  const pack = packFor(
+    dir,
+    req('brand notes: brand colours and type rules for the dashboard brand'),
+  )
+  expect(pack.text).toContain('Brand notes: full text.')
+})
+
+test("a folder entry that is not the main rules can still match, and another folder's entry never does", () => {
+  writeFileSync(
+    join(dir, 'catalog', 'hand-other.json'),
+    JSON.stringify([
+      {
+        id: 'knowledge:other-side',
+        kind: 'knowledge',
+        name: 'Side Notes Elsewhere',
+        when: 'Notes that only sometimes apply',
+        tags: [],
+        folders: ['C:/Users/me/elsewhere'],
+        cost: 'free',
+        how: 'read the side notes',
+        load: { type: 'file', path: join(dir, 'side-rules.md') },
+      },
+    ]),
+  )
+  const pack = packFor(dir, req('side rules notes that sometimes apply'))
+  expect(pack.ids).toContain('knowledge:side-rules')
+  expect(pack.ids).not.toContain('knowledge:other-side')
 })
 
 test('a repeated message in the same session sends only what was not sent before', () => {

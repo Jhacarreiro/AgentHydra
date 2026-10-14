@@ -13,6 +13,8 @@ export const LEAD_CAP = 8 * 1024
 const INLINE_MATCHES = 3
 const POINTERS = 5
 const MATCH_MIN = 4
+/** A match is pasted in full only this strong (a name hit or several); weaker ones go as one-line pointers. */
+const INLINE_MIN = 20
 const LEAD_MIN = 4
 
 export type PackMode = 'first' | 'full' | 'delta'
@@ -84,20 +86,29 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const fresh = (id: string) => !seen.has(id)
 
   const folderAll = folderKnowledgeOf(entries, req.cwd)
-  const folderIds = new Set(folderAll.map((e) => e.id))
-  const folder = mainRules(folderAll).filter((e) => fresh(e.id))
+  const main = mainRules(folderAll)
+  const mainIds = new Set(main.map((e) => e.id))
+  const folder = main.filter((e) => fresh(e.id))
+  // An entry filed under other folders belongs to another project; one filed nowhere fits every folder.
+  const here = new Set(folderAll.map((e) => e.id))
+  const foreign = (e: CatalogEntry) => (e.folders ?? []).length > 0 && !here.has(e.id)
 
-  const matches = rankEntries(entries, req.prompt)
-    .filter(
-      (s) =>
-        s.score >= MATCH_MIN &&
-        s.entry.kind !== 'person' &&
-        !folderIds.has(s.entry.id) &&
-        fresh(s.entry.id),
-    )
+  const matches = rankEntries(entries, req.prompt).filter(
+    (s) =>
+      s.score >= MATCH_MIN &&
+      s.entry.kind !== 'person' &&
+      !mainIds.has(s.entry.id) &&
+      !foreign(s.entry) &&
+      fresh(s.entry.id),
+  )
+  const inline = matches
+    .filter((s) => s.entry.kind === 'knowledge' && s.score >= INLINE_MIN)
+    .slice(0, INLINE_MATCHES)
     .map((s) => s.entry)
-  const inline = matches.filter((e) => e.kind === 'knowledge').slice(0, INLINE_MATCHES)
-  const pointers = matches.filter((e) => !inline.includes(e)).slice(0, POINTERS)
+  const pointers = matches
+    .map((s) => s.entry)
+    .filter((e) => !inline.includes(e))
+    .slice(0, POINTERS)
 
   const hydra = hydraLead(files.hydraMd)
   const persona = hydra
