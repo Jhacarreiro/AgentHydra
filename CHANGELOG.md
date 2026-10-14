@@ -53,6 +53,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   tells you once when an account lists a model it has never seen, and `hswarm models --free` shows every model your
   accounts list, what is new, and the steps to test a new one against the paid route before any routed work moves
   to it.
+- **Thinking work on Free ChatGPT accounts stops falling back to paid keys.** ChatGPT's Free plan runs out of its
+  thinking model during the day, so critical and code review work sent there failed and was paid for on the API.
+  That work now goes to your Go-plan accounts first: 29 of 30 test tasks stayed on Free, up from 18.
 - **Free account work survives AgentHydra restarting itself.** AgentHydra restarts onto each update it pulls, about
   every 25 minutes on a busy day, and each restart used to drop every Free account task in flight onto paid keys. The
   task now waits for AgentHydra to come back and takes its answer from the chat, which kept going meanwhile.
