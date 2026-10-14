@@ -73,7 +73,8 @@ export const STOP_HOOK_TIMEOUT_S = 10
  *    DAEMON answers, unlike the signal. It asks a worker whose estimate missed by more than
  *    REVIEW_BAND why, in the same turn (climayte-eta.ts stopDecision, climayteStopHook). It must be
  *    the daemon: the decision reads the worker's record. A daemon that is down or restarting makes
- *    the hook a non-blocking error, so the worker just stops, and one review is skipped. */
+ *    the hook a non-blocking error, so the worker just stops, and one review is skipped.
+ *  - Stop, also the `stopHooks` given: a core-mode chat's Hydra Core hook (its president rule). */
 export function workerHooks(opts: {
   signalFile: string
   claims: string | null
@@ -81,7 +82,14 @@ export function workerHooks(opts: {
   stopUrl?: string | null
   promptHooks?: Array<{ hooks: Hook[] }>
   sessionStartHooks?: Array<{ hooks: Hook[] }>
+  stopHooks?: Array<{ hooks: Hook[] }>
 }): WorkerHooks {
+  const stop: Array<{ hooks: Hook[] }> = [
+    ...(opts.stopHooks ?? []),
+    ...(opts.stopUrl
+      ? [{ hooks: [{ type: 'http', url: opts.stopUrl, timeout: STOP_HOOK_TIMEOUT_S } as Hook] }]
+      : []),
+  ]
   const guards = opts.guards ?? []
   const preToolUse: HookGroup[] = [
     ...(opts.claims
@@ -116,13 +124,7 @@ export function workerHooks(opts: {
   return {
     ...(opts.promptHooks?.length ? { UserPromptSubmit: opts.promptHooks } : {}),
     ...(opts.sessionStartHooks?.length ? { SessionStart: opts.sessionStartHooks } : {}),
-    ...(opts.stopUrl
-      ? {
-          Stop: [
-            { hooks: [{ type: 'http', url: opts.stopUrl, timeout: STOP_HOOK_TIMEOUT_S } as Hook] },
-          ],
-        }
-      : {}),
+    ...(stop.length ? { Stop: stop } : {}),
     ...(preToolUse.length ? { PreToolUse: preToolUse } : {}),
     PostToolUse: [
       {

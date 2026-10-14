@@ -268,6 +268,27 @@ describe('chat workers', () => {
     rmSync(join(CORE, 'ON'))
   })
 
+  // 2026-10-13: Hydra Core's president rule (a Stop hook) reached the owner's terminal sessions only; a Desk chat
+  // launches with its own settings and never ran it.
+  test('in core mode a chat stops through the Hydra Core hook; a worker does not', () => {
+    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
+    const stops = (file: string) =>
+      (JSON.parse(readFileSync(file, 'utf8')).hooks.Stop ?? []) as Array<{
+        hooks: Array<{ type: string; command?: string }>
+      }>
+    const isCore = (g: { hooks: Array<{ command?: string }> }) =>
+      g.hooks.some((h) => h.command?.endsWith('hydra-core/hook.mjs"'))
+    const chat = dispatch({ title: 'a core chat', chat: true })
+    const worker = dispatch({ title: 'a core worker task' })
+    expect(stops(writeWorkerSettings(chat, acct)).some(isCore)).toBe(false)
+    writeFileSync(join(CORE, 'ON'), '')
+    expect(stops(writeWorkerSettings(chat, acct)).some(isCore)).toBe(true)
+    const workerStops = stops(writeWorkerSettings(worker, acct))
+    expect(workerStops.some(isCore)).toBe(false)
+    expect(workerStops.map((g) => g.hooks[0]?.type)).toEqual(['http'])
+    rmSync(join(CORE, 'ON'))
+  })
+
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light
   // worker runs nothing, and starts none of the owner's MCP servers (each a process per worker).
   test("a light worker launches with no shell and no MCP server but CliMayte's own", () => {

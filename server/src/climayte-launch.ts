@@ -596,6 +596,9 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
             : [],
         sessionStartHooks:
           w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
+        // Its president rule: a chat about to ask the owner something asks the owner tier first.
+        stopHooks:
+          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed
@@ -652,7 +655,7 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md')), ...coreChatExcludes()] }
 }
 
-/** Core mode's chat hook: Hydra Core's hook.mjs, given for the prompt and the session start in place of the router. */
+/** Core mode's chat hook: Hydra Core's hook.mjs, given for the prompt, the session start and the stop, in place of the router. */
 export function coreHookGroups(): Array<{ hooks: Array<{ type: 'command'; command: string }> }> {
   return [
     {
