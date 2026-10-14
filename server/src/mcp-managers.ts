@@ -30,6 +30,7 @@ export interface DeskChat {
   title?: string
   cwd?: string
   status?: string
+  lastError?: string | null
 }
 
 interface TranscriptItem {
@@ -111,8 +112,14 @@ export async function replyWhenDone(
     const items = await transcriptItems(chat.id)
     const fresh = sentAfter === null ? items : items.slice(sentAfter)
     const working = current?.status === 'working' || current?.status === 'starting'
-    const taken = sentAfter === null || fresh.some((i) => i.kind === 'user')
-    if (!working && taken) {
+    // A sent message is answered only once the assistant spoke after it (or the chat errored): Desk
+    // flips a new or idle chat to working a beat after the prompt lands in the transcript.
+    const lastUser = fresh.map((i) => i.kind).lastIndexOf('user')
+    const answered =
+      sentAfter === null ||
+      (lastUser >= 0 &&
+        (fresh.slice(lastUser).some((i) => i.kind === 'assistant_text') || !!current?.lastError))
+    if (!working && answered) {
       const reply = fresh.filter((i) => i.kind === 'assistant_text').at(-1)?.text ?? ''
       return { chat: chat.id, title: chat.title, status: 'done', reply }
     }
