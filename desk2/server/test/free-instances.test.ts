@@ -642,7 +642,7 @@ describe('Free jobs and routes', () => {
     const day = dayOf(Date.now())
     const rows = [
       { day, instanceId: instance.id, model: 'model-a', sent: 1, failed: 0, input: 10, output: 20 },
-      { day, instanceId: instance.id, model: 'model-b', sent: 1, failed: 1, input: 0, output: 0 },
+      { day, instanceId: instance.id, model: 'model-b', sent: 1, failed: 1, input: 0, output: 0, why: { rate_limited: 1 } },
     ]
     expect(await (await app.request('/api/free/stats?days=14')).json()).toEqual(rows)
     await service.settled()

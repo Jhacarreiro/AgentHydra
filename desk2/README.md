@@ -898,7 +898,10 @@ in it.
 **Free numbers on Usage history** (owner, 2026-10-08: "total tokens ... for Claude and ChatGPT ... and also the
 success rate across which models"; `server/src/free-instances/stats.ts`). Desk keeps a daily record in
 `free/accounts.json` (`stats`): per day, account and model, the messages sent and failed and their token estimate,
-30 days, counts only. A failure counts on the model it was sent to. `GET /api/free/stats?days=N` returns the rows.
+30 days, counts only. A failure counts on the model it was sent to, and by its error code (`why`: `generation_error`,
+`not_found`, `rate_limited` ...; since 2026-10-14, when 205 ChatGPT sends failed in a day and the one-hour health had
+nothing left to say why). `GET /api/free/stats?days=N` returns the rows. The answered share's hover names the three
+most common reasons.
 With the Free rows on screen, Instances' Usage history card shows the Free totals in its header line and, opened,
 the tokens of all Free accounts, of Claude and of ChatGPT in the table's window with the answered share, answered
 by model, and Free tokens per day by provider (`hydra/src/components/FreeSummary.vue`, `lib/free-stats.ts`); it

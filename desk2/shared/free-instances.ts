@@ -178,7 +178,8 @@ export interface FreeHealth {
 /** One day's messages on one account and model (stats.ts). `model` is what the provider answered with ('unknown' when
  *  a failure came before it was chosen); '' holds the tokens of messages from before Desk recorded models, with no
  *  messages counted (`sent` 0), so they count in no success rate. */
-export interface FreeStatRow { day: string; instanceId: string; model: string; sent: number; failed: number; input: number; output: number }
+/** `why`: the failures by error code (server/src/free-instances/stats.ts), absent when none failed. */
+export interface FreeStatRow { day: string; instanceId: string; model: string; sent: number; failed: number; input: number; output: number; why?: Record<string, number> }
 export interface FreeStatus {
   ready: boolean
   /** Each account's estimate by its id (tokens.ts); an account that never chatted here has none. */

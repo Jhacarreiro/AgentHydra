@@ -22,7 +22,7 @@ from collections import Counter
 
 from . import config
 from .climayte_route import base_url
-from .free_client import FreeChatClient, TurnError, tool_names_allowed, turn
+from .free_client import FreeChatClient, TurnError, redo, tool_names_allowed, turn
 from .spec import Result, Task, inline_files, now_iso
 
 log = logging.getLogger("hswarm.free")
@@ -255,13 +255,20 @@ async def _serve(job_id: str, task: Task, accounts: list | None = None) -> tuple
     # one" is its last turn's model, which those Haiku asks made Haiku 5.5 on every account (2026-10-10). A
     # ChatGPT account ignores both.
     item["model"] = "haiku" if task.profile in HAIKU_PROFILES else "sonnet"
-    try:
-        one = await turn(_call, item, min(task.timeout_s, WAIT_CAP_S))
-    except TurnError as e:
-        fallback, status, kind = _TURN_MISS[e.stage]
-        _say(job_id, f"{fallback} ({e.body}); the task runs on its API route")
-        error = str(e.one.get("error") or "")[:200] if e.stage == "failed" else None
-        return None, _miss(task, fallback, status, kind, e.one or None, accounts, error)
+    redone = 0
+    while True:
+        try:
+            one = await turn(_call, item, min(task.timeout_s, WAIT_CAP_S))
+            break
+        except TurnError as e:
+            if redo(e, None, redone):  # ChatGPT failed to answer the new thread: another one (free_client.REDO)
+                redone += 1
+                item = {**item, "name": f"hswarm {job_id} {task.id} g{redone + 1}"}
+                continue
+            fallback, status, kind = _TURN_MISS[e.stage]
+            _say(job_id, f"{fallback} ({e.body}); the task runs on its API route")
+            error = str(e.one.get("error") or "")[:200] if e.stage == "failed" else None
+            return None, _miss(task, fallback, status, kind, e.one or None, accounts, error)
     why = "tool-free task on a signed-in Free account, no API cost"
     res = _result(task, one, why, started, job_id)
     return (res, None) if res else (None, _miss(task, "the free reply was unusable", "error", "model", one, accounts))

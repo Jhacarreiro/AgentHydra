@@ -77,6 +77,13 @@ export default {
     answeredOf: 'answered of {sent} messages {span}',
     ofSent: 'of {sent}',
     messagesTip: '{sent} messages sent {span}, {failed} failed',
+    messagesWhyTip: '{sent} messages sent {span}, {failed} failed: {why}',
+    // A failure's error code in words (FreeSummary.vue WHY).
+    why: {
+      generation_error: 'reply failed', answer_not_confirmed: 'reply not confirmed', not_found: 'chat not found', rate_limited: 'limit reached', http_rejected: 'request rejected',
+      http_verification_required: 'access check', login_required: 'signed out', network_error: 'network error',
+      operation_interrupted: 'interrupted', stream_interrupted: 'reply cut off', response_pending: 'reply not confirmed', unknown: 'no reason',
+    },
     byModel: 'Answered by model {span}',
     perDay: 'Free tokens per day {span}',
     noModels: 'No messages recorded yet. Each new message counts here with the model that answered it.',

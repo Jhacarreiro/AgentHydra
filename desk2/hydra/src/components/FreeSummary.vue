@@ -45,7 +45,24 @@ const series = SERIES.map(s => ({ key: s, label: providerLabel(s), color: series
 const dayBars = computed(() => summary.value.days.map(d => ({ label: dayLabel(d.key), values: [d.claude, d.chatgpt] })))
 const daysEmpty = computed(() => summary.value.days.every(d => d.claude + d.chatgpt === 0))
 const { freeSpan } = useUsageSpan()
-const messagesTip = (x: FreeTally) => t('freeInstances.stats.messagesTip', { sent: x.sent, failed: x.failed, span: freeSpan.value })
+/** A failure's error code in words (server/src/free-instances/stats.ts keeps them by day); an unlisted one shows as is. */
+const WHY: Record<string, string> = {
+  generation_error: 'freeInstances.stats.why.generation_error', answer_not_confirmed: 'freeInstances.stats.why.answer_not_confirmed',
+  not_found: 'freeInstances.stats.why.not_found', rate_limited: 'freeInstances.stats.why.rate_limited',
+  http_rejected: 'freeInstances.stats.why.http_rejected', http_verification_required: 'freeInstances.stats.why.http_verification_required',
+  login_required: 'freeInstances.stats.why.login_required', network_error: 'freeInstances.stats.why.network_error',
+  operation_interrupted: 'freeInstances.stats.why.operation_interrupted', stream_interrupted: 'freeInstances.stats.why.stream_interrupted',
+  response_pending: 'freeInstances.stats.why.response_pending', unknown: 'freeInstances.stats.why.unknown',
+}
+/** The failures' three most common reasons ("150 reply failed, 30 limit reached"). */
+function whyText(x: FreeTally): string {
+  return Object.entries(x.why).sort((a, b) => b[1] - a[1]).slice(0, 3)
+    .map(([code, n]) => `${n} ${WHY[code] ? t(WHY[code]) : code.replace(/_/g, ' ')}`).join(', ')
+}
+const messagesTip = (x: FreeTally) => {
+  const why = whyText(x)
+  return t(why ? 'freeInstances.stats.messagesWhyTip' : 'freeInstances.stats.messagesTip', { sent: x.sent, failed: x.failed, span: freeSpan.value, why })
+}
 </script>
 
 <template>

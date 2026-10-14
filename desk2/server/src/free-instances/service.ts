@@ -378,7 +378,7 @@ export class FreeInstances {
       if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted) {
         this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
         const ok = job.result?.ok === true
-        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, input: spent?.input ?? 0, output: spent?.output ?? 0 })
+        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, code: job.result?.error?.code, input: spent?.input ?? 0, output: spent?.output ?? 0 })
       }
       this.store.save()
     }
