@@ -270,7 +270,7 @@ try {
 
   // 13. The peek under the arrows (owner, 2026-10-10: "show me what the previous message was in ... a slide-down tray"):
   // it shows the message the up arrow would go to and the view stays put; it stays while the pointer is on it, goes about
-  // a second after the pointer leaves, and on its own after two seconds; Go to it lands that message on the line.
+  // a second after the pointer leaves, and on its own after two seconds; its arrow lands that message on the line.
   const boxOf = (sel: string): Promise<Box | null> => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect();
     return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
   const PEEK_BTN = '[data-testid="peek-step"]'
@@ -304,13 +304,13 @@ try {
   const third = await boxOf(PEEK_BTN)
   if (third) await click(third)
   await sleep(400)
-  const go = await ev(`(() => { const b = [...document.querySelectorAll('${TRAY} button')].find((e) => e.textContent.trim() === 'Go to it')?.getBoundingClientRect();
+  const go = await ev(`(() => { const b = document.querySelector('${TRAY} button[aria-label="Go to this message"]')?.getBoundingClientRect();
     return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
   if (go) await click(go)
   await sleep(900)
   const landed = await onLine()
   check(!!go && landed.n === here.n - 1 && Math.abs(landed.off) <= 2 && (await peekText()) === null,
-    `Go to it lands the peeked message on the line and closes the peek (${said([landed])})`)
+    `The peek's arrow lands the peeked message on the line and closes the peek (${said([landed])})`)
 } finally {
   // The Edge launched here may hand its window to another process: close the browser over CDP, then the launcher.
   try {

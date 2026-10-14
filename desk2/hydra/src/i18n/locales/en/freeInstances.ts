@@ -18,7 +18,6 @@ export default {
   // The Tokens column: neither site reports tokens, so Desk estimates them (server/src/free-instances/tokens.ts).
   tokensBreakdown: '{output} output · {input} input (the thread each message continued included)',
   tokensSource: 'Estimated on this PC from the text AgentHydra sent and got back, about 4 characters a token. Messages sent before this count began, or from another PC, are not in it.',
-  noReading: 'No reading yet', noReadingHint: 'Claude shows this account’s usage only after it sends a message. Each chat here brings a fresh reading.',
   signedOut: 'Not signed in',
   // The verdict of a check someone started (lib/free-instances.ts freeCheckVerdict), as a toast and on the row.
   isAlive: 'Is it alive?', accountLabel: 'Free {num} ({name})',

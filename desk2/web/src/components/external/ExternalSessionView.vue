@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
-import type { DesktopMessageRequest, DesktopMessageResult, TranscriptItem } from '@shared/protocol'
+import type { DesktopMessageRequest, DesktopMessageResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
@@ -79,6 +79,13 @@ async function sendInto(text: string): Promise<void> {
   const body = (await res.json().catch(() => null)) as (Partial<DesktopMessageResult> & { error?: string }) | null
   if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
   queued.value = [...queued.value, { id: ++queuedId, text }]
+}
+// Stop: Claude Desktop's own Stop for the turn, through AgentHydra's native stop (owner, 2026-10-14: a running chat showed
+// only a send arrow). It answers once the app shows the turn stopping.
+async function stopInto(): Promise<void> {
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/stop`, { method: 'POST' })
+  const body = (await res.json().catch(() => null)) as (Partial<DesktopStopResult> & { error?: string }) | null
+  if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
 }
 // A queued message is shown as queued until the transcript shows it (once per matching message).
 watch(items, (list) => {
@@ -312,7 +319,7 @@ onUnmounted(() => {
           <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
         </ul>
       </div>
-      <Composer :key="desktopChat.id" :chat="desktopChat" :into="{ send: sendInto, why: INTO_WHY }" />
+      <Composer :key="desktopChat.id" :chat="desktopChat" :into="{ send: sendInto, why: INTO_WHY, stop: stopInto }" />
     </template>
 
     <div v-else-if="session && usable" class="shrink-0 px-8 py-3">

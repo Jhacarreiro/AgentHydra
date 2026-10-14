@@ -43,6 +43,10 @@ export const TOOL_VALUE = `${TOOL_TEXT} text-[var(--text)]`
 export const TOOL_ICON =
   'flex size-5 shrink-0 items-center justify-center rounded-[var(--radius-5)] text-[var(--text-2)] [&>svg]:[stroke-width:2.5] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] data-[state=open]:bg-[var(--fill-hover)] data-[state=open]:text-[var(--text)] disabled:opacity-50 disabled:hover:bg-transparent'
 
+/** Icon button inside the box (+ at its left, the mic at its right, owner 2026-10-14 after Claude Desktop): 24x24, r6, as Send. */
+export const BOX_ICON =
+  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] data-[state=open]:bg-[var(--fill-hover)] data-[state=open]:text-[var(--text)] disabled:opacity-50 disabled:hover:bg-transparent'
+
 /** Repo strip button: h24, r6, px5. */
 export const STRIP_BUTTON =
   'flex h-6 shrink-0 items-center gap-1 rounded-[var(--radius-6)] px-[5px] text-ui transition-colors duration-[60ms] hover:bg-[var(--fill-hover)]'

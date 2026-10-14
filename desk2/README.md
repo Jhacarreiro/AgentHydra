@@ -270,8 +270,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   `engine/service-runtime.ts` (the record, the queue, the idle close). An idle outside Codex chat continues the same way (owner, 2026-10-13: "why are they only read-only? ...
   It should function similar to Claude"): its first message imports it as a chat pinned to Codex on its own thread
   and account, resumed in place (`codexImport` in `chat-manager.ts`); Fork stays on Claude chats. Opening a session from a search while the
-  session header is folded shows the header for two seconds, then folds it again; the pointer on it keeps
-  it out (`peekHeader` in `session-header/state.ts`).
+  session rail is shut shows the rail for two seconds, lying over the chat, then shuts it again; the pointer on it
+  keeps it out (`peekHeader` in `session-header/state.ts`).
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
   the blinking dot, in the Working row under a turn and on the line over a Claude Desktop chat's composer,
   which has more room around it now (owner, 2026-10-08: "replace the blinking dot with a fun, like, orange
@@ -318,7 +318,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   Right under the up arrow, above the down arrow, an eye peeks at the message the up arrow would go to without scrolling (owner, 2026-10-10: "show me what
   the previous message was in ... a slide-down tray. Kind of like the Session details thing works"): a tray slides
   down over the transcript's top with that message, stays two seconds, stays while the pointer is on it and goes a
-  second after it leaves; its Go to it glides there (`transcript/parts/MessagePeek.vue`). The message sits in the sent
+  second after it leaves; the up arrow at the message's right glides there, with no line over it (owner, 2026-10-14:
+  "just have a little arrow on the right side") (`transcript/parts/MessagePeek.vue`). The message sits in the sent
   bubble's lighter grey, clamped at its 180px with a fade and Read more (owner, 2026-10-10: "it needs to cap off a
   little bit better with a 'read more.' ... a lighter gray bubble"). The tray's label, bubble and image line sit centered
   in the conversation's 768px column (owner, 2026-10-12: "center the block please. Not, left align").
@@ -414,21 +415,24 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **The sidebar is there at once.** Opening or reloading the window shows the last known lists straight
   away (kept in the browser), and the server sends a new window every list it has as soon as it joins,
   instead of waiting for the next change.
-- **The session header.** Over a session opened from the cloud list (or any session running outside
-  Desk) sits one bar, across the whole pane, with what AgentHydra's Sessions tab said about it, each
-  fact in its own colour: the product, the short id (click to copy), the instance number and account
-  (its address in the tooltip; click to see that account's row in AgentHydra's Instances, the desktop or
-  CLI table, marked), the folder (click to open it), the git branch, turns,
-  tokens and cost (the breakdown in the tooltip; a "+" when a model has no published price), the model
-  and effort, and any credentials the transcript printed (redacted). Its buttons are Find (Ctrl + F;
-  Enter and Shift + Enter step through the matches, marked in the transcript), Copy session file
-  location, Copy session id and Close, and its ⋯ menu has the account (bring it to the front, copy its
-  address), Display (only what I typed, tool activity, reasoning, compact layout), the session file
-  (open it, save it as Markdown, a web page or the raw .jsonl, copy the file itself, copy its path), and
-  for Claude sessions Reopen in a terminal and Migrate to another account. The title bar's panel icon
-  slides it up out of view and back down; it lies over the top of the transcript, so the page never
-  re-lays out while it moves. The chat title in the title bar is centred. It reads AgentHydra through
-  Desk 2's `/ah/api`.
+- **The session rail** (owner, 2026-10-14, after Claude Desktop's). The title bar's Session details button, at its right
+  end, shows or hides a column of cards at the chat's right, for Desk's own chats and for any session running outside Desk:
+  Environment (the folder, which opens on a click; the account; the model and effort), Context (how full the context
+  window is, amber from 75% and red from 90%, and what the chat has cost), To-dos (the session's checklist, TodoWrite's or
+  Claude Desktop's update_plan, folded away with a click on its name like any card), Connectors (the ones a chat gets,
+  three and Show more) and Background tasks. It takes from the chat only the room the centred text column needs: on a
+  wide window it lies over the empty margin and the text stays centred, and as the window narrows it pushes the text
+  over (`railReserve` in `web/src/components/shell/logic.ts`). Its left edge drags its width, which the window keeps. For
+  a session running outside Desk the cards hold what AgentHydra's Sessions tab said about it, each fact in its own
+  colour: the product, the short id (click to copy), the instance number and account (its address in the tooltip; click
+  to see that account's row in AgentHydra's Instances, marked), the folder, the git branch, the model, turns, tokens and
+  cost (the breakdown in the tooltip; a "+" when a model has no published price), and any credentials the transcript
+  printed (redacted). The Environment card's buttons are Find (Ctrl + F; Enter and Shift + Enter step through the
+  matches, marked in the transcript, the Find bar over the transcript's top), Copy session file location, Copy session
+  id, and a ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
+  activity, reasoning, compact layout), the session file (open it, save it as Markdown, a web page or the raw .jsonl,
+  copy the file itself, copy its path), for Claude sessions Reopen in a terminal and Migrate to another account, and
+  Close. The chat title in the title bar is centred. It reads AgentHydra through Desk 2's `/ah/api`.
 - **One card for the Instances tab** (owner, 2026-10-06; one table since 2026-10-07). Desktop, CLI and Free rows sit in the same
   lighter, rounded card (`InstanceCard.vue`): the header bar is its top, the rows inside it. The kind
   toggles in its header (Desktop, CLI, Free, each with its count; a kind with no rows still shows) choose
@@ -496,9 +500,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   running outside Desk too (owner, 2026-10-05: "it currently says, 'No running, no finished,' but there
   actually is one running and one finished"): it lists that session's running and finished background
   tasks, a failed or stopped one with an X, and keeps asking while one runs, even when the session itself
-  is idle. The title bar's list button, beside the session header's panel button, opens the panel, for
-  Desk's own chats too, with a blue count while tasks run (owner, 2026-10-05: "the one that shows me,
-  like, background running tasks. Which I have not been able to figure out how to view").
+  is idle. The session rail's Background tasks card lists the running ones, each with its time and a Stop that shows
+  on hover and stops it at once (owner, 2026-10-14), and a task, the finished count or the card's name slides the rail
+  over to the panel, whose back arrow slides the cards back; the title bar's Session details button carries a gray
+  count while tasks run and the rail is shut (owner, 2026-10-05: "the one that shows me, like, background running
+  tasks. Which I have not been able to figure out how to view").
   A chat's finished tasks count under Finished, in Desk's own chats too, and so do the HSwarm jobs it called, the
   ones its sidebar row's HSwarm badge counts (owner, 2026-10-10: "it shows it has a H Swarm item, but it doesn't show
   the H Swarm in line"); a job's name opens it on the HSwarm tab. They stay listed however busy the PC is: while the
@@ -507,9 +513,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   place, the muted "1 running task · 2 finished" line under the last message; the agents chip that
   repeated it above the composer is gone. A workflow that finished before the latest turn began (a
   finished background task starts a turn of its own) folds into one muted line, as in the real app,
-  instead of keeping its card. The panel slides in from the right and back out, opens narrow, and its
-  left edge drags it wider or narrower, a width the window keeps (`tasksPanelWidth` in
-  `web/src/components/shell/logic.ts`); what a task was told is a tooltip on its name, not a paragraph in
+  instead of keeping its card. The panel slides in over the session rail and back out, as wide as
+  the rail, and Expand gives it the chat's place; what a task was told is a tooltip on its name, not a paragraph in
   its card (owner, 2026-10-08: "the sidebar ... should be resizeable, and probably open narrower").
 - **Stop a background task, or all of them.** Every running row in the Background tasks panel has a
   Stop square, and the Running header has **Stop all** (owner, 2026-10-05: three background commands

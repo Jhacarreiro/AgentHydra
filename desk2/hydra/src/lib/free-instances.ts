@@ -55,12 +55,21 @@ export const freeApi = {
 /** A Free reading as the snapshot every instance table's usage cells draw (UsageBadge, UsageBar):
  *  the harness's `five_hour` window is the 5-hour one, `seven_day` the weekly one. Null when the
  *  provider exposed neither, so the cell offers a check instead of a number. */
-export function freeUsageSnapshot(usage: FreeUsage | null): UsageSnapshot | null {
+/** A Claude account's window with nothing in it: 0% used, no reset to count down. */
+const IDLE: UsageLimit = { pct: 0, resets: '', resetsAt: null }
+
+/** The instance tables' reading of a Free account. Claude reports a window only while it is open, so a Claude account with
+ *  nothing sent in the last five hours (or ever) has no 5-hour window, and one whose window reset since the reading has a
+ *  spent one: both are 0% used now, not an unknown (owner, 2026-10-14: "why do these have no information on the five-hour,
+ *  but they do show on the week?"). Other providers' missing windows stay unknown. */
+export function freeUsageSnapshot(usage: FreeUsage | null, provider?: FreeProvider, now: Date = new Date()): UsageSnapshot | null {
   if (!usage) return null
+  const idle = provider === 'claude' ? IDLE : null
   const limit = (prefix: string): UsageLimit | null => {
     const w = usage.windows.find(x => x.id === prefix) ?? usage.windows.find(x => x.id.startsWith(prefix))
     const pct = w?.used_percent ?? (w?.remaining_percent == null ? null : 100 - w.remaining_percent)
-    if (!w || pct == null) return null
+    if (!w || pct == null) return idle
+    if (idle && (w.reset_passed || (w.resets_at && Date.parse(w.resets_at) <= now.getTime()))) return idle
     const at = w.resets_at ? new Date(w.resets_at) : null
     return { pct, resetsAt: w.resets_at, resets: at ? at.toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' }) : '' }
   }

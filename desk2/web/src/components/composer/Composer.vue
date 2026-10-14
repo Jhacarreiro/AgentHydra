@@ -61,7 +61,7 @@ import { holdFocus } from '@/lib/hold-focus'
 import { warmChat } from '@/lib/timing'
 import { isExternalChatId } from '@/components/external/logic'
 import { draftImages, draftImagesReady, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from './draft-images'
-import { HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON, TOOL_VALUE } from './menu'
+import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON, TOOL_VALUE } from './menu'
 import SendSplit from './SendSplit.vue'
 import QueueTray from './QueueTray.vue'
 import QueueChip from './QueueChip.vue'
@@ -91,7 +91,6 @@ import { ATTACHMENT_TILE, attachmentTile } from '@/lib/picture-tile'
 const Check = icons.check
 const Plus = icons.add
 const Mic = icons.record
-const DictationChevron = icons.dictationSettings
 const X = icons.dismiss
 const FolderIcon = icons.folder
 
@@ -107,12 +106,13 @@ interface PendingFile {
   blob?: Blob
 }
 
-type MenuName = 'plus' | 'dictation' | 'mode' | 'model' | 'effort'
+type MenuName = 'plus' | 'mode' | 'model' | 'effort'
 
 const props = defineProps<{
   chat: ChatSummary | null
-  /** A chat working in Claude Desktop: a send goes into it as text (`send`), pictures and voice are off (`why` says so). */
-  into?: { send: (text: string) => Promise<void>; why: string }
+  /** A chat working in Claude Desktop: a send goes into it as text (`send`), pictures and voice are off (`why` says so), and
+   *  `stop` stops its turn there, so the box offers Stop as it does for a chat of its own. */
+  into?: { send: (text: string) => Promise<void>; why: string; stop?: () => Promise<void> }
   /** A sentence about where a send goes (an outside chat continues as a copy): an info mark in the toolbar row says it on
    *  hover or focus, not a line over the box (owner, 2026-10-08: "Should this just be a small info hover icon"). */
   note?: string
@@ -198,7 +198,7 @@ provideTranscript({
 const BUSY: ChatStatus[] = ['working', 'starting', 'needs_you']
 const busy = computed(() => !!props.chat && BUSY.includes(props.chat.status))
 const hasContent = computed(() => text.value.trim().length > 0 || images.value.length > 0 || files.value.length > 0)
-const showStop = computed(() => busy.value && !hasContent.value)
+const showStop = computed(() => (busy.value || !!props.into?.stop) && !hasContent.value)
 
 // The managed send queue (SPEC "Send queue"), once the server reports one; the server sends from it. The
 // Gallery and the parity scenes have none (demo, or a source without it), so they show no queue UI.
@@ -979,8 +979,10 @@ function errText(e: unknown) {
 let sentAt = 0
 /** The Stop button or Esc. `click`: the button, which sits where Send was, so the second click of a send is not a Stop. */
 function stop(click = false) {
-  if (!props.chat || (click && Date.now() - sentAt < STOP_GUARD_MS)) return
-  desk.interrupt(props.chat.id).catch((e) => showNotice(`Stop failed: ${errText(e)}`))
+  if (click && Date.now() - sentAt < STOP_GUARD_MS) return
+  const fail = (e: unknown) => showNotice(`Stop failed: ${errText(e)}`)
+  if (props.into?.stop) void props.into.stop().catch(fail)
+  else if (props.chat) desk.interrupt(props.chat.id).catch(fail)
 }
 
 async function sendToChat(id: string, body: string, refs: ImageRef[], enqueue: boolean) {
@@ -1352,6 +1354,41 @@ onBeforeUnmount(() => {
         </div>
 
         <div class="flex items-end gap-2">
+          <DropdownMenu v-bind="menuModel('plus')" :modal="!nonModal">
+            <DropdownMenuTrigger as-child>
+              <button type="button" :class="BOX_ICON" aria-label="Add">
+                <Plus class="size-4" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent side="top" align="start" :side-offset="10" :class="MENU" data-composer-menu="plus">
+              <DropdownMenuItem :class="ITEM" :disabled="!!into" :title="into?.why" @select="fileInput?.click()">
+                <icons.addFiles :class="MENU_GLYPH" />
+                Add files or photos
+                <span :class="SHORTCUT">Ctrl+U</span>
+              </DropdownMenuItem>
+              <DropdownMenuItem :class="ITEM" @select="showNotice('Adding a folder is not in Hydra Desk yet')">
+                <composerIcons.addFolder :class="MENU_GLYPH" />
+                Add folder
+              </DropdownMenuItem>
+              <DropdownMenuItem :class="ITEM" :disabled="!chat" @select="startSlash">
+                <icons.slashCommands :class="MENU_GLYPH" />
+                Slash commands
+              </DropdownMenuItem>
+              <McpSubmenu :api="api" :cwd="cwd" :chat-id="chatId" :config-dir="mcpConfigDir" @error="showNotice" />
+              <div role="separator" :class="SEPARATOR" />
+              <DropdownMenuSub>
+                <DropdownMenuSubTrigger :class="[ITEM, SUB_TRIGGER]"><Mic :class="MENU_GLYPH" />Dictation language</DropdownMenuSubTrigger>
+                <DropdownMenuSubContent :class="MENU">
+                  <DropdownMenuItem v-for="l in dictationLangs" :key="l" :class="ITEM" @select="setDictationLang(l)">
+                    <span class="flex-1">{{ l }}{{ l === browserLang ? ' (browser)' : '' }}</span>
+                    <Check v-if="dictationLang === l" class="ms-auto size-3.5 text-(--accent)" :stroke-width="3" />
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+            </DropdownMenuContent>
+          </DropdownMenu>
+          <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePicked" />
+
           <textarea
             ref="textarea"
             v-model="text"
@@ -1381,6 +1418,19 @@ onBeforeUnmount(() => {
             @error="(m) => showNotice(`Queue: ${m}`)"
             @close-focus="textarea?.focus()"
           />
+          <Tip :label="into ? into.why : SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
+            <button
+              type="button"
+              :class="[BOX_ICON, recording ? 'bg-(--danger-bg) text-(--danger-text)' : '']"
+              :aria-label="recording ? 'Recording, release to stop' : 'Press and hold to record'"
+              :disabled="!SpeechRecognition || !!into"
+              @pointerdown.prevent="startDictation"
+              @pointerup="stopDictation"
+              @pointerleave="stopDictation"
+            >
+              <Mic class="size-4" :class="recording ? 'animate-(--animate-dot-blink)' : ''" />
+            </button>
+          </Tip>
         </div>
       </div>
 
@@ -1393,59 +1443,6 @@ onBeforeUnmount(() => {
 
       <!-- Toolbar row below the box: h20, 12px #c3c2b7, padding 0 10 0 7 -->
       <div class="flex h-5 items-center ps-1.75 pe-2.5">
-        <DropdownMenu v-bind="menuModel('plus')" :modal="!nonModal">
-          <DropdownMenuTrigger as-child>
-            <button type="button" :class="TOOL_ICON" aria-label="Add">
-              <Plus class="size-4" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="start" :side-offset="6" :class="MENU" data-composer-menu="plus">
-            <DropdownMenuItem :class="ITEM" :disabled="!!into" :title="into?.why" @select="fileInput?.click()">
-              <icons.addFiles :class="MENU_GLYPH" />
-              Add files or photos
-              <span :class="SHORTCUT">Ctrl+U</span>
-            </DropdownMenuItem>
-            <DropdownMenuItem :class="ITEM" @select="showNotice('Adding a folder is not in Hydra Desk yet')">
-              <composerIcons.addFolder :class="MENU_GLYPH" />
-              Add folder
-            </DropdownMenuItem>
-            <DropdownMenuItem :class="ITEM" :disabled="!chat" @select="startSlash">
-              <icons.slashCommands :class="MENU_GLYPH" />
-              Slash commands
-            </DropdownMenuItem>
-            <McpSubmenu :api="api" :cwd="cwd" :chat-id="chatId" :config-dir="mcpConfigDir" @error="showNotice" />
-          </DropdownMenuContent>
-        </DropdownMenu>
-        <input ref="fileInput" type="file" multiple class="hidden" @change="onFilePicked" />
-
-        <Tip :label="into ? into.why : SpeechRecognition ? 'Press and hold to record' : 'Dictation is not available in this browser'" side="top">
-          <button
-            type="button"
-            :class="[TOOL_ICON, recording ? 'bg-(--danger-bg) text-(--danger-text)' : '']"
-            :aria-label="recording ? 'Recording, release to stop' : 'Press and hold to record'"
-            :disabled="!SpeechRecognition || !!into"
-            @pointerdown.prevent="startDictation"
-            @pointerup="stopDictation"
-            @pointerleave="stopDictation"
-          >
-            <Mic class="size-3.5" :class="recording ? 'animate-(--animate-dot-blink)' : ''" />
-          </button>
-        </Tip>
-        <DropdownMenu v-bind="menuModel('dictation')" :modal="!nonModal">
-          <DropdownMenuTrigger as-child>
-            <button type="button" :class="TOOL_ICON" class="w-4.75" aria-label="Dictation settings">
-              <DictationChevron class="size-3" />
-            </button>
-          </DropdownMenuTrigger>
-          <DropdownMenuContent side="top" align="start" :side-offset="6" :class="MENU">
-            <div :class="HEADER">Dictation language</div>
-            <DropdownMenuItem v-for="l in dictationLangs" :key="l" :class="ITEM" @select="setDictationLang(l)">
-              <span class="flex-1">{{ l }}{{ l === browserLang ? ' (browser)' : '' }}</span>
-              <Check v-if="dictationLang === l" class="ms-auto size-3.5 text-(--accent)" :stroke-width="3" />
-            </DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
-
         <Tip v-if="note" :label="note" side="top">
           <button type="button" :class="TOOL_ICON" :aria-label="note" data-composer-note>
             <Info class="size-3.5" />

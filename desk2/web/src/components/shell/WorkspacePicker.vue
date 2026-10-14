@@ -15,7 +15,7 @@ const props = defineProps<{ chat: ChatSummary }>()
 const src = useShellSource()
 
 const PILL =
-  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
+  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[553px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
 
 const projects = ref<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
 const open = ref(false)

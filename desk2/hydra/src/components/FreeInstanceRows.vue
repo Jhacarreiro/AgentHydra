@@ -112,10 +112,12 @@ const runningOf = (i: FreeInstance, ...commands: FreeCommand[]) =>
 // refresh that brings the same reading back redraws nothing.
 const snapshotMemo = new Map<string, { key: string; snapshot: UsageSnapshot | null }>()
 function usageFor(i: FreeInstance): UsageSnapshot | null {
-  const key = JSON.stringify(i.usage)
+  // The minute is in the key: a Claude window whose reset passes while the table is open reads 0% from then on.
+  const at = now.value
+  const key = `${JSON.stringify(i.usage)}@${Math.floor(at.getTime() / 60_000)}`
   const memo = snapshotMemo.get(i.id)
   if (memo?.key === key) return memo.snapshot
-  const snapshot = freeUsageSnapshot(i.usage)
+  const snapshot = freeUsageSnapshot(i.usage, i.provider, at)
   snapshotMemo.set(i.id, { key, snapshot })
   return snapshot
 }
@@ -228,16 +230,12 @@ function rowModel(i: FreeInstance): InstanceRowModel {
               : t('freeInstances.unlimitedHint', { model: i.usage.text_model ?? '' }),
           noQuotaLabel: t('freeInstances.unlimited'),
         }
-      : i.provider === 'claude' && i.usage && !usageFor(i)
-        ? // Claude answers a free account's usage with empty windows until it sends a message (seen
-          // 2026-10-06), which the cell used to call "Not checked yet.".
-          {
-            noQuota: t('freeInstances.noReadingHint'),
-            noQuotaLabel: t('freeInstances.noReading'),
-          }
-        : {
+      : {
           usage: {
-            snapshot: usageFor(i),
+            // A getter, as the last-used time is: only the cells that draw it follow the clock.
+            get snapshot() {
+              return usageFor(i)
+            },
             checking: runningOf(i, 'auth', 'usage'),
             key: `free:${i.id}`,
             onCheck: () => void run(i, 'usage'),

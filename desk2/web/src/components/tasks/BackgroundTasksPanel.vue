@@ -8,9 +8,10 @@
 // unit's active workers through AgentHydra, or stops a Desk chat's background task through the chat
 // (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
 // that for every running unit listed. The trash in the header, beside Expand and Close (owner, 2026-10-08: "move
-// this here", from the Finished row), only hides finished units here.
+// this here", from the Finished row), only hides finished units here. In the session rail (`back`) it lies over the rail's cards, and
+// its back arrow slides them back.
 import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
-import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useShellSource } from '@/components/shell/source'
@@ -32,8 +33,10 @@ const props = defineProps<{
   climayte?: boolean
   focusId?: string | null
   expanded?: boolean
+  /** It lies over the session rail's cards: a back arrow leads its header. */
+  back?: boolean
 }>()
-const emit = defineEmits<{ close: []; 'toggle-expand': [] }>()
+const emit = defineEmits<{ close: []; 'toggle-expand': []; back: [] }>()
 
 const src = useShellSource()
 const desk = useDesk()
@@ -172,7 +175,12 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
 
 <template>
   <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-ui leading-5" aria-label="Background tasks">
-    <header class="flex h-8.5 shrink-0 items-center ps-2 pe-1">
+    <header class="flex h-8.5 shrink-0 items-center pe-1" :class="back ? 'ps-1' : 'ps-2'">
+      <Tip v-if="back" label="Back to session details" side="bottom">
+        <button type="button" :class="ICON_BTN" aria-label="Back to session details" @click="emit('back')">
+          <ChevronLeft class="size-4" :stroke-width="1.5" />
+        </button>
+      </Tip>
       <h2 class="min-w-0 flex-1 truncate font-normal text-(--text-2)">Background tasks</h2>
       <Tip v-if="lists.finished.length" label="Clear finished" side="bottom">
         <button type="button" :class="ICON_BTN" aria-label="Clear finished" @click="clearFinished(lists.finished.flatMap((u) => u.keys))">
