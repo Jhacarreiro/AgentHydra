@@ -22,6 +22,7 @@ export function chatPaths(dir: string, raw: string) {
     state: join(root, 'state.json'),
     prompt: join(root, 'prompt.txt'),
     cwd: join(root, 'cwd.txt'),
+    sent: join(root, 'sent.json'),
   }
 }
 

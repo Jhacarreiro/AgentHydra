@@ -62,13 +62,19 @@ export function scoreEntry(e: CatalogEntry, need: Map<string, number>): number {
   return score
 }
 
-export function findPage(
+export interface Scored {
+  entry: CatalogEntry
+  score: number
+}
+
+/** Every entry that matches the need, best first (tier rank, then score, then id). */
+export function rankEntries(
   entries: Iterable<CatalogEntry>,
   need: string,
   opts: FindOpts = {},
-): { ids: string[]; total: number } {
+): Scored[] {
   const t = terms(need)
-  const scored: { id: string; rank: number; score: number }[] = []
+  const scored: { entry: CatalogEntry; rank: number; score: number }[] = []
   if (t.size)
     for (const e of entries) {
       if (opts.kinds && !opts.kinds.includes(e.kind)) continue
@@ -76,12 +82,23 @@ export function findPage(
       const rank = opts.tiers ? opts.tiers.indexOf(e.tier ?? '') : 0
       if (rank < 0) continue
       const score = scoreEntry(e, t)
-      if (score > 0) scored.push({ id: e.id, rank, score })
+      if (score > 0) scored.push({ entry: e, rank, score })
     }
-  scored.sort((a, b) => a.rank - b.rank || b.score - a.score || a.id.localeCompare(b.id))
+  scored.sort(
+    (a, b) => a.rank - b.rank || b.score - a.score || a.entry.id.localeCompare(b.entry.id),
+  )
+  return scored.map(({ entry, score }) => ({ entry, score }))
+}
+
+export function findPage(
+  entries: Iterable<CatalogEntry>,
+  need: string,
+  opts: FindOpts = {},
+): { ids: string[]; total: number } {
+  const ranked = rankEntries(entries, need, opts)
   const start = opts.start ?? 0
   const limit = opts.limit ?? PAGE
-  return { ids: scored.slice(start, start + limit).map((s) => s.id), total: scored.length }
+  return { ids: ranked.slice(start, start + limit).map((s) => s.entry.id), total: ranked.length }
 }
 
 export function matchOf(e: CatalogEntry): Match {

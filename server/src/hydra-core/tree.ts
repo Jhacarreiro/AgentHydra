@@ -151,18 +151,29 @@ function readDoc(files: Files): HydraDoc | null {
 /** Folder entries q1 shows in full; a folder with many rules would otherwise fill the chat on every message. */
 const FOLDER_SHOWN = 3
 
-/** The knowledge for the chat's folder: its main entries (tagged `repo`) in full, the rest as a count that core_find reaches. */
-function folderKnowledge(cat: Map<string, CatalogEntry>, cwd: string) {
-  if (!cwd) return { folderKnowledge: [] }
+/** All knowledge filed under the chat's folder. */
+export function folderKnowledgeOf(cat: Iterable<CatalogEntry>, cwd: string): CatalogEntry[] {
+  if (!cwd) return []
   const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
   const here = norm(cwd)
-  const all = [...cat.values()].filter(
+  return [...cat].filter(
     (e) =>
       e.kind === 'knowledge' &&
       (e.folders ?? []).some((f) => here === norm(f) || here.startsWith(`${norm(f)}/`)),
   )
+}
+
+/** The rules a pack or core_scope shows for a folder: its main entries (tagged `repo`) when it has any, else all of them. */
+export function mainRules(all: CatalogEntry[]): CatalogEntry[] {
   const main = all.filter((e) => (e.tags ?? []).includes('repo'))
-  const shown = (main.length ? main : all).slice(0, FOLDER_SHOWN)
+  return main.length ? main : all
+}
+
+/** The knowledge for the chat's folder: its main entries (tagged `repo`) in full, the rest as a count that core_find reaches. */
+function folderKnowledge(cat: Map<string, CatalogEntry>, cwd: string) {
+  if (!cwd) return { folderKnowledge: [] }
+  const all = folderKnowledgeOf(cat.values(), cwd)
+  const shown = mainRules(all).slice(0, FOLDER_SHOWN)
   const more = all.length - shown.length
   return {
     folderKnowledge: shown.map((e) => ({ ...matchOf(e), load: loadRef(e) })),

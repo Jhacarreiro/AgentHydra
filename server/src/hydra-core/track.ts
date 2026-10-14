@@ -236,6 +236,15 @@ function reportOf(chat: string, run: number, events: Json[]): Reported | null {
   }
 }
 
+function packedAt(s: Session, turn: Turn, events: Json[]): boolean {
+  return events.some(
+    (e) =>
+      e.event === 'pack' &&
+      str(e.session) === s.id &&
+      Math.abs(Date.parse(str(e.at)) - turn.at) <= 60_000,
+  )
+}
+
 function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
   const scopes = turn.calls
     .filter((c) => c.name === `${CORE_PREFIX}scope`)
@@ -265,7 +274,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     turn: index,
     at: new Date(turn.at).toISOString(),
     scopes,
-    compliant: scopes.length > 0,
+    compliant: scopes.length > 0 || packedAt(s, turn, events),
     used,
     offered: offeredList,
     picks,

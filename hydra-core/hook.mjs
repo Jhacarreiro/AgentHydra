@@ -19,6 +19,7 @@ export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
 const LEAD_CAP = 20000;
 const TAIL_CHUNK = 1 << 20;
 const NAME_CAP = 60;
+export const PACK_TIMEOUT_MS = 1500;
 const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
 const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
 const BLOCK_REASON =
@@ -79,17 +80,74 @@ function sessionText(hydraPath, hydraText) {
 
 const output = (hookEventName, additionalContext) => ({ hookSpecificOutput: { hookEventName, additionalContext } });
 
-function userPromptSubmit(input, env, dir) {
-  const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/")) return null;
+const cwdOf = (input) => (typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+
+function recordPrompt(input, env, dir, prompt) {
   const key = chatKey(input, env);
   const chatDir = path.join(dir, "chats", key);
   mkdirSync(chatDir, { recursive: true });
   writeFileSync(path.join(chatDir, "prompt.txt"), prompt);
-  writeFileSync(path.join(chatDir, "cwd.txt"), typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+  writeFileSync(path.join(chatDir, "cwd.txt"), cwdOf(input));
   const hydraPath = path.join(chatDir, "hydra.md");
   const hydraText = existsSync(hydraPath) ? readFileSync(hydraPath, "utf8") : null;
+  return { key, hydraPath, hydraText };
+}
+
+function userPromptSubmit(input, env, dir) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.trimStart().startsWith("/")) return null;
+  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
   return output("UserPromptSubmit", promptBlock(key, hydraPath, hydraText));
+}
+
+function injectOn(dir) {
+  const file = path.join(dir, "INJECT");
+  return existsSync(file) && readFileSync(file, "utf8").trim() === "ON";
+}
+
+async function requestPack(req, env) {
+  const base = env.AGENTHYDRA_DAEMON_URL || "http://127.0.0.1:7787";
+  const res = await fetch(`${base}/api/core/pack`, {
+    method: "POST",
+    headers: { "content-type": "application/json" },
+    body: JSON.stringify(req),
+    signal: AbortSignal.timeout(PACK_TIMEOUT_MS),
+  });
+  const body = await res.json().catch(() => ({}));
+  if (!res.ok) throw new Error(body.error ?? `the daemon answered ${res.status}`);
+  return body;
+}
+
+async function injectPrompt(input, env, dir) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.trimStart().startsWith("/")) return null;
+  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
+  try {
+    const pack = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt },
+      env,
+    );
+    return pack.text ? output("UserPromptSubmit", pack.text) : null;
+  } catch (error) {
+    return output("UserPromptSubmit", `${promptBlock(key, hydraPath, hydraText)}\nHydra Core pack unavailable: ${error.message}`);
+  }
+}
+
+async function injectSession(input, env, dir) {
+  if (input.source !== "compact" && input.source !== "resume") return null;
+  const key = chatKey(input, env);
+  try {
+    const pack = await requestPack(
+      { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt: "", full: true },
+      env,
+    );
+    return pack.text ? output("SessionStart", pack.text) : null;
+  } catch (error) {
+    const old = sessionStart(input, env, dir);
+    const note = `Hydra Core pack unavailable: ${error.message}`;
+    if (!old) return output("SessionStart", note);
+    return output("SessionStart", `${old.hookSpecificOutput.additionalContext}\n${note}`);
+  }
 }
 
 function sessionStart(input, env, dir) {
@@ -226,21 +284,22 @@ function stopCheck(input, env, dir) {
   return { decision: "block", reason: BLOCK_REASON };
 }
 
-export function run(input, env = process.env) {
+export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
   if (isWorker(env)) return null;
   const dir = coreDir(env);
   if (!existsSync(path.join(dir, "ON"))) return null;
   if (event === "Stop") return stopCheck(input, env, dir);
+  if (injectOn(dir)) return event === "UserPromptSubmit" ? injectPrompt(input, env, dir) : injectSession(input, env, dir);
   return event === "UserPromptSubmit" ? userPromptSubmit(input, env, dir) : sessionStart(input, env, dir);
 }
 
-export function handle(text, env = process.env) {
+export async function handle(text, env = process.env) {
   let input = null;
   try {
     input = JSON.parse(text.trim() ? text : "{}");
-    return run(input, env);
+    return await run(input, env);
   } catch (error) {
     if (input && EVENTS.has(input.hook_event_name)) {
       return output(input.hook_event_name, `Hydra Core hook error: ${error.message}`);
@@ -254,7 +313,7 @@ if (isMain) {
   let text = "";
   for await (const chunk of process.stdin) text += chunk;
   try {
-    const result = handle(text);
+    const result = await handle(text);
     if (result) process.stdout.write(JSON.stringify(result));
   } catch (error) {
     process.stderr.write(`Hydra Core hook: ${error.message}\n`);

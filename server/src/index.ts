@@ -91,6 +91,8 @@ import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
+import { packFor } from './hydra-core/pack'
+import { coreDir } from './hydra-core/paths'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
   clearInstanceInfo,
@@ -415,6 +417,27 @@ app.post('/api/mcp', async (c) => {
 app.get('/api/mcp', (c) =>
   c.text('This MCP endpoint does not offer a server-initiated stream.', 405),
 )
+
+// The UserPromptSubmit hook asks for a pack here (hydra-core/pack.ts) and injects what comes back.
+app.post('/api/core/pack', async (c) => {
+  const body = await c.req.json().catch(() => null)
+  const str = (v: unknown) => (typeof v === 'string' ? v : '')
+  if (!body || typeof body !== 'object') return c.json({ error: 'a JSON object is required' }, 400)
+  const b = body as Record<string, unknown>
+  const req = {
+    chat: str(b.chat),
+    session: str(b.session),
+    cwd: str(b.cwd),
+    prompt: str(b.prompt),
+    full: b.full === true,
+  }
+  if (!req.chat || !req.session) return c.json({ error: 'chat and session are required' }, 400)
+  try {
+    return c.json(packFor(coreDir(), req))
+  } catch (err) {
+    return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
+  }
+})
 
 // One shared stdio server (mcp-hub.ts) for every Claude session: each client gets its own answer, the child one.
 app.post('/api/mcp/shared/:name', async (c) => {

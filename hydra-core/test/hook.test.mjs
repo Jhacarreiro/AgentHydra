@@ -9,10 +9,10 @@ import { chatKey, handle, parseHydraMd, run } from "../hook.mjs";
 const HOOK = path.resolve(import.meta.dirname, "..", "hook.mjs");
 const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT"];
 
-function withCore(fn) {
+async function withCore(fn) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-hook-"));
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -50,23 +50,23 @@ function hydraMd(leadPath, tier = 2) {
   ].join("\n");
 }
 
-test("a CliMayte worker gets no output and no files", () => withCore((dir) => {
+test("a CliMayte worker gets no output and no files", () => withCore(async (dir) => {
   turnOn(dir);
-  assert.equal(run(turn("move notes"), envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1" })), null);
+  assert.equal(await run(turn("move notes"), envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1" })), null);
   assert.equal(existsSync(path.join(dir, "chats")), false);
 }));
 
-test("a CliMayte chat (worker with a chat id) is not skipped", () => withCore((dir) => {
+test("a CliMayte chat (worker with a chat id) is not skipped", () => withCore(async (dir) => {
   turnOn(dir);
   const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1", AGENTHYDRA_CLIMAYTE_CHAT: "c-1" });
-  assert.ok(run(turn("move notes"), env));
+  assert.ok(await run(turn("move notes"), env));
 }));
 
-test("slash commands and a missing ON flag produce no output and write nothing", () => withCore((dir) => {
-  assert.equal(run(turn("move notes"), envFor(dir)), null);
+test("slash commands and a missing ON flag produce no output and write nothing", () => withCore(async (dir) => {
+  assert.equal(await run(turn("move notes"), envFor(dir)), null);
   assert.equal(existsSync(path.join(dir, "chats")), false);
   turnOn(dir);
-  assert.equal(run(turn("  /clear"), envFor(dir)), null);
+  assert.equal(await run(turn("  /clear"), envFor(dir)), null);
   assert.equal(existsSync(path.join(dir, "chats")), false);
 }));
 
@@ -78,9 +78,9 @@ test("the chat key is the Desk chat id when set, else the session id, made filen
   assert.throws(() => chatKey({}, {}), /no chat key/);
 });
 
-test("UserPromptSubmit writes prompt.txt and cwd.txt and injects a short block naming hydra.md", () => withCore((dir) => {
+test("UserPromptSubmit writes prompt.txt and cwd.txt and injects a short block naming hydra.md", () => withCore(async (dir) => {
   turnOn(dir);
-  const out = run(turn("move notes.txt into the archive"), envFor(dir));
+  const out = await run(turn("move notes.txt into the archive"), envFor(dir));
   assert.equal(out.hookSpecificOutput.hookEventName, "UserPromptSubmit");
   const chat = path.join(dir, "chats", "sess-1");
   assert.equal(readFileSync(path.join(chat, "prompt.txt"), "utf8"), "move notes.txt into the archive");
@@ -92,12 +92,12 @@ test("UserPromptSubmit writes prompt.txt and cwd.txt and injects a short block n
   assert.match(text, /\(none yet\)/);
 }));
 
-test("the block names the lead and tier from an existing hydra.md", () => withCore((dir) => {
+test("the block names the lead and tier from an existing hydra.md", () => withCore(async (dir) => {
   turnOn(dir);
   const chat = path.join(dir, "chats", "sess-1");
   mkdirSync(chat, { recursive: true });
   writeFileSync(path.join(chat, "hydra.md"), hydraMd(path.join(dir, "lead.md"), 3));
-  const text = run(turn("redo the dashboard"), envFor(dir)).hookSpecificOutput.additionalContext;
+  const text = (await run(turn("redo the dashboard"), envFor(dir))).hookSpecificOutput.additionalContext;
   assert.match(text, /lead Example Lead, tier 3\)/);
   assert.ok(text.length < 400, `block is ${text.length} characters`);
 }));
@@ -115,14 +115,14 @@ test("parseHydraMd reads the lead name, its full-text path and the tier", () => 
   });
 });
 
-test("SessionStart after a compact re-injects hydra.md and the lead's full text", () => withCore((dir) => {
+test("SessionStart after a compact re-injects hydra.md and the lead's full text", () => withCore(async (dir) => {
   turnOn(dir);
   const chat = path.join(dir, "chats", "sess-1");
   mkdirSync(chat, { recursive: true });
   const leadPath = path.join(dir, "lead.md");
   writeFileSync(leadPath, "LEAD BRIEF TEXT");
   writeFileSync(path.join(chat, "hydra.md"), hydraMd(leadPath));
-  const out = run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "compact" }, envFor(dir));
+  const out = await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "compact" }, envFor(dir));
   assert.equal(out.hookSpecificOutput.hookEventName, "SessionStart");
   const text = out.hookSpecificOutput.additionalContext;
   assert.match(text, /Example plan line\./);
@@ -130,37 +130,37 @@ test("SessionStart after a compact re-injects hydra.md and the lead's full text"
   assert.doesNotMatch(text, /cut at/);
 }));
 
-test("SessionStart cuts a lead text longer than 20000 characters and says so", () => withCore((dir) => {
+test("SessionStart cuts a lead text longer than 20000 characters and says so", () => withCore(async (dir) => {
   turnOn(dir);
   const chat = path.join(dir, "chats", "sess-1");
   mkdirSync(chat, { recursive: true });
   const leadPath = path.join(dir, "lead.md");
   writeFileSync(leadPath, "@".repeat(25000));
   writeFileSync(path.join(chat, "hydra.md"), hydraMd(leadPath));
-  const text = run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "resume" }, envFor(dir))
+  const text = (await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "resume" }, envFor(dir)))
     .hookSpecificOutput.additionalContext;
   assert.equal(text.split("@").length - 1, 20000);
   assert.ok(text.includes("cut at 20000 of 25000 characters"));
 }));
 
-test("SessionStart on a fresh startup injects nothing", () => withCore((dir) => {
+test("SessionStart on a fresh startup injects nothing", () => withCore(async (dir) => {
   turnOn(dir);
-  assert.equal(run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "startup" }, envFor(dir)), null);
+  assert.equal(await run({ hook_event_name: "SessionStart", session_id: "sess-1", source: "startup" }, envFor(dir)), null);
 }));
 
-test("a hook error is named in the output, not swallowed", () => withCore((dir) => {
+test("a hook error is named in the output, not swallowed", () => withCore(async (dir) => {
   turnOn(dir);
-  const out = handle(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "hi" }), envFor(dir));
+  const out = await handle(JSON.stringify({ hook_event_name: "UserPromptSubmit", prompt: "hi" }), envFor(dir));
   assert.equal(out.hookSpecificOutput.hookEventName, "UserPromptSubmit");
   assert.match(out.hookSpecificOutput.additionalContext, /Hydra Core hook error: no chat key/);
 }));
 
-test("an unknown hook event is an error", () => withCore((dir) => {
-  assert.throws(() => handle(JSON.stringify({ hook_event_name: "PreToolUse" }), envFor(dir)), /unexpected hook_event_name "PreToolUse"/);
+test("an unknown hook event is an error", () => withCore(async (dir) => {
+  await assert.rejects(() => handle(JSON.stringify({ hook_event_name: "PreToolUse" }), envFor(dir)), /unexpected hook_event_name "PreToolUse"/);
 }));
 
 // Real subprocesses: a cold runner can take longer than bun's 5 s default.
-test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", { timeout: 20_000 }, () => withCore((dir) => {
+test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", { timeout: 20_000 }, () => withCore(async (dir) => {
   turnOn(dir);
   const ok = spawnSync(process.execPath, [HOOK], {
     input: JSON.stringify(turn("move notes")),
