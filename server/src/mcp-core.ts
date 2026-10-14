@@ -23,7 +23,7 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_scope',
     listed: true,
     description:
-      'MUTATES: start a scope run for this chat. Returns the first question (q1) and the folder knowledge.',
+      'MUTATES: start a scope run for this chat. Returns the first question (q1) and the folder knowledge. On a first message, q1 also asks difficulty 1-5 (`no 1` = go with nothing loaded; 2 or more goes straight to the lead).',
     inputSchema: S({ chat: { type: 'string' } }),
     run: async (a: Record<string, unknown>) => scope(coreDir(), chatOf(a)),
   },
@@ -47,7 +47,7 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_find',
     listed: true,
     description:
-      'Find catalog entries (people, tools, workers, knowledge, skills) for a need. Five per page; more=true for the next page.',
+      'Find catalog entries (people, tools, workers, knowledge, skills) for a need. Five per page; more=true for the next page. Person matches show tier and family.',
     inputSchema: S(
       {
         need: { type: 'string' },
