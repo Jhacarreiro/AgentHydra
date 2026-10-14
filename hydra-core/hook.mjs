@@ -116,15 +116,16 @@ function placementOf(dir) {
 async function placedPrompt(input, env, dir) {
   const prompt = String(input.prompt ?? "");
   if (prompt.trimStart().startsWith("/")) return null;
-  const { key } = recordPrompt(input, env, dir, prompt);
+  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
+  const scope = promptBlock(key, hydraPath, hydraText);
   try {
     const match = await requestPack(
       { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt, placement: placementOf(dir) },
       env,
     );
-    return match.text ? output("UserPromptSubmit", match.text) : null;
+    return output("UserPromptSubmit", match.text ? `${scope}\n${match.text}` : scope);
   } catch {
-    return null;
+    return output("UserPromptSubmit", scope);
   }
 }
 
