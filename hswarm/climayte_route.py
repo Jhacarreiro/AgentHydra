@@ -126,6 +126,14 @@ async def before_last_resort(job_id: str, task: Task, providers: list[str], call
     return await consult(job_id, task, first=f"its other routes failed over and only {', '.join(providers)} is left, kept for after CliMayte", caller=caller)
 
 
+async def before_rescue(job_id: str, task: Task, caller: dict | None = None) -> tuple[Result | None, dict | None]:
+    """consult, as a code or critical task's walk reaches its first lower-profile rescue leg (dispatch._climayte_at_floor):
+    CliMayte is asked to run it before that leg is. A task CliMayte was already asked to run is not asked again."""
+    if (job_id, task.id) in _ASKED:
+        return None, None
+    return await consult(job_id, task, first=f"its {task.profile} routes are gone and only lower-profile rescue routes are left", caller=caller)
+
+
 async def step_up(job_id: str, task: Task, why: str, caller: dict | None = None) -> Result | None:
     """A cheaper API leg gave up on the task (jobs._step_up): CliMayte takes it as the next level up when an account
     is idle or comes free within ROUTE_VIA_CLIMAYTE_START_S, told that a cheaper model tried first. None when the task

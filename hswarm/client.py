@@ -200,9 +200,11 @@ _TOO_LARGE_429 = re.compile(r"Request too large", re.I)
 # A key whose account's PLAN refuses tool calls while it serves plain chat: Inworld answers HTTP 400 "Tool calling is
 # currently restricted on your plan" on three of its six live keys (2026-10-13). Not a dead key (it still serves every
 # tool-free call) and not a bad request (another key takes it): a tool call skips that key for the life of the process
-# (_NO_TOOL_KEYS), and only when no live key is left for it does the leg fail over (NoUsableKey).
+# the key's row in the shared key state (KeyPool.mark_tools_refused), read by every process that loads it, and only when
+# no live key is left for it does the leg fail over (NoUsableKey). The mark is re-probed after TOOLS_REFUSED_S: a plan
+# may have been upgraded since, and one doomed request a day is the price of noticing.
 _TOOLS_REFUSED_400 = re.compile(r"Tool calling is (?:currently )?restricted on your plan", re.I)
-_NO_TOOL_KEYS: set[str] = set()
+TOOLS_REFUSED_S = 86400.0
 
 
 def _until_quota_reset(now: dt.datetime | None = None, hour: int = QUOTA_RESET_UTC_HOUR) -> float:
@@ -603,6 +605,32 @@ class KeyPool:
 
     def _rest_until(self, key: str) -> float:
         return float(self._entry(key).get("rest_until") or 0.0)
+
+    def _tool_refused(self, key: str, now: float) -> bool:
+        """The key's plan refused a tool call (_TOOLS_REFUSED_400) within the last TOOLS_REFUSED_S."""
+        return now - float(self._entry(key).get("tools_refused_at") or 0.0) < TOOLS_REFUSED_S
+
+    def tools_refused_keys(self) -> set[str]:
+        """The keys whose plan refused tool calls and not yet re-probed: a tooled call never sends them."""
+        self._load()
+        now = time.time()
+        return {k for k in self._keys if self._tool_refused(k, now)}
+
+    def tools_refused_all(self) -> bool:
+        """Every live key (not disabled, not resting) is tool-refused: a provider whose tool calls cannot be served now."""
+        self._load()
+        now = time.time()
+        live = [k for k in self._keys if self._usable(k, False, now) and self._rest_until(k) <= now]
+        return bool(live) and all(self._tool_refused(k, now) for k in live)
+
+    def mark_tools_refused(self, key: str) -> None:
+        """Remember on the key's row (its fingerprint, never the key) that a tool call was refused, so no process sends a
+        doomed tooled request on it again until TOOLS_REFUSED_S has passed. Written at once, under the write lock."""
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
+            e = dict(self._entry(key))
+            e["tools_refused_at"] = time.time()
+            self._put(tx, key, e)
 
     def _usable(self, key: str, free: bool, now: float | None = None) -> bool:
         """Out of credit is out of credit, whether this pool disabled it or an older build parked it on a timer:
@@ -1416,7 +1444,7 @@ class ChatClient:
                 # Every key that could take it is known too small (_LIMIT_413): nothing is sent, and the leg fails over.
                 raise ApiError(413, f"Request too large for model `{model_id}`: about {need} tokens, over the account limit "
                                     f"of every {self.provider} key that could take it; not sent", self.provider)
-            if tooled and (no_tools := skip | (_NO_TOOL_KEYS & set(self.pool.keys))) != skip:
+            if tooled and (no_tools := skip | self.pool.tools_refused_keys()) != skip:
                 if not self.pool.live_besides(no_tools, free=free):
                     raise NoUsableKey(f"NoUsableKey: no live {self.provider} key's plan allows tool calls (_TOOLS_REFUSED_400); not sent")
                 skip = no_tools
@@ -1480,7 +1508,7 @@ class ChatClient:
                     continue
                 raise ApiError(r.status_code, r.text, self.provider)
             if r.status_code == 400 and tooled and _TOOLS_REFUSED_400.search(r.text or ""):
-                _NO_TOOL_KEYS.add(key)  # see _TOOLS_REFUSED_400: the key keeps serving tool-free calls
+                self.pool.mark_tools_refused(key)  # see _TOOLS_REFUSED_400: the key keeps serving tool-free calls
                 self.rotations += 1
                 continue  # the loop's top skips it, and fails the leg over once no key is left
             if r.status_code == 429 and _TOO_LARGE_429.search(r.text or ""):

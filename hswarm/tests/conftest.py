@@ -104,9 +104,6 @@ def _isolated_home(tmp_path, monkeypatch, request):
     monkeypatch.setattr(_client, "_flush_timer", None)
     monkeypatch.setattr(_client, "_last_flush", 0.0)
     monkeypatch.setattr(_client, "_LIVE_POOLS", [])
-    # A key whose plan refuses tool calls is skipped process-wide (client._NO_TOOL_KEYS): one test's refusal must not
-    # skip the next test's key of the same value.
-    monkeypatch.setattr(_client, "_NO_TOOL_KEYS", set())
     # The model-stats cache is process-wide and serves a cached range whatever ledger it was read from, and its refreshes
     # run on daemon threads that store into whatever cache the module holds when they end (model_stats._refresh_later):
     # one test's warm-up must not answer the next test's call. Let any still running end, then start empty.

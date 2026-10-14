@@ -25,6 +25,7 @@ from . import config
 LOCK_WAIT_S = 2.0          # a write waits this long for another process's write before giving up (the pool keeps its own copy)
 TOMBSTONE_KEEP_S = 86400.0 # an emptied row is kept this long so every process sees it go (readers re-sync every few seconds)
 _READINGS = ("balance_usd", "balance_at", "probed_at", "free_left")
+_KEEP = (*_READINGS, "tools_refused_at")  # what a key's row keeps once its rest has run out (prune)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS keys (fp TEXT PRIMARY KEY, entry TEXT NOT NULL, rev INTEGER NOT NULL, ts REAL NOT NULL) WITHOUT ROWID;
 CREATE INDEX IF NOT EXISTS keys_rev ON keys(rev);
@@ -226,7 +227,7 @@ def prune(live: set[str]) -> dict:
                     out["tombstones"] += 1
             elif (not e.get("disabled") and not e.get("broke") and not e.get("strikes")
                   and float(e.get("rest_until") or 0.0) < now):
-                tx.put(fp, {k: e[k] for k in _READINGS if k in e})
+                tx.put(fp, {k: e[k] for k in _KEEP if k in e})
                 out["expired"] += 1
             else:
                 out["kept"] += 1

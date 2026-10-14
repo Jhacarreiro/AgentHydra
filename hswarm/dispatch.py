@@ -61,8 +61,17 @@ def _memo_wake():
     return wake
 
 
-def _why_not(provider, wake):
+def _tools_refused(provider):
+    """Every live key of the provider has been refused a tool call (client.KeyPool.mark_tools_refused): a tooled task
+    cannot run there now, so the plan keeps the provider out, as it keeps out a pool with no key ready."""
+    pool = keys.pool_for(provider)
+    return pool is not None and hasattr(pool, "tools_refused_all") and pool.tools_refused_all()
+
+
+def _why_not(provider, wake, tooled=False):
     w = wake(provider)
+    if tooled and _tools_refused(provider):
+        return "no live key's plan allows tool calls"
     if w is None:
         return "no key on this machine"
     if w == float("inf"):
@@ -86,14 +95,29 @@ def _fits_cc(plan, backend):
     return plan
 
 
+def _refused_check(kw):
+    """For a tooled plan, a memoised predicate that is True for a provider whose live keys are all tool-refused; for a
+    tool-free plan, one that is always False (tool-free calls never take the tool refusal into account)."""
+    if config.is_tool_free(kw.get("tools", "none")):
+        return lambda p: False
+    seen = {}
+
+    def refused(provider):
+        if provider not in seen:
+            seen[provider] = _tools_refused(provider)
+        return seen[provider]
+    return refused
+
+
 def _plan_here(profile, *, min_context, wake=_wake, **kw):
     """The evaluated plan over pools that can answer now; when nothing can (every candidate pool is resting on
     429s), the plan over pools that are merely busy, so the task queues on its gate instead of being refused
     as NoCapableSwarmRoute at width (the `cc` smoke of 2026-09-25)."""
     backend = kw.get("backend")
-    plan = _fits_cc(selection.plan(profile, usable=lambda p: _usable(p, wake), min_context=min_context, **kw), backend)
+    refused = _refused_check(kw)
+    plan = _fits_cc(selection.plan(profile, usable=lambda p: _usable(p, wake) and not refused(p), min_context=min_context, **kw), backend)
     if not plan["candidates"]:
-        busy = _fits_cc(selection.plan(profile, usable=lambda p: _alive(p, wake), min_context=min_context, **kw), backend)
+        busy = _fits_cc(selection.plan(profile, usable=lambda p: _alive(p, wake) and not refused(p), min_context=min_context, **kw), backend)
         if busy["candidates"]:
             return busy
     return plan
@@ -127,6 +151,7 @@ def _plan(profile, *, min_context, explain=False, **kw):
     plan, with why (all keys disabled, every key resting, no key here) - what hswarm_select shows and what a
     submit refusal names."""
     wake = _memo_wake()
+    tooled = not config.is_tool_free(kw.get("tools", "none"))
     plan, at = _plan_here(profile, min_context=min_context, wake=wake, **kw), profile
     while not plan["candidates"] and at in _STEP_DOWN:
         at = _STEP_DOWN[at]
@@ -142,7 +167,7 @@ def _plan(profile, *, min_context, explain=False, **kw):
     if explain:
         chosen = {c["model"] for c in plan["candidates"]}
         cc = kw.get("backend") == "cc"
-        plan["unavailable"] = [{"model": c["model"], "provider": c["provider"], "why": short or _why_not(c["provider"], wake)}
+        plan["unavailable"] = [{"model": c["model"], "provider": c["provider"], "why": short or _why_not(c["provider"], wake, tooled)}
                                | ({"input_limit": True} if short else {})
                                for c in selection.plan(profile, min_context=min_context, **kw)["candidates"]
                                if c["model"] not in chosen
@@ -508,7 +533,29 @@ def _ordered(plan, task, gates, rescue=()):
         candidates = sorted(candidates, key=lambda c: rank[_leg_key(task, c["model"])])
         plan = {**plan, "candidates": candidates}
         terminal = len(front) - 1 if front else terminal
+        candidates, terminal = _climayte_ahead_of_rescue(task, plan, candidates, terminal)
     return plan, candidates, terminal
+
+
+CLIMAYTE_LEG = "climayte"  # the walk's marker for a CliMayte start (jobs' leg list), never a model
+_FLOOR_PROFILES = ("code", "critical")  # a tooled task of these never runs on a lower profile while CliMayte can take it
+
+
+def _climayte_ahead_of_rescue(task, plan, candidates, terminal):
+    """Owner, 2026-10-14: "There cannot ever be waiting on dead worker fleets", and a code task ran on a `rescue: general`
+    leg below the code floor while CliMayte could take it. A tooled code or critical task whose own legs are gone (the
+    plan stepped down, `below_floor`, or only rescue legs are left) gets a CliMayte leg put before the first lower-profile
+    leg. The walk asks CliMayte there; when no account starts, the walk goes on to the rescue legs as before. Tool-free
+    and general/routine tasks are not touched."""
+    from . import climayte_route
+
+    if task.profile not in _FLOOR_PROFILES or config.is_tool_free(task.tools) or not climayte_route.can_take(task):
+        return candidates, terminal
+    at = 0 if plan.get("below_floor") else next((n for n, c in enumerate(candidates) if c.get("rescue")), None)
+    if at is None:
+        return candidates, terminal
+    leg = {"model": CLIMAYTE_LEG, "provider": CLIMAYTE_LEG, "climayte": True}
+    return candidates[:at] + [leg] + candidates[at:], terminal + (1 if at <= terminal else 0)
 
 
 def _used(task, attempts):
@@ -713,6 +760,15 @@ async def _climayte_before(run, i):
     return served
 
 
+async def _climayte_at_floor(run):
+    """The task as CliMayte ran it, or None when no account started it (the walk then goes on to the rescue legs)."""
+    from . import climayte_route
+
+    served, note = await climayte_route.before_rescue(run.job.id, run.task, caller=run.job.caller)
+    run.route = (served.selection or {}).get("route") if served is not None else note
+    return served
+
+
 async def _walk_legs(run):
     """Run the legs in order until one serves, fails for a reason another leg cannot fix, or a budget is spent.
     The task's clock is its RUN time: the seconds its legs actually ran (Result.seconds). Waiting on a
@@ -732,6 +788,13 @@ async def _walk_legs(run):
             run.attempts.append(res)
             break
         candidate, last = run.candidates[i], i == len(run.candidates) - 1
+        if candidate.get("climayte"):  # the CliMayte leg _climayte_ahead_of_rescue put before the lower-profile legs
+            run.climayte_asked = True
+            if (served := await _climayte_at_floor(run)) is not None:
+                run.attempts.append(served)
+                return served
+            i += 1
+            continue
         if candidate.get("after_climayte") and not run.climayte_asked:
             run.climayte_asked = True
             if (served := await _climayte_before(run, i)) is not None:
