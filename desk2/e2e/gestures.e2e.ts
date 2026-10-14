@@ -97,6 +97,14 @@ const DEV = 'button[aria-label="Dev servers"]'
 // The running server's row: a project's group starts closed, and a closed one lists only what is up (owner, 2026-10-07).
 const DEV_ROW = `(${VISIBLE})([...document.querySelectorAll('[role="region"][aria-label="Dev servers"] [role="button"][aria-label="web details"]')])`
 const DETAILS_PANE = `!!document.querySelector('[data-testid="dev-page"] section[aria-label="Server details"]')`
+
+// The New screen's folder pill (composer/FolderPicker.vue): with Project Hydra its press puts the caret in Filter projects
+// (owner, 2026-10-13), without it its menu opens just above it. Its menu trigger once sat inside its Tip, whose first-hover swap
+// left the menu anchored to a detached node, so the menu opened in the window's top-left corner (2026-10-13).
+const FOLDER_PILL = `(${VISIBLE})([...document.querySelectorAll('[role="group"][aria-label="Environment"] button')].slice(0, 1))`
+const FOLDER_PILL_DONE = `(() => { if (document.activeElement?.getAttribute('aria-label') === 'Filter projects') return true;
+  const m = document.querySelector('[data-composer-menu="folder"]'); const p = document.querySelector('[role="group"][aria-label="Environment"] button');
+  if (!m || !p) return false; const a = m.getBoundingClientRect(), b = p.getBoundingClientRect(); return a.bottom <= b.top && Math.abs(a.left - b.left) < 8 })()`
 // What Desk answers to the window here for the dev servers (shared/devwebui.ts): one invented project with a running and a stopped server.
 const DW_FIXTURE: Record<string, unknown> = {
   '/dw/status': { state: 'running', pid: 1, running: 1 },
@@ -133,6 +141,7 @@ each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'More options
 each(['press', 'key'], { page: 'desk', what: 'More options: CliMayte tasks item flips once, menu stays open', pick: TASKS_ITEM, ok: `${MENU_OPEN} && ${MORE_ITEMS}.length === 4 && ${TASKS_ITEM_FLIPPED}`, setup: OPEN_MORE })
 each(['press', 'hover-press'], { page: 'desk', what: 'Tip toggle: Dev servers flips once, no tooltip', pick: toggle(DEV), ok: `${flipped(DEV)} && !(${TIP_OPEN})`, diag: `[${flipped(DEV)}, ${TIP_OPEN}]` })
 each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'Dev servers row shows its details', pick: DEV_ROW, ok: DETAILS_PANE, setup: `document.querySelector('${DEV}').click()` })
+each(['tap', 'press', 'hover-press', 'key'], { page: 'desk', what: 'folder pill goes to Filter projects or opens its menu above it', pick: FOLDER_PILL, ok: FOLDER_PILL_DONE })
 
 const TRACE = `(() => { window.__log = []; const d = (e) => { const t = e.target; window.__log.push([Math.round(performance.now()), e.type, e.isTrusted, t && t.tagName,
   t && t.getAttribute && (t.getAttribute('aria-label') || t.getAttribute('data-slot')), t && t.getAttribute && t.getAttribute('data-state'), t && t.isConnected, e.pointerType || '']) };

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare, Pin } from '@lucide/vue'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
@@ -15,7 +15,7 @@ import { focusFirstItem, MENU_CONTENT, MENU_ITEM } from '../sidebar/menuClasses'
 import ProjectFoldersDialog from './ProjectFoldersDialog.vue'
 import StatsCard from './StatsCard.vue'
 import { useShellSource } from './source'
-import { gridProjects } from './project-grid'
+import { focusProjectFilter, gridProjects } from './project-grid'
 import { addProjectFolder, filterProjects, pickedFolder, type ProjectAction, type ProjectMenuApi, projectActions, runProjectAction, shownProjects, syncLabel } from './projects'
 import { showHiddenProjects, showProjectDetails } from './projectDetails'
 
@@ -71,6 +71,19 @@ onMounted(load)
 onMounted(refreshDashboards)
 watch(showHiddenProjects, load)
 const hasDashboard = (path: string) => hasSite(dashboardList.value, path)
+
+// The composer's folder pill comes here when Project Hydra lists the projects (FolderPicker.vue).
+const filterBox = ref<HTMLInputElement | null>(null)
+async function focusFilter(): Promise<void> {
+  tab.value = 'projects'
+  await nextTick()
+  filterBox.value?.focus()
+  filterBox.value?.select()
+}
+onMounted(() => (focusProjectFilter.value = focusFilter))
+onBeforeUnmount(() => {
+  if (focusProjectFilter.value === focusFilter) focusProjectFilter.value = null
+})
 
 const hiddenCount = computed(() => choices.value.hidden.length)
 const listed = computed(() => filterProjects(shownProjects(answer.value?.projects ?? [], showHiddenProjects.value), query.value))
@@ -203,7 +216,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
 
       <template v-if="tab === 'projects'">
         <div class="mt-3 flex w-full items-center gap-1.5">
-          <input v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-ui leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
+          <input ref="filterBox" v-model="query" type="search" placeholder="Filter projects" aria-label="Filter projects" class="h-8 min-w-0 flex-1 rounded-(--radius-8) bg-fill-5 px-3 text-ui leading-4.75 text-text placeholder:text-text-muted outline-none focus-visible:ring-1 focus-visible:ring-(--accent)" />
           <Tip label="View options">
             <span class="inline-flex">
               <DropdownMenu>
