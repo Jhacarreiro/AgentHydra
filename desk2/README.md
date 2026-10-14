@@ -598,6 +598,14 @@ sidebar on the left stays put, and only the pane on the right changes.
   the daemon's `POST /api/sessions/:id/message`) and runs when its turn ends; until the transcript shows
   it, it is listed as queued. Text only: files, pictures and voice are off there. An idle chat still
   continues as a copy, as above.
+- **An outside chat at work looks like one here.** A Codex, Claude Code or Claude Desktop chat working
+  elsewhere keeps the same composer it has when idle, one that never comes and goes at a turn's edge, and
+  its working line ("Using exec", the time) is the transcript's last row, as in a chat here (owner,
+  2026-10-14: "I shouldn't be able to tell if I'm using Claude or Codex ... There should be input boxes").
+  A message for a Codex or Claude Code chat is held in the window (and over a reload) and sent the moment
+  its turn ends, by the same carry-on an idle chat's first message uses; more than one go to that chat in
+  order. A send that fails puts the text back in the box and says why. Stop is there only for a Desktop
+  chat: AgentHydra cannot end a Codex or terminal turn from here.
 - **Copy up to here into a new chat.** Under a finished reply in an outside Claude Code session, a button
   has AgentHydra copy the session up to that reply into a new session beside it, "<title> (branch)", which
   opens; the original is not touched (`POST /api/external/sessions/:id/branch`, on to the daemon's

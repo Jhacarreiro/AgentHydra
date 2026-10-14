@@ -49,7 +49,7 @@ import { openBackgroundTasks } from '@/components/tasks/api'
 import { movedOrder } from '@/components/composer/queue'
 import { sameFolder } from '@/components/composer/folders'
 import { SEARCH_LIMIT, SEARCH_MIN_CHARS, SearchError } from '@/components/sidebar/search'
-import { accountRefOf, externalChat, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
+import { accountRefOf, externalChat, externalChatId, holderOf, isExternalChatId, sessionOfChatId } from '@/components/external/logic'
 import { chatViewOf, sameView, type View } from '@/components/shell/logic'
 import { loadDraft, saveDraft } from '@/components/composer/logic'
 import { draftImages, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from '@/components/composer/draft-images'
@@ -792,7 +792,7 @@ async function importOutside(s: ExternalSession, fork = false, at?: string): Pro
   })
 }
 
-async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean }> {
+async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean; chatId?: string }> {
   const s = findExternal(sessionId)
   if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
   const from = viewNow()
@@ -809,11 +809,12 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
       await fetchJson(`/chats/${chat.id}`, { method: 'PATCH', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(patch) })
     }
     externalPatches.delete(sessionId)
-    return await fetchJson<{ queued: boolean }>(`/chats/${chat.id}/messages`, {
+    const sent = await fetchJson<{ queued: boolean }>(`/chats/${chat.id}/messages`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(message)
     })
+    return { ...sent, chatId: chat.id }
   } catch (err) {
     saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
     noteNotSent(chat.id, err instanceof Error ? err.message : String(err), message)
@@ -822,6 +823,80 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
     landChat(chat, from)
   }
 }
+
+// Messages typed into an outside Codex or Claude Code chat while it works elsewhere (owner, 2026-10-14: "Codex should be
+// exactly the same ... There should be input boxes. It should all work the same"): held here, and in localStorage over a
+// reload, then sent the moment the chat is idle there, by the carry-on its composer uses then (resumeExternal); the rest go
+// to the chat that makes, whose own send queue runs them in turn. A working Claude Desktop chat's go to AgentHydra instead,
+// which queues them in the app. A send that fails puts the text back in the box and says why (heldError).
+const HELD_KEY = 'hydra-desk:outside-held'
+const outsideHeld = reactive(new Map<string, { id: number; text: string }[]>())
+const heldErrors = reactive(new Map<string, string>())
+const sendingHeld = new Set<string>()
+let heldSeq = 0
+
+function saveHeld(): void {
+  try {
+    localStorage.setItem(HELD_KEY, JSON.stringify([...outsideHeld].filter(([, list]) => list.length)))
+  } catch {
+    // floor-ok: no storage (a test, a locked profile) keeps the held messages for this window only
+  }
+}
+
+function loadHeld(): void {
+  try {
+    const raw = typeof localStorage === 'undefined' ? null : localStorage.getItem(HELD_KEY)
+    const rows = raw ? (JSON.parse(raw) as [string, { text?: unknown }[]][]) : []
+    for (const [sessionId, list] of Array.isArray(rows) ? rows : []) {
+      const texts = Array.isArray(list) ? list.map((m) => m?.text).filter((t): t is string => typeof t === 'string' && !!t.trim()) : []
+      if (typeof sessionId === 'string' && texts.length) outsideHeld.set(sessionId, texts.map((text) => ({ id: ++heldSeq, text })))
+    }
+  } catch {
+    // floor-ok: a damaged record holds nothing to send; the next hold writes it again
+  }
+}
+loadHeld()
+
+/** Sends what is held for the session once it can be carried on here; a held session still working waits. */
+async function sendHeld(sessionId: string): Promise<void> {
+  const held = outsideHeld.get(sessionId)
+  if (!held?.length || sendingHeld.has(sessionId) || !findExternal(sessionId)?.canResume) return
+  sendingHeld.add(sessionId)
+  outsideHeld.delete(sessionId)
+  saveHeld()
+  const [first, ...rest] = held
+  try {
+    const { chatId } = await resumeExternal(sessionId, { text: first!.text })
+    for (const m of rest) {
+      await fetchJson(`/chats/${chatId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: m.text } satisfies SendMessageRequest)
+      })
+    }
+  } catch (err) {
+    // resumeExternal keeps a first message refused after its chat was made in that chat; the box gets the text either way.
+    const chatId = externalChatId(sessionId)
+    const back: PutBack = { chatId, text: held.map((m) => m.text).join('\n\n'), images: [] }
+    if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+    if (!back.taken) {
+      const storage = typeof localStorage === 'undefined' ? null : localStorage
+      saveDraft(storage, chatId, putBackDraft(back.text, loadDraft(storage, chatId)))
+    }
+    heldErrors.set(sessionId, err instanceof Error ? err.message : String(err))
+  } finally {
+    sendingHeld.delete(sessionId)
+  }
+}
+
+// A held session is sent the moment the list says it can be carried on (its turn ended there).
+watch(
+  () => [...outsideHeld.keys()].map((id) => `${id}:${findExternal(id)?.canResume ? 1 : 0}`).join(','),
+  () => {
+    for (const id of [...outsideHeld.keys()]) void sendHeld(id)
+  },
+  { immediate: true }
+)
 
 // What the window itself writes into a chat's transcript: a first message refused after its chat was
 // made, which only the window knows of. Kept here, so the chat's items loaded from the server keep it.
@@ -1465,6 +1540,21 @@ export function useDesk() {
     },
 
     /** What was changed in the composer of an outside session before its first message. */
+    /** Messages held for an outside chat at work elsewhere, sent when its turn ends there (sendHeld). */
+    heldFor(sessionId: string): readonly { id: number; text: string }[] {
+      return outsideHeld.get(sessionId) ?? []
+    },
+    /** Why the held messages last failed to go, until the next is held. */
+    heldError(sessionId: string): string | null {
+      return heldErrors.get(sessionId) ?? null
+    },
+    holdFor(sessionId: string, text: string): Promise<void> {
+      heldErrors.delete(sessionId)
+      outsideHeld.set(sessionId, [...(outsideHeld.get(sessionId) ?? []), { id: ++heldSeq, text }])
+      saveHeld()
+      return sendHeld(sessionId)
+    },
+
     externalPatch(sessionId: string): ChatPatch {
       return externalPatches.get(sessionId) ?? {}
     },

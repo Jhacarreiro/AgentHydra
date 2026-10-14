@@ -345,3 +345,26 @@ describe('the row menu through the store', () => {
     expect(desk.external.value.find((s) => s.id === 'm1')).toMatchObject({ title: 'Renamed here', pinned: true, group: 'Ops', archived: false })
   })
 })
+
+describe('a message typed into an outside chat at work elsewhere', () => {
+  test('is held while it works, then carried on the moment it is idle there, the rest sent after it in order', async () => {
+    push({ type: 'external.update', sessions: [session({ id: 'h1', source: 'cli', status: 'working', canResume: false })] })
+    calls.length = 0
+    await desk.holdFor('h1', 'first')
+    await desk.holdFor('h1', 'second')
+    expect(calls).toEqual([])
+    expect(desk.heldFor('h1').map((m) => m.text)).toEqual(['first', 'second'])
+
+    push({ type: 'external.update', sessions: [session({ id: 'h1', source: 'cli', status: 'idle', canResume: true })] })
+    for (let i = 0; i < 50 && calls.filter((c) => c.path.endsWith('/messages')).length < 2; i++) await new Promise((r) => setTimeout(r, 0))
+    expect(calls.map((c) => `${c.method} ${c.path}`)).toEqual([
+      'POST /api/chats/import',
+      'GET /api/chats/new-1/items',
+      'POST /api/chats/new-1/messages',
+      'POST /api/chats/new-1/messages'
+    ])
+    expect(calls.filter((c) => c.path.endsWith('/messages')).map((c) => c.body)).toEqual([{ text: 'first' }, { text: 'second' }])
+    expect(desk.heldFor('h1')).toEqual([])
+    expect(desk.heldError('h1')).toBeNull()
+  })
+})

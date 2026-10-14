@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
-import type { DesktopMessageRequest, DesktopMessageResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, DesktopMessageRequest, DesktopMessageResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
@@ -60,14 +60,39 @@ const inset = ref(0)
 const standIn = computed(() =>
   session.value?.canResume ? externalChat(session.value, src.accounts.value, desk.externalPatch(session.value.id), desk.landingOf(session.value.id)) : null
 )
-// A Claude Desktop chat that is working or waiting on you keeps its composer: a message goes into that chat
-// (AgentHydra queues it there; it runs when the turn ends), text only. A terminal session has no such way in.
-const desktopChat = computed(() => {
+// A chat at work elsewhere keeps its composer, as one here does (owner, 2026-10-14: "Codex should be exactly the same. I
+// shouldn't be able to tell if I'm using Claude or Codex ... There should be input boxes"). A Claude Desktop chat's message
+// goes into that chat (AgentHydra queues it there); a Codex or Claude Code chat's is held here and sent when the turn ends
+// (desk.holdFor). Each runs when the turn ends, text only.
+const holdsHere = computed(() => {
   const s = session.value
-  if (standIn.value || !s || s.source !== 'desktop' || !isWorking.value) return null
+  return !!s && (s.source === 'cli' || (s.source === 'codex' && !!s.codexAccountId))
+})
+const workingChat = computed(() => {
+  const s = session.value
+  if (standIn.value || !s || !isWorking.value || !(s.source === 'desktop' || holdsHere.value)) return null
   return externalChat(s, src.accounts.value)
 })
 const INTO_WHY = 'Text only: a message into a working Claude Desktop chat has no pictures or voice.'
+const HOLD_WHY = 'Text only: a message for a chat at work elsewhere is sent when its turn ends, with no pictures or voice.'
+const into = computed(() =>
+  holdsHere.value ? { send: (text: string) => desk.holdFor(props.sessionId, text), why: HOLD_WHY } : { send: sendInto, why: INTO_WHY, stop: stopInto }
+)
+const queuedLines = computed(() => (holdsHere.value ? desk.heldFor(props.sessionId) : queued.value))
+const heldError = computed(() => desk.heldError(props.sessionId))
+const composerChat = computed(() => standIn.value ?? workingChat.value)
+// The chat at work, as the transcript's working line (WorkingFooter) reads a chat here: its status, what it does, since when.
+const liveChat = computed<ChatSummary | null>(() =>
+  workingChat.value
+    ? {
+        ...workingChat.value,
+        status: session.value?.status === 'needs_you' ? 'needs_you' : 'working',
+        activity: session.value?.activity ?? null,
+        turnStartedAt: doing.value.since ?? null,
+        queuedCount: queuedLines.value.length
+      }
+    : null
+)
 const queued = ref<{ id: number; text: string }[]>([])
 let queuedId = 0
 async function sendInto(text: string): Promise<void> {
@@ -338,7 +363,7 @@ onUnmounted(() => {
         :chat-id="sessionId"
         :items="shown"
         :read-only="!standIn"
-        :chat="standIn"
+        :chat="standIn ?? liveChat"
         :find="find"
         :compact="displayPrefs.compact"
         :inset-top="inset"
@@ -351,32 +376,19 @@ onUnmounted(() => {
       />
     </div>
 
-    <template v-if="standIn">
-      <!-- In place or as a copy, and on which account: the info mark in the composer's toolbar says it on hover. -->
-      <Composer :key="standIn.id" :chat="standIn" :note="continueNote || undefined" />
-    </template>
-
-    <template v-else-if="desktopChat && session">
-      <!-- Room below (owner, 2026-10-08: "it's too close" to the composer); above, the transcript's own 20px is the gap, a
-           turn's, as between any two rows (owner, 2026-10-08: the last ones had "way too big of gaps"). -->
-      <div class="shrink-0 px-8 pb-4 pt-1">
-        <Tip :label="liveWhere">
-          <p class="mx-auto flex h-6 w-full max-w-3xl items-center gap-1.25 px-2 text-ui-lg leading-5 text-(--text-muted)" role="status">
-            <span class="flex size-6 shrink-0 items-center justify-center">
-              <WorkingMark v-if="working" :label="glyph?.label ?? 'Working'" />
-              <span v-else role="img" :aria-label="glyph?.label" class="size-1.5 rounded-full" :class="dotClass" />
-            </span>
-            <span class="min-w-0 truncate" :class="working ? 'tx-shimmer' : 'text-warning-text'">{{ liveText }}</span>
-            <RevealStep v-if="liveStep" @click="revealLive" />
-            <span v-if="liveFor" class="ms-0.5 shrink-0 tabular-nums text-ui" aria-hidden="true">{{ liveFor }}</span>
-            <span class="sr-only">{{ liveWhere }}</span>
-          </p>
-        </Tip>
-        <ul v-if="queued.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-2 pt-1 ps-8 text-ui-sm leading-4 text-(--text-muted)" aria-label="Queued messages">
-          <li v-for="q in queued" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
-        </ul>
-      </div>
-      <Composer :key="desktopChat.id" :chat="desktopChat" :into="{ send: sendInto, why: INTO_WHY, stop: stopInto }" />
+    <!-- One composer whether the chat is idle there or at work, so the box never comes and goes (owner, 2026-10-14:
+         "Codex should be exactly the same ... There should be input boxes"). At work, the working line is the
+         transcript's own last row, as in a chat here. -->
+    <template v-if="composerChat">
+      <ul v-if="workingChat && queuedLines.length" class="mx-auto flex w-full max-w-3xl flex-col gap-0.5 px-6 pb-1 text-ui-sm leading-4 text-(--text-muted)" aria-label="Queued messages">
+        <li v-for="q in queuedLines" :key="q.id" class="truncate" role="status">Queued, runs when this turn ends: {{ q.text }}</li>
+      </ul>
+      <!-- What was held for this chat while it worked and could not be sent: back in the box, and why. -->
+      <p v-if="standIn && heldError" class="mx-auto w-full max-w-3xl px-6 pb-1 text-ui-sm text-(--danger-text)" role="alert">
+        Not sent: {{ heldError }} It is back in the box.
+      </p>
+      <!-- Idle: in place or as a copy, and on which account (the info mark in the composer's toolbar says it on hover). -->
+      <Composer :key="composerChat.id" :chat="composerChat" :note="standIn ? continueNote || undefined : undefined" :into="standIn ? undefined : into" />
     </template>
 
     <div v-else-if="session && usable" class="shrink-0 px-8 py-3">

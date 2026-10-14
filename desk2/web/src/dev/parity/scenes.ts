@@ -340,3 +340,8 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
 
 PARITY_SCENES.lazy = lazy
 PARITY_SCENES['header-fit-external'] = { ...PARITY_SCENES['external-session']!, sidebarHidden: true }
+// The same session as a Codex chat at work in Codex: its composer and working line are a Claude chat's (owner, 2026-10-14).
+PARITY_SCENES['external-codex'] = {
+  ...PARITY_SCENES['external-session']!,
+  external: PARITY_SCENES['external-session']!.external!.map((s) => ({ ...s, source: 'codex' as const, instance: '#7 alpha', accountId: null, codexAccountId: 'codex-7', activity: 'Using exec' }))
+}
