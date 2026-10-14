@@ -1205,7 +1205,7 @@ export function climayteRun(input: {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
-  refuseDrone(input.origin)
+  refuseDrone(input.origin, input.tasks.every((t) => t.sealed) ? input.tasks.length : 0)
   input.tasks.forEach(checkRole)
   input = { ...input, tasks: input.tasks.map(sealedTask) }
   const defaults = runDefaultsOf(input)
@@ -1244,12 +1244,18 @@ export function climayteRun(input: {
   return runReply(group, repeats, fresh, made, now)
 }
 
-/** A drone never starts workers (roleOf): its dispatch is refused, and the refusal is logged on the drone. */
-function refuseDrone(origin: CliMayteOrigin | undefined): void {
+/** A drone never starts workers (roleOf): its dispatch is refused, and the refusal is logged on the drone.
+ *  Sealed visitors are the exception (`visitors`: how many, when every task is sealed): one has only the
+ *  tools it names and starts nothing itself, and a drone's check may need a wave of them. */
+function refuseDrone(origin: CliMayteOrigin | undefined, visitors = 0): void {
   const caller = originFor(origin)
   if (caller?.kind !== 'worker') return
   const w = workers.get(caller.workerId)
   if (!w || roleOf(w) !== 'drone') return
+  if (visitors > 0) {
+    journal(w, 'visitors', { notice: String(visitors) })
+    return
+  }
   journal(w, 'refused', { notice: DRONE_REFUSAL })
   throw new Error(DRONE_REFUSAL)
 }

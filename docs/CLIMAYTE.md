@@ -607,7 +607,7 @@ Every worker has exactly one role, stored on it, returned in climayte_status and
 
 - **prime**: a chat worker that is not a pinned sub-manager chat (`chat: true`, no `desk.manager`).
 - **seat**: a worker carrying a persona, dispatched with `role: 'seat'` and `persona: '<catalog id>'` (the persona must be in the hydra-core catalog, or the dispatch is refused); or a chat worker with `desk.manager` set.
-- **drone**: everything else. A drone never starts workers: its climayte_run, climayte_manage and fan_out are refused with "A drone never starts workers..." and the refusal is journaled as `refused` on the drone. Its brief tells it to end its report with a `TOO BIG:` line and a suggested split when a job is too big for one session; whoever started it splits the job.
+- **drone**: everything else. A drone never starts workers: its climayte_run, climayte_manage and fan_out are refused with "A drone never starts workers..." and the refusal is journaled as `refused` on the drone. Its brief tells it to end its report with a `TOO BIG:` line and a suggested split when a job is too big for one session; whoever started it splits the job. One exception: a drone may start sealed visitors (a climayte_run whose every task is `sealed`), since a sealed worker has only the tools it names and starts nothing itself; each such dispatch is journaled as `visitors` on the drone, with the count.
 
 Prime, seat and no-worker callers dispatch as before. Manager workers (`kind: 'manage'`) are drones; their wave tasks are dispatched by the manager (climayte-manager-mcp), with no origin, so the refusal does not reach them.
 

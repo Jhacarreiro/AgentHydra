@@ -42,6 +42,7 @@ export type CliMayteJournalEvent =
   | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
   | 'priority' // its priority was changed (climayteSetPriority)
   | 'refused' // a drone asked to start workers, and was refused (`notice`: the refusal's first words)
+  | 'visitors' // a drone started sealed visitors, which it may (`notice`: how many)
   | 'nudged' // an idle account was sent one cheap prompt to start its 5-hour window (session-keepalive.ts); id and group 'keepalive'
   | 'done'
   | 'failed'

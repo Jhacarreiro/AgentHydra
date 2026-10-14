@@ -125,6 +125,37 @@ describe('dispatch by role', () => {
     expect(refused.length).toBeGreaterThan(0)
   })
 
+  test('a drone may start sealed visitors, and each such dispatch is journaled', () => {
+    const drone = start({ title: 'Drone visitor fixture' })
+    const promptFile = join(scratch, 'visitor.md')
+    const mcpConfig = join(scratch, 'visitor-mcp.json')
+    writeFileSync(promptFile, 'You are an invented visitor.')
+    writeFileSync(mcpConfig, JSON.stringify({ mcpServers: {} }))
+    const sealed = { systemPromptFile: promptFile, mcpConfig, allowedTools: ['mcp__hands__*'] }
+    const r = climayteRun({
+      tasks: [
+        { prompt: 'Visit the page.', cwd: CWD, title: 'Visitor 1', sealed },
+        { prompt: 'Visit the page.', cwd: CWD, title: 'Visitor 2', sealed },
+      ],
+      group: GROUP,
+      origin: originOf(drone),
+    })
+    expect(r.workers.length).toBe(2)
+    const logged = readJournal(JOURNAL_PATH, { id: drone.id }).filter((e) => e.event === 'visitors')
+    expect(logged.map((e) => e.notice)).toEqual(['2'])
+    // One unsealed task among them is still a drone dispatching work.
+    expect(() =>
+      climayteRun({
+        tasks: [
+          { prompt: 'Visit the page.', cwd: CWD, title: 'Visitor 3', sealed },
+          { prompt: 'Start a sub-job.', cwd: CWD, title: 'Sub-job' },
+        ],
+        group: GROUP,
+        origin: originOf(drone),
+      }),
+    ).toThrow(DRONE_REFUSAL)
+  })
+
   test('a drone caller is refused by climayte_manage', async () => {
     const drone = start({ title: 'Drone manage fixture' })
     await expect(
