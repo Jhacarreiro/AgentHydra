@@ -6,7 +6,7 @@
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type Directive } from 'vue'
 import { LoaderCircle } from '@lucide/vue'
 import { icons } from '@/lib/icons'
-import type { ChatSummary, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { watchTranscript } from '@/lib/chat-audio'
 import { buildRows, estimateHeight } from './lib/rows'
@@ -14,7 +14,7 @@ import { newestBrowserCalls } from './lib/tools'
 import { redesignState } from './lib/redesign'
 import { groupRows, liveRow, rowGap, type DisplayRow } from './lib/groups'
 import { prefixOffsets, rowAt, visibleRange } from './lib/window'
-import { nextMessageStep, stepTarget } from './lib/steps'
+import { nextMessageStep, sentOverIndex, stepTarget } from './lib/steps'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
 import { COLLAPSE_MS } from './lib/motion'
@@ -58,6 +58,10 @@ const props = defineProps<{
   olderCount?: number
   /** The page above is being fetched: a spinner row shows at the top. */
   loadingOlder?: boolean
+  /** The chat's index: the step arrows and the peek reach every message sent, loaded or not. */
+  index?: TranscriptIndex | null
+  /** One item by id, for the peek of a message that is not loaded. */
+  fetchItem?: (id: string) => Promise<TranscriptItem | null>
 }>()
 const emit = defineEmits<{ loadOlder: [] }>()
 
@@ -362,7 +366,7 @@ const sent = computed(() => {
     ids.push(r.id)
     tops.push(rowTop(i))
   })
-  return { ids, tops }
+  return sentOverIndex({ ids, tops }, props.index?.userMessages, avgRow.value, 20 + (props.insetTop ?? 0))
 })
 
 // A step glides there by the transcript's own frames, not the browser's smooth scroll. The rows on the way start as
@@ -447,22 +451,53 @@ function stopGlide() {
   heading.value = null
 }
 onBeforeUnmount(stopGlide)
+/** Asks for the page above until the row `id` is loaded; false when the pages ran out first. */
+async function ensureLoaded(id: string): Promise<boolean> {
+  for (let n = 0; n < 200 && !indexById.value.has(id); n++) {
+    if ((props.olderCount ?? 0) <= 0 && !props.loadingOlder) return false
+    const had = props.items.length
+    if (!props.loadingOlder) emit('loadOlder')
+    await nextTick()
+    for (let ms = 0; ms < 15_000 && props.loadingOlder; ms += 25) await new Promise((r) => setTimeout(r, 25))
+    await nextTick()
+    if (props.items.length === had && !indexById.value.has(id)) return false
+  }
+  return indexById.value.has(id)
+}
+async function glideToMessage(id: string) {
+  if (!indexById.value.has(id) && !(await ensureLoaded(id))) return
+  glideTo(id)
+}
 function stepUp() {
   const i = prevStep.value
-  if (i !== null) glideTo(sent.value.ids[i]!)
+  if (i !== null) void glideToMessage(sent.value.ids[i]!)
 }
 function stepDown() {
   const i = nextStep.value
-  glideTo(i === null ? null : sent.value.ids[i]!)
+  if (i === null) glideTo(null)
+  else void glideToMessage(sent.value.ids[i]!)
 }
 
 // The peek under the arrows (parts/MessagePeek.vue): the message the up arrow would go to, shown in a tray over the
 // top while the view stays put. A second press closes it.
 const peekId = ref<string | null>(null)
+const peekFetched = shallowRef<Extract<TranscriptItem, { kind: 'user' }> | null>(null)
 const peekItem = computed(() => {
   const i = peekId.value === null ? undefined : indexById.value.get(peekId.value)
   const r = i === undefined ? undefined : display.value[i]
-  return r?.kind === 'item' && r.item.kind === 'user' ? r.item : null
+  if (r?.kind === 'item' && r.item.kind === 'user') return r.item
+  return peekFetched.value && peekFetched.value.id === peekId.value ? peekFetched.value : null
+})
+// A message outside the loaded rows is fetched by its id for the tray.
+watch(peekId, async (id) => {
+  peekFetched.value = null
+  if (!id || indexById.value.has(id) || !props.fetchItem) return
+  try {
+    const it = await props.fetchItem(id)
+    if (it && it.kind === 'user' && peekId.value === id) peekFetched.value = it
+  } catch {
+    peekId.value = null // floor-ok: nothing to show; the tray closes
+  }
 })
 function peek() {
   const i = prevStep.value
@@ -471,7 +506,7 @@ function peek() {
 function goToPeek() {
   const id = peekId.value
   peekId.value = null
-  if (id) glideTo(id)
+  if (id) void glideToMessage(id)
 }
 
 let rowObserver: ResizeObserver | null = null

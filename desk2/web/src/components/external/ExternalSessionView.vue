@@ -319,6 +319,8 @@ onUnmounted(() => {
         :running="isWorking"
         :older-count="olderCount"
         :loading-older="loadingOlder"
+        :index="externalIndexBySession.get(sessionId) ?? null"
+        :fetch-item="(id: string) => api.externalItem?.(sessionId, id, session?.cwd) ?? Promise.resolve(null)"
         @load-older="loadOlderPage"
       />
     </div>

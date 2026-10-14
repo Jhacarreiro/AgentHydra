@@ -4,6 +4,7 @@ import type { ChatSummary, TranscriptIndex } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
+import { usePaneApi } from '@/components/panes/api'
 import Composer from '@/components/composer/Composer.vue'
 import { OPEN_CLIMAYTE_EVENT, OPEN_DIFF_EVENT, OPEN_REPOYETI_EVENT } from '@/components/composer/api'
 import { OPEN_BROWSER_EVENT, type BrowserOpenRequest } from '@shared/browser'
@@ -80,6 +81,7 @@ type LazyMembers = {
   hasOlder?(id: string): boolean
 }
 const src = useShellSource() as ReturnType<typeof useShellSource> & LazyMembers
+const paneApi = usePaneApi()
 // A reload (a right-click Refresh, a new build) comes back to the same screen: the store keeps Desk's view,
 // and the rest is kept here (lib/view-memory.ts): the view under Settings, the AgentHydra pane, the Settings
 // page. The demo window starts from its props.
@@ -1096,7 +1098,7 @@ function moveSidebar(side: SidebarSide) {
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" @load-older="loadOlder" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="(id: string) => paneApi.chatItem?.(chat!.id, id) ?? Promise.resolve(null)" @load-older="loadOlder" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
