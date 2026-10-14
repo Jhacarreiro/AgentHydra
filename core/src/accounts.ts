@@ -230,7 +230,21 @@ export function accounts(): Accounts {
         service === 'chatgpt'
           ? free.sort(chatgptOrder)
           : free.filter((a) => a.room > MIN_ROOM).sort(agentOrder)
-      if (!best) return { why: `No ${NAME[service]} account has room now.` }
+      if (!best) {
+        // Why each was passed over, for the core's log: the chat says only that none had room.
+        const all = (await current())[service]
+        console.warn(
+          `[core:accounts] no ${service}: ${
+            all
+              .map(
+                (a) =>
+                  `${a.id.slice(0, 8)} ${avoid.has(a.id) ? 'tried' : (holds.get(a.id) ?? 0) > now ? 'held' : `room ${a.room}`}`,
+              )
+              .join(', ') || 'none listed'
+          }`,
+        )
+        return { why: `No ${NAME[service]} account has room now.` }
+      }
       lastPicked.set(best.id, now)
       return best
     },

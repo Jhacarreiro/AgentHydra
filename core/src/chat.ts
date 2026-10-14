@@ -47,6 +47,9 @@ export function str(v: unknown, what: string): string {
 
 const LABEL: Record<Service, string> = { claude: 'Claude', codex: 'Codex', chatgpt: 'ChatGPT' }
 const NEW_TITLE = 'New chat'
+/** A message every login throttled (a 429) waits this long between tries, for up to THROTTLE_WAIT_MS in all. */
+const THROTTLE_RETRY_MS = 15_000
+const THROTTLE_WAIT_MS = 4 * 60_000
 const SELF = `http://127.0.0.1:${process.env.CORE_PORT ?? 7789}/api`
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
 
@@ -341,10 +344,21 @@ export class Chats {
     e.chat.serviceRanOn = service === 'claude' ? undefined : service
     let thread = this.boundThread(e, service)
     const avoid = new Set<string>()
+    /** Logins that throttled this message: tried again once the rest are spent, for up to THROTTLE_WAIT_MS. */
+    const throttled = new Set<string>()
     for (;;) {
       const picked = await this.accountFor(service, thread, avoid)
       if (!this.alive(e)) return { ok: false }
-      if ('why' in picked) return { ok: false, error: picked.why }
+      if ('why' in picked) {
+        if (!throttled.size || Date.now() - started > THROTTLE_WAIT_MS)
+          return { ok: false, error: picked.why }
+        // Every login with room is throttling: a 429 passes, so the message waits and tries them again (2026-10-14,
+        // probe round 5: two logins answering 429 and two at their limit, and three chats gave up at once).
+        if (!(await this.backOff(e, service))) return { ok: false }
+        for (const id of throttled) avoid.delete(id)
+        throttled.clear()
+        continue
+      }
       if (e.interrupted) return { ok: false }
       this.bindAccount(e, service, picked)
       // The turn before this one may still hold the thread: its backend lets go only after it has ended (Codex's
@@ -367,13 +381,38 @@ export class Chats {
       e.chat.status = 'working'
       this.save(e)
       const end = await turn.done
-      if (!this.alive(e) || e.interrupted || end.limitedUntil === undefined) return end
-      this.d.accounts.hold(picked.id, end.limitedUntil)
+      if (!this.alive(e) || e.interrupted || (end.limitedUntil === undefined && !end.throttled))
+        return end
+      if (end.throttled && thread && Date.now() - started < THROTTLE_WAIT_MS) {
+        // A thread lives on its login: a throttle there is waited out on the same thread, not moved.
+        console.warn(
+          `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} throttled; waiting`,
+        )
+        if (!(await this.backOff(e, service))) return { ok: false }
+        continue
+      }
+      if (end.limitedUntil !== undefined) this.d.accounts.hold(picked.id, end.limitedUntil)
+      else throttled.add(picked.id)
       avoid.add(picked.id)
+      console.warn(
+        `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} ${end.limitedUntil === undefined ? 'throttled' : `held until ${new Date(end.limitedUntil).toISOString()}`}: ${end.error ?? ''}`,
+      )
       // The next account starts a new thread, and reads what the held one said first.
       thread = undefined
-      lead = this.handoff(e, started, sentId, { why: 'usage limit' })
+      lead = this.handoff(e, started, sentId, {
+        why: end.throttled ? 'the provider throttled the account' : 'usage limit',
+      })
     }
+  }
+
+  /** Waits THROTTLE_RETRY_MS, saying so in the chat; false once the chat is deleted or stopped meanwhile. */
+  private async backOff(e: Entry, service: Service): Promise<boolean> {
+    this.sink(e, service).activity(`${LABEL[service]} is busy right now; trying again shortly`)
+    for (let waited = 0; waited < THROTTLE_RETRY_MS; waited += 1000) {
+      await new Promise((resolveTick) => setTimeout(resolveTick, 1000))
+      if (!this.alive(e) || e.interrupted) return false
+    }
+    return true
   }
 
   private finish(e: Entry, end: TurnEnd, started: number): void {
@@ -441,6 +480,9 @@ export class Chats {
     if (thread) {
       const bound = await this.d.accounts.find(service, thread.accountId)
       if (bound) return bound
+      console.warn(
+        `[core:chat] ${service} thread's account ${thread.accountId.slice(0, 8)} is not listed`,
+      )
     }
     return this.d.accounts.pick(service, avoid)
   }

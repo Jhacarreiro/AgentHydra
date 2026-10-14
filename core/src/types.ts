@@ -60,6 +60,9 @@ export interface TurnEnd {
   durationMs?: number
   /** The account ran into a usage limit: held until then (epoch ms), and the message goes on another account. */
   limitedUntil?: number
+  /** The provider is throttling this account for now (a 429): this message goes on another account, and the account is
+   *  not held, since a hold on every throttled login left none to pick (2026-10-14, probe round 4). */
+  throttled?: boolean
 }
 
 export interface Turn {

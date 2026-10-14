@@ -3,13 +3,13 @@
 ## Status
 
 <!-- rewritten by frontier.py on every `next`; hand notes go in the Log -->
-<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null]], "iteration": 3, "last": {"at": "2026-10-14T07:09Z", "frontier": {"detail": {"queued": [false, true], "queuedCount": 0, "replies": [], "status": "error", "stillMarkedQueued": [false, false]}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-queue", "passed": null}, "green": 16, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
+<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null], ["codex-held-elsewhere", null], ["codex-held-elsewhere", null]], "iteration": 5, "last": {"at": "2026-10-14T07:49Z", "frontier": {"detail": {"firstError": "The Codex app on #60 test2 has this chat open, so only it can write to it now. Close the chat there, then send again.", "holderSaid": "holding", "holding": true, "last": "PINOK", "sameThread1": true, "sameThread2": false}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-held-elsewhere", "passed": null}, "green": 20, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
 - goal: A fresh AgentHydra core (accounts + a message -> the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it
 - probe: `C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run "bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts"`
-- updated: 2026-10-14T07:09Z
-- frontier: `codex-queue` FIX
-- stages green: 16/23
-- iterations: 3
+- updated: 2026-10-14T07:49Z
+- frontier: `codex-held-elsewhere` FIX
+- stages green: 20/23
+- iterations: 5
 - stalled: no
 
 ## Log
@@ -32,3 +32,7 @@
 - 2026-10-14T07:19Z analyze: Round 3 (16/23): 4 Codex stages 'No Codex account has room now' (an unread usage window counted as room 0, so a login whose read timed out was never picked); codex-import-race and codex-held-elsewhere 'thread never listed as outside' (the probe-folder filter sat in the shared mapExternal, so the core hid the probe's own threads); task-many empty (HSwarm --json is indented, the parse read only its last line; every ChatGPT account refused the name 'Reply with exactly...' with name_conflict, since earlier rounds made a chat of that name on each).
 - 2026-10-14T07:19Z fix: accounts.ts: unread counts as half full (Desk's rule) and each account keeps its last good reading. The throwaway filter moved out of mapExternal into Desk's externalSessions and the core's route, both with ?throwaway=1 for the probe. tasks.ts parses the indented answer and logs each failed attempt. A ChatGPT chat's name is its title plus the chat id's start, in the core and in Desk's live runtime (the same name_conflict hit two Desk chats with one title on one account). Core idleTimeout 120 s (Bun's 10 s default reset a 30 s task wait).
 - 2026-10-14T07:19Z verify: task-many and task-api alone on the core: 2 of 2 (task-many 6/6 in 9 s, all on ChatGPT).
+- 2026-10-14T07:40Z probe: frontier `codex-held-elsewhere` FIX [20/23 green]
+- 2026-10-14T07:49Z probe: frontier `codex-held-elsewhere` FIX [20/23 green]
+- 2026-10-14T07:50Z verify: Round 5: 20/23, same three. The new log: two Codex logins answered real OpenAI 429s, a third hit its usage limit ('try again at 2:48 AM', minutes away, yet held 60 min), the fourth is at 100%. So the core gave up while the fleet was briefly short.
+- 2026-10-14T07:50Z fix: chat.ts: when every login with room has throttled a message, it waits 15 s and tries them again, up to 4 min; a throttle on a chat's bound thread is waited out on that thread instead of moving (held-elsewhere's second send lost its thread that way). codex.ts holds a limited login until the time Codex states, else 60 min.

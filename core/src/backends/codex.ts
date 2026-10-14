@@ -39,9 +39,19 @@ interface Live {
 
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
+/** When a limit ends, from Codex's "...or try again at 2:48 AM." (local time): the next time the clock reads it, else
+ *  LIMIT_HOLD_MS from now (2026-10-14: a login whose limit ended in minutes was held an hour). */
+function limitEnds(message: string, now: number): number {
+  const m = /try again at (\d{1,2}):(\d{2})\s*([AP]M)/i.exec(message)
+  if (!m) return now + LIMIT_HOLD_MS
+  const at = new Date(now)
+  at.setHours((Number(m[1]) % 12) + (m[3].toUpperCase() === 'PM' ? 12 : 0), Number(m[2]), 0, 0)
+  if (at.getTime() <= now) at.setDate(at.getDate() + 1)
+  return at.getTime()
+}
+
 /** A login OpenAI is throttling ('exceeded retry limit, last status: 429 Too Many Requests') is not at its usage limit:
- *  it is held this long and the turn moves to another account (README: a limit or a failure moves it to the next A). */
-const THROTTLE_HOLD_MS = 2 * 60_000
+ *  the turn moves to another account (README: a limit or a failure moves it to the next A). */
 const throttled = (message: string): boolean => /\b429\b|too many requests/i.test(message)
 
 let media: MediaCache | null = null
@@ -110,11 +120,8 @@ export function codexBackend(): Backend {
         running.clear()
         const info = turn.error?.codexErrorInfo
         if (turn.status === 'failed' && isLimit(info)) {
-          end({
-            ok: false,
-            error: turn.error?.message || 'Codex hit its usage limit.',
-            limitedUntil: now + LIMIT_HOLD_MS,
-          })
+          const error = turn.error?.message || 'Codex hit its usage limit.'
+          end({ ok: false, error, limitedUntil: limitEnds(error, now) })
           return
         }
         const ok = turn.status === 'completed'
@@ -127,7 +134,7 @@ export function codexBackend(): Backend {
           ok,
           durationMs: turn.durationMs ?? now - started,
           ...(error ? { error } : {}),
-          ...(error && throttled(error) ? { limitedUntil: now + THROTTLE_HOLD_MS } : {}),
+          ...(error && throttled(error) ? { throttled: true } : {}),
         })
       }
 
@@ -278,9 +285,9 @@ export function codexBackend(): Backend {
           const message = errorText(err)
           end(
             /usage limit/.test(message)
-              ? { ok: false, error: message, limitedUntil: Date.now() + LIMIT_HOLD_MS }
+              ? { ok: false, error: message, limitedUntil: limitEnds(message, Date.now()) }
               : throttled(message)
-                ? { ok: false, error: message, limitedUntil: Date.now() + THROTTLE_HOLD_MS }
+                ? { ok: false, error: message, throttled: true }
                 : { ok: false, error: message },
           )
         } finally {
