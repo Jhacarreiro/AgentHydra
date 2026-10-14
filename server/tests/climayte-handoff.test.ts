@@ -1,8 +1,10 @@
 // When CliMayte asks a session to hand off for its conversation's size (climayte-lib.ts).
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, writeFileSync } from 'node:fs'
+import { afterEach, describe, expect, test } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { journal, workers } from '../src/climayte-core'
+import type { CliMayteAccount, CliMayteWorker } from '../src/climayte-lib'
 import {
   contextTokens,
   continuationPrompt,
@@ -12,7 +14,10 @@ import {
   windDownAt,
   windDownMessage,
 } from '../src/climayte-lib'
+import { scheduleDue, setLauncher, tickState } from '../src/climayte-schedule'
 import { withStops } from '../src/climayte-stops'
+import { climayteJournal } from '../src/climayte-view'
+import './no-chats'
 
 describe('continuationPrompt', () => {
   const args = ['the task', 'the handoff', 'h.md', ['t.jsonl'], []] as [
@@ -221,5 +226,111 @@ describe('the w-984f4bed sequence (invented text)', () => {
     expect(windDownMessage({ reason: 'context', tokens: 210_000 }, path, true)).not.toContain(
       'one line saying the handoff',
     )
+  })
+})
+
+describe('a launch that threw after its runner started', () => {
+  // 2026-10-02: the launch wrote its 'moved' event and then threw before the worker was
+  // marked running. Its runner was live, but the worker stayed queued on the account it left, so the
+  // next tick launched the same handoff again: two runners, and two 'moved' events from one account.
+  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-handoff-retry-'))
+  const configDir = (name: string): string => {
+    const dir = join(root, name)
+    mkdirSync(dir, { recursive: true })
+    return dir
+  }
+  const from: CliMayteAccount = {
+    id: 'handoff-from',
+    num: 191,
+    name: 'from@example.com',
+    configDir: configDir('from'),
+    sessionPct: 80,
+    weekPct: 30,
+  }
+  const to: CliMayteAccount = {
+    id: 'handoff-to',
+    num: 192,
+    name: 'to@example.com',
+    configDir: configDir('to'),
+    sessionPct: 0,
+    weekPct: 0,
+  }
+  const accounts = [from, to]
+  const now = Date.now()
+  const id = 'handoff-retry-w'
+
+  afterEach(() => {
+    setLauncher(null)
+    workers.delete(id)
+    rmSync(root, { recursive: true, force: true })
+  })
+
+  test('one handoff starts one runner, whatever the ticks after a failed bookkeeping step', () => {
+    const w = {
+      id,
+      group: 'g-handoff-retry',
+      title: 'handoff retry',
+      cwd: 'C:/Users/me/repo',
+      prompt: 'p',
+      pending: [],
+      model: null,
+      effort: null,
+      accounts: null,
+      status: 'queued',
+      accountId: from.id,
+      sessionId: 'handoff-session',
+      attempts: [
+        {
+          account: { id: from.id, num: from.num, name: from.name, configDir: from.configDir },
+          outcome: 'handoff',
+          endedAt: now - 1_000,
+          startedAt: now - 60_000,
+          log: '',
+          errLog: '',
+          runner: null,
+        },
+      ],
+      result: null,
+      error: null,
+      lastActivity: null,
+      costUsd: 0,
+      turns: 0,
+      moves: 0,
+      retries: 0,
+      notBefore: null,
+      createdAt: now,
+      updatedAt: now,
+    } as unknown as CliMayteWorker
+    workers.set(id, w)
+
+    let launches = 0
+    setLauncher((task, acct) => {
+      launches++
+      // What launch() does: the attempt is recorded and its runner is up, then the bookkeeping
+      // after the spawn throws (here: the journal write of the 'moved' line fails on the first).
+      task.attempts.push({
+        account: { id: acct.id, num: acct.num, name: acct.name, configDir: acct.configDir },
+        outcome: 'running',
+        startedAt: Date.now(),
+        endedAt: null,
+        log: '',
+        errLog: '',
+        runner: null,
+      } as unknown as CliMayteWorker['attempts'][number])
+      journal(task, 'moved', { from: '#191', account: `#${acct.num}` })
+      if (launches === 1) throw new Error('journal write failed after the runner started')
+      task.accountId = acct.id
+      task.status = 'running'
+    })
+
+    scheduleDue(tickState(accounts, now), [w])
+    // The retry is due ten seconds later; a later tick must not start the handoff again.
+    scheduleDue(
+      tickState(accounts, now + 60_000),
+      [w].filter((x) => x.status === 'queued'),
+    )
+
+    expect(launches).toBe(1)
+    expect(climayteJournal({ id }).filter((e) => e.event === 'moved')).toHaveLength(1)
   })
 })

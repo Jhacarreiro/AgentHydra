@@ -446,6 +446,16 @@ function holdForReset(
 /** A throw after the spawn leaves a live attempt. One before it (a file lock on the
  *  transcript copy or the prompt file) is usually passing: retry it, three times per turn. */
 function retryLaunch(w: CliMayteWorker, acct: CliMayteAccount, err: unknown): void {
+  // A live attempt is adopted, never launched again beside it: its runner is already working the
+  // handoff, and a second one on another account would run the same task twice (launch() records
+  // the attempt before its bookkeeping, which is where a throw comes from).
+  const live = w.attempts.at(-1)
+  if (live?.outcome === 'running') {
+    w.accountId = live.account.id
+    w.status = 'running'
+    changed(w)
+    return
+  }
   if (w.status === 'running' || w.status === 'failed') return
   const msg = err instanceof Error ? err.message : String(err)
   if (w.retries < 3) {
