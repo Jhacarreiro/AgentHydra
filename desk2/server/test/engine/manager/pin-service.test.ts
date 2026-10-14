@@ -178,10 +178,11 @@ test("a usage limit moves the message to another Codex account, whose new thread
   expect(m.get(chat.id).serviceThreads?.codex?.accountId).toBe(BETA.id)
 })
 
-test('pinned back to Claude, the next message carries what was said on Codex, and shows only what was typed', async () => {
-  const { m, q, fake, chat } = await setup()
+test('pinned back to Claude by way of ChatGPT, which never ran, the next message carries what was said on Codex, and shows only what was typed', async () => {
+  const { m, q, fake, chat } = await setup({ free: fakeFree([GPT(3, 'alpha', true)]).free })
   await m.patch(chat.id, { service: 'codex' })
   await codexTurn(fake, m, chat.id, 'Name the module', 'Call it ledger.')
+  await m.patch(chat.id, { service: 'chatgpt' })
   await m.patch(chat.id, { service: null })
   expect(systemTexts(m.listItems(chat.id))).toContain('This chat runs on Claude again.')
 

@@ -89,6 +89,8 @@ export interface ChatSummary {
   serviceThreads?: Partial<Record<PinnedService, ServiceThread>>
   /** When the pin last left each service (epoch ms): the next turn there first reads what was said since, then this is cleared. */
   serviceLeftAt?: Partial<Record<ChatServiceKind, number>>
+  /** The service the chat's last turn ran on, when that was Codex or ChatGPT; absent = Claude. A handoff names it as what ran the chat meanwhile. */
+  serviceRanOn?: PinnedService
   forkedFrom: string | null // the session it was forked from: until it has its own, its next message resumes a fork of that one
   createdAt: number
   updatedAt: number // last activity of any kind

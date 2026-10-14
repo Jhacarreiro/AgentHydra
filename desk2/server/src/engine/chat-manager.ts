@@ -813,6 +813,7 @@ export class ChatManager {
     // copy of it reads back as the message and a muted line (userTurns); a runtime's shows what was typed.
     const lead = e.chat.serviceLeftAt?.claude !== undefined ? this.serviceHandoff(e, 'claude', !e.chat.sessionId && !e.chat.workerId, null) : null
     if (e.chat.serviceLeftAt?.claude !== undefined) this.clearLeftAt(e, 'claude')
+    e.chat.serviceRanOn = undefined
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, lead ? `${lead.text}${ANSWER_NOW}${text}` : text, images, opts, text)
     // Awaited only when there is something to wait for: a new chat's first send starts its process at once.
     if (e.moving) {
@@ -2132,10 +2133,8 @@ export class ChatManager {
     const since = fresh ? 0 : left!
     const items = this.store.loadItems(chat.id).filter((i) => i.ts > since && i.id !== sentId && !(i.kind === 'user' && i.queued))
     if (!items.some((i) => i.kind === 'assistant_text')) return null
-    const last = Object.entries(chat.serviceLeftAt ?? {})
-      .filter(([k]) => k !== kind)
-      .sort((a, b) => b[1] - a[1])[0]
-    const from = movedFrom ?? (last ? SERVICE_LABEL[last[0] as ChatServiceKind] : SERVICE_LABEL.claude)
+    // What last ran a turn, not what the pin last left: Codex -> ChatGPT -> Claude while Codex replied never ran ChatGPT.
+    const from = movedFrom ?? SERVICE_LABEL[chat.serviceRanOn ?? 'claude']
     const text = buildHandoff({
       chatId: chat.id,
       title: chat.title,
@@ -2148,6 +2147,13 @@ export class ChatManager {
       services: { from, to: SERVICE_LABEL[kind] },
     })
     return { text, from }
+  }
+
+  /** A turn starts on `kind`: what it first reads, and from then on a handoff says the chat ran there. */
+  private turnOn(e: Entry, kind: PinnedService, fresh: boolean, sentId: string, movedFrom?: string): { text: string; from: string } | null {
+    const lead = this.serviceHandoff(e, kind, fresh, sentId, movedFrom)
+    e.chat.serviceRanOn = kind
+    return lead
   }
 
   /** The runtime of the service the chat is pinned to; one left from an earlier pin is closed. */
@@ -2171,7 +2177,7 @@ export class ChatManager {
       now: this.now,
       free,
       held: this.chatgptHeld,
-      handoff: (fresh, sentId, movedFrom) => this.serviceHandoff(e, 'chatgpt', fresh, sentId, movedFrom),
+      handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'chatgpt', fresh, sentId, movedFrom),
       caughtUp: () => this.clearLeftAt(e, 'chatgpt'),
     })
   }
@@ -2190,7 +2196,7 @@ export class ChatManager {
         const found = (await dir?.instances().catch(() => []))?.find((i) => i.id === id && i.loggedIn)
         return found ? codexAccount(found) : null
       },
-      handoff: (fresh, sentId, movedFrom) => this.serviceHandoff(e, 'codex', fresh, sentId, movedFrom),
+      handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'codex', fresh, sentId, movedFrom),
       caughtUp: () => this.clearLeftAt(e, 'codex'),
       hold: (accountId, until) => this.codexHeld.set(accountId, until),
     })
