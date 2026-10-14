@@ -5,7 +5,7 @@
 
 import { randomUUID } from 'node:crypto'
 import type { FailureCause, FailureRow, FailuresResponse } from '@shared/protocol'
-import { isUsageLimitText } from './chat-runtime'
+import { isUsageLimitText } from './usage-limit'
 import { dayKey, JsonlLog, safeText } from './diagnostics'
 
 const MAX_MESSAGE = 500

@@ -13,7 +13,8 @@ import type {
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatSummary, DeskSettings, ServerEvent, TranscriptItem } from '@shared/protocol'
-import { ChatRuntime, INTERRUPT_GRACE_MS, isUsageLimitText, type QueryImpl } from '../../../src/engine/chat-runtime'
+import { ChatRuntime, INTERRUPT_GRACE_MS, type QueryImpl } from '../../../src/engine/chat-runtime'
+import { isUsageLimitText } from '../../../src/engine/usage-limit'
 import { DESK_APPEND, DESK_APPEND_NO_DELEGATE } from '../../../src/engine/desk-prompt'
 import { ElicitationAnswerError } from '../../../src/engine/requests'
 import { ChatStore } from '../../../src/engine/store'

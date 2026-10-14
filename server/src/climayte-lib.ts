@@ -411,7 +411,7 @@ export type AccountCaps = Pick<CliMayteAccount, 'maxSessionPct' | 'maxWeekPct'>
 /** Someone else's account right now (owner, 2026-10-02: CliMayte must not "step on the toes of
  *  other accounts running"): a person used its desktop app in the last ten minutes, or Claude
  *  sessions that are not CliMayte's run in its folder, the calling chat's own among them. */
-export function accountInUse(a: CliMayteAccount): boolean {
+export function accountInUse(a: Pick<CliMayteAccount, 'handsOnAgoMs' | 'otherSessions'>): boolean {
   return a.handsOnAgoMs != null || (a.otherSessions ?? 0) > 0
 }
 

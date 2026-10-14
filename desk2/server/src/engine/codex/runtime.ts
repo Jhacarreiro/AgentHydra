@@ -50,7 +50,7 @@ const PROGRESS_EVERY_MS = 400
 const LIMIT_HOLD_MS = 60 * 60_000
 
 /** Codex's approval and sandbox for Desk's permission mode. */
-function policy(mode: PermissionMode): { approvalPolicy: string; sandbox: string; sandboxPolicy: Record<string, unknown> } {
+export function policy(mode: PermissionMode): { approvalPolicy: string; sandbox: string; sandboxPolicy: Record<string, unknown> } {
   if (mode === 'bypassPermissions') return { approvalPolicy: 'never', sandbox: 'danger-full-access', sandboxPolicy: { type: 'dangerFullAccess' } }
   if (mode === 'plan') return { approvalPolicy: 'on-request', sandbox: 'read-only', sandboxPolicy: { type: 'readOnly', networkAccess: true } }
   return {
@@ -61,9 +61,9 @@ function policy(mode: PermissionMode): { approvalPolicy: string; sandbox: string
 }
 
 /** A chat model only Codex knows (a Claude id stays with Claude). */
-const codexModel = (model: string | null): string | null => (model && /^(?:gpt-|o\d|codex)/i.test(model) ? model : null)
+export const codexModel = (model: string | null): string | null => (model && /^(?:gpt-|o\d|codex)/i.test(model) ? model : null)
 
-const isLimit = (info: unknown): boolean => info === 'usageLimitExceeded' || info === 'sessionBudgetExceeded'
+export const isLimit = (info: unknown): boolean => info === 'usageLimitExceeded' || info === 'sessionBudgetExceeded'
 
 export class CodexRuntime extends ServiceRuntime {
   readonly kind = 'codex' as const

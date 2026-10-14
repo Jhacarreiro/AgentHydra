@@ -8,7 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 const root = join(import.meta.dir, '..', '..')
-const port = process.env.CORE_PORT ?? '7799'
+const port = process.env.CORE_PORT ?? '7789'
 const base = `http://127.0.0.1:${port}/api`
 const bootFail = (detail: unknown) => {
   console.log(JSON.stringify({ stages: [{ name: 'boot', status: 'fail', detail }] }))

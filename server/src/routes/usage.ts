@@ -2,6 +2,7 @@ import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
 import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
+import { cliInstancesInUse } from '../climayte-core'
 import { remoteActiveCounts } from '../climayte-remote'
 import { cliAccountUuid } from '../core/account-holders'
 import {
@@ -573,9 +574,12 @@ app.get('/api/cli-instances', async (c) => {
       async ({ i }) => (await readLiveRegistryAsync(i.configDir, { transcripts: false })).length,
     ),
   )
+  // Someone else is on the account now (CliMayte's accountInUse): CliMayte leaves it out for new work.
+  const busy = cliInstancesInUse(rows.map((r) => r.i))
   return c.json(
     rows.map(({ i, uuid, lastUsageCheck }, k) => ({
       ...i,
+      inUse: busy.has(i.id),
       lastNudge: nudges[i.id] ?? null,
       liveSessions: liveSessions[k],
       // The last prompt typed on this login (the CLI appends to history.jsonl) or the last

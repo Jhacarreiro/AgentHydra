@@ -1,5 +1,5 @@
 // The new core's acceptance probe: the 16 live scenarios the old Desk was smoke-tested with on 2026-10-14, run against
-// any server that speaks the chat API (`CORE_URL`, default the new core on 7799; the old Desk is
+// any server that speaks the chat API (`CORE_URL`, default the new core on 7789; the old Desk is
 // `CORE_URL=http://127.0.0.1:7798/api AH_URL=http://127.0.0.1:7787/api`). Each scenario runs in its own throwaway chat
 // and folder, all at once, on the owner's real accounts; every chat it makes is deleted and every Codex thread
 // archived. Prints PASS/FAIL per scenario with its evidence (states, replies to fixed-word prompts, error sentences),
@@ -12,10 +12,12 @@ import { homedir, tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { connectCodexRpc } from '../../server/src/core/codex-rpc'
 
-const BASE = process.env.CORE_URL ?? 'http://127.0.0.1:7799/api'
+const BASE = process.env.CORE_URL ?? 'http://127.0.0.1:7789/api'
 /** Where the session-tail probes go: the core itself, or AgentHydra's daemon when the target is the old Desk. */
 const AH = process.env.AH_URL ?? BASE
 const ROOT = join(tmpdir(), 'agenthydra-smoke')
+/** AgentHydra's daemon, which lists every Codex thread on this PC (the cleanup's sweep of the run's folders). */
+const DAEMON = process.env.DAEMON_URL ?? 'http://127.0.0.1:7787/api'
 const CODEX_HOMES = join(homedir(), '.agenthydra', 'codex-instances')
 const args = process.argv.slice(2)
 const asJson = args.includes('--json')
@@ -1009,6 +1011,14 @@ for (const id of chats) {
     console.log(`cleanup chat ${id.slice(0, 8)} NOT deleted: ${del?.status ?? 'unreachable'}`)
 }
 await Bun.sleep(1500)
+// A thread a stage made but never saw (its chat gone before this read it) is the run's too: every Codex thread in a folder
+// under ROOT goes as well (2026-10-14: 'smoke interrupt (throwaway)' stayed in the Codex list after a run).
+const listed = (await req('GET', '/codex-chats', undefined, DAEMON).catch(() => null))?.json as {
+  rows?: { instanceId: string; threadId: string; cwd?: string }[]
+} | null
+for (const r of listed?.rows ?? [])
+  if (String(r.cwd).includes('agenthydra-smoke'))
+    keep({ accountId: r.instanceId, threadId: r.threadId })
 for (const t of threads)
   console.log(
     `cleanup thread ${t.threadId.slice(0, 8)} ${(await archive(t, 15_000)) >= 0 ? 'archived' : 'NOT archived'}`,

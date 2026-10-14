@@ -57,7 +57,7 @@ login, then an API model). The smoke stages `task-*` are its bar.
 
 <details><summary>Running it</summary>
 
-- `bun core/src/main.ts` serves `http://127.0.0.1:7799/api` (`CORE_PORT`).
+- `bun core/src/main.ts` serves `http://127.0.0.1:7789/api` (`CORE_PORT`).
 - `bun core/smoke/smoke.ts --json` runs the probe against it; `CORE_URL=http://127.0.0.1:7798/api
   AH_URL=http://127.0.0.1:7787/api` runs the same probe against the old Desk, as the baseline.
 - `core/LOOP.md` is the rebuild's frontier loop (`~/.claude/tools/frontier.py`): its Status names the earliest

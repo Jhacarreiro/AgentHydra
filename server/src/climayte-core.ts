@@ -35,6 +35,7 @@ import {
 import {
   type AccountCaps,
   type AttemptSpend,
+  accountInUse,
   addTokens,
   attemptSpend,
   type CliMayteAccount,
@@ -357,6 +358,22 @@ export let claudeCommand: () => string[] = () => [resolveClaudeExe()]
 function otherSessionsIn(configDir: string, mine: Set<string>): number {
   const read = registrations.get(configDir)
   return read ? liveIdsOf(read.regs).filter((id) => !mine.has(id)).length : 0
+}
+
+/** Which CLI instances are someone else's right now: the same accountInUse the pool judges with, over
+ *  the same inputs (the desktop app's last hand, the registrations the tick last read). GET
+ *  /api/cli-instances reads it every ~30 s, so it reads what the tick already holds and nothing more. */
+export function cliInstancesInUse(instances: CliInstance[], now = Date.now()): Set<string> {
+  const mine = ownSessions()
+  const busy = new Set<string>()
+  for (const i of instances) {
+    const inUse = accountInUse({
+      handsOnAgoMs: handsOnAgoMs(i.associatedDesktopDir, now),
+      otherSessions: otherSessionsIn(i.configDir, mine),
+    })
+    if (inUse) busy.add(i.id)
+  }
+  return busy
 }
 
 /** Each pool account's session registrations and when they were read. The pool read every

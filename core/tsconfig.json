@@ -5,7 +5,13 @@
     // The core has no packages of its own: Bun's types (and the Agent SDK) are Desk 2's server's.
     "typeRoots": ["../desk2/server/node_modules/@types"],
     "types": ["bun"],
-    "lib": ["ESNext", "DOM"]
+    "lib": ["ESNext", "DOM"],
+    "paths": {
+      "@shared/*": ["../desk2/shared/*"],
+      "@anthropic-ai/claude-agent-sdk": [
+        "../desk2/server/node_modules/@anthropic-ai/claude-agent-sdk"
+      ]
+    }
   },
   "include": ["src"]
 }
