@@ -122,7 +122,11 @@ function lastTurn(input) {
 }
 
 export function asksQuestion(text) {
-  const prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+  // Markdown headings are labels, not questions (the recap's "## Am I 100% done?" ends every reply).
+  const prose = text
+    .replace(/```[\s\S]*?```/g, "")
+    .replace(/`[^`\n]*`/g, "")
+    .replace(/^#{1,6}\s.*$/gm, "");
   const paragraphs = prose
     .split(/\n\s*\n/)
     .map((paragraph) => paragraph.trim())

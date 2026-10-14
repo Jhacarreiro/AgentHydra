@@ -3,7 +3,7 @@ import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "nod
 import os from "node:os";
 import path from "node:path";
 import { test } from "node:test";
-import { handle } from "../hook.mjs";
+import { asksQuestion, handle } from "../hook.mjs";
 import { defaultHookPath, install, uninstall } from "../install.mjs";
 
 const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT"];
@@ -156,3 +156,8 @@ test("install adds Stop beside an existing Stop hook and uninstall removes only 
     uninstall({ settingsPath, coreDir });
     assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { hooks: { Stop: [other] } });
   }));
+
+test("a markdown heading ending in ? is a label, not a question", () => {
+  assert.equal(asksQuestion("Done.\n\n## Am I 100% done?\nYes.\n\n## Do I recommend anything else?\nNothing."), false);
+  assert.equal(asksQuestion("Done.\n\nShould I push this?"), true);
+});
