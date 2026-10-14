@@ -7,11 +7,8 @@ import { appendLog } from './log'
 import { chatPaths } from './paths'
 import { folderKnowledgeOf, mainRules } from './tree'
 
-export const FOLDER_CAP = 12 * 1024
-export const MATCH_CAP = 2 * 1024
-export const LEAD_CAP = 8 * 1024
+export const TOTAL_CAP = 9500
 const INLINE_MATCHES = 3
-const POINTERS = 5
 const MATCH_MIN = 4
 /** A match is pasted in full only this strong (a name hit or several); weaker ones go as one-line pointers. */
 const INLINE_MIN = 20
@@ -37,6 +34,13 @@ export interface Pack {
 
 type Sent = Record<string, string[]>
 
+interface Sections {
+  folder: string
+  lead: string
+  inline: string[]
+  pointers: string[]
+}
+
 function readSent(file: string): Sent {
   if (!existsSync(file)) return {}
   try {
@@ -46,11 +50,14 @@ function readSent(file: string): Sent {
   }
 }
 
-function capped(text: string, cap: number, where: string): string {
-  const bytes = Buffer.byteLength(text, 'utf8')
-  if (bytes <= cap) return text
-  const head = Buffer.from(text, 'utf8').subarray(0, cap).toString('utf8')
-  return `${head}\n[cut at ${cap} of ${bytes} bytes; the rest is in ${where}]`
+function cutHead(body: string, room: number, where: string): { text: string; kept: number } {
+  if (body.length <= room) return { text: body, kept: body.length }
+  const note = (n: number) =>
+    `\n[cut at ${n} of ${body.length} characters; the rest is in ${where}]`
+  let kept = Math.max(0, room - note(room).length)
+  if (/[\uD800-\uDBFF]/.test(body[kept - 1] ?? '')) kept--
+  if (kept === 0) return { text: '', kept: 0 }
+  return { text: body.slice(0, kept) + note(kept), kept }
 }
 
 function hydraLead(file: string): { name: string; path: string } | null {
@@ -64,16 +71,17 @@ function hydraLead(file: string): { name: string; path: string } | null {
 function leadFileText(path: string): string {
   if (!path) return ''
   if (!isAbsolute(path) || !existsSync(path)) return `(lead text not readable: ${path})`
-  return capped(readFileSync(path, 'utf8'), LEAD_CAP, path)
+  return readFileSync(path, 'utf8')
 }
 
-function entryBlock(e: CatalogEntry, cap: number): string {
-  return `--- ${e.id} (${loadRef(e)}) ---\n${capped(loadText(e), cap, loadRef(e))}`
+function entryBlock(e: CatalogEntry): string {
+  return `--- ${e.id} (${loadRef(e)}) ---\n${loadText(e)}`
 }
 
 /**
- * What Agent Hydra attaches to a chat message: the folder's rules and the matching knowledge in full, the
- * lead, and a closing line the first time. Later messages get only what this session has not been sent yet.
+ * What Agent Hydra attaches to a chat message: the folder's rules and the matching knowledge, the lead, and a
+ * closing line the first time. The text stays within TOTAL_CAP so Claude Code does not save it to a file.
+ * Later messages get only what this session has not been sent yet.
  */
 export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const started = performance.now()
@@ -105,10 +113,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     .filter((s) => s.entry.kind === 'knowledge' && s.score >= INLINE_MIN)
     .slice(0, INLINE_MATCHES)
     .map((s) => s.entry)
-  const pointers = matches
-    .map((s) => s.entry)
-    .filter((e) => !inline.includes(e))
-    .slice(0, POINTERS)
+  const rest = matches.map((s) => s.entry).filter((e) => !inline.includes(e))
 
   const hydra = hydraLead(files.hydraMd)
   const persona = hydra
@@ -121,42 +126,77 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     lead = {
       key: persona.entry.id,
       name: persona.entry.name,
-      text: capped(loadText(persona.entry), LEAD_CAP, loadRef(persona.entry)),
+      text: loadText(persona.entry),
     }
 
-  const parts: string[] = []
-  if (folder.length)
-    parts.push(
-      `Folder rules for ${req.cwd}:\n\n${capped(folder.map((e) => entryBlock(e, FOLDER_CAP)).join('\n\n'), FOLDER_CAP, folder.map(loadRef).join(', '))}`,
-    )
-  if (inline.length)
-    parts.push(
-      `Rulings and knowledge for this message:\n\n${inline.map((e) => entryBlock(e, MATCH_CAP)).join('\n\n')}`,
-    )
-  if (pointers.length)
-    parts.push(
-      `Also matching (core_find { need, chat } loads any of them):\n${pointers.map((e) => `- ${e.id} - ${e.when} (${loadRef(e)})`).join('\n')}`,
-    )
-  if (lead) parts.push(`Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd())
-
-  const closing = `More is one core_find { need: "<what you need>", chat: "${req.chat}" } away; no other manager call is needed.`
-  const header =
-    mode === 'delta'
-      ? 'Hydra Core, new for this message:'
-      : 'Hydra Core attached for this chat and message:'
-  const text =
+  const frame = (parts: string[]) =>
     mode === 'delta'
       ? parts.length
-        ? [header, ...parts].join('\n\n')
+        ? ['Hydra Core, new for this message:', ...parts].join('\n\n')
         : ''
-      : [header, ...parts, closing].join('\n\n')
+      : [
+          'Hydra Core attached for this chat and message:',
+          ...parts,
+          `More is one core_find { need: "<what you need>", chat: "${req.chat}" } away; no other manager call is needed.`,
+        ].join('\n\n')
+  const parts = (s: Sections) =>
+    [
+      s.folder,
+      s.inline.length ? `Rulings and knowledge for this message:\n\n${s.inline.join('\n\n')}` : '',
+      s.pointers.length
+        ? `Also matching (core_find { need, chat } loads any of them):\n${s.pointers.join('\n')}`
+        : '',
+      s.lead,
+    ].filter(Boolean)
+  const fits = (s: Sections) => frame(parts(s)).length <= TOTAL_CAP
 
-  const ids = [
-    ...folder.map((e) => e.id),
-    ...inline.map((e) => e.id),
-    ...pointers.map((e) => e.id),
-    ...(lead ? [lead.key] : []),
-  ]
+  let s: Sections = { folder: '', lead: '', inline: [], pointers: [] }
+  const ids: string[] = []
+
+  if (folder.length) {
+    const prefix = `Folder rules for ${req.cwd}:\n\n`
+    const blocks = folder.map(entryBlock)
+    const cut = cutHead(
+      blocks.join('\n\n'),
+      TOTAL_CAP - frame([prefix]).length,
+      folder.map(loadRef).join(', '),
+    )
+    if (cut.kept > 0) {
+      s.folder = prefix + cut.text
+      let end = -2
+      const ends = blocks.map((b) => (end += b.length + 2))
+      ids.push(...folder.filter((_, i) => ends[i] <= cut.kept).map((e) => e.id))
+    }
+  }
+
+  if (lead) {
+    const full = `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd()
+    const pointer = `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.key}", mode: "become" }.`
+    if (fits({ ...s, lead: full })) s = { ...s, lead: full }
+    else if (fits({ ...s, lead: pointer })) s = { ...s, lead: pointer }
+  }
+
+  const overflow: CatalogEntry[] = []
+  const inlineIds: string[] = []
+  for (const e of inline) {
+    const next = { ...s, inline: [...s.inline, entryBlock(e)] }
+    if (fits(next)) {
+      s = next
+      inlineIds.push(e.id)
+    } else overflow.push(e)
+  }
+
+  const pointerIds: string[] = []
+  for (const e of [...overflow, ...rest]) {
+    const next = { ...s, pointers: [...s.pointers, `- ${e.id} - ${e.when} (${loadRef(e)})`] }
+    if (fits(next)) {
+      s = next
+      pointerIds.push(e.id)
+    }
+  }
+
+  const text = frame(parts(s))
+  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.key] : []))
   const record = mode === 'delta' ? [...seen, ...ids] : ids
   sent[req.session] = [...new Set(record)]
   mkdirSync(dirname(files.sent), { recursive: true })

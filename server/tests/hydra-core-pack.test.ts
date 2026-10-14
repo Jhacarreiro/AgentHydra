@@ -1,7 +1,7 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { existsSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { FOLDER_CAP, packFor } from '../src/hydra-core/pack'
+import { packFor, TOTAL_CAP } from '../src/hydra-core/pack'
 import { chatPaths } from '../src/hydra-core/paths'
 import { scratch } from './hydra-core-fixture'
 
@@ -147,7 +147,7 @@ test('the folder rules and the lead are capped and the cut is named', () => {
   )
   const pack = packFor(dir, req('hello'))
   expect(pack.text).toContain('[cut at')
-  expect(Buffer.byteLength(pack.text, 'utf8')).toBeLessThan(FOLDER_CAP + 4096)
+  expect(pack.text.length).toBeLessThanOrEqual(TOTAL_CAP)
 })
 
 test('a pack is logged with its mode, ids, bytes and time', () => {
@@ -173,4 +173,142 @@ test('a message with nothing matching and no folder rules sends the closing line
   expect(pack.mode).toBe('first')
   expect(pack.ids).toEqual([])
   expect(pack.text).toContain('core_find')
+})
+
+const knowledge = (id: string, name: string, when: string, path: string) => ({
+  id,
+  kind: 'knowledge',
+  name,
+  when,
+  tags: [],
+  cost: 'free',
+  how: 'read it',
+  load: { type: 'file', path },
+})
+
+test('a first pack with big folder rules, lead and matches stays within the cap', () => {
+  writeFileSync(
+    join(dir, 'folder-8k.md'),
+    `FOLDER 8K START\n${'f'.repeat(8 * 1024)}\nFOLDER 8K END\n`,
+  )
+  writeFileSync(join(dir, 'lead-8k.md'), `LEAD 8K START\n${'l'.repeat(8 * 1024)}\n`)
+  for (const n of ['alpha', 'beta', 'gamma'])
+    writeFileSync(join(dir, `${n}.md`), `${n} body\n${'k'.repeat(2 * 1024)}\n`)
+  writeFileSync(
+    join(dir, 'catalog', 'hand-budget.json'),
+    JSON.stringify([
+      {
+        id: 'knowledge:folder-8k',
+        kind: 'knowledge',
+        name: 'Folder Eight K',
+        when: 'Long folder rules',
+        tags: ['repo'],
+        folders: [CWD],
+        cost: 'free',
+        how: 'read them',
+        load: { type: 'file', path: join(dir, 'folder-8k.md') },
+      },
+      {
+        id: 'person:quinn-lead',
+        kind: 'person',
+        name: 'Quinn Lead',
+        tier: 'manager',
+        family: 'manager',
+        when: 'Leads the budget work',
+        tags: ['budget'],
+        modes: ['become'],
+        cost: 'medium',
+        how: 'hand her the budget',
+        load: { type: 'file', path: join(dir, 'lead-8k.md') },
+      },
+      knowledge('knowledge:alpha', 'Alpha Spec', 'Alpha notes', join(dir, 'alpha.md')),
+      knowledge('knowledge:beta', 'Beta Spec', 'Beta notes', join(dir, 'beta.md')),
+      knowledge('knowledge:gamma', 'Gamma Spec', 'Gamma notes', join(dir, 'gamma.md')),
+    ]),
+  )
+  const pack = packFor(dir, req('quinn lead: alpha spec beta spec gamma spec'))
+  expect(pack.text.length).toBeLessThanOrEqual(TOTAL_CAP)
+  expect(pack.text).toContain('FOLDER 8K START')
+  expect(pack.text).toContain('FOLDER 8K END')
+  expect(pack.text).not.toContain('[cut at')
+  expect(pack.text).not.toContain('LEAD 8K START')
+  expect(pack.text).toContain(
+    'Lead for this message: Quinn Lead. Load the brief with core_use { chat: "chat-1", id: "person:quinn-lead", mode: "become" }.',
+  )
+  expect(pack.ids).toContain('person:quinn-lead')
+})
+
+test('folder rules over the budget are cut at the budget with the pointer', () => {
+  writeFileSync(join(dir, 'big-rules.md'), 'x'.repeat(40 * 1024))
+  writeFileSync(
+    join(dir, 'catalog', 'hand-big.json'),
+    JSON.stringify([
+      {
+        id: 'knowledge:big-rules',
+        kind: 'knowledge',
+        name: 'Big Rules',
+        when: 'Very long rules',
+        tags: ['repo'],
+        folders: [CWD],
+        cost: 'free',
+        how: 'read them',
+        load: { type: 'file', path: join(dir, 'big-rules.md') },
+      },
+    ]),
+  )
+  const pack = packFor(dir, req('hello'))
+  expect(pack.text.length).toBeLessThanOrEqual(TOTAL_CAP)
+  expect(pack.text).toContain(`[cut at`)
+  expect(pack.text).toContain(`the rest is in ${join(dir, 'big-rules.md')}`)
+  expect(pack.text).toContain('core_find')
+  expect(pack.ids).not.toContain('knowledge:big-rules')
+})
+
+test('a delta with new big matches stays within the cap', () => {
+  writeFileSync(join(dir, 'alpha.md'), `alpha body\n${'k'.repeat(4 * 1024)}\n`)
+  writeFileSync(join(dir, 'beta.md'), `beta body\n${'k'.repeat(4 * 1024)}\n`)
+  writeFileSync(join(dir, 'gamma.md'), `gamma body\n${'k'.repeat(4 * 1024)}\n`)
+  writeFileSync(
+    join(dir, 'catalog', 'hand-delta.json'),
+    JSON.stringify([
+      knowledge('knowledge:alpha', 'Alpha Spec', 'Alpha notes', join(dir, 'alpha.md')),
+      knowledge('knowledge:beta', 'Beta Spec', 'Beta notes', join(dir, 'beta.md')),
+      knowledge('knowledge:gamma', 'Gamma Spec', 'Gamma notes', join(dir, 'gamma.md')),
+    ]),
+  )
+  packFor(dir, req('zzz qqq'))
+  const next = packFor(
+    dir,
+    req(
+      'alpha spec alpha notes: alpha spec alpha notes, beta spec beta notes, gamma spec gamma notes',
+    ),
+  )
+  expect(next.mode).toBe('delta')
+  expect(next.text.length).toBeLessThanOrEqual(TOTAL_CAP)
+  expect(next.text).toContain('- knowledge:alpha - ')
+  expect(next.ids).toContain('knowledge:alpha')
+})
+
+test('ids left out of the text are not recorded as sent and a later delta can send them', () => {
+  const specs = Array.from({ length: 60 }, (_, i) => {
+    const n = i + 1
+    writeFileSync(join(dir, `spec-${n}.md`), `spec ${n} body\n`)
+    return knowledge(
+      `knowledge:spec-note-${n}`,
+      `Spec Note ${n}`,
+      `Spec note number ${n} with a long description of what it covers for the team`,
+      join(dir, `spec-${n}.md`),
+    )
+  })
+  writeFileSync(join(dir, 'catalog', 'hand-specs.json'), JSON.stringify(specs))
+  const pack = packFor(dir, req('spec note'))
+  const sent = JSON.parse(readFileSync(chatPaths(dir, 'chat-1').sent, 'utf8'))
+  expect(pack.text.length).toBeLessThanOrEqual(TOTAL_CAP)
+  const dropped = specs.map((e) => e.id).filter((id) => !pack.text.includes(id))
+  expect(dropped.length).toBeGreaterThan(0)
+  expect(sent['sess-1']).toEqual(pack.ids)
+  for (const id of dropped) expect(sent['sess-1']).not.toContain(id)
+  const later = packFor(dir, req('spec note'))
+  expect(later.mode).toBe('delta')
+  expect(later.ids.some((id) => dropped.includes(id))).toBe(true)
 })
