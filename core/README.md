@@ -38,6 +38,23 @@ their smoke test (owner, 2026-10-14: "it's literally A plus B equals C").
 
 </details>
 
+<details><summary>Tasks: what CliMayte, HSwarm and fan-outs become</summary>
+
+Over 14 days (2026-10-14) sessions called 138 AgentHydra and HSwarm tools 42,622 times; twelve carried 74% of it, and
+a third of all calls only asked whether a run had finished. A task is the whole of it:
+
+- `POST /api/tasks {prompt, cwd, tools: none | read | edit | all, title?}` answers the task: `{id, status}`.
+- `GET /api/tasks/:id` and `GET /api/tasks/:id/wait?seconds=N` (answers when it settles, or after N seconds; no
+  polling) give `{id, status: queued | running | done | failed | cancelled, backend, account, result, error}`.
+- `POST /api/tasks/:id/cancel`, `POST /api/tasks/:id/send {text}` (a follow-up in the same thread) and
+  `POST /api/tasks/:id/verdict {pass}` (which teaches the picker what each kind of task needs).
+- The same six as MCP tools: run, wait, send, cancel, verdict, usage.
+
+A task with tools runs on an agent login (Claude, Codex); a tool-free one on the cheapest route with room (a Free web
+login, then an API model). The smoke stages `task-*` are its bar.
+
+</details>
+
 <details><summary>Running it</summary>
 
 - `bun core/src/main.ts` serves `http://127.0.0.1:7799/api` (`CORE_PORT`).

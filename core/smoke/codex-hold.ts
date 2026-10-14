@@ -21,10 +21,15 @@ try {
   }
   console.log('holding')
   await new Promise<void>((resolve) => {
-    process.stdin.on('end', () => resolve())
-    process.stdin.on('close', () => resolve())
+    // The 5-minute cap must not keep the helper alive once stdin has let it go.
+    const cap = setTimeout(resolve, 300_000)
+    const done = () => {
+      clearTimeout(cap)
+      resolve()
+    }
+    process.stdin.on('end', done)
+    process.stdin.on('close', done)
     process.stdin.resume()
-    setTimeout(resolve, 300_000)
   })
 } catch (err) {
   console.log('hold failed', err instanceof Error ? err.message.slice(0, 160) : String(err))

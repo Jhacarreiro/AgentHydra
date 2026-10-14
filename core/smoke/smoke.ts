@@ -41,6 +41,12 @@ const STAGES = [
   'crossing-double-switch',
   'crossing-delete',
   'handoff-roundtrip',
+  // Phase 2 (owner, 2026-10-14: CliMayte, HSwarm and the orchestration are the same A + B = C): a task runs on the
+  // cheapest account or model with room that can do its tools. todo while the core answers POST /tasks with 404.
+  'task-claude',
+  'task-api',
+  'task-many',
+  'task-cancel',
 ]
 
 type Item = {
@@ -201,14 +207,48 @@ const sendImage = (id: string, text: string) =>
     images: [{ mediaType: 'image/png', dataBase64: redPng(), name: 'red.png' }],
   })
 
-const out = new Map<string, { pass: boolean; detail: unknown; seconds: number }>()
-async function scenario(
-  name: string,
-  run: () => Promise<{ pass: boolean; detail: unknown }>,
-): Promise<void> {
+/** A task (phase 2): POST /tasks {prompt, cwd, tools}; GET /tasks/:id, /tasks/:id/wait?seconds=N; POST /tasks/:id/cancel. */
+type TaskRow = {
+  id: string
+  status: string
+  result?: string
+  error?: string
+  backend?: string
+  account?: { service?: string }
+}
+const TASK_TODO = { pass: false, todo: true, detail: 'POST /tasks answers 404: not built yet' }
+async function startTask(body: {
+  prompt: string
+  cwd: string
+  tools: string
+}): Promise<TaskRow | null> {
+  const made = await req('POST', '/tasks', { ...body, title: 'smoke task (throwaway)' })
+  if (made.status === 404) return null
+  if (made.status >= 300) throw new Error(`POST /tasks: ${made.status} ${made.text.slice(0, 200)}`)
+  return made.json as TaskRow
+}
+/** Waits on the core's own wait (one call per 30 s, never a tight poll) until the task settles. */
+async function waitTask(id: string, ms = 300_000): Promise<TaskRow> {
+  const end = Date.now() + ms
+  for (;;) {
+    const r = await ok<TaskRow>('GET', `/tasks/${id}/wait?seconds=30`)
+    if (['done', 'failed', 'cancelled'].includes(r.status)) return r
+    if (Date.now() > end) throw new Error(`timed out: task ${r.status}`)
+  }
+}
+const taskDetail = (t: TaskRow) => ({
+  status: t.status,
+  result: (t.result ?? '').slice(0, 60),
+  error: t.error,
+  route: t.backend ?? t.account?.service ?? null,
+})
+
+type Outcome = { pass: boolean; detail: unknown; todo?: boolean }
+const out = new Map<string, Outcome & { seconds: number }>()
+async function scenario(name: string, run: () => Promise<Outcome>): Promise<void> {
   if (only.length && !only.includes(name)) return
   const t = Date.now()
-  let r: { pass: boolean; detail: unknown }
+  let r: Outcome
   try {
     r = await running.run(name, run)
     if (!r.pass)
@@ -862,6 +902,92 @@ if (up)
         detail: { checked: list.length, why: 'no outside Claude chat listed with an older page' },
       }
     }),
+
+    // A task with tools runs on an agent account and uses them: it reads a file only it can see.
+    scenario('task-claude', async () => {
+      const cwd = join(ROOT, 'task-read')
+      mkdirSync(cwd, { recursive: true })
+      await Bun.write(join(cwd, 'WORD.txt'), 'TASKREAD')
+      const t = await startTask({
+        prompt:
+          'Read the file WORD.txt in this folder and reply with exactly its contents and nothing else.',
+        cwd,
+        tools: 'read',
+      })
+      if (!t) return TASK_TODO
+      const done = await waitTask(t.id)
+      return {
+        pass: done.status === 'done' && word(done.result) === 'TASKREAD',
+        detail: taskDetail(done),
+      }
+    }),
+
+    // A tool-free task goes to the cheapest route with room (a Free web login or an API model).
+    scenario('task-api', async () => {
+      const t = await startTask({
+        prompt: 'Reply with exactly the word TASKAPI and nothing else.',
+        cwd: ROOT,
+        tools: 'none',
+      })
+      if (!t) return TASK_TODO
+      const done = await waitTask(t.id)
+      return {
+        pass: done.status === 'done' && word(done.result) === 'TASKAPI',
+        detail: taskDetail(done),
+      }
+    }),
+
+    // Six at once, as a fan-out sends them: each finishes with its own answer.
+    scenario('task-many', async () => {
+      const words = [1, 2, 3, 4, 5, 6].map((n) => `MANY${n}`)
+      const started = await Promise.all(
+        words.map((w) =>
+          startTask({
+            prompt: `Reply with exactly the word ${w} and nothing else.`,
+            cwd: ROOT,
+            tools: 'none',
+          }),
+        ),
+      )
+      if (started.some((t) => !t)) return TASK_TODO
+      const done = await Promise.all(started.map((t) => waitTask(t!.id)))
+      const got = done.map((d) => word(d.result))
+      return {
+        pass: done.every((d) => d.status === 'done') && got.every((g, i) => g === words[i]),
+        detail: { got, routes: done.map((d) => d.backend ?? d.account?.service ?? null) },
+      }
+    }),
+
+    // A running task is stopped: it reads cancelled, and nothing more comes of it.
+    scenario('task-cancel', async () => {
+      const cwd = join(ROOT, 'task-cancel')
+      mkdirSync(cwd, { recursive: true })
+      const t = await startTask({
+        prompt:
+          'Write the numbers from 1 to 3000, one per line, with no other text. Do not run any command.',
+        cwd,
+        tools: 'read',
+      })
+      if (!t) return TASK_TODO
+      const running = await until(
+        async () => (await ok<TaskRow>('GET', `/tasks/${t.id}`)).status === 'running',
+        120_000,
+      )
+      const cancel = await req('POST', `/tasks/${t.id}/cancel`)
+      const stopped = await until(
+        async () => (await ok<TaskRow>('GET', `/tasks/${t.id}`)).status === 'cancelled',
+        20_000,
+      )
+      return {
+        pass: running && cancel.status < 300 && stopped,
+        detail: {
+          running,
+          cancel: cancel.status,
+          stopped,
+          last: taskDetail(await ok<TaskRow>('GET', `/tasks/${t.id}`)),
+        },
+      }
+    }),
   ])
 
 // Cleanup: every chat made here, then every thread, then (on the old Desk) the CliMayte workers its chats ran on.
@@ -913,7 +1039,8 @@ const stages = STAGES.filter((s) => s === 'boot' || !only.length || only.include
         status: up ? 'skipped' : 'todo',
         detail: up ? 'not run' : 'the server is not up',
       }
-    return { name, status: r.pass ? 'pass' : 'fail', seconds: r.seconds, detail: r.detail }
+    const status = r.pass ? 'pass' : r.todo ? 'todo' : 'fail'
+    return { name, status, seconds: r.seconds, detail: r.detail }
   },
 )
 const passed = stages.filter((s) => s.name !== 'boot' && s.status === 'pass').length
