@@ -1,12 +1,16 @@
 #!/usr/bin/env node
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "node:fs";
+import { appendFileSync, existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 
-export const EVENTS = new Set(["UserPromptSubmit", "SessionStart"]);
+export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
 const LEAD_CAP = 20000;
 const NAME_CAP = 60;
+const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
+const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
+const BLOCK_REASON =
+  'Before you ask Jacob, ask the owner tier (core_use { mode: "consult", id: "person:creaitor", question } or the creaitor.py ask command); ask Jacob only if that answer says it needs him (a credential, money, a physical step); otherwise act on the answer.';
 
 export function coreDir(env = process.env) {
   return env.AGENTHYDRA_CORE_DIR || path.join(os.homedir(), ".agenthydra", "core");
@@ -83,12 +87,106 @@ function sessionStart(input, env, dir) {
   return output("SessionStart", sessionText(hydraPath, readFileSync(hydraPath, "utf8")));
 }
 
+function isRealPrompt(entry) {
+  if (entry.message?.role !== "user") return false;
+  const content = entry.message.content;
+  if (typeof content === "string") return content.trim() !== "";
+  return Array.isArray(content) && content.some((block) => block?.type === "text");
+}
+
+const blocksOf = (entry) => (Array.isArray(entry?.message?.content) ? entry.message.content : []);
+
+function lastTurn(input) {
+  const entries = readFileSync(input.transcript_path, "utf8")
+    .split(/\r?\n/)
+    .filter((line) => line.trim())
+    .map((line) => JSON.parse(line));
+  let start = -1;
+  entries.forEach((entry, index) => {
+    if (isRealPrompt(entry)) start = index;
+  });
+  const assistant = entries.filter((entry) => entry.message?.role === "assistant");
+  const last = assistant.at(-1);
+  const text =
+    typeof input.last_assistant_message === "string"
+      ? input.last_assistant_message
+      : blocksOf(last)
+          .filter((block) => block?.type === "text")
+          .map((block) => block.text)
+          .join("\n");
+  const tools = entries
+    .slice(start + 1)
+    .filter((entry) => entry.message?.role === "assistant")
+    .flatMap((entry) => blocksOf(entry).filter((block) => block?.type === "tool_use"));
+  return { text, tools };
+}
+
+export function asksQuestion(text) {
+  const prose = text.replace(/```[\s\S]*?```/g, "").replace(/`[^`\n]*`/g, "");
+  const paragraphs = prose
+    .split(/\n\s*\n/)
+    .map((paragraph) => paragraph.trim())
+    .filter(Boolean);
+  return /\?(?=\s|$)/.test(paragraphs.at(-1) ?? "");
+}
+
+function ownerIds(dir) {
+  const ids = new Set();
+  const catalog = path.join(dir, "catalog");
+  if (!existsSync(catalog)) return ids;
+  for (const name of readdirSync(catalog)) {
+    if (!/^(generated|hand)-.*\.json$/.test(name)) continue;
+    try {
+      for (const entry of JSON.parse(readFileSync(path.join(catalog, name), "utf8"))) {
+        if (entry?.kind === "person" && entry.tier === "owner" && typeof entry.id === "string") ids.add(entry.id);
+      }
+    } catch {}
+  }
+  return ids;
+}
+
+function isOwner(id, dir) {
+  const owners = ownerIds(dir);
+  return owners.size ? owners.has(id) : OWNER_FALLBACK.test(id);
+}
+
+function consults(tool, dir) {
+  const input = tool.input ?? {};
+  if (typeof tool.name === "string" && tool.name.endsWith("core_use")) {
+    return input.mode === "consult" && typeof input.id === "string" && isOwner(input.id, dir);
+  }
+  if (tool.name === "Bash" || tool.name === "PowerShell") return ASK_CREAITOR.test(String(input.command ?? ""));
+  return false;
+}
+
+function logBlock(input, env, dir) {
+  try {
+    mkdirSync(dir, { recursive: true });
+    const chat = chatKey(input, env);
+    appendFileSync(path.join(dir, "log.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), event: "president-block", chat })}\n`);
+  } catch {}
+}
+
+function stopCheck(input, env, dir) {
+  if (input.stop_hook_active === true) return null;
+  try {
+    const { text, tools } = lastTurn(input);
+    if (!asksQuestion(text)) return null;
+    if (tools.some((tool) => consults(tool, dir))) return null;
+  } catch {
+    return null;
+  }
+  logBlock(input, env, dir);
+  return { decision: "block", reason: BLOCK_REASON };
+}
+
 export function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
   if (isWorker(env)) return null;
   const dir = coreDir(env);
   if (!existsSync(path.join(dir, "ON"))) return null;
+  if (event === "Stop") return stopCheck(input, env, dir);
   return event === "UserPromptSubmit" ? userPromptSubmit(input, env, dir) : sessionStart(input, env, dir);
 }
 

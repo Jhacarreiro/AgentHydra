@@ -1,0 +1,158 @@
+import assert from "node:assert/strict";
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import os from "node:os";
+import path from "node:path";
+import { test } from "node:test";
+import { handle } from "../hook.mjs";
+import { defaultHookPath, install, uninstall } from "../install.mjs";
+
+const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT"];
+
+function withCore(fn) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-stop-"));
+  try {
+    return fn(dir);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+}
+
+function envFor(dir, extra = {}) {
+  const env = { ...process.env, AGENTHYDRA_CORE_DIR: dir };
+  for (const key of CLEARED) delete env[key];
+  return { ...env, ...extra };
+}
+
+const prompt = (text) => ({ type: "user", message: { role: "user", content: text } });
+const says = (text) => ({ type: "assistant", message: { role: "assistant", content: [{ type: "text", text }] } });
+const uses = (name, input) => ({
+  type: "assistant",
+  message: { role: "assistant", content: [{ type: "tool_use", id: "t1", name, input }] },
+});
+const result = () => ({
+  type: "user",
+  message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "ok" }] },
+});
+
+function stop(dir, entries, extra = {}) {
+  const transcript = path.join(dir, "transcript.jsonl");
+  writeFileSync(transcript, entries.map((entry) => JSON.stringify(entry)).join("\n"));
+  return { hook_event_name: "Stop", session_id: "sess-stop", stop_hook_active: false, transcript_path: transcript, ...extra };
+}
+
+function turnOn(dir, catalog) {
+  writeFileSync(path.join(dir, "ON"), "");
+  if (catalog) {
+    mkdirSync(path.join(dir, "catalog"), { recursive: true });
+    writeFileSync(path.join(dir, "catalog", "hand-people.json"), JSON.stringify(catalog));
+  }
+}
+
+const OWNERS = [
+  { kind: "person", id: "person:creaitor", tier: "owner" },
+  { kind: "person", id: "person:someone", tier: "employee" },
+];
+
+const fire = (input, env) => handle(JSON.stringify(input), env) ?? null;
+
+test("blocks a trailing question with no owner consult and logs the block", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
+    const out = fire(input, envFor(dir));
+    assert.equal(out.decision, "block");
+    assert.match(out.reason, /ask the owner tier/);
+    assert.match(out.reason, /person:creaitor/);
+    const [line] = readFileSync(path.join(dir, "log.jsonl"), "utf8").trim().split("\n");
+    const logged = JSON.parse(line);
+    assert.equal(logged.event, "president-block");
+    assert.equal(logged.chat, "sess-stop");
+  }));
+
+test("allows after a core_use consult of an owner-tier person", () =>
+  withCore((dir) => {
+    turnOn(dir, OWNERS);
+    const input = stop(dir, [
+      prompt("fix it"),
+      uses("mcp__agenthydra__core_use", { mode: "consult", id: "person:creaitor", question: "delete?" }),
+      result(),
+      says("Should I delete the old folder?"),
+    ]);
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("a consult of a non-owner person does not count", () =>
+  withCore((dir) => {
+    turnOn(dir, OWNERS);
+    const input = stop(dir, [
+      prompt("fix it"),
+      uses("mcp__agenthydra__core_use", { mode: "consult", id: "person:someone", question: "delete?" }),
+      result(),
+      says("Should I delete the old folder?"),
+    ]);
+    assert.equal(fire(input, envFor(dir)).decision, "block");
+  }));
+
+test("allows after a Bash creaitor.py ask", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [
+      prompt("fix it"),
+      uses("Bash", { command: "python ~/.claude/tools/creaitor.py ask 'delete the folder?'" }),
+      result(),
+      says("Should I delete the old folder?"),
+    ]);
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("never blocks twice in a row", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")], { stop_hook_active: true });
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("allows for a CliMayte worker", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
+    assert.equal(fire(input, envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1" })), null);
+  }));
+
+test("allows when the final message has no question", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [prompt("fix it"), says("Deleted the old folder.")]);
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("allows when the only question mark is inside a code block", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const input = stop(dir, [prompt("fix it"), says("Done.\n\n```js\nconst ok = x ? 1 : 2;\n```")]);
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("allows on a broken transcript (fail open)", () =>
+  withCore((dir) => {
+    turnOn(dir);
+    const transcript = path.join(dir, "broken.jsonl");
+    writeFileSync(transcript, "{not json\n");
+    const input = { hook_event_name: "Stop", session_id: "sess-stop", stop_hook_active: false, transcript_path: transcript };
+    assert.equal(fire(input, envFor(dir)), null);
+  }));
+
+test("install adds Stop beside an existing Stop hook and uninstall removes only ours", () =>
+  withCore((dir) => {
+    const settingsPath = path.join(dir, "settings.json");
+    const coreDir = path.join(dir, "core");
+    const other = { hooks: [{ type: "command", command: "node C:/Example/other-stop.mjs" }] };
+    writeFileSync(settingsPath, JSON.stringify({ hooks: { Stop: [other] } }));
+    install({ settingsPath, coreDir, hookPath: defaultHookPath() });
+    const installed = JSON.parse(readFileSync(settingsPath, "utf8"));
+    assert.equal(installed.hooks.Stop.length, 2);
+    assert.deepEqual(installed.hooks.Stop[0], other);
+    assert.match(installed.hooks.Stop[1].hooks[0].command, /hook\.mjs"$/);
+    uninstall({ settingsPath, coreDir });
+    assert.deepEqual(JSON.parse(readFileSync(settingsPath, "utf8")), { hooks: { Stop: [other] } });
+  }));

@@ -5,7 +5,7 @@ import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { isDeepStrictEqual } from "node:util";
 
-export const EVENTS = ["UserPromptSubmit", "SessionStart"];
+export const EVENTS = ["UserPromptSubmit", "SessionStart", "Stop"];
 const CORE_COMMAND = /[\\/]hydra-core[\\/]hook\.mjs"?\s*$/;
 const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/;
 const RECORD_FILE = "router-entry.json";

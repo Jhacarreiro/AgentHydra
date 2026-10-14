@@ -156,7 +156,7 @@ test("a hook error is named in the output, not swallowed", () => withCore((dir) 
 }));
 
 test("an unknown hook event is an error", () => withCore((dir) => {
-  assert.throws(() => handle(JSON.stringify({ hook_event_name: "Stop" }), envFor(dir)), /unexpected hook_event_name "Stop"/);
+  assert.throws(() => handle(JSON.stringify({ hook_event_name: "PreToolUse" }), envFor(dir)), /unexpected hook_event_name "PreToolUse"/);
 }));
 
 test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unknown event", () => withCore((dir) => {
@@ -169,10 +169,10 @@ test("the hook runs as a process: JSON on stdout for a prompt, exit 1 for an unk
   assert.equal(ok.status, 0);
   assert.equal(JSON.parse(ok.stdout).hookSpecificOutput.hookEventName, "UserPromptSubmit");
   const bad = spawnSync(process.execPath, [HOOK], {
-    input: JSON.stringify({ hook_event_name: "Stop" }),
+    input: JSON.stringify({ hook_event_name: "PreToolUse" }),
     env: envFor(dir),
     encoding: "utf8",
   });
   assert.equal(bad.status, 1);
-  assert.match(bad.stderr, /unexpected hook_event_name "Stop"/);
+  assert.match(bad.stderr, /unexpected hook_event_name "PreToolUse"/);
 }));
