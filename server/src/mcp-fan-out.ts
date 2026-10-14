@@ -313,7 +313,6 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
       ['tasks'],
     ),
     run: async (a) => {
-      if ((await callerRole(a)) === 'drone') throw new Error(DRONE_REFUSAL)
       const rawTasks = Array.isArray(a.tasks) ? a.tasks : []
       if (rawTasks.length === 0) throw new Error('tasks is required: at least one {cwd, prompt}')
       const tasks = rawTasks.map((t, i) => {
@@ -331,6 +330,8 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
           ...(artifact ? { artifact } : {}),
         }
       })
+      // After the argument checks: the role is read from the daemon, and a bad call is refused before any request.
+      if ((await callerRole(a)) === 'drone') throw new Error(DRONE_REFUSAL)
       const groupName = str(a.group).trim()
       const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
       // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES
