@@ -420,7 +420,8 @@ sidebar on the left stays put, and only the pane on the right changes.
   end, shows or hides a column of cards at the chat's right, for Desk's own chats and for any session running outside Desk:
   Environment (the folder, which opens on a click; the account; the model and effort), Context (how full the context
   window is, amber from 75% and red from 90%, and what the chat has cost; for an outside session, "84.3K tokens in context"
-  from its last reply's usage in its .jsonl, with no share, since the file never names the window), To-dos (the session's checklist, TodoWrite's or
+  from its last reply's usage in its .jsonl, with no share, since the file never names the window, and for an outside Codex
+  chat the share and "51K of 258K", from its rollout's last `token_count`), To-dos (the session's checklist, TodoWrite's or
   Claude Desktop's update_plan), Connectors (the ones a chat gets, or for an outside session the MCP servers its tools
   called, as letter tiles, three and Show more) and Background tasks (what runs, with a Stop on hover, greyed with its
   reason for a task only the session that started it can stop; a click on a task slides the full list in). Each card

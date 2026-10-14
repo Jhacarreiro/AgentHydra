@@ -40,6 +40,7 @@ import {
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
 import { buildTranscriptIndex } from '../engine/transcript-index'
+import { findCodexRollout, lastCodexContext } from './codex-rollout'
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
@@ -83,6 +84,10 @@ const SESSION_TASKS_KEPT = 20
 const OLDER_PAGES = 32
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
+/** The Codex homes (accounts come and go rarely) are asked again after this long. */
+const CODEX_HOMES_FRESH_MS = 5 * 60_000
+/** A session with no rollout found is looked for again after this long (a Codex thread's file appears with its first turn). */
+const ROLLOUT_MISS_MS = 60_000
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
 const DELIVER_NOW_PROBE_ID = 'desk-probe-no-such-worker'
 /**
@@ -669,6 +674,21 @@ export function createBridge(opts: BridgeOptions = {}) {
     return { items: all.slice(from, to), above: from }
   }
 
+  /** Where Codex keeps its threads: the default login's home and every Codex account AgentHydra lists. */
+  const codexHomes = sharedRead(CODEX_HOMES_FRESH_MS, async () => {
+    const homes = [join(home, '.codex'), ...(await client.codexInstances().catch(() => [])).map((i) => i.codexHome).filter(Boolean)]
+    return [...new Map(homes.map((h) => [h.toLowerCase(), h])).values()]
+  })
+  /** A thread's rollout once found; a miss is asked again after ROLLOUT_MISS_MS (a session with neither file is looked for again). */
+  const rollouts = new Map<string, { path: string | null; at: number }>()
+  async function codexRollout(threadId: string): Promise<string | null> {
+    const kept = rollouts.get(threadId)
+    if (kept && (kept.path || now() - kept.at < ROLLOUT_MISS_MS)) return kept.path
+    const path = await findCodexRollout(threadId, await codexHomes())
+    rollouts.set(threadId, { path, at: now() })
+    return path
+  }
+
   /** A whole outside session's history, kept by file size and mtime (a file that grew is read again). */
   const wholeKept = new Map<string, { key: string; items: TranscriptItem[]; index: TranscriptIndex }>()
   const WHOLE_KEPT = 3
@@ -684,14 +704,21 @@ export function createBridge(opts: BridgeOptions = {}) {
     }
     const kept = wholeKept.get(sessionId)
     if (key && kept && kept.key === key) return kept
-    // Its context comes from the file's usage lines, which no item carries; a session with no .jsonl (a Codex chat) has none.
-    let contextTokens: number | null = null
+    // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
+    // for a chat with none, a Codex rollout's last token_count (with its window).
+    let context: { tokens: number; window: number | null } | null = null
     try {
-      contextTokens = key && file ? lastContextTokens(file) : null
+      if (key && file) {
+        const tokens = lastContextTokens(file)
+        context = tokens === null ? null : { tokens, window: null }
+      } else {
+        const rollout = await codexRollout(sessionId)
+        context = rollout ? lastCodexContext(rollout) : null
+      }
     } catch {
-      // gone since the stat: no context, the rest of the index stands
+      // gone since it was found: no context, the rest of the index stands
     }
-    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens } }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null } }
     if (key) {
       wholeKept.delete(sessionId)
       wholeKept.set(sessionId, built)

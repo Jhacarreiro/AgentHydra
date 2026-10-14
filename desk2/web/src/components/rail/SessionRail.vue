@@ -90,13 +90,19 @@ const account = computed(() => {
 })
 const model = computed(() => (props.chat ? `${modelName(props.chat.model)} · ${effortLabel(props.chat.effort)}` : ''))
 const revealFolder = () => props.chat && void src.revealFolder(props.chat.cwd).catch(() => {}) // floor-ok: a folder gone since leaves the row as it is
-const context = computed(() => (props.chat?.contextPct == null ? null : Math.round(props.chat.contextPct)))
-const contextColor = computed(() => (context.value === null ? '' : context.value >= 90 ? 'var(--danger)' : context.value >= 75 ? 'var(--warning)' : 'var(--accent)'))
 const cost = computed(() => (props.chat && props.chat.costUsd > 0 ? `$${props.chat.costUsd.toFixed(2)} spent` : ''))
-// An outside session's context is its last reply's tokens (the index's), with no share: its file never names the window.
+// An outside session's context is its last reply's tokens (the index's), a share only where its file names the window (a Codex
+// rollout does; a Claude Code .jsonl never does, so that one shows the tokens alone).
 const outsideContext = computed(() => (props.outside && props.index?.contextTokens ? props.index.contextTokens : null))
+const outsideWindow = computed(() => (outsideContext.value !== null && props.index?.contextWindow ? props.index.contextWindow : null))
+const context = computed(() => {
+  if (!props.outside) return props.chat?.contextPct == null ? null : Math.round(props.chat.contextPct)
+  return outsideWindow.value === null ? null : Math.min(100, Math.round((outsideContext.value! / outsideWindow.value) * 100))
+})
+const contextColor = computed(() => (context.value === null ? '' : context.value >= 90 ? 'var(--danger)' : context.value >= 75 ? 'var(--warning)' : 'var(--accent)'))
+const meterNote = computed(() => (outsideWindow.value !== null ? `${formatCompact(outsideContext.value!)} of ${formatCompact(outsideWindow.value)}` : cost.value))
 const contextSummary = computed(() =>
-  outsideContext.value !== null ? `${formatCompact(outsideContext.value)} tokens` : context.value === null ? undefined : `${context.value}% used`
+  context.value !== null ? `${context.value}% used` : outsideContext.value !== null ? `${formatCompact(outsideContext.value)} tokens` : undefined
 )
 
 // To-dos: the session's latest checklist, while it has one.
@@ -223,7 +229,18 @@ const NO_STOP = 'Only the session that started it can stop this task'
         </RailCard>
 
         <RailCard v-if="outside || context !== null" id="context" title="Context" :summary="contextSummary">
-          <ul v-if="outsideContext !== null" class="flex flex-col">
+          <!-- The share: a Desk chat's, or an outside session's whose file names the window. -->
+          <div v-if="context !== null" class="px-1.5 pb-1.5" data-testid="rail-context-meter">
+            <div class="flex h-6.5 items-center gap-2">
+              <span class="tnum font-medium text-text">{{ context }}% used</span>
+              <span class="min-w-0 flex-1" />
+              <span v-if="meterNote" class="tnum truncate text-ui-sm text-text-muted">{{ meterNote }}</span>
+            </div>
+            <div class="h-1 overflow-hidden rounded-full bg-(--fill-secondary)" role="meter" aria-label="Context used" :aria-valuenow="context" aria-valuemin="0" aria-valuemax="100">
+              <div class="h-full rounded-full" :style="{ width: `${context}%`, background: contextColor }" />
+            </div>
+          </div>
+          <ul v-else-if="outsideContext !== null" class="flex flex-col">
             <li>
               <Tip :label="`${outsideContext.toLocaleString()} tokens in context after the last reply: its prompt and its answer. The session's file does not name the model's context window, so no share is shown.`">
                 <span :class="RAIL_ROW" tabindex="0" data-testid="rail-context-tokens">
@@ -234,16 +251,6 @@ const NO_STOP = 'Only the session that started it can stop this task'
             </li>
           </ul>
           <div v-if="outside" :id="RAIL_TARGETS.context" class="flex flex-col" />
-          <div v-else class="px-1.5 pb-1.5">
-            <div class="flex h-6.5 items-center gap-2">
-              <span class="tnum font-medium text-text">{{ context }}% used</span>
-              <span class="min-w-0 flex-1" />
-              <span v-if="cost" class="tnum truncate text-ui-sm text-text-muted">{{ cost }}</span>
-            </div>
-            <div class="h-1 overflow-hidden rounded-full bg-(--fill-secondary)" role="meter" aria-label="Context used" :aria-valuenow="context ?? 0" aria-valuemin="0" aria-valuemax="100">
-              <div class="h-full rounded-full" :style="{ width: `${context}%`, background: contextColor }" />
-            </div>
-          </div>
         </RailCard>
 
         <RailCard v-if="todos" id="todos" title="To-dos" :summary="`${todosDone} of ${todos.length} done`">

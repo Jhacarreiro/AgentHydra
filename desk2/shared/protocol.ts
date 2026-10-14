@@ -295,9 +295,11 @@ export interface TranscriptIndex {
   /** The last 20 finished tasks, oldest first. */
   recentTasks: TranscriptItem[]
   lastUserText: string
-  /** An outside session's: the tokens in context after its last reply, read from its .jsonl (no window, so no share); null when
+  /** An outside session's: the tokens in context after its last reply, from its Claude Code .jsonl or Codex rollout; null when
    *  its file has none, absent on a Desk chat (whose ChatSummary.contextPct is the share). */
   contextTokens?: number | null
+  /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
+  contextWindow?: number | null
 }
 
 /** `GET /api/external/sessions/:id/older?before=<offset>&limit=<n>` answers the newest n items before the offset and this
