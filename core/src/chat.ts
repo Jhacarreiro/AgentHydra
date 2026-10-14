@@ -397,9 +397,11 @@ export class Chats {
       console.warn(
         `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} ${end.limitedUntil === undefined ? 'throttled' : `held until ${new Date(end.limitedUntil).toISOString()}`}: ${end.error ?? ''}`,
       )
-      // The next account starts a new thread, and reads what the held one said first.
+      // The next account starts a new thread, which knows nothing yet: it reads the whole chat first, the moved turn's
+      // own words included (2026-10-14, round 6: read from this turn's start only, a throttle move dropped the catch-up
+      // from Claude, and Codex answered 'Unknown' for the code word).
       thread = undefined
-      lead = this.handoff(e, started, sentId, {
+      lead = this.handoff(e, 0, sentId, {
         why: end.throttled ? 'the provider throttled the account' : 'usage limit',
       })
     }

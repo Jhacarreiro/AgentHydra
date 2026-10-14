@@ -3,13 +3,13 @@
 ## Status
 
 <!-- rewritten by frontier.py on every `next`; hand notes go in the Log -->
-<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null], ["codex-held-elsewhere", null], ["codex-held-elsewhere", null]], "iteration": 5, "last": {"at": "2026-10-14T07:49Z", "frontier": {"detail": {"firstError": "The Codex app on #60 test2 has this chat open, so only it can write to it now. Close the chat there, then send again.", "holderSaid": "holding", "holding": true, "last": "PINOK", "sameThread1": true, "sameThread2": false}, "failed": null, "failures": [], "mode": "FIX", "name": "codex-held-elsewhere", "passed": null}, "green": 20, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
+<!-- frontier:state {"goal": "A fresh AgentHydra core (accounts + a message -\u003e the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it", "history": [["history-paging", null], ["codex-queue", null], ["codex-queue", null], ["codex-held-elsewhere", null], ["codex-held-elsewhere", null], ["claude-to-codex-mid-turn", null]], "iteration": 6, "last": {"at": "2026-10-14T08:01Z", "frontier": {"detail": {"last": "Unknown", "pin": 200, "queued": true, "status": "idle", "wasBusy": true}, "failed": null, "failures": [], "mode": "FIX", "name": "claude-to-codex-mid-turn", "passed": null}, "green": 21, "stalled": false, "total": 23}, "probe": "C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run \"bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts\""} -->
 - goal: A fresh AgentHydra core (accounts + a message -> the account with room runs it, the reply streams back) beside the running one, reusing existing libraries; switch over only when every smoke stage passes on it
 - probe: `C:/Users/blogi/.claude/tools/fairjob.cmd -Weight 3 -Run "bun D:/PublicProjects/AgentHydra/app/core/smoke/verify.ts"`
-- updated: 2026-10-14T07:49Z
-- frontier: `codex-held-elsewhere` FIX
-- stages green: 20/23
-- iterations: 5
+- updated: 2026-10-14T08:01Z
+- frontier: `claude-to-codex-mid-turn` FIX
+- stages green: 21/23
+- iterations: 6
 - stalled: no
 
 ## Log
@@ -34,5 +34,6 @@
 - 2026-10-14T07:19Z verify: task-many and task-api alone on the core: 2 of 2 (task-many 6/6 in 9 s, all on ChatGPT).
 - 2026-10-14T07:40Z probe: frontier `codex-held-elsewhere` FIX [20/23 green]
 - 2026-10-14T07:49Z probe: frontier `codex-held-elsewhere` FIX [20/23 green]
-- 2026-10-14T07:50Z verify: Round 5: 20/23, same three. The new log: two Codex logins answered real OpenAI 429s, a third hit its usage limit ('try again at 2:48 AM', minutes away, yet held 60 min), the fourth is at 100%. So the core gave up while the fleet was briefly short.
-- 2026-10-14T07:50Z fix: chat.ts: when every login with room has throttled a message, it waits 15 s and tries them again, up to 4 min; a throttle on a chat's bound thread is waited out on that thread instead of moving (held-elsewhere's second send lost its thread that way). codex.ts holds a limited login until the time Codex states, else 60 min.
+- 2026-10-14T08:01Z probe: frontier `claude-to-codex-mid-turn` FIX [21/23 green]
+- 2026-10-14T08:02Z verify: Round 6 (65497d03): 21/23. codex-held-elsewhere passes (its throttled second send waited on its own thread). Left: claude-to-codex-mid-turn and handoff-roundtrip, both answered 'Unknown' on Codex: the throttle move rebuilt the catch-up from this turn's start only, nothing was said yet, so the catch-up from Claude was dropped.
+- 2026-10-14T08:02Z fix: A turn moved to another login's new thread is caught up on the whole chat (handoff from 0), its own partial words included.
