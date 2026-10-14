@@ -20,6 +20,7 @@ import {
 } from '../core/instance-ref'
 import {
   focusInstance,
+  listInstanceLogins,
   listInstances,
   openInstance,
   quitInstance,
@@ -56,6 +57,10 @@ import { desktopKey, readAppAfterOpen } from '../usage-service'
 app.get('/api/instances', async (c) => {
   return c.json(await listInstances())
 })
+// Each profile's signed-in login, read off disk without the process scan: the Instances tab asks every few seconds,
+// so a profile signed into another account shows that account at once (2026-10-14: a row kept the old account's
+// name and plan for two minutes, until the next list poll). Registered before the `:dir` routes.
+app.get('/api/instances/logins', (c) => c.json(listInstanceLogins()))
 
 // --- instance numbers -------------------------------------------------------
 // The whole fleet under ONE numbering, flattened across desktop / CLI / Codex. This is what makes

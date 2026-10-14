@@ -534,6 +534,8 @@ export const updateScheduler = (b: Partial<SchedulerState>) =>
 // (distinct from the sqlite `accounts` table above, which holds auth secrets for queue
 // dispatch). See server/src/core/shared.ts for the DTO shapes.
 export const listInstances = () => j<CMInstance[]>('/api/instances')
+/** Each profile's signed-in login off disk, without the list's process scan: cheap enough to ask every few seconds. */
+export const listInstanceLogins = () => j<{ dir: string; loginUuid: string | null }[]>('/api/instances/logins')
 export interface ClaudeNativeProfileConfig {
   port: number
   mode: 'native-only' | 'prefer-native'

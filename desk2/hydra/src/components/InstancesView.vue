@@ -133,6 +133,7 @@ const {
   openingDirs,
   startPolling,
   refreshInstances,
+  followLogins,
   open,
   quit,
   focus,
@@ -1461,6 +1462,9 @@ async function refreshDesktopInstall(fresh = false) {
 // 5-minute cache): the banner's own instruction is "install the classic build", and following it
 // used to leave the stale banner pinned until a manual Refresh. No banner → no polling cost.
 let stopDesktopInstallPoll: (() => void) | null = null
+// A profile signed into another account shows it within this, not at the next two-minute list poll (useInstances.followLogins).
+const LOGIN_WATCH_MS = 5_000
+let stopLoginWatch: (() => void) | null = null
 
 onMounted(() => {
   // The first look at this tab: later refreshes are lib/warm-data.ts's (the desktop, cli and free kinds).
@@ -1472,6 +1476,7 @@ onMounted(() => {
   stopDesktopInstallPoll = visibleInterval(() => {
     if (desktopWarning.value) void refreshDesktopInstall(true)
   }, 60_000)
+  stopLoginWatch = visibleInterval(() => void followLogins(), LOGIN_WATCH_MS)
   // A probe or a resolve that never answers must not hold the order (or the warning) for good.
   if (holding.value) loadHoldTimer = window.setTimeout(releaseHold, LOAD_HOLD_MAX_MS)
 })
@@ -1481,6 +1486,7 @@ onUnmounted(() => {
   // slow queue of network requests open behind you.
   catchupSignal.aborted = true
   stopDesktopInstallPoll?.()
+  stopLoginWatch?.()
   window.clearTimeout(firstDrawTimer)
   window.clearTimeout(loadHoldTimer)
 })

@@ -169,6 +169,15 @@ export interface ListInstancesOptions {
   ) => Promise<CMInstance['account'] | null | undefined> | CMInstance['account'] | null | undefined
 }
 
+/** Each profile under the instances root and the login its config.json names: a directory listing and one small
+ *  read apiece, without the process scan listInstances pays (1-1.5 s), so a window can ask every few seconds. */
+export function listInstanceLogins(): { dir: string; loginUuid: string | null }[] {
+  return listInstanceRootDirs().map((meta) => ({
+    dir: meta.dir,
+    loginUuid: readLoginUuid(meta.dir),
+  }))
+}
+
 /**
  * Union of (a) subdirs of `instancesRoot()` and (b) dirs seen on a running Claude
  * process's `--user-data-dir`. One `CMInstance` per normalized dir. Dirs only seen

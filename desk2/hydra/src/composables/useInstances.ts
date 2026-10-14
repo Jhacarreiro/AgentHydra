@@ -370,6 +370,26 @@ async function setAppearance(
  *  un-clickable every time a background resolve happened to be in flight. Resolving reads a file
  *  and asks Anthropic who this token belongs to; it changes nothing about the instance, so there
  *  is nothing for a busy flag to protect. */
+/**
+ * A profile signed into another account shows it at once, not at the next list poll (two minutes): the logins are
+ * read off disk every few seconds while the Instances tab is on screen, and a row whose login moved drops the old
+ * identity (a blank cell beats the previous account's name and plan) and resolves now (2026-10-14, owner: #5 read
+ * "Max 20×", its old account's plan, after it was signed into a Pro one).
+ */
+async function followLogins(): Promise<void> {
+  const logins = await guard(api.listInstanceLogins())
+  if (!logins) return
+  for (const { dir, loginUuid } of logins) {
+    const row = instances.value.find((i) => i.dir === dir)
+    if (!row || !loginUuid || row.loginUuid === loginUuid) continue
+    const moved = loginChanged({ loginUuid, account: row.account })
+    upsert({ ...row, loginUuid, ...(moved ? { account: null } : {}) })
+    if (!moved) continue
+    lastAutoResolveAt.set(dir, Date.now())
+    void resolveAccount(dir)
+  }
+}
+
 async function resolveAccount(dir: string, noNetwork = false): Promise<boolean> {
   const account = await guard(api.getInstanceAccount(dir, { noNetwork }))
   if (account === undefined) return false
@@ -387,6 +407,7 @@ export function useInstances() {
     openingDirs,
     lastError,
     refreshInstances,
+    followLogins,
     startPolling,
     open,
     quit,
