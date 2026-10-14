@@ -63,7 +63,8 @@ const menu = computed(() => (props.chat ? rowMenu({ ...chatRow(props.chat), mute
 // The right block's floor: its buttons, 26px each and 4px apart, counted as they show (a floor short of them let the
 // centred title run under Changes once the rail button joined them). An alert shrinks into whatever room is left beside them.
 // The title group's hide points (@max-[553px] the folder pill, 462 the status text, 379 the glyph, 347 the Connections chip,
-// 319 the tighter gaps and the CliMayte count) are where its items stop fitting beside all six buttons (176px).
+// 319 the smaller More button and the CliMayte count) are where its items stop fitting beside all six buttons (176px). The
+// gap before the buttons never closes: an alert with no room left still sits in it.
 const side = computed(() => {
   const n = props.chat ? 4 + Number(fourmanAvailable.value) + Number(connectionsShown.value) : props.external ? 1 : 0
   return `${n ? n * 26 + (n - 1) * 4 : 0}px`
@@ -252,7 +253,7 @@ const PANE_BTN =
     </div>
 
     <!-- The right column has a fixed minimum, so the alert truncates inside it and never moves the centred title. -->
-    <div class="flex min-w-(--side) flex-1 shrink-0 items-center justify-end gap-1" :class="chat && '@max-[319px]:-ms-2'">
+    <div class="flex min-w-(--side) flex-1 shrink-0 items-center justify-end gap-1">
     <Tip v-if="alert" :label="alert"><p role="alert" data-fit="alert" class="min-w-0 truncate pe-1 text-ui-sm leading-4 text-danger-text @max-[286px]:sr-only">{{ alert }}</p></Tip>
     <div v-if="chat" class="flex shrink-0 items-center gap-1">
       <Tip label="Changes">
