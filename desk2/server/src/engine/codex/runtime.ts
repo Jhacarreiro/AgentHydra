@@ -405,6 +405,7 @@ export class CodexRuntime extends ServiceRuntime {
       this.deps.onFailure?.({ message: error!, durationMs })
       this.notify('error', error!)
     } else this.dispatch({ type: 'stateChanged', state: 'idle', now })
+    if (ok) this.deps.onTurnClassified?.({ model: codexModel(this.chat.model) ?? 'default', effort: (this.chat.effort === 'max' ? 'xhigh' : this.chat.effort) ?? 'default', stopReason: null, text: this.lastText })
     if (this.startNext()) return
     if (ok) this.notify('finished', this.lastText.trim().slice(0, 200) || 'Codex finished.')
     this.letGo()

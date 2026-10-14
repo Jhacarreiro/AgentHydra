@@ -17,6 +17,7 @@ import type {
   AccountRef,
   ChatPatch,
   ChatSummary,
+  SusLevel,
   ChatWait,
   CliMayteWorker,
   CreateChatRequest,
@@ -48,7 +49,7 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
-import { NOTE_MAX, type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
+import { NOTE_MAX, SUS_LEVELS, type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
 import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
@@ -62,6 +63,7 @@ import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
+import { classifyTurn, PushbackStore, type PushbackRow } from './pushback'
 import { claudeCodeBinaryFor } from './claude-code-binary'
 import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
@@ -338,6 +340,7 @@ export class ChatManager {
   private readonly signInHeld = new Map<string, number>()
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
+  private readonly pushback: PushbackStore
   private readonly bridge: ManagerBridge
   private readonly onChatEnd: ((sessions: string[]) => void) | undefined
   private readonly claudeHome: string | undefined
@@ -377,6 +380,7 @@ export class ChatManager {
 
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
+    this.pushback = new PushbackStore(o.home)
     this.failures = new FailureLedger(o.home, o.now)
     this.timings = Timings.for(o.home, o.now)
     this.sessionMeta = new SessionMetaStore(o.home, o.now)
@@ -647,6 +651,43 @@ export class ChatManager {
     return live ? commandInfosFrom(live) : STATIC_COMMANDS
   }
 
+  /** Every finished turn on any service is counted under its setting; the chat's sus pick is read again. */
+  private countTurn(chatId: string, service: ChatServiceKind, t: { model: string; effort: string; stopReason: string | null; text: string }): void {
+    const v = classifyTurn(t.stopReason, t.text)
+    this.pushback.record({ service, model: t.model, effort: t.effort }, v.cls, { chat: chatId, label: v.label })
+    const cur = this.chats.get(chatId)
+    if (cur) this.refreshSusPick(cur.chat)
+  }
+
+  /** GET /api/pushback: what each setting has done so far. */
+  pushbackRows(): PushbackRow[] {
+    return this.pushback.rows().sort((a, b) => a.pushbackRate - b.pushbackRate || b.turns - a.turns)
+  }
+
+  /** Seeds the pushback counts once from the transcripts of the chats this Desk knows; a second run adds nothing. */
+  backfillPushback(): { chats: number; turns: number } {
+    const chats = [...this.chats.values()].filter((e) => !e.chat.service && !e.chat.workerId)
+    return this.pushback.backfill(chats.map((e) => ({ id: e.chat.id, model: e.chat.model, effort: e.chat.effort, items: () => this.store.loadItems(e.chat.id) })))
+  }
+
+  /** What 'sus' runs a chat's next Claude turn on: the least-pushing setting with enough turns, else the chat's own. */
+  private susTurnOf(chat: ChatSummary): { model: string | null; effort: Effort | null } | null {
+    if (chat.sus !== 'sus') return null
+    const pick = this.pushback.pick()
+    if (!pick) return { model: chat.model, effort: chat.effort }
+    return { model: pick.model === 'default' ? null : pick.model, effort: pick.effort === 'default' ? null : (pick.effort as Effort) }
+  }
+
+  /** The summary's susPick: what 'sus' resolves to now, null when no setting qualifies yet; absent off 'sus'. */
+  private refreshSusPick(chat: ChatSummary): void {
+    if (chat.sus !== 'sus') {
+      delete chat.susPick
+      return
+    }
+    const pick = this.pushback.pick()
+    chat.susPick = pick ? { model: pick.model, effort: pick.effort === 'default' ? null : (pick.effort as Effort), pushbackRate: pick.pushbackRate, turns: pick.turns } : null
+  }
+
   /** A live runtime's model list (remembered once read), else the static menu. */
   async models(): Promise<ModelChoice[]> {
     const live = [...this.chats.values()].find((e) => e.runtime?.running && e.query)
@@ -713,6 +754,7 @@ export class ChatManager {
   private async openNew(req: CreateChatRequest, messageId?: string): Promise<{ chat: ChatSummary; firstSend: Promise<string | null> }> {
     const cwd = checkCwd(req.cwd)
     if (req.parentId && !this.chats.has(req.parentId)) throw new ChatError(400, 'parentId names no Desk chat')
+    if (req.sus === 'bad' && !this.codexDir) throw new ChatError(409, 'Codex is not set up in this Desk.')
     if (this.newChats === 'climayte') return this.open(req, cwd, { account: { ...CLIMAYTE_ACCOUNT }, auto: true, note: null }, messageId, true)
     return this.open(req, cwd, await this.resolveAccount(req.accountId ?? this.settingsOf().defaultAccountId), messageId)
   }
@@ -737,6 +779,9 @@ export class ChatManager {
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
       delegateToCliMayte: req.delegateToCliMayte ?? settings.delegateToCliMayte,
+      ...(!worker && req.sus && req.sus !== 'fine' ? { sus: req.sus } : {}),
+      // Born on 'bad': pinned to Codex from the first message, with nothing to catch up on.
+      ...(!worker && req.sus === 'bad' ? { service: 'codex' as const } : {}),
       ...(req.parentId ? { parentId: req.parentId } : {}),
       ...(req.managerSlug ? { managerSlug: req.managerSlug } : {}),
       status: 'closed',
@@ -758,6 +803,7 @@ export class ChatManager {
       climayteActive: 0,
       ...(worker ? { workerId: null } : {}),
     }
+    this.refreshSusPick(chat)
     const entry: Entry = { chat, runtime: null, query: null, ...(req.title?.trim() ? { titled: true } : {}) }
     this.chats.set(chat.id, entry)
     this.changed(chat)
@@ -1418,6 +1464,7 @@ export class ChatManager {
     if (chat.workerId !== undefined) p = { ...p, accountId: undefined, model: undefined, effort: undefined, permissionMode: undefined }
     const resolved = p.accountId !== undefined ? await this.resolveAccount(p.accountId) : null
     const live = e.runtime?.running ? e.runtime : null
+    if (p.sus !== undefined && chat.workerId === undefined) await this.applySus(e, p.sus)
     if (p.service !== undefined) await this.pinService(e, p.service)
     const relocated = this.applyMarks(id, e, p, resolved)
     await this.applyRuntimeSettings(e, live, p)
@@ -1428,6 +1475,21 @@ export class ChatManager {
     this.changed(chat)
     this.accountNote(id, resolved?.note ?? null)
     return { ...chat }
+  }
+
+  /**
+   * The sus level (SPEC "Sus meter"). 'bad' pins the chat to Codex (the existing pin, which makes the next turn catch up);
+   * leaving 'bad' unpins it. 'sus' is read at the next turn.
+   */
+  private async applySus(e: Entry, to: SusLevel): Promise<void> {
+    const chat = e.chat
+    const was: SusLevel = chat.sus ?? 'fine'
+    if (to === was) return
+    if (to === 'bad') await this.pinService(e, 'codex')
+    else if (was === 'bad') await this.pinService(e, null)
+    if (to === 'fine') delete chat.sus
+    else chat.sus = to
+    this.refreshSusPick(chat)
   }
 
   /** The chat's own fields a patch sets at once; true when it was put in another folder by hand. */
@@ -2233,6 +2295,7 @@ export class ChatManager {
       free,
       held: this.chatgptHeld,
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'chatgpt', fresh, sentId, movedFrom),
+      onTurnClassified: (t) => this.countTurn(e.chat.id, 'chatgpt', t),
       caughtUp: () => this.clearLeftAt(e, 'chatgpt'),
     })
   }
@@ -2252,6 +2315,7 @@ export class ChatManager {
         return found ? codexAccount(found) : null
       },
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'codex', fresh, sentId, movedFrom),
+      onTurnClassified: (t) => this.countTurn(e.chat.id, 'codex', t),
       caughtUp: () => this.clearLeftAt(e, 'codex'),
       hold: (accountId, until) => this.codexHeld.set(accountId, until),
     })
@@ -2285,6 +2349,14 @@ export class ChatManager {
       },
       forkAt: () => this.chats.get(chatId)?.forkAt ?? null,
       onTurnEnd: () => this.checkMoved(chatId),
+      susTurn: () => {
+        const cur = this.chats.get(chatId)
+        if (!cur) return null
+        this.refreshSusPick(cur.chat)
+        return this.susTurnOf(cur.chat)
+      },
+      // A refusal is counted and nothing more: the message is never sent again on another setting or service.
+      onTurnClassified: (t) => this.countTurn(chatId, 'claude', t),
       onFailure: (f) => {
         const cur = this.chats.get(chatId)
         if (cur) this.fail(cur, f)
@@ -2944,6 +3016,8 @@ export function parseCreate(body: unknown): CreateChatRequest {
   if (effort !== undefined) req.effort = effort
   const mode = optMode(b)
   if (mode) req.permissionMode = mode
+  const sus = optSus(b)
+  if (sus !== undefined) req.sus = sus
   const delegate = optBool(b, 'delegateToCliMayte')
   if (delegate !== undefined) req.delegateToCliMayte = delegate
   const parentId = optString(b, 'parentId')
@@ -3025,7 +3099,13 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service', 'sus']
+function optSus(b: Record<string, unknown>): SusLevel | undefined {
+  if (b.sus === undefined) return undefined
+  if (!SUS_LEVELS.includes(b.sus as SusLevel)) throw new ChatError(400, `sus is one of ${SUS_LEVELS.join(', ')}`)
+  return b.sus as SusLevel
+}
+
 const PINNABLE: PinnedService[] = ['codex', 'chatgpt']
 
 /** POST /api/chats/import-desk: `ids`, the chats to copy (every one when absent). */
@@ -3070,6 +3150,8 @@ export function parsePatch(body: unknown): ChatPatch {
   }
   const note = optNote(b)
   if (note !== undefined) p.note = note
+  const sus = optSus(b)
+  if (sus !== undefined) p.sus = sus
   if (b.service !== undefined) {
     if (b.service !== null && !PINNABLE.includes(b.service as PinnedService)) throw new ChatError(400, `service is one of ${PINNABLE.join(', ')}, or null for Claude`)
     p.service = b.service as PinnedService | null

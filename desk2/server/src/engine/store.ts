@@ -11,7 +11,7 @@ import { appendFile, open, rm, stat } from 'node:fs/promises'
 import { renameOver, renameOverAsync, writeFlushed, writeFlushedAsync } from '../write-flushed'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
-const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
+const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive', 'susPick'] as const
 /** Chats whose raw transcript lines stay in memory; the least recently read goes first. */
 const LINE_CACHE_MAX = 20
 

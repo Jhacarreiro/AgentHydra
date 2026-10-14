@@ -382,6 +382,7 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
   )
   app.get('/api/chats/:id/commands', (c) => answer(c, () => manager.commands(c.req.param('id'))))
   app.get('/api/models', (c) => answer(c, () => manager.models()))
+  app.get('/api/pushback', (c) => answer(c, () => manager.pushbackRows()))
   app.get('/api/chat-services', (c) => answer(c, () => manager.services()))
 }
 

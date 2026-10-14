@@ -18,6 +18,8 @@ export interface ServiceRuntimeDeps {
   now?: () => number
   onClosed?(): void
   onFailure?(f: { message: string; durationMs: number | null }): void
+  /** A turn ended answered: what ran it and what it ended with, for the pushback count. */
+  onTurnClassified?(t: { model: string; effort: string; stopReason: string | null; text: string }): void
 }
 
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>

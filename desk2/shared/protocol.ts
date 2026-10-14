@@ -31,6 +31,14 @@ export interface AccountRef {
 /** A service a chat's own turns can run on (the row menu's Pin service). Claude, through the chat's account, is every chat's own. */
 export type ChatServiceKind = 'claude' | 'codex' | 'chatgpt'
 /** A service a chat can be pinned to instead of Claude. */
+export type SusLevel = 'fine' | 'sus' | 'bad'
+export const SUS_LEVELS: readonly SusLevel[] = ['fine', 'sus', 'bad']
+export interface SusPick {
+  model: string
+  effort: Effort | null
+  pushbackRate: number
+  turns: number
+}
 export type PinnedService = Exclude<ChatServiceKind, 'claude'>
 
 /** Where a pinned chat's conversation goes on in a service: the account Desk picked there and the thread on it. */
@@ -85,6 +93,10 @@ export interface ChatSummary {
   note?: string | null
   /** Pin service: Codex or ChatGPT runs the chat's own turns instead of Claude. Absent or null = Claude, on `account`. */
   service?: PinnedService | null
+  /** The sus level (SPEC "Sus meter"): absent = 'fine'. */
+  sus?: SusLevel
+  /** What 'sus' runs the next Claude turn on (the setting that pushes back least); null when none qualifies yet, absent off 'sus'. Never saved. */
+  susPick?: SusPick | null
   /** The chat's thread on each service it ran on, kept when the pin moves on: pinned there again, it goes on in that thread. */
   serviceThreads?: Partial<Record<PinnedService, ServiceThread>>
   /** When the pin last left each service (epoch ms): the next turn there first reads what was said since, then this is cleared. */
@@ -664,6 +676,7 @@ export interface CreateChatRequest {
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
   parentId?: string // the Desk chat this one sits under (a sub-manager chat)
+  sus?: SusLevel // the sus level the chat starts on (default 'fine')
   managerSlug?: string // the manager this chat runs as: its Claude process gets AGENTHYDRA_MANAGER
 }
 
@@ -708,6 +721,7 @@ export interface ChatPatch {
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
   note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note
+  sus?: SusLevel // fine = the chat's own setting; sus = the setting that pushes back least + owner context; bad = pinned to Codex
   service?: PinnedService | null // Pin service; null = back to Claude. A running turn ends where it is; the next one runs there
 }
 

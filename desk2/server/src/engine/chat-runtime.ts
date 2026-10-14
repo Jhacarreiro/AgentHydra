@@ -97,6 +97,16 @@ export interface ChatRuntimeDeps {
   onMessage?(msg: SDKMessage): void
   /** The Desk base URL this chat's move line names; without it the line is left out. */
   deskUrl?(): string
+  /** The sus level's setting for the next turn (SPEC "Sus meter"): null on a chat that is not on 'sus'. */
+  susTurn?(): SusTurn | null
+  /** A Claude turn ended: what ran it and what it ended with, for the pushback count. Never for a replayed turn. */
+  onTurnClassified?(t: { model: string; effort: string; stopReason: string | null; text: string }): void
+}
+
+/** What a 'sus' chat's next turn runs on: the setting that pushes back least, or the chat's own. */
+export interface SusTurn {
+  model: string | null
+  effort: Effort | null
 }
 
 type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>
@@ -259,6 +269,12 @@ export class ChatRuntime {
   private readonly onFailure?: (f: { message: string; durationMs: number | null }) => void
   private readonly forkAt?: () => string | null
   private readonly onTurnEnd?: () => void
+  private readonly susTurn?: () => SusTurn | null
+  private readonly onTurnClassified?: ChatRuntimeDeps['onTurnClassified']
+  /** The model and effort the live process runs its next turn on; the last assistant text and model of the turn running. */
+  private applied: SusTurn = { model: null, effort: null }
+  private turnText = ''
+  private turnModel = ''
   private readonly onMessage?: (msg: SDKMessage) => void
   private readonly deskUrl?: () => string
 
@@ -345,6 +361,8 @@ export class ChatRuntime {
     this.onFailure = deps.onFailure
     this.forkAt = deps.forkAt
     this.onTurnEnd = deps.onTurnEnd
+    this.susTurn = deps.susTurn
+    this.onTurnClassified = deps.onTurnClassified
     this.onMessage = deps.onMessage
     this.deskUrl = deps.deskUrl
   }
@@ -377,6 +395,8 @@ export class ChatRuntime {
     else delete env.AGENTHYDRA_MANAGER
     pinHaikuModel(env)
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
+    const sus = this.susTurn?.() ?? null
+    this.applied = sus ? { ...sus } : { model: withoutOldHaiku(chat.model), effort: chat.effort }
     const options: Options = {
       cwd: chat.cwd,
       env,
@@ -397,8 +417,8 @@ export class ChatRuntime {
     // A Bypass chat in plan mode goes back to Bypass when the plan is approved, and the CLI refuses Bypass
     // to a process not launched for it (a process restarted mid-plan included).
     if (chat.permissionMode === 'bypassPermissions' || this.beforePlan === 'bypassPermissions') options.allowDangerouslySkipPermissions = true
-    if (chat.model) options.model = withoutOldHaiku(chat.model) ?? undefined
-    if (chat.effort) options.effort = chat.effort
+    if (this.applied.model) options.model = withoutOldHaiku(this.applied.model) ?? undefined
+    if (this.applied.effort) options.effort = this.applied.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
     if (chat.sessionId) options.resume = chat.sessionId
     else if (chat.forkedFrom) {
@@ -719,6 +739,7 @@ ${swap.real}` }
     if (!this.q) this.start()
     const before = this.chat
     const busy = before.status === 'working' || before.status === 'needs_you' || (before.status === 'starting' && before.turnStartedAt !== null)
+    if (!busy) void this.applySetting()
     this.limitAnnounced = false
     if (!busy) this.replied = false
     const msg = this.input!.push({ text, images }, messageId)
@@ -881,10 +902,28 @@ ${swap.real}` }
     }
   }
 
+  /** Before a turn: a live process takes the setting the sus level (or the chat itself) now asks for. The chat's own fields stay. */
+  private async applySetting(): Promise<void> {
+    const q = this.q
+    if (!q || this.susTurn === undefined) return
+    const sus = this.susTurn()
+    const want: SusTurn = sus ?? { model: withoutOldHaiku(this.chat.model), effort: this.chat.effort }
+    const had = this.applied
+    if (want.model === had.model && want.effort === had.effort) return
+    this.applied = { ...want }
+    try {
+      if (want.model !== had.model) await q.setModel(want.model ?? undefined)
+      if (want.effort !== had.effort) await q.applyFlagSettings({ effortLevel: want.effort })
+    } catch {
+      this.applied = had
+    }
+  }
+
   async setModel(picked: string | null): Promise<void> {
     const model = withoutOldHaiku(picked)
     const was = this.chat.model
     this.chat.model = model
+    this.applied = { ...this.applied, model }
     this.touch()
     this.publishChat()
     const q = this.q
@@ -901,6 +940,7 @@ ${swap.real}` }
   async setEffort(effort: Effort | null): Promise<void> {
     const was = this.chat.effort
     this.chat.effort = effort
+    this.applied = { ...this.applied, effort }
     this.touch()
     this.publishChat()
     const q = this.q
@@ -1122,6 +1162,9 @@ ${swap.real}` }
     this.takeUp(msg)
     if (m.type === 'assistant' && !(msg as { error?: unknown }).error && !(msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
       const said = assistantText(msg)
+      if (said.trim()) this.turnText = said
+      const ranOn = (msg as { message?: { model?: unknown } }).message?.model
+      if (typeof ranOn === 'string' && ranOn) this.turnModel = ranOn
       if (!isUsageLimitText(said) && !isSignInFailureText(said)) this.replied = true
     }
 
@@ -1215,10 +1258,21 @@ ${swap.real}` }
     if (!carried) this.notify('limited', text)
   }
 
+  /** A finished turn into the pushback count: a result that is an error with no refusal answered nothing and counts nowhere. */
+  private classifyTurn(msg: SDKMessage): void {
+    const r = msg as { is_error?: unknown; stop_reason?: unknown }
+    const stopReason = typeof r.stop_reason === 'string' ? r.stop_reason : null
+    if (this.chat.status === 'limited' || (r.is_error === true && stopReason !== 'refusal')) return
+    this.onTurnClassified?.({ model: this.turnModel || this.applied.model || 'default', effort: this.applied.effort ?? 'default', stopReason, text: this.turnText })
+  }
+
   private onResult(msg: SDKMessage, reportedQueued: number | undefined, now: number): void {
     const total = (msg as { total_cost_usd?: unknown }).total_cost_usd
     if (typeof total === 'number') this.totalCost = total
     this.turns++
+    if (!this.replaying) this.classifyTurn(msg)
+    this.turnText = ''
+    this.turnModel = ''
     this.stopping = false
     this.resultSinceAck = true
     if (!this.replaying) this.cwdCheckDue = true

@@ -263,6 +263,7 @@ export class ChatgptRuntime extends ServiceRuntime {
       this.base.onFailure?.({ message: error!, durationMs: end.durationMs })
       this.notify('error', error!)
     } else this.dispatch({ type: 'stateChanged', state: 'idle', now })
+    if (end.ok) this.deps.onTurnClassified?.({ model: this.chat.model || 'default', effort: 'default', stopReason: null, text: end.text ?? '' })
     if (this.startNext()) return
     if (end.ok) this.notify('finished', end.text?.slice(0, 200) || 'ChatGPT answered.')
     this.publish()

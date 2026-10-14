@@ -367,6 +367,7 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/folders/reveal` (`{ path }`) | `{ path }` (opens an existing absolute folder in Explorer, `explorer.exe <path>`, no shell; else 400) |
 | `GET /api/chats/:id/commands` | `SlashCommandInfo[]` |
 | `GET /api/models` | `ModelChoice[]` |
+| `GET /api/pushback` | `{ service, model, effort, turns, pushback, refusals, pushbackRate }[]` (every setting with any turns, on any service, lowest `pushbackRate` first; see "Sus meter"; `model` is the resolved model id, `effort` is `default` when none was set) |
 | `GET /api/folders/recent` | `string[]` (the folder menu's Recent: the chats' folders and the folders opened or chosen in the menu, latest first, at most 20; a folder taken off stays off until it is used again; folders gone from disk left out; `<home>/folders.json`) |
 | `POST /api/folders/recent` (`{ path }`) | `string[]` (the folder was chosen: it tops Recent, back on it if it was taken off; 400 unless an existing absolute folder on this machine) |
 | `DELETE /api/folders/recent?path=` | `string[]` (takes the folder off Recent until it is opened, chosen or gets a new chat) |
@@ -411,6 +412,38 @@ window is connected the bridge polls AgentHydra every 3 s and broadcasts `extern
 "AgentHydra is not running"), never a crash. Down means out of reach for a minute (`DOWN_GRACE_MS`): a relaunch or
 a stalled read is not down, and a list read that fails is answered with its last answer for two minutes
 (`KEEP_LAST_MS`), so the sidebar never empties and refills over a blip (owner, 2026-10-09).
+
+## Sus meter (server/src/engine/pushback.ts)
+
+Some settings kick back on routine work on the owner's own projects (refusing, "are you sure", warnings about his own
+keys or production, lecturing, doing less than asked). Desk measures that per setting and lets each chat choose a level
+instead of a model. Server half; the composer draws the three levels.
+
+- **Counting.** When any assistant turn ends, on Claude, Codex or ChatGPT, `classifyTurn(stopReason, finalText)` gives
+  `refusal` (the result's `stop_reason` is `refusal`), `pushback` (the closing text matches an entry of
+  `PUSHBACK_PHRASES`, one exported list of `{ label, re }`, case-insensitive: a refusal, permission or "are you sure" asked
+  for routine work, a warning about the owner's own keys, production or accounts, a safety lecture, or less done than
+  asked with the reason; a plain technical caveat such as "this will need a restart" matches nothing) or `clean`. Every
+  answered turn is counted, clean ones too, so a setting that never pushes back shows its zero. A turn that failed
+  without a refusal answered nothing and counts nowhere. The count is keyed `{ service, model, effort }`: the model id the
+  assistant message named (Codex and ChatGPT: the chat's model, `default` when none), the effort (`default` when none).
+  Counts live in `<home>/pushback.json` (temp file + rename) with the ids of the chats the backfill has counted and an
+  audit list: each turn that was not clean, with its time, chat, setting, class and the matched phrase label (newest 2000).
+- **Backfill.** `ChatManager.backfillPushback()` / `bun server/scripts/pushback-backfill.ts <data folder>` seeds the counts
+  once from the transcripts of the Claude chats the Desk knows, under each chat's own model and effort (a transcript has no
+  stop reasons, so only pushbacks are found). A chat counted is recorded, so a second run adds nothing.
+- **Levels.** `ChatSummary.sus` is `fine | sus | bad` (absent = `fine`); set on `PATCH /api/chats/:id` (`{ sus }`) and on
+  `POST /api/chats` (`{ sus }`).
+  - `fine`: the chat's own model and effort, exactly as before.
+  - `sus`: the next Claude turn runs on the Claude setting with the lowest `pushbackRate` among those with at least
+    `SUS_MIN_TURNS` (20) classified turns, else on the chat's own. Nothing is added to the prompt; only the model and effort
+    of that turn change, and the chat's own fields stay. `ChatSummary.susPick` (`{ model, effort, pushbackRate, turns }`,
+    null when no setting qualifies yet, absent off `sus`, never saved) says what `sus` resolves to.
+  - `bad`: the chat is pinned to Codex (`service: 'codex'`, the Pin service path: the next turn first reads what was said).
+    Leaving `bad` pins back to Claude. Without Codex set up the patch is the 409 `Codex is not set up in this Desk.`
+- **Never re-sent.** A turn that ended in `refusal` is counted and reported, nothing more: it is not sent again on another
+  setting or service, and refusals do not enter the `sus` ranking (only `pushbackRate`). The level changes where the next
+  message goes only because the owner chose it.
 
 ## The bridge (server/src/bridge)
 
