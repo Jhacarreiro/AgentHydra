@@ -5,6 +5,7 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DRONE_REFUSAL } from './climayte-lib'
 import {
   AUTO_DETACH_MS,
   api,
@@ -19,7 +20,6 @@ import {
   str,
 } from './mcp-client'
 import { instanceLabel, selfIdentity } from './mcp-self'
-import type { McpEngineTool } from './mcp-stdio.mjs'
 
 /** The orchestrator's arg limit is 4000 characters; a seven-task spec with real prompts can pass
  *  it. Under the limit the spec travels inline (visible in the returned `command`); over it, it is
@@ -205,6 +205,16 @@ async function runFanOut(
   }
 }
 
+/** Whether this session is a drone worker (its CliMayte id rides in the env, scrubbedEnv). */
+async function droneCaller(): Promise<boolean> {
+  const id = process.env.AGENTHYDRA_CLIMAYTE_WORKER
+  if (!id) return false
+  const w = (await api(`/api/corch/workers/${encodeURIComponent(id)}`).catch(() => null)) as {
+    role?: string
+  } | null
+  return w?.role === 'drone'
+}
+
 export const FAN_OUT_TOOLS: HydraTool[] = [
   // --- fan-out: one task list -> N visible chats on N accounts -------------------------
   // The owner's ask (2026-09-04): "if I start a single chat and tell it to do something that
@@ -313,6 +323,7 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
       ['tasks'],
     ),
     run: async (a) => {
+      if (await droneCaller()) throw new Error(DRONE_REFUSAL)
       const rawTasks = Array.isArray(a.tasks) ? a.tasks : []
       if (rawTasks.length === 0) throw new Error('tasks is required: at least one {cwd, prompt}')
       const tasks = rawTasks.map((t, i) => {

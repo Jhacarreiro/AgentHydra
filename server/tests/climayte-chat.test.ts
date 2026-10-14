@@ -19,7 +19,7 @@ import {
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
 import { CHAT_NOTE, cliArgv, writeWorkerMcp, writeWorkerSettings } from '../src/climayte-launch'
-import { type CliMayteAccount, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
+import { type CliMayteAccount, DRONE_BRIEF, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -192,7 +192,7 @@ describe('chat workers', () => {
       '--settings',
       'hooks.json',
       '--append-system-prompt',
-      WORKER_BRIEF,
+      `${WORKER_BRIEF} ${DRONE_BRIEF}`,
     ])
   })
 

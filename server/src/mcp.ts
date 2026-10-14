@@ -919,6 +919,17 @@ export const TOOLS: HydraTool[] = [
                 description:
                   'true for a worker that only reads and edits files (a builder that runs no build or test): it has no shell and no MCP server but climayte_ask, and it starts at once on a busy machine instead of waiting for the CPU. Its `check`, if any, is still run by CliMayte after it reports.',
               },
+              role: {
+                type: 'string',
+                enum: ['seat'],
+                description:
+                  "'seat' for a worker that carries a persona (`persona`): it is dispatched like any other. Omit it for an ordinary task, which is a drone: a drone never starts workers, so its climayte_run, climayte_manage and fan_out are refused.",
+              },
+              persona: {
+                type: 'string',
+                description:
+                  "With role 'seat': the id of a catalog entry (the hydra-core catalog) for the persona the worker carries.",
+              },
               size: {
                 type: 'string',
                 description:

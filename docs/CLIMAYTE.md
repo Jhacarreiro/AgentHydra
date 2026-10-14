@@ -601,6 +601,16 @@ that folder as `ownerDir`, makes the account folder match:
   that file, so the step holds through retries, moves to another account and compaction with no
   special casing; the 658805b prompt-preamble setting did the same job and was taken back out.
 
+### Roles
+
+Every worker has exactly one role, stored on it, returned in climayte_status and the list and detail APIs, and logged on its `dispatched` and `launched` journal entries.
+
+- **prime**: a chat worker that is not a pinned sub-manager chat (`chat: true`, no `desk.manager`).
+- **seat**: a worker carrying a persona, dispatched with `role: 'seat'` and `persona: '<catalog id>'` (the persona must be in the hydra-core catalog, or the dispatch is refused); or a chat worker with `desk.manager` set.
+- **drone**: everything else. A drone never starts workers: its climayte_run, climayte_manage and fan_out are refused with "A drone never starts workers..." and the refusal is journaled as `refused` on the drone. Its brief tells it to end its report with a `TOO BIG:` line and a suggested split when a job is too big for one session; whoever started it splits the job.
+
+Prime, seat and no-worker callers dispatch as before. Manager workers (`kind: 'manage'`) are drones; their wave tasks are dispatched by the manager (climayte-manager-mcp), with no origin, so the refusal does not reach them.
+
 ### Chat workers (`chat: true`, owner, 2026-10-04)
 
 A chat front end can run each of the owner's interactive chats as a CliMayte worker (dispatched

@@ -191,6 +191,23 @@ export interface CliMayteSealed {
   allowedTools: string[]
 }
 
+export type CliMayteRole = 'prime' | 'seat' | 'drone'
+
+/** A worker's role. Stored on every worker made since the roles (climayte-dispatch.ts newWorker);
+ *  an older one takes the role its chat flags give it. */
+export function roleOf(w: {
+  role?: CliMayteRole
+  chat?: boolean
+  desk?: { manager?: string }
+}): CliMayteRole {
+  if (w.role) return w.role
+  if (w.chat !== true) return 'drone'
+  return w.desk?.manager ? 'seat' : 'prime'
+}
+
+export const DRONE_REFUSAL =
+  'A drone never starts workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
+
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
@@ -276,6 +293,11 @@ export interface CliMayteWorker {
    *  nothing, so it starts without waiting for the CPU (climayte-cpu.ts), and its CLI has no Bash or PowerShell and no
    *  MCP server but CliMayte's own (LIGHT_BRIEF, climayte-launch.ts). Absent: an ordinary worker. */
   light?: boolean
+  /** prime: a chat. seat: carries a persona (`persona`), or is a chat that manages a desk. drone:
+   *  everything else, which never starts workers (roleOf; the dispatch refusal, climayte.ts). */
+  role?: CliMayteRole
+  /** A seat's persona: a catalog id (hydra-core catalog), checked when the seat is dispatched. */
+  persona?: string
   /** How many times `check` has run. */
   checkRuns?: number
   /** The check running now, under a runner outside the daemon like an attempt's CLI (climayte.ts
@@ -563,6 +585,8 @@ export interface CliMayteWorkerReport {
   kind: CliMayteWorker['kind']
   model: string | null
   effort: string | null
+  role: CliMayteRole
+  persona?: string
   lastActivity: string | null
   waitUntil?: string | null
   error: string | null
@@ -628,6 +652,8 @@ export function toReport(
     kind: v.kind,
     model: v.model ?? null,
     effort: v.effort ?? null,
+    role: roleOf(v),
+    ...(v.persona ? { persona: v.persona } : {}),
     lastActivity: v.lastActivity ? v.lastActivity.slice(0, 120) : null,
     ...(v.waitUntil !== undefined ? { waitUntil: v.waitUntil } : {}),
     error: v.error,
@@ -699,7 +725,7 @@ export function climayteEffort(v: unknown): string | null {
 }
 
 export const WORKER_BRIEF =
-  "You are a CliMayte worker: a Claude Code CLI session AgentHydra started on one of the owner's accounts, at the owner's request, to do one task for an orchestrating chat. Do all of it yourself, in this session. " +
+  'Do all of your task yourself, in this session. ' +
   ETA_INSTRUCTION +
   " Nobody watches live: make the reasonable call and say which you made. Your session ends with your turn, and nothing wakes it for a background job: never end your turn to wait for a build, test or run; wait inside the turn, looping on its output with a time limit, and end the turn only with your final report or after climayte_ask. Only when blocked on a real decision the task does not settle, where a wrong guess would cost real work, call climayte_ask (question, options, context) and end your turn: whoever started you answers by message, and this session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's rules: commit only the files you changed, and push if they say to. Never read or print a secret value. Your context is small: never Read more than 120 lines at once; grep -n first, then Read with offset and limit, and pipe command output through tail -40. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a repository hook asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
@@ -711,6 +737,10 @@ export const NO_COMMIT_BRIEF =
 /** Added to WORKER_BRIEF for a `light` worker, whose CLI has no shell: it must not plan on running anything. */
 export const LIGHT_BRIEF =
   'This task only reads and edits files: you have no shell, so run no build, test, install or git command; end your report with the command the orchestrator should run to check your change.'
+
+/** Added to WORKER_BRIEF for a drone, which never starts workers: a job too big for one session goes back to whoever started it. */
+export const DRONE_BRIEF =
+  'You never start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
@@ -2186,6 +2216,7 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
   return {
     ...w,
     ...originFields(w.origin, lookup, w.trace),
+    role: roleOf(w),
     // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
     sendIds: undefined,
     prompt: w.prompt.slice(0, 300),

@@ -114,7 +114,9 @@ import {
   classifyAttempt,
   climaytePriority,
   contextTokens,
+  DRONE_REFUSAL,
   RUNNER_NEVER_STARTED_NOTICE,
+  roleOf,
 } from './climayte-lib'
 import { archiveLogsWhenDue } from './climayte-log-archive'
 import {
@@ -210,6 +212,8 @@ import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
+import { loadCatalog } from './hydra-core/catalog'
+import { coreDir } from './hydra-core/paths'
 import { POINTER_DIR } from './instance'
 import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
 
@@ -1111,6 +1115,8 @@ function enlistWorkers(
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
+      role: w.role,
+      persona: w.persona,
       trace: trace ? (trace.label ?? (trace.sessionId ? 'a chat' : 'a worker')) : undefined,
       accounts: w.accounts?.length,
       model: w.model,
@@ -1157,6 +1163,10 @@ export function climayteRun(input: {
     commit?: boolean
     /** An edit-only worker: no shell, no MCP server but CliMayte's, and no wait for the CPU (CliMayteWorker.light). */
     light?: boolean
+    /** 'seat': the worker carries `persona` (CliMayteWorker.role). Absent: a prime chat, a seat of a desk, or a drone. */
+    role?: 'seat'
+    /** A catalog id, with role 'seat' (CliMayteWorker.persona). */
+    persona?: string
     priority?: number
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
@@ -1195,6 +1205,8 @@ export function climayteRun(input: {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
+  refuseDrone(input.origin)
+  input.tasks.forEach(checkRole)
   input = { ...input, tasks: input.tasks.map(sealedTask) }
   const defaults = runDefaultsOf(input)
   const settings = taskSettings(input.tasks, defaults)
@@ -1230,6 +1242,27 @@ export function climayteRun(input: {
   )
   enlistWorkers(made, settings, fresh, input)
   return runReply(group, repeats, fresh, made, now)
+}
+
+/** A drone never starts workers (roleOf): its dispatch is refused, and the refusal is logged on the drone. */
+function refuseDrone(origin: CliMayteOrigin | undefined): void {
+  const caller = originFor(origin)
+  if (caller?.kind !== 'worker') return
+  const w = workers.get(caller.workerId)
+  if (!w || roleOf(w) !== 'drone') return
+  journal(w, 'refused', { notice: DRONE_REFUSAL })
+  throw new Error(DRONE_REFUSAL)
+}
+
+/** The role a task names: only a seat, which needs a persona that is in the catalog. */
+function checkRole(t: { role?: unknown; persona?: unknown }): void {
+  if (t.role === undefined && t.persona === undefined) return
+  if (t.role !== 'seat')
+    throw new Error('a task names only the role "seat"; without one it is a drone')
+  if (typeof t.persona !== 'string' || !t.persona)
+    throw new Error('a seat needs a persona: the id of a catalog entry')
+  if (!loadCatalog(coreDir()).entries.has(t.persona))
+    throw new Error(`persona "${t.persona}" is not in the catalog`)
 }
 
 /** One verdict for several finished workers (the same `verdict`, `note` and `kind` for each), in
@@ -1678,6 +1711,7 @@ export async function climayteWaveStart(input: {
   trace?: CliMayteTrace
 }): Promise<{ wave: string; managerId: string; waiter: string }> {
   load()
+  refuseDrone(input.origin)
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
   const plan = str(input.plan)
   const cwd = str(input.cwd)

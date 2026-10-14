@@ -47,6 +47,7 @@ import {
   CONTEXT_HANDOFF_TOKENS,
   continuationPrompt,
   copySessionTranscript,
+  DRONE_BRIEF,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   keepReport,
@@ -54,6 +55,7 @@ import {
   NO_COMMIT_BRIEF,
   newestTranscript,
   PAUSED_PROMPT,
+  roleOf,
   scrubbedEnv,
   TRANSIENT_PROMPT,
   transcriptHandoff,
@@ -755,6 +757,7 @@ function briefArgs(w: CliMayteWorker): string[] {
     )
     const brief = [
       WORKER_BRIEF,
+      roleOf(w) === 'drone' ? DRONE_BRIEF : '',
       w.commit === false ? NO_COMMIT_BRIEF : '',
       w.light ? LIGHT_BRIEF : '',
       note,
@@ -906,6 +909,7 @@ function journalLaunch(
     active: activeOnAccount,
     model: w.model,
     effort: w.effort,
+    role: roleOf(w),
   })
 }
 
