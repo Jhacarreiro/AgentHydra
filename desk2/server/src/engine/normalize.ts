@@ -416,8 +416,13 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
   function onToolUseBlock(out: Emission[], block: Block, parent: string | null) {
     const id = str(block.id)
     if (!id) return
-    const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
-    const name = str(block.name) || block.type
+    const given = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
+    const called = str(block.name) || block.type
+    // Claude Desktop's update_plan (its ccd_turn MCP, 2026-10: the checklist the app draws under a running turn) is
+    // TodoWrite by another name, its `items` the same { content, status }: read as TodoWrite, it is the chat's To-dos.
+    const plan = /(^|__)update_plan$/.test(called) && Array.isArray(given.items)
+    const name = plan ? 'TodoWrite' : called
+    const input: Loose = plan ? { todos: given.items } : given
     for (const p of inputPaths(name, input)) named.add(pathKey(p))
     const prev = tools.get(id)
     const item: ToolItem = withParent(

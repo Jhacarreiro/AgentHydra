@@ -3,7 +3,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { TranscriptItem } from '@shared/protocol'
-import { createNormalizer, type Emission, type NormalizerOptions } from '../../src/engine/normalize'
+import { createNormalizer, historyToItems, type Emission, type NormalizerOptions } from '../../src/engine/normalize'
 import * as hand from '../fixtures/hand-built'
 
 const NOW = 1_000
@@ -107,6 +107,30 @@ describe('hand-built fixtures', () => {
     expect(get(r.items, 'toolu_todo_1', 'tool_use').status).toBe('done')
     expect(get(r.items, 'toolu_todo_2', 'tool_use').status).toBe('done')
     expect(r.of('chat').filter((e) => 'activity' in e.patch).map((e) => e.patch.activity)).toEqual(['Thinking', 'Updating todos', 'Thinking', 'Updating todos', 'Thinking'])
+  })
+
+  test("Claude Desktop's update_plan is the chat's To-dos, as TodoWrite is", () => {
+    const items = historyToItems([
+      {
+        type: 'assistant',
+        uuid: 'u-plan',
+        timestamp: '2026-10-14T16:00:00.000Z',
+        message: {
+          id: 'msg_plan',
+          role: 'assistant',
+          content: [
+            {
+              type: 'tool_use',
+              id: 'toolu_plan',
+              name: 'mcp__ccd_turn__update_plan',
+              input: { items: [{ content: 'Read the spec', status: 'completed' }, { content: 'Write the code', status: 'in_progress' }], scope: 'first_task' },
+            },
+          ],
+        },
+      },
+    ])
+    expect(items.find((i) => i.kind === 'todos')).toMatchObject({ todos: [{ content: 'Read the spec', status: 'completed' }, { content: 'Write the code', status: 'in_progress' }] })
+    expect(items.find((i) => i.id === 'toolu_plan')).toMatchObject({ kind: 'tool_use', name: 'TodoWrite' })
   })
 
   test('sub-agent: parentToolUseId on its items, task events fold into one task item', () => {

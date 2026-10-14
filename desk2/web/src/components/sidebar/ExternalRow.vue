@@ -54,6 +54,10 @@ const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: ba
 const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
 const speaker = computed(() => isMuted(props.session.id) || isAudible(props.session.id))
+/** Room at the row's right end: for the three dots (and the speaker) on hover in compact mode; always otherwise, where the status dot sits. */
+const extrasPad = computed(() =>
+  speaker.value ? [menuOpen.value ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : props.compact ? ['pe-1 group-hover/row:pe-6', { 'pe-6': menuOpen.value }] : 'pe-6'
+)
 const menu = computed(() => props.entries ?? rowMenu({ ...externalRow(props.session), muted: isMuted(props.session.id) }, props.groups, accountChoices.value, codexAccountChoices.value))
 const canRename = computed(() => menu.value.some((e) => typeof e === 'object' && 'action' in e && e.action === 'rename'))
 const menuOpen = ref(false)
@@ -125,11 +129,18 @@ function onMenuClosed(e: Event) {
   <Tip :label="renaming || menuOpen ? '' : tooltip" side="right" align="start">
     <span class="block" v-on="listeners">
       <DefineBody>
-          <span class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" :selected="selected" />
-            <span v-else class="flex size-3.5 items-center justify-center">
-              <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
-            </span>
+          <!-- Compact: the project icon in its ring leads the row. Otherwise the status dot sits at the row's right end, where
+               the three dots come on hover and cover it (owner, 2026-10-14, as Claude's sidebar draws it). -->
+          <span v-if="compact" class="flex size-6 shrink-0 items-center justify-center">
+            <ProjectRing :glyph="glyph" :icon="icon" :selected="selected" />
+          </span>
+          <span v-else class="w-0.5 shrink-0" aria-hidden="true" />
+          <span
+            v-if="!compact && !renaming"
+            class="pointer-events-none absolute right-0.75 top-0.75 flex size-5 items-center justify-center transition-opacity duration-(--dur-fast) group-hover/row:opacity-0"
+            :class="menuOpen && 'opacity-0'"
+          >
+            <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
           <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
@@ -154,11 +165,13 @@ function onMenuClosed(e: Event) {
 
           <!-- The account number, the sub-item badges (SubBadges.vue, when the sidebar shows them as counts) and the age; they
                make room for the three dots on hover, the age giving its place. -->
-          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ms-1 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+          <span v-if="!renaming && (account !== null || aged || $slots.default)" class="ms-1 flex shrink-0 items-center gap-1 text-ui-sm leading-4" :class="extrasPad">
             <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ account }}</span>
             <slot />
-            <RowAge v-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="session.lastActivityAt" />
+            <RowAge v-if="aged" :class="compact && ['group-hover/row:hidden', { hidden: menuOpen }]" :at="session.lastActivityAt" />
           </span>
+          <!-- Nothing at the right end: the title still stops short of the status dot. -->
+          <span v-else-if="!compact && !renaming" class="w-5 shrink-0" aria-hidden="true" />
 
       </DefineBody>
       <ContextMenu v-if="seen">

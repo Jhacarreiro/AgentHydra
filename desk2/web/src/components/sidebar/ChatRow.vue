@@ -34,6 +34,10 @@ const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [tit
 
 const glyph = computed(() => props.dot ?? statusGlyph(props.chat))
 const speaker = computed(() => isMuted(props.chat.id) || isAudible(props.chat.id))
+/** Room at the row's right end: for the three dots (and the speaker) on hover in compact mode; always otherwise, where the status dot sits. */
+const extrasPad = computed(() =>
+  speaker.value ? [menuOpen.value ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : props.compact ? ['pe-1 group-hover/row:pe-6', { 'pe-6': menuOpen.value }] : 'pe-6'
+)
 const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups, null, null, chatServices.value))
 // The service a pinned chat runs on, as its word (Codex, ChatGPT); Claude, the default, is not named.
 const serviceWord = computed(() => (props.chat.service ? SERVICE_WORDS[props.chat.service] : null))
@@ -106,11 +110,18 @@ defineExpose({ startRename })
   <Tip :label="renaming || menuOpen || cardOpen ? '' : tooltip" side="right" align="start">
     <span class="block" v-on="listeners">
       <DefineBody>
-          <span class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing v-if="compact" :glyph="glyph" :icon="icon" :selected="selected" />
-            <span v-else class="flex size-3.5 items-center justify-center">
-              <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
-            </span>
+          <!-- Compact: the project icon in its ring leads the row. Otherwise the status dot sits at the row's right end, where
+               the three dots come on hover and cover it (owner, 2026-10-14, as Claude's sidebar draws it). -->
+          <span v-if="compact" class="flex size-6 shrink-0 items-center justify-center">
+            <ProjectRing :glyph="glyph" :icon="icon" :selected="selected" />
+          </span>
+          <span v-else class="w-0.5 shrink-0" aria-hidden="true" />
+          <span
+            v-if="!compact && !renaming"
+            class="pointer-events-none absolute right-0.75 top-0.75 flex size-5 items-center justify-center transition-opacity duration-(--dur-fast) group-hover/row:opacity-0"
+            :class="menuOpen && 'opacity-0'"
+          >
+            <span role="img" :aria-label="glyph.label" class="size-1.5 rounded-full" :class="dotClass" />
           </span>
           <!-- The manager the chat is on, left of its title (owner, 2026-10-13): its photo or initial; a click opens its card, not the chat. -->
           <ManagerAvatar v-if="chat.manager" v-model:open="cardOpen" :manager="chat.manager" />
@@ -133,15 +144,17 @@ defineExpose({ startRename })
           <!-- Hydra Desk extras: account number, sub-items, elapsed time or age, limit reset. No CliMayte count of its own: the
                sub-item badges count the workers, and the dot runs while they do (owner, 2026-10-10: "drop the pill"). -->
           <!-- The elapsed counter and the age give their place to the three dots while the row is hovered or its menu open. -->
-          <span v-if="!renaming && (account !== null || serviceWord || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 pe-1 text-ui-sm leading-4 group-hover/row:pe-6" :class="speaker ? [menuOpen ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : { 'pe-6': menuOpen }">
+          <span v-if="!renaming && (account !== null || serviceWord || elapsed || aged || resets || $slots.default)" class="ms-2 flex shrink-0 items-center gap-1 text-ui-sm leading-4" :class="extrasPad">
             <span v-if="account !== null" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted tnum">#{{ account }}</span>
             <span v-if="serviceWord" class="shrink-0 rounded-sm bg-fill-5 px-1 text-2xs leading-4 text-text-muted">{{ serviceWord }}</span>
             <!-- The sub-item badges (SubBadges.vue), when the sidebar shows them as counts. -->
             <slot />
-            <span v-if="elapsed" class="tnum text-text-muted group-hover/row:hidden" :class="{ hidden: menuOpen }">{{ elapsed }}</span>
-            <RowAge v-else-if="aged" class="group-hover/row:hidden" :class="{ hidden: menuOpen }" :at="chat.updatedAt" />
+            <span v-if="elapsed" class="tnum text-text-muted" :class="compact && ['group-hover/row:hidden', { hidden: menuOpen }]">{{ elapsed }}</span>
+            <RowAge v-else-if="aged" :class="compact && ['group-hover/row:hidden', { hidden: menuOpen }]" :at="chat.updatedAt" />
             <span v-if="resets" class="tnum text-(--status-limited-text)">resets {{ resets }}</span>
           </span>
+          <!-- Nothing at the right end: the title still stops short of the status dot. -->
+          <span v-else-if="!compact && !renaming" class="w-5 shrink-0" aria-hidden="true" />
 
       </DefineBody>
       <ContextMenu v-if="seen">
