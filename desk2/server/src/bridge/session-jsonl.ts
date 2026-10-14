@@ -14,7 +14,13 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { historyBuilder, historyToItems, parseJsonl } from '../engine/normalize'
+import { historyBuilder, historyToItems, parseJsonl, type HistoryOptions } from '../engine/normalize'
+import { mediaCache } from '../media/cache'
+
+/** How a session file's records become items: with the media cache, so a Read of a picture, a screenshot and the
+ *  person's own pictures show (2026-10-14: without it every outside session's pictures were dropped). Measured on a
+ *  session holding 15 in its tail: 57 ms the first time they are cached, then 7 ms against 5 to 9 without them. */
+const history = (cwd?: string | null): HistoryOptions => ({ cwd: cwd ?? null, media: mediaCache() })
 
 /** How much of a transcript's end is read: enough for a long session's recent turns. What is before it the window asks
  *  for on its own (sessionJsonlOlder): a 56 MB session showed only its last 8 MiB, none of the owner's messages
@@ -362,7 +368,7 @@ const LINES_PER_SLICE = 100
 function openingItems(head: Buffer, before: number, cwd?: string | null): TranscriptItem[] {
   for (let s = 0, nl = head.indexOf(10); nl >= 0 && nl < before; s = nl + 1, nl = head.indexOf(10, s)) {
     const rec = parseJsonl(head.subarray(s, nl).toString('utf8'))[0] as { type?: unknown } | undefined
-    if (rec?.type === 'user') return historyToItems([rec], { cwd: cwd ?? null })
+    if (rec?.type === 'user') return historyToItems([rec], history(cwd))
   }
   return []
 }
@@ -478,12 +484,12 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     }
     yield
     const opening = head ? openingItems(head, from, cwd) : []
-    const answer = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
+    const answer = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], history(cwd))]
     fresh.items = answer
     if (windowed) {
       const dropped = trimWindow(fresh, answer, o.keepBytes, pinCap)
       // A first read dropped most of the tail: what is kept answers for the window alone, not the whole tail again.
-      if (dropped > o.keepBytes) fresh.items = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
+      if (dropped > o.keepBytes) fresh.items = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], history(cwd))]
     }
     memo.delete(path)
     memo.set(path, fresh)
@@ -577,8 +583,8 @@ export async function sessionJsonlOlder(path: string, before: number, cwd?: stri
   if (running) return running
   const read = (async () => {
     const buf = (await runAsync({ op: 'read', path, from: 0, to: st.size })) as Buffer
-    const all = historyBuilder({ cwd: cwd ?? null })
-    const after = historyBuilder({ cwd: cwd ?? null })
+    const all = historyBuilder(history(cwd))
+    const after = historyBuilder(history(cwd))
     let lines = 0
     let bytes = 0
     for (let start = 0; start < buf.length; ) {

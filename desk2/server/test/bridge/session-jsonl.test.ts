@@ -258,6 +258,30 @@ describe('outside session .jsonl', () => {
     expect(await both()).toEqual(whole())
   })
 
+  test("shows the pictures a tool returned and the person's own, from the media cache", () => {
+    const dir = temp()
+    const f = join(dir, `${SID}.jsonl`)
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    const picture = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }
+    writeFileSync(f, [
+      { type: 'user', uuid: 'u1', timestamp: at(0), message: { role: 'user', content: [{ type: 'text', text: 'what is on this?' }, picture] } },
+      { type: 'assistant', uuid: 'a1', timestamp: at(1), message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'C:/Users/me/shot.png' } }] } },
+      { type: 'user', uuid: 'u2', timestamp: at(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [picture] }] } },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n')
+    const home = process.env.HYDRA_DESK_HOME
+    process.env.HYDRA_DESK_HOME = join(dir, 'home')
+    try {
+      const items = sessionJsonlItems(f)
+      const user = items.find((i) => i.kind === 'user') as Extract<TranscriptItem, { kind: 'user' }>
+      const read = items.find((i) => i.kind === 'tool_use') as Extract<TranscriptItem, { kind: 'tool_use' }>
+      expect(user.images?.map((i) => i.url)).toEqual([expect.stringMatching(/^\/api\/media\/[0-9a-f]{64}\.png$/)])
+      expect(read.result?.images?.map((i) => i.url)).toEqual(user.images!.map((i) => i.url))
+    } finally {
+      if (home === undefined) delete process.env.HYDRA_DESK_HOME
+      else process.env.HYDRA_DESK_HOME = home
+    }
+  })
+
   test('keeps the full text of an answer: newlines, lists, headings and fences', () => {
     const dir = temp()
     const f = join(dir, `${SID}.jsonl`)
