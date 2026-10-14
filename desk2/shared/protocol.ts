@@ -805,7 +805,8 @@ export interface QueueReorder {
 // WebSocket (/ws): the server pushes; the client only pings
 
 export type ServerEvent =
-  | { type: 'hello'; version: string; chats: ChatSummary[]; settings: DeskSettings; queue?: QueueState }
+  // `chats` is the whole list, so a chat it leaves out is gone; absent while the server is still loading its chats.
+  | { type: 'hello'; version: string; chats?: ChatSummary[]; settings: DeskSettings; queue?: QueueState }
   | { type: 'queue.update'; queue: QueueState }
   | { type: 'chat.upsert'; chat: ChatSummary }
   | { type: 'chat.removed'; chatId: string }

@@ -78,10 +78,10 @@ describe('scaffold server', () => {
     expect(settings).toEqual({ ...DEFAULT_SETTINGS, idleCloseMinutes: 45 })
   })
 
-  test('/ws sends a hello event carrying the settings', async () => {
+  test('/ws sends a hello event carrying the settings, and no chat list before the engine has one', async () => {
     const desk = await boot(tempDir('desk-home-'))
     const hello = await firstMessage(desk.url)
-    expect(hello).toEqual({ type: 'hello', version: desk.ctx.version, chats: [], settings: DEFAULT_SETTINGS })
+    expect(hello).toEqual({ type: 'hello', version: desk.ctx.version, settings: DEFAULT_SETTINGS })
   })
 
   test('loads a plugin from pluginsDir with (app, ctx), in file-name order', async () => {

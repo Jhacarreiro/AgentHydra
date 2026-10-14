@@ -84,6 +84,8 @@ desk.disconnect()
 await desk.init()
 // What init() started stops, and the real globals come back, before the next file runs.
 afterAll(() => {
+  // The store is one per process: the chats made here go, so the next file starts from an empty list.
+  for (const c of desk.chats.value) push({ type: 'chat.removed', chatId: c.id })
   desk.disconnect()
   restoreGlobals()
 })
@@ -133,12 +135,18 @@ describe('a reconnect keeps the open chat', () => {
   })
 })
 
-describe('a hello merges into the chat list', () => {
-  test('a chat the hello omits stays listed, and one it carries is updated', async () => {
-    push(hello([summary('rc-keep'), summary('rc-merge')]))
+describe("a hello's list is the whole list", () => {
+  test('a chat deleted while the window was away is dropped, and one it carries is updated', async () => {
+    push(hello([summary('rc-gone'), summary('rc-merge')]))
     push(hello([{ ...summary('rc-merge'), title: 'Renamed' }]))
-    expect(desk.chats.value.map((c) => c.id)).toContain('rc-keep')
+    expect(desk.chats.value.map((c) => c.id)).not.toContain('rc-gone')
     expect(desk.chats.value.find((c) => c.id === 'rc-merge')?.title).toBe('Renamed')
+  })
+
+  test('a hello from a server still loading its chats keeps the list', async () => {
+    push(hello([summary('rc-stay')]))
+    push({ ...(hello([]) as Extract<ServerEvent, { type: 'hello' }>), chats: undefined })
+    expect(desk.chats.value.map((c) => c.id)).toContain('rc-stay')
   })
 })
 

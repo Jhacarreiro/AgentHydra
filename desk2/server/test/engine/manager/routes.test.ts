@@ -340,7 +340,7 @@ describe('chat routes', () => {
     const second = await boot({ home: first.home })
     const { hello } = await listen(second.desk)
     expect(hello.chats).toHaveLength(1)
-    expect(hello.chats[0]).toMatchObject({ id: chat.id, status: 'closed', sessionId: FIXTURE_SID, title: 'Notes question', pinned: true })
+    expect(hello.chats?.[0]).toMatchObject({ id: chat.id, status: 'closed', sessionId: FIXTURE_SID, title: 'Notes question', pinned: true })
     const items = (await call<TranscriptItem[]>(second.desk, 'GET', `/api/chats/${chat.id}/items`)).body
     expect(items.find((i) => i.kind === 'user')).toMatchObject({ text: 'What does notes.txt say?' })
     expect(items.some((i) => i.kind === 'assistant_text')).toBe(true)

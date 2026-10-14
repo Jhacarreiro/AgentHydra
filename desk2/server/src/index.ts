@@ -142,7 +142,8 @@ export async function createServer(opts: CreateServerOptions): Promise<DeskServe
   const wsRoutes = new Map<string, WsRoute>()
   const hostRoutes: HostRoute[] = []
   const routeOf = (ws: WsClient) => (ws.data as { route: WsRoute; data: unknown } | undefined) ?? null
-  let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, chats: [], settings: settings.get() })
+  // No chat list until the engine registers its own: an empty one would read as every chat gone.
+  let hello: HelloProvider = () => ({ type: 'hello', version: VERSION, settings: settings.get() })
 
   let base = `http://127.0.0.1:${opts.port}`
   const ctx: ServerContext = {
