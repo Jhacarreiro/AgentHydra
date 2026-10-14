@@ -47,7 +47,8 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
-import { NOTE_MAX, type ChatItemsPage } from '@shared/protocol'
+import { NOTE_MAX, type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
+import { buildTranscriptIndex } from './transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
@@ -353,6 +354,7 @@ export class ChatManager {
   private syncing: Promise<void> | null = null
   private workerRows = new Map<string, AhWorker>()
   /** The JSON of each chat's items as last answered, while its file and media stand as they were (see itemsBody). */
+  private readonly itemIndexes = new Map<string, { stamp: string; index: TranscriptIndex }>()
   private readonly itemsBodies = new Map<string, { stamp: string; body: string; count: number }>()
   private itemsBodyBytes = 0
   /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
@@ -460,7 +462,29 @@ export class ChatManager {
     return { items: all.slice(start, end), total: all.length, olderBefore: start }
   }
 
+  /** The chat's TranscriptIndex, rebuilt when its file or media stamp changes (or while a turn runs / stand-ins exist). */
+  transcriptIndex(id: string): TranscriptIndex {
+    const e = this.entry(id)
+    const reusable = e.runtime?.running !== true && !e.sent?.length
+    const hit = this.itemIndexes.get(id)
+    if (hit && reusable && hit.stamp === this.store.itemsStamp(id)) return hit.index
+    const index = buildTranscriptIndex(this.listItems(id))
+    const stamp = reusable ? this.store.itemsStamp(id) : ''
+    this.itemIndexes.delete(id)
+    if (stamp) {
+      this.itemIndexes.set(id, { stamp, index })
+      while (this.itemIndexes.size > 50) this.itemIndexes.delete(this.itemIndexes.keys().next().value as string)
+    }
+    return index
+  }
+
+  /** One item of the chat by id, or null. */
+  itemById(id: string, itemId: string): IndexedItem | null {
+    return this.listItems(id).find((i) => i.id === itemId) ?? null
+  }
+
   private dropItemsBody(id: string): void {
+    this.itemIndexes.delete(id)
     const hit = this.itemsBodies.get(id)
     if (!hit) return
     this.itemsBodies.delete(id)

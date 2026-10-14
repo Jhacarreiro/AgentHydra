@@ -38,7 +38,7 @@ import {
 } from './client'
 import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { buildTranscriptIndex } from './transcript-index'
+import { buildTranscriptIndex } from '../engine/transcript-index'
 import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'

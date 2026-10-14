@@ -283,6 +283,14 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
       throw err
     }
   })
+  app.get('/api/chats/:id/index', (c) => answer(c, () => manager.transcriptIndex(c.req.param('id'))))
+  app.get('/api/chats/:id/items/:itemId', (c) =>
+    answer(c, () => {
+      const item = manager.itemById(c.req.param('id'), c.req.param('itemId'))
+      if (!item) throw new ChatError(404, 'no such item')
+      return item
+    }),
+  )
   // The warm start (SPEC "Speed (timings)"): the window asks when the owner begins typing in a closed chat.
   app.post('/api/chats/:id/warm', (c) => answer(c, () => manager.warm(c.req.param('id'))))
   // Retry under "Could not get Claude Code": the download starts again.
