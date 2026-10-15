@@ -38,7 +38,7 @@ export function modesOf(e: CatalogEntry): string[] {
 }
 
 /** Words a chat says about a look, mapped to the words the persona entries use, on top of the tool finder's
- *  SYNONYMS (2026-10-13: "redesign the pricing page" never reached Iris, whose entry says design, screen, ui). */
+ *  SYNONYMS (2026-10-13: "redesign the pricing page" never reached the design manager, whose entry says design, screen, ui). */
 const CORE_SYNONYMS: Record<string, string[]> = {
   redesign: ['design', 'ui', 'screen'],
   restyle: ['design', 'visual', 'ui'],

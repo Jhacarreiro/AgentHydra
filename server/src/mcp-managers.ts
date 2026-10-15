@@ -99,6 +99,24 @@ function waitSeconds(a: Record<string, unknown>): number {
   return Math.min(MAX_WAIT, Math.max(0, Number.isFinite(n) ? n : DEFAULT_WAIT))
 }
 
+/** Whether a chat's turn has ended and answered what was sent after `sentAfter` (null for a read). A sent message is
+ *  answered only once the assistant spoke after it (or the chat errored): Desk flips a new or idle chat to working a
+ *  beat after the prompt lands in the transcript. */
+export function turnAnswered(
+  chat: Pick<DeskChat, 'status' | 'lastError'> | undefined,
+  items: { kind?: string }[],
+  sentAfter: number | null,
+): boolean {
+  const working = chat?.status === 'working' || chat?.status === 'starting'
+  const fresh = sentAfter === null ? items : items.slice(sentAfter)
+  const lastUser = fresh.map((i) => i.kind).lastIndexOf('user')
+  const answered =
+    sentAfter === null ||
+    (lastUser >= 0 &&
+      (fresh.slice(lastUser).some((i) => i.kind === 'assistant_text') || !!chat?.lastError))
+  return !working && answered
+}
+
 /** The completion registry the manager tools register with (tests replace its methods). */
 export const managerCompletions: Pick<typeof completionsApi, 'waitFor' | 'seen'> = {
   waitFor: (input) => completionsApi.waitFor(input),
@@ -134,16 +152,8 @@ export async function replyWhenDone(
   for (;;) {
     const current = (await deskChats()).find((c) => c.id === chat.id)
     const items = await transcriptItems(chat.id)
-    const fresh = sentAfter === null ? items : items.slice(sentAfter)
-    const working = current?.status === 'working' || current?.status === 'starting'
-    // A sent message is answered only once the assistant spoke after it (or the chat errored): Desk
-    // flips a new or idle chat to working a beat after the prompt lands in the transcript.
-    const lastUser = fresh.map((i) => i.kind).lastIndexOf('user')
-    const answered =
-      sentAfter === null ||
-      (lastUser >= 0 &&
-        (fresh.slice(lastUser).some((i) => i.kind === 'assistant_text') || !!current?.lastError))
-    if (!working && answered) {
+    if (turnAnswered(current, items, sentAfter)) {
+      const fresh = sentAfter === null ? items : items.slice(sentAfter)
       const reply = fresh.filter((i) => i.kind === 'assistant_text').at(-1)?.text ?? ''
       return { chat: chat.id, title: chat.title, status: 'done', reply }
     }
