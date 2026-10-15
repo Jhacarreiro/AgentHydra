@@ -96,15 +96,16 @@ const truth = (v) => (v === UNKNOWN ? null : Boolean(v))
 /**
  * A condition's truth: true, false or null (unknown). `look(path)` gives what a name holds (UNKNOWN when it cannot be
  * known). Handles ||, &&, !, parentheses, === / !== / == / != against a literal, and bare names; the rest is unknown.
+ * `presence(path)`, when given, answers a bare name `look` cannot (true, false or null); a comparison never asks it.
  */
-export function evaluate(expr, look) {
+export function evaluate(expr, look, presence = null) {
   const s = String(expr ?? '').trim()
   if (!s) return null
   const ors = splitTop(s, '||')
   if (ors.length > 1) {
     let unknown = false
     for (const p of ors) {
-      const v = evaluate(p, look)
+      const v = evaluate(p, look, presence)
       if (v === true) return true
       if (v === null) unknown = true
     }
@@ -114,17 +115,17 @@ export function evaluate(expr, look) {
   if (ands.length > 1) {
     let unknown = false
     for (const p of ands) {
-      const v = evaluate(p, look)
+      const v = evaluate(p, look, presence)
       if (v === false) return false
       if (v === null) unknown = true
     }
     return unknown ? null : true
   }
   if (s.startsWith('!') && !s.startsWith('!=')) {
-    const v = evaluate(s.slice(1), look)
+    const v = evaluate(s.slice(1), look, presence)
     return v === null ? null : !v
   }
-  if (wrapped(s)) return evaluate(s.slice(1, -1), look)
+  if (wrapped(s)) return evaluate(s.slice(1, -1), look, presence)
   if (s === 'true') return true
   if (s === 'false') return false
   const cmp = /^(.+?)\s*(===|!==|==|!=)\s*(.+)$/.exec(s)
@@ -139,8 +140,62 @@ export function evaluate(expr, look) {
     const same = loose ? have == want || (have === undefined && want === null) : have === want
     return op.startsWith('!') ? !same : same
   }
-  if (IDENT_PATH.test(s)) return truth(look(s))
+  if (IDENT_PATH.test(s)) {
+    const v = truth(look(s))
+    return v === null && presence ? presence(s) : v
+  }
   return null
+}
+
+// A name for something the person opens or picks on the page: a selection, an open thread, a docked record, a menu.
+const OPENED_OR_PICKED = [
+  /^(?:open|opened|expanded|editing|is(?:Open|Opened|Expanded|Editing))$/,
+  /^open[A-Z]/,
+  /[a-z](?:Open|Opened|Expanded)$/,
+  /^selected(?:[A-Z]|$)/,
+  /^dock[A-Z]/,
+  /(?:^|[a-z])(?:[Ff]lyout|[Mm]enu|[Oo]verlay|[Pp]opover|[Pp]opup|[Ss]urface|[Ss]heet|[Dd]rawer|[Dd]ialog|[Mm]odal|[Pp]icker)(?:Mounted|Visible|Shown|Showing)$/,
+]
+
+/** Whether a name, by its last segment (or the one before a `.length`), says the person opens or picks it. */
+export function openedOrPicked(path) {
+  const parts = String(path).replace(/\?\./g, '.').split('.').filter((p) => p !== 'value')
+  let last = parts.pop()
+  if ((last === 'length' || last === 'size') && parts.length) last = parts.pop()
+  return OPENED_OR_PICKED.some((re) => re.test(last))
+}
+
+const EMPTY_START = /^(?:|null|undefined|false|0|''|""|``|\[\s*\]|new (?:Set|Map)\(\s*\))$/
+const FALLBACK = /(?:\?\?|\|\|)\s*([^\s),;}]+)/g
+const LOAD_HOOK = /\b(?:watch|watchEffect|watchPostEffect|onMounted|onBeforeMount|useEffect|useLayoutEffect)\s*\(/g
+const VALUE_SET = /([A-Za-z_$][\w$]*)\.value\s*=(?!=)\s*([^;\n]*)/g
+const CALL_ARG = /([A-Za-z_$][\w$]*)\(\s*([^()]*)\)/g
+
+/**
+ * Names a script may start with a value: `ref(x)`, `shallowRef(x)` or React's `const [name] = useState(x)` whose x is
+ * not empty (null, false, '', 0, [], an empty Set or Map), a `computed` with a fallback that is not empty
+ * (`?? list[0]`), or state a watcher or load hook (`watch`, `onMounted`, `useEffect`...) sets to something not empty.
+ */
+export function mayStartSet(src) {
+  const out = new Set()
+  if (!src) return out
+  const setters = new Map()
+  const decl = /(?:const|let)\s+(?:([A-Za-z_$][\w$]*)|\[\s*([A-Za-z_$][\w$]*)\s*(?:,\s*([A-Za-z_$][\w$]*))?[^\]]*\])\s*(?::[^=]+)?=\s*(ref|shallowRef|useState|computed)\s*(?:<[^>]*>)?\(/g
+  for (const m of src.matchAll(decl)) {
+    const open = m.index + m[0].length - 1
+    const body = src.slice(open + 1, balancedFrom(src, open)).trim()
+    const name = m[1] ?? m[2]
+    if (m[3]) setters.set(m[3], name)
+    const set = m[4] === 'computed' ? [...body.matchAll(FALLBACK)].some((f) => !EMPTY_START.test(f[1])) : !EMPTY_START.test(body)
+    if (set) out.add(name)
+  }
+  for (const m of src.matchAll(LOAD_HOOK)) {
+    const open = m.index + m[0].length - 1
+    const body = src.slice(open + 1, balancedFrom(src, open))
+    for (const v of body.matchAll(VALUE_SET)) if (!EMPTY_START.test(v[2].trim())) out.add(v[1])
+    for (const c of body.matchAll(CALL_ARG)) if (setters.has(c[1]) && !EMPTY_START.test(c[2].trim())) out.add(setters.get(c[1]))
+  }
+  return out
 }
 
 /** Whether a name, by its last segment, is a phone-layout flag ('phone'), a desktop one ('desktop'), or neither. */

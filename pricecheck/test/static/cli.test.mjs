@@ -174,3 +174,67 @@ group('page --tree', () => {
     ])
   })
 })
+
+group('scan --by app', () => {
+  const files = {
+    'package.json': '{"name":"example-root"}',
+    'apps/alpha/package.json': '{"name":"alpha"}',
+    'apps/alpha/src/views/Home.vue': '<template><section><h2>Long alpha heading words here</h2><p>Several words of body copy for the home page</p><button>Go</button></section></template>',
+    'apps/alpha/src/views/About.vue': '<template><p>Short</p></template>',
+    'apps/beta/package.json': '{"name":"beta"}',
+    'apps/beta/src/views/Start.vue': '<template><section><p>Start here</p></section></template>',
+    'src/views/Loose.vue': '<template><p>One</p></template>',
+  }
+
+  function sample() {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cli-'))
+    dirs.push(dir)
+    for (const [rel, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
+      fs.writeFileSync(path.join(dir, rel), text)
+    }
+    return dir
+  }
+
+  test('--json adds apps sorted dearest first, each app folder rolled up from its nearest package.json', async () => {
+    const dir = sample()
+    const plain = JSON.parse((await capture(['scan', '--json', '--root', dir])).out).pages
+    const pointsOf = (file) => plain.find((p) => p.page === file).points
+    const alpha = pointsOf('apps/alpha/src/views/Home.vue') + pointsOf('apps/alpha/src/views/About.vue')
+    const beta = pointsOf('apps/beta/src/views/Start.vue')
+    const loose = pointsOf('src/views/Loose.vue')
+
+    const { code, out } = await capture(['scan', '--by', 'app', '--json', '--root', dir])
+    expect(code).toBe(0)
+    const scanned = JSON.parse(out)
+    expect(scanned.pages.map((p) => p.page).sort()).toEqual(plain.map((p) => p.page).sort())
+    expect(scanned.apps.map((a) => a.app)).toEqual(['apps/alpha', 'apps/beta', '.'])
+    expect(scanned.apps.map((a) => a.points)).toEqual([alpha, beta, loose])
+    expect(scanned.apps.map((a) => a.pages)).toEqual([2, 1, 1])
+    expect(scanned.apps.map((a) => a.top)).toEqual([
+      'apps/alpha/src/views/Home.vue',
+      'apps/beta/src/views/Start.vue',
+      'src/views/Loose.vue',
+    ])
+    expect(Object.keys(scanned.apps[0])).toEqual(['app', 'points', 'pages', 'top'])
+  })
+
+  test('--limit trims the pages list but the apps rollup still covers every page', async () => {
+    const dir = sample()
+    const scanned = JSON.parse((await capture(['scan', '--by', 'app', '--json', '--limit', '1', '--root', dir])).out)
+    expect(scanned.pages.length).toBe(1)
+    expect(scanned.apps.reduce((n, a) => n + a.pages, 0)).toBe(4)
+  })
+
+  test('human output: one line per app, dearest first, then an apps and pages total', async () => {
+    const dir = sample()
+    const { code, out } = await capture(['scan', '--by', 'app', '--root', dir])
+    expect(code).toBe(0)
+    const lines = out.split('\n')
+    expect(lines.length).toBe(4)
+    expect(lines[0]).toMatch(/^ *\d+ points {2}2 pages {2}apps\/alpha {2}top apps\/alpha\/src\/views\/Home\.vue$/)
+    expect(lines[1]).toMatch(/^ *\d+ points {2}1 pages {2}apps\/beta {2}top apps\/beta\/src\/views\/Start\.vue$/)
+    expect(lines[2]).toMatch(/^ *\d+ points {2}1 pages {2}\. {2}top src\/views\/Loose\.vue$/)
+    expect(lines[3]).toBe('3 apps, 4 pages')
+  })
+})

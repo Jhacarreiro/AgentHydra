@@ -10,6 +10,7 @@ import { isPageFile, TEMPLATE_EXT } from './discover.mjs'
 
 const USAGE = `usage: pricecheck <scan|page|diff|check|freeze> [--root <repo>] [options]
   scan [--json] [--limit N]        every page, most expensive first (by daily exposure when views exist)
+  scan [--by app] [--json]         per app instead: total points, pages and dearest page of each app folder
   page <file> [--tree] [--depth N] [--min P]
                                    one page and the file each point comes from; --tree adds what each
                                    rendered component costs (dearest first, components under P points left out)
@@ -193,7 +194,48 @@ function diff(opts) {
 /** A priced row as the JSON readers (MCP tool, history, next-page picker) take it: named by `page`. */
 const named = (p) => ({ page: p.file, ...p })
 
+function appOf(root, file, cache) {
+  let dir = path.posix.dirname(file)
+  const walked = []
+  let app = '.'
+  for (;;) {
+    if (cache.has(dir)) {
+      app = cache.get(dir)
+      break
+    }
+    walked.push(dir)
+    if (fs.existsSync(path.join(root, dir, 'package.json'))) {
+      app = dir
+      break
+    }
+    if (dir === '.') break
+    dir = path.posix.dirname(dir)
+  }
+  for (const d of walked) cache.set(d, app)
+  return app
+}
+
+function appRollup(root, pages) {
+  const cache = new Map()
+  const apps = new Map()
+  for (const p of pages) {
+    const app = appOf(root, p.file, cache)
+    const a = apps.get(app) ?? { app, points: 0, pages: 0, top: p.file, topPoints: -Infinity }
+    a.points += p.points
+    a.pages += 1
+    if (p.points > a.topPoints) {
+      a.top = p.file
+      a.topPoints = p.points
+    }
+    apps.set(app, a)
+  }
+  return [...apps.values()]
+    .map(({ app, points, pages, top }) => ({ app, points: round(points), pages, top }))
+    .sort((a, b) => b.points - a.points || (a.app < b.app ? -1 : a.app > b.app ? 1 : 0))
+}
+
 function scan(opts) {
+  if (opts.by !== undefined && opts.by !== 'app') throw new Error('pricecheck: --by takes app')
   let pages = priceRepo({ root: opts.root }).pages
   const views = loadViews(opts.root)
   if (views) {
@@ -203,8 +245,16 @@ function scan(opts) {
   }
   const limit = opts.limit ? Number(opts.limit) : pages.length
   const shown = pages.slice(0, limit)
+  const apps = opts.by === 'app' ? appRollup(opts.root, pages) : null
   if (opts.json) {
-    console.log(JSON.stringify({ root: opts.root, mode: 'static', pages: shown.map(named) }, null, 2))
+    const body = { root: opts.root, mode: 'static', pages: shown.map(named) }
+    if (apps) body.apps = apps
+    console.log(JSON.stringify(body, null, 2))
+    return 0
+  }
+  if (apps) {
+    for (const a of apps) console.log(`${String(a.points).padStart(7)} points  ${a.pages} pages  ${a.app}  top ${a.top}`)
+    console.log(`${apps.length} apps, ${pages.length} pages`)
     return 0
   }
   console.log(`${'rank'.padStart(4)}  ${'points'.padStart(7)}${views ? `  ${'exposure'.padStart(10)}` : ''}  page  top file`)

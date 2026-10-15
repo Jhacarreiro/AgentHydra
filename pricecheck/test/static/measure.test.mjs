@@ -257,3 +257,43 @@ group('names a component derives from its props', () => {
     expect(price(dir, 'src/views/Home.vue').units).toEqual({ word: 10 })
   })
 })
+
+group('closed on arrival', () => {
+  const detail = '<template><section><h2>Five words of row detail</h2><button>Save</button></section></template>'
+  const page = (template, script = '') =>
+    `<template>${template}</template>\n<script setup lang="ts">\nimport { ref } from 'vue'\nimport RowDetail from '../components/RowDetail.vue'\nimport PickHint from '../components/PickHint.vue'\n${script}\n</script>\n`
+  const tree = (template, script) => ({
+    'src/components/RowDetail.vue': detail,
+    'src/components/PickHint.vue': '<template><p>Pick a row</p></template>',
+    'src/views/List.vue': page(template, script),
+  })
+
+  test('a detail shown only once the person picks a row costs nothing on arrival', () => {
+    const dir = repo(tree('<p>Rows</p><RowDetail v-if="selectedRow" />', 'const selectedRow = ref(null)'))
+    expect(price(dir, 'src/views/List.vue').units).toEqual({ word: 1 })
+  })
+
+  test('with an else, the else is what shows on arrival', () => {
+    const dir = repo(tree('<RowDetail v-if="selectedRow" /><PickHint v-else />', 'const selectedRow = ref(null)'))
+    expect(price(dir, 'src/views/List.vue').units).toEqual({ word: 3 })
+  })
+
+  test('a flag the script starts as true, a comparison, and a name that says nothing about opening still count', () => {
+    const started = repo(tree('<RowDetail v-if="expanded" />', 'const expanded = ref(true)'))
+    expect(price(started, 'src/views/List.vue').units.word).toBe(6)
+    const compared = repo(tree("<RowDetail v-if=\"selectedTab === 'a'\" /><PickHint v-else-if=\"selectedTab === 'b'\" />", "const selectedTab = ref('a')"))
+    expect(price(compared, 'src/views/List.vue').units.word).toBe(6)
+    const mounted = repo(tree('<RowDetail v-if="mounted" />', 'const mounted = ref(false)'))
+    expect(price(mounted, 'src/views/List.vue').units.word).toBe(6)
+  })
+
+  test('a prop the caller passes as true opens it', () => {
+    const dir = repo({
+      'src/components/RowDetail.vue': detail,
+      'src/components/Drawerless.vue':
+        '<template><RowDetail v-if="open" /></template>\n<script setup lang="ts">\nimport RowDetail from \'./RowDetail.vue\'\ndefineProps<{ open?: boolean }>()\n</script>\n',
+      'src/views/List.vue': '<template><Drawerless :open="true" /></template>\n<script setup lang="ts">\nimport Drawerless from \'../components/Drawerless.vue\'\n</script>\n',
+    })
+    expect(price(dir, 'src/views/List.vue').units.word).toBe(6)
+  })
+})

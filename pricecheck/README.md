@@ -7,7 +7,7 @@ Everything a person sees on a page costs them something: a word to read, a butto
 - **Any repo.** Vue, React (JSX/TSX), Svelte and plain HTML. A JSX `a ? X : Y` or `a && X` prices only its dearer arm. No setup to start; `.pricecheck.json` tunes it.
 - **Two measurers, one price list.** Static reads the code (the page and every component it renders, in seconds, for gates). Live renders the page in a real browser at desktop and phone width, prices what is actually on screen, and names the component that drew each thing.
 - **Every point is attributed.** A page's price is the sum of its files' shares, so "the footer costs 14 of this page's 40" is a fact, not a guess. `page <file> --tree` shows what each rendered component costs, nested.
-- **Only what can show at once.** A condition known where a component is used decides what it shows: a prop the caller passes or leaves out, a name computed from props, `v-show` set to false. Sibling `v-if`s that can never be true together count once, and a page that switches on a phone or desktop flag is priced at both widths (the dearer is its price; `byViewport` has both).
+- **Only what can show at once.** A condition known where a component is used decides what it shows: a prop the caller passes or leaves out, a name computed from props, `v-show` set to false. A page's own state named for something the person opens or picks (a selection, an open thread, a docked record, a menu) is closed on arrival, unless the script starts it with a value or a watcher or load hook sets one. Sibling `v-if`s that can never be true together count once, and a page that switches on a phone or desktop flag is priced at both widths (the dearer is its price; `byViewport` has both).
 - **Pages are pages.** A component another template renders, or an app's `index.html` shell, is not counted as a page of its own.
 - **A ratchet per repo.** `.pricecheck/baseline.json` freezes each page's price. Prices only fall; a rise needs `raisedTo` and a `reason`.
 - **Weighted by real traffic when you have it.** `.pricecheck/views.json` (page or route to daily views) turns a price into what the page costs your users per day, which is how pages are ranked.
@@ -39,6 +39,7 @@ Static measures word, control, choice, field, feature, media and product. Live m
 
 ```
 node pricecheck/bin/pricecheck.mjs scan    [--root <repo>] [--json]   every page, most expensive first
+node pricecheck/bin/pricecheck.mjs scan    [--by app] [--json]        per app: points, pages and dearest page, dearest app first
 node pricecheck/bin/pricecheck.mjs page    <file> [--root <repo>]     one page and the file each point comes from
         [--tree [--depth N] [--min P]]                                  the render tree, each component with its points
 node pricecheck/bin/pricecheck.mjs diff    [--root <repo>]            what the working tree's changes cost

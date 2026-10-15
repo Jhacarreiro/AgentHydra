@@ -9,7 +9,7 @@ import { discoverPages } from './discover.mjs'
 import { readTemplate } from './templates.mjs'
 import { makeI18n } from './i18n.mjs'
 import { makeGraph } from './graph.mjs'
-import { UNKNOWN, declaredProps, derivedNames, evaluate, literal, propsOf, viewportFlag } from './conditions.mjs'
+import { UNKNOWN, declaredProps, derivedNames, evaluate, literal, openedOrPicked, propsOf, mayStartSet, viewportFlag } from './conditions.mjs'
 
 const MAX_DEPTH = 25
 const MEDIA = new Set(['img', 'picture', 'video', 'canvas', 'iframe', 'svg', 'object', 'embed'])
@@ -47,6 +47,7 @@ export function session(root, readFile, { trace = false } = {}) {
     owned: new Map(),
     props: new Map(),
     derived: new Map(),
+    initials: new Map(),
     names: new Map(),
     viewport: null,
     sawViewport: false,
@@ -136,10 +137,24 @@ function valueOf(expr, look) {
   return v === null ? UNKNOWN : v
 }
 
+/**
+ * Whether a name the component cannot know is closed on arrival: its own state (not a prop) named for something the
+ * person opens or picks, which its script does not start as true. Else null (unknown).
+ */
+const closedOnArrival = (ctx, sc) => (raw) => {
+  const p = raw.replace(/\?\./g, '.').replace(/^this\./, '')
+  const root = p.split('.')[0]
+  if (root === 'props' || root === '$props' || (sc.env && Object.hasOwn(sc.env, root)) || sc.declared?.has(root)) return null
+  if (sc.env?.['...'] && !sc.declared) return null
+  if (!openedOrPicked(p)) return null
+  if (!ctx.initials.has(sc.file)) ctx.initials.set(sc.file, mayStartSet(ctx.read(sc.file)))
+  return ctx.initials.get(sc.file).has(root) ? null : false
+}
+
 /** A condition's truth for this component instance: true, false or null (unknown, priced as possibly shown). */
 function truthOf(ctx, sc, expr) {
   const slot = slotTest(expr, sc.slots)
-  return slot !== null ? slot : evaluate(expr, lookIn(ctx, sc))
+  return slot !== null ? slot : evaluate(expr, lookIn(ctx, sc), closedOnArrival(ctx, sc))
 }
 
 /** Of a chain's conditions in order (null = else), the indexes that may show: a false one never, nothing past a true one. */

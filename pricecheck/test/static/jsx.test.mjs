@@ -33,9 +33,9 @@ const SMALL = '<p>Hint</p>'
 
 group('jsx conditional expressions', () => {
   test('a ternary prices only its dearer arm and keeps the condition', () => {
-    const body = `{isOpen ? ${BIG} : ${SMALL}}`
+    const body = `{ready ? ${BIG} : ${SMALL}}`
     const node = find(treeOf(body).root, 'pc-if')
-    expect(node.attrs.when).toEqual(['isOpen'])
+    expect(node.attrs.when).toEqual(['ready'])
     expect(tagsOf(node)).toEqual(['button', 'pc-else', 'p'])
     expect(priceOf(body).points).toBe(priceOf(BIG).points)
     expect(priceOf(body).points).toBeLessThan(priceOf(`${BIG}${SMALL}`).points)
