@@ -53,6 +53,34 @@ group('vue', () => {
     expect(Object.keys(p.byFile)).toEqual(['src/views/Menu.vue'])
   })
 
+  test('what a page passes into a component (its slot) is priced, on the page; a slot fallback only when nothing is passed', () => {
+    const dir = repo({
+      'src/components/Card.vue': '<template><div class="frame"><slot>Nothing here yet</slot></div></template>',
+      'src/views/Home.vue': '<template><Card><h1>Five words in this title</h1><button>Go</button></Card><Card /></template>',
+    })
+    const p = price(dir, 'src/views/Home.vue')
+    expect(p.units).toEqual({ word: 9, control: 1 })
+    expect(p.byFile['src/views/Home.vue'].units).toEqual({ word: 6, control: 1 })
+    expect(p.byFile['src/components/Card.vue'].units).toEqual({ word: 3 })
+  })
+
+  test('an overlay is off screen until it opens: a closed dialog costs nothing, a tooltip costs only its trigger', () => {
+    const dir = repo({
+      'src/components/AppDialog.vue': '<template><div role="dialog"><button>Close</button><slot /></div></template>',
+      'src/components/AppTooltip.vue': '<template><span><slot /><span role="tooltip"><slot name="content" /></span></span></template>',
+      'src/views/Home.vue': [
+        '<template>',
+        '<AppDialog :open="isOpen"><p>Lots of hidden words here now</p></AppDialog>',
+        '<AppTooltip><button>Save</button><template #content>Saves your draft right now</template></AppTooltip>',
+        '<AppDialog open><p>Shown on arrival</p></AppDialog>',
+        '</template>',
+      ].join('\n'),
+    })
+    const p = price(dir, 'src/views/Home.vue')
+    expect(p.units).toEqual({ control: 2, word: 5, interruption: 1 })
+    expect(p.byFile['src/views/Home.vue'].units).toEqual({ control: 1, word: 4 })
+  })
+
   test('a component used without an import is found by its name', () => {
     const dir = repo({
       'src/components/Badge.vue': '<template><span class="badge">New</span></template>',

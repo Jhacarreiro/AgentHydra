@@ -31,7 +31,7 @@ export function session(root, readFile) {
         return null
       }
     })
-  return { root, cfg, list: cfg.list, i18n: makeI18n(root), graph: makeGraph(root, cfg), read, templates: new Map(), children: new Map() }
+  return { root, cfg, list: cfg.list, i18n: makeI18n(root), graph: makeGraph(root, cfg), read, templates: new Map(), children: new Map(), owned: new Map() }
 }
 
 function parsed(ctx, file) {
@@ -128,12 +128,55 @@ function i18nItems(ctx, sc, el) {
   return [{ unit: 'word', count: text == null ? 1 : wordsIn(text), file: sc.file, line: el.line, note: text == null ? 'unresolved message' : undefined }]
 }
 
-function renderChild(ctx, sc, child, cond) {
-  if (sc.depth >= MAX_DEPTH || sc.stack.includes(child)) return []
+// Overlays are off screen until they open: a dialog-like one shows nothing on arrival but its trigger slot, a
+// tooltip-like one only the trigger it wraps (its default slot). An `open`/`visible`/`show` set to literal true opens it.
+const HIDES_ALL = /(Dialog|Modal|Drawer|Sheet|Snackbar|SnackbarHost|Toast|Toaster)$/
+const WRAPS_TRIGGER = /(Tooltip|Popover|Popup|Dropdown|DropdownMenu|ContextMenu|HoverCard)$/
+const TRIGGER_SLOT = /^(trigger|activator|reference|anchor)$/
+const OPEN_PROPS = ['open', 'visible', 'show', 'modelValue', 'model-value']
+const pascal = (tag) => tag.replace(/(^|-)([a-z])/g, (_, _sep, c) => c.toUpperCase())
+
+function overlayKind(tag) {
+  const name = pascal(tag)
+  if (HIDES_ALL.test(name)) return 'all'
+  return WRAPS_TRIGGER.test(name) ? 'trigger' : null
+}
+
+const openOnArrival = (a) =>
+  OPEN_PROPS.some((p) => [p, `:${p}`, `v-model:${p}`].some((k) => a[k] === true || a[k] === 'true' || a[k] === '{true}'))
+
+function slotName(el) {
+  for (const k of Object.keys(el.attrs)) {
+    const m = /^(?:#|v-slot:?)([\w-]*)$/.exec(k)
+    if (m) return m[1] || 'default'
+  }
+  return null
+}
+
+/** What a closed overlay still shows: its trigger slot, and for a tooltip-like one the default slot it wraps. */
+const triggerContent = (el, kind) =>
+  el.children.filter((k) => {
+    if (k.type !== 'el' || k.tag !== 'template') return kind === 'trigger'
+    const name = slotName(k) ?? 'default'
+    return TRIGGER_SLOT.test(name) || (kind === 'trigger' && name === 'default')
+  })
+
+/** A component tag: its own markup in its file, plus what the caller passes into it (its slots), priced on the caller. */
+function renderChild(ctx, sc, child, el, cond) {
+  const slotted = collectChildren(ctx, sc, el.children, cond)
+  if (sc.depth >= MAX_DEPTH || sc.stack.includes(child)) return slotted
   const t = parsed(ctx, child)
-  if (!t) return []
-  const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child] }
-  return collectChildren(ctx, next, t.root.children, cond)
+  if (!t) return slotted
+  const filled = el.children.some((k) => k.type === 'el' || wordsIn(k.text) > 0)
+  // A component's own markup prices the same wherever it is used: priced once per session, not once per use.
+  const key = `${child}\u0000${filled}\u0000${cond}`
+  let own = ctx.owned.get(key)
+  if (!own) {
+    const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child], filled }
+    own = collectChildren(ctx, next, t.root.children, cond)
+    ctx.owned.set(key, own)
+  }
+  return [...own, ...slotted]
 }
 
 function measureElement(ctx, sc, el, cond) {
@@ -141,8 +184,11 @@ function measureElement(ctx, sc, el, cond) {
   if (el.tag.startsWith('pc-') || tag === 'script' || tag === 'style') return []
   if ('hidden' in el.attrs || el.attrs['aria-hidden'] === 'true') return []
   if (tag === 'i18n-t' || tag === 'formattedmessage') return i18nItems(ctx, sc, el)
+  if (tag === 'slot') return sc.filled ? [] : collectChildren(ctx, sc, el.children, cond)
+  const overlay = overlayKind(el.tag)
+  if (overlay && !openOnArrival(el.attrs)) return collectChildren(ctx, sc, triggerContent(el, overlay), cond)
   const child = /[-A-Z]/.test(el.tag) ? ctx.graph.resolveTag(sc.file, el.tag) : null
-  if (child) return renderChild(ctx, sc, child, cond)
+  if (child) return renderChild(ctx, sc, child, el, cond)
   const { own, descend } = classify(ctx, sc, el, cond)
   return [...own, ...(descend ? collectChildren(ctx, sc, el.children, cond) : [])]
 }

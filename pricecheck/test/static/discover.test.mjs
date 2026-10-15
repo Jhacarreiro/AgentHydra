@@ -83,6 +83,22 @@ group('discovery per framework', () => {
     expect(pages).toEqual([{ file: 'src/screens/Plans.vue', route: '/pricing' }])
   })
 
+  test('a single-screen app: the root component its entry mounts is the page at /, unless it only hosts a router', () => {
+    const resolve = (spec, from) => (spec === './App.vue' || spec === './App' ? `${from.split('/')[0]}/${spec === './App' ? 'App.tsx' : 'App.vue'}` : null)
+    const root = repo({
+      'one/main.ts': "import { createApp } from 'vue'\nimport App from './App.vue'\ncreateApp(App).mount('#app')\n",
+      'one/App.vue': '<template><p>The whole app</p></template>',
+      'two/main.tsx': "import { createRoot } from 'react-dom/client'\nimport App from './App'\ncreateRoot(el).render(<App />)\n",
+      'two/App.tsx': 'export default function App() { return <p>Hi</p> }',
+      'shell/main.ts': "import { createApp } from 'vue'\nimport App from './App.vue'\ncreateApp(App).mount('#app')\n",
+      'shell/App.vue': '<template><RouterView /></template>',
+    })
+    expect(discoverPages(root, {}, resolve)).toEqual([
+      { file: 'one/App.vue', route: '/' },
+      { file: 'two/App.tsx', route: '/' },
+    ])
+  })
+
   test('config pages globs replace discovery', () => {
     expect(files(discoverPages(fixture('vue'), { pages: ['src/components/*.vue'] }))).toEqual(['src/components/SignInFooterBar.vue'])
   })

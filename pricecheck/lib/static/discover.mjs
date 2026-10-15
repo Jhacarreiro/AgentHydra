@@ -9,6 +9,9 @@ const SKIP_DIRS = new Set(['node_modules', 'dist', 'build', 'out', 'coverage', '
 const ROUTER_FILE = /(^|\/)(router|routes?|routing|app|main|index|App|root|entry)[^/]*\.(vue|tsx|jsx|ts|js|mjs)$/i
 const ROUTER_HINT = /createRouter|createBrowserRouter|createWebHistory|createMemoryHistory|<Route\b|RouterProvider|useRoutes|component:\s*(\(|[A-Z])/
 const TEST_OR_STORY = /\.(test|spec|stories|story)\.[a-z]+$|(^|\/)(__tests__|__mocks__|__fixtures__|tests?|fixtures?|e2e)\//
+const ENTRY_FILE = /(^|\/)(main|index|entry|client|app|root)\.(ts|tsx|js|jsx|mjs)$/i
+const MOUNT = /createApp\(\s*(\w+)|\.render\(\s*<(\w+)|\bmount\(\s*(\w+)\s*,\s*\{\s*target|new\s+(\w+)\(\s*\{\s*target/g
+const HOSTS_ROUTER = /<RouterView\b|<router-view\b|<Routes\b|<RouterProvider\b|<Outlet\b|<Switch\b/
 const CONVENTION = [
   /(^|\/)(views|pages)\/.+\.(vue|svelte|tsx|jsx)$/,
   /(^|\/)[^/]*(Page|View)\.(vue|svelte|tsx|jsx)$/,
@@ -162,12 +165,21 @@ export function discoverPages(root, cfg = {}, resolve = () => null) {
     if (route !== undefined) add(f, route)
   }
   for (const f of files) {
-    if (!ROUTER_FILE.test(f) || !SOURCE_EXT.test(f)) continue
+    if (!ROUTER_FILE.test(f) || !SOURCE_EXT.test(f) || TEST_OR_STORY.test(f)) continue
     const src = read(root, f)
-    if (!ROUTER_HINT.test(src)) continue
-    for (const { route, spec } of routeRecords(src)) {
-      const target = resolve(spec, f)
-      if (target && usable(target)) add(target, route)
+    if (ROUTER_HINT.test(src)) {
+      for (const { route, spec } of routeRecords(src)) {
+        const target = resolve(spec, f)
+        if (target && usable(target)) add(target, route)
+      }
+    }
+    // A single-screen app: the root component the entry mounts is the page, unless it only hosts a router's screens.
+    if (!ENTRY_FILE.test(f)) continue
+    const imports = importsOf(src)
+    for (const m of src.matchAll(MOUNT)) {
+      const spec = imports.get(m[1] ?? m[2] ?? m[3] ?? m[4])
+      const target = spec && resolve(spec, f)
+      if (target && usable(target) && !HOSTS_ROUTER.test(read(root, target))) add(target, '/')
     }
   }
   for (const f of files) {
