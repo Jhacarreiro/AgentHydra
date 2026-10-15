@@ -5,7 +5,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chatFace } from '../../src/engine/core-lead'
-import { loadPeopleAddon } from '../../../../server/src/people-host'
+import { forgetPeopleAddon, loadPeopleAddon } from '../../../../server/src/people-host'
 
 const FAKE_ADDON = `
 export function peopleAddon() {
@@ -33,8 +33,8 @@ beforeEach(() => {
   }
 })
 
-afterEach(async () => {
-  await loadPeopleAddon({ home: opts.home, env: {}, appRoot: opts.appRoot, coreDir: opts.coreDir })
+afterEach(() => {
+  forgetPeopleAddon()
   rmSync(root, { recursive: true, force: true })
 })
 

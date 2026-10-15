@@ -49,7 +49,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { Hook } from './climayte-signal'
-import { inRepoPeople, type PeopleOpts, peopleAddon, peopleModulePresent } from './people-host'
+import { inRepoPeople, type PeopleOpts, peopleAddon } from './people-host'
 
 const STAMP = '.agenthydra-owner-sync.json'
 
@@ -460,7 +460,8 @@ const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/
  *  chat is on every message. Only those groups: the owner's other hooks stay his. None when the file is missing or
  *  unreadable, and always without the people add-on (server/src/people-addon.ts). */
 export function ownerRouterHooks(ownerDir: string, addon?: PeopleOpts): Array<{ hooks: Hook[] }> {
-  if (peopleModulePresent(addon)) return peopleAddon()?.routerHooks?.(ownerDir) ?? []
+  const fromAddon = peopleAddon()?.routerHooks
+  if (fromAddon) return fromAddon(ownerDir)
   if (!inRepoPeople(addon)) return []
   let groups: unknown
   try {

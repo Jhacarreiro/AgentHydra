@@ -84,14 +84,21 @@ export function peopleModulePresent(opts: PeopleOpts | undefined = loaded?.opts)
   return findSueDredd(PEOPLE_ENTRY, opts?.env ?? process.env, opts?.appRoot ?? APP_ROOT) !== null
 }
 
-/** The in-repo people code runs only where the add-on module is not present (step 3 of the plan deletes it). */
+/** The in-repo people code answers a seam the add-on does not answer, on a PC with the add-on (step 3 of the plan
+ *  deletes each part as it moves into the add-on). */
 export function inRepoPeople(opts: PeopleOpts | undefined = loaded?.opts): boolean {
-  return peopleAddonPresent(opts) && !peopleModulePresent(opts)
+  return peopleAddonPresent(opts)
 }
 
 /** The add-on as loaded by the last loadPeopleAddon, or null before a load and when the module is absent. */
 export function peopleAddon(): PeopleAddon | null {
   return loaded?.addon ?? null
+}
+
+/** Forgets the last load, so the seams read this PC again (a test's cleanup, so its fake add-on stays its own). */
+export function forgetPeopleAddon(): void {
+  loaded = null
+  memo = undefined
 }
 
 function hostFor(opts: PeopleOpts): PeopleHost {

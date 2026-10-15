@@ -303,7 +303,7 @@ ${message}`
   }
   let pick: LeadPick
   const addon = peopleAddon()
-  const modelAsks = addon ? !!addon.lead : inRepoPeople()
+  const modelAsks = addon?.lead ? true : inRepoPeople()
   if (!contentWords(message).length) pick = { id: null, path: 'words', ms: 0 }
   // No managers to choose from, or no one to ask: the word ranker picks among whoever can be become.
   else if (!managers.length || !modelAsks)

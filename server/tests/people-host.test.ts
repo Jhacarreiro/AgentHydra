@@ -8,7 +8,13 @@ import { ownerRouterHooks } from '../src/climayte-owner-sync'
 import type { CatalogEntry } from '../src/hydra-core/catalog'
 import { pickLead } from '../src/hydra-core/lead'
 import { MANAGER_TOOLS, managerTools } from '../src/mcp-managers'
-import { inRepoPeople, loadPeopleAddon, peopleAddon, peopleModulePresent } from '../src/people-host'
+import {
+  forgetPeopleAddon,
+  inRepoPeople,
+  loadPeopleAddon,
+  peopleAddon,
+  peopleModulePresent,
+} from '../src/people-host'
 
 const FAKE_ADDON = `
 export function peopleAddon() {
@@ -64,8 +70,8 @@ beforeEach(() => {
   root = mkdtempSync(join(tmpdir(), 'people-host-'))
   setup(false)
 })
-afterEach(async () => {
-  await loadPeopleAddon(absent())
+afterEach(() => {
+  forgetPeopleAddon()
   rmSync(root, { recursive: true, force: true })
 })
 
@@ -84,13 +90,13 @@ test('a checkout with only the door keeps the in-repo people code on', async () 
   expect(managerTools(opts)).toEqual(MANAGER_TOOLS)
 })
 
-test('with the add-on module the add-on answers and the in-repo tools stay off', async () => {
+test('with the add-on module the add-on answers its seams and the in-repo code keeps the rest', async () => {
   setup(true)
   const addon = await loadPeopleAddon(opts)
   expect(addon?.tools?.map((t) => t.name)).toEqual(['fake_people_tool'])
   expect(peopleAddon()).toBe(addon)
-  expect(inRepoPeople(opts)).toBe(false)
-  expect(managerTools(opts)).toEqual([])
+  expect(inRepoPeople(opts)).toBe(true)
+  expect(managerTools(opts)).toEqual(MANAGER_TOOLS)
 })
 
 test('the add-on catalog entries are written to core/catalog and removed when it goes', async () => {

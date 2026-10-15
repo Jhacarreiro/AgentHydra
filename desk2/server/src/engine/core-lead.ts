@@ -158,8 +158,8 @@ function personaFace(id: string, role: 'lead' | 'seat'): ChatFace {
 /** The face a chat's row shows, or null for none (see the top of this file). */
 export function chatFace(chat: Pick<ChatSummary, 'id'> & Partial<Pick<ChatSummary, 'managerSlug' | 'sessionId' | 'parentId'>>): ChatFace | null {
   const addon = peopleAddon()
-  if (addon) {
-    const face = addon.face?.({
+  if (addon?.face) {
+    const face = addon.face({
       id: chat.id,
       managerSlug: chat.managerSlug ?? null,
       sessionId: chat.sessionId ?? null,
