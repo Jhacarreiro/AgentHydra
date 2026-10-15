@@ -19,7 +19,8 @@ import { type SearchResult, searchResult } from '@shared/find'
 import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
-import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
+import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, jobDirs, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
+import { attachJobModels } from './swarm-models'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
 import {
   BridgeError,
@@ -353,7 +354,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       }
       const [answer, remote, chats] = await Promise.all([client.hswarmJobs(JOBS_ASKED).catch(swarmMiss), cachedRemoteQueues().catch(miss), chatsIndex()])
       const kept = missed ? keptJobs.get() : undefined
-      return kept ?? keptJobs.ok([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)])
+      return kept ?? keptJobs.ok(await attachJobModels([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)], jobDirs(answer)))
     })()
     lastJobs = { at: now(), jobs }
     return jobs
@@ -412,7 +413,10 @@ export function createBridge(opts: BridgeOptions = {}) {
       const have = new Set(raw.map((w) => w.id))
       const up = [...new Set(raw.flatMap((w) => (w.origin?.kind === 'worker' && !have.has(w.origin.workerId) ? [w.origin.workerId] : [])))]
       const all = up.length ? [...raw, ...(await client.workersByIds(up).catch(() => []))] : raw
-      if (jobs) kept.jobs = mapSwarmJobs(jobs, chats, SESSION_FINISHED).filter((j) => j.callerSessionId === sessionId || j.callerHostSessionId === sessionId)
+      if (jobs) {
+        const mine = mapSwarmJobs(jobs, chats, SESSION_FINISHED).filter((j) => j.callerSessionId === sessionId || j.callerHostSessionId === sessionId)
+        kept.jobs = await attachJobModels(mine, jobDirs(jobs))
+      }
       return { sessionId, workers: workersOfChat(mapWorkers(all), { sessionId }), jobs: kept.jobs }
     })()
     const entry = { at: now(), answer, kept }

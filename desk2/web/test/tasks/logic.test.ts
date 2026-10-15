@@ -56,10 +56,13 @@ const job = (id: string, over: Partial<SwarmJob> = {}): SwarmJob => ({
   callerHostSessionId: null,
   callerTitle: null,
   pc: null,
+  tokens: null,
+  costUsd: null,
+  models: null,
   ...over
 })
 
-const task = (id: string, status: 'running' | 'completed' | 'failed', over: Partial<Extract<TranscriptItem, { kind: 'task' }>> = {}): TranscriptItem => ({
+const task =(id: string, status: 'running' | 'completed' | 'failed', over: Partial<Extract<TranscriptItem, { kind: 'task' }>> = {}): TranscriptItem => ({
   id,
   ts: 2_000,
   kind: 'task',

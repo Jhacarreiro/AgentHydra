@@ -398,6 +398,10 @@ export interface AhHswarmJob {
   caller_ids?: { session_id?: string | null; chat_id?: string | null; instance?: string | null } | null
   created?: string | null
   finished?: string | boolean | null
+  /** The job's measured tokens and dollars (HSwarm's summary), and its folder, where its results.jsonl is. */
+  tokens?: number | null
+  cost_usd?: number | null
+  dir?: string | null
 }
 export interface AhHswarmJobs {
   jobs?: AhHswarmJob[]

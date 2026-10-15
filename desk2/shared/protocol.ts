@@ -577,6 +577,21 @@ export interface SwarmJob {
   pc: string | null
   /** Another PC's only: the last name of its caller's folder, never the path; absent or null when not shared. */
   folder?: string | null
+  /** Tokens the job moved (HSwarm's own count: input cached or not, plus output); null when HSwarm gave none (another PC's). */
+  tokens: number | null
+  /** Dollars the job cost (HSwarm's own figure); null when HSwarm gave none. */
+  costUsd: number | null
+  /** Per model, from the job's results.jsonl (the server reads it, each finished job once); null when the file is not there. */
+  models: SwarmJobModel[] | null
+}
+
+/** One model's tasks in a HSwarm job: the model without its `rank:` prefix or `:provider` suffix, and its results. */
+export interface SwarmJobModel {
+  model: string
+  tasks: number
+  ok: number
+  failed: number
+  tokens: number
 }
 
 /** How many finished workers and jobs of one session GET /api/session-tasks/:sessionId keeps: the Background tasks panel's

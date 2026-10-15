@@ -9,7 +9,7 @@
 // outside session's facts and actions are its session header's, drawn into the cards here (RAIL_TARGETS). DeskFrame places the
 // rail and keeps the chat's text column clear of it.
 import { computed, effectScope, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
-import { CircleCheck, Gauge, LoaderCircle, Sparkles, UserRound, X } from '@lucide/vue'
+import { CircleCheck, Gauge, LoaderCircle, Network, Sparkles, UserRound, Users, X } from '@lucide/vue'
 import type { ChatSummary, ToolTally, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { tallyTools } from '@shared/transcript-index'
 import { newSessionGlyphs } from '@/lib/icons'
@@ -30,6 +30,8 @@ import { useSessionTasks } from '@/components/tasks/session'
 import { holdPeek } from '@/components/session-header/state'
 import { formatCompact } from '@/components/session-header/logic'
 import RailCard from './RailCard.vue'
+import DelegationPanel from './DelegationPanel.vue'
+import { delegationStats, type DelegationService, type ServiceStats } from './delegation'
 import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN, RAIL_TILE } from './classes'
 import { RAIL_TARGETS, railTargets } from './state'
 const BackgroundTasksPanel = lazyPanel(() => import('@/components/tasks/BackgroundTasksPanel.vue'))
@@ -67,6 +69,9 @@ watch(
     if (t) {
       panelOn.value = true
       panelFocus.value = t.focus
+      // A task opened over the Delegation panel takes its place at once.
+      delegationOn.value = false
+      delegationShown.value = false
     } else panelTimer = setTimeout(() => (panelOn.value = false), PANEL_MS)
   }
 )
@@ -169,6 +174,35 @@ const lists = computed(() =>
   panelLists({ workers: src.workers.value, items: props.items, index: props.index, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, cleared: cleared.value, chatId: props.chatId })
 )
 const tasksSummary = computed(() => (lists.value.running.length ? `${lists.value.running.length} running` : 'None running'))
+
+// Delegation: what this chat sent to HSwarm and CliMayte, from the session's own reads (the whole session, the newest finished
+// ones) and the live lists for the ones it dispatched since. Its panel slides over the cards as the Background tasks panel does.
+const delegation = computed(() => {
+  const sid = props.sessionId
+  const mine = (id: string | null | undefined) => !!sid && id === sid
+  const workers = [...(own.value?.workers ?? []), ...src.workers.value.filter((w) => mine(w.originSessionId))]
+  const live = [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value].filter((j) => mine(j.callerSessionId) || mine(j.callerHostSessionId))
+  return delegationStats(workers, [...(own.value?.jobs ?? []), ...live])
+})
+const delegationRuns = computed(() => delegation.value.reduce((n, s) => n + s.runs, 0))
+const delegationSummary = computed(() => `${delegationRuns.value.toLocaleString()} ${delegationRuns.value === 1 ? 'run' : 'runs'}`)
+const DELEGATION_ICON: Record<DelegationService, typeof Network> = { hswarm: Network, climayte: Users }
+const delegationFact = (s: ServiceStats) => `${s.runs.toLocaleString()} ${s.runs === 1 ? 'run' : 'runs'}${s.failed ? ` · ${s.failed.toLocaleString()} failed` : ''}`
+const delegationOn = ref(false)
+const delegationShown = ref(false)
+const showDelegation = computed(() => delegationShown.value && !props.tasks)
+const railOpen = computed(() => !!props.tasks || delegationOn.value)
+let delegationTimer: ReturnType<typeof setTimeout> | undefined
+function openDelegation() {
+  clearTimeout(delegationTimer)
+  delegationOn.value = true
+  delegationShown.value = true
+}
+function closeDelegation() {
+  delegationOn.value = false
+  clearTimeout(delegationTimer)
+  delegationTimer = setTimeout(() => (delegationShown.value = false), PANEL_MS)
+}
 // A 1 s clock only while something runs; the elapsed time is all it moves.
 const frozenNow = Date.now()
 const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
@@ -224,10 +258,10 @@ const NO_STOP = 'Only the session that started it can stop this task'
   <div class="relative size-full overflow-clip" @pointerenter="holdPeek(true)" @pointerleave="holdPeek(false)">
     <div
       class="flex h-full w-[200%] transition-transform duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
-      :style="{ transform: tasks ? 'translateX(-50%)' : 'translateX(0)' }"
+      :style="{ transform: railOpen ? 'translateX(-50%)' : 'translateX(0)' }"
     >
       <!-- The cards: only they take the pointer, so the transcript under the rail's empty part still scrolls and clicks. -->
-      <div class="pointer-events-none flex h-full w-1/2 min-w-0 flex-col gap-2.5 overflow-y-auto pb-2" :inert="!!tasks" :aria-hidden="!!tasks || undefined">
+      <div class="pointer-events-none flex h-full w-1/2 min-w-0 flex-col gap-2.5 overflow-y-auto pb-2" :inert="railOpen" :aria-hidden="railOpen || undefined">
         <RailCard id="environment" title="Environment">
           <template v-if="outside" #actions>
             <div :id="RAIL_TARGETS.actions" class="flex items-center" />
@@ -337,6 +371,19 @@ const NO_STOP = 'Only the session that started it can stop this task'
           </button>
         </RailCard>
 
+        <!-- Each service a row: its runs and failures; a row slides the rail over to its stats. Hidden for a chat that delegated nothing. -->
+        <RailCard v-if="delegation.length" id="delegation" title="Delegation" :summary="delegationSummary">
+          <ul class="flex flex-col" aria-label="Delegation, by service">
+            <li v-for="s in delegation" :key="s.service">
+              <button type="button" :class="RAIL_ROW_BTN" :aria-label="`${s.label}, show its stats in Delegation`" :data-testid="`rail-delegation-${s.service}`" @click="openDelegation">
+                <component :is="DELEGATION_ICON[s.service]" :class="RAIL_ICON" aria-hidden="true" />
+                <span class="min-w-0 flex-1 truncate text-text">{{ s.label }}</span>
+                <span class="tnum shrink-0 text-ui-sm text-text-muted">{{ delegationFact(s) }}</span>
+              </button>
+            </li>
+          </ul>
+        </RailCard>
+
         <RailCard id="tasks" title="Background tasks" :summary="tasksSummary">
           <ul v-if="lists.running.length" class="flex flex-col" aria-label="Running">
             <li v-for="u in lists.running" :key="u.id" class="group/task relative">
@@ -373,9 +420,10 @@ const NO_STOP = 'Only the session that started it can stop this task'
       </div>
 
       <!-- The panel takes the pointer whole: its back arrow, Expand, the trash and every row (the rail around it lets clicks through). -->
-      <div class="pointer-events-auto h-full w-1/2 min-w-0 pb-2" :inert="!tasks" :aria-hidden="!tasks || undefined">
+      <div class="pointer-events-auto h-full w-1/2 min-w-0 pb-2" :inert="!railOpen" :aria-hidden="!railOpen || undefined">
+        <DelegationPanel v-if="showDelegation" :stats="delegation" @back="closeDelegation" @close="emit('close')" />
         <BackgroundTasksPanel
-          v-if="panelOn"
+          v-else-if="panelOn"
           :session-id="sessionId"
           :worker-ids="workerIds"
           :items="items"
