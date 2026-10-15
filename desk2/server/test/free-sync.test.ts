@@ -4,7 +4,7 @@
 
 import { afterEach, expect, jest, test } from 'bun:test'
 import { randomBytes, randomUUID } from 'node:crypto'
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { FreeInstance, FreeJob } from '@shared/free-instances'
@@ -39,7 +39,7 @@ function fakeStore(token: string) {
 }
 
 /** One PC: its Free instances, with a harness whose log out deletes the session file, as the real one does. */
-function pc() {
+function pc(onAuth?: (stateDir: string) => void) {
   const home = mkdtempSync(join(tmpdir(), 'desk-free-sync-'))
   dirs.push(home)
   const runtime: FreeRuntime = {
@@ -50,6 +50,7 @@ function pc() {
   const ok = (value: unknown): RunOutput => ({ code: 0, stdout: JSON.stringify(value) })
   const runner: FreeRunner = async (config, request) => {
     if (request.command === 'forget') rmSync(join(config.stateDir, request.provider === 'chatgpt' ? 'chatgpt' : '', 'session.dpapi'), { force: true })
+    if (request.command === 'auth') onAuth?.(config.stateDir)
     return ok({ ok: true, authenticated: true })
   }
   const service = new FreeInstances(home, runner, runtime)
@@ -223,5 +224,65 @@ test.skipIf(process.platform !== 'win32')('a ChatGPT login a browser sign-in mad
     expect(readLogin(freshFile, 'chatgpt')!.fresh).toBe(true)
   } finally {
     rmSync(dir, { recursive: true, force: true })
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a round with an unchanged store row writes no login again', async () => {
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc()
+    const b = pc()
+    const syncA = new FreeSync(a.home, a.host, creds)
+    const syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'claude', name: 'Example account' })
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('first', 1_900_000_000))
+    await syncA.pass()
+    await syncB.pass()
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('second', 1_900_500_000))
+    await syncA.pass()
+    await syncB.pass()
+    expect(signedInAs(fileB)).toBe('second')
+    const landed = readFileSync(fileB)
+    await syncB.pass()
+    expect(readFileSync(fileB).equals(landed)).toBe(true)
+  } finally {
+    store.stop()
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a login the harness re-saves after a landing is kept, not landed over again', async () => {
+  let checks = 0
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc()
+    const b = pc(stateDir => { checks++; writeLogin(join(stateDir, 'session.dpapi'), 'claude', sessionKey(`rotated-${checks}`, -1)) })
+    const syncA = new FreeSync(a.home, a.host, creds)
+    const syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'claude', name: 'Example account' })
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('first', 1_900_000_000))
+    await syncA.pass()
+    await syncB.pass()
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    writeLogin(a.host.sessionFile(account), 'claude', sessionKey('second', 1_900_500_000))
+    await syncA.pass()
+    await syncB.pass()
+    await settled(b.service)
+    const checksAfterLanding = checks
+    const rewritten = readFileSync(fileB)
+    for (let round = 0; round < 3; round++) {
+      await syncB.pass()
+      await settled(b.service)
+    }
+    expect(readFileSync(fileB).equals(rewritten)).toBe(true)
+    expect(checks).toBe(checksAfterLanding)
+  } finally {
+    store.stop()
   }
 })

@@ -171,6 +171,8 @@ export interface FreeSyncStatus { on: boolean; lastSyncAt: number | null; lastEr
 export class FreeSync {
   private file: string
   private agreed: Record<string, Agreed> = {}
+  /** The auth of the login each landing wrote over (null: none was there), kept in memory only. */
+  private replaced = new Map<string, string | null>()
   private creds: { value: StoreCreds | null; at: number } | null = null
   private timer: ReturnType<typeof setTimeout> | null = null
   private running: Promise<void> | null = null
@@ -331,7 +333,10 @@ export class FreeSync {
       return true
     }
     if (local.auth === agreed.auth) return true
-    if (agreed.exp != null && local.exp < agreed.exp) return false
+    // An older login the landing replaced (or any older one after a restart) falls through; any other is a sign-in here
+    // since the landing, which a check's re-save makes, and it goes up rather than the store's copy landing again.
+    const was = this.replaced.get(instance.id)
+    if (agreed.exp != null && local.exp < agreed.exp && (was === undefined || local.auth === was)) return false
     await this.upload(c, instance, local, row.version)
     return true
   }
@@ -348,6 +353,7 @@ export class FreeSync {
     const theirs = describe(instance.provider, shared.value.cookies ?? [])
     if (!theirs) throw new Error('the store holds a login without its sign-in')
     if (!local || (theirs.auth !== local.auth && newer(theirs, local))) {
+      this.replaced.set(instance.id, local?.auth ?? null)
       if (!writeLogin(file, instance.provider, theirs.cookies)) throw new Error('the login could not be written for this Windows user')
       this.host.landed(instance.id)
       this.agreed[instance.id] = { version: shared.version, auth: theirs.auth, exp: theirs.exp }
