@@ -246,6 +246,10 @@ export interface CMInstance {
    *  an instance was re-logged into a different account and re-resolve the identity immediately,
    *  instead of showing the previous account's email until someone hits Refresh. */
   loginUuid: string | null
+  /** Set while the app RUNS and its own log says it signed itself out after it last signed in
+   *  (core/app-sign-in-log.ts): `loginUuid` is the stored login and outlives that. The app's own
+   *  line; null when it is closed or signed in. */
+  appSignedOut?: string | null
   /** True when discovered from a running process whose --user-data-dir isn't under
    *  the instances root. */
   isExternal: boolean

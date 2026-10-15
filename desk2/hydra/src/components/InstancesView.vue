@@ -218,8 +218,9 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   plan: inst.account?.planLabel ?? null,
   // `loginUuid`, not `account`: account is resolved lazily and is null for a second after every
   // refresh, which would make signed-in rows flicker out of a filtered table. loginUuid is read
-  // straight off config.json with every list.
-  signedIn: inst.loginUuid != null,
+  // straight off config.json with every list. It is the stored login, which outlives the app's own
+  // sign-out, so a running app whose log says it signed itself out (`appSignedOut`) is not signed in.
+  signedIn: inst.loginUuid != null && !inst.appSignedOut,
   search: searchText(
     inst.num,
     inst.name,
@@ -770,7 +771,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
         ),
       copy: accountEmail(inst.account),
     },
-    badge: inst.isExternal ? { label: t('instances.external') } : undefined,
+    // Signed out comes first: it is the one a person has to act on (sign in again in that window).
+    badge: inst.appSignedOut
+      ? { label: t('instances.signedOutInApp'), title: t('instances.signedOutInAppHint', { line: inst.appSignedOut }) }
+      : inst.isExternal
+        ? { label: t('instances.external') }
+        : undefined,
     // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
     // missing account is a moment, not a state you act on.
     account: accountName
