@@ -7,7 +7,7 @@ let last: DevWebAlerts | null = null
 <script setup lang="ts">
 import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { Bell, Pencil, Plus, Trash2 } from '@lucide/vue'
-import type { DevWebAlertEvent, DevWebAlertRule } from '@shared/devwebui'
+import type { DevWebAlertEvent, DevWebAlertRule, DevWebProcess } from '@shared/devwebui'
 import { ago, bytes, clockTime, cpu, duration, toMb } from '@/components/servers/info/format'
 import { alertList, updateAlert, removeAlert, clearAlertEvents } from '@/components/servers/api'
 import { Tip } from '@/components/ui/tooltip'
@@ -42,8 +42,20 @@ const events = computed(() =>
   [...(alerts.value?.events ?? [])].filter((e) => !props.processId || e.processId === props.processId).sort((a, b) => b.firedAt - a.firedAt)
 )
 const shownEvents = computed(() => (showAll.value ? events.value : events.value.slice(0, SHOWN)))
+// events is newest first, so the first event seen for a rule is its latest.
+const latestByRule = computed(() => {
+  const latest = new Map<string, DevWebAlertEvent>()
+  for (const e of events.value) if (!latest.has(e.ruleId)) latest.set(e.ruleId, e)
+  return latest
+})
 
-const liveProcess = (id: string) => (dev.projects.value ?? []).flatMap((p) => p.processes).find((p) => p.id === id)
+// One lookup per process id, so each row reads the live sample without scanning every project.
+const liveProcesses = computed(() => {
+  const byId = new Map<string, DevWebProcess>()
+  for (const proj of dev.projects.value ?? []) for (const proc of proj.processes) if (!byId.has(proc.id)) byId.set(proc.id, proc)
+  return byId
+})
+const liveProcess = (id: string) => liveProcesses.value.get(id)
 const liveValue = (id: string, metric: 'cpu' | 'memory') => liveProcess(id)?.[metric === 'cpu' ? 'cpu' : 'memory'] ?? null
 const serverName = (ev: DevWebAlertEvent) => liveProcess(ev.processId)?.name ?? ev.processName
 const amount = (metric: 'cpu' | 'memory', n: number) => (metric === 'cpu' ? cpu(n) : bytes(n))
@@ -52,12 +64,12 @@ const limit = (r: DevWebAlertRule) => (r.metric === 'cpu' ? `${r.threshold}%` : 
 // The service keeps no resolved marker, so an event reads as firing while it is the rule's latest and the server's live
 // sample is still over the threshold.
 const stillFiring = (ev: DevWebAlertEvent) => {
-  if (events.value.find((e) => e.ruleId === ev.ruleId)?.id !== ev.id) return false
+  if (latestByRule.value.get(ev.ruleId)?.id !== ev.id) return false
   const now = liveValue(ev.processId, ev.metric)
   return now != null && now > ev.threshold
 }
 const ruleFiring = (r: DevWebAlertRule) => {
-  const latest = events.value.find((e) => e.ruleId === r.id)
+  const latest = latestByRule.value.get(r.id)
   return !!latest && stillFiring(latest)
 }
 
@@ -66,7 +78,8 @@ const servers = computed(() => {
   for (const proj of dev.projects.value ?? []) for (const proc of proj.processes) list.push({ id: proc.id, name: proc.name, projectName: proj.name })
   return list.sort((a, b) => a.name.localeCompare(b.name))
 })
-const serverOf = (id: string) => servers.value.find((s) => s.id === id)
+const serverById = computed(() => new Map(servers.value.map((s) => [s.id, s] as const)))
+const serverOf = (id: string) => serverById.value.get(id)
 
 let loadedAt = 0
 async function load() {

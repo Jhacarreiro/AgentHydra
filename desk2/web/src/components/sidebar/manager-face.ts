@@ -7,6 +7,7 @@
 
 import { reactive } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
+import { hash } from './hash'
 
 export type ChatManager = NonNullable<ChatSummary['manager']>
 
@@ -19,13 +20,6 @@ export const PHOTO_MAX_BYTES = 2 * 1024 * 1024
 
 /** A photo's version as this window last uploaded it, by slug: every row of the manager shows it before the server's update lands. */
 const uploaded = reactive(new Map<string, number>())
-
-/** A stable non-negative hash of a slug (FNV-1a). */
-function hash(text: string): number {
-  let h = 2166136261
-  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619)
-  return h >>> 0
-}
 
 export interface ManagerFace {
   /** The photo's address with its version, or null for none. */

@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { Cloud, LogIn, LogOut, Monitor, RefreshCw } from '@lucide/vue'
 import type { PeopleHomeKind, PeopleStoreStatus } from '@shared/people-store'
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { BUTTON } from '@/components/panes/settings-styles'
 import { chooseHome, loadStatus, signIn, signOut, syncNow } from './where-api'
 import { initialsOf, syncLine, whereView } from './where-logic'
@@ -9,7 +9,7 @@ import { initialsOf, syncLine, whereView } from './where-logic'
 // Settings → People → "Where your people live": This PC (the default) or the person's Connections account.
 // Its own component and route (/api/people-store), registered once in Settings; the first-run "Your people" page
 // is a separate component. Connections with no app id in this build says so and This PC keeps working.
-const status = ref<PeopleStoreStatus | null>(null)
+const status = shallowRef<PeopleStoreStatus | null>(null)
 const failure = ref<string | null>(null)
 const busy = ref<'home' | 'signin' | 'signout' | 'sync' | null>(null)
 const now = ref(Date.now())

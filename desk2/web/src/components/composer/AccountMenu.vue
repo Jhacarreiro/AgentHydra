@@ -101,7 +101,7 @@ const tip = computed(() => {
           >
             <span class="flex-1">Auto</span>
             <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="pinned ? 'bg-(--fill-secondary)' : 'bg-(--accent)'" aria-hidden="true">
-              <span class="absolute top-0.5 size-2.5 rounded-full bg-white transition-[left]" :class="pinned ? 'left-0.5' : 'left-3'" />
+              <span class="absolute left-0.5 top-0.5 size-2.5 rounded-full bg-white transition-transform" :class="pinned ? 'translate-x-0' : 'translate-x-2.5'" />
             </span>
           </DropdownMenuItem>
         </DropdownMenuContent>

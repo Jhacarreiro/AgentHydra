@@ -53,8 +53,6 @@ import {
   Zap
 } from '@lucide/vue'
 
-export const ICON_SIZE = { chrome: 16, row: 16, menu: 16, chevron: 12, toolbar: 20 } as const
-
 /** Stroke width Hydra Desk draws every lucide icon with (set globally in style.css). */
 export const ICON_STROKE = 1.5
 
@@ -128,8 +126,6 @@ export const icons = {
   fastMode: Zap,
   pullRequest: GitPullRequest
 } as const
-
-export type IconName = keyof typeof icons
 
 // Shell (sidebar, chrome, title bar)
 import { Archive, Bot, CircleDot, EllipsisVertical, MonitorSmartphone, Pencil, Pin, Settings, Terminal, Trash2 } from '@lucide/vue'

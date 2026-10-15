@@ -28,6 +28,7 @@ const totals = computed(() => (details.value ? totalTiles(details.value) : []))
 const counters = computed(() => (details.value ? counterTiles(details.value) : []))
 const trendGroups = computed(() => Object.entries(details.value?.trends ?? {}).map(([name, g]) => ({ name, rows: trendRows(g) })))
 const numbers = computed(() => Object.entries(details.value?.numbers ?? {}))
+const runCounters = computed(() => new Map(runs.value.map((r) => [r.startedAt, runCounterText(r.lastLine)])))
 
 const stamp = (ms: number) => new Date(ms).toLocaleString()
 const TREND_ICON = { up: ArrowUp, down: ArrowDown, flat: ArrowRight }
@@ -147,7 +148,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
             <CircleMinus v-else class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
             <span class="shrink-0 text-text-2" :title="stamp(r.startedAt)">{{ runStamp(r.startedAt) }}</span>
             <span class="tnum shrink-0 text-text-muted">{{ spanOf(r.endedAt - r.startedAt) }} · {{ r.outcome }}</span>
-            <span v-if="runCounterText(r.lastLine)" class="tnum min-w-0 truncate text-text-muted">{{ runCounterText(r.lastLine) }}</span>
+            <span v-if="runCounters.get(r.startedAt)" class="tnum min-w-0 truncate text-text-muted">{{ runCounters.get(r.startedAt) }}</span>
             <LoaderCircle v-if="r.description?.state === 'pending'" class="size-3.5 shrink-0 animate-spin text-text-muted" aria-label="Describing the run" />
             <ChevronRight v-if="openable(r)" class="ms-auto size-3.5 shrink-0 text-text-muted transition-transform" :class="openRuns.has(r.startedAt) ? 'rotate-90' : ''" aria-hidden="true" />
           </button>

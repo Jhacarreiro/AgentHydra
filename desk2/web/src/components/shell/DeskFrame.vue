@@ -55,7 +55,7 @@ import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
 import { CHAT_DEFAULT, CHAT_MIN, NavHistory, RAIL_INSET, RAIL_MAX, RAIL_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, railReserve, railWidthIn, splitChat, splitColumns, unreadHold, viewUnder, type View } from './logic'
-import SessionRail from '@/components/rail/SessionRail.vue'
+const SessionRail = lazyPanel(() => import('@/components/rail/SessionRail.vue'))
 import { railOpen, railWidth, saveRailWidth } from '@/components/rail/state'
 import { headerPeek } from '@/components/session-header/state'
 import { useElementSize } from '@vueuse/core'

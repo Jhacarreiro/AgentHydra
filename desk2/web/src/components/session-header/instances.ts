@@ -2,7 +2,7 @@
 // row menu's first line and Move to account (sidebar/logic.ts). Read when one of them opens, at most every 15 s
 // unless asked to; the address an instance was resolved to (ah.instanceAccount) is kept across reads, which do not
 // carry it. AgentHydra's Codex accounts are read with them, for a Codex chat's row menu.
-import { computed, ref, shallowRef } from 'vue'
+import { computed, shallowRef } from 'vue'
 import type { AccountChoice } from '@/components/sidebar/logic'
 import { ah } from './ah'
 import { instanceName, type AhCodexInstance, type AhInstance } from './logic'
@@ -10,7 +10,7 @@ import { instanceName, type AhCodexInstance, type AhInstance } from './logic'
 const FRESH_MS = 15_000
 
 /** null until AgentHydra first answers. */
-export const ahInstances = ref<AhInstance[] | null>(null)
+export const ahInstances = shallowRef<AhInstance[] | null>(null)
 /** AgentHydra's Codex accounts; null until it first answers. */
 export const ahCodexInstances = shallowRef<AhCodexInstance[] | null>(null)
 let reading: Promise<void> | null = null

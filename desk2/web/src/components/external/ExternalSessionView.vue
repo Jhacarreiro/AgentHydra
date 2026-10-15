@@ -305,15 +305,15 @@ watch(
 // Where a session no signed-in CLI instance holds lands (the stand-in's account, the line over its
 // composer), again when Settings' default changes or the accounts arrive: the named default is only
 // found among them, and a holder's sign-in shows there.
+const accountsKey = computed(() => src.accounts.value.map((a) => `${a.id}:${a.signedIn}`).join(','))
 watch(
-  () =>
-    [
-      props.sessionId,
-      session.value?.canResume,
-      session.value?.accountId ?? null,
-      src.settings.value?.defaultAccountId,
-      src.accounts.value.map((a) => `${a.id}:${a.signedIn}`).join(',')
-    ] as const,
+  [
+    () => props.sessionId,
+    () => session.value?.canResume,
+    () => session.value?.accountId ?? null,
+    () => src.settings.value?.defaultAccountId,
+    accountsKey
+  ],
   ([id, can, owner]) => {
     if (can && !holderOf({ accountId: owner }, src.accounts.value)) void desk.ensureLanding(id)
   },

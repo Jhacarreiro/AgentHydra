@@ -3,7 +3,7 @@
 // the repo waits for) plus a menu. Every action goes to Desk's server, which runs it in RepoYeti (the person's own click, so
 // REST and not RepoYeti's approval-gated MCP). Commit, New branch, an undo and "Undo this chat's changes" ask in a small
 // popover above the control first.
-import { computed, nextTick, onBeforeUnmount, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import type { ChatUndoPlan, RepoYetiGitAction, RepoYetiGitState } from '@shared/connectors'
 import { icons } from '@/lib/icons'
 import {
@@ -41,7 +41,7 @@ const emit = defineEmits<{ notice: [text: string]; 'open-yeti': []; changed: [] 
 const Chevron = icons.morePrOptions
 
 const group = ref<HTMLElement | null>(null)
-const state = ref<RepoYetiGitState | null>(null)
+const state = shallowRef<RepoYetiGitState | null>(null)
 const busy = ref<string | null>(null)
 const panel = ref<'commit' | 'branch' | 'step' | 'chat' | null>(null)
 const menuOpen = ref(false)
@@ -64,7 +64,8 @@ onBeforeUnmount(() => stateRun?.abort())
 
 const items = computed(() => barItems(props.git, state.value, !!props.chatId))
 const primary = computed(() => primaryItem(props.git))
-const item = (key: BarKey): BarItem => items.value.find((i) => i.key === key)!
+const itemByKey = computed(() => new Map(items.value.map((i) => [i.key, i])))
+const item = (key: BarKey): BarItem => itemByKey.value.get(key)!
 const primaryEnabled = computed(() => item(primary.value.key).enabled && !busy.value)
 
 // One action, with its notice and a refresh of the bar's counts.
@@ -136,7 +137,7 @@ async function runStep() {
 }
 
 // Undo this chat's changes
-const plan = ref<ChatUndoPlan | null>(null)
+const plan = shallowRef<ChatUndoPlan | null>(null)
 const planError = ref<string | null>(null)
 const picked = ref<Set<string>>(new Set())
 async function openChatUndo() {

@@ -10,18 +10,18 @@
 // that for every running unit listed. The trash in the header, beside Expand and Close (owner, 2026-10-08: "move
 // this here", from the Finished row), only hides finished units here. In the session rail (`back`) it lies over the rail's cards, and
 // its back arrow slides them back.
-import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
+import { computed, nextTick, ref, toRef, watch } from 'vue'
 import { Check, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
 import type { TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
-import { useClock } from '@/lib/clock'
 import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
 import { canStop, doingLine, doingOfAgent, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 import { useSessionTasks } from './session'
+import { useClockWhile } from './useClockWhile'
 
 const props = defineProps<{
   sessionId: string | null | undefined
@@ -77,30 +77,11 @@ const squares = computed(() => {
 // The shared 1 s clock runs only while something here counts up (a running unit, or a unit with a start and no end).
 const ticking = computed(() => lists.value.running.length > 0 || lists.value.finished.some((u) => u.startedAt !== null && u.endedAt === null))
 const frozenNow = Date.now()
-const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
-const now = computed(() => clock.value?.now.value ?? frozenNow)
+const now = useClockWhile(() => ticking.value, 1000, () => frozenNow)
 const doingText = (a: TaskAgent): string => {
   const d = doingOfAgent(a)
   return d ? doingLine(d, now.value) : ''
 }
-let clockScope: EffectScope | null = null
-watch(
-  ticking,
-  (on) => {
-    if (on && !clockScope) {
-      clockScope = effectScope()
-      const tick = clockScope.run(() => useClock(1000))
-      clock.value = tick ? { now: tick } : null
-    } else if (!on && clockScope) {
-      clockScope.stop()
-      clockScope = null
-      clock.value = null
-    }
-  },
-  { immediate: true }
-)
-onBeforeUnmount(() => clockScope?.stop())
-
 // Phases open: per unit, the first with a running agent unless the user toggled it.
 const toggled = ref(new Map<string, string | null>())
 const shownPhase = (u: TaskUnit) => (toggled.value.has(u.id) ? toggled.value.get(u.id)! : openPhase(u))
@@ -149,12 +130,13 @@ const stopText = computed(() => {
 async function confirmStop() {
   const us = stopUnits.value
   stopping.value = null
-  const failed: string[] = []
-  const why = (e: unknown) => failed.push(e instanceof Error ? e.message : String(e))
-  for (const u of us) {
-    for (const id of u.stoppable) await desk.cancelWorker(id).catch(why)
-    if (u.stopTask && props.chatId) await desk.stopTask(props.chatId, u.stopTask).catch(why)
-  }
+  const why = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  const stops = us.flatMap((u) => [
+    ...u.stoppable.map((id) => desk.cancelWorker(id)),
+    ...(u.stopTask && props.chatId ? [desk.stopTask(props.chatId, u.stopTask)] : []),
+  ])
+  // Each stop is independent, so they go out together; the failures keep their order, so the first named is the first listed.
+  const failed = (await Promise.all(stops.map((s) => s.then(() => '', why)))).filter(Boolean)
   stopError.value = failed.length ? `Not stopped: ${failed[0]}` : ''
 }
 

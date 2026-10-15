@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import type { ChatSummary, ProjectEntry } from '@shared/protocol'
 import { Check, ChevronDown, Folder } from '@lucide/vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -17,7 +17,7 @@ const src = useShellSource()
 const PILL =
   'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[553px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
 
-const projects = ref<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
+const projects = shallowRef<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
 const open = ref(false)
 const query = ref('')
 const active = ref(0)

@@ -66,10 +66,10 @@ const SEGMENT =
   'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-ui leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
 
 const local = ref<DeskSettings | null>(null)
-const models = ref<ModelChoice[]>([])
+const models = shallowRef<ModelChoice[]>([])
 const version = ref<string | null>(null)
 const home = ref<string | null>(null)
-const bridge = ref<{ up: boolean; url: string } | null>(null)
+const bridge = shallowRef<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
 const instanceManager = shallowRef<InstanceManagerStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
@@ -269,11 +269,15 @@ const instanceManagerNote = computed(() => {
   return [`Watching ${s.instances.length} apps, ${up} up.`, last, s.error].filter(Boolean).join(' ')
 })
 
+// Each tick asks again; the status is written only when it changed, so an unchanged answer redraws nothing.
+function setBridge(next: { up: boolean; url: string }) {
+  if (bridge.value?.up !== next.up || bridge.value?.url !== next.url) bridge.value = next
+}
 async function loadBridge() {
   try {
-    bridge.value = await api.bridgeStatus()
+    setBridge(await api.bridgeStatus())
   } catch {
-    bridge.value = { up: false, url: bridge.value?.url ?? '' }
+    setBridge({ up: false, url: bridge.value?.url ?? '' })
   }
 }
 

@@ -8,7 +8,7 @@
 // - the Free logins' Keep windows running and their weekly floor, Desk's own (/api/free/settings,
 //   server/src/free-instances).
 import { useStorage } from '@vueuse/core'
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { FreeSettings } from '@shared/free-instances'
 import type { PaneApi } from './api'
 import type { AgentHydraSettings } from './agenthydra'
@@ -121,8 +121,8 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   }
 
   // --- Claude native control ---
-  const native = ref<NativeSettings>({})
-  const profiles = ref<DesktopProfile[]>([])
+  const native = shallowRef<NativeSettings>({})
+  const profiles = shallowRef<DesktopProfile[]>([])
   const profile = ref('')
   const nativeLoading = ref(false)
   const nativeSaving = ref(false)
@@ -189,7 +189,7 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   )
 
   // --- the Free table's keepalive ---
-  const free = ref<FreeSettings | null>(null)
+  const free = shallowRef<FreeSettings | null>(null)
   const freeError = ref<string | null>(null)
   async function loadFree() {
     try {
@@ -210,7 +210,7 @@ export function useInstanceSettings(api: PaneApi, ah: AgentHydraSettings) {
   }
 
   // --- a CLI login for each Desktop account ---
-  const pairing = ref<{ enabled: boolean; candidates: PairingCandidate[] } | null>(null)
+  const pairing = shallowRef<{ enabled: boolean; candidates: PairingCandidate[] } | null>(null)
   const pairingBusy = ref(false)
   const pairingConfirm = ref(false)
   const pairingError = ref<string | null>(null)

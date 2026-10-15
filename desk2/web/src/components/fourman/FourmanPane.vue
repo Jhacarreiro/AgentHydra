@@ -14,6 +14,7 @@ const emit = defineEmits<{ close: [] }>()
 const REFRESH_MS = 60_000
 const scope = shallowRef<FourmanScope>({ kind: 'folder', cwd: props.cwd })
 const board = shallowRef<FourmanBoard | null>(null)
+const fetchedAt = ref<number | null>(null)
 const folderProject = ref<string | null>(null)
 const projectKeys = ref<string[]>([])
 const error = ref<string | null>(null)
@@ -26,7 +27,7 @@ const choices = computed<ScopeChoice[]>(() => projectChoices(props.cwd, folderPr
 const current = computed(() => choices.value.find((c) => sameScope(c.scope, scope.value))?.label ?? folderName(props.cwd))
 const forYouRows = computed(() => (board.value ? forYou(board.value) : []))
 const sections = computed(() => (board.value ? tierSections(board.value, openTiers.value) : []))
-const ago = computed(() => (board.value ? timeAgo(board.value.fetchedAt, now.value) : ''))
+const ago = computed(() => (fetchedAt.value !== null ? timeAgo(fetchedAt.value, now.value) : ''))
 
 function sameScope(a: FourmanScope, b: FourmanScope): boolean {
   if (a.kind !== b.kind) return false
@@ -35,10 +36,15 @@ function sameScope(a: FourmanScope, b: FourmanScope): boolean {
   return true
 }
 
+// Every fetch stamps a new fetchedAt, so that field is left out: a poll that finds the same tasks keeps the board it has.
+const sameBoard = (a: FourmanBoard, b: FourmanBoard): boolean =>
+  JSON.stringify({ ...a, fetchedAt: 0 }) === JSON.stringify({ ...b, fetchedAt: 0 })
+
 async function load() {
   try {
     const next = await fourmanBoard(scope.value)
-    board.value = next
+    if (!board.value || !sameBoard(board.value, next)) board.value = next
+    fetchedAt.value = next.fetchedAt
     if (scope.value.kind === 'folder') folderProject.value = next.project
     error.value = null
   } catch (e) {

@@ -229,8 +229,9 @@ onBeforeUnmount(() => clockScope?.stop())
 const stopping = ref(new Set<string>())
 const stopError = ref('')
 watch(
-  () => lists.value.running.map((u) => u.id),
-  (ids) => {
+  () => lists.value.running.map((u) => u.id).join('\n'),
+  () => {
+    const ids = lists.value.running.map((u) => u.id)
     const left = [...stopping.value].filter((id) => ids.includes(id))
     if (left.length !== stopping.value.size) stopping.value = new Set(left)
   }

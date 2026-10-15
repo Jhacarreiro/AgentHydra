@@ -46,6 +46,7 @@ const scheduleText = computed(() => {
   if (r.windowsTask !== null) return `Windows: ${r.windowsTask.replace(/^\\/, '')}`
   return 'its own pace'
 })
+const reasonText = computed(() => props.routine.headline ?? plainReason(props.routine.reason, localZone()))
 const totalRows = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => ({ label: counterLabel(k), value: n.toLocaleString('en-US') })))
 const runsTotal = computed(() => Math.max(props.routine.runsTotal ?? 0, props.routine.runs.length))
 const settingRows = computed(() => Object.entries(props.routine.settings ?? {}))
@@ -139,7 +140,7 @@ function toggleEdit() {
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span class="wrap-break-word">{{ scheduleText }}<template v-if="routine.until"> · until {{ routine.until }}</template></span>
       </div>
-      <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
+      <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ reasonText }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
       <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
         <div v-for="t in totalRows" :key="t.label" class="rounded-[var(--radius-6)] bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">

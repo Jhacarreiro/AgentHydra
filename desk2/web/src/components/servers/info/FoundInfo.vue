@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import type { DevWebAddResult, DevWebFoundItem, DevWebPreview, DevWebProposal } from '@shared/devwebui'
 import { FileCode, Folder } from '@lucide/vue'
-import { ref, watch } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
 import { Tip } from '@/components/ui/tooltip'
 import { ignoreFolder, loadProject, previewFound, scaffoldProject, unignoreFolder } from '../api'
 import { useDevServers } from '../store'
@@ -15,7 +15,7 @@ import ProposalEditor from './ProposalEditor.vue'
 const props = defineProps<{ item: DevWebFoundItem }>()
 const servers = useDevServers()
 
-const preview = ref<DevWebPreview | null>(null)
+const preview = shallowRef<DevWebPreview | null>(null)
 const proposal = ref<DevWebProposal | null>(null)
 const ignored = ref(false)
 const busy = ref(false)

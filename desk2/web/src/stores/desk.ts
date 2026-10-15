@@ -150,9 +150,14 @@ const indexByChat = shallowReactive(new Map<string, TranscriptIndex>())
 const WINDOW_SIZE = 200
 const INDEX_EVERY_MS = 1000
 const indexTimers = new Map<string, { at: number; timer: ReturnType<typeof setTimeout> | null }>()
+const INDEX_TIMERS_MAX = 200
 
 /** Fetches a chat's index at most once a second; a call inside the second runs when it is up. */
 function refreshIndex(chatId: string) {
+  if (indexTimers.size > INDEX_TIMERS_MAX) {
+    // A slot with no run pending and its second gone by behaves as no slot at all, so it is dropped.
+    for (const [id, old] of indexTimers) if (!old.timer && Date.now() - old.at >= INDEX_EVERY_MS) indexTimers.delete(id)
+  }
   const slot = indexTimers.get(chatId) ?? { at: 0, timer: null }
   indexTimers.set(chatId, slot)
   if (slot.timer) return
@@ -639,10 +644,12 @@ function keepNewer(snapshot: TranscriptItem[], since: readonly TranscriptItem[] 
   const newer = new Map(since.map((i) => [i.id, i]))
   const out = snapshot.map((i) => newer.get(i.id) ?? i)
   const had = new Set(snapshot.map((i) => i.id))
-  const said = snapshot.flatMap((i) => (i.kind === 'user' ? [i] : []))
+  // The latest time each user message's text was said at, so each message of `since` is one lookup, not a scan of the snapshot.
+  const saidAt = new Map<string, number>()
+  for (const i of snapshot) if (i.kind === 'user') saidAt.set(i.text, Math.max(saidAt.get(i.text) ?? -Infinity, i.ts))
   for (const i of since) {
     if (had.has(i.id)) continue
-    if (i.kind === 'user' && isDrawnMessage(i) && said.some((s) => s.text === i.text && s.ts >= i.ts - 1000)) continue
+    if (i.kind === 'user' && isDrawnMessage(i) && (saidAt.get(i.text) ?? -Infinity) >= i.ts - 1000) continue
     out.push(i)
   }
   return out
@@ -698,8 +705,9 @@ function updateWindowTitle() {
   document.title = `${prefix}AgentHydra`
 }
 
+// The counts as one string: a fresh array would run the callback on every chat change, not when a count moves.
 watch(
-  () => [store.chats.filter((c) => c.status === 'working').length, store.chats.filter((c) => c.status === 'needs_you').length, store.connected],
+  () => `${store.chats.filter((c) => c.status === 'working').length}|${store.chats.filter((c) => c.status === 'needs_you').length}|${store.connected}`,
   () => {
     updateWindowTitle()
   }
@@ -714,6 +722,8 @@ watch(
 // that account's folder when the message goes out.
 const externalPatches = reactive(new Map<string, ChatPatch>())
 const landings = reactive(new Map<string, AccountRef>())
+/** Landings kept; past it the one set longest ago goes, and its session shows no landing until it is picked again. */
+const LANDINGS_MAX = 200
 
 // The poller's list holds the last 24 hours. An older outside session the window opened anyway (a search
 // hit) is fetched on its own and kept here; the public list shows it after the list's own rows, and a
@@ -746,6 +756,18 @@ const queuePlaceholders = shallowRef<QueueItem[]>([])
 
 function queueWithPlaceholders(q: QueueState | null): QueueState | null {
   return q && queuePlaceholders.value.length ? { ...q, items: [...q.items, ...queuePlaceholders.value] } : q
+}
+
+/** Puts a message back where the window keeps a refused one: the box that shows the chat takes it, else the chat's draft. */
+function putBackInBox(chatId: string, message: { text: string; images?: DraftImage[] }): void {
+  const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
+  if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
+  // No box shows the chat now: it waits as the chat's draft.
+  if (!back.taken) {
+    const storage = typeof localStorage === 'undefined' ? null : localStorage
+    saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
+    saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
+  }
 }
 
 /** A queue request; a refusal ({ error } with 400/404/409) rejects with the server's own words. */
@@ -1135,7 +1157,8 @@ function landPlaceholder(placeholder: string, chat: ChatSummary) {
   const bubbles = itemsByChat.get(placeholder) ?? []
   const streamed = unloadedUpserts.get(chat.id) ?? []
   unloadedUpserts.delete(chat.id)
-  const kept = bubbles.filter((b) => !(b.kind === 'user' && streamed.some((s) => s.kind === 'user' && s.text === b.text)))
+  const streamedTexts = new Set(streamed.flatMap((s) => (s.kind === 'user' ? [s.text] : [])))
+  const kept = bubbles.filter((b) => !(b.kind === 'user' && streamedTexts.has(b.text)))
   itemsByChat.delete(placeholder)
   indexes.delete(placeholder)
   itemsByChat.set(chat.id, shallowReactive([...kept, ...streamed]))
@@ -1314,13 +1337,7 @@ export function useDesk() {
         body: JSON.stringify({ itemId } satisfies CancelQueuedRequest)
       })
       if (!result.cancelled) return result
-      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
-      if (!back.taken) {
-        const storage = typeof localStorage === 'undefined' ? null : localStorage
-        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
-        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
-      }
+      putBackInBox(chatId, message)
       return result
     },
 
@@ -1448,14 +1465,7 @@ export function useDesk() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ at: itemId } satisfies RewindChatRequest)
       })
-      const back: PutBack = { chatId, text: message.text, images: message.images ?? [] }
-      if (typeof window !== 'undefined') window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: back }))
-      // No box shows the chat now: it waits as the chat's draft.
-      if (!back.taken) {
-        const storage = typeof localStorage === 'undefined' ? null : localStorage
-        saveDraft(storage, chatId, putBackDraft(message.text, loadDraft(storage, chatId)))
-        saveDraftImages(chatId, [...back.images, ...draftImages(chatId)])
-      }
+      putBackInBox(chatId, message)
       return chat
     },
 
@@ -1650,7 +1660,11 @@ export function useDesk() {
     },
     async ensureLanding(sessionId: string): Promise<void> {
       const landing = await pickLanding()
-      if (landing) landings.set(sessionId, landing)
+      if (!landing) return
+      // Set again, it counts as the newest, so the cap never drops the one just picked.
+      landings.delete(sessionId)
+      landings.set(sessionId, landing)
+      capMap(landings, LANDINGS_MAX)
     },
     /** The stand-in chat of an outside session the composer can carry on now, else null. */
     standInOf(sessionId: string): ChatSummary | null {

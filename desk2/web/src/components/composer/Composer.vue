@@ -428,12 +428,15 @@ watch(
 const GIT_POLL_MS = 15_000
 let gitTimer: ReturnType<typeof setInterval> | null = null
 let gitRun: AbortController | null = null
+// The JSON of the answer in git.value, so each poll serialises only the new answer.
+let gitSignature: string | null = null
 async function refreshGit() {
   gitRun?.abort()
   gitRun = null
   const dir = cwd.value
   if (!dir) {
     git.value = null
+    gitSignature = null
     return
   }
   const run = new AbortController()
@@ -441,9 +444,16 @@ async function refreshGit() {
   try {
     const g = await api.git(dir, run.signal)
     // An unchanged answer keeps the object, so nothing that reads it re-renders.
-    if (dir === cwd.value && JSON.stringify(g) !== JSON.stringify(git.value)) git.value = g
+    const signature = JSON.stringify(g)
+    if (dir === cwd.value && signature !== gitSignature) {
+      gitSignature = signature
+      git.value = g
+    }
   } catch {
-    if (!run.signal.aborted) git.value = null
+    if (!run.signal.aborted) {
+      git.value = null
+      gitSignature = null
+    }
   }
 }
 function openDiff() {
@@ -475,7 +485,7 @@ function showPending() {
 }
 
 // Slash commands
-const commands = ref<SlashCommandInfo[]>([])
+const commands = shallowRef<SlashCommandInfo[]>([])
 let commandsFor: string | null = null
 let commandsRun: AbortController | null = null
 const slashIndex = ref(0)
@@ -988,9 +998,14 @@ function onPicLoad(id: string, e: Event) {
   const el = e.target as HTMLImageElement
   picSizes.value = { ...picSizes.value, [id]: { w: el.naturalWidth, h: el.naturalHeight } }
 }
+// Each picture's crop is worked out once when its size arrives, not on every render of its tile.
+const picStyles = computed(() => Object.fromEntries(Object.entries(picSizes.value).map(([id, size]) => [id, picStyleFor(size.w, size.h)])))
+const unsizedPicStyle = computed(() => picStyleFor(0, 0))
+function picStyleFor(w: number, h: number) {
+  return { objectPosition: attachmentTile(w, h).objectPosition }
+}
 function picStyle(id: string) {
-  const size = picSizes.value[id]
-  return { objectPosition: attachmentTile(size?.w ?? 0, size?.h ?? 0).objectPosition }
+  return picStyles.value[id] ?? unsizedPicStyle.value
 }
 
 function removeFile(id: string) {

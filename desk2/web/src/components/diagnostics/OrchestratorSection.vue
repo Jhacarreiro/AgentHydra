@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import type { OrchestratorAct, OrchestratorJudgment, OrchestratorMove, OrchestratorPlan, OrchestratorRow } from '@shared/orchestrator'
 import type { View } from '@/components/shell/logic'
 import { useShellSource } from '@/components/shell/source'
@@ -13,7 +13,7 @@ import { Tip } from '@/components/ui/tooltip'
 // it writes when the hard limits allow (plugins/70-orchestrator.ts), and lists what it did. Nothing else here sends.
 const api = usePaneApi()
 const src = useShellSource()
-const plan = ref<OrchestratorPlan | null>(null)
+const plan = shallowRef<OrchestratorPlan | null>(null)
 const error = ref<string | null>(null)
 const asking = ref(false)
 const arming = ref(false)

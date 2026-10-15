@@ -1,6 +1,6 @@
 // The Connections chip's calls to Desk 2's server (routes in shared/connectors.ts, server plugins/56-connections.ts),
 // and its one shared read of GET /api/connectors (is the connector on and on this machine).
-import { ref } from 'vue'
+import { shallowRef } from 'vue'
 import {
   CONNECTIONS_COMPANIES,
   CONNECTIONS_DEFAULT,
@@ -18,7 +18,7 @@ import {
 } from '@shared/connectors'
 import { cappedDelay } from './logic'
 
-export const connectorList = ref<ConnectorView[] | null>(null)
+export const connectorList = shallowRef<ConnectorView[] | null>(null)
 
 let lastText = ''
 let lastList: ConnectorView[] | null = null

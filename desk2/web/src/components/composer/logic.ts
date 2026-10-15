@@ -151,20 +151,10 @@ export const EFFORTS: { value: Effort; label: string }[] = [
 /** The stop the slider marks "Recommended" (the real popover marks one stop with a taller pill). */
 export const RECOMMENDED_EFFORT: Effort = 'medium'
 
-export function modeLabel(mode: PermissionMode): string {
-  return PERMISSION_MODES.find((m) => m.value === mode)?.label ?? mode
-}
-
 /** null = the account's default effort, shown as "Default". */
 export function effortLabel(effort: Effort | null): string {
   if (effort == null) return 'Default'
   return EFFORTS.find((e) => e.value === effort)?.label ?? String(effort)
-}
-
-/** Slider position of an effort; the default (null) sits on the recommended stop. */
-export function effortIndex(effort: Effort | null): number {
-  const i = EFFORTS.findIndex((e) => e.value === (effort ?? RECOMMENDED_EFFORT))
-  return i < 0 ? 0 : i
 }
 
 /** The model menu: the first `numbered` models get number shortcuts, the rest go under "More models". */

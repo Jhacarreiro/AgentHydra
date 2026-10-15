@@ -136,7 +136,9 @@ function phasesOf(workers: CliMayteWorker[]): TaskPhase[] {
   const byStage = new Map<string, CliMayteWorker[]>()
   for (const w of [...workers].sort((a, b) => (a.startedAt ?? 0) - (b.startedAt ?? 0))) {
     const stage = capital(w.kind ?? '') || 'Tasks'
-    byStage.set(stage, [...(byStage.get(stage) ?? []), w])
+    const ws = byStage.get(stage) ?? []
+    ws.push(w)
+    byStage.set(stage, ws)
   }
   return [...byStage].map(([name, ws]) => {
     const agents = ws.map(toAgent).sort((a, b) => STATE_ORDER[a.state] - STATE_ORDER[b.state] || (a.startedAt ?? 0) - (b.startedAt ?? 0))
@@ -257,8 +259,11 @@ export function workerUnits(workers: CliMayteWorker[]): TaskUnit[] {
   const groups = new Map<string, CliMayteWorker[]>()
   const units: TaskUnit[] = []
   for (const w of workers) {
-    if (w.group) groups.set(w.group, [...(groups.get(w.group) ?? []), w])
-    else units.push(workerUnit(`worker:${w.id}`, w.title, [w]))
+    if (w.group) {
+      const ws = groups.get(w.group) ?? []
+      ws.push(w)
+      groups.set(w.group, ws)
+    } else units.push(workerUnit(`worker:${w.id}`, w.title, [w]))
   }
   for (const [g, ws] of groups) units.push(workerUnit(`group:${g}`, g, ws))
   return units
@@ -388,7 +393,9 @@ function doingParts(doings: readonly DoingOf[], now: number): string[] {
   const byHead = new Map<string, DoingOf[]>()
   for (const d of doings.filter((x) => x.state === 'waiting')) {
     const head = headOf(d.doing)
-    byHead.set(head, [...(byHead.get(head) ?? []), d])
+    const ds = byHead.get(head) ?? []
+    ds.push(d)
+    byHead.set(head, ds)
   }
   const groups = [...byHead]
     .map(([head, ds]) => ({ head, ds, since: Math.min(...ds.map((d) => d.since ?? Number.POSITIVE_INFINITY)) }))
