@@ -8,7 +8,8 @@
 // only: every other method under /ah is answered here, as are /dw and the pane's shared preferences, so no account or
 // owner setting is touched. The Pin is Desk's own mark, kept in the throwaway home. Needs at least four outside-session
 // rows on screen (this PC's sessions). Prints PASS/FAIL per check and the bulk menu's labels, never a row's text; exits
-// 1 on any FAIL.
+// 1 on any FAIL. The rows are held by their keyed wrappers (window.__rows), never by place: the list is live, and a
+// row that left it above them shifted every place (2026-10-14: one run of two read [0,1] for a pick of [1,2]).
 
 import { mkdtempSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -86,9 +87,17 @@ try {
   const PINNED = `document.querySelectorAll('section[aria-label="Pinned"] [role="button"][aria-description^="Runs in"]').length`
   const MENU_OPEN = `document.querySelectorAll('[role="menu"]').length > 0`
   if (!(await until(`${ROWS}.length >= 4`, 30_000))) throw new Error('fewer than 4 outside-session rows on screen')
-  // Rows are replaced as the lists arrive after mount; let them settle.
+  // Rows are replaced as the lists arrive after mount; let them settle, then hold the rows on screen by their keyed
+  // wrappers (the row inside is swapped as its menu mounts on the first hover). ROW(i) is the row in wrapper i now.
   await sleep(2500)
-  const at = async (i: number) => (await ev(`(() => { const r = ${ROWS}[${i}].getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 } })()`)) as { x: number; y: number }
+  const capture = () => ev(`(window.__rows = ${ROWS}.map((el) => el.closest('[draggable]'))).length`)
+  const ROW = (i: number | string) => `(window.__rows[${i}]?.isConnected ? window.__rows[${i}].querySelector('[role="button"][aria-description^="Runs in"]') : null)`
+  await capture()
+  const at = async (i: number) => {
+    const p = (await ev(`(() => { const el = ${ROW(i)}; if (!el) return null; const r = el.getBoundingClientRect(); return { x: r.left + 40, y: r.top + r.height / 2 } })()`)) as { x: number; y: number } | null
+    if (!p) throw new Error(`row ${i} left the list during the run`)
+    return p
+  }
   const click = async (i: number, button: 'left' | 'right', modifiers = 0) => {
     const p = await at(i)
     await send('Input.dispatchMouseEvent', { type: 'mouseMoved', x: p.x, y: p.y, modifiers })
@@ -101,7 +110,7 @@ try {
     for (const type of ['keyDown', 'keyUp']) await send('Input.dispatchKeyEvent', { type, key: 'Escape', code: 'Escape', windowsVirtualKeyCode: 27 })
     await sleep(200)
   }
-  const picked = async () => JSON.stringify(await ev(`${ROWS}.map((el, i) => (el.getAttribute('aria-pressed') === 'true' ? i : -1)).filter((i) => i >= 0)`))
+  const picked = async () => JSON.stringify(await ev(`window.__rows.map((_, i) => (${ROW('i')}?.getAttribute('aria-pressed') === 'true' ? i : -1)).filter((i) => i >= 0)`))
   const nonePicked = async () => (await ev(`document.querySelectorAll('[role="button"][aria-pressed="true"]').length`)) === 0
   // The open menu's own lines (submenus are not opened): its items, its text lines and its rules.
   const menuLines = async () =>
@@ -125,7 +134,7 @@ try {
   await click(0, 'left', CTRL | SHIFT)
   check((await picked()) === '[0,1,2,3]', `Ctrl+Shift and a click adds the run: ${await picked()}`)
 
-  if (((await ev(`${ROWS}.length`)) as number) > 4) {
+  if (((await ev(`window.__rows.length`)) as number) > 4) {
     await click(4, 'right')
     await until(MENU_OPEN, 3000)
     const own = await menuLines()
@@ -142,6 +151,9 @@ try {
   // Pin is the item whose letter is P (its text runs on into the letter: "PinP").
   await ev(`document.querySelector('[role="menu"] [role="menuitem"][data-shortcut="P"]')?.click()`)
   check(await until(`${PINNED} === ${pinnedBefore + 2}`, 5000), 'Pin on the shared menu moves both picked rows into Pinned')
+  // The two pinned rows left this list for Pinned: hold the rows on screen now.
+  await sleep(500)
+  await capture()
 
   await click(0, 'left', CTRL)
   await click(1, 'left', CTRL)
@@ -149,7 +161,7 @@ try {
   check(await nonePicked(), 'Escape leaves the picks')
   await click(0, 'left', CTRL)
   await click(1, 'left')
-  check((await nonePicked()) && (await ev(`${ROWS}[1].getAttribute('aria-current')`)) === 'page', 'a plain click leaves the picks and opens the row')
+  check((await nonePicked()) && (await ev(`${ROW(1)}?.getAttribute('aria-current')`)) === 'page', 'a plain click leaves the picks and opens the row')
 } catch (err) {
   check(false, `the run stopped: ${err instanceof Error ? err.message : String(err)}`)
 } finally {
