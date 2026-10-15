@@ -3,6 +3,7 @@ import type { PeopleStoreStatus } from '../../web/src/components/people/where-ty
 import { ago, syncLine, whereView } from '../../web/src/components/people/where-logic'
 
 const status = (over: Partial<PeopleStoreStatus> = {}): PeopleStoreStatus => ({
+  available: true,
   home: 'pc',
   crainium: { available: false },
   syncing: false,

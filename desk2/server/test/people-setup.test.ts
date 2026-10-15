@@ -4,18 +4,20 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { presentAddon } from './people-addon-fixture'
 
 const home = mkdtempSync(join(tmpdir(), 'people-'))
 process.env.HOME = home
 process.env.USERPROFILE = home
 process.env.AGENTHYDRA_MANAGERS_DIR = join(home, 'legacy-managers')
 process.env.AGENTHYDRA_CORE_DIR = join(home, 'core')
+const addon = presentAddon(home)
 const { peopleState, savePeople } = await import('../src/people/setup')
 afterAll(() => rmSync(home, { recursive: true, force: true }))
 
 describe('people setup', () => {
   test('a fresh home is empty and offers five invented starters', () => {
-    const s = peopleState()
+    const s = peopleState(addon)
     expect(s.empty).toBe(true)
     expect(s.starters.map((x) => x.slug)).toEqual(['project-coordinator', 'floor-manager', 'backend-engineer', 'ui-designer', 'advertising-lead'])
     expect(JSON.stringify(s.starters)).not.toMatch(/\b(he|she|his|her)\b/i)
@@ -24,7 +26,7 @@ describe('people setup', () => {
     const res = await savePeople({
       authority: { name: 'Example Owner', brief: 'Decides fast.' },
       managers: [{ slug: 'floor-manager', name: 'Sam Ortega', title: 'Floor manager', oneLiner: 'Runs day-to-day work.', brief: 'Sam runs the floor.' }],
-    })
+    }, undefined, addon)
     expect(res.catalog.ok).toBe(true)
     const persona = JSON.parse(readFileSync(join(home, '.agenthydra', 'people', 'manager', 'floor-manager', 'persona.json'), 'utf8'))
     expect(persona.name).toBe('Sam Ortega')
@@ -34,6 +36,6 @@ describe('people setup', () => {
     expect(existsSync(join(home, 'core', 'catalog'))).toBe(true)
   })
   test('refuses a manager with no name', async () => {
-    await expect(savePeople({ managers: [{ name: ' ', brief: '' }] })).rejects.toThrow('name')
+    await expect(savePeople({ managers: [{ name: ' ', brief: '' }] }, undefined, addon)).rejects.toThrow('name')
   })
 })

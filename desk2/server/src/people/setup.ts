@@ -5,6 +5,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import { PERSON_SLUG, slugOf, type PeopleSaveRequest, type PeopleSaveResponse, type PeopleState, type PersonDraft } from '@shared/people'
+import { type AddonOpts, peopleAddonPresent } from '../../../../server/src/people-addon'
 import { managersDir, peopleDir } from '../../../../server/src/manager-folders'
 import { writeFlushed } from '../write-flushed'
 import { STARTERS } from './starters'
@@ -30,13 +31,15 @@ function nameOf(dir: string, slug: string): string {
   }
 }
 
-export function peopleState(): PeopleState {
+export function peopleState(addon?: AddonOpts): PeopleState {
+  if (!peopleAddonPresent(addon)) return { available: false, empty: false, folder: '', authority: null, managers: [], starters: [] }
   const dir = peopleDir()
   const authorities = folders(join(dir, 'creator'))
   const own = folders(join(dir, 'manager')).map((s) => nameOf(join(dir, 'manager'), s))
   const legacy = folders(managersDir()).map((s) => nameOf(managersDir(), s))
   const managers = [...new Set([...own, ...legacy])]
   return {
+    available: true,
     empty: authorities.length === 0 && managers.length === 0,
     folder: dir,
     authority: authorities.length ? nameOf(join(dir, 'creator'), authorities[0]) : null,
@@ -72,7 +75,8 @@ export async function buildCatalog(): Promise<{ ok: boolean; message: string }> 
 
 export class BadPeople extends Error {}
 
-export async function savePeople(req: PeopleSaveRequest, build = buildCatalog): Promise<PeopleSaveResponse> {
+export async function savePeople(req: PeopleSaveRequest, build = buildCatalog, addon?: AddonOpts): Promise<PeopleSaveResponse> {
+  if (!peopleAddonPresent(addon)) throw new BadPeople('The people add-on is not installed on this PC.')
   const managers = Array.isArray(req?.managers) ? req.managers : []
   if (managers.length > 30) throw new BadPeople('That is more managers than the setup writes at once.')
   const written: string[] = []
@@ -92,5 +96,5 @@ export async function savePeople(req: PeopleSaveRequest, build = buildCatalog): 
     written.push(writePerson('manager', slug, { name, title: clean(m.title, 80), oneLiner: clean(m.oneLiner, 160), brief: clean(m.brief, MAX_TEXT) || `${name} is a manager.` }))
   }
   const catalog = written.length ? await build() : { ok: true, message: 'Nothing to write.' }
-  return { written, catalog, state: peopleState() }
+  return { written, catalog, state: peopleState(addon) }
 }

@@ -49,6 +49,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { Hook } from './climayte-signal'
+import { type AddonOpts, peopleAddonPresent } from './people-addon'
 
 const STAMP = '.agenthydra-owner-sync.json'
 
@@ -457,8 +458,9 @@ const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/
  *  settings.json in `ownerDir`, for a chat's own settings (climayte-launch.ts writeWorkerSettings): an account folder
  *  has settings of its own, so the owner's never reach a CliMayte chat, and the router picks which manager the
  *  chat is on every message. Only those groups: the owner's other hooks stay his. None when the file is missing or
- *  unreadable. */
-export function ownerRouterHooks(ownerDir: string): Array<{ hooks: Hook[] }> {
+ *  unreadable, and always without the people add-on (server/src/people-addon.ts). */
+export function ownerRouterHooks(ownerDir: string, addon?: AddonOpts): Array<{ hooks: Hook[] }> {
+  if (!peopleAddonPresent(addon)) return []
   let groups: unknown
   try {
     groups = (

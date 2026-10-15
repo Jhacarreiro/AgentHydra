@@ -253,6 +253,11 @@ function leadGroup(need: string): Group {
   return { ...group('lead', need, ['person'], 'become'), tiers: LEAD_TIERS }
 }
 
+/** Without a manager in the catalog there is no lead to ask for, so the lead question is skipped. */
+function hasLeads(ctx: Ctx): boolean {
+  return [...ctx.cat.values()].some((e) => e.kind === 'person' && e.family === 'manager')
+}
+
 function fill(ctx: Ctx, g: Group): void {
   g.ids = findPage(ctx.cat.values(), g.need, {
     kinds: g.kinds,
@@ -406,7 +411,7 @@ function firstQ1(ctx: Ctx, state: RunState, p: Parsed): Reply {
     return next(ctx, state, null)
   }
   state.tier = String(p.n)
-  if (p.n >= 2) {
+  if (p.n >= 2 && hasLeads(ctx)) {
     state.groups = [leadGroup(p.text ?? state.msg)]
     fill(ctx, state.groups[0])
     state.step = 'q6pick'
@@ -454,7 +459,7 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
     case 'q5':
       state.team = String(p.n)
       state.groups = []
-      state.step = 'q6'
+      state.step = hasLeads(ctx) ? 'q6' : 'q7'
       return next(ctx, state, doc)
     case 'q6': {
       state.groups = [leadGroup(p.text ?? state.msg)]

@@ -24,6 +24,8 @@ export interface StarterManager extends PersonDraft {
 }
 
 export interface PeopleState {
+  /** False without the CrAInium people add-on on this PC: no setup, no starters, nothing to save. */
+  available: boolean
   /** True when no manager and no highest authority exist yet: the page offers itself on first run. */
   empty: boolean
   /** Where the folders live, as the user sees them. */

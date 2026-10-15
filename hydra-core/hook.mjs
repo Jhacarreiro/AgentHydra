@@ -426,6 +426,7 @@ function logBlock(input, env, dir) {
 function stopCheck(input, env, dir) {
   if (input.stop_hook_active === true) return null;
   try {
+    if (!ownerIds(dir).size) return null;
     const { text, tools } = lastTurn(input);
     if (!asksQuestion(text)) return null;
     if (tools.some((tool) => consults(tool, dir))) return null;

@@ -7,6 +7,8 @@ export const PEOPLE_STORE_SYNC = `${PEOPLE_STORE}/sync`
 export type PeopleHomeKind = 'pc' | 'crainium'
 
 export interface PeopleStoreStatus {
+  /** False without the CrAInium people add-on on this PC: Settings shows no People section. */
+  available: boolean
   home: PeopleHomeKind
   /** CrAInium (private): `available` is true only when the door is here and answering. */
   crainium: { available: boolean; owner?: string; people?: number; reason?: string }

@@ -22,7 +22,8 @@ function skip() {
 onMounted(async () => {
   try {
     if (localStorage.getItem(SKIPPED)) return
-    open.value = (await loadPeople()).empty
+    const st = await loadPeople()
+    open.value = st.available && st.empty
   } catch {
     // floor-ok: no server answer means no first-run offer
   }

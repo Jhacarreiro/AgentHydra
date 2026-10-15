@@ -15,6 +15,7 @@ import { readState } from './manager-analytics/store'
 import { MANAGER_SLUG, managerFile } from './manager-folders'
 import { completionsApi, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
+import { type AddonOpts, peopleAddonPresent } from './people-addon'
 
 const CORE_MODE_REFUSAL =
   'Core mode: sub-manager chats are off. Use core_use { chat, id, mode: "consult" | "hire" } to ask or hire a hidden copy.'
@@ -328,3 +329,8 @@ export const MANAGER_TOOLS: HydraTool[] = [
     },
   },
 ]
+
+/** The manager_* tools, listed only with the people add-on on this PC (server/src/people-addon.ts). */
+export function managerTools(opts?: AddonOpts): HydraTool[] {
+  return peopleAddonPresent(opts) ? MANAGER_TOOLS : []
+}

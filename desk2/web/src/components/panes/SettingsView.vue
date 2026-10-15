@@ -16,6 +16,7 @@ import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
 import PeopleSetup from '@/components/people/PeopleSetup.vue'
 import PeopleWhere from '@/components/people/PeopleWhere.vue'
+import { loadStatus as loadPeopleStore } from '@/components/people/where-api'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { COLLAPSE_MODES, COLLAPSE_MODE_LABELS } from '@/components/sidebar/collapse'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
@@ -430,6 +431,11 @@ function onFocus() {
   if (!ah.sync.value?.connected) void ah.loadSync()
 }
 window.addEventListener('focus', onFocus)
+// The People add-on is absent on most PCs; its section stays hidden until the store says it is here.
+const peopleOn = ref(false)
+void loadPeopleStore().then((st) => (peopleOn.value = st.available)).catch(() => {})
+const navSections = computed(() => SETTINGS_SECTIONS.filter((s) => s.id !== 'people' || peopleOn.value))
+
 onMounted(async () => {
   syncBridgePoll()
   void ah.load()
@@ -492,9 +498,9 @@ onBeforeUnmount(() => {
       </label>
 
       <div ref="navEl" class="flex gap-1 overflow-x-auto sm:flex-col sm:gap-px sm:overflow-visible" @keydown="onNavKey">
-        <template v-for="(s, i) in SETTINGS_SECTIONS" :key="s.id">
+        <template v-for="(s, i) in navSections" :key="s.id">
           <div
-            v-if="s.caption !== SETTINGS_SECTIONS[i - 1]?.caption"
+            v-if="s.caption !== navSections[i - 1]?.caption"
             class="hidden px-2 pb-1.5 text-ui-sm leading-4 text-text-muted sm:block"
             :class="i ? 'pt-4' : 'pt-2'"
           >
@@ -534,7 +540,7 @@ onBeforeUnmount(() => {
 
       <ConnectorsSettings v-else-if="section === 'connectors' && !searching" />
 
-      <PeopleSetup v-else-if="section === 'people' && !searching" />
+      <PeopleSetup v-else-if="section === 'people' && !searching && peopleOn" />
 
       <template v-else>
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">
@@ -761,7 +767,7 @@ onBeforeUnmount(() => {
         </div>
       </template>
 
-      <PeopleWhere v-if="section === 'people' && !searching" />
+      <PeopleWhere v-if="section === 'people' && !searching && peopleOn" />
     </section>
   </div>
 </template>

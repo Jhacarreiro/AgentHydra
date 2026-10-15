@@ -156,6 +156,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
+import { peopleAddonPresent } from './people-addon'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -1701,8 +1702,9 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
-if (IS_PRIMARY_INSTALL) {
+// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only, and only
+// with the people add-on (server/src/people-addon.ts).
+if (IS_PRIMARY_INSTALL && peopleAddonPresent()) {
   startManagerAnalytics((worker) =>
     storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
   )

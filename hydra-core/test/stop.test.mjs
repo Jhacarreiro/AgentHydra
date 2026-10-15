@@ -57,7 +57,7 @@ const fire = async (input, env) => (await handle(JSON.stringify(input), env)) ??
 
 test("blocks a trailing question with no owner consult and logs the block", () =>
   withCore(async (dir) => {
-    turnOn(dir);
+    turnOn(dir, OWNERS);
     const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
     const out = await fire(input, envFor(dir));
     assert.equal(out.decision, "block");
@@ -67,6 +67,13 @@ test("blocks a trailing question with no owner consult and logs the block", () =
     const logged = JSON.parse(line);
     assert.equal(logged.event, "president-block");
     assert.equal(logged.chat, "sess-stop");
+  }));
+
+test("no block without an owner-tier person in the catalog", () =>
+  withCore(async (dir) => {
+    turnOn(dir, [{ kind: "person", id: "person:someone", tier: "employee" }]);
+    const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("allows after a core_use consult of an owner-tier person", () =>
@@ -144,7 +151,7 @@ test("allows on a broken transcript (fail open)", () =>
 
 test("decides from the last turn alone: a broken line before it changes nothing, and a turn over a chunk parses whole", () =>
   withCore(async (dir) => {
-    turnOn(dir);
+    turnOn(dir, OWNERS);
     const transcript = path.join(dir, "long.jsonl");
     const big = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "é".repeat(600_000) }] } };
     const lines = [
