@@ -6,7 +6,7 @@ import { shellGlyphs } from '@/lib/icons'
 import { useClock } from '@/lib/clock'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
-import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, SERVICE_WORDS, statusGlyph, type RowMenuItem, type StatusGlyph } from './logic'
+import { chatRow, elapsedLabel, glyphDotClass, resetClock, rowMenu, rowTooltip, SERVICE_WORDS, statusGlyph, type RowMenuEntry, type RowMenuItem, type StatusGlyph } from './logic'
 import { chatServices } from './services'
 import ProjectRing from './ProjectRing.vue'
 import { Tip } from '@/components/ui/tooltip'
@@ -23,22 +23,27 @@ import ManagerAvatar from './ManagerAvatar.vue'
 
 // One session row: 26px, r6, status dot in a 24px leading slot, the manager's avatar, title with a right fade, and on hover
 // the "More options" button. The three-dot menu and the right-click menu are the same list.
-const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null; /** The dot in place of the chat's own: Sidebar.vue's, with the row's running sub-tasks counted. */ dot?: StatusGlyph }>(), {
+const props = withDefaults(defineProps<{ chat: ChatSummary; selected?: boolean; /** Move to group's names. */ groups?: string[]; /** Compact sidebar: the project icon in a ring replaces the dot (compact.ts). */ compact?: boolean; /** That project's icon, null for none. */ icon?: string | null; /** The dot in place of the chat's own: Sidebar.vue's, with the row's running sub-tasks counted. */ dot?: StatusGlyph; /** While rows are picked together (picked.ts): whether this one is, drawn as selected in place of the open row; null while none are. */ picked?: boolean | null; /** The menu in place of the chat's own: the picked rows' (bulkMenu). */ entries?: RowMenuEntry[] }>(), {
   selected: false,
   groups: () => [],
   compact: false,
   icon: null,
-  dot: undefined
+  dot: undefined,
+  picked: null,
+  entries: undefined
 })
-const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; rename: [title: string] }>()
+/** `select` carries the click or key press, whose Ctrl or Shift picks rows instead of opening this one. */
+const emit = defineEmits<{ select: [e: MouseEvent | KeyboardEvent]; action: [item: RowMenuItem]; rename: [title: string] }>()
 
+/** Drawn as selected: the picked rows while there are any, else the open row. */
+const lit = computed(() => props.picked ?? props.selected)
 const glyph = computed(() => props.dot ?? statusGlyph(props.chat))
 const speaker = computed(() => isMuted(props.chat.id) || isAudible(props.chat.id))
 /** Room at the row's right end: for the three dots (and the speaker) on hover in compact mode; always otherwise, where the status dot sits. */
 const extrasPad = computed(() =>
   speaker.value ? [menuOpen.value ? 'pe-11' : 'pe-6', 'group-hover/row:pe-11'] : props.compact ? ['pe-1 group-hover/row:pe-6', { 'pe-6': menuOpen.value }] : 'pe-6'
 )
-const menu = computed(() => rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups, null, null, chatServices.value))
+const menu = computed(() => props.entries ?? rowMenu({ ...chatRow(props.chat), muted: isMuted(props.chat.id) }, props.groups, null, null, chatServices.value))
 // The service a pinned chat runs on, as its word (Codex, ChatGPT); Claude, the default, is not named.
 const serviceWord = computed(() => (props.chat.service ? SERVICE_WORDS[props.chat.service] : null))
 // The clock is read only while the row shows a time that moves (a working chat's elapsed time, a limited
@@ -113,7 +118,7 @@ defineExpose({ startRename })
           <!-- Compact: the project icon in its ring leads the row. Otherwise the status dot sits at the row's right end, where
                the three dots come on hover and cover it (owner, 2026-10-14, as Claude's sidebar draws it). -->
           <span v-if="compact" class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing :glyph="glyph" :icon="icon" :selected="selected" />
+            <ProjectRing :glyph="glyph" :icon="icon" :selected="lit" />
           </span>
           <span v-else class="w-0.5 shrink-0" aria-hidden="true" />
           <span
@@ -163,14 +168,15 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
@@ -203,14 +209,15 @@ defineExpose({ startRename })
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />

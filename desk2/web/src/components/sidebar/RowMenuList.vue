@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { onMounted } from 'vue'
-import { Clock, Hash } from '@lucide/vue'
+import { Clock, Hash, ListChecks } from '@lucide/vue'
 import { icons } from '@/lib/icons'
 import { useClock } from '@/lib/clock'
 import {
@@ -87,6 +87,11 @@ onMounted(() => {
       <span class="shrink-0 font-mono text-ui-sm text-text-2">{{ entry.label }}</span>
       <span v-if="entry.hint" class="ms-auto min-w-0 truncate ps-4 text-ui-sm text-text-muted">{{ entry.hint }}</span>
     </component>
+    <!-- Rows picked together (bulkMenu): the first line counts them; text, not a command. -->
+    <div v-else-if="entry.action === 'picked'" role="none" :class="MENU_ITEM" class="flex items-center select-none">
+      <ListChecks class="size-3.5 shrink-0 text-text-muted" />
+      <span class="shrink-0 text-ui-sm text-text-2">{{ entry.label }}</span>
+    </div>
     <!-- The line under it: how long ago the row last did something, the exact time in its tooltip; text, not a command. -->
     <div v-else-if="entry.since !== undefined" role="none" :title="exactTime(entry.since)" :class="MENU_ITEM" class="flex items-center select-none">
       <Clock class="size-3.5 shrink-0 text-text-muted" />

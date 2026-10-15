@@ -41,15 +41,22 @@ const props = withDefaults(
     compact?: boolean
     /** That project's icon, null for none. */
     icon?: string | null
+    /** While rows are picked together (picked.ts): whether this one is, drawn as selected in place of the open row; null while none are. */
+    picked?: boolean | null
   }>(),
   {
     selected: false,
     groups: () => [],
     compact: false,
-    icon: null
+    icon: null,
+    picked: null
   }
 )
-const emit = defineEmits<{ select: []; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
+/** `select` carries the click or key press, whose Ctrl or Shift picks rows instead of opening this one. */
+const emit = defineEmits<{ select: [e: MouseEvent | KeyboardEvent]; action: [item: RowMenuItem]; /** null: back to the session's own title. */ rename: [title: string | null] }>()
+
+/** Drawn as selected: the picked rows while there are any, else the open row. */
+const lit = computed(() => props.picked ?? props.selected)
 
 const glyph = computed(() => props.dot ?? externalGlyph(props.session))
 const source = computed(() => sourceLabel(props.session.source))
@@ -132,7 +139,7 @@ function onMenuClosed(e: Event) {
           <!-- Compact: the project icon in its ring leads the row. Otherwise the status dot sits at the row's right end, where
                the three dots come on hover and cover it (owner, 2026-10-14, as Claude's sidebar draws it). -->
           <span v-if="compact" class="flex size-6 shrink-0 items-center justify-center">
-            <ProjectRing :glyph="glyph" :icon="icon" :selected="selected" />
+            <ProjectRing :glyph="glyph" :icon="icon" :selected="lit" />
           </span>
           <span v-else class="w-0.5 shrink-0" aria-hidden="true" />
           <span
@@ -181,15 +188,16 @@ function onMenuClosed(e: Event) {
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           :aria-description="`Runs in ${source}`"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />
@@ -222,15 +230,16 @@ function onMenuClosed(e: Event) {
           role="button"
           tabindex="0"
           :aria-current="selected ? 'page' : undefined"
+          :aria-pressed="picked ?? undefined"
           :aria-description="`Runs in ${source}`"
           class="group/row relative flex h-6.5 w-full cursor-default items-center gap-1 rounded-(--radius-6) px-0.5 text-ui leading-[19.5px] transition-colors duration-(--dur-fast) ease-(--ease-snap) select-none"
           :class="[
-            selected ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
-            menuOpen && !selected ? 'bg-fill-hover' : '',
-            dimText(glyph, selected)
+            lit ? 'bg-fill-selected text-text' : 'text-text-2 hover:bg-fill-hover',
+            menuOpen && !lit ? 'bg-fill-hover' : '',
+            dimText(glyph, lit)
           ]"
-          @click="!renaming && emit('select')"
-          @keydown.enter.self="emit('select')"
+          @click="(e: MouseEvent) => !renaming && emit('select', e)"
+          @keydown.enter.self="(e: KeyboardEvent) => emit('select', e)"
           @keydown.f2.self="startRename"
         >
           <ReuseBody />

@@ -875,6 +875,7 @@ export type RowAction =
   | 'copySessionId'
   | 'copyId'
   | 'lastAction'
+  | 'picked'
   | 'moveToAccount'
   | 'unassign'
   | 'duplicateToAccount'
@@ -1097,6 +1098,50 @@ export function rowMenu(
       : { action: 'archive', label: 'Archive', shortcut: 'A', ...(row.outside ? { title: OUTSIDE_ARCHIVE } : {}) }
   )
   if (!row.outside) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })
+  return out
+}
+
+/**
+ * The menu of two or more rows picked together (Ctrl or Shift and a click, picked.ts): the row menu's items that make
+ * sense for many at once, each run on every picked row it fits. Its first line counts them. Pin, Mark as read and
+ * Archive go the way that changes a row (Pin while any is unpinned); Move to group ticks a group only when every row is
+ * in it; Move to account and Duplicate to account come only when every row can go to the same kind of account, ticking
+ * the account only when all are on it; Delete only when none runs outside.
+ */
+export function bulkMenu(
+  rows: readonly RowState[],
+  groups: string[] = [],
+  desktopAccounts: readonly AccountChoice[] | null = null,
+  codexAccounts: readonly AccountChoice[] | null = null
+): RowMenuEntry[] {
+  const out: RowMenuEntry[] = [{ action: 'picked', label: `${rows.length} selected` }, 'separator']
+  if (rows.some((r) => r.stoppable)) out.push({ action: 'stop', label: 'Stop' })
+  out.push(rows.some((r) => !r.pinned) ? { action: 'pin', label: 'Pin', shortcut: 'P' } : { action: 'unpin', label: 'Unpin', shortcut: 'P' })
+  out.push(rows.some((r) => r.unread) ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
+  out.push({ action: 'copySessionId', label: 'Copy session IDs', disabled: !rows.some((r) => r.sessionId) })
+
+  const places = new Set(rows.map((r) => (r.group ?? folderLabel(r.cwd)).toLowerCase()))
+  const shared = places.size === 1 ? [...places][0] : null
+  const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === shared }))
+  if (moveTo.length) moveTo.push('separator')
+  moveTo.push({ action: 'newGroup', label: 'New group…' })
+  if (rows.some((r) => r.group)) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
+  out.push('separator', { label: 'Move to group', items: moveTo })
+
+  const kinds = new Set(rows.map((r) => r.movable))
+  const kind = kinds.size === 1 ? [...kinds][0] : null
+  if (kind) {
+    const accounts = kind === 'codex' ? codexAccounts : desktopAccounts
+    const unassigned = rows.every((r) => r.unassigned)
+    const homes = new Set(rows.map((r) => accountNum(r.account, accounts)))
+    const home = homes.size === 1 ? [...homes][0] : null
+    const onAccount = rows.some((r) => r.unassigned) ? null : home
+    out.push(accountMenu(onAccount, accounts, kind, unassigned))
+    out.push(duplicateMenu(kind === 'codex' ? home : onAccount, accounts, kind))
+  }
+  out.push('separator')
+  out.push(rows.some((r) => !r.archived) ? { action: 'archive', label: 'Archive', shortcut: 'A' } : { action: 'unarchive', label: 'Unarchive', shortcut: 'A' })
+  if (rows.every((r) => !r.outside)) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })
   return out
 }
 
