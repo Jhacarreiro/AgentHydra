@@ -831,17 +831,31 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
   nativeCheckIdentity(env, found, request, settled)
   // The picker's own path ('picker'): the app refuses it for a root or remote-spawned chat, and
   // the read-back below is what says whether it took.
+  // Where the app will not take Bypass, the chat goes on Auto (owner, 2026-10-15: "If the app doesn't accept bypass
+  // or whatever, it should just be auto"), never left on the app's asking default.
+  let bypassRefused: string | null = null
   if (request.bypass === true && session.permissionMode !== 'bypassPermissions') {
     if (typeof manager.setPermissionMode !== 'function')
       nativeRefuse('native method unavailable: setPermissionMode')
-    await manager.setPermissionMode(session.sessionId, 'bypassPermissions', 'picker')
+    try {
+      await manager.setPermissionMode(session.sessionId, 'bypassPermissions', 'picker')
+    } catch (error: any) {
+      bypassRefused = String(error?.message ?? error)
+    }
     nativeCheckIdentity(env, found, request, settled)
+    if (nativeSelect(manager, request).permissionMode !== 'bypassPermissions') {
+      bypassRefused ??= 'the app did not keep Bypass'
+      await manager.setPermissionMode(session.sessionId, 'auto', 'picker')
+      nativeCheckIdentity(env, found, request, settled)
+    }
   }
   const after = pick(nativeSelect(manager, request))
   const verified =
     (after.ultracode === true) === wantUltracode &&
     after.effort === request.effort &&
-    (request.bypass !== true || after.permissionMode === 'bypassPermissions')
+    (request.bypass !== true ||
+      after.permissionMode === 'bypassPermissions' ||
+      after.permissionMode === 'auto')
   return {
     ok: verified,
     verified,
@@ -850,6 +864,7 @@ async function nativeUltracode(env: any, found: any, request: any, settled: any,
     identity: nativeIdentity(env, found, null),
     before,
     after,
+    ...(bypassRefused ? { bypassRefused } : {}),
     evidence: "native manager state read back after the app's own applyFlagSettings",
   }
 }

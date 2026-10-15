@@ -81,11 +81,12 @@ export const ah = {
 /** A Codex move's answer: the copy's new id, and the background commands archiving the original stopped. */
 type CodexLanding = { ok: boolean; error?: string; destinationThreadId?: string; stoppedCommands?: string[] }
 
-type Landing = { ok: boolean; error?: string; sourceStillShown?: string[]; settingsInApp?: { ok: boolean; effort: string; ultracode: boolean; permissionMode: string | null; reason?: string } }
+type Landing = { ok: boolean; error?: string; sourceStillShown?: string[]; settingsInApp?: { ok: boolean; effort: string; ultracode: boolean; permissionMode: string | null; reason?: string; bypassRefused?: string } }
 
-/** The sentence a move adds when the running app did not take Bypass and its effort; '' when it did, or the app was closed. */
+/** The sentence a move adds when the running app did not take Bypass and its effort, or took Auto in place of Bypass; '' when it took both, or the app was closed. */
 export function settingsMissed(x: { settingsInApp?: Landing['settingsInApp'] }): string {
   const s = x.settingsInApp
+  if (s?.ok && s.permissionMode === 'auto') return ` That app would not take Bypass${s.bypassRefused ? ` (${s.bypassRefused})` : ''}, so the chat is on Auto.`
   if (!s || s.ok) return ''
   return ` Bypass and its effort did not take in that app${s.reason ? ` (${s.reason})` : ''}; they apply when the app restarts.`
 }

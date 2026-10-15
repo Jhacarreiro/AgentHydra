@@ -698,6 +698,29 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       verified: false,
     })
   })
+  // Owner, 2026-10-15: "If the app doesn't accept bypass or whatever, it should just be auto."
+  test('ultracode with bypass falls back to Auto when the app will not keep Bypass', async () => {
+    const h = harness()
+    const modes: string[] = []
+    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+      const s = h.manager.sessions.get(id)
+      s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
+      s.effort = flags.effortLevel
+    }
+    h.manager.setPermissionMode = async (id: string, mode: string) => {
+      modes.push(mode)
+      if (mode === 'bypassPermissions') throw new Error('Bypass is not available for this chat')
+      h.manager.sessions.get(id).permissionMode = mode
+      return true
+    }
+    expect(await h.run({ action: 'ultracode', effort: 'xhigh', bypass: true })).toMatchObject({
+      ok: true,
+      verified: true,
+      after: { permissionMode: 'auto' },
+      bypassRefused: 'Bypass is not available for this chat',
+    })
+    expect(modes).toEqual(['bypassPermissions', 'auto'])
+  })
   // 2026-10-09: each import started a second claude.exe only to hand over a claude://resume link.
   test('import makes the deep link call directly and reads the landing back', async () => {
     const h = harness()

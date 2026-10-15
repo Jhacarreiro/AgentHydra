@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A chat's Delegation card shows what it sent to HSwarm and CliMayte.** Its rail card lists each service's runs and
+  failures; a click opens the runs by model, with their tokens marked as estimates.
+- **A moved chat the open app will not put on Bypass goes on Auto.** Before, it stayed on that app's asking default
+  until the app restarted. The move's note says when this happened.
+- **A sidebar folder with no project icon shows its first letter.** "Desktop" gets a small D, so every heading lines
+  up. Unassigned stays without one.
 - **Move to account names each account by who is signed in.** The list showed each account's folder name; it now
   shows the signed-in account's name beside its number, as the Instances page does. A name you gave an account still
   wins.

@@ -125,7 +125,8 @@ import {
   type StatusGlyph,
   type SidebarFilter,
   type SidebarGroups,
-  emptyListText
+  emptyListText,
+  UNASSIGNED
 } from './logic'
 import { useSidebarOrder } from './order'
 import { chatServices } from './services'
@@ -1320,6 +1321,14 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
               @click="toggleGroup(group.key)"
             >
               <img v-if="groupIcons.get(group.key)" :src="groupIcons.get(group.key)!" alt="" class="me-0.5 size-3.5 shrink-0 rounded-(--radius-4)" />
+              <!-- No project icon: its first letter in a tile the icon's size (owner, 2026-10-15: "desktop would have, like, a
+                   small D icon. Unassigned can just have no icon"). -->
+              <span
+                v-else-if="group.key !== UNASSIGNED && group.label.trim()"
+                aria-hidden="true"
+                class="me-0.5 flex size-3.5 shrink-0 items-center justify-center rounded-(--radius-4) bg-(--fill-secondary) text-[9px] leading-none font-semibold text-text-2"
+                data-testid="group-letter"
+              >{{ group.label.trim().charAt(0).toUpperCase() }}</span>
               <span class="truncate">{{ group.label }}</span>
               <EyeOff v-if="group.hidden" role="img" aria-label="Hidden group" class="ms-0.5 size-3 shrink-0" />
               <component

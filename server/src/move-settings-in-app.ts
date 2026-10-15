@@ -20,6 +20,8 @@ export interface MovedSettingsOutcome {
   permissionMode: string | null
   /** Why the push did not land; absent on success. */
   reason?: string
+  /** The app would not keep Bypass, so the chat is on Auto: why. */
+  bypassRefused?: string
 }
 
 function knownEffort(value: unknown): string | null {
@@ -103,7 +105,12 @@ export async function landMovedSettingsInApp(
         reason: outcome.reason ?? 'the app did not read the effort and Bypass back',
       }
     }
-    return { ok: true, ...pair, permissionMode: outcome.after?.permissionMode ?? null }
+    return {
+      ok: true,
+      ...pair,
+      permissionMode: outcome.after?.permissionMode ?? null,
+      ...(outcome.bypassRefused ? { bypassRefused: outcome.bypassRefused } : {}),
+    }
   } catch (error) {
     return {
       ok: false,
