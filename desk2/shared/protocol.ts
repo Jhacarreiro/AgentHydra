@@ -97,6 +97,8 @@ export interface ChatSummary {
   sus?: SusLevel
   /** What 'sus' runs the next Claude turn on (the setting that pushes back least); null when none qualifies yet, absent off 'sus'. Never saved. */
   susPick?: SusPick | null
+  /** A worker chat's own model and effort before its first Sus override (CliMayte keeps a sent setting): sent back once when Sus stops applying. */
+  susRestore?: { model: string | null; effort: string | null }
   /** The chat's thread on each service it ran on, kept when the pin moves on: pinned there again, it goes on in that thread. */
   serviceThreads?: Partial<Record<PinnedService, ServiceThread>>
   /** When the pin last left each service (epoch ms): the next turn there first reads what was said since, then this is cleared. */

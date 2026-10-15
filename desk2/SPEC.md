@@ -439,8 +439,12 @@ instead of a model. Server half; the composer draws the three levels.
   it again. The backfill reads a worker chat's transcript as turns that end at the next message, the last one only once
   the chat is not at work. `sus` on a worker chat sends each message (and the worker's start) with the pick as CliMayte's
   `model` (`opus`, `sonnet`, `haiku`, by the family the id names) and `effort` (`low` to `max`); a pick it cannot name,
-  no pick yet, and `fine` send none. CliMayte keeps a sent setting from that launch on, so a worker left `sus` stays on
-  the last pick until another is sent. `bad` pins a worker chat to Codex as any other.
+  no pick yet, and `fine` send none. CliMayte keeps a sent setting from that launch on, so the first override records the
+  worker's own `{ model, effort }` (from its worker record; `null`s for a worker started on the pick) as
+  `ChatSummary.susRestore`, saved with the chat. Once `sus` stops applying (the chat left it for `fine` or `bad`, or no
+  setting qualifies any more) the next message to the worker carries that setting once and the field goes; a part
+  CliMayte cannot name, or none, goes back as its nearest, Opus and xhigh (how CliMayte launches a Desk chat). `bad` pins a
+  worker chat to Codex as any other: nothing reaches the worker meanwhile, so the restore rides its first message after.
 - **Levels.** `ChatSummary.sus` is `fine | sus | bad` (absent = `fine`); set on `PATCH /api/chats/:id` (`{ sus }`) and on
   `POST /api/chats` (`{ sus }`).
   - `fine`: the chat's own model and effort, exactly as before.

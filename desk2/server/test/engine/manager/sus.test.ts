@@ -7,9 +7,9 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo, TranscriptItem } from '@shared/protocol'
-import { ChatManager, ChatError, climayteSetting, parsePatch } from '../../../src/engine/chat-manager'
+import { ChatManager, ChatError, climayteSetting, parsePatch, restoreSetting } from '../../../src/engine/chat-manager'
 import type { CodexDirectory } from '../../../src/engine/codex/accounts'
-import type { OpenAppServer } from '../../../src/engine/codex/app-server'
+import type { OpenAppServer, ThreadListener } from '../../../src/engine/codex/app-server'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
 
@@ -174,6 +174,7 @@ async function workerSetup(o: { seed?: 'claude' | 'unnamed' | 'none'; codex?: bo
   if (o.seed === 'unnamed') seed(home)
   const b = fakeBridge({ roots: [] })
   const codexTurns: string[] = []
+  const threads = new Map<string, ThreadListener>()
   const openCodex: OpenAppServer = async () => ({
     call: async <T,>(method: string, params: Record<string, unknown> = {}): Promise<T> => {
       if (method === 'thread/start') return { thread: { id: 'thread-1' } } as T
@@ -183,14 +184,39 @@ async function workerSetup(o: { seed?: 'claude' | 'unnamed' | 'none'; codex?: bo
       }
       return {} as T
     },
-    listen: () => () => {},
+    listen: (threadId, l) => {
+      threads.set(threadId, l)
+      return () => threads.delete(threadId)
+    },
     release: () => {},
   })
   const codex: CodexDirectory | undefined = o.codex ? { instances: async () => [ALPHA], usage: async () => ({ snapshot: { session: { pct: 10 }, weekAll: { pct: 5 } } }) } : undefined
-  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, ...(codex ? { codex, openCodex } : {}) })
-  managers.push(m)
-  return { m, b, home, codexTurns }
+  const make = (): ChatManager => {
+    const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => ({ ...DEFAULT_SETTINGS }), bridge: b.bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, ...(codex ? { codex, openCodex } : {}) })
+    managers.push(m)
+    return m
+  }
+  /** The Desk again on the same home and AgentHydra, the first one closed. */
+  const restart = async (old: ChatManager): Promise<ChatManager> => {
+    await old.closeAll()
+    managers.splice(managers.indexOf(old), 1)
+    return make()
+  }
+  /** Codex answers its latest turn with `text`. */
+  const codexReply = (text: string): void => {
+    const turnId = `turn-${codexTurns.length}`
+    const l = threads.get('thread-1')!
+    l.notify('item/completed', { threadId: 'thread-1', turnId, item: { type: 'agentMessage', id: `msg-${codexTurns.length}`, text } })
+    l.notify('turn/completed', { threadId: 'thread-1', turn: { id: turnId, status: 'completed', durationMs: 5 } })
+  }
+  return { m: make(), b, home, codexTurns, codexReply, restart }
 }
+
+/** Each message the worker got, with the model and effort it carried (null: none). */
+const sentSettings = (w: { b: ReturnType<typeof fakeBridge> }) => w.b.state.sentToWorker.map((s) => [s.text, s.setting ?? null])
+const SONNET_HIGH = { model: 'sonnet', effort: 'high' }
+/** The worker's own setting before Sus, as AgentHydra's worker record has it. */
+const OWN = { reportedModel: 'claude-opus-5-5', model: 'opus', effort: 'high' }
 
 /** A worker chat started with `prompt`, its worker running on `ran`. */
 async function workerChat(w: Awaited<ReturnType<typeof workerSetup>>, req: { prompt: string; sus?: 'sus' | 'bad' }, ran = { reportedModel: 'claude-opus-5-5', effort: 'xhigh' }) {
@@ -232,21 +258,99 @@ test('the backfill counts a worker chat by its transcript, leaving the turn stil
   expect(w.m.pushbackRows()).toEqual([PUSHED])
 })
 
-test('sus on a worker chat starts and sends its worker on the least-pushing setting; fine sends no override', async () => {
+/** A worker chat whose first turn is over, on its own setting. */
+async function idleWorkerChat(w: Awaited<ReturnType<typeof workerSetup>>, req: { prompt: string; sus?: 'sus' } = { prompt: 'go' }) {
+  const { chat, row } = await workerChat(w, req, OWN)
+  Object.assign(row, { status: 'done' })
+  w.b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 9, text: req.prompt }, { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Done.' }]
+  await w.m.syncWorkers(chat.id)
+  return chat
+}
+
+test('sus on a worker chat starts and sends its worker on the least-pushing setting; fine sends CliMayte its launch setting back once', async () => {
   const w = await workerSetup()
-  const { chat, row } = await workerChat(w, { prompt: 'go', sus: 'sus' })
+  const chat = await idleWorkerChat(w, { prompt: 'go', sus: 'sus' })
   expect(w.b.state.started[0]).toMatchObject({ model: 'sonnet', effort: 'high' })
   expect(w.m.get(chat.id)).toMatchObject({ sus: 'sus', susPick: { model: 'claude-sonnet-5-5', effort: 'high', pushbackRate: 1 / 30, turns: 30 } })
-  Object.assign(row, { status: 'done' })
-  w.b.state.workerItems['worker-session-1'] = [{ kind: 'user', id: 'u-1', ts: 9, text: 'go' }, { kind: 'assistant_text', id: 'a-1', ts: 10, text: 'Done.' }]
-  await w.m.syncWorkers(chat.id)
+  // Started on the pick: it had no setting of its own, so it goes back to how CliMayte launches a Desk chat.
+  expect(w.m.get(chat.id).susRestore).toEqual({ model: null, effort: null })
   await w.m.send(chat.id, 'again')
   await w.m.patch(chat.id, { sus: 'fine' })
   await w.m.send(chat.id, 'once more')
-  expect(w.b.state.sentToWorker.map((s) => [s.text, s.setting ?? null])).toEqual([
-    ['again', { model: 'sonnet', effort: 'high' }],
-    ['once more', null],
+  await w.m.send(chat.id, 'and again')
+  expect(sentSettings(w)).toEqual([
+    ['again', SONNET_HIGH],
+    ['once more', { model: 'opus', effort: 'xhigh' }],
+    ['and again', null],
   ])
+  expect(w.m.get(chat.id).susRestore).toBeUndefined()
+})
+
+test("leaving sus to fine sends a worker chat's own setting back once, then nothing", async () => {
+  const w = await workerSetup()
+  const chat = await idleWorkerChat(w)
+  await w.m.patch(chat.id, { sus: 'sus' })
+  await w.m.send(chat.id, 'a')
+  await w.m.send(chat.id, 'b')
+  expect(w.m.get(chat.id).susRestore).toEqual({ model: 'opus', effort: 'high' })
+  await w.m.patch(chat.id, { sus: 'fine' })
+  await w.m.send(chat.id, 'c')
+  await w.m.send(chat.id, 'd')
+  expect(sentSettings(w)).toEqual([
+    ['a', SONNET_HIGH],
+    ['b', SONNET_HIGH],
+    ['c', { model: 'opus', effort: 'high' }],
+    ['d', null],
+  ])
+})
+
+test("leaving sus to bad sends nothing to the worker while on Codex, and its own setting back once after", async () => {
+  const w = await workerSetup({ codex: true })
+  const chat = await idleWorkerChat(w)
+  await w.m.patch(chat.id, { sus: 'sus' })
+  await w.m.send(chat.id, 'a')
+  // Its reply to 'a' is in before the pin moves, so Codex is not waiting on it.
+  const row = w.b.state.rows[0]!
+  Object.assign(row, { status: 'running' })
+  await w.m.syncWorkers(chat.id)
+  w.b.state.workerItems['worker-session-1'] = [...w.b.state.workerItems['worker-session-1']!, { kind: 'user', id: 'u-2', ts: 11, text: 'a' }, { kind: 'assistant_text', id: 'a-2', ts: 12, text: 'Done again.' }]
+  Object.assign(row, { status: 'done' })
+  await w.m.syncWorkers(chat.id)
+  await waitFor(() => w.m.get(chat.id).status === 'idle')
+  await w.m.patch(chat.id, { sus: 'bad' })
+  await w.m.send(chat.id, 'on codex')
+  await waitFor(() => w.codexTurns.length === 1)
+  w.codexReply('On it.')
+  await waitFor(() => w.m.get(chat.id).status === 'idle')
+  expect(w.m.get(chat.id).susRestore).toEqual({ model: 'opus', effort: 'high' })
+  await w.m.patch(chat.id, { sus: 'fine' })
+  await w.m.send(chat.id, 'b')
+  await w.m.send(chat.id, 'c')
+  // 'b' first carries what was said on Codex: its own words are its last line.
+  expect(sentSettings(w).map(([text, set]) => [String(text).split('\n').at(-1), set])).toEqual([
+    ['a', SONNET_HIGH],
+    ['b', { model: 'opus', effort: 'high' }],
+    ['c', null],
+  ])
+})
+
+test('a restart keeps what a worker chat goes back to, and sus with no pick left sends it once', async () => {
+  const w = await workerSetup()
+  const chat = await idleWorkerChat(w)
+  await w.m.patch(chat.id, { sus: 'sus' })
+  await w.m.send(chat.id, 'a')
+  // No setting qualifies after the restart: sus has nothing to send, so the worker goes back to its own.
+  rmSync(join(w.home, 'pushback.json'))
+  const m2 = await w.restart(w.m)
+  expect(m2.get(chat.id)).toMatchObject({ sus: 'sus', susRestore: { model: 'opus', effort: 'high' } })
+  await m2.send(chat.id, 'b')
+  await m2.send(chat.id, 'c')
+  expect(sentSettings(w)).toEqual([
+    ['a', SONNET_HIGH],
+    ['b', { model: 'opus', effort: 'high' }],
+    ['c', null],
+  ])
+  expect(restoreSetting({ model: 'some-other-model', effort: 'default' })).toEqual({ model: 'opus', effort: 'xhigh' })
 })
 
 test('sus on a worker chat sends no override while no setting qualifies or the pick is one CliMayte cannot name', async () => {

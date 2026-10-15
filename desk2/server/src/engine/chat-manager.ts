@@ -1253,7 +1253,12 @@ export class ChatManager {
     const connectors = connectorsPending()
     if (connectors) await connectors
     const sus = this.workerSusSetting(chat)
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? undefined)
+    const restore = !sus && chat.susRestore ? restoreSetting(chat.susRestore) : null
+    const had = sus && !chat.susRestore ? this.workerRows.get(chat.workerId) : undefined
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? restore ?? undefined)
+    if (sus && !chat.susRestore) chat.susRestore = { model: had?.model ?? null, effort: had?.effort ?? null }
+    else if (restore) delete chat.susRestore
+    if (sus || restore) this.changed(chat)
     this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
@@ -1274,6 +1279,8 @@ export class ChatManager {
       ...(sus ? { ...sus, modelWhy: SUS_WHY } : {}),
     })
     e.workerCwd = chat.cwd
+    // Started on a Sus pick: what it goes back to is CliMayte's own launch setting.
+    if (sus) chat.susRestore = { model: null, effort: null }
     chat.workerId = w.id
     chat.sessionId = w.sessionId
     started?.()
@@ -2858,11 +2865,21 @@ const LIVE_STATUSES = new Set<ChatSummary['status']>(['starting', 'working', 'ne
 const WORKER_EFFORTS: readonly WorkerSendSetting['effort'][] = ['low', 'medium', 'high', 'xhigh', 'max']
 const SUS_WHY = 'Hydra Desk sus meter: the setting that pushes back least.'
 
+const modelFamily = (model: string | null): WorkerSendSetting['model'] | null =>
+  !model ? null : /opus/i.test(model) ? 'opus' : /sonnet/i.test(model) ? 'sonnet' : /haiku/i.test(model) ? 'haiku' : null
+const effortLevel = (effort: string | null): WorkerSendSetting['effort'] | undefined => WORKER_EFFORTS.find((x) => x === effort)
+
 /** A counted setting ('claude-opus-5-5', 'high') as CliMayte's send takes it; null when it cannot say it. */
 export function climayteSetting(model: string, effort: string): WorkerSendSetting | null {
-  const family = /opus/i.test(model) ? 'opus' : /sonnet/i.test(model) ? 'sonnet' : /haiku/i.test(model) ? 'haiku' : null
-  const level = WORKER_EFFORTS.find((x) => x === effort)
+  const family = modelFamily(model)
+  const level = effortLevel(effort)
   return family && level ? { model: family, effort: level } : null
+}
+
+/** A worker's setting from before Sus, as CliMayte's send takes it. A part it cannot name, or none (the worker ran on
+ *  CliMayte's own default), goes back as the nearest it can: Opus, xhigh, how CliMayte launches a Desk chat. */
+export function restoreSetting(r: { model: string | null; effort: string | null }): WorkerSendSetting {
+  return { model: modelFamily(r.model) ?? 'opus', effort: effortLevel(r.effort) ?? 'xhigh' }
 }
 
 /** The setting a worker's turn ran on, named as a Claude turn's is: the model its attempt reported, else the one it was given. */
