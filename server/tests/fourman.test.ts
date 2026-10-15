@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, beforeEach, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, beforeEach, describe, expect, setSystemTime, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -15,6 +15,7 @@ import {
   findEngine,
   fourmanBoard,
   fourmanStatus,
+  NOTES_CACHE_MS,
   parseTodoChecklist,
   runEngine,
   setFourmanDeps,
@@ -310,6 +311,8 @@ describe('notes through the Connections local MCP', () => {
     '(3 of 3 to-dos)',
   ].join('\n')
   let requests = 0
+  /** While set, a checklist read waits for it: the server is slow. */
+  let hold: Promise<void> | null = null
   let server: ReturnType<typeof Bun.serve>
 
   beforeAll(() => {
@@ -339,6 +342,7 @@ describe('notes through the Connections local MCP', () => {
         if (req.headers.get('mcp-session-id') !== 'session-1')
           return new Response('no session', { status: 400 })
         requests++
+        if (hold) await hold
         const payload = {
           jsonrpc: '2.0',
           id: msg.id,
@@ -392,6 +396,35 @@ describe('notes through the Connections local MCP', () => {
     ])
     expect(requests).toBe(1)
     expect(JSON.stringify({ status, board })).not.toContain(token)
+  })
+
+  test('an expired checklist is answered at once while the next read runs', async () => {
+    writeClaudeConfig(home, {
+      type: 'http',
+      url: `http://127.0.0.1:${server.port}/mcp`,
+      headersHelper: `node "${helper}"`,
+    })
+    setFourmanDeps({ env: {}, home, portOwner: async () => null })
+    expect((await fourmanBoard({ all: true })).notes).toHaveLength(3)
+    let release = () => {}
+    hold = new Promise((resolve) => {
+      release = resolve
+    })
+    setSystemTime(new Date(Date.now() + NOTES_CACHE_MS + 1000))
+    try {
+      const answer = await Promise.race([
+        fourmanBoard({ all: true }),
+        Bun.sleep(2000).then(() => 'waited for the read' as const),
+      ])
+      if (answer === 'waited for the read')
+        throw new Error('the expired checklist waited for the next read')
+      expect(answer.notes).toHaveLength(3)
+    } finally {
+      release()
+      hold = null
+      setSystemTime()
+      await fourmanStatus() // the read it started, so it lands before the next test counts requests
+    }
   })
 
   test('a failing helper retries once without headers and the answer leaks nothing', async () => {
