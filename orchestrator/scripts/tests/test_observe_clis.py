@@ -114,6 +114,35 @@ class ObserveCliTest(unittest.TestCase):
         self.assertEqual(code, 3)
         self.assertIn("cannot be acted on", err)
 
+    def test_gate_chat_background_counts_only_the_last_engines_jobs(self):
+        # The instance manager asks this of a chat whose app died: no live engine is left, so
+        # --engine-started is the only thing telling the dead engine's jobs from an older one's.
+        tmp = Path(self._state.name) / "t.jsonl"
+        launch = "Command running in background with ID: {id}. You will be notified when it completes."
+        records = [
+            {"type": "user", "timestamp": "2026-09-05T01:00:00Z",
+             "message": {"content": [{"type": "tool_result", "content": launch.format(id="bold1")}]}},
+            {"type": "user", "timestamp": "2026-09-05T02:00:00Z",
+             "message": {"content": [{"type": "tool_result", "content": launch.format(id="bnew2")}]}},
+            {"type": "assistant", "timestamp": "2026-09-05T02:00:05Z",
+             "message": {"content": [{"type": "text", "text": "Waiting on the build."}]}},
+        ]
+        tmp.write_text("\n".join(json.dumps(r) for r in records) + "\n", encoding="utf-8")
+        self.stub.routes["/api/chats/dossier"] = {
+            "matches": [{"title": "T", "cliSessionId": SID, "lineageIds": [SID], "live": None}]
+        }
+        self.stub.routes["/api/sessions"] = [
+            {"session_id": SID, "transcript_path": str(tmp), "archived": False}
+        ]
+        from datetime import datetime, timezone
+        engine_started_ms = str(int(datetime(2026, 9, 5, 1, 30, tzinfo=timezone.utc).timestamp() * 1000))
+        code, out, _ = run_cli(gate_chat.main,
+                               [SID, "--json", "--background", "--engine-started", engine_started_ms])
+        self.assertEqual(code, 0)
+        self.assertEqual(json.loads(out)["background"]["outstanding"], ["bnew2"])
+        code, out, _ = run_cli(gate_chat.main, [SID, "--json", "--background"])
+        self.assertEqual(sorted(json.loads(out)["background"]["outstanding"]), ["bnew2", "bold1"])
+
     # ---- attempts.py
 
     def test_attempts_reports_suppressions_loudly(self):

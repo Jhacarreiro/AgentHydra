@@ -1,9 +1,10 @@
 // The instance manager's hands (shared/instance-manager.ts says what it is for; decide.ts judges). One look reads
-// every app and what works in it, notices an app that went down with chats working in it, and moves each recovery
-// one step: wait a moment for the app to come back by itself, find out why it went down, choose the same-kind
-// account with the most room, open it, move the chats there with AgentHydra's own move (which starts each one again
-// with a note), then watch that each one really runs. Every step is taken again on the next look until it is done,
-// so a Desk restart in the middle resumes where it stopped (the plugin saves this state after every look).
+// every app and what is open in it, notices an app that went down with chats open in it, and moves each recovery
+// one step: wait a moment for the app to come back by itself, find out why it went down and which chats it cut off
+// mid-work, choose the same-kind account with the most room, open it, move those chats there with AgentHydra's own
+// move (which starts each one again with a note), then watch that each one really runs. Every step is taken again on
+// the next look until it is done, so a Desk restart in the middle resumes where it stopped (the plugin saves this
+// state after every look).
 
 import type {
   InstanceManagerStatus,
@@ -18,14 +19,16 @@ import {
   acts,
   type Candidate,
   causeOf,
+  cutOff,
   detect,
   type Down,
   isUp,
   type Memory,
+  type OpenChat,
   rankTargets,
   resumeText,
   type SeenInstance,
-  type WorkingChat,
+  type TurnState,
 } from './decide'
 
 /** What one chat's move came to. `newId` is a Codex chat's id in its new account (a Claude chat keeps its own). */
@@ -49,8 +52,11 @@ export interface Landed {
 export interface InstanceManagerIO {
   /** Every Claude Desktop and Codex app AgentHydra manages; null when AgentHydra did not answer. */
   instances(): Promise<SeenInstance[] | null>
-  /** The chats working now in those apps; null when the list did not load. */
-  working(seen: readonly SeenInstance[]): Promise<WorkingChat[] | null>
+  /** The chats open now in those apps; null when the list did not load. */
+  openChats(seen: readonly SeenInstance[]): Promise<OpenChat[] | null>
+  /** AgentHydra's gate on each Claude chat of an app that went down, by id; a chat's entry is null when its verdict
+   *  could not be read. */
+  turns(chats: readonly Pick<OpenChat, 'id' | 'startedAt'>[]): Promise<Map<string, TurnState | null>>
   /** The same-kind accounts with their usage, to choose where chats go. */
   candidates(kind: ManagedKind, seen: readonly SeenInstance[]): Promise<Candidate[]>
   /** What the account answers now, over the network; null when it could not be asked. */
@@ -113,6 +119,8 @@ export interface Tracked extends Recovery {
   movedAt?: number
   /** A Codex chat's id in its new account, by its old id. */
   newIds: Record<string, string>
+  /** How each chat was seen at the last look its app was up (busy, and its engine's start). */
+  seenAs?: Record<string, Pick<OpenChat, 'busy' | 'startedAt'>>
 }
 
 export interface Saved {
@@ -157,7 +165,7 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
   let memory: Memory = initial.memory
   let recoveries: Tracked[] = initial.recoveries
   let seen: SeenInstance[] = []
-  let working: WorkingChat[] = []
+  let open: OpenChat[] = []
   let checkedAt: number | null = null
   let lastError: string | null = null
 
@@ -192,14 +200,24 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       cause: 'unknown',
       causeDetail: '',
       state: 'waiting',
-      detail: d.closed ? 'the app closed; giving it a moment to come back by itself' : 'its account was signed out; giving it a moment',
+      detail: d.closed
+        ? 'the app closed; giving it a moment to come back by itself'
+        : d.instance.dead
+          ? `its account stopped working (${d.instance.dead}); giving it a moment`
+          : 'its account was signed out; giving it a moment',
       at: now,
       updatedAt: now,
-      chats: chats.map((c) => ({ id: c.id, title: c.title, state: 'pending', detail: 'was working when the app went down' })),
+      chats: chats.map((c) => ({
+        id: c.id,
+        title: c.title,
+        state: 'pending',
+        detail: c.busy ? 'was working when the app went down' : 'was open when the app went down; whether it was mid-work is read next',
+      })),
       fromInstance: d.instance,
       toInstance: null,
       passed: [],
       newIds: {},
+      seenAs: Object.fromEntries(chats.map((c) => [c.id, { busy: c.busy, startedAt: c.startedAt }])),
     }
     if (!alone) change(r, 'left', SEVERAL)
     else if (!enabled) change(r, 'left', 'the instance manager was off, so nothing was moved')
@@ -260,9 +278,10 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       return
     }
     const text = resumeText(label(from), label(to), r.cause, r.causeDetail, INSTANCE_MANAGER_FROM)
-    // A source app still running signed out may hold engines that cannot work any more: they are stopped. Read now, not
-    // when it went down, so an app that has since closed or signed in again is never asked to stop anything.
-    const started = await io.startMove(from, to, ids, text, `instance-manager:${r.id}:${to.ref}`, from.running && !from.signedIn)
+    // A source app still running (not up: signed out, or its account dead) may hold engines that cannot work any more:
+    // they are stopped. Read now, not when it went down, so an app that has since closed or come back is never asked to
+    // stop anything.
+    const started = await io.startMove(from, to, ids, text, `instance-manager:${r.id}:${to.ref}`, from.running)
     if ('error' in started) {
       if (started.busy) change(r, r.state, `waiting for another move in AgentHydra to finish (${started.error})`)
       else change(r, 'failed', `the move was refused: ${started.error}`)
@@ -301,7 +320,12 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     }
     const landed = r.chats.filter((c) => c.state === 'moved').length
     if (!landed) change(r, 'failed', `no chat landed in ${label(to)}`)
-    else change(r, 'watching', `${landed} of ${r.chats.length} landed in ${label(to)}; watching that they run`)
+    else change(r, 'watching', `${landed} of ${moving(r)} landed in ${label(to)}; watching that they run`)
+  }
+
+  /** How many of its chats the recovery moves (the rest stay where they were). */
+  function moving(r: Tracked): number {
+    return r.chats.filter((c) => c.state !== 'stays').length
   }
 
   async function watch(r: Tracked, now: number): Promise<void> {
@@ -312,7 +336,7 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     if (moved.length) {
       const ids = moved.map((c) => r.newIds[c.id] ?? c.id)
       const there = await io.chatsIn(to, ids, since)
-      const workingNow = new Set(working.filter((w) => w.ref === to.ref).map((w) => w.id))
+      const workingNow = new Set(open.filter((c) => c.ref === to.ref && c.busy).map((c) => c.id))
       for (const c of moved) {
         const id = r.newIds[c.id] ?? c.id
         const row = there?.get(id)
@@ -336,7 +360,33 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     const moved = r.chats.filter((c) => c.state === 'running' || c.state === 'moved' || c.state === 'stuck').length
     const verb = r.kind === 'codex' ? 'moved to' : 'run again in'
     const count = r.kind === 'codex' ? moved : running
-    change(r, 'done', `${count} of ${r.chats.length} chat${r.chats.length === 1 ? '' : 's'} ${verb} ${label(to)}`)
+    const n = moving(r)
+    change(r, 'done', `${count} of ${n} chat${n === 1 ? '' : 's'} ${verb} ${label(to)}`)
+  }
+
+  /**
+   * Keeps for the move only the chats the app's going down cut off mid-work (decide.ts cutOff); the others are marked
+   * to stay. 'reread' while a verdict could not be read and there is still time to read it again; after that, a chat
+   * with no verdict stays (nothing is moved on a guess).
+   */
+  async function sortCutOff(r: Tracked, now: number): Promise<'reread' | 'none' | 'some'> {
+    const pending = r.chats.filter((c) => c.state === 'pending')
+    // A recovery saved before chats were sorted this way remembers only chats that were working.
+    const as = (id: string) => r.seenAs?.[id] ?? { busy: true, startedAt: null }
+    const ask = r.kind === 'desktop' ? pending.filter((c) => !as(c.id).busy) : []
+    const turns = ask.length ? await io.turns(ask.map((c) => ({ id: c.id, startedAt: as(c.id).startedAt }))) : new Map<string, TurnState | null>()
+    const lastUp = lastUpOf(r)
+    const verdicts = pending.map((c) => ({ c, v: cutOff(as(c.id).busy, turns.get(c.id) ?? null, lastUp, now) }))
+    const unread = verdicts.filter((x) => x.v === null).length
+    if (unread && now - r.at < GRACE_MS + READ_RETRY_MS) {
+      change(r, 'waiting', `could not read whether ${unread} of its chats ${unread === 1 ? 'was' : 'were'} mid-work yet; reading again`)
+      return 'reread'
+    }
+    for (const { c, v } of verdicts) {
+      if (v?.cut) setChat(r, c.id, 'pending', v.why)
+      else setChat(r, c.id, 'stays', v ? `${v.why}; it stays in ${r.from.name}` : `AgentHydra's gate could not read it; it stays in ${r.from.name}`)
+    }
+    return r.chats.some((c) => c.state === 'pending') ? 'some' : 'none'
   }
 
   /** One step of one recovery. */
@@ -357,11 +407,18 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
         change(r, 'waiting', `could not read why ${label(inst)} went down yet; reading again`)
         return
       }
+      const sorted = acts(why.cause) ? await sortCutOff(r, now) : 'none'
+      if (sorted === 'reread') return
       r.cause = why.cause
       r.causeDetail = why.detail
       r.fromInstance = inst
       if (!acts(why.cause)) {
         change(r, 'left', why.cause === 'quit' ? `${why.detail}: a person closed it, so its chats stay` : `${why.detail}; nothing was moved`)
+        return
+      }
+      if (sorted === 'none') {
+        const n = r.chats.length
+        change(r, 'left', `${why.detail}; none of its ${n} open chat${n === 1 ? '' : 's'} was cut off mid-work, so nothing was moved`)
         return
       }
       await choose(r, now)
@@ -419,15 +476,15 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       lastError = 'AgentHydra did not answer; nothing was judged'
       return
     }
-    const live = await io.working(all)
+    const live = await io.openChats(all)
     if (live === null) {
-      // Without what works where, a down app's chats are unknown: nothing new is noticed, nothing remembered changes.
+      // Without what is open where, a down app's chats are unknown: nothing new is noticed, nothing remembered changes.
       seen = all
-      lastError = 'the list of working chats did not load; nothing was judged'
+      lastError = 'the list of open chats did not load; nothing was judged'
       return
     }
     seen = all
-    working = live
+    open = live
     lastError = null
     const d = detect(memory, all, live, now)
     memory = d.memory
@@ -466,7 +523,8 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
         plan: i.plan,
         running: i.running,
         signedIn: i.signedIn,
-        working: working.filter((w) => w.ref === i.ref).length,
+        dead: i.dead,
+        working: open.filter((c) => c.ref === i.ref && c.busy).length,
         lastUpAt: memory[i.ref]?.lastUpAt ?? null,
       }))
       .sort((a, b) => (a.kind === b.kind ? a.num - b.num : a.kind === 'desktop' ? -1 : 1))

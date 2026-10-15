@@ -3,7 +3,7 @@
 
 import { expect, test } from 'bun:test'
 import type { ManagedKind, RecoveryState } from '@shared/instance-manager'
-import type { AccountProbe, Candidate, SeenInstance, WorkingChat } from '../../src/instance-manager/decide'
+import type { AccountProbe, Candidate, OpenChat, SeenInstance, TurnState } from '../../src/instance-manager/decide'
 import {
   createInstanceManager,
   GRACE_MS,
@@ -11,6 +11,7 @@ import {
   type Landed,
   type MoveResult,
   OPEN_SETTLE_MS,
+  READ_RETRY_MS,
   type Saved,
   WATCH_MS,
 } from '../../src/instance-manager/engine'
@@ -28,6 +29,7 @@ function app(num: number, fields: Partial<SeenInstance> = {}): SeenInstance {
     plan: 'Max 5×',
     running: true,
     signedIn: true,
+    dead: null,
     ...fields,
   }
 }
@@ -35,10 +37,29 @@ function app(num: number, fields: Partial<SeenInstance> = {}): SeenInstance {
 const codex = (num: number, fields: Partial<SeenInstance> = {}): SeenInstance =>
   app(num, { kind: 'codex', ref: `codex:id${num}`, handle: `id${num}`, plan: 'Plus', ...fields })
 
+/** A chat open in an app: busy (seen working), or quiet (its engine alive, nothing written lately). */
+const busy = (id: string, title: string, ref: string): OpenChat => ({ id, title, ref, busy: true, startedAt: null })
+const quiet = (id: string, title: string, ref: string): OpenChat => ({ id, title, ref, busy: false, startedAt: T0 - 3_600_000 })
+
+/** gate_chat's verdicts, as io.ts reads them. */
+const gate = (state: string, fields: Partial<TurnState> = {}): TurnState => ({
+  state,
+  kind: null,
+  idle: false,
+  lane: null,
+  quietSecs: 30,
+  outstanding: 0,
+  cause: '',
+  ...fields,
+})
+
 interface World {
   now: number
   apps: SeenInstance[]
-  working: WorkingChat[]
+  open: OpenChat[]
+  /** The gate's verdict on each chat (absent: it could not be read). */
+  turns: Record<string, TurnState>
+  gated: string[]
   usage: Record<number, [number, number]>
   logs: Record<string, string>
   probe: AccountProbe | null
@@ -51,11 +72,13 @@ interface World {
   landed: Record<string, Landed>
 }
 
-function world(apps: SeenInstance[], working: WorkingChat[] = []): World {
+function world(apps: SeenInstance[], open: OpenChat[] = []): World {
   return {
     now: T0,
     apps,
-    working,
+    open,
+    turns: {},
+    gated: [],
     usage: {},
     logs: {},
     probe: { status: 'live', plan: 'Max 5×' },
@@ -70,7 +93,11 @@ function world(apps: SeenInstance[], working: WorkingChat[] = []): World {
 function io(w: World): InstanceManagerIO {
   return {
     instances: async () => w.apps.map((a) => ({ ...a })),
-    working: async () => [...w.working],
+    openChats: async () => [...w.open],
+    turns: async (chats) => {
+      w.gated.push(...chats.map((c) => c.id))
+      return new Map(chats.map((c) => [c.id, w.turns[c.id] ?? null]))
+    },
     candidates: async (kind: ManagedKind, seen) =>
       seen
         .filter((i) => i.kind === kind)
@@ -104,10 +131,7 @@ const empty = (): Saved => ({ memory: {}, recoveries: [] })
 
 test('a crashed app with two working chats: the roomiest same-kind account is opened, the chats move there, start again and are seen running', async () => {
   const [a, b, c] = [app(1), app(2, { plan: 'Max 20×', running: false }), app(3)]
-  const w = world([a, b, c], [
-    { id: 's1', title: 'Fix the parser', ref: a.ref },
-    { id: 's2', title: 'Write docs', ref: a.ref },
-  ])
+  const w = world([a, b, c], [busy('s1', 'Fix the parser', a.ref), busy('s2', 'Write docs', a.ref)])
   w.usage = { 2: [10, 40], 3: [0, 0] } // #2: 20 x 45 = 900 of room; #3: 5 x 85 = 425
   w.logs[a.ref] = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
   const m = createInstanceManager(io(w), empty())
@@ -116,16 +140,16 @@ test('a crashed app with two working chats: the roomiest same-kind account is op
   // #1 dies: no quit in its log.
   w.now += 20_000
   w.apps = [{ ...a, running: false }, b, c]
-  w.working = []
+  w.open = []
   await m.look(true)
   expect(m.status(true, null).recoveries.map((r) => [r.state, r.chats.map((x) => x.id)])).toEqual([['waiting', ['s1', 's2']]])
   expect(w.opened).toEqual([])
 
-  // Past the grace: a crash, so #2 (Max 20x, closed) is opened rather than #3.
+  // Past the grace: a crash, so #2 (Max 20x, closed) is opened rather than #3. Both were seen working: no gate is asked.
   w.now += GRACE_MS
   await m.look(true)
   let r = m.status(true, null).recoveries[0]
-  expect([r?.state, r?.cause, r?.to?.num, w.opened]).toEqual(['opening', 'crashed', 2, [2]])
+  expect([r?.state, r?.cause, r?.to?.num, w.opened, w.gated]).toEqual(['opening', 'crashed', 2, [2], []])
 
   // #2 comes up; the chats move once it has settled.
   w.now += 20_000
@@ -153,11 +177,97 @@ test('a crashed app with two working chats: the roomiest same-kind account is op
   // One writes again, the other is seen working: both run, and the recovery is done.
   w.now += 20_000
   w.landed = { s1: { archived: false, activeSince: true } }
-  w.working = [{ id: 's2', title: 'Write docs', ref: b.ref }]
+  w.open = [busy('s2', 'Write docs', b.ref)]
   await m.look(true)
   r = m.status(true, null).recoveries[0]
   expect([r?.state, r?.detail, r?.chats.map((x) => x.state)]).toEqual(['done', '2 of 2 chats run again in #2 p2', ['running', 'running']])
   expect(w.moves).toHaveLength(1)
+})
+
+test('a crash moves only the chats it cut off: one in a long tool call, one waiting on its background jobs; a finished one and one a person stopped stay', async () => {
+  const [a, b] = [app(1), app(2)]
+  // Nothing was written in the last 30 s, so none reads as working: only the gate tells them apart.
+  const w = world([a, b], [
+    quiet('long', 'Run the full build', a.ref),
+    quiet('jobs', 'Wait on the workflow', a.ref),
+    quiet('done', 'Answered a question', a.ref),
+    quiet('stopped', 'Interrupted by a person', a.ref),
+    quiet('lost', 'Its transcript is unreadable', a.ref),
+  ])
+  w.usage = { 2: [0, 0] }
+  w.logs[a.ref] = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
+  const m = createInstanceManager(io(w), empty())
+  await m.look(true)
+  w.now += 20_000
+  w.apps = [{ ...a, running: false }, b]
+  w.open = []
+  await m.look(true)
+
+  // The first read leaves one verdict unread: the gate is asked again rather than the chat being judged on nothing.
+  w.turns = {
+    long: gate('crashed', { kind: 'mid-turn', cause: 'died mid-turn (last record: a tool call whose result never landed)' }),
+    jobs: gate('finished', { lane: 'needs-input-review', outstanding: 2 }),
+    done: gate('finished', { lane: 'archive-candidate' }),
+    stopped: gate('finished', { lane: 'human', outstanding: 1 }),
+  }
+  w.now += GRACE_MS
+  await m.look(true)
+  expect([m.status(true, null).recoveries[0]?.state, w.moves]).toEqual(['waiting', []])
+
+  // Past the reread window the unread one stays too; the two cut off move into the running #2 and start again.
+  w.now += READ_RETRY_MS
+  await m.look(true)
+  const r = m.status(true, null).recoveries[0]
+  expect(w.moves.map((x) => [x.from, x.to, x.ids])).toEqual([[1, 2, ['long', 'jobs']]])
+  expect(r?.chats.map((c) => [c.id, c.state])).toEqual([
+    ['long', 'pending'],
+    ['jobs', 'pending'],
+    ['done', 'stays'],
+    ['stopped', 'stays'],
+    ['lost', 'stays'],
+  ])
+  expect(r?.chats.find((c) => c.id === 'jobs')?.detail).toContain('2 background jobs')
+  expect(w.moves[0]?.text).toContain('background job')
+
+  // An app whose open chats had all finished is said and left: nothing is opened or moved.
+  const w2 = world([a, b], [quiet('done', 'Answered a question', a.ref)])
+  w2.usage = { 2: [0, 0] }
+  w2.turns = { done: gate('finished', { lane: 'archive-candidate' }) }
+  w2.logs[a.ref] = w.logs[a.ref] as string
+  const m2 = createInstanceManager(io(w2), empty())
+  await m2.look(true)
+  w2.now += 20_000
+  w2.apps = [{ ...a, running: false }, b]
+  w2.open = []
+  await m2.look(true)
+  w2.now += GRACE_MS
+  await m2.look(true)
+  const left = m2.status(true, null).recoveries[0]
+  expect([left?.state, left?.chats[0]?.state, w2.moves, w2.opened]).toEqual(['left', 'stays', [], []])
+  expect(left?.detail).toContain('none of its 1 open chat was cut off')
+})
+
+test('an app left open whose account died is down: its chats move off it with their engines stopped, and a dead account is never where they go', async () => {
+  const [a, b] = [app(1), app(2, { plan: 'Max 5×' })]
+  const free = app(3, { plan: 'Free', running: false, dead: 'its plan reads Free, and Claude Code does not run on Free' })
+  const w = world([a, b, free], [busy('s1', 'Fix the parser', a.ref)])
+  w.usage = { 2: [50, 50], 3: [0, 0] } // the Free account reads more room, and is still never chosen
+  const m = createInstanceManager(io(w), empty())
+  await m.look(true)
+
+  // Its organization is disabled: the app stays open and signed in, and every chat fails.
+  w.now += 20_000
+  const dead = 'its log: Session local_x query error: Claude Code returned an error result: Your organization has disabled Claude subscription access'
+  w.apps = [{ ...a, dead }, b, free]
+  w.open = []
+  await m.look(true)
+  expect(m.status(true, null).recoveries[0]?.detail).toContain('its account stopped working')
+  w.now += GRACE_MS
+  await m.look(true)
+  const r = m.status(true, null).recoveries[0]
+  expect([r?.cause, r?.causeDetail, r?.to?.num]).toEqual(['account-dead', dead, 2])
+  expect(w.moves.map((x) => [x.from, x.to, x.ids, x.terminateLive])).toEqual([[1, 2, ['s1'], true]])
+  expect(w.moves[0]?.text).toContain('its account stopped working')
 })
 
 test('a clean quit, a Codex app closed for no known reason, an app that comes back by itself, several apps at once and a manager switched off move nothing', async () => {
@@ -182,13 +292,13 @@ test('a clean quit, a Codex app closed for no known reason, an app that comes ba
   ]
   for (const k of cases) {
     const ups = k.start ?? [app(1), app(2), app(3)]
-    const w = world(ups, ups.map((u) => ({ id: `chat-${u.num}`, title: 'Some work', ref: u.ref })))
+    const w = world(ups, ups.map((u) => busy(`chat-${u.num}`, 'Some work', u.ref)))
     w.usage = { 2: [0, 0], 3: [0, 0] }
     const m = createInstanceManager(io(w), empty())
     await m.look(k.enabled)
     w.now += 20_000
     w.apps = k.name === 'came back' ? [{ ...app(1), running: false }, app(2), app(3)] : k.run(w)
-    w.working = []
+    w.open = []
     await m.look(k.enabled)
     w.now += GRACE_MS
     if (k.name === 'came back') w.apps = k.run(w)
@@ -200,14 +310,14 @@ test('a clean quit, a Codex app closed for no known reason, an app that comes ba
 
 test('an app that comes back while an account is being opened for its chats keeps them: nothing is moved', async () => {
   const [a, b] = [app(1), app(2, { plan: 'Max 20×', running: false })]
-  const w = world([a, b], [{ id: 's1', title: 'Fix the parser', ref: a.ref }])
+  const w = world([a, b], [busy('s1', 'Fix the parser', a.ref)])
   w.usage = { 2: [0, 0] }
   w.logs[a.ref] = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
   const m = createInstanceManager(io(w), empty())
   await m.look(true)
   w.now += 20_000
   w.apps = [{ ...a, running: false }, b]
-  w.working = []
+  w.open = []
   await m.look(true)
   w.now += GRACE_MS
   await m.look(true)
@@ -216,7 +326,7 @@ test('an app that comes back while an account is being opened for its chats keep
   // A person starts #1 again; then #2 comes up too.
   w.now += 20_000
   w.apps = [a, b]
-  w.working = [{ id: 's1', title: 'Fix the parser', ref: a.ref }]
+  w.open = [busy('s1', 'Fix the parser', a.ref)]
   await m.look(true)
   w.now += 20_000
   w.apps = [a, { ...b, running: true }]
@@ -229,17 +339,14 @@ test('two apps down together wait on one app opened for both, and give up after 
   const crash = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
   const [a, b] = [app(1), app(2)]
   const closed = [app(3, { plan: 'Max 20×', running: false }), app(4, { plan: 'Max 5×', running: false }), app(5, { plan: 'Pro', running: false })]
-  const w = world([a, b, ...closed], [
-    { id: 's1', title: 'Fix the parser', ref: a.ref },
-    { id: 's2', title: 'Write docs', ref: b.ref },
-  ])
+  const w = world([a, b, ...closed], [busy('s1', 'Fix the parser', a.ref), busy('s2', 'Write docs', b.ref)])
   w.usage = { 3: [0, 0], 4: [0, 0], 5: [0, 0] }
   w.logs = { [a.ref]: crash, [b.ref]: crash }
   const m = createInstanceManager(io(w), empty())
   await m.look(true)
   w.now += 20_000
   w.apps = [{ ...a, running: false }, { ...b, running: false }, ...closed]
-  w.working = []
+  w.open = []
   await m.look(true)
   w.now += GRACE_MS
   await m.look(true)
@@ -262,14 +369,14 @@ test('two apps down together wait on one app opened for both, and give up after 
 
 test('a Desk restart mid-move polls the same move and starts no second one; a chat already being recovered is not taken twice', async () => {
   const [a, b] = [app(1, { signedIn: true }), app(2)]
-  const w = world([a, b], [{ id: 's1', title: 'Fix the parser', ref: a.ref }])
+  const w = world([a, b], [busy('s1', 'Fix the parser', a.ref)])
   w.usage = { 2: [0, 0] }
   const m1 = createInstanceManager(io(w), empty())
   await m1.look(true)
   // Signed out under a running app: its engines are stopped on the move.
   w.now += 20_000
   w.apps = [{ ...a, signedIn: false }, b]
-  w.working = []
+  w.open = []
   await m1.look(true)
   w.now += GRACE_MS
   await m1.look(true)
@@ -297,14 +404,14 @@ test('a Desk restart mid-move polls the same move and starts no second one; a ch
 test('a Codex app signed out as it closes moves its working chats to another Codex account, never to a Claude one, and says the Codex app continues them', async () => {
   const [x, y] = [codex(10, { plan: 'Pro Lite' }), codex(11, { running: false })]
   const claude = app(2, { plan: 'Max 20×' })
-  const w = world([x, y, claude], [{ id: 't1', title: 'Port the CLI', ref: x.ref }])
+  const w = world([x, y, claude], [busy('t1', 'Port the CLI', x.ref)])
   w.usage = { 11: [0, 10], 2: [0, 0] }
   w.codexMove = [{ id: 't1', landed: true, resumed: false, detail: '', newId: 't1-new' }]
   const m = createInstanceManager(io(w), empty())
   await m.look(true)
   w.now += 20_000
   w.apps = [{ ...x, running: false, signedIn: false }, y, claude]
-  w.working = []
+  w.open = []
   await m.look(true)
   w.now += GRACE_MS
   await m.look(true)

@@ -2,17 +2,19 @@
 // outside-session list. Every call is bounded by a timeout and answers null (or an error) rather than throwing, so a
 // look that cannot read something judges nothing instead of judging on a guess.
 //
-// Claude Desktop: the apps and their sign-in come from GET /api/fleet, usage from GET /api/usage/survey, the account
-// probe from GET /api/instances/:dir/account, opening from POST /api/instances/:dir/open, and the move from the
-// orchestrator's migrate_batch (POST /api/orchestrator/run, polled at /api/orchestrator/operations/:id), the same
-// move AgentHydra's move_chats tool runs: it verifies each landing and starts each chat again with `--resume`.
+// Claude Desktop: the apps, their sign-in and their chats' live engines come from GET /api/fleet, usage from GET
+// /api/usage/survey, the account probe from GET /api/instances/:dir/account, whether a chat was cut off mid-work from
+// the orchestrator's gate_chat (POST /api/orchestrator/run), opening from POST /api/instances/:dir/open, and the move
+// from the orchestrator's migrate_batch (the same route, polled at /api/orchestrator/operations/:id), the same move
+// AgentHydra's move_chats tool runs: it verifies each landing and starts each chat again with `--resume`. An app whose
+// account died while it stays open is read from its own log (decide.ts deadFromLog).
 // Codex: GET /api/codex-instances, /:id/usage, /:id/account, POST /:id/desktop/open and /:id/move-chat.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ExternalSession } from '@shared/protocol'
 import type { ManagedKind } from '@shared/instance-manager'
-import type { AccountProbe, Candidate, SeenInstance, WorkingChat } from './decide'
+import { type AccountProbe, type Candidate, deadFromLog, isFreePlan, type OpenChat, type SeenInstance, type TurnState } from './decide'
 import type { InstanceManagerIO, Landed, MoveResult } from './engine'
 
 const READ_TIMEOUT_MS = 8_000
@@ -26,6 +28,11 @@ const CODEX_MOVE_TIMEOUT_MS = 120_000
 export const CAP_PCT = 85
 /** How much of an app's log is read from its end. */
 const LOG_TAIL_BYTES = 512 * 1024
+/** Every look reads this much of each running app's log for an account that died (a few hours on a busy profile). */
+const DEAD_TAIL_BYTES = 256 * 1024
+/** One chat's gate reads its transcript once (about 0.3 s, measured 2026-10-15). */
+const GATE_TIMEOUT_MS = 60_000
+const FREE_PLAN = 'its plan reads Free, and Claude Code does not run on Free'
 
 type Json = Record<string, unknown>
 
@@ -67,8 +74,8 @@ export function readTail(file: string, bytes = LOG_TAIL_BYTES): string | null {
   }
 }
 
-/** migrate_batch's --json report, from the operation's stdout (its last JSON object when anything printed before). */
-export function moveReport(stdout: string): Json | null {
+/** An orchestrator script's --json report, from its stdout (the JSON object after anything printed before it). */
+export function scriptReport(stdout: string): Json | null {
   const text = stdout.trim()
   // A pretty-printed report's inner objects are indented, so only its own first line opens at column 0.
   for (const m of text.matchAll(/(^|\n)\{/g)) {
@@ -95,6 +102,25 @@ export function moveResultOf(row: unknown): MoveResult | null {
   }
 }
 
+/** gate_chat's --json verdict, as decide.ts reads it. */
+export function turnOf(v: Json): TurnState | null {
+  const state = str(v.state)
+  if (!state) return null
+  const outstanding = obj(v.background).outstanding
+  return {
+    state,
+    kind: str(obj(v.crashed).kind),
+    idle: v.idle !== null && typeof v.idle === 'object',
+    lane: str(obj(v.finished).lane),
+    quietSecs: num(v.quiet_secs),
+    outstanding: Array.isArray(outstanding) ? outstanding.length : 0,
+    cause: str(v.cause) ?? '',
+  }
+}
+
+/** A Claude profile folder as a ref, the same however AgentHydra spelled its drive letter or slashes. */
+const refKey = (ref: string): string => ref.replace(/\//g, '\\').toLowerCase()
+
 export interface IoOptions {
   /** AgentHydra's address (the bridge's). */
   base: string
@@ -116,6 +142,8 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
       const n = num(i.num)
       if (!dir || n === null) return []
       const account = obj(i.account)
+      const plan = str(account.planLabel)
+      const running = i.isRunning === true
       return [
         {
           ref: str(i.ref) ?? `desktop:${dir}`,
@@ -124,9 +152,11 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           name: str(i.name) ?? dir,
           handle: dir,
           email: str(account.email),
-          plan: str(account.planLabel),
-          running: i.isRunning === true,
+          plan,
+          running,
           signedIn: i.signedIn === true && account.status !== 'loggedout',
+          // A closed app's log is read only when it is weighed as a target (candidates): every look reads the open ones.
+          dead: isFreePlan(plan) ? FREE_PLAN : running ? deadFromLog(readTail(join(dir, 'logs', 'main.log'), DEAD_TAIL_BYTES)) : null,
         },
       ]
     })
@@ -152,6 +182,7 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           plan: str(account.planLabel) ?? str(account.planType),
           running: i.isDesktopRunning === true,
           signedIn: i.loggedIn === true,
+          dead: null,
         },
       ]
     })
@@ -164,24 +195,63 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
       return d === null || c === null ? null : [...d, ...c]
     },
 
-    async working(seen) {
-      const list = await o.outside()
-      if (list === null) return null
-      // A Desktop session names its app by the profile's name, its folder or its number.
+    async openChats(seen) {
+      const [list, fleet] = await Promise.all([o.outside(), call(base, '/api/fleet')])
+      const engines = fleet?.status === 200 ? obj(fleet.body).sessions : null
+      if (list === null || !Array.isArray(engines)) return null
       const desktop = seen.filter((i) => i.kind === 'desktop')
+      const byRef = new Map(desktop.map((i) => [refKey(i.ref), i.ref]))
+      // A Desktop session names its app by the profile's name, its folder or its number.
       const byName = new Map(desktop.map((i) => [i.name.toLowerCase(), i.ref]))
       const byFolder = new Map(desktop.map((i) => [basename(i.handle).toLowerCase(), i.ref]))
       const byNum = new Map(desktop.map((i) => [String(i.num), i.ref]))
-      return list.flatMap((s): WorkingChat[] => {
-        if (s.status !== 'working' || s.fromPc) return []
+      const byId = new Map(list.filter((s) => !s.fromPc).map((s) => [s.id, s]))
+      const out = new Map<string, OpenChat>()
+      // Every live engine in a managed app: a chat in one long tool call writes nothing for minutes yet is mid-work.
+      for (const row of engines) {
+        const e = obj(row)
+        const id = str(e.sessionId)
+        const ref = byRef.get(refKey(str(e.instanceRef) ?? ''))
+        // An engine with no transcript is a spare one the app keeps warm: no chat's work is in it.
+        if (!id || !ref || !str(obj(e.transcript).path)) continue
+        const s = byId.get(id)
+        out.set(id, { id, title: s?.title ?? str(e.name) ?? id.slice(0, 8), ref, busy: s?.status === 'working', startedAt: num(e.startedAt) })
+      }
+      for (const s of byId.values()) {
+        if (s.status !== 'working' || out.has(s.id)) continue
         if (s.source === 'desktop') {
           const key = (s.instance ?? '').toLowerCase().replace(/^#/, '')
           const ref = byName.get(key) ?? byFolder.get(key) ?? byNum.get(key)
-          return ref ? [{ id: s.id, title: s.title, ref }] : []
+          if (ref) out.set(s.id, { id: s.id, title: s.title, ref, busy: true, startedAt: null })
+        } else if (s.source === 'codex' && s.codexAccountId)
+          out.set(s.id, { id: s.id, title: s.title, ref: `codex:${s.codexAccountId}`, busy: true, startedAt: null })
+      }
+      return [...out.values()]
+    },
+
+    async turns(chats) {
+      const out = new Map<string, TurnState | null>()
+      // One at a time: the orchestrator's route runs one copy of a script and refuses a second while it does.
+      for (const c of chats) {
+        const args = [c.id, '--json', '--background']
+        if (c.startedAt !== null) args.push('--engine-started', String(Math.round(c.startedAt)))
+        const r = await call(
+          base,
+          '/api/orchestrator/run',
+          { method: 'POST', body: JSON.stringify({ script: 'gate_chat', args, timeoutMs: GATE_TIMEOUT_MS }) },
+          GATE_TIMEOUT_MS + 15_000,
+        )
+        const b = obj(r?.body)
+        if (r?.status === 200 && b.exitCode === 3) {
+          // gate_chat's own answer that no verdict exists (no transcript): asking again would say the same.
+          const why = (str(b.stderr) ?? '').trim().split(/\r?\n/)[0] || 'AgentHydra’s gate cannot read its transcript'
+          out.set(c.id, { state: 'ungateable', kind: null, idle: false, lane: null, quietSecs: null, outstanding: 0, cause: why })
+          continue
         }
-        if (s.source === 'codex' && s.codexAccountId) return [{ id: s.id, title: s.title, ref: `codex:${s.codexAccountId}` }]
-        return []
-      })
+        const report = r?.status === 200 && b.exitCode === 0 ? scriptReport(str(b.stdout) ?? '') : null
+        out.set(c.id, report ? turnOf(report) : null)
+      }
+      return out
     },
 
     async candidates(kind: ManagedKind, seen) {
@@ -192,7 +262,12 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
         if (Array.isArray(rows)) for (const row of rows) if (obj(row).kind === 'desktop' && num(obj(row).num) !== null) byNum.set(num(obj(row).num) as number, obj(row))
         return seen
           .filter((i) => i.kind === 'desktop')
-          .map((instance): Candidate => {
+          .map((seenAs): Candidate => {
+            // A closed app whose account died before it closed would only fail every chat moved into it.
+            const instance =
+              seenAs.running || seenAs.dead !== null
+                ? seenAs
+                : { ...seenAs, dead: deadFromLog(readTail(join(seenAs.handle, 'logs', 'main.log'), DEAD_TAIL_BYTES)) }
             const row = byNum.get(instance.num)
             const snap = obj(obj(row?.result).snapshot)
             const advice = obj(row?.advice ?? obj(row?.result).advice)
@@ -278,7 +353,7 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
       if (op.status === 'running') return null
       const result = obj(op.result)
       if (str(result.error)) return { error: str(result.error) as string }
-      const report = moveReport(str(result.stdout) ?? '')
+      const report = scriptReport(str(result.stdout) ?? '')
       if (!report) return { error: `the move printed no report (exit ${String(result.exitCode)}): ${(str(result.stderr) ?? '').slice(-300)}` }
       const rows = Array.isArray(report.results) ? report.results : []
       return { results: rows.map(moveResultOf).filter((m): m is MoveResult => m !== null) }

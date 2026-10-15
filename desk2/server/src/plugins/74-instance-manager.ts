@@ -15,19 +15,22 @@ import type { ExternalSession } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { AsyncFile } from '../async-file'
 import { bridge } from '../bridge'
-import { createInstanceManager, RECOVERIES_KEPT, type Saved } from '../instance-manager/engine'
+import { createInstanceManager, RECOVERIES_KEPT, type Saved, settled } from '../instance-manager/engine'
 import { daemonIO } from '../instance-manager/io'
 
 /** The first look waits for the bridge's first read of AgentHydra. */
 const FIRST_LOOK_MS = 30_000
 
 /** <home>/instance-manager.json, or an empty memory when it is missing or damaged. An empty memory only means an app
- *  that went down while it was unreadable is not noticed: nothing is moved on a guess. */
+ *  that went down while it was unreadable is not noticed: nothing is moved on a guess. Every recovery still under way
+ *  is kept, as a look keeps them; only the settled ones past RECOVERIES_KEPT go. */
 function load(file: string): Saved {
   try {
     const v = JSON.parse(readFileSync(file, 'utf8')) as Partial<Saved>
     const memory = v.memory && typeof v.memory === 'object' && !Array.isArray(v.memory) ? v.memory : {}
-    return { memory, recoveries: Array.isArray(v.recoveries) ? v.recoveries.slice(0, RECOVERIES_KEPT) : [] }
+    const all = Array.isArray(v.recoveries) ? v.recoveries : []
+    const old = new Set(all.filter(settled).slice(RECOVERIES_KEPT))
+    return { memory, recoveries: all.filter((r) => !old.has(r)) }
   } catch (err) {
     const code = (err as NodeJS.ErrnoException).code
     if (code !== 'ENOENT' && code !== 'ENOTDIR') console.error('[instance-manager] instance-manager.json did not load; starting with no memory:', err)

@@ -11,9 +11,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   Noncommercial 1.0.0; commercial use needs a separate license. Versions released before it stay MIT.
 - **The connector list stops polling fast when nothing changes.** A connector stuck installing or starting is asked about every second; after a minute with the same answer the poll falls back to every 5 seconds. A Desk window at rest asks once every 5 seconds (7 requests in 30 s).
 - **When a Claude Desktop or Codex app goes down with chats running, the Instance manager moves them and starts them
-  again.** If the app crashed, was signed out, or its plan or organization stopped working, it opens the same kind of
-  app on the account with the most room left, moves the chats there and checks that they run. An app a person quit
-  is left alone, and moved Codex chats are continued from the Codex app (Settings > Managers > Instance manager).
+  again.** If the app crashed, was signed out, or its plan or organization stopped working (even with the app left
+  open), it opens the same kind of app on the account with the most room left, moves the chats it cut off mid-work
+  there (one inside a long command or waiting on its background jobs counts; one that had finished stays) and checks
+  that they run. An app a person quit is left alone, and moved Codex chats are continued from the Codex app (Settings >
+  Managers > Instance manager).
 - **A fresh ChatGPT Free sign-in is no longer undone by Login sync.** Since 2026-10-14 ChatGPT answers sends only
   from a login a browser sign-in made, and sync used to keep whichever copy expired later, often an older one from
   the other PC. A freshly signed-in login now wins and reaches the other PCs. A refused ChatGPT call also names the

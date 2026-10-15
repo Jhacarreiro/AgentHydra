@@ -1,14 +1,14 @@
 // The instance manager (owner, 2026-10-15: "if it notices a desktop instance close, it should start the next
 // available desktop instance with room ... migrate the threads, confirm they're migrated and moved over ... and then
 // go back to babysitting"). Every EVERY_MS it looks at every Claude Desktop and Codex Desktop app AgentHydra manages
-// and remembers which chats each one was running. When an app that was up goes down (it closed, or its account was
-// signed out, ran out of plan or had its organization disabled) while chats were working in it, it picks the
-// same-kind account with the most room (a Claude chat goes to a Claude app, a Codex chat to a Codex app), opens that
-// app if it is closed, moves the chats there through AgentHydra's own move, confirms they landed, and starts each one
-// again with a note saying why. A chat that only ever ran in AgentHydra's own window is not its business: nothing is
-// opened for it. The server keeps it (server/src/plugins/74-instance-manager.ts, deciding in
-// server/src/instance-manager/); GET /api/instance-manager answers what it saw last and Settings > Managers draws it.
-// Plain types only.
+// and remembers which chats each one has open. When an app that was up goes down (it closed, or its account was
+// signed out, ran out of plan or had its organization disabled, which can leave the app open with every chat
+// failing) it asks AgentHydra's gate which of those chats it cut off mid-work, picks the same-kind account with the
+// most room (a Claude chat goes to a Claude app, a Codex chat to a Codex app), opens that app if it is closed, moves
+// those chats there through AgentHydra's own move, confirms they landed, and starts each one again with a note saying
+// why. A chat that only ever ran in AgentHydra's own window is not its business: nothing is opened for it. The server
+// keeps it (server/src/plugins/74-instance-manager.ts, deciding in server/src/instance-manager/); GET
+// /api/instance-manager answers what it saw last and Settings > Managers draws it. Plain types only.
 
 /** How often it looks. A look is two local reads of AgentHydra (about 0.2 s). */
 export const INSTANCE_MANAGER_EVERY_MS = 20_000
@@ -38,6 +38,8 @@ export interface ManagedInstance {
   plan: string | null
   running: boolean
   signedIn: boolean
+  /** Why it is not up though it runs signed in (its log says its account stopped working, its plan reads Free), or null. */
+  dead: string | null
   /** Chats working in it at the last look. */
   working: number
   /** When it was last seen running and signed in, ms; null when never. */
@@ -60,12 +62,14 @@ export type RecoveryState = 'waiting' | 'came-back' | 'left' | 'opening' | 'movi
 /**
  * Where one chat of a recovery stands:
  * pending   not moved yet
+ * stays     it was open in the app but nothing of it was cut off (its turn had ended, or a person had stopped it): it
+ *           stays where it was
  * moved     landed in the new app; not yet seen running
  * running   seen working (or newly active) in the new app
  * stuck     landed, but not seen running after the watch window: a person should look
  * failed    the move refused or did not land
  */
-export type RecoveredChatState = 'pending' | 'moved' | 'running' | 'stuck' | 'failed'
+export type RecoveredChatState = 'pending' | 'stays' | 'moved' | 'running' | 'stuck' | 'failed'
 
 export interface RecoveredChat {
   id: string // the Claude session id, or the Codex thread id
