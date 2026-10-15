@@ -813,7 +813,7 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
     expect(col).toMatchObject({ id: 'person:sam-backend', path: 'model' })
     const { q } = asked[0] as { q: LeadQuestion }
     expect(q.question).toContain(
-      "Only a small change that spends money or changes stored data stays its field's manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's.",
+      "Only a small change that spends money or changes a database schema, a migration or customers' data stays its field's manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's.",
     )
   })
 
