@@ -51,6 +51,7 @@ import { chatAction, focusAction, modeAction } from '@/components/sidebar/collap
 import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import WhatsNewDialog from './WhatsNewDialog.vue'
+import PeopleFirstRun from '@/components/people/PeopleFirstRun.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
@@ -1290,6 +1291,7 @@ function moveSidebar(side: SidebarSide) {
     </Dialog>
 
     <WhatsNewDialog />
+    <PeopleFirstRun />
     <WindowControls v-if="ownFrame && !collapsed" />
   </div>
 </template>

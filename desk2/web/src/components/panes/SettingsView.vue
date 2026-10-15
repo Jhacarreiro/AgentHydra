@@ -14,6 +14,7 @@ import RoutineDetails from './RoutineDetails.vue'
 import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
+import PeopleSetup from '@/components/people/PeopleSetup.vue'
 import PeopleWhere from '@/components/people/PeopleWhere.vue'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { COLLAPSE_MODES, COLLAPSE_MODE_LABELS } from '@/components/sidebar/collapse'
@@ -528,6 +529,8 @@ onBeforeUnmount(() => {
       <DiagnosticsView v-else-if="section === 'diagnostics' && !searching" />
 
       <ConnectorsSettings v-else-if="section === 'connectors' && !searching" />
+
+      <PeopleSetup v-else-if="section === 'people' && !searching" />
 
       <template v-else>
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">

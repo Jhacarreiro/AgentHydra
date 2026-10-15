@@ -128,6 +128,23 @@ you already have.
 
 </details>
 
+## Your people
+
+**TL;DR**
+
+- **First run:** with no managers and no highest authority yet, AgentHydra opens a short "Your people" page. Skip it and it stays out of the way; it is always in Settings → Your people.
+- **It asks three things:** (1) the highest authority, the person whose rulings win (a name, a few lines on how they decide, optional rulings); (2) which managers you want, from five invented starters or your own; (3) Save.
+- **Where it writes:** `~/.agenthydra/people/` (the format in [docs/PEOPLE.md](docs/PEOPLE.md)), then it rebuilds the Hydra Core catalog so your chats see them at once.
+
+<details>
+<summary>Details</summary>
+
+- The authority goes to `people/creator/<name>/`, each manager to `people/manager/<name>/`, each as a `persona.json` plus a `brief.md` you can edit by hand.
+- The starters are a project coordinator, a floor manager, a backend engineer, a UI designer and an advertising lead, with invented names and generic text. Rename or rewrite them freely; saving never overwrites a folder you did not pick.
+- Managers already in `~/.agenthydra/managers/` count as set up, so the page does not show for them.
+
+</details>
+
 ## Where your people live
 
 **TL;DR**
