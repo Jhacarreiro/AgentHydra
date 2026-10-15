@@ -1,9 +1,0 @@
-{
-  "slug": "onboarding-wizard",
-  "title": "Onboarding Wizard",
-  "surface": "A five-step wizard whose brief shows only on step 1: long-horizon recall across unlabeled inputs, bare-div dropdowns, a calendar that must go back 36 years, a stepper, a toggle that starts wrong and a trap toggle that must stay off.",
-  "task": "Finish onboarding with the details in the brief on step 1.",
-  "success": { "text": "Onboarding complete" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/OnboardingWizard.tsx (Apache-2.0, Copyright TesterArmy)"
-}

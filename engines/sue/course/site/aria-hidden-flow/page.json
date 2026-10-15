@@ -1,9 +1,0 @@
-{
-  "slug": "aria-hidden-flow",
-  "title": "Aria Hidden Flow",
-  "surface": "The whole plan picker sits under one aria-hidden container of bare divs, so the accessibility tree is empty even though every card and button is visible and clickable.",
-  "task": "Pick the plan the page asks for and confirm it.",
-  "success": { "text": "Plan activated" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/AriaHiddenFlow.tsx (Apache-2.0, Copyright TesterArmy)"
-}

@@ -1,9 +1,0 @@
-{
-  "slug": "canvas-whiteboard",
-  "title": "Canvas Whiteboard",
-  "surface": "The whole whiteboard - toolbar, shapes, dashed slots, Save button and status - is painted on one aria-hidden canvas; there is no DOM to query, clicks do not move shapes, and only real press-move-release drags at pixel coordinates work, with wrong or missed drops sending the shape back.",
-  "task": "Drag the blue rectangle and the orange circle into their matching dashed slots, then press Save.",
-  "success": { "text": "Design saved" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/CanvasWhiteboard.tsx (Apache-2.0, Copyright TesterArmy)"
-}

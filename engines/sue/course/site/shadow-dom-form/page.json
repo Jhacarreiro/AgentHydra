@@ -1,9 +1,0 @@
-{
-  "slug": "shadow-dom-form",
-  "title": "Shadow DOM Form",
-  "surface": "The input and Submit button live in a closed shadow root nested inside an open one, so selectors, querySelector and DOM snapshots cannot reach them; only what is on screen can.",
-  "task": "Enter the access code shown on the page and submit it.",
-  "success": { "text": "Access granted" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/ShadowDomForm.tsx (Apache-2.0, Copyright TesterArmy)"
-}

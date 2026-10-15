@@ -1,9 +1,0 @@
-{
-  "slug": "sticky-chrome",
-  "title": "Sticky Chrome",
-  "surface": "The Accept terms button sits below ~2800px of filler in a scroll box whose opaque sticky footer covers its bottom 96px and takes the click, so the button has to be scrolled clear of the footer before a click lands.",
-  "task": "Accept the terms of service.",
-  "success": { "text": "Terms accepted" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/StickyChrome.tsx (Apache-2.0, Copyright TesterArmy)"
-}

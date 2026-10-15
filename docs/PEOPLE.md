@@ -44,11 +44,12 @@ Optional, outside the repo. Every key is optional; a missing key turns that sour
 `boardroomDir` (paths, `~` allowed), `ownerName`, `companyId`, `seats` (`[{ slug, name, personaId }]`) and
 `minimums` (`{ managers, employees, instruments, skills, knowledge }`, the floors `--check` enforces; none by default).
 
-## The engines read the same folders
+## Sue, Dredd and the price check
 
-The Sue, Dredd and price check engines in `engines/` read their people from this store, never from the repo: a Sue is
-`expert/sue-<id>` (the Sue document under `sue` in `persona.json`, her mind in `brief.md`), a Dredd seat is a
-`dredd-seat` person. See `engines/README.md`. `AGENTHYDRA_PEOPLE_HOME` points the engines at another people folder.
+They are a private add-on, not part of this repo. AgentHydra's `sue`, `dredd` and price check tools start them
+from their own checkout when it is on this PC (`SUE_DREDD_HOME`, else a `sue-dredd` folder beside AgentHydra),
+and say they are not installed when it is not. The add-on keeps its people in its own private store, not in these
+folders.
 
 ## Where people are stored
 

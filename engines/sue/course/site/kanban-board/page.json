@@ -1,9 +1,0 @@
-{
-  "slug": "kanban-board",
-  "title": "Kanban Board",
-  "surface": "Cards move only by pointer drags that pass an 8px threshold and are released over a column; HTML5 drag events, dataTransfer and plain clicks do nothing.",
-  "task": "Move the cards so the board matches the goal layout the page describes, then submit the board.",
-  "success": { "text": "Board matches the goal" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/KanbanBoard.tsx (Apache-2.0, Copyright TesterArmy)"
-}

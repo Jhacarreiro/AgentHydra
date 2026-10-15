@@ -1,2 +1,0 @@
-{"at":"2026-09-20T18:00:06.000Z","kind":"patience-exhausted","text":"Total patience gone while waiting for the email code.","source":"body","url":"http://localhost:4173/signup"}
-{"at":"2026-09-20T18:00:06.000Z","kind":"wrong-destination","text":"Final URL /settings does not match the scenario's expected landing.","source":"body","url":"http://localhost:4173/settings"}

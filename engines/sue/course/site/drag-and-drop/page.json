@@ -1,9 +1,0 @@
-{
-  "slug": "drag-and-drop",
-  "title": "Drag and Drop",
-  "surface": "Real HTML5 drag and drop carried by dataTransfer: clicks do nothing, and only Banana then Cherry, in that order, fill the dropzone; anything else empties it.",
-  "task": "Drag Banana into the dropzone, then Cherry, and leave Apple alone.",
-  "success": { "text": "Items dropped in the right order" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/DragAndDrop.tsx (Apache-2.0, Copyright TesterArmy)"
-}

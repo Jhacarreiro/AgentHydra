@@ -1,9 +1,0 @@
-{
-  "slug": "context-menu-trap",
-  "title": "Context Menu Trap",
-  "surface": "The page tells you to right-click a file, but right-click does nothing; the rename lives behind a per-row ⋯ menu whose other items are decoys.",
-  "task": "Rename the file report.pdf to summary.pdf.",
-  "success": { "text": "File renamed to summary.pdf" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/ContextMenuTrap.tsx (Apache-2.0, Copyright TesterArmy)"
-}

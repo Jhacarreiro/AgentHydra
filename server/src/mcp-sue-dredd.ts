@@ -1,6 +1,6 @@
 // server/src/mcp-sue-dredd.ts - sue and dredd: the doors to Sue (simulated visitors) and Dredd (the judge that picks the
 // review instruments). Both engines live in their own private checkout; these tools only start it on disk, never carry
-// its code. The checkout is SUE_DREDD_HOME, else the in-repo engines/ folder.
+// its code. The checkout is SUE_DREDD_HOME, else the sue-dredd folder beside the AgentHydra checkout.
 // Each call runs `node <checkout>/sue/sue.mjs <action> --json-file <file>` (Dredd: dredd/dredd.mjs and its flags,
 // dredd/README.md) and hands back what the engine printed. A wave or a hearing outlives the call budget: it keeps
 // running detached, and the answer names the file its output is going to.
@@ -119,19 +119,18 @@ const ENTRY: Record<Engine, string> = {
   dredd: join('dredd', 'dredd.mjs'),
 }
 
-/** The folder holding `engine`: SUE_DREDD_HOME when it has the engine, else the in-repo engines/ folder, else a sue-dredd folder beside the checkout. */
+/** The folder holding `engine`: SUE_DREDD_HOME when it has the engine, else the sue-dredd folder beside the AgentHydra checkout. */
 export function resolveCheckout(engine: Engine, env: SueDreddDeps['env'], appRoot: string): string {
   const fromEnv = str(env.SUE_DREDD_HOME).trim()
-  const inRepo = join(resolve(appRoot), 'engines')
   const beside = join(resolve(appRoot), '..', 'sue-dredd')
-  const tried = fromEnv ? [resolve(fromEnv), inRepo, beside] : [inRepo, beside]
+  const tried = fromEnv ? [resolve(fromEnv), beside] : [beside]
   for (const home of tried) if (existsSync(join(home, ENTRY[engine]))) return home
   const env_ = fromEnv
     ? `SUE_DREDD_HOME (${resolve(fromEnv)}) has no ${ENTRY[engine]}`
     : 'SUE_DREDD_HOME is not set'
   throw new Error(
-    `${engine} runs from the engines/ folder of the AgentHydra checkout, and it was not found: ${env_}, and ${inRepo} has no ${ENTRY[engine]}, and sue-dredd has no ${ENTRY[engine]} beside it. ` +
-      'Reinstall AgentHydra, or set SUE_DREDD_HOME to a folder holding the engine. Nothing ran.',
+    `${engine} is a private add-on that is not installed on this PC: ${env_}, and ${beside} has no ${ENTRY[engine]}. ` +
+      'Set SUE_DREDD_HOME to the sue-dredd checkout to use it. Nothing ran.',
   )
 }
 
@@ -373,7 +372,7 @@ export function sueDreddTools(deps: SueDreddDeps = LIVE_DEPS): HydraTool[] {
       name: 'sue',
       callerChat: 'deskChat',
       description:
-        "Runs Sue, the simulated website visitors, from the in-repo engines folder (SUE_DREDD_HOME overrides): node sue/sue.mjs <action> with params as its JSON arguments, and returns the engine's JSON answer. A run, focus_group, ape, art, inbox_test, field or blind_round that is still going at the call budget keeps running detached; the answer names its output file. Actions and params: sue/README.md in that checkout. MUTATES when the action starts people or saves one.",
+        "Runs Sue, the simulated website visitors, from the private sue-dredd checkout (SUE_DREDD_HOME overrides): node sue/sue.mjs <action> with params as its JSON arguments, and returns the engine's JSON answer. A run, focus_group, ape, art, inbox_test, field or blind_round that is still going at the call budget keeps running detached; the answer names its output file. Actions and params: sue/README.md in that checkout. MUTATES when the action starts people or saves one.",
       inputSchema: S(
         {
           action: {
@@ -392,7 +391,7 @@ export function sueDreddTools(deps: SueDreddDeps = LIVE_DEPS): HydraTool[] {
       name: 'dredd',
       callerChat: 'deskChat',
       description:
-        'Asks Dredd, the judge that picks which review instruments to run for an ask, from the in-repo engines folder (SUE_DREDD_HOME overrides), and returns its answer. params: ask, url, root, docket, run, announce, rounds, seats, fromLine, limit. A hearing and a resolve detach in the engine and return their docket; a convene, collect or boardroom still going at the call budget keeps running detached. Manual: dredd/README.md in that checkout. MUTATES when the action convenes, hears, resolves or stops.',
+        'Asks Dredd, the judge that picks which review instruments to run for an ask, from the private sue-dredd checkout (SUE_DREDD_HOME overrides), and returns its answer. params: ask, url, root, docket, run, announce, rounds, seats, fromLine, limit. A hearing and a resolve detach in the engine and return their docket; a convene, collect or boardroom still going at the call budget keeps running detached. Manual: dredd/README.md in that checkout. MUTATES when the action convenes, hears, resolves or stops.',
       inputSchema: S(
         {
           action: { type: 'string', enum: DREDD_ACTIONS, description: DREDD_ACTIONS.join(' | ') },

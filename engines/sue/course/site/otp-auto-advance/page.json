@@ -1,9 +1,0 @@
-{
-  "slug": "otp-auto-advance",
-  "title": "OTP Auto-Advance",
-  "surface": "Six one-digit boxes that move focus by themselves after every digit; a driver that also tabs onward, or fills one box with the whole code, puts digits in the wrong boxes, and a wrong code wipes every box.",
-  "task": "Enter the 6-digit code the page shows.",
-  "success": { "text": "Code verified" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/OtpAutoAdvance.tsx (Apache-2.0, Copyright TesterArmy)"
-}

@@ -1,9 +1,0 @@
-[
-  { "device": "phone", "from": "clean", "to": "result", "move": "button:Apple", "control": "button:Apple", "variant": 1 },
-  { "device": "phone", "from": "silent", "to": "silent", "move": "button:Apple", "control": "button:Apple", "variant": 1 },
-  { "device": "phone", "from": "lcard", "to": "lplay", "move": "button:Start", "control": "button:Start", "variant": 1 },
-  { "device": "phone", "from": "lplay", "to": "lwhy", "move": "button:Apple", "control": "button:Apple", "variant": 1 },
-  { "device": "phone", "from": "lplay", "to": "lgap", "move": "button:Pear", "control": "button:Pear", "variant": 1 },
-  { "device": "phone", "from": "lplay", "to": "lofs", "move": "button:Pear~2", "control": "button:Pear~2", "variant": 1 },
-  { "device": "phone", "from": "clean", "to": "lctr", "move": "button:Apple", "control": "button:Apple", "variant": 2 }
-]

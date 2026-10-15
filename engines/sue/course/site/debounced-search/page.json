@@ -1,9 +1,0 @@
-{
-  "slug": "debounced-search",
-  "title": "Debounced Search",
-  "surface": "A debounced search box with a fake search delay whose results list is attached to the page body instead of under the input, and the results are near-identical decoys one character away from the target.",
-  "task": "Find Trail Mix 500 g and add it to the cart.",
-  "success": { "text": "Added Trail Mix 500 g to the cart" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/DebouncedSearch.tsx (Apache-2.0, Copyright TesterArmy)"
-}

@@ -1,9 +1,0 @@
-{
-  "slug": "infinite-scroll",
-  "title": "Infinite Scroll",
-  "surface": "The target sits seven lazy loads deep in a feed that is its own scroll container: it is not in the DOM until the feed (not the page) is scrolled far enough, and each load takes a moment.",
-  "task": "Find the Golden Ticket in the feed and claim it.",
-  "success": { "text": "Golden Ticket claimed" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/InfiniteScroll.tsx (Apache-2.0, Copyright TesterArmy)"
-}

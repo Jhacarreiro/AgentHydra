@@ -1,9 +1,0 @@
-{
-  "slug": "overlay-trap",
-  "title": "Overlay Trap",
-  "surface": "After a cookie banner, an invisible full-screen overlay lands half a second after load and swallows every click, so Continue looks clickable but never fires until a small chip in the top-right corner closes the overlay.",
-  "task": "Get past the cookie banner and whatever blocks the page, then press Continue.",
-  "success": { "text": "You made it past the overlay" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/OverlayTrap.tsx (Apache-2.0, Copyright TesterArmy)"
-}

@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Sue, Dredd and the price check are a private add-on again.** AgentHydra no longer carries their code; its tools start them from their own sue-dredd checkout when that is on this PC (SUE_DREDD_HOME points at it). Without the checkout, those tools say they are not installed.
 - **A new "Your people" page sets up your managers.** When you have no managers yet, AgentHydra asks for the person whose rulings win and which managers you want, and writes them for you. Skip it and it stays out of the way; it is always in Settings under Your people.
 - **Your people can follow you to other PCs from AgentHydra's own server.** The cloud home is now AgentHydra's server, not your Connections Data Locker, and Sign in with Connections is only how it knows who you are. The newer copy of a person wins, and the older one is kept in a backup folder.
 - **Fan-out chats start without touching your Claude window, on the model you choose.** On an account with native control, the Claude app starts the chat itself, so no window is raised and nothing is clicked. A chat runs on Opus 5.5 at xhigh effort unless the task names another model or effort, and never on Fable unless asked. An account without native control still opens its chat through its window.

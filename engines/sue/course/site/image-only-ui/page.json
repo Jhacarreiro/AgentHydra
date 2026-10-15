@@ -1,9 +1,0 @@
-{
-  "slug": "image-only-ui",
-  "title": "Image Only UI",
-  "surface": "Every word on the page is a picture (a canvas-painted PNG with an empty alt) and the buttons are unlabeled SVG icons, so the DOM holds no readable text at all; only the pixels say what to do.",
-  "task": "Follow the instruction shown on the page by clicking the icons in the order it asks.",
-  "success": { "text": "Icons verified" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/ImageOnlyUi.tsx (Apache-2.0, Copyright TesterArmy)"
-}

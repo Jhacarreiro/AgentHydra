@@ -1,9 +1,0 @@
-{
-  "slug": "promo-storefront",
-  "title": "Promo Storefront",
-  "surface": "A promo-heavy shop with a sticky header, a fixed cookie banner, a support-chat bubble and review skeletons that resolve after 1.2 s; all of it looks suspicious but works, so the trap is reporting false bugs.",
-  "task": "Buy any one product, dismissing the promotional overlays that get in the way, until the order is confirmed.",
-  "success": { "text": "Order confirmed" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/PromoStorefront.tsx (Apache-2.0, Copyright TesterArmy)"
-}

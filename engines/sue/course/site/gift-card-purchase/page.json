@@ -1,9 +1,0 @@
-{
-  "slug": "gift-card-purchase",
-  "title": "Gift Card Purchase",
-  "surface": "The visible form works, but its accessibility layer looks broken (aria-labels reading \"undefined\", raw i18n keys, a template token, a hidden \"Total: $NaN\"); a visitor must trust what is on screen and not report these as product bugs.",
-  "task": "Buy a gift card for friend@example.com and complete the purchase.",
-  "success": { "text": "Gift card sent to friend@example.com" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/GiftCardPurchase.tsx (Apache-2.0, Copyright TesterArmy)"
-}

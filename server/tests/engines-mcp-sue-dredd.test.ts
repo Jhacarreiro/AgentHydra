@@ -1,4 +1,4 @@
-// The sue and dredd tools: each finds the sue-dredd checkout (SUE_DREDD_HOME, else the in-repo engines folder), hands
+// The sue and dredd tools: each finds the sue-dredd checkout (SUE_DREDD_HOME, else the sue-dredd folder beside AgentHydra), hands
 // the engine its arguments in a file and returns what it printed. The engines here are tiny stubs in a temp folder that
 // echo what they were given, so these tests never start a visitor or a hearing.
 import { afterEach, beforeEach, expect, describe as group, test } from 'bun:test'
@@ -68,38 +68,38 @@ afterEach(() => rmSync(base, { recursive: true, force: true }))
 
 group('resolveCheckout', () => {
   test('SUE_DREDD_HOME comes first', () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     makeCheckout(join(base, 'elsewhere'), 'env')
     expect(
       resolveCheckout('sue', { SUE_DREDD_HOME: join(base, 'elsewhere') }, join(base, 'AgentHydra')),
     ).toBe(join(base, 'elsewhere'))
   })
-  test('else the in-repo engines folder', () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
-    expect(resolveCheckout('dredd', {}, join(base, 'AgentHydra'))).toBe(
-      join(base, 'AgentHydra', 'engines'),
-    )
+  test('else the sue-dredd folder beside the checkout', () => {
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
+    expect(resolveCheckout('dredd', {}, join(base, 'AgentHydra'))).toBe(join(base, 'sue-dredd'))
   })
   test('an SUE_DREDD_HOME without the engine falls back to the folder beside', () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     expect(
       resolveCheckout('sue', { SUE_DREDD_HOME: join(base, 'empty') }, join(base, 'AgentHydra')),
-    ).toBe(join(base, 'AgentHydra', 'engines'))
+    ).toBe(join(base, 'sue-dredd'))
   })
   test('none found names both places and that nothing ran', () => {
     const wrong = join(base, 'nowhere')
     expect(() =>
       resolveCheckout('sue', { SUE_DREDD_HOME: wrong }, join(base, 'AgentHydra')),
-    ).toThrow(/SUE_DREDD_HOME \(.*nowhere\) has no .*sue\.mjs.*engines has no .*Nothing ran/)
+    ).toThrow(
+      /not installed.*SUE_DREDD_HOME \(.*nowhere\) has no .*sue\.mjs.*sue-dredd has no .*Nothing ran/,
+    )
     expect(() => resolveCheckout('dredd', {}, join(base, 'AgentHydra'))).toThrow(
-      /SUE_DREDD_HOME is not set.*engines has no/,
+      /not installed.*SUE_DREDD_HOME is not set.*sue-dredd has no/,
     )
   })
 })
 
 group('sue', () => {
   test('hands params over in a json file with the calling folder as workspace, and returns the engine JSON', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     const out = (await tool(deps(), 'sue').run({
       action: 'personas',
       params: { scope: 'all' },
@@ -113,7 +113,7 @@ group('sue', () => {
     expect(argv[3]).toBe('--json-file')
   })
   test('a relative file is resolved against the calling folder', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     const out = (await tool(deps(), 'sue').run({
       action: 'status',
       params: { file: 'notes/a.md' },
@@ -121,21 +121,21 @@ group('sue', () => {
     expect(out.json.file).toBe(join(base, 'project', 'notes', 'a.md'))
   })
   test("the engine's own refusal comes back as it printed it", async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     expect(await tool(deps(), 'sue').run({ action: 'refuse' })).toEqual({
       ok: false,
       error: 'refused by the stub',
     })
   })
   test('a crash with no JSON is an error carrying the exit code and the stderr tail', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     await expect(tool(deps(), 'sue').run({ action: 'crash' })).rejects.toThrow(
       /sue crash answered no JSON \(exit 3\): engine fell over/,
     )
   })
   test('no checkout: the error names both places', async () => {
     await expect(tool(deps(), 'sue').run({ action: 'personas' })).rejects.toThrow(
-      /SUE_DREDD_HOME is not set.*engines has no/,
+      /not installed.*SUE_DREDD_HOME is not set.*sue-dredd has no/,
     )
   })
   test("'move' and a malformed action are refused before anything runs", async () => {
@@ -146,13 +146,13 @@ group('sue', () => {
         return { done: true, code: 0, stdout: '{}', stderr: '' }
       },
     })
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     await expect(tool(d, 'sue').run({ action: 'move' })).rejects.toThrow(/hand\.mjs/)
     await expect(tool(d, 'sue').run({ action: 'rm -rf' })).rejects.toThrow(/action must be/)
     expect(launched).toBe(0)
   })
   test('a wave past the call budget keeps running and the answer names its output', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     const seen: { keep: boolean; waitMs: number }[] = []
     const d = deps({
       launch: async (_c, _a, o) => {
@@ -180,7 +180,7 @@ group('sue', () => {
 
 group('dredd', () => {
   test('a docket gets the ask through --ask-file, --json and the mcp door', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     const out = (await tool(deps(), 'dredd').run({
       action: 'docket',
       params: { ask: 'the pricing page is too wordy', url: 'https://example.test/pricing' },
@@ -196,7 +196,7 @@ group('dredd', () => {
     expect(argv).toContain('--ask-file')
   })
   test('a hearing detaches in the engine and returns its docket to poll', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     const out = (await tool(deps(), 'dredd').run({
       action: 'hearing',
       params: { ask: 'checkout feels broken' },
@@ -205,7 +205,7 @@ group('dredd', () => {
     expect(String(out.output)).toContain('Hearing started.')
   })
   test('status needs a docket, and a text answer comes back as output', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     await expect(tool(deps(), 'dredd').run({ action: 'status' })).rejects.toThrow(
       /needs params\.docket/,
     )
@@ -217,13 +217,13 @@ group('dredd', () => {
     ).toEqual({ ok: true, output: 'status: sitting' })
   })
   test('bench reads bench.json from the checkout', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     expect(await tool(deps(), 'dredd').run({ action: 'bench' })).toEqual({
       instruments: [{ id: 'stub-instrument' }],
     })
   })
   test('an unknown action and a missing ask are refused', async () => {
-    makeCheckout(join(base, 'AgentHydra', 'engines'), 'beside')
+    makeCheckout(join(base, 'sue-dredd'), 'beside')
     await expect(tool(deps(), 'dredd').run({ action: 'jail' })).rejects.toThrow(
       /action must be one of/,
     )

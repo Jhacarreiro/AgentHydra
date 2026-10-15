@@ -1,6 +1,0 @@
-{"at":"2026-09-20T18:00:03.000Z","tool":"look","url":"http://localhost:4173/","clock":{"elapsedSeconds":3}}
-{"at":"2026-09-20T18:00:08.000Z","tool":"click","url":"http://localhost:4173/","clock":{"elapsedSeconds":8}}
-{"at":"2026-09-20T18:00:20.000Z","tool":"look","url":"http://localhost:4173/signup","clock":{"elapsedSeconds":20}}
-{"at":"2026-09-20T18:01:00.000Z","tool":"click","url":"http://localhost:4173/signup","clock":{"elapsedSeconds":60}}
-{"at":"2026-09-20T18:01:10.000Z","tool":"check_email","url":"http://localhost:4173/signup","clock":{"elapsedSeconds":70}}
-{"at":"2026-09-20T18:02:00.000Z","tool":"done","url":"http://localhost:4173/events","clock":{"elapsedSeconds":120}}

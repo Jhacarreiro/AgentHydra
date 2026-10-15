@@ -53,13 +53,15 @@ const writeTools = (source: string) => {
 }
 
 describe('priceCheckDir', () => {
-  test('defaults to the in-repo engines/pricecheck when PRICECHECK_DIR is unset', () => {
-    const saved = process.env.PRICECHECK_DIR
+  test('defaults to the sue-dredd pricecheck beside AgentHydra when nothing is set', () => {
+    const saved = { dir: process.env.PRICECHECK_DIR, home: process.env.SUE_DREDD_HOME }
     delete process.env.PRICECHECK_DIR
+    delete process.env.SUE_DREDD_HOME
     try {
-      expect(priceCheckDir()).toBe(join(APP_ROOT, 'engines', 'pricecheck'))
+      expect(priceCheckDir()).toBe(join(APP_ROOT, '..', 'sue-dredd', 'pricecheck'))
     } finally {
-      if (saved !== undefined) process.env.PRICECHECK_DIR = saved
+      if (saved.dir !== undefined) process.env.PRICECHECK_DIR = saved.dir
+      if (saved.home !== undefined) process.env.SUE_DREDD_HOME = saved.home
     }
   })
 
@@ -71,6 +73,21 @@ describe('priceCheckDir', () => {
     } finally {
       if (saved === undefined) delete process.env.PRICECHECK_DIR
       else process.env.PRICECHECK_DIR = saved
+    }
+  })
+
+  test('takes pricecheck under SUE_DREDD_HOME when that checkout has it', () => {
+    mkdirSync(join(dir, 'pricecheck', 'mcp'), { recursive: true })
+    writeFileSync(join(dir, 'pricecheck', 'mcp', 'tools.mjs'), FAKE_TOOLS)
+    const saved = { dir: process.env.PRICECHECK_DIR, home: process.env.SUE_DREDD_HOME }
+    delete process.env.PRICECHECK_DIR
+    process.env.SUE_DREDD_HOME = dir
+    try {
+      expect(priceCheckDir()).toBe(join(dir, 'pricecheck'))
+    } finally {
+      if (saved.dir !== undefined) process.env.PRICECHECK_DIR = saved.dir
+      if (saved.home === undefined) delete process.env.SUE_DREDD_HOME
+      else process.env.SUE_DREDD_HOME = saved.home
     }
   })
 })

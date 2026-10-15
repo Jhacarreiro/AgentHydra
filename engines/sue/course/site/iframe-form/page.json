@@ -1,9 +1,0 @@
-{
-  "slug": "iframe-form",
-  "title": "Iframe Form",
-  "surface": "The coupon code is shown in one iframe and the form that takes it sits in a second iframe, so the visitor has to carry a value across two separate documents.",
-  "task": "Apply the coupon code shown on the page at checkout.",
-  "success": { "text": "Coupon applied" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/IframeForm.tsx (Apache-2.0, Copyright TesterArmy)"
-}

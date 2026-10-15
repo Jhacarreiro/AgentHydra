@@ -1,9 +1,0 @@
-{
-  "slug": "css-content-ui",
-  "title": "CSS Content UI",
-  "surface": "Every label on the page comes from CSS ::before content, so the DOM is empty divs with meaningless class names and text extraction or an accessibility snapshot reads nothing; the words exist only on screen.",
-  "task": "Do what the instruction on the page says: pick the right action and confirm it.",
-  "success": { "text": "Shipped successfully" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/CssContentUi.tsx (Apache-2.0, Copyright TesterArmy)"
-}

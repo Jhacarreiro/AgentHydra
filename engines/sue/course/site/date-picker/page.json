@@ -1,9 +1,0 @@
-{
-  "slug": "date-picker",
-  "title": "Date Picker",
-  "surface": "A read-only date input behind a custom calendar that opens three months early; the date cannot be typed, only reached with the month arrows and picked from a grid of bare numbers.",
-  "task": "Book an appointment for September 17, 2026.",
-  "success": { "text": "Appointment booked for September 17, 2026" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/DatePicker.tsx (Apache-2.0, Copyright TesterArmy)"
-}

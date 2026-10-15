@@ -1,9 +1,0 @@
-{
-  "slug": "async-states",
-  "title": "Async States",
-  "surface": "The page is a skeleton for two seconds, the verification code appears only in a toast that disappears after 2.5 seconds, and Verify stays disabled until a code was sent, so the visitor must wait, then read fast.",
-  "task": "Get a verification code and verify it.",
-  "success": { "text": "Code verified successfully" },
-  "plantedBug": null,
-  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/AsyncStates.tsx (Apache-2.0, Copyright TesterArmy)"
-}

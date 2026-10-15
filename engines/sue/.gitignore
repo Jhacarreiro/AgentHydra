@@ -1,5 +1,0 @@
-# SUE runtime state - never committed (SPEC.md): every run and the account ledger live here.
-# Anchored to this directory on purpose: a bare `runs/` also matched `tests/fixtures/runs/`, so the
-# sample-run fixture report.spec.mjs reads never reached git and the spec failed on every other disk.
-/runs/
-/state/

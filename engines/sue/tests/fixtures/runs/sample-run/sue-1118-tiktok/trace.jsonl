@@ -1,4 +1,0 @@
-{"at":"2026-09-20T18:00:02.000Z","tool":"look","url":"http://localhost:4173/","clock":{"elapsedSeconds":2}}
-{"at":"2026-09-20T18:00:04.000Z","tool":"click","url":"http://localhost:4173/","clock":{"elapsedSeconds":4}}
-{"at":"2026-09-20T18:00:09.000Z","tool":"scroll","url":"http://localhost:4173/","clock":{"elapsedSeconds":9}}
-{"at":"2026-09-20T18:00:15.000Z","tool":"give_up","url":"http://localhost:4173/","clock":{"elapsedSeconds":15}}
