@@ -21,8 +21,9 @@ const DECIDE_URL = 'http://127.0.0.1:7793/api/decide'
 /** Jev and Clef answer nothing on this PC (2026-10-14: the TypeSafe key is disabled, no Cloudflare route), so the
  *  call goes straight to a fast fallback model: this one answered in 0.4-0.7 s. */
 const DEFAULT_MODEL = 'cerebras-gpt-oss-120b'
-/** One model answer varies run to run; three asks at once, two agreeing, measured steadier at the same speed. */
-const VOTES = 3
+/** One model answer varies run to run: with time for it (a launch), three asks at once and two agreeing measured
+ *  steadier; inside the hook's budget one ask, since three at once come back slower. */
+const votesFor = (budgetMs: number) => (budgetMs >= 3000 ? 3 : 1)
 
 export interface LeadQuestion {
   message: string
@@ -83,7 +84,7 @@ export function hswarmDecide(q: LeadQuestion, budgetMs: number): Decision {
     tokenFile:
       process.env.AGENTHYDRA_HSWARM_TOKEN_FILE || join(homedir(), '.hswarm', 'console-token'),
     ms: Math.max(100, budgetMs - 150),
-    votes: VOTES,
+    votes: votesFor(budgetMs),
     body,
   })
   const r = spawnSync(process.execPath, ['-e', CHILD], {
