@@ -99,7 +99,7 @@ import {
   usageHistoryKeys,
 } from '../usage-history'
 import { withLimitWall, withLinkedReading, withLiveReading } from '../usage-live'
-import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
+import { lastAutoRefreshAt, markUsageSeen, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
   checkUsageForCliInstance,
@@ -353,6 +353,9 @@ app.get('/api/usage/history', (c) => {
 
 // Force one background sweep now (the same pass the auto-refresh timer runs).
 app.post('/api/usage/refresh', async (c) => c.json({ ok: true, checked: await sweepUsage() }))
+// Someone is looking at AgentHydra (its page on screen, or Desk's account menu open): the background
+// sweep keeps its set interval, and slows down an hour after the last look (usage-refresh.ts).
+app.post('/api/usage/seen', (c) => c.json({ ok: true, ...markUsageSeen() }))
 
 // MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account, so it stops
 // at its limits instead of billing. `instance_ref` is 'desktop:<dir>' or 'cli:<id>'. A person's

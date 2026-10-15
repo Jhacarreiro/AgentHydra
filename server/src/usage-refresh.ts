@@ -15,6 +15,12 @@
 //
 // Turn it off in the Instances tab's filter menu. The manual "Refresh usage" buttons work exactly the same either
 // way; this only decides whether the numbers go stale between visits.
+//
+// It reads only what has aged: a timer looks every TICK_MS and reads each reading older than the interval, so a row
+// another reader just refreshed (CliMayte placing work, the window's catch-up, a click) is not read again, and a
+// daemon relaunch reads nothing that is fresh. Nobody looking at AgentHydra for IDLE_AFTER_MS stretches the interval
+// to IDLE_INTERVAL_MIN (owner, 2026-10-14: "if I haven't loaded the instances tab or ... the Agent Hydra UI after a
+// certain period of time, it should ... significantly lower the rate of polling"); the next look reads what aged.
 
 import { climayteJournalNudge, climayteLimitWalls, climayteLiveReadings } from './climayte'
 import type { CliMayteLiveUsage } from './climayte-lib'
@@ -31,12 +37,16 @@ import {
   runKeepaliveSweep,
 } from './session-keepalive'
 import type { UsageSettings, UsageSnapshot } from './types'
+import { getCachedUsage } from './usage-cache'
 import { withLiveReading } from './usage-live'
 import {
   checkUsageForCliInstance,
   checkUsageForCodex,
   checkUsageForDesktop,
+  cliKey,
+  codexKey,
   desktopIsCheckable,
+  desktopKey,
 } from './usage-service'
 
 /**
@@ -56,6 +66,12 @@ const MIN_INTERVAL_MIN = 5
 const MAX_INTERVAL_MIN = 24 * 60
 /** Gap between instances within one sweep, so a fleet trickles instead of stampeding. */
 const STAGGER_MS = 750
+/** Nobody has looked at AgentHydra (its page on screen, or Desk's account menu) for this long: idle. */
+export const IDLE_AFTER_MS = 60 * 60_000
+/** The interval while idle, eight times the default: the readings still age into the next look. */
+export const IDLE_INTERVAL_MIN = 4 * 60
+/** How often the timer looks for a reading older than the interval. Looking reads only the cache. */
+const TICK_MS = 5 * 60_000
 
 // --- settings (db `settings` table; same getSetting/setSetting pattern as portable mode) ---------
 
@@ -105,6 +121,40 @@ export function setUsageSettings(patch: Partial<UsageSettings>): UsageSettings {
 let timer: ReturnType<typeof setInterval> | null = null
 let sweeping = false
 let lastSweepAt: string | null = null
+/** When someone last looked at AgentHydra (epoch ms); 0 until the first look since the daemon started. */
+let seenAt = 0
+/** When the timer last tried each key, so a reading that keeps failing is tried once per interval. */
+const triedAt = new Map<string, number>()
+
+/** The sweep's interval: the setting while someone looked in the last IDLE_AFTER_MS, else
+ *  IDLE_INTERVAL_MIN (or the setting, when that is longer). */
+export function sweepIntervalMs(settingMin: number, lastSeenAt: number, now: number): number {
+  const idle = now - lastSeenAt >= IDLE_AFTER_MS
+  return (idle ? Math.max(settingMin, IDLE_INTERVAL_MIN) : settingMin) * 60_000
+}
+
+/** A reading is due once it, and the last try at it, are older than the interval. A reading with no
+ *  time counts as never read. */
+export function readingDue(
+  capturedAt: string | null | undefined,
+  tried: number | undefined,
+  intervalMs: number,
+  now: number,
+): boolean {
+  const at = Date.parse(capturedAt ?? '')
+  return now - Math.max(Number.isFinite(at) ? at : 0, tried ?? 0) >= intervalMs
+}
+
+/** Someone looked at AgentHydra (POST /api/usage/seen). Back from idle, what aged is read now rather
+ *  than at the next tick. */
+export function markUsageSeen(now = Date.now()): { intervalMin: number } {
+  const settings = getUsageSettings()
+  const wasIdle = now - seenAt >= IDLE_AFTER_MS
+  seenAt = now
+  if (wasIdle && settings.autoRefresh)
+    void sweepDue().catch((err) => console.error('[usage-refresh] catch-up failed:', err))
+  return { intervalMin: sweepIntervalMs(settings.autoRefreshIntervalMin, seenAt, now) / 60_000 }
+}
 
 /** ISO timestamp of the last completed sweep, or null — surfaced so the UI can say "auto-refreshed X ago". */
 export function lastAutoRefreshAt(): string | null {
@@ -115,9 +165,10 @@ const sleep = (ms: number): Promise<void> => new Promise((r) => setTimeout(r, ms
 
 /** Desktop profiles, checked one at a time. An uncheckable one is skipped WITHOUT the stagger: it
  *  costs nothing, so there is nothing to space out. Returns how many probes actually ran. */
-async function sweepDesktopInstances(): Promise<number> {
+async function sweepDesktopInstances(due: (key: string) => boolean): Promise<number> {
   let checked = 0
   for (const inst of await listInstances()) {
+    if (!due(desktopKey(inst.dir))) continue
     try {
       if (!(await desktopIsCheckable(inst.dir))) continue
       await checkUsageForDesktop(inst.dir)
@@ -131,11 +182,12 @@ async function sweepDesktopInstances(): Promise<number> {
 }
 
 /** CLI logins, checked one at a time. */
-async function sweepCliInstances(): Promise<number> {
+async function sweepCliInstances(due: (key: string) => boolean): Promise<number> {
   let checked = 0
   for (const cli of listCliInstances()) {
     // Nothing to check with → don't fire a doomed probe every 15 minutes.
     if (!cli.loggedIn && !cli.associatedAccountId && !cli.associatedDesktopDir) continue
+    if (!due(cliKey(cli.id))) continue
     try {
       await checkUsageForCliInstance(cli.id)
       checked++
@@ -148,10 +200,11 @@ async function sweepCliInstances(): Promise<number> {
 }
 
 /** Codex homes, checked one at a time. Only a ChatGPT-auth account has quota to read. */
-async function sweepCodexInstances(): Promise<number> {
+async function sweepCodexInstances(due: (key: string) => boolean): Promise<number> {
   let checked = 0
   for (const inst of await listCodexInstances()) {
     if (inst.account?.authMode !== 'chatgpt') continue
+    if (!due(codexKey(inst.id))) continue
     try {
       await checkUsageForCodex(inst.codexHome, inst.id)
       checked++
@@ -296,25 +349,47 @@ export function keepaliveSettingsChanged(): void {
 }
 
 /**
- * One pass over every checkable instance. Sequential + staggered on purpose (see the header): the
- * point is to keep numbers warm quietly, not to win a race. Never throws; one bad instance is
- * logged and skipped so the rest of the sweep still lands.
+ * One pass over the checkable instances that `due` names. Sequential + staggered on purpose (see the
+ * header): the point is to keep numbers warm quietly, not to win a race. Never throws; one bad
+ * instance is logged and skipped so the rest of the sweep still lands.
  */
-export async function sweepUsage(): Promise<number> {
+async function sweep(due: (key: string) => boolean): Promise<number> {
   if (sweeping) return 0 // a slow sweep must never overlap the next tick
   sweeping = true
   try {
-    let checked = await sweepDesktopInstances()
-    checked += await sweepCliInstances()
+    let checked = await sweepDesktopInstances(due)
+    checked += await sweepCliInstances(due)
     const providers = getProviderSettings()
     if (providers.codexDesktopEnabled || providers.codexCliEnabled)
-      checked += await sweepCodexInstances()
-    lastSweepAt = new Date().toISOString()
-    await runCliKeepalive()
+      checked += await sweepCodexInstances(due)
+    if (checked) {
+      lastSweepAt = new Date().toISOString()
+      await runCliKeepalive()
+    }
     return checked
   } finally {
     sweeping = false
   }
+}
+
+/** Every checkable instance, now (the Refresh button: POST /api/usage/refresh). */
+export function sweepUsage(): Promise<number> {
+  return sweep(() => true)
+}
+
+/** The timer's pass: only the readings older than the interval, each judged as its turn comes, so
+ *  one another reader refreshed during the pass is skipped. */
+function sweepDue(): Promise<number> {
+  return sweep((key) => {
+    const now = Date.now()
+    const every = sweepIntervalMs(getUsageSettings().autoRefreshIntervalMin, seenAt, now)
+    const reading = key.startsWith('cli:')
+      ? keepaliveReading(climayteLiveReadings())(key)
+      : getCachedUsage(key)
+    if (!readingDue(reading?.capturedAt, triedAt.get(key), every, now)) return false
+    triedAt.set(key, now)
+    return true
+  })
 }
 
 function rearm(settings = getUsageSettings()): void {
@@ -324,8 +399,8 @@ function rearm(settings = getUsageSettings()): void {
   }
   if (!settings.autoRefresh) return
   timer = setInterval(() => {
-    void sweepUsage().catch((err) => console.error('[usage-refresh] sweep failed:', err))
-  }, settings.autoRefreshIntervalMin * 60_000)
+    void sweepDue().catch((err) => console.error('[usage-refresh] sweep failed:', err))
+  }, TICK_MS)
   // Don't hold the process open on this timer alone.
   timer.unref?.()
 }
@@ -343,7 +418,7 @@ export function startUsageRefresh(): void {
   armKeepalive()
   if (!settings.autoRefresh) return
   const kickoff = setTimeout(() => {
-    void sweepUsage().catch((err) => console.error('[usage-refresh] initial sweep failed:', err))
+    void sweepDue().catch((err) => console.error('[usage-refresh] initial sweep failed:', err))
   }, 20_000)
   kickoff.unref?.()
 }

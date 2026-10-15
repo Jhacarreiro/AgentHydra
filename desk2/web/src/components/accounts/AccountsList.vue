@@ -50,6 +50,8 @@ function dotClass(row: AccountRow): string {
 async function load() {
   error.value = null
   now.value = Date.now()
+  // A look at the accounts' usage: AgentHydra keeps its usage sweep at the set interval (server/src/usage-refresh.ts).
+  void api.agentHydra('/usage/seen', { method: 'POST' }).catch(() => {}) // floor-ok: best effort, AgentHydra may be down
   const tasks: Promise<unknown>[] = [api.pickAccount().then((p) => (pick.value = p)).catch(() => {})]
   if (!src.accounts.value.length) {
     tasks.push(

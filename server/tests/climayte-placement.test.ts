@@ -16,7 +16,13 @@ import {
   startCliMayte,
 } from '../src/climayte'
 import { resetCpuRing } from '../src/climayte-cpu'
-import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../src/climayte-lib'
+import {
+  type CliMayteAccount,
+  dueOrder,
+  fullUntilReset,
+  pickAccount,
+  rankAccounts,
+} from '../src/climayte-lib'
 import { type MachineMemory, memoryShort } from '../src/climayte-memory'
 import {
   DEFAULT_TASK_PCT,
@@ -780,5 +786,41 @@ describe('waitsForRoom', () => {
     expect(waitsForRoom(chosen, placement, [1], true, soon, now)).toBe(false)
     // 150% fits no Pro window, so waiting would be for ever: it goes where the projection is lowest.
     expect(waitsForRoom(chosen, { ...placement, expected: 150 }, [1], false, soon, now)).toBe(false)
+  })
+})
+
+describe('fullUntilReset: no reading opens the account before its reset, so CliMayte does not read it', () => {
+  const now = Date.parse('2026-10-14T12:00:00Z')
+  const hours = (h: number) => now + h * 3_600_000
+  const days = (d: number) => hours(d * 24)
+  const at = (
+    sessionPct: number | null,
+    sessionResetsAt: number | null,
+    weekPct: number | null,
+    weekResetsAt: number | null,
+  ) => ({
+    sessionPct,
+    sessionResetsAt,
+    weekPct,
+    weekResetsAt,
+  })
+  test.each([
+    ['5-hour window at the stop line, reset ahead', at(85, hours(2), 10, days(3)), null, true],
+    ['week at the stop line, reset ahead', at(5, hours(2), 92, days(3)), null, true],
+    ['under both stop lines', at(84, hours(2), 84, days(3)), null, false],
+    ['full, but the 5-hour reset has passed', at(95, null, 10, days(3)), null, false],
+    ['full week, but its reset has passed', at(5, hours(2), 100, null), null, false],
+    ['no reading at all', at(null, null, null, null), null, false],
+    [
+      'under the fleet line, at the owner cap',
+      at(60, hours(2), 10, days(3)),
+      { maxSessionPct: 60, maxWeekPct: null },
+      true,
+    ],
+    // In a week's last five hours the weekly line is 89, so 86% can take work again and is read.
+    ['86% of a week ending in 3 hours', at(5, hours(1), 86, hours(3)), null, false],
+    ['89% of a week ending in 3 hours', at(5, hours(1), 89, hours(3)), null, true],
+  ] as const)('%s', (_, a, caps, full) => {
+    expect(fullUntilReset(a, caps, now)).toBe(full)
   })
 })

@@ -822,6 +822,9 @@ export const clearUsage = (keys: string[]) =>
 /** Force one background refresh sweep now (the same pass the auto-refresh timer runs). */
 export const refreshAllUsage = () =>
   j<{ ok: boolean; checked: number }>('/api/usage/refresh', { method: 'POST' })
+/** Someone is looking at this page: the daemon keeps its usage sweep at the set interval (lib/usage-seen.ts). */
+export const reportUsageSeen = () =>
+  j<{ ok: boolean; intervalMin: number }>('/api/usage/seen', { method: 'POST' })
 /** MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account
  *  (`desktop:<dir>` / `cli:<id>`), so it stops at its limits instead of billing. */
 export const turnOffExtraUsage = (instanceRef: string) =>

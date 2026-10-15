@@ -43,6 +43,7 @@ import {
   type CliMayteWalls,
   type CliMayteWorker,
   freshestPct,
+  fullUntilReset,
   isOrgDisabled,
   isWalledNow,
   liveUsage,
@@ -545,8 +546,21 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
   const sessionPct = freshestPct(u?.session, snapshotAt, live.session, now)
   const weekPct = freshestPct(u?.weekAll, snapshotAt, live.week, now)
   const readAt = sessionReadAt(sessionPct, live.session, snapshotAt)
-  // A walled account takes no work until its wall ends, so its reading waits too.
-  const due = readAt === null || now - readAt > READING_STALE_MS
+  const sessionResetsAt = upcomingReset(
+    sessionPct,
+    limitReset(live.session, snapshotAt, u?.session),
+    now,
+  )
+  const weekResetsAt = upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now)
+  const caps = {
+    maxSessionPct: i.placement?.maxSessionPct ?? null,
+    maxWeekPct: i.placement?.maxWeekPct ?? null,
+  }
+  // A walled account takes no work until its wall ends, and a full one none until its reset, so
+  // their readings wait too.
+  const due =
+    (readAt === null || now - readAt > READING_STALE_MS) &&
+    !fullUntilReset({ sessionPct, sessionResetsAt, weekPct, weekResetsAt }, caps, now)
   const asked = refreshAsked.get(i.id)
   const untried = asked === undefined || now - asked >= READING_STALE_MS
   if (b.toPlace && due && untried && !isWalledNow(walls[i.id], now)) b.due.push(i.id)
@@ -558,13 +572,9 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
     configDir: i.configDir,
     planFactor: planFactor(i.planLabel),
     sessionPct,
-    sessionResetsAt: upcomingReset(
-      sessionPct,
-      limitReset(live.session, snapshotAt, u?.session),
-      now,
-    ),
+    sessionResetsAt,
     weekPct,
-    weekResetsAt: upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now),
+    weekResetsAt,
     readAt,
     refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
     readTriedAt: asked ?? null,

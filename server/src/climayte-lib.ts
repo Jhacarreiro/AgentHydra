@@ -854,6 +854,25 @@ export const READING_STALE_MS = 10 * 60_000
 export const readingStale = (a: Pick<CliMayteAccount, 'readAt'>, now: number): boolean =>
   a.readAt != null && now - a.readAt > READING_STALE_MS
 
+/** No reading can open this account to work before a reset: it is at its 5-hour stop line with that
+ *  window's reset still ahead, or at its weekly one likewise. Usage only climbs inside a window, so
+ *  CliMayte does not read it again until then (buildPool's `due`). 2026-10-14: with work waiting,
+ *  every account was read every 10 minutes, the full ones too: a CLI login's readings came a median
+ *  10.1 minutes apart over a day, 2,772 readings in 24 hours. */
+export function fullUntilReset(
+  a: Pick<CliMayteAccount, 'sessionPct' | 'sessionResetsAt' | 'weekPct' | 'weekResetsAt'>,
+  caps: AccountCaps | null | undefined,
+  now: number,
+): boolean {
+  const ahead = (at: number | null | undefined): at is number => at != null && at > now
+  return (
+    (a.sessionPct != null && ahead(a.sessionResetsAt) && a.sessionPct >= sessionStopPct(caps)) ||
+    (a.weekPct != null &&
+      ahead(a.weekResetsAt) &&
+      a.weekPct >= accountWeekStopPct(caps, a.weekResetsAt, now))
+  )
+}
+
 /** No task starts on this account until its usage is read again (climayte-schedule startOn): the
  *  read is running, or its reading is missing (`readAt` null) or older than READING_STALE_MS and no
  *  re-read was tried in that time. One that was tried and failed lets a worker go on the old
