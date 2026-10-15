@@ -924,14 +924,14 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** A worker session's part, read from the newest file that holds it; null when no file does yet (a miss is remembered). */
   async function partOf(sid: string, cwd: string | null, o: WorkerScan, ownRoot: string | null, allRoots: () => Promise<string[]>): Promise<WorkerPart | null> {
     let known = o.rescan ? null : foundAt.get(sid)
+    // The turn in flight is looked for in its own folder on every look: a new session's file is not there yet at its
+    // first poll, and a back-off here made the next look 5 s, then 10 s, later.
     if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
-      const ownKey = `${ownRoot}|${sid}`
-      const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
+      const own = await findSessionJsonlAsync(sid, [ownRoot], cwd)
       if (own) {
-        notFound.delete(ownKey)
         rememberFile(sid, own)
         known = own
-      } else if (!o.rescan) rememberMiss(ownKey)
+      }
     }
     const part = known ? ((await unchangedPart(sid, known, cwd)) ?? (await readPart(known, cwd))) : null
     if (part) return part
@@ -1119,6 +1119,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     startWorker,
     workersByIds,
     workerItems,
+    /** The session file a worker session was last found in: what a watch on a turn in flight follows. */
+    workerFileOf: (sessionId: string): string | null => foundAt.get(sessionId) ?? null,
     /** The home screen's stats card, consolidated over every source AgentHydra counts (stats.ts). */
     homeStats,
     setExtraWorkerIds(fn: () => string[]): void {

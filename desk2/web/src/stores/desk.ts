@@ -378,7 +378,7 @@ const placeholderMakes = new Map<string, { req: CreateChatRequest; made: Promise
 function landItems(id: string, snapshot: TranscriptItem[], olderBefore = 0): TranscriptItem[] {
   const since = [...(unloadedUpserts.get(id) ?? []), ...(itemsByChat.get(id) ?? [])]
   unloadedUpserts.delete(id)
-  const items = keepNewer(withWindowNotes(id, snapshot), since)
+  const items = withWindowNotes(id, keepNewer(snapshot, since))
   const kept = shallowReactive(items)
   itemsByChat.set(id, kept)
   windowStart.set(id, olderBefore)
@@ -798,14 +798,33 @@ async function importOutside(s: ExternalSession, fork = false, at?: string): Pro
   })
 }
 
-async function resumeExternal(sessionId: string, message: SendMessageRequest): Promise<{ queued: boolean; chatId?: string }> {
-  const s = findExternal(sessionId)
-  if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+/** Messages sent from an outside session's own view before its chat is made: drawn in that view until the chat takes them. */
+const standInBubbles = reactive(new Map<string, TranscriptItem[]>())
+function standInFail(sessionId: string, itemId: string, reason: string) {
+  const items = standInBubbles.get(sessionId) ?? []
+  standInBubbles.set(sessionId, items.map((i) => (i.id === itemId ? { ...i, sendFailed: reason } : i)))
+}
+function standInDrop(sessionId: string, itemId: string) {
+  const items = (standInBubbles.get(sessionId) ?? []).filter((i) => i.id !== itemId)
+  if (items.length) standInBubbles.set(sessionId, items)
+  else standInBubbles.delete(sessionId)
+}
+
+async function resumeExternal(sessionId: string, message: SendMessageRequest, bubble: TranscriptItem): Promise<{ queued: boolean; chatId?: string }> {
   const from = viewNow()
-  const chat = await importOutside(s)
-  // The import holds the session's history: in the cache before the send, the chat opens on the whole
-  // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
-  await landHistory(chat.id)
+  let chat: ChatSummary
+  try {
+    const s = findExternal(sessionId)
+    if (!s || !s.canResume) throw new Error('This session cannot be continued here right now.')
+    chat = await importOutside(s)
+    // The import holds the session's history: in the cache before the send, the chat opens on the whole
+    // conversation with the message under it, as the stand-in showed it, never on the new lines alone.
+    await landHistory(chat.id)
+  } catch (err) {
+    standInFail(sessionId, bubble.id, reasonOf(err))
+    throw err
+  }
+  appendItem(chat.id, streamedItems(chat.id), bubble)
   // From here the chat exists: it opens whether the send goes or not, so a refused one is a chat to
   // retry in, its message back in the box. The stand-in's composer is gone by the time the refusal
   // reaches it, so the new chat's transcript says why.
@@ -823,10 +842,12 @@ async function resumeExternal(sessionId: string, message: SendMessageRequest): P
     return { ...sent, chatId: chat.id }
   } catch (err) {
     saveDraft(typeof localStorage === 'undefined' ? null : localStorage, chat.id, message.text)
-    noteNotSent(chat.id, err instanceof Error ? err.message : String(err), message)
+    markSendFailed(chat.id, bubble.id, reasonOf(err))
+    noteNotSent(chat.id, reasonOf(err), message)
     throw err
   } finally {
     landChat(chat, from)
+    standInDrop(sessionId, bubble.id)
   }
 }
 
@@ -871,8 +892,10 @@ async function sendHeld(sessionId: string): Promise<void> {
   outsideHeld.delete(sessionId)
   saveHeld()
   const [first, ...rest] = held
+  const bubble = pendingUserItem({ text: first!.text })
+  standInBubbles.set(sessionId, [...(standInBubbles.get(sessionId) ?? []), bubble])
   try {
-    const { chatId } = await resumeExternal(sessionId, { text: first!.text })
+    const { chatId } = await resumeExternal(sessionId, { text: first!.text }, bubble)
     for (const m of rest) {
       await fetchJson(`/chats/${chatId}/messages`, {
         method: 'POST',
@@ -933,7 +956,7 @@ function withWindowNotes(chatId: string, items: TranscriptItem[]): TranscriptIte
   if (!notes) return items
   const out = [...items]
   for (const { item, reason } of notes) {
-    if (statesReason(items, reason)) continue
+    if (statesReason(items, reason) || out.some((i) => i.id === item.id)) continue
     const at = out.findIndex((i) => i.ts > item.ts)
     out.splice(at < 0 ? out.length : at, 0, item)
   }
@@ -1181,10 +1204,21 @@ export function useDesk() {
       return makeChat(placeholder, req)
     },
 
+    /** Messages sent from an outside session's view before its chat is made: drawn there until the chat takes them. */
+    standInBubblesOf(sessionId: string): TranscriptItem[] {
+      return standInBubbles.get(sessionId) ?? []
+    },
+
     /** Draws the message's bubble before the POST answers; a failed POST marks it Not sent and resolves null. */
     async send(chatId: string, message: SendMessageRequest): Promise<{ queued: boolean } | null> {
-      if (isExternalChatId(chatId)) return resumeExternal(sessionOfChatId(chatId), message)
       const clicked = performance.now()
+      if (isExternalChatId(chatId)) {
+        const sessionId = sessionOfChatId(chatId)
+        const bubble = pendingUserItem(message)
+        standInBubbles.set(sessionId, [...(standInBubbles.get(sessionId) ?? []), bubble])
+        reportAtPaint('click_to_bubble', clicked, chatId)
+        return resumeExternal(sessionId, message, bubble)
+      }
       const key = resolveChatId(chatId)
       const item = pendingUserItem(message, chatBusy(key))
       appendItem(key, streamedItems(key), item)

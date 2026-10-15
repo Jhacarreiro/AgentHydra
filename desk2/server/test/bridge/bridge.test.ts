@@ -540,6 +540,25 @@ ${line('assistant', 4, 'second answer')}
     m.answer()
     expect(await m.texts('new-acct')).toEqual(['first answer', 'second answer'])
   })
+
+  test('a turn in flight whose file appears is found on the very next look, with no miss back-off', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-in-flight-'))
+    temps.push(home)
+    const dir = join(home, 'old')
+    const folder = join(dir, 'projects', encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const f = await fake()
+    f.state.instances = [{ num: 1, id: 'old-acct', name: 'Example 1', configDir: dir, loggedIn: true, lastUsageCheck: null }]
+    const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(dir, 'projects')] })
+    const writing = { sessionId: SESSION, accountId: 'old-acct' }
+    expect(await b.workerItems([SESSION], CWD, { writing })).toEqual([])
+    writeFileSync(join(folder, `${SESSION}.jsonl`), `${line('user', 1, 'first question')}
+${line('assistant', 2, 'first answer')}
+`)
+    // The same instant as the miss: a session not in flight would wait out its back-off here.
+    const again = await b.workerItems([SESSION], CWD, { writing })
+    expect(again.filter((i) => i.kind === 'assistant_text')).toHaveLength(1)
+  })
 })
 
 describe('a chat with more session data than the settled cache holds', () => {

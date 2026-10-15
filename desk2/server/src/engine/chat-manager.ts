@@ -9,7 +9,7 @@
 
 import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync, watch } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig, Query } from '@anthropic-ai/claude-agent-sdk'
 import type {
@@ -88,7 +88,7 @@ import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
 import type { ServiceRuntime } from './service-runtime'
 
-export type ManagerBridge = Pick<Bridge, 'completionFinished' | 'startWorker' |'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'completionFinished' | 'startWorker' |'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'workerFileOf' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -233,6 +233,8 @@ interface Entry {
   turnLive?: boolean
   /** A CliMayte chat: the worker's session file and the account it was found under, so a poll does not search the session folders again. */
   cwdFile?: { sessionId: string; account: string | null; file: string }
+  /** A CliMayte chat with a turn in flight: its session file is watched, so a write is read at once (the poll stays the fallback). */
+  turnWatch?: { file: string; timer?: ReturnType<typeof setTimeout>; stop: () => void }
   /** The worker's items as the last poll went through them: the bridge answers the same array while nothing changed. */
   workerSeen?: TranscriptItem[]
   /** The account the worker's JSONL was last read under: a change means the live file may have moved, so it is looked for again. */
@@ -310,6 +312,8 @@ const MAX_MOVES = 4
 const SIGN_IN_HOLD_MS = 6 * 60 * 60 * 1000
 /** How long a worker that read done stays busy while its JSONL does not show what was sent yet (applyWorker). */
 const WORKER_END_GRACE_MS = 15_000
+/** How long a write to a turn's file waits before its worker is read (a burst of writes is read once). */
+const TURN_WATCH_MS = 100
 
 /** '#126' for a numbered account, else its label. */
 const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
@@ -1599,6 +1603,7 @@ export class ChatManager {
     this.onChatEnd?.(this.browserSessions(id))
     this.sessionMeta.tombstone(this.browserSessions(id))
     this.chats.delete(id)
+    e.turnWatch?.stop()
     const rt = e.runtime
     e.runtime = null
     if (rt) await rt.close().catch(() => {})
@@ -2028,7 +2033,11 @@ export class ChatManager {
     const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
     const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
     // Deleted meanwhile, or Undo let this worker go.
-    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
+    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) {
+      e.turnWatch?.stop()
+      e.turnWatch = undefined
+      return
+    }
     e.readAccount = w.accountId
     const newReply = this.syncWorkerItems(e, items)
     // The status after the transcript: a chat never reads done before its reply is in. A message waiting for that
@@ -2041,6 +2050,7 @@ export class ChatManager {
     }
     e.endHeldSince = undefined
     const next = this.applyWorkerStatus(e, w, was)
+    this.watchTurnFile(e, LIVE_STATUSES.has(next.status) && writing ? this.bridge.workerFileOf(writing.sessionId) : null)
     if (ending && next.status === 'idle') this.countWorkerTurn(e, w, items)
     if (next.status === 'error') this.undelivered(e)
     else if (next.waiting) this.markQueued(e)
@@ -2141,6 +2151,32 @@ export class ChatManager {
       this.noteTask(e, item)
     }
     return newReply
+  }
+
+  /** Watches the file a turn in flight writes to: a write reads the worker at once, instead of at the next poll. */
+  private watchTurnFile(e: Entry, file: string | null): void {
+    if (e.turnWatch?.file === file) return
+    e.turnWatch?.stop()
+    e.turnWatch = undefined
+    if (!file) return
+    const turn: NonNullable<Entry['turnWatch']> = {
+      file,
+      stop: () => {
+        clearTimeout(turn.timer)
+        watcher?.close()
+      }
+    }
+    let watcher: ReturnType<typeof watch> | undefined
+    try {
+      watcher = watch(file, { persistent: false }, () => {
+        clearTimeout(turn.timer)
+        turn.timer = setTimeout(() => void this.syncWorkers(e.chat.id), TURN_WATCH_MS)
+      })
+    } catch {
+      return
+    }
+    watcher.on('error', turn.stop)
+    e.turnWatch = turn
   }
 
   /** The worker's session file: the one found last time while the session and account are the same and it is still there, else searched for. */

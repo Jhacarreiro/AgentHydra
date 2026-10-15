@@ -239,6 +239,7 @@ export function fakeBridge(
       state.workerReads += 1
       return sessionIds.flatMap((s) => state.workerItems[s] ?? [])
     },
+    workerFileOf: () => null,
     listAccounts: async () => (o.picked ? [ACCOUNT_68, { ...ACCOUNT_68, ...o.picked }] : [ACCOUNT_68]),
     externalSessions: async () => state.meta(o.external ?? []),
     externalSession: async (id: string) => {
