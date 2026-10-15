@@ -2,7 +2,7 @@
   "name": "agenthydra",
   "private": true,
   "version": "2.0.4",
-  "license": "MIT",
+  "license": "PolyForm-Noncommercial-1.0.0",
   "workspaces": [
     "server",
     "orchestrator/server",

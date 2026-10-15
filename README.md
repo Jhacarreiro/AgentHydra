@@ -9,7 +9,7 @@
 [![Website](https://img.shields.io/badge/website-agenthydra.lunarwerx.com-c15f3c?style=flat-square)](https://agenthydra.lunarwerx.com)
 [![CI](https://img.shields.io/github/actions/workflow/status/LunarWerxs/AgentHydra/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/LunarWerxs/AgentHydra/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/LunarWerxs/AgentHydra?style=flat-square&color=c15f3c)](https://github.com/LunarWerxs/AgentHydra/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-c15f3c?style=flat-square)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-c15f3c?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join_the_community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/PsWpeNUzhk)
 
 </div>
@@ -175,7 +175,8 @@ bun run build && bun run start
 <details>
 <summary><b>Is it free?</b></summary>
 
-Yes, MIT-licensed, with no account or subscription. You bring your own Claude Code, Codex or
+Yes, for noncommercial use (PolyForm Noncommercial 1.0.0), with no account or subscription.
+Commercial use needs a separate license. You bring your own Claude Code, Codex or
 OpenCode.
 
 </details>
@@ -211,7 +212,7 @@ Made by [LunarWerx Studios](https://lunarwerx.com). Also see [RepoYeti](https://
 
 ## License
 
-[MIT](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE). Versions released before it stay under the MIT License.
 
 ## Star history
 
