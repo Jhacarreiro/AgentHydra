@@ -1,5 +1,5 @@
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { dirname, join } from 'node:path'
 import { type CatalogEntry, loadText } from './catalog'
 
 export type Sent = Record<string, string[]>
@@ -16,9 +16,41 @@ export function readSent(file: string): Sent {
   }
 }
 
-export function writeSent(file: string, sent: Sent): void {
+const WEEK = 7 * 24 * 60 * 60 * 1000
+
+/** When each session's list last changed, beside sent.json; a session unchanged for a week is dropped. */
+function seenFile(file: string): string {
+  return join(dirname(file), 'sent-seen.json')
+}
+
+function readSeen(file: string): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(seenFile(file), 'utf8')) as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+export function writeSent(file: string, sent: Sent, now = new Date()): void {
   mkdirSync(dirname(file), { recursive: true })
-  writeFileSync(file, JSON.stringify(sent, null, 2))
+  const before = readSent(file)
+  const seen = readSeen(file)
+  const at = now.toISOString()
+  const kept: Sent = {}
+  const keptSeen: Record<string, string> = {}
+  for (const [key, ids] of Object.entries(sent)) {
+    if (key === OWED) {
+      kept[key] = ids
+      continue
+    }
+    const changed = JSON.stringify(before[key]) !== JSON.stringify(ids)
+    const last = changed || !seen[key] ? at : seen[key]
+    if (now.getTime() - Date.parse(last) > WEEK) continue
+    kept[key] = ids
+    keptSeen[key] = last
+  }
+  writeFileSync(file, JSON.stringify(kept, null, 2))
+  writeFileSync(seenFile(file), JSON.stringify(keptSeen, null, 2))
 }
 
 export function setLeadOwed(sent: Sent, id: string): void {

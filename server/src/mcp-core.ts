@@ -1,7 +1,7 @@
 import { callerAndChat } from './hydra-core/caller'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
-import { reportRun } from './hydra-core/report-row'
+import { OUTCOMES, reportRun } from './hydra-core/report-row'
 import { trackSummary } from './hydra-core/track'
 import { answer, findTool, scope } from './hydra-core/tree'
 import { defaultDaemon, use } from './hydra-core/use'
@@ -21,7 +21,6 @@ const stringList = (v: unknown): string[] | undefined =>
   Array.isArray(v) ? v.map((x) => str(x).trim()).filter(Boolean) : undefined
 
 const MODES = ['become', 'consult', 'hire', 'load']
-const OUTCOMES = ['done', 'partial', 'failed']
 
 export const CORE_TOOLS: HydraTool[] = [
   {
@@ -125,7 +124,7 @@ export const CORE_TOOLS: HydraTool[] = [
     inputSchema: S(
       {
         chat: { type: 'string' },
-        outcome: { type: 'string', enum: OUTCOMES },
+        outcome: { type: 'string', enum: [...OUTCOMES] },
         note: { type: 'string' },
         overruled: { type: 'array', items: { type: 'string' } },
         score: { type: 'integer', minimum: 1, maximum: 5 },

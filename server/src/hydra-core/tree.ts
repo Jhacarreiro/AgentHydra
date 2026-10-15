@@ -1,5 +1,5 @@
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
-import { dirname } from 'node:path'
+import { existsSync, mkdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
+import { dirname, join } from 'node:path'
 import {
   type CatalogEntry,
   KINDS,
@@ -130,9 +130,31 @@ const TOKEN = /^(\d+|(?:person|instrument|worker|knowledge|skill):[a-z0-9-]+)$/
 
 const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 
+/** The ask the end of every run carries: the report is the only outcome signal the log gets. */
+const REPORT_ASK =
+  'When this work is finished, call core_report once: { chat, outcome: "done" | "partial" | "failed", note, score: 1-5 for the help you got, overruled?: [ids you set aside] }.'
+
+const skipsLogged = new Set<string>()
+
+function mtimeOf(file: string): number {
+  try {
+    return statSync(file).mtimeMs
+  } catch {
+    return 0
+  }
+}
+
+/** The catalog, logging each skipped entry once per (file, id, why) until that file changes. */
 function catalogFor(dir: string, now: Date): Map<string, CatalogEntry> {
   const cat = loadCatalog(dir)
-  for (const s of cat.skipped) appendLog(dir, { event: 'skip', ...s }, now)
+  for (const s of cat.skipped) {
+    const key = [dir, s.file, s.id ?? '', s.why, mtimeOf(join(dir, 'catalog', s.file))].join(
+      '\u0000',
+    )
+    if (skipsLogged.has(key)) continue
+    skipsLogged.add(key)
+    appendLog(dir, { event: 'skip', ...s }, now)
+  }
   return cat.entries
 }
 
@@ -241,9 +263,18 @@ function fill(ctx: Ctx, g: Group): void {
     appendLog(ctx.dir, { chat: ctx.chat, event: 'find', need: g.need, empty: true }, ctx.now)
 }
 
-function pageGroup(ctx: Ctx, g: Group): void {
+/** Logs every id a group showed as a miss: passed over for the next page (`more`) or rejected (`none`). */
+function missGroup(ctx: Ctx, g: Group, why: 'more' | 'none', better?: string): void {
   for (const id of g.ids)
-    appendLog(ctx.dir, { chat: ctx.chat, event: 'miss', id, need: g.need }, ctx.now)
+    appendLog(
+      ctx.dir,
+      { chat: ctx.chat, event: 'miss', id, need: g.need, why, ...(better ? { better } : {}) },
+      ctx.now,
+    )
+}
+
+function pageGroup(ctx: Ctx, g: Group): void {
+  missGroup(ctx, g, 'more')
   g.start += PAGE
   fill(ctx, g)
 }
@@ -293,7 +324,7 @@ function end(
   write = true,
 ): Reply {
   state.step = 'done'
-  const reply: Reply = { verdict, ...body }
+  const reply: Reply = { verdict, ...body, report: REPORT_ASK }
   if (verdict === 'go') {
     const lead = takeLeadOwed(ctx.files.sent, ctx.cat)
     if (lead) reply.lead = lead
@@ -423,6 +454,7 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
       return next(ctx, state, doc)
     }
     case 'q6pick': {
+      if (p.kw === 'none') for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
       if (p.kw === 'none' && p.text) {
         state.groups = [leadGroup(p.text)]
         fill(ctx, state.groups[0])
@@ -476,6 +508,7 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
         return next(ctx, state, doc)
       }
       if (p.kw === 'picks') addPicks(state, resolve(p.picks ?? [], state, ctx.cat).ids, 'hire')
+      else for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
       state.groups = []
       state.step = 'q8'
       return next(ctx, state, doc)
@@ -498,6 +531,7 @@ function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Repl
         return next(ctx, state, doc)
       }
       if (p.kw === 'picks') addPicks(state, resolve(p.picks ?? [], state, ctx.cat).ids)
+      else for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
       state.groups = []
       state.step = 'q9'
       return next(ctx, state, doc)
@@ -634,6 +668,8 @@ export function answer(
     }
     parsed = fallback(step, state)
   }
+  const dflt = fallback(step, state)
+  const defaulted = parsed.kw === dflt.kw && parsed.n === dflt.n && parsed.text === dflt.text
   state.retried = false
   state.steps.push(`${step} ${parsed.kw}`)
   appendLog(
@@ -644,6 +680,8 @@ export function answer(
       step,
       answer: squash(input.answer ?? '').slice(0, 200),
       shown: state.shown,
+      kw: parsed.kw,
+      defaulted,
     },
     now,
   )
@@ -653,7 +691,15 @@ export function answer(
   return reply
 }
 
+/** The last page core_find showed per (chat, need, kind), for the misses a `more` logs. */
 const pages = new Map<string, { start: number; ids: string[] }>()
+const PAGES_KEPT = 200
+
+function keepPage(key: string, page: { start: number; ids: string[] }): void {
+  pages.delete(key)
+  pages.set(key, page)
+  if (pages.size > PAGES_KEPT) pages.delete(pages.keys().next().value as string)
+}
 
 export function findTool(
   dir: string,
@@ -666,42 +712,37 @@ export function findTool(
   if (args.kind && !(KINDS as readonly string[]).includes(args.kind))
     throw new Error(`kind must be one of ${KINDS.join(', ')}`)
   const kinds = args.kind ? [args.kind as Kind] : undefined
-  const key = [args.chat ?? '', need, args.kind ?? ''].join('\u0000')
-  const prev = pages.get(key)
+  // A call with no chat keeps no page: two chat-less callers would otherwise page each other's list.
+  const key = args.chat ? [args.chat, need, args.kind ?? ''].join('\u0000') : null
   let start = 0
   if (args.more) {
-    for (const id of prev?.ids ?? [])
-      appendLog(dir, { chat: args.chat, event: 'miss', id, need }, now)
-    start = (prev?.start ?? 0) + PAGE
+    // No page in memory (a restart, an evicted key, no chat): the previous page is the first one.
+    const prev = (key && pages.get(key)) || {
+      start: 0,
+      ids: findPage(cat.values(), need, { kinds, start: 0 }).ids,
+    }
+    for (const id of prev.ids)
+      appendLog(dir, { chat: args.chat, event: 'miss', id, need, why: 'more' }, now)
+    start = prev.start + PAGE
   }
   const r = findPage(cat.values(), need, { kinds, start })
-  pages.set(key, { start, ids: r.ids })
-  if (!r.ids.length) appendLog(dir, { chat: args.chat, event: 'find', need, empty: true }, now)
+  if (key) keepPage(key, { start, ids: r.ids })
+  appendLog(
+    dir,
+    {
+      chat: args.chat,
+      event: 'find',
+      need,
+      ...(args.kind ? { kind: args.kind } : {}),
+      ...(start ? { start } : {}),
+      ids: r.ids,
+      total: r.total,
+    },
+    now,
+  )
   const matches = r.ids.flatMap((id) => {
     const e = cat.get(id)
     return e ? [matchOf(e)] : []
   })
   return { matches, more: r.total > start + PAGE, total: r.total }
-}
-
-export function report(
-  dir: string,
-  args: { chat: string; outcome: string; note: string; overruled?: string[] },
-  now = new Date(),
-) {
-  const state = readState(chatPaths(dir, args.chat).state)
-  const run = state?.run ?? null
-  appendLog(
-    dir,
-    {
-      chat: args.chat,
-      run,
-      event: 'report',
-      outcome: args.outcome,
-      note: args.note,
-      overruled: args.overruled ?? [],
-    },
-    now,
-  )
-  return { ok: true, run }
 }
