@@ -80,6 +80,7 @@ import {
 import { SESSION_TOOLS } from './mcp-session-tools'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
+import { SUE_DREDD_TOOLS } from './mcp-sue-dredd'
 import type { UsageSnapshot } from './types'
 
 // Tests, index.ts and main.ts import these from here, where they have always lived.
@@ -1996,6 +1997,7 @@ export const TOOLS: HydraTool[] = [
   ),
   ...DASHBOARD_TOOLS,
   ...PRICECHECK_TOOLS,
+  ...SUE_DREDD_TOOLS,
   ...MANAGER_TOOLS,
   ...CORE_TOOLS,
   {
