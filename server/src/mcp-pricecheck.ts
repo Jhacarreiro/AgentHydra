@@ -141,6 +141,11 @@ export function priceCheckTools(deps: PriceCheckDeps = LIVE_DEPS): HydraTool[] {
             description: 'scan, page, diff or check (see the description).',
           },
           page: { type: 'string', description: 'The page file, for mode page.' },
+          tree: {
+            type: 'boolean',
+            description:
+              'With mode page: also treeLines, the render tree as lines, each rendered component with its points, dearest first.',
+          },
           against: {
             type: 'string',
             description: 'A git ref to diff against (default HEAD), for mode diff.',
@@ -177,10 +182,15 @@ export function priceCheckTools(deps: PriceCheckDeps = LIVE_DEPS): HydraTool[] {
         if (mode === 'page') {
           const file = str(a.page).trim()
           if (!file) throw new Error('mode page needs page: the page file, as scan lists it')
-          const run = await deps.runCli(['page', file, '--json'], root, budget.left())
+          const args = ['page', file, '--json']
+          if (a.tree === true) args.push('--tree')
+          const run = await deps.runCli(args, root, budget.left())
           if (run.overBudget) return overBudget(run)
           const row = parseJson(run.stdout)
-          if (isPage(row)) return withDescribe(row)
+          if (isPage(row)) {
+            const { tree: _nested, ...rest } = row as ScanPage & { tree?: unknown }
+            return withDescribe(rest)
+          }
           const scanRun = await deps.runCli(['scan', '--json'], root, budget.left())
           if (scanRun.overBudget) return overBudget(scanRun)
           const found = parseScan(scanRun, root).pages.find((p) => p.page === file)

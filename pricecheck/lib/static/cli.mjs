@@ -241,15 +241,15 @@ function page(opts, file) {
   if (!file) throw new Error('pricecheck: page needs a file')
   const rel = relOf(opts.root, file)
   const p = measurePage(opts.root, rel, undefined, { trace: opts.tree })
+  const lines = () => treeLines(p.tree, { min: opts.min ? Number(opts.min) : Math.max(1, p.points / 100), depth: opts.depth ? Number(opts.depth) : 8 })
   if (opts.json) {
-    console.log(JSON.stringify(named(p), null, 2))
+    console.log(JSON.stringify(opts.tree ? { ...named(p), treeLines: lines() } : named(p), null, 2))
     return 0
   }
   console.log(`${rel}: ${describe(p, loadConfig(opts.root).list)}`)
   if (opts.tree) {
-    const min = opts.min ? Number(opts.min) : Math.max(1, p.points / 100)
     console.log('render tree (each line counts everything inside it):')
-    for (const line of treeLines(p.tree, { min, depth: opts.depth ? Number(opts.depth) : 8 })) console.log(line)
+    for (const line of lines()) console.log(line)
     return 0
   }
   for (const f of topFiles(p, 50)) console.log(`  ${String(f.points).padStart(7)}  ${f.file}`)

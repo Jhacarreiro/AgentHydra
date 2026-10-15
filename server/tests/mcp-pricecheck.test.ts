@@ -154,6 +154,24 @@ group('price_check', () => {
     expect(calls.length).toBe(0)
   })
 
+  test('mode page with tree asks the CLI for the render tree and returns its lines, not the nested nodes', async () => {
+    const row = {
+      ...scanJson.pages[1],
+      tree: { children: [{ points: 20, children: [] }] },
+      treeLines: ['     20  <Hero> src/Hero.vue'],
+    }
+    const { deps, calls } = fakeDeps(() => ok(JSON.stringify(row)))
+    const out = (await byName(priceCheckTools(deps), 'price_check').run({
+      cwd: ROOT,
+      mode: 'page',
+      page: 'src/views/Landing.vue',
+      tree: true,
+    })) as any
+    expect(calls[0].args).toEqual(['page', 'src/views/Landing.vue', '--json', '--tree'])
+    expect(out.treeLines).toEqual(['     20  <Hero> src/Hero.vue'])
+    expect(out.tree).toBeUndefined()
+  })
+
   test('mode check reports ok false with the failure lines when the CLI exits non-zero', async () => {
     const { deps } = fakeDeps(() => ({
       code: 1,

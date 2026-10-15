@@ -167,5 +167,10 @@ group('page --tree', () => {
     ])
     const json = JSON.parse((await capture(['page', 'src/views/Home.vue', '--tree', '--json', '--root', dir])).out)
     expect(json.tree.children.map((n) => n.points)).toEqual([1, 9])
+    expect(json.treeLines).toEqual([
+      "      9  branch 1 of 2 at src/views/Home.vue:3",
+      "      9    <Panel> src/components/Panel.vue (v-if tab === 'a')",
+      '      1  <Small> src/components/Small.vue',
+    ])
   })
 })
