@@ -597,11 +597,11 @@ export const THREADS_RUNNING: StatusGlyph = { shape: 'dot', tone: 'warning', mot
 
 /**
  * A row's dot with its running sub-tasks counted (Sidebar.vue's runningThreads): a row whose own dot is not running,
- * waits on the owner or errs, but which has `running` sub-tasks, shows THREADS_RUNNING. Yellow (needs you) and red
- * (error) stay as they are, and so does a dot that already runs.
+ * waits on the owner or errs, but which has `running` sub-tasks, shows THREADS_RUNNING. Yellow (needs you), red
+ * (error) and the usage limit's pink ring stay as they are, and so does a dot that already runs.
  */
 export function withThreads(glyph: StatusGlyph, running: number): StatusGlyph {
-  if (!running || glyph.motion === 'blink' || glyph.tone === 'warning' || glyph.tone === 'danger') return glyph
+  if (!running || glyph.motion === 'blink' || glyph.tone === 'warning' || glyph.tone === 'danger' || glyph.tone === 'limited') return glyph
   return THREADS_RUNNING
 }
 

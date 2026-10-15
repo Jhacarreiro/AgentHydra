@@ -367,6 +367,8 @@ describe('status glyph language', () => {
   it('sub-tasks never take a question its pulse or an error its red; a green unread row with sub-tasks turns orange', () => {
     expect(withThreads(statusGlyph({ status: 'needs_you', unread: false }), 2)).toMatchObject({ tone: 'warning', motion: 'pulse' })
     expect(withThreads(statusGlyph({ status: 'error', unread: false }), 2)).toMatchObject({ tone: 'danger' })
+    // A Prime on a usage limit keeps its pink ring while its threads run: the limit is its own row in the rulebook.
+    expect(withThreads(statusGlyph({ status: 'limited', unread: false }), 2)).toMatchObject({ shape: 'ring', tone: 'limited', label: 'Usage limit' })
     expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ tone: 'warning', motion: 'none', label: 'Replied, workers still running' })
     expect(withThreads(statusGlyph({ status: 'working', unread: false }), 1)).toMatchObject({ tone: 'muted', motion: 'blink' })
   })
