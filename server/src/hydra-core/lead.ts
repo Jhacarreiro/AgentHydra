@@ -107,11 +107,12 @@ const CACHE_MAX = 100
 const cache = new Map<string, LeadPick>()
 
 const noModel: Decider = () => ({ answer: null, error: 'no model call under test' })
-let decider: Decider = process.env.NODE_ENV === 'test' ? noModel : hswarmDecide
+const defaultDecider = (): Decider => (process.env.NODE_ENV === 'test' ? noModel : hswarmDecide)
+let decider: Decider = defaultDecider()
 
-/** Tests set a mock; null puts the real call back. */
+/** Tests set a mock; null puts the default back (no model call under test, so no test reaches the network). */
 export function setDecider(d: Decider | null): void {
-  decider = d ?? hswarmDecide
+  decider = d ?? defaultDecider()
   cache.clear()
 }
 

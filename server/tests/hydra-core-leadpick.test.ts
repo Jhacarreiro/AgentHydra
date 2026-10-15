@@ -247,6 +247,19 @@ describe('lead choice (A2-F1)', () => {
     expect(got.answer).toBeNull()
     expect(ms).toBeLessThan(1400)
   })
+
+  test('clearing a mock under test puts back no model call, so later test files never reach the network', () => {
+    mockModel(() => 'person:sam-backend')
+    setDecider(null)
+    pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
+      cache: false,
+      log: { dir, chat: 'lp-net' },
+    })
+    expect(logOf(dir).find((e) => e.event === 'lead-pick')).toMatchObject({
+      path: 'words',
+      error: 'no model call under test',
+    })
+  })
 })
 
 describe('the word ranker behind the model (A2-F2, A2-F3)', () => {
