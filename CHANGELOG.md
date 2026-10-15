@@ -7,6 +7,12 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A chat you move to an open account keeps its settings.** Move to account now puts the chat on Bypass
+  permissions at the effort it had before, in the app that is already running, instead of leaving it on that
+  app's defaults until it restarts.
+- **Pick several chats in the sidebar and act on them at once.** Hold Ctrl and click to pick chats one by one, or
+  hold Shift and click to pick a run of them. Right-click any picked chat for one menu that pins, marks, archives,
+  moves to a group or moves to another account all of them. Esc or a plain click lets them go.
 - **A chat's menu says how long ago it last did something.** Right-click a chat (or open its three-dot menu) and
   the line under its ID reads "Last action" and how long ago, in minutes, hours, days, weeks, months or years.
   Hover it for the exact time. Opening, renaming or pinning a chat does not count as an action.

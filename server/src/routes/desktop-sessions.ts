@@ -19,6 +19,7 @@ import {
   invalidateSessionMetaCache,
 } from '../instance-sessions'
 import { isProfileRunning, keepChatOn, queueRetireOnClose } from '../move-retire-on-close'
+import { landMovedSettingsInApp } from '../move-settings-in-app'
 import { type SettleDeps, settleMovedSource, usageAtWall } from '../move-source-settle'
 import { newChatUltracodeEnabled, withUltracode } from '../new-chat-defaults'
 import { samePathKey } from '../path-key'
@@ -772,7 +773,8 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // TWO LANDINGS, chosen by whether the target app is running (owner ask, 2026-09-03):
   //   · running -> the app's own import creates the record; the carried settings are merged onto
   //     it with the title and the bypass stamp, and remembered so the sweep keeps them there until
-  //     that app's next start makes them permanent.
+  //     that app's next start makes them permanent. The running app also gets the effort and Bypass
+  //     through its own calls (move-settings-in-app.ts), so the chat does not wait for that restart.
   //   · closed  -> the record is written straight into the target's store, a near-copy of the
   //     source's, and the app finds it there - settings intact - when it starts. No boot, nothing
   //     to fight. This used to be refused outright ("importing would boot that instance"); the
@@ -839,6 +841,13 @@ app.post('/api/sessions/:id/migrate', async (c) => {
   // flip, so an unrelated twin in the same store is not resurrected beside it.
   const targetUnarchived = unarchiveChatRecord(landedPath)
 
+  // A running app holds the moved chat in memory, so the disk carry above only lands at its next
+  // start: push the source's effort and Bypass through the app's own calls now. A failure is
+  // reported in the answer and never undoes the verified landing. A closed app reads the record at
+  // its next start, so the cold path does not call this.
+  const settingsInApp =
+    landing === 'hot' ? await landMovedSettingsInApp(targetDir, landedPath, sourceMeta) : null
+
   // THE NAME HAS TO SURVIVE THE MOVE TOO (owner report, 2026-09-09: chats arriving on the new
   // account called "General coding session"). The hot landing's title is a single disk write into
   // a store the RUNNING target app is holding in memory - where the import handler left the title
@@ -897,6 +906,7 @@ app.post('/api/sessions/:id/migrate', async (c) => {
     verified: true,
     landedPath,
     targetUnarchived,
+    ...(settingsInApp ? { settingsInApp } : {}),
     ...(staleLoginSetAside.length ? { staleLoginSetAside } : {}),
     sourceArchived: settled.filter((s) => s.changed).map((s) => s.profile),
     // Per old account: how its row was retired, or why it was not. A profile in sourceStillShown

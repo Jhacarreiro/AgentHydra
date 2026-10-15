@@ -12,7 +12,9 @@
 //   · running -> the app creates the record; we merge the carried settings onto it right where the
 //     title and the bypass stamp are written, and remember them (db migrated_chat_settings) so the
 //     standing sweep can put them back each time the running app re-saves its in-memory copy over
-//     them. They take effect at that app's next start, exactly like the bypass stamp.
+//     them. They take effect at that app's next start, exactly like the bypass stamp. The move route
+//     now also pushes effort, ultracode and Bypass into the running app (move-settings-in-app.ts), so
+//     this disk carry is the backstop.
 //   · closed  -> there is no app to fight. The record is written straight into the target's store,
 //     as a near-copy of the source record, and the app finds it there, settings intact, when it
 //     starts. This is the case the owner named: move to a closed account, open it, everything is
