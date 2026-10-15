@@ -7,8 +7,10 @@ import {
   type FreeInstance,
   noteFreeOutcome,
   noteFreeSend,
+  noteProviderOutcome,
   paceCap,
   pickFreeAccount,
+  providerDown,
   resetFreeHealth,
   restingFor,
   windowResetAt,
@@ -110,6 +112,32 @@ describe('pickFreeAccount', () => {
     for (let n = 0; n < 61; n++) noteFreeSend('b', now - n * 1000)
     noteFreeOutcome('b', 'rate_limited', now)
     expect(paceCap(gpt, now)).toBe(54)
+    resetFreeHealth()
+  })
+
+  test('a provider failing five sends in a row takes no new thread; after its rest one probe goes, a failure rests it longer', () => {
+    // 2026-10-15: chatgpt.com answered 421 of 421 sends 404 not_found; no account rested, so ChatGPT kept taking work.
+    resetFreeHealth()
+    const now = Date.now()
+    for (let n = 0; n < 4; n++) noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)).toBeNull()
+    noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)?.until).toBe(now + 10 * 60_000)
+    const gptOnly = INSTANCES.filter((i) => i.id === 'b')
+    expect(pickFreeAccount(gptOnly, new Set(), {})).toBeNull()
+    expect(pickFreeAccount(INSTANCES, new Set(), {})?.provider).toBe('claude')
+    expect(pickFreeAccount(gptOnly, new Set(), { account: 2 })?.num).toBe(2) // a named account is never held back
+    // The rest over: one probe, and nothing else until it ends.
+    resetFreeHealth()
+    const past = now - 11 * 60_000
+    for (let n = 0; n < 5; n++) noteProviderOutcome('chatgpt', 'not_found', past)
+    const two = [INSTANCES[1], { ...INSTANCES[1], id: 'e', num: 5 }]
+    expect(pickFreeAccount(two, new Set(), {})?.provider).toBe('chatgpt')
+    expect(pickFreeAccount(two, new Set(['b']), {})).toBeNull()
+    noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)?.until).toBe(now + 20 * 60_000)
+    noteProviderOutcome('chatgpt', null, now)
+    expect(providerDown('chatgpt', now)).toBeNull()
     resetFreeHealth()
   })
 })

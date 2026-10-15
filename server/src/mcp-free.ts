@@ -191,6 +191,60 @@ export function restingFor(instanceId: string, now = Date.now()): Rest | null {
   return rest && rest.until > now ? rest : null
 }
 
+/** A whole provider down: PROVIDER_STREAK sends in a row failed on it, across its accounts, whatever the code
+ *  (2026-10-15: chatgpt.com answered every send 404 "Model not found", code not_found, 421 of 421 in a day; no
+ *  account rested, since the code is not an account's, so 49 ChatGPT accounts kept taking work Claude Free would
+ *  have answered). While down its accounts take no new thread unless one is named; when the rest ends ONE send
+ *  probes it, a success clears it and a failure rests it twice as long. */
+interface ProviderRest {
+  streak: number
+  until: number
+  strikes: number
+  /** When the probe after a rest was sent; another may go once it is PROBE_STALE_MS old with no outcome. */
+  probing?: number
+  code?: string
+}
+const providerRests = new Map<Provider, ProviderRest>()
+const PROVIDER_STREAK = 5
+const PROVIDER_REST_MS = 10 * 60_000
+const PROVIDER_MAX_REST_MS = 2 * 60 * 60_000
+const PROBE_STALE_MS = 10 * 60_000
+
+export function noteProviderOutcome(
+  provider: Provider | undefined,
+  code: string | null,
+  now = Date.now(),
+): void {
+  if (!provider) return
+  if (code == null) {
+    providerRests.delete(provider)
+    return
+  }
+  const r = providerRests.get(provider) ?? { streak: 0, until: 0, strikes: 0 }
+  r.streak++
+  r.code = code
+  delete r.probing
+  if (r.streak >= PROVIDER_STREAK) {
+    r.strikes++
+    r.until = now + Math.min(PROVIDER_REST_MS * 2 ** (r.strikes - 1), PROVIDER_MAX_REST_MS)
+  }
+  providerRests.set(provider, r)
+}
+
+/** The provider's rest while it is down, or while its one probe is out; null when it may take new threads. */
+export function providerDown(provider: Provider, now = Date.now()): ProviderRest | null {
+  const r = providerRests.get(provider)
+  if (!r || r.streak < PROVIDER_STREAK) return null
+  if (r.until > now) return r
+  return r.probing != null && now - r.probing < PROBE_STALE_MS ? r : null
+}
+
+/** A pick of a down provider's account after its rest is the probe: no other goes until it ends. */
+function notePicked(i: FreeInstance, now: number): void {
+  const r = providerRests.get(i.provider)
+  if (r && r.streak >= PROVIDER_STREAK && r.until <= now) r.probing = now
+}
+
 // ChatGPT Free answered about 75 new chats in half an hour and then refused every send for 30-60 minutes (owner,
 // 2026-10-08: "automatically, dynamically adjust cooldown rates globally to keep them from hitting their burst
 // rate"; that day #2 and #6 locked out 17 times, at exactly 75 in the trailing 30 minutes 9 times). Every free
@@ -296,6 +350,7 @@ function pacedUntil(id: string, now: number): number {
 /** For tests: forget every rest, pick, send and learned cap. */
 export function resetFreeHealth(): void {
   rests.clear()
+  providerRests.clear()
   lastPicked.clear()
   sends.clear()
   paces = {}
@@ -315,7 +370,7 @@ export function eligibleAccounts(
       i.loggedIn &&
       (!want.provider || i.provider === want.provider) &&
       (want.account == null
-        ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id)
+        ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id) && !providerDown(i.provider)
         : i.num === want.account),
   )
 }
@@ -349,6 +404,7 @@ export function pickFreeAccount(
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
       a.num - b.num,
   )
+  if (free[0] && want.account == null) notePicked(free[0], Date.now())
   return free[0] ?? null
 }
 
@@ -473,6 +529,7 @@ async function pollRunning(it: Item, tick: Tick) {
       finish(it, job.result, inst)
       const code = job.result?.ok ? null : (job.result?.error?.code ?? 'unknown')
       if (it.instanceId) noteFreeOutcome(it.instanceId, code, Date.now(), windowResetAt(inst))
+      noteProviderOutcome(inst?.provider, code)
       if (code) retryElsewhere(it, code)
     }
   } catch (e) {
@@ -699,7 +756,13 @@ async function freeStatus() {
   return {
     ready: status.ready,
     accounts: status.instances.map((i) => {
-      const rest = restingFor(i.id)
+      const own = restingFor(i.id)
+      const down = own ? null : providerDown(i.provider, now)
+      const rest =
+        own ??
+        (down
+          ? { until: down.until, code: `${i.provider} down: ${down.code}`, strikes: down.strikes }
+          : null)
       const cap = paceCap(i, now)
       const paced = cap != null && pacedOut(i, now)
       return {

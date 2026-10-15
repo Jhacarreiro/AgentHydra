@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free work stops going to a provider that is failing every send.** After five failed sends in a row, its accounts
+  take no new work for 10 minutes (doubling up to 2 hours), and HSwarm sees them as resting. When the rest ends, one
+  send tests the provider. Before, ChatGPT Free failed 421 of 421 sends in a day while Claude Free accounts sat idle.
+- **A routine has a details view with every run and its stats.** Settings > Managers > Routines > All runs & stats shows how many runs it has had, how many succeeded or failed, its average time, what its runs added up to (Archangel: fixes landed and the rest), and the whole run list a page at a time.
 - **The model's name under the message box is now the model menu.** Click it to pick a model; the name changes with
   the pick. The three-dot button is gone. A Claude Desktop chat shows the model it really runs on (it said Sonnet 5.5
   on chats running Opus 5.5), and Fine, Sus and Bad each explain themselves on hover.
