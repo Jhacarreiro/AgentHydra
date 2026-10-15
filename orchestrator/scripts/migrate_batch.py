@@ -115,6 +115,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -1633,6 +1634,48 @@ def _recheck_provisional_settles(items: list) -> dict | None:
     }
 
 
+#: How long the sweep waits for the source store to stop calling a killed engine live.
+_SOURCE_KILL_CONFIRM_SECS = 15
+
+
+def _kill_source_engine(sid: str, src: str, row: dict) -> dict:
+    """Kill the engine the SOURCE app is running for a landed chat, and confirm on the source.
+
+    ⛔ WHY (owner, 2026-10-15: "you seemed to have missed one ... still there and still
+    running"). The #187 -> #215 drain killed 'Dealflow app Google Look styling' on
+    --terminate-live and the move landed, but #187's app was still open and started a NEW
+    engine for the chat at once (engineReleased: "the app kept the engine: work is in flight").
+    The app then refused every settle with NATIVE_REFUSAL (isRunning), the final sweep re-settled
+    into the same refusal, and the chat sat unarchived AND working on the account being shut
+    down, beside its landed copy: two writers on one transcript.
+
+    Scoped to the source on purpose: a moved chat keeps its session id, so enginelib's
+    cross-account liveness read would see the landed copy's engine and call this kill
+    unconfirmed. The pid comes from the source account's own row, read just now."""
+    pid = row.get("livePid")
+    if not pid:
+        return {"stopped": False, "pid": None, "why": "the source row is live but names no pid"}
+    try:
+        clilib.run_text(["taskkill", "/PID", str(int(pid)), "/T", "/F"], timeout=30)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+        return {"stopped": False, "pid": pid, "why": f"taskkill failed: {err}"}
+    t0 = time.time()
+    while time.time() - t0 < _SOURCE_KILL_CONFIRM_SECS:
+        try:
+            again = [r for r in hydralib.chats(instance=src, archived="hide")
+                     if str(r.get("sessionId") or "") == sid]
+        except hydralib.DaemonError:
+            again = None  # a flaky read confirms nothing either way - keep polling
+        if again is not None and not any(r.get("live") for r in again):
+            ledgerlib.note("terminate", sid, note=(
+                f"final sweep: pid {pid} on {src} restarted after the move - killed again"))
+            return {"stopped": True, "pid": pid, "why": f"killed the source app's restarted "
+                    f"engine (pid {pid}) on {src}", "confirmedSecs": round(time.time() - t0, 1)}
+        time.sleep(1)
+    return {"stopped": False, "pid": pid, "why": f"taskkill was issued for pid {pid} but {src} "
+            f"still lists the chat live after {_SOURCE_KILL_CONFIRM_SECS}s"}
+
+
 def _sweep_repair(item, sid: str, src: str, fleet: dict) -> bool:
     """Re-drive the settle for one landed chat the sweep still saw on its source. True when the
     source no longer shows it afterwards."""
@@ -1691,6 +1734,10 @@ def _final_source_sweep(items: list, parsed) -> dict | None:
         if sid not in shown:
             continue
         src = str(shown[sid].get("instance") or "")
+        # A kill this batch was already allowed for this chat (--terminate-live, or the
+        # full-source standing order) covers the engine the source app restarted after it.
+        if shown[sid].get("live") and (parsed.terminate_live or item.terminated is not None):
+            item.payload["sourceRestartKilled"] = _kill_source_engine(sid, src, shown[sid])
         if fleet is None and item.landing is not None:
             try:
                 fleet = hydralib.fleet()
