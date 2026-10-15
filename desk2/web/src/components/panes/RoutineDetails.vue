@@ -8,7 +8,7 @@ import type { RoutineDetails, RoutineRun } from '@shared/routines'
 import { usePaneApi } from './api'
 import { BUTTON } from './settings-styles'
 import { outcomeKind, spanOf } from './routine-view'
-import { counterLabel, counterTiles, mergeRuns, runCounterText, statTiles, totalTiles, trendRows } from './routine-details'
+import { counterLabel, runStamp, counterTiles, mergeRuns, runCounterText, statTiles, totalTiles, trendRows } from './routine-details'
 
 const props = defineProps<{ id: string; name: string }>()
 const emit = defineEmits<{ back: [] }>()
@@ -64,7 +64,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
 </script>
 
 <template>
-  <section class="mt-3" :aria-label="`${name} details`">
+  <section class="mt-3 w-0 min-w-full" :aria-label="`${name} details`">
     <div class="flex items-center gap-2">
       <button type="button" :class="[BUTTON, 'gap-1.5']" @click="emit('back')">
         <ArrowLeft class="size-3.5" aria-hidden="true" />All routines
@@ -83,7 +83,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
       <div v-if="details.headline" class="mt-1 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ details.headline }}</div>
 
       <h4 class="mt-3 text-ui-sm leading-4.5 text-text-2">Runs</h4>
-      <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1.5">
+      <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(min(6rem,100%),1fr))] gap-1.5">
         <li v-for="t in tiles" :key="t.key" :class="TILE" :title="t.title">
           <div class="text-ui-sm leading-4.5 text-text-muted">{{ t.label }}</div>
           <div class="tnum text-ui-lg leading-5 text-text">{{ t.value }}</div>
@@ -92,7 +92,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
 
       <template v-if="totals.length">
         <h4 class="mt-3 text-ui-sm leading-4.5 text-text-2">Totals</h4>
-        <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1.5">
+        <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(min(6rem,100%),1fr))] gap-1.5">
           <li v-for="t in totals" :key="t.key" :class="TILE">
             <div class="text-ui-sm leading-4.5 text-text-muted">{{ t.label }}</div>
             <div class="tnum text-ui-lg leading-5 text-text">{{ t.value }}</div>
@@ -102,7 +102,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
 
       <template v-if="counters.length">
         <h4 class="mt-3 text-ui-sm leading-4.5 text-text-2">Across all runs</h4>
-        <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(6.5rem,1fr))] gap-1.5">
+        <ul class="mt-1 grid grid-cols-[repeat(auto-fill,minmax(min(6rem,100%),1fr))] gap-1.5">
           <li v-for="t in counters" :key="t.key" :class="TILE">
             <div class="text-ui-sm leading-4.5 text-text-muted">{{ t.label }}</div>
             <div class="tnum text-ui-lg leading-5 text-text">{{ t.value }}</div>
@@ -119,7 +119,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
 
       <template v-for="g in trendGroups" :key="g.name">
         <h4 class="mt-3 text-ui-sm leading-4.5 text-text-2">{{ counterLabel(g.name) }}</h4>
-        <ul class="mt-1 grid gap-0.5">
+        <ul class="mt-1 grid grid-cols-[minmax(0,1fr)] gap-0.5">
           <li v-for="row in g.rows" :key="row.name" class="grid grid-cols-[minmax(0,1fr)_auto_auto_auto] items-center gap-x-4 px-1.5 text-ui-sm leading-6">
             <span class="truncate text-text-2">{{ row.label }}</span>
             <span class="tnum text-text">{{ row.latest }}</span>
@@ -133,7 +133,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
 
       <h4 class="mt-4 text-ui-sm leading-4.5 text-text-2">All runs ({{ details.stats.total }})</h4>
       <div v-if="!runs.length" class="text-ui-sm leading-4.5 text-text-muted">No runs yet.</div>
-      <ul v-else class="mt-1 grid gap-0.5">
+      <ul v-else class="mt-1 grid grid-cols-[minmax(0,1fr)] gap-0.5">
         <li v-for="r in runs" :key="r.startedAt">
           <button
             type="button"
@@ -145,8 +145,8 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
             <CircleCheck v-if="outcomeKind(r.outcome) === 'ok'" class="size-3.5 shrink-0 text-success" aria-hidden="true" />
             <CircleAlert v-else-if="outcomeKind(r.outcome) === 'failed'" class="size-3.5 shrink-0 text-danger-text" aria-hidden="true" />
             <CircleMinus v-else class="size-3.5 shrink-0 text-text-muted" aria-hidden="true" />
-            <span class="text-text-2">{{ stamp(r.startedAt) }}</span>
-            <span class="tnum text-text-muted">{{ spanOf(r.endedAt - r.startedAt) }} · {{ r.outcome }}</span>
+            <span class="shrink-0 text-text-2" :title="stamp(r.startedAt)">{{ runStamp(r.startedAt) }}</span>
+            <span class="tnum shrink-0 text-text-muted">{{ spanOf(r.endedAt - r.startedAt) }} · {{ r.outcome }}</span>
             <span v-if="runCounterText(r.lastLine)" class="tnum min-w-0 truncate text-text-muted">{{ runCounterText(r.lastLine) }}</span>
             <LoaderCircle v-if="r.description?.state === 'pending'" class="size-3.5 shrink-0 animate-spin text-text-muted" aria-label="Describing the run" />
             <ChevronRight v-if="openable(r)" class="ms-auto size-3.5 shrink-0 text-text-muted transition-transform" :class="openRuns.has(r.startedAt) ? 'rotate-90' : ''" aria-hidden="true" />

@@ -23,9 +23,11 @@ export function durationText(ms: number | null): string {
 
 export const percentText = (rate: number | null): string => (rate === null ? '-' : `${Math.round(rate * 100)}%`)
 
-/** A date for 'Since': 'Oct 12, 2026'. */
-export function sinceText(ms: number | null): string {
-  return ms === null ? '-' : new Date(ms).toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' })
+/** A date for 'Since': 'Oct 12', with the year when it is not this one. */
+export function sinceText(ms: number | null, now = Date.now()): string {
+  if (ms === null) return '-'
+  const d = new Date(ms)
+  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' }) })
 }
 
 /** The tiles every routine gets, from its whole history. Failed and busy runs are counted apart. */
@@ -101,3 +103,6 @@ export function runCounterText(line: string): string {
   for (const m of line.matchAll(/(?:^|[\s,:;(])([A-Za-z][A-Za-z_-]{1,29})[ =]+(\d+)(?![\w.:-])/g)) out.push(`${m[1]!.toLowerCase()} ${m[2]}`)
   return out.length >= 2 ? out.join(' · ') : ''
 }
+
+/** A run's start for the list: 'Oct 15, 6:23 AM' (its tooltip has the full stamp). */
+export const runStamp = (ms: number): string => new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
