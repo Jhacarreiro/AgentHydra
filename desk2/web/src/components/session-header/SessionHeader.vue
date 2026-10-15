@@ -26,7 +26,7 @@ import { modelName } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import { useShellSource } from '@/components/shell/source'
 import { showInstanceInHydra } from '@/components/hydra/api'
-import { ah } from './ah'
+import { ah, settingsMissed } from './ah'
 import { ahInstances, refreshAhInstances, setInstanceAccount } from './instances'
 import {
   accountName,
@@ -271,9 +271,10 @@ async function migrateTo(t: { ref: string; name: string }) {
   migrating.value = true
   try {
     const x = await ah.migrate(r, t.ref)
+    const missed = settingsMissed(x)
     if (!x.ok) say(x.error ?? "Couldn't migrate this chat", true)
-    else if (x.sourceStillShown?.length) say(`Migrated to ${t.name}. An old account still lists it.`, true)
-    else say(`Migrated to ${t.name}. The chat is in that desktop app now, ready to carry on.`)
+    else if (x.sourceStillShown?.length) say(`Migrated to ${t.name}. An old account still lists it.${missed}`, true)
+    else say(`Migrated to ${t.name}. The chat is in that desktop app now, ready to carry on.${missed}`, !!missed)
   } catch (err) {
     say(err instanceof Error ? err.message : "Couldn't migrate this chat", true)
   } finally {

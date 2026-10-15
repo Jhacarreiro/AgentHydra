@@ -17,7 +17,7 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { duplicateSession, moveCodexSession, moveSession, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
+import { duplicateSession, moveCodexSession, moveSession, settingsMissed, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
 import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -716,7 +716,7 @@ async function moveOne(sessionId: string, ref: string, label: string): Promise<M
   if (codex && src.external.value.some((s) => s.id === sessionId && codexBusy(s))) return { ok: false, error: 'it is still working in Codex. Let the turn finish, then move it.' }
   const before = src.external.value.find((s) => s.id === sessionId)
   try {
-    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; stoppedCommands?: string[]; restored?: boolean; destinationThreadId?: string } = codex
+    const x: { ok: boolean; error?: string; sourceStillShown?: string[]; settingsInApp?: { ok: boolean; effort: string; ultracode: boolean; permissionMode: string | null; reason?: string }; stoppedCommands?: string[]; restored?: boolean; destinationThreadId?: string } = codex
       ? await moveCodexSession(sessionId, ref, { unassigned: !!before?.unassigned })
       : await moveSession(sessionId, ref)
     if (!x.ok) return { ok: false, error: x.error ?? 'AgentHydra did not say why' }
@@ -727,12 +727,13 @@ async function moveOne(sessionId: string, ref: string, label: string): Promise<M
     if (before?.unassigned) await src.updateSessionMeta(sessionId, { unassigned: false }).catch(() => {})
     // A Codex move makes a new chat (a new id): the note goes with it.
     if (before?.note && x.destinationThreadId) await src.updateSessionMeta(x.destinationThreadId, { note: before.note }).catch(() => {})
+    const missed = settingsMissed(x)
     const note = x.restored
-      ? `Back on ${label}.`
+      ? `Back on ${label}.${missed}`
       : x.sourceStillShown?.length
-        ? `Moved to ${label}. An old account still lists it.`
-        : `Moved to ${label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}`
-    return { ok: true, note, forMs: stopped ? 15000 : 8000 }
+        ? `Moved to ${label}. An old account still lists it.${missed}`
+        : `Moved to ${label}. It is in that ${codex ? 'Codex' : 'desktop'} app now.${stopped}${missed}`
+    return { ok: true, note, forMs: stopped || missed ? 15000 : 8000 }
   } catch (err) {
     return { ok: false, error: reasonOf(err) }
   }

@@ -9,7 +9,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **A chat you move to an open account keeps its settings.** Move to account now puts the chat on Bypass
   permissions at the effort it had before, in the app that is already running, instead of leaving it on that
-  app's defaults until it restarts.
+  app's defaults until it restarts. If that app does not take them, the move's note says so.
 - **Pick several chats in the sidebar and act on them at once.** Hold Ctrl and click to pick chats one by one, or
   hold Shift and click to pick a run of them. Right-click any picked chat for one menu that pins, marks, archives,
   moves to a group or moves to another account all of them. Esc or a plain click lets them go.
