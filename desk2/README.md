@@ -435,14 +435,15 @@ sidebar on the left stays put, and only the pane on the right changes.
   folds with a click on its name and then says what it holds on the right ("1 running", "3 of 5 done"), and remembers
   it. Each fact is one row of a gray icon and the fact, as Claude Desktop draws them. It takes from the chat only the
   room the centred text column needs: on a wide window it lies over the empty margin and the text stays centred, and
-  as the window narrows it pushes the text over (`railReserve` in `web/src/components/shell/logic.ts`). Its left edge
+  as the window narrows it pushes the text over (`railReserve` in `web/src/components/shell/logic.ts`). The gap is 48px (`RAIL_GAP`, in the same file): the step arrows sit 12px in from the chat's right edge, 24px wide, with a 12px lane clear of the text. Its left edge
   drags its width, which the window keeps. For a session running outside Desk the cards hold what AgentHydra's
   Sessions tab said about it: the product and short id (click to copy the id), the instance number and account (its
   address in the tooltip; click to see that account's row in AgentHydra's Instances, marked), the folder (its project
   dashboard on hover), the git branch, the model, turns, tokens and cost (the breakdown in the tooltip; a "+" when a
-  model has no published price), and any credentials the transcript printed (redacted). The Environment card's buttons
-  are Find (Ctrl + F; Enter and Shift + Enter step through the matches, marked in the transcript, the Find bar over the
-  transcript's top) and a ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
+  model has no published price), and any credentials the transcript printed (redacted). For an outside session, Find is in
+  the title bar, just left of Session details, whether the rail is open or shut; Ctrl + F still opens it (Enter and
+  Shift + Enter step through the matches, marked in the transcript, the Find bar over the transcript's top). The
+  Environment card keeps its ⋯ menu with the account (bring it to the front, copy its address), Display (only what I typed, tool
   activity, reasoning, compact layout), the session file (open it, save it as Markdown, a web page or the raw .jsonl,
   copy the file itself, copy its path), for Claude sessions Reopen in a terminal and Migrate to another account, and
   Close. The chat title in the title bar is centred. It reads AgentHydra through Desk 2's `/ah/api`.
@@ -632,7 +633,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   bar asks Desk instead: a press on any part of it that is not a control moves the window, a second press
   maximizes or restores (`ah:window`, `hydra/src/lib/desk-embed.ts`; owner, 2026-10-08: "drag handles that exist
   in places that aren't covered by buttons"), and that bar is in the page's background colour, so it no longer
-  changes colour at the edges of the centred page. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
+  changes colour at the edges of the centred page. A menu open in Desk closes on a click into the frame (`web/src/lib/frame-dismiss.ts`), and a menu open in AgentHydra's page closes on a click on Desk (`hydra/src/lib/desk-embed.ts`); `bun run e2e:frame-click` checks both. Its WebView2 data lives in `%LOCALAPPDATA%\HydraDesk2\webview`; on
   the first run the launcher asks the old Edge app window to close and the host copies the page's saved
   settings (the sidebar order and filters among them) from the old window profile.
 - **Desk's chats, brought over.** `POST /api/chats/import-desk` (body `{}` for every chat, or

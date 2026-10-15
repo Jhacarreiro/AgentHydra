@@ -7,6 +7,14 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A new instance is made in one click, with no name asked.** The plus on the Desktop, Codex and DeepSeek tables creates the instance at once and gives it the next free name. The sign-in note that came with the create dialog is gone, and you can still rename an instance from its row menu.
+- **AgentHydra reads usage less when nobody is looking.** An hour after you last had AgentHydra on screen, it checks your accounts at most every 4 hours instead of at your set interval, and it catches up as soon as you look again. CliMayte no longer re-reads an account that is full until its reset.
+- **An open menu closes when you click into AgentHydra's pane.** A menu, popover or dropdown in Desk used to stay open when the click landed in AgentHydra's pane. AgentHydra's own menus now close on a click on Desk too, and clicking into another app leaves them as they are.
+- **An outside chat at work keeps its message box.** A Codex, Claude Code or Claude Desktop chat that is working elsewhere keeps the same composer it shows when idle. Its working line sits at the bottom of the transcript, as in a Desk chat.
+- **A Desktop row shows its CLI login's newer usage.** On the Instances page, a Desktop row shows the 5-hour and weekly figures of its linked CLI login when those are newer. This happens only while both are signed in to the same account, so a signed-out login never lends its figures.
+- **Find for an outside chat sits in the title bar.** Find moved from the session rail to the title bar, just left of Session details, whether the rail is open or shut. The step arrows at the chat's right edge no longer cover the text.
+- **A source copy picks up a push from this PC in about 20 seconds.** A copy run from source takes a push made on the same PC about 20 seconds after it lands, instead of waiting for its next check. A push from another PC still waits for that check unless this PC fetches it first.
+- **AgentHydra records who takes each usage reading.** Every reading now notes the request or timer that took it. A readers list shows which of them have been reading, counted by source and account kind, so an unexpected reader is easy to spot.
 - **A routine that fails or breaks now tells you.** When a scheduled routine's run fails or times out, or its file
   stops checking out, AgentHydra opens an incident and pings you the way other incidents do. The next good run, or the
   fixed file, clears it.
