@@ -13,6 +13,7 @@ import {
   type TranscriptItem
 } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import type { InstanceManagerStatus } from '@shared/instance-manager'
 import type { RoutineDetails, RoutinesRequest, RoutinesStatus } from '@shared/routines'
 import type { OrchestratorModelStatus } from '@shared/orchestrator'
 import type { FreeSettings } from '@shared/free-instances'
@@ -25,6 +26,8 @@ export interface PaneApi {
   bridgeStatus(): Promise<{ up: boolean; url: string }>
   /** GET /api/babysitter: the chats a usage limit stopped and what the babysitter did (plugins/72-babysitter.ts). */
   babysitter(): Promise<BabysitterStatus>
+  /** GET /api/instance-manager: the apps it watches and what it did when one went down (plugins/74-instance-manager.ts). */
+  instanceManager(): Promise<InstanceManagerStatus>
   /** GET /api/routines: the routines the last look read, and the proposals waiting for the owner (plugins/73-routines.ts). */
   routines(): Promise<RoutinesStatus>
   /** POST /api/routines: one action (run, pause, resume, approve, discard, describe) or the switch; answers the whole status, or why not (409, 404, 403). */
@@ -81,6 +84,7 @@ export const httpPaneApi: PaneApi = {
   health: () => json('/health'),
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
+  instanceManager: () => json('/instance-manager'),
   routines: () => json('/routines'),
   routineDetails: (id, before = null, limit = 50) =>
     json(`/routines/${encodeURIComponent(id)}/details?limit=${limit}${before === null ? '' : `&before=${before}`}`),

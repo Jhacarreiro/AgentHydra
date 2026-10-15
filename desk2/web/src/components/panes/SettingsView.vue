@@ -4,6 +4,7 @@ import { Check, Hourglass, ListChecks } from '@lucide/vue'
 import { routineCountLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import type { InstanceManagerStatus } from '@shared/instance-manager'
 import type { RoutinesStatus } from '@shared/routines'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
@@ -69,6 +70,7 @@ const version = ref<string | null>(null)
 const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
+const instanceManager = shallowRef<InstanceManagerStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
 /** The routine whose details replace the list (its Details button), or null. */
 const detailsOf = ref<string | null>(null)
@@ -184,6 +186,14 @@ async function loadBabysitter() {
   }
 }
 
+async function loadInstanceManager() {
+  try {
+    instanceManager.value = await api.instanceManager()
+  } catch {
+    instanceManager.value = null
+  }
+}
+
 async function loadRoutines() {
   try {
     routines.value = await api.routines()
@@ -246,6 +256,16 @@ const babysitterNote = computed(() => {
     : 'Nothing is stopped by a limit.'
   const last = s.acts.find((a) => a.did === 'resumed')
   return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
+})
+
+/** Under the Instance manager row: how many apps it watches, and the last one that went down and what came of it. */
+const instanceManagerNote = computed(() => {
+  const s = instanceManager.value
+  if (!s) return null
+  const up = s.instances.filter((i) => i.running && i.signedIn).length
+  const r = s.recoveries[0]
+  const last = r ? `Last: #${r.from.num} ${r.from.name} went down at ${clock(r.at)}; ${r.detail}.` : 'No app has gone down with chats in it.'
+  return [`Watching ${s.instances.length} apps, ${up} up.`, last, s.error].filter(Boolean).join(' ')
 })
 
 async function loadBridge() {
@@ -337,6 +357,16 @@ function onBabysitterVisibility() {
   if (showsBabysitter.value && !document.hidden) void loadBabysitter()
 }
 
+// The instance manager's the same way.
+const showsInstanceManager = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'instanceManager')))
+watch(showsInstanceManager, (on) => {
+  if (on) void loadInstanceManager()
+}, { immediate: true })
+document.addEventListener('visibilitychange', onInstanceManagerVisibility)
+function onInstanceManagerVisibility() {
+  if (showsInstanceManager.value && !document.hidden) void loadInstanceManager()
+}
+
 // The standing agents' status is read the same way, when its row comes on screen and when the window is shown again.
 const showsRoutines = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'routines')))
 watch(showsRoutines, (on) => {
@@ -426,6 +456,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('visibilitychange', onBabysitterVisibility)
+  document.removeEventListener('visibilitychange', onInstanceManagerVisibility)
   document.removeEventListener('visibilitychange', onRoutinesVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
@@ -509,6 +540,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-ui-sm leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ babysitterNote }}</div>
+                <div v-if="r.id === 'instanceManager' && instanceManagerNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ instanceManagerNote }}</div>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
@@ -635,6 +667,13 @@ onBeforeUnmount(() => {
                   label="Routines"
                   :model-value="local.routines"
                   @update:model-value="(v: boolean) => save({ routines: v })"
+                />
+
+                <PaneSwitch
+                  v-else-if="r.id === 'instanceManager'"
+                  label="Instance manager"
+                  :model-value="local.instanceManager"
+                  @update:model-value="(v: boolean) => save({ instanceManager: v })"
                 />
 
                 <PaneSwitch
