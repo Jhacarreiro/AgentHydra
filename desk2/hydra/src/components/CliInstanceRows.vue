@@ -870,7 +870,6 @@ defineExpose({
   <!-- The dialogs teleport to <body>, so sitting beside the rows puts nothing inside the table. -->
   <CliInstanceNameDialog
     v-model:open="renameOpen"
-    mode="rename"
     :current-name="renameTarget?.name ?? null"
     :submitting="renaming"
     :error-message="renameError"

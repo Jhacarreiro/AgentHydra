@@ -36,7 +36,6 @@ import { toast } from 'vue-sonner'
 import CliInstanceRows from '@/components/CliInstanceRows.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
-import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
@@ -373,9 +372,7 @@ const presentPlans = computed(() => [
   ...codexInstances.value.map((i) => i.account?.planLabel),
 ])
 
-const createOpen = ref(false)
 const creating = ref(false)
-const createError = ref<string | null>(null)
 
 const deleteOpen = ref(false)
 const deleteTarget = ref<CMInstance | null>(null)
@@ -896,7 +893,7 @@ async function onCreateFor(id: string) {
   showKind('desktop')
   showProvider(provider)
   if (provider === 'claude') {
-    openCreateDialog()
+    void createNow()
     return
   }
   await nextTick()
@@ -1229,24 +1226,18 @@ async function onCreateShortcut(inst: CMInstance) {
   else toast.error(result?.message ?? t('instances.toastShortcutFailed'))
 }
 
-function openCreateDialog() {
-  createError.value = null
-  createOpen.value = true
-}
-async function onCreateSubmit(name: string) {
+// A new instance is made at once, its folder named by the daemon: nobody is asked for a name
+// (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are"). The row shows the account once it signs in.
+async function createNow() {
+  if (creating.value) return
   creating.value = true
-  createError.value = null
   try {
-    const result = await create(name)
+    const result = await create()
     if (result?.ok) {
       toast.success(t('instances.toastCreated'))
-      createOpen.value = false
-      if (result.needsBrowserDance) toast.info(t('instances.browserDanceBody'))
       // Same self-heal as onOpen: a successful create disproves a stale "not manageable" verdict.
       if (desktopWarning.value) void refreshDesktopInstall(true)
-    } else {
-      createError.value = result?.message ?? t('instances.toastCreateFailed')
-    }
+    } else toast.error(result?.message ?? t('instances.toastCreateFailed'))
   } finally {
     creating.value = false
   }
@@ -2058,12 +2049,6 @@ onUnmounted(() => {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    <CreateInstanceDialog
-      v-model:open="createOpen"
-      :submitting="creating"
-      :error-message="createError"
-      @submit="onCreateSubmit"
-    />
     <DeleteInstanceDialog
       v-model:open="deleteOpen"
       :instance-name="deleteTarget?.name ?? null"

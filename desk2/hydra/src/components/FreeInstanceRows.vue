@@ -612,7 +612,6 @@ defineExpose({
   />
   <CliInstanceNameDialog
     v-model:open="renameOpen"
-    mode="rename"
     namespace="freeInstances"
     :current-name="renameTarget?.name ?? null"
     :submitting="renaming"

@@ -607,8 +607,8 @@ export const setInstanceMeta = (
     method: 'POST',
     body: JSON.stringify(patch),
   })
-export const createInstance = (name: string) =>
-  j<CMActionResult>('/api/instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** A new Desktop instance; the daemon names its folder (nobody is asked for a name). */
+export const createInstance = () => j<CMActionResult>('/api/instances', { method: 'POST', body: '{}' })
 export const getDesktopInstall = (opts: { fresh?: boolean } = {}) =>
   j<CMDesktopInstall>(`/api/desktop-install${opts.fresh ? '?fresh=1' : ''}`)
 
@@ -1439,10 +1439,11 @@ export const checkCodexInstanceUsage = (id: string, refresh = false) =>
   j<UsageCheckResult>(
     `/api/codex-instances/${encodeURIComponent(id)}/usage${refresh ? '?refresh=1' : ''}`,
   )
-export const createCodexInstance = (name: string) =>
+/** A new Codex instance; the daemon names it until its account does. */
+export const createCodexInstance = () =>
   j<CMActionResult>('/api/codex-instances', {
     method: 'POST',
-    body: JSON.stringify({ name }),
+    body: '{}',
   })
 export const launchCodexInstance = (id: string, opts: { model?: string; effort?: string } = {}) =>
   j<CMActionResult>(`/api/codex-instances/${encodeURIComponent(id)}/launch`, {
@@ -1592,8 +1593,8 @@ export interface DshInstance {
   createdAt: number
 }
 export const listDshInstances = () => j<DshInstance[]>('/api/dsh-instances')
-export const createDshInstance = (name: string) =>
-  j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: JSON.stringify({ name }) })
+/** A new DeepSeek home; the daemon names it. */
+export const createDshInstance = () => j<CMActionResult>('/api/dsh-instances', { method: 'POST', body: '{}' })
 /** Start a server for this home (or open a window against one already running) — both are this. */
 export const launchDshInstance = (id: string) =>
   j<CMActionResult>(`/api/dsh-instances/${encodeURIComponent(id)}/launch`, { method: 'POST' })

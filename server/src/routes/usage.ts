@@ -42,6 +42,7 @@ import {
   deleteCodexInstance,
   findCodexInstance,
   focusCodexDesktopInstance,
+  freeCodexName,
   launchCodexInstance,
   listCodexInstances,
   openCodexDesktopInstance,
@@ -954,11 +955,12 @@ app.get('/api/codex-instances/:id/usage', async (c) => {
   if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
   return c.json(await checkUsageForCodex(inst.codexHome, id, wantsRefresh(c)))
 })
+// No name in the body: one is made up (core/shared.ts firstFreeName). A blank one is still refused.
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string' || !body.name.trim())
-    return c.json({ error: 'name is required' }, 400)
-  return c.json(createCodexInstance(body.name))
+  const name = body.name === undefined ? freeCodexName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(createCodexInstance(name))
 })
 app.post('/api/codex-instances/:id/launch', async (c) => {
   const body = await jsonBody(c)

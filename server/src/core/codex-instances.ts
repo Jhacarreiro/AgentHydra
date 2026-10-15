@@ -34,7 +34,7 @@ import {
   writeCmdLauncher,
 } from './launch-options'
 import { isPathInside, normalizePath } from './paths'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, firstFreeName } from './shared'
 
 const CODEX_INSTANCES_ROOT = join(CONFIG_DIR, 'codex-instances')
 const STORE_PATH = join(CONFIG_DIR, 'codex-instances.json')
@@ -386,6 +386,13 @@ function validName(name: string): string | null {
   if (!value) return 'Name cannot be empty.'
   if (value.length > NAME_MAX) return `Name must be ≤ ${NAME_MAX} chars.`
   return null
+}
+
+/** The first `Codex <n>` no instance is called, for a create that names nothing. Not the person's own name
+ *  (`ownName`), so the row is named after its account once it signs in. */
+export function freeCodexName(): string {
+  const names = new Set(readStore().instances.map((i) => i.name.trim().toLowerCase()))
+  return firstFreeName('Codex ', (name) => names.has(name.toLowerCase()))
 }
 
 export function createCodexInstance(name: string): CMActionResult {

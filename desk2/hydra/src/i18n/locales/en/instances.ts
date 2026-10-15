@@ -315,12 +315,7 @@ export default {
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
   deleteDialogMismatch: "Name doesn't match.",
-  createDialogTitle: 'Create instance',
-  createDialogDescription: 'Create a new isolated Claude Desktop instance.',
-  createDialogLabel: 'Instance name',
   createDialogPlaceholder: 'e.g. work, personal, client-a',
-  createDialogSubmit: 'Create',
-  createDialogCreating: 'Creating…',
   editDialogTitle: 'Edit instance',
   editDialogNameLabel: 'Display name',
   editDialogIconLabel: 'Icon',
@@ -340,9 +335,6 @@ export default {
   desktopWarnAllDownloads: 'All downloads',
   // Names ISOLATED instances explicitly: the old copy said "every other running instance", and a
   // user dutifully following it one-click-quit their REAL (External) Claude Desktop mid-chat.
-  browserDanceTitle: 'One-time sign-in required',
-  browserDanceBody:
-    'Before signing in for the first time, quit the other ISOLATED instances created here (the login can attach to the wrong isolated profile). Your regular Claude Desktop is not affected, so leave it open.',
   toastOpened: 'Instance opened.',
   toastOpenFailed: 'Failed to open instance.',
   toastQuit: 'Instance quit.',

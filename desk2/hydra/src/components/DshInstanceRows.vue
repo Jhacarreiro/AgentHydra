@@ -82,19 +82,31 @@ async function act(id: string, fn: () => Promise<{ ok: boolean; message: string 
 // input, one type-the-name delete), not through window.prompt: this app has exactly one native
 // prompt in it, in the tray's quick window, and a second one in the main Instances view would look
 // like a different program. `namespace` is what points those dialogs at this table's own copy.
-const nameDialog = ref<{ mode: 'create' | 'rename'; target: DshInstance | null } | null>(null)
+const nameDialog = ref<{ target: DshInstance } | null>(null)
 const deleteTarget = ref<DshInstance | null>(null)
 const submitting = ref(false)
 const dialogError = ref<string | null>(null)
 
-function openCreate(): void {
-  dialogError.value = null
-  nameDialog.value = { mode: 'create', target: null }
+// A new home is made at once and named by the daemon: nobody is asked for a name
+// (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are").
+async function openCreate(): Promise<void> {
+  if (submitting.value) return
+  submitting.value = true
+  try {
+    const result = await createDshInstance()
+    if (result.ok) toast.success(result.message ?? '')
+    else toast.error(result.message ?? '')
+    await refresh()
+  } catch (err) {
+    toast.error(err instanceof Error ? err.message : String(err))
+  } finally {
+    submitting.value = false
+  }
 }
 
 function openRename(inst: DshInstance): void {
   dialogError.value = null
-  nameDialog.value = { mode: 'rename', target: inst }
+  nameDialog.value = { target: inst }
 }
 
 /** The icon row at the top of a row's ⋯ menu. The default home is the machine's own install and
@@ -168,10 +180,7 @@ async function onNameSubmit(name: string): Promise<void> {
   submitting.value = true
   dialogError.value = null
   try {
-    const result =
-      dialog.mode === 'create'
-        ? await createDshInstance(name)
-        : await renameDshInstance(dialog.target?.id ?? '', name)
+    const result = await renameDshInstance(dialog.target.id, name)
     if (!result.ok) {
       // Kept IN the dialog rather than thrown as a toast: the input the person typed is still on
       // screen and the message is about that input ("a name like that already exists").
@@ -296,7 +305,6 @@ defineExpose({ openCreate, refresh })
   <CliInstanceNameDialog
     :open="nameDialog !== null"
     namespace="dshInstances"
-    :mode="nameDialog?.mode ?? 'create'"
     :current-name="nameDialog?.target?.name ?? null"
     :submitting="submitting"
     :error-message="dialogError"

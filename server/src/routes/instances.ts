@@ -4,6 +4,7 @@ import { detectDesktopInstall } from '../core/desktop-install'
 import {
   createDshInstance,
   deleteDshInstance,
+  freeDshName,
   launchDshInstance,
   listDshInstances,
   quitDshInstance,
@@ -27,7 +28,7 @@ import {
   readLoginUuid,
   revealInstanceFolder,
 } from '../core/instances'
-import { createInstance, removeInstance } from '../core/lifecycle'
+import { createInstance, freeInstanceName, removeInstance } from '../core/lifecycle'
 import { readLoginHistory } from '../core/login-history'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
@@ -300,12 +301,12 @@ app.post('/api/instances/:dir/meta', async (c) => {
   const meta = setInstanceMeta(dir, patch)
   return c.json({ ok: true, action: 'meta', dir, message: 'updated', data: meta })
 })
+// No name in the body: one is made up (core/shared.ts firstFreeName). A blank one is still refused.
 app.post('/api/instances', async (c) => {
-  const body = await c.req.json().catch(() => null)
-  if (!body || typeof body.name !== 'string' || !body.name.trim()) {
-    return c.json({ error: 'name is required' }, 400)
-  }
-  return c.json(await createInstance(body.name))
+  const body = await c.req.json().catch(() => ({}))
+  const name = body?.name === undefined ? freeInstanceName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(await createInstance(name))
 })
 
 // --- DeepSeek Harness instances (a home per account; see core/dsh-instances.ts) ------------------
@@ -317,9 +318,9 @@ app.post('/api/instances', async (c) => {
 app.get('/api/dsh-instances', async (c) => c.json(await listDshInstances()))
 app.post('/api/dsh-instances', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string' || !body.name.trim())
-    return c.json({ error: 'name is required' }, 400)
-  return c.json(createDshInstance(body.name))
+  const name = body.name === undefined ? freeDshName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(createDshInstance(name))
 })
 app.post('/api/dsh-instances/:id/launch', async (c) =>
   c.json(await launchDshInstance(c.req.param('id'))),

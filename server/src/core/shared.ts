@@ -286,8 +286,12 @@ export interface CMActionResult {
    *  the common early-return guard-clause failure paths — callers should treat
    *  a missing `data` as "no extra payload," never as a malformed result. */
   data?: Record<string, unknown>
-  /** Create-only: surfaces the "Browser Dance" caveat (quit other instances before first login). */
-  needsBrowserDance?: boolean
+}
+
+/** The first `<stem><n>`, n from 1, that `taken` does not hold: a new instance is never asked for a name
+ *  (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are"). Its row is named after the account once it signs in, and Rename is still there. */
+export function firstFreeName(stem: string, taken: (name: string) => boolean): string {
+  for (let n = 1; ; n++) if (!taken(`${stem}${n}`)) return `${stem}${n}`
 }
 
 /** How Claude Desktop is installed on this machine (see core/desktop-install.ts). On Windows,
