@@ -37,10 +37,9 @@ const SIGN_IN: Record<FreeProvider, (name: string) => boolean> = {
   claude: name => name === 'sessionKey',
   chatgpt: name => /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(name)
 }
-// Cookies only a browser sign-in sets. Since 2026-10-14 ~18:00 UTC chatgpt.com answers a send from a login without
-// them 404 "Model not found": on 2026-10-15 49 of 50 ChatGPT logins lacked them and failed every send, and the one
-// signed in fresh that morning had them and sent. A login with them beats one without, whatever its expiry says, so a
-// fresh sign-in is never undone by an older copy from another PC, and it lands on the other PCs.
+// Short-lived browser-issued markers: preserve a valid pair over a less complete
+// login, and sync same-session refreshes. Presence alone does not establish that
+// message generation works (2026-10-15: a browser replied while HTTP still got 404).
 const SIGNED_IN_FRESH: Record<FreeProvider, readonly string[]> = { claude: [], chatgpt: ['_uasid', '_umsid'] }
 const FIRST_PASS_MS = 15_000
 const EVERY_MS = 120_000
@@ -48,7 +47,7 @@ const HIDDEN_EVERY_MS = 10 * 60_000
 const NUDGE_MS = 2_000
 const CREDS_KEEP_MS = 10 * 60_000
 
-interface Cookie { name: string; value: string; expires?: number }
+interface Cookie { name: string; value: string; expires?: number; domain?: string; path?: string }
 /** One login as the sync compares it: its sign-in's identity (a hash) and when that sign-in expires. */
 export interface FreeLogin {
   cookies: Cookie[]
@@ -56,13 +55,16 @@ export interface FreeLogin {
   exp: number
   /** It carries the cookies only a browser sign-in sets (SIGNED_IN_FRESH); absent for a provider with none. */
   fresh?: boolean
+  /** Comparable browser-marker refresh, independent of the session token. */
+  refresh?: string
+  freshExp?: number
 }
 export interface StoreCreds { url: string; token: string; key: Buffer }
 interface Shared { id: string; num: number; provider: FreeProvider; name: string; auth: string; cookies?: Cookie[]; signedOut?: true; deleted?: true }
 interface Row { id: string; version: number; meta?: { signedOut?: boolean; deleted?: boolean } }
 /** What this PC and the store last agreed on for a row: its version, and the sign-in it held and when that
  *  expires (null: none). */
-interface Agreed { version: number; auth: string | null; exp?: number | null }
+interface Agreed { version: number; auth: string | null; exp?: number | null; refresh?: string }
 
 /** What the sync needs of the Free instances (FreeInstances.syncHost()). */
 export interface FreeSyncHost {
@@ -90,11 +92,22 @@ function describe(provider: FreeProvider, cookies: Cookie[]): FreeLogin | null {
   const signIn = cookies.filter(c => SIGN_IN[provider](c.name))
   if (!signIn.length) return null
   const marks = SIGNED_IN_FRESH[provider]
+  const now = Date.now() / 1000
+  const markerCookies = marks.map(m => cookies.filter(c => c.name === m && c.value &&
+    c.domain?.replace(/^\./, '').toLowerCase() === 'chatgpt.com' &&
+    (!c.path || c.path === '/') && (c.expires === -1 || (Number(c.expires) > now)))
+    .sort((a, b) => (b.expires ?? 0) - (a.expires ?? 0))[0])
+  const fresh = !!marks.length && markerCookies.every(Boolean)
+  const markers = fresh ? markerCookies as Cookie[] : []
   return {
     cookies,
     auth: sha(signIn.map(c => `${c.name}=${c.value}`).sort().join('\n')),
     exp: Math.max(...signIn.map(c => Number(c.expires) || 0)),
-    ...(marks.length ? { fresh: marks.every(m => cookies.some(c => c.name === m && c.value)) } : {})
+    ...(marks.length ? {
+      fresh,
+      freshExp: fresh ? Math.min(...markers.map(c => c.expires === -1 ? Number.MAX_SAFE_INTEGER : c.expires!)) : 0,
+      refresh: fresh ? sha(markers.map(c => `${c.name}=${c.value};${c.expires}`).join('\n')) : ''
+    } : {})
   }
 }
 
@@ -334,7 +347,9 @@ export class FreeSync {
       if (agreed.auth && !row.meta?.signedOut) await this.signOut(c, instance, agreed.auth, row.version)
       return true
     }
-    if (local.auth === agreed.auth) return true
+    // A browser can refresh its short-lived markers without changing the session
+    // token. Reconcile that change with the store rather than silently losing it.
+    if (local.auth === agreed.auth) return local.refresh === agreed.refresh
     // An older login the landing replaced (or any older one after a restart) falls through; any other is a sign-in here
     // since the landing, which a check's re-save makes, and it goes up rather than the store's copy landing again.
     const was = this.replaced.get(instance.id)
@@ -354,13 +369,14 @@ export class FreeSync {
   private async landNewer(c: StoreCreds, instance: FreeInstance, file: string, local: FreeLogin | null, shared: { value: Shared; version: number }): Promise<void> {
     const theirs = describe(instance.provider, shared.value.cookies ?? [])
     if (!theirs) throw new Error('the store holds a login without its sign-in')
-    if (!local || (theirs.auth !== local.auth && newer(theirs, local))) {
+    const differs = !local || theirs.auth !== local.auth || theirs.refresh !== local.refresh || theirs.exp !== local.exp
+    if (!local || (differs && newer(theirs, local))) {
       this.replaced.set(instance.id, local?.auth ?? null)
       if (!writeLogin(file, instance.provider, theirs.cookies)) throw new Error('the login could not be written for this Windows user')
       this.host.landed(instance.id)
-      this.agreed[instance.id] = { version: shared.version, auth: theirs.auth, exp: theirs.exp }
-    } else if (theirs.auth !== local.auth) await this.upload(c, instance, local, shared.version)
-    else this.agreed[instance.id] = { version: shared.version, auth: local.auth, exp: local.exp }
+      this.agreed[instance.id] = { version: shared.version, auth: theirs.auth, exp: theirs.exp, refresh: theirs.refresh }
+    } else if (differs) await this.upload(c, instance, local, shared.version)
+    else this.agreed[instance.id] = { version: shared.version, auth: local.auth, exp: local.exp, refresh: local.refresh }
   }
 
   /** A row with no instance here: a Free account another PC added becomes one here too. */
@@ -373,7 +389,7 @@ export class FreeSync {
     const instance = this.host.adopt({ id, num, provider, name })
     if (!writeLogin(this.host.sessionFile(instance), provider, theirs.cookies)) throw new Error('the login could not be written for this Windows user')
     this.host.landed(instance.id)
-    this.agreed[instance.id] = { version: shared.version, auth: theirs.auth, exp: theirs.exp }
+    this.agreed[instance.id] = { version: shared.version, auth: theirs.auth, exp: theirs.exp, refresh: theirs.refresh }
   }
 
   private async read(c: StoreCreds, id: string): Promise<{ value: Shared; version: number } | null> {
@@ -388,7 +404,7 @@ export class FreeSync {
   private async upload(c: StoreCreds, instance: FreeInstance, login: FreeLogin, version: number): Promise<void> {
     const { id, num, provider, name } = instance
     const blob = seal(c.key, { id, num, provider, name, auth: login.auth, cookies: login.cookies })
-    await this.put(c, id, version, blob, {}, { auth: login.auth, exp: login.exp })
+    await this.put(c, id, version, blob, {}, { auth: login.auth, exp: login.exp, refresh: login.refresh })
   }
 
   private async signOut(c: StoreCreds, instance: FreeInstance, auth: string, version: number): Promise<void> {
@@ -419,5 +435,9 @@ export class FreeSync {
  *  hash, so every PC picks the same one and none sends its own back up. */
 export function newer(a: FreeLogin, b: FreeLogin): boolean {
   if (!!a.fresh !== !!b.fresh) return !!a.fresh
+  if (a.auth === b.auth && a.refresh !== b.refresh) {
+    if (a.freshExp !== b.freshExp) return (a.freshExp ?? 0) > (b.freshExp ?? 0)
+    return (a.refresh ?? '') > (b.refresh ?? '')
+  }
   return a.exp !== b.exp ? a.exp > b.exp : a.auth > b.auth
 }

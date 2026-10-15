@@ -1,6 +1,11 @@
 Bundled ClaudFree 0.8.0 transport source, developed for this project. Desk's adapter uses its HTTP
-clients for Claude Incognito and ChatGPT Temporary Chats. Manual login is the sole visible-browser
-operation: it uses zendriver with the installed Chrome or Edge on a throwaway profile (no Camoufox fetch). `desk_entry.py` provides a structured login result and closes the owned window on success.
+clients for Claude Incognito and ChatGPT Temporary Chats. Manual login uses zendriver with the
+installed Chrome or Edge on a throwaway profile. ChatGPT automatic sends also restore the saved
+login in an owned browser for current first-party request preparation; no email login is submitted.
+With valid browser markers, the browser closes before Python dispatches once. Missing markers
+complete that requested message in the ordinary browser, then HTTP verifies the reply without
+resending. Interactive verification is never bypassed. The owned profile is removed afterward.
+`desk_entry.py` provides a structured login result and closes its owned window on success.
 The shared JavaScript cache is selected with `CLAUDFREE_CACHE_DIR`; each account uses a separate
 `CLAUDFREE_STATE_DIR`. The package can still be used through Python, its CLI, or MCP.
 

@@ -227,6 +227,59 @@ test.skipIf(process.platform !== 'win32')('a ChatGPT login a browser sign-in mad
   }
 })
 
+test.skipIf(process.platform !== 'win32')('expired, misplaced and incomplete browser markers are not fresh', () => {
+  const dir = mkdtempSync(join(tmpdir(), 'free-sync-marker-expiry-'))
+  dirs.push(dir)
+  const now = Date.now() / 1000
+  const token = { name: '__Secure-next-auth.session-token', value: 'fixture', domain: '.chatgpt.com', expires: now + 86_400 }
+  const marker = (name: string, expires: number, domain = '.chatgpt.com') => ({ name, value: 'fixture-marker', domain, path: '/', expires })
+  const file = join(dir, 'login.dpapi')
+  for (const bad of [marker('_umsid', now - 1), marker('_umsid', now + 300, 'auth.openai.com'), marker('_umsid', now + 300, 'other.test')]) {
+    writeLogin(file, 'chatgpt', [token, marker('_uasid', now + 300), bad])
+    expect(readLogin(file, 'chatgpt')!.fresh).toBe(false)
+  }
+  writeLogin(file, 'chatgpt', [token, marker('_uasid', now + 300), marker('_umsid', now + 600)])
+  expect(readLogin(file, 'chatgpt')!.freshExp).toBe(now + 300)
+})
+
+test.skipIf(process.platform !== 'win32')('same-token marker refresh reaches both PCs and a stale re-save cannot undo it', async () => {
+  const token = randomBytes(16).toString('hex')
+  const store = fakeStore(token)
+  try {
+    const key = randomBytes(32)
+    const creds = async () => ({ url: store.url, token, key })
+    const a = pc(), b = pc()
+    const syncA = new FreeSync(a.home, a.host, creds), syncB = new FreeSync(b.home, b.host, creds)
+    const account = a.service.create({ provider: 'chatgpt', name: 'Example account' })
+    const fileA = a.host.sessionFile(account)
+    const now = Date.now() / 1000
+    const jar = (value: string, expiry: number) => [
+      { name: '__Secure-next-auth.session-token', value: 'same-session', domain: '.chatgpt.com', path: '/', expires: now + 86_400 },
+      ...['_uasid', '_umsid'].map(name => ({ name, value, domain: '.chatgpt.com', path: '/', expires: expiry }))
+    ]
+    writeLogin(fileA, 'chatgpt', jar('old-marker', now + 300))
+    await syncA.pass()
+    await syncB.pass()
+    await settled(b.service)
+    const fileB = b.host.sessionFile(b.service.status().instances[0]!)
+    const previousAuth = readLogin(fileB, 'chatgpt')!.auth
+    writeLogin(fileB, 'chatgpt', jar('new-marker', now + 900))
+    expect(readLogin(fileB, 'chatgpt')!.auth).toBe(previousAuth)
+    await syncB.pass()
+    await syncA.pass()
+    await settled(a.service)
+    expect(readLogin(fileA, 'chatgpt')!.cookies.find(c => c.name === '_uasid')!.value).toBe('new-marker')
+    writeLogin(fileA, 'chatgpt', jar('old-marker', now + 300))
+    await syncA.pass()
+    await settled(a.service)
+    expect(readLogin(fileA, 'chatgpt')!.cookies.find(c => c.name === '_uasid')!.value).toBe('new-marker')
+    const version = store.rows.get(account.id)!.version
+    await syncA.pass()
+    await syncB.pass()
+    expect(store.rows.get(account.id)!.version).toBe(version)
+  } finally { store.stop() }
+})
+
 test.skipIf(process.platform !== 'win32')('a round with an unchanged store row writes no login again', async () => {
   const token = randomBytes(16).toString('hex')
   const store = fakeStore(token)
