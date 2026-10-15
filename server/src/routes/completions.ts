@@ -20,7 +20,13 @@ const registry: Completions = createCompletions({
   off: () => climaytePingState().on === false,
   now: Date.now,
 })
-setInterval(() => registry.sweep(), SWEEP_MS).unref()
+setInterval(() => {
+  try {
+    registry.sweep()
+  } catch {
+    // the next sweep tries again; a throw here would end the daemon
+  }
+}, SWEEP_MS).unref()
 
 app.post('/api/completions/wait', async (c) => {
   const body = await jsonBody(c)

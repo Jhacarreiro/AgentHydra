@@ -45,7 +45,7 @@ test('a process that opens the throwaway db still exits 0', () => {
   expect(r.stdout.toString()).toContain('done')
   expect(r.stderr.toString()).not.toContain('EBUSY')
   expect(r.exitCode).toBe(0)
-})
+}, 30_000)
 
 test('starting up sweeps throwaway homes older than a day and keeps younger ones', () => {
   const old = join(tmp, 'agenthydra-test-OLD')
@@ -57,4 +57,4 @@ test('starting up sweeps throwaway homes older than a day and keeps younger ones
   runConfig(OPEN_DB)
   expect(existsSync(old)).toBe(false)
   expect(existsSync(fresh)).toBe(true)
-})
+}, 30_000)

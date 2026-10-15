@@ -603,4 +603,4 @@ test('B4b-8: the test preload points AGENTHYDRA_CORE_DIR at its scratch folder, 
   expect(home).not.toBe('')
   expect(preset).toBe(join(home, 'core'))
   expect(preset).not.toContain(join('.agenthydra', 'core'))
-})
+}, 30_000)

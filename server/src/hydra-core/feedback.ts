@@ -289,7 +289,16 @@ function foldQuietly(dir: string, force: boolean): void {
 export function startFeedbackFold(dir = coreDir()): void {
   if (first || every) return
   first = setTimeout(() => foldQuietly(dir, true), 30_000)
-  every = setInterval(() => foldQuietly(dir, false), 60 * 60 * 1000)
+  every = setInterval(
+    () => {
+      try {
+        foldQuietly(dir, false)
+      } catch {
+        // the next hour tries again; a throw here would end the daemon
+      }
+    },
+    60 * 60 * 1000,
+  )
   first.unref?.()
   every.unref?.()
 }
