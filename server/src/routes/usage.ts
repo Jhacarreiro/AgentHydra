@@ -98,6 +98,7 @@ import {
   fleetUsageSeries,
   lastSampleSnapshot,
   usageHistoryKeys,
+  usageReaderCounts,
 } from '../usage-history'
 import { withLimitWall, withLinkedReading, withLiveReading } from '../usage-live'
 import { lastAutoRefreshAt, markUsageSeen, sweepUsage } from '../usage-refresh'
@@ -357,6 +358,13 @@ app.post('/api/usage/refresh', async (c) => c.json({ ok: true, checked: await sw
 // Someone is looking at AgentHydra (its page on screen, or Desk's account menu open): the background
 // sweep keeps its set interval, and slows down an hour after the last look (usage-refresh.ts).
 app.post('/api/usage/seen', (c) => c.json({ ok: true, ...markUsageSeen() }))
+// Who has been reading usage: the readings of the last `hours` (default 24) counted by the request or
+// timer that took them (usage-reader.ts), most first.
+app.get('/api/usage/readers', (c) => {
+  const hours = Math.min(Math.max(Number(c.req.query('hours')) || 24, 0.1), 24 * 90)
+  const since = Date.now() - hours * 3600_000
+  return c.json({ since: new Date(since).toISOString(), readers: usageReaderCounts(since) })
+})
 
 // MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account, so it stops
 // at its limits instead of billing. `instance_ref` is 'desktop:<dir>' or 'cli:<id>'. A person's

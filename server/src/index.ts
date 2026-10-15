@@ -182,6 +182,7 @@ import { startTrayInvariant } from './tray-invariant'
 import { materializeTrayToolkit } from './tray-toolkit'
 import { updateProgress } from './update-progress'
 import { applyUpdate, checkForUpdate } from './updater'
+import { asReader, requestReader } from './usage-reader'
 import {
   getUsageSettings,
   keepaliveSettingsChanged,
@@ -254,6 +255,10 @@ process.on('exit', (code) => {
 // stall, and what was in flight, to daemon.log BEFORE that kill. First middleware on purpose, so
 // every request is on its in-flight list. See stall-sentinel.ts.
 app.use('*', startStallSentinel(logFilePath()))
+// A usage reading taken while a request runs records that request as its reader (usage-reader.ts).
+app.use('/api/*', (c, next) =>
+  asReader(requestReader(c.req.method, c.req.path, c.req.header('user-agent')), next),
+)
 
 // --- hide tray icon (server/src/db.ts settings table; read live by the tray host) ---
 function hideTrayIconEnabled(): boolean {
@@ -1666,13 +1671,14 @@ for (const [label, report] of [
 // over — into a native OS notification. `recheck` is injected rather than imported so reset-watch
 // never imports usage-service (which imports back into the usage stack).
 startResetWatch({
-  recheck: async (key) => {
-    if (key.startsWith('desktop:')) {
-      await checkUsageForDesktop(key.slice('desktop:'.length))
-      return
-    }
-    if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
-  },
+  recheck: (key) =>
+    asReader('reset watch', async () => {
+      if (key.startsWith('desktop:')) {
+        await checkUsageForDesktop(key.slice('desktop:'.length))
+        return
+      }
+      if (key.startsWith('cli:')) await checkUsageForCliInstance(key.slice('cli:'.length))
+    }),
 })
 
 // --- HydraSwarm sidecar (serves the HSwarm console API on /api/hswarm/*) -----

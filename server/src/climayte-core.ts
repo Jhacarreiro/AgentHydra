@@ -82,6 +82,7 @@ import { getProviderSettings } from './provider-settings'
 import type { CliInstance, UsageSnapshot } from './types'
 import { resetTimeIso } from './usage'
 import { allCachedUsage } from './usage-cache'
+import { asReader } from './usage-reader'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
 // two daemons never tick and overwrite the same workers.json.
@@ -461,7 +462,7 @@ function refreshReading(id: string, now: number): void {
   refreshRunning.set(id, now)
   // Loaded only when a reading is due, so a daemon (or a test) that never places loads none of it.
   void import('./usage-service')
-    .then((m) => m.checkUsageForCliInstance(id))
+    .then((m) => asReader('climayte placement', () => m.checkUsageForCliInstance(id)))
     .catch((err) => console.error(`[climayte] could not read usage of ${id}:`, err))
     .finally(() => {
       refreshRunning.delete(id)

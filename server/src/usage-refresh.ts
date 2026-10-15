@@ -39,6 +39,7 @@ import {
 import type { UsageSettings, UsageSnapshot } from './types'
 import { getCachedUsage } from './usage-cache'
 import { withLiveReading } from './usage-live'
+import { asReader } from './usage-reader'
 import {
   checkUsageForCliInstance,
   checkUsageForCodex,
@@ -276,7 +277,7 @@ function armKeepalive(): void {
   keepaliveTimer = setTimeout(
     () => {
       keepaliveTimer = null
-      void runCliKeepalive()
+      void asReader('keepalive', runCliKeepalive)
     },
     Math.min(keepaliveNextAt - now, 2 ** 31 - 1),
   )
@@ -315,7 +316,8 @@ export async function runCliKeepalive(): Promise<KeepaliveSweepResult | null> {
       // The read-back is the usage check the sweep runs, so the tables show the new window at once.
       nudge: (t) =>
         nudgeWindow(t, {
-          readBack: async (x) => (await checkUsageForCliInstance(x.id))?.snapshot ?? null,
+          readBack: async (x) =>
+            (await asReader('keepalive', () => checkUsageForCliInstance(x.id)))?.snapshot ?? null,
         }),
       // Logged, not silent: this is the one loop here that SPENDS, so every nudge is a journal line
       // (climayte_log { group: 'keepalive' }) and a record the CLI table shows.
@@ -399,7 +401,9 @@ function rearm(settings = getUsageSettings()): void {
   }
   if (!settings.autoRefresh) return
   timer = setInterval(() => {
-    void sweepDue().catch((err) => console.error('[usage-refresh] sweep failed:', err))
+    void asReader('usage sweep', sweepDue).catch((err) =>
+      console.error('[usage-refresh] sweep failed:', err),
+    )
   }, TICK_MS)
   // Don't hold the process open on this timer alone.
   timer.unref?.()
@@ -418,7 +422,9 @@ export function startUsageRefresh(): void {
   armKeepalive()
   if (!settings.autoRefresh) return
   const kickoff = setTimeout(() => {
-    void sweepDue().catch((err) => console.error('[usage-refresh] initial sweep failed:', err))
+    void asReader('usage sweep', sweepDue).catch((err) =>
+      console.error('[usage-refresh] initial sweep failed:', err),
+    )
   }, 20_000)
   kickoff.unref?.()
 }
