@@ -1,11 +1,11 @@
 <script setup lang="ts">
 // A routine's status chip: an icon and a word, coloured only by state (ok green, failed red, running blue, paused grey).
 import { computed } from 'vue'
-import { CircleAlert, CircleCheck, CircleDashed, CirclePause, Hourglass, LoaderCircle } from '@lucide/vue'
+import { CircleAlert, CircleCheck, CircleDashed, CirclePause, Globe, Hourglass, LoaderCircle } from '@lucide/vue'
 import { STATUS_LABEL, type RoutineStatus } from './routine-view'
 
 const props = defineProps<{ status: RoutineStatus }>()
-const ICON = { ok: CircleCheck, failed: CircleAlert, running: LoaderCircle, paused: CirclePause, waiting: Hourglass, new: CircleDashed }
+const ICON = { ok: CircleCheck, failed: CircleAlert, running: LoaderCircle, paused: CirclePause, waiting: Hourglass, new: CircleDashed, elsewhere: Globe }
 const COLOR: Record<RoutineStatus, string> = {
   ok: 'var(--success)',
   failed: 'var(--danger)',
@@ -13,6 +13,7 @@ const COLOR: Record<RoutineStatus, string> = {
   paused: 'var(--text-muted)',
   waiting: 'var(--warning)',
   new: 'var(--text-muted)',
+  elsewhere: 'var(--text-muted)',
 }
 const icon = computed(() => ICON[props.status])
 </script>

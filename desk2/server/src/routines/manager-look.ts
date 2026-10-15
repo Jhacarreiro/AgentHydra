@@ -7,14 +7,43 @@ import { PROMPT_LOOK_MS } from './manager-config'
 import { enabled, memOf, readStatus, reportBroken, save, type Manager } from './manager'
 import { settleCommands } from './manager-settle'
 import { pollPrompts, recordTaskRun, startRun } from './manager-runs'
+import { centralEntries, refreshCentral } from './manager-central'
 
-/** Reads each routine's file, status and Windows task. A windowsTask routine off Windows is broken; the tasks are read in one call. */
+/** Whether this computer reads and runs an entry: a local file, or a central routine placed here. */
+export const runsHere = (e: Entry): boolean => !e.central || e.central.placed
+
+/** A look soon after this one, for what the store just brought. */
+function lookSoon(m: Manager): void {
+  const soon = (): void => {
+    if (!m.stopping) schedule(m, 1000)
+  }
+  if (m.looking) void m.looking.then(soon)
+  else soon()
+}
+
+/** The central store's routines and proposals, from this computer's copy; the store is read again in the background
+ *  (refreshCentral says how often), and a look follows when it brought a change. */
+function centralRead(m: Manager, localIds: Set<string>): { entries: Entry[]; proposals: RoutineProposal[] } {
+  const c = m.central
+  if (!c) return { entries: [], proposals: [] }
+  void refreshCentral(c, false, m.clock()).then((changed) => {
+    if (changed) lookSoon(m)
+  })
+  return centralEntries(c, localIds)
+}
+
+/** Reads each routine's file, status and Windows task, and the central store's routines beside them. A windowsTask routine
+ *  off Windows is broken; the tasks are read in one call; a central routine that runs elsewhere is listed, never read. */
 async function readAll(m: Manager): Promise<{ seen: Seen[]; proposals: RoutineProposal[] }> {
-  const entries = readEntries(m.routinesDir, parseRoutineText).map((e): Entry => {
-    if (e.def?.windowsTask !== undefined && m.platform !== 'win32') return { id: e.id, def: null, broken: 'a Windows task runs only on Windows' }
+  const local = readEntries(m.routinesDir, parseRoutineText)
+  const localProposals = readEntries(m.proposedDir, parseProposalText)
+  const central = centralRead(m, new Set([...local, ...localProposals].map((e) => e.id)))
+  const entries = [...local, ...central.entries].map((e): Entry => {
+    if (e.def?.windowsTask !== undefined && runsHere(e) && m.platform !== 'win32')
+      return { id: e.id, def: null, broken: 'a Windows task runs only on Windows', ...(e.central ? { central: e.central } : {}) }
     return e
   })
-  const names = [...new Set(entries.flatMap((e) => (e.def?.windowsTask !== undefined ? [e.def.windowsTask] : [])))]
+  const names = [...new Set(entries.flatMap((e) => (e.def?.windowsTask !== undefined && runsHere(e) ? [e.def.windowsTask] : [])))]
   let readings: TaskReading[] = []
   let taskError: string | null = null
   if (names.length) {
@@ -27,14 +56,15 @@ async function readAll(m: Manager): Promise<{ seen: Seen[]; proposals: RoutinePr
   const taskOf = new Map(readings.map((r) => [r.path, r]))
   const reads = await Promise.all(
     entries.map(async (entry): Promise<Seen> => {
+      if (!runsHere(entry)) return { entry, reading: null, readError: null, task: null }
       const path = entry.def?.windowsTask
       if (path !== undefined) return { entry, reading: null, readError: taskError, task: taskOf.get(path) ?? null }
       const status = entry.def ? await readStatus(entry.def) : { reading: null, readError: null }
       return { entry, reading: status.reading, readError: status.readError, task: null }
     }),
   )
-  const found = readEntries(m.proposedDir, parseProposalText).flatMap((e) => (e.def ? [e.def] : []))
-  return { seen: reads, proposals: found }
+  const found = localProposals.flatMap((e) => (e.def ? [e.def] : []))
+  return { seen: reads, proposals: [...found, ...central.proposals] }
 }
 
 /** One look: reads everything, judges, and starts the runs that fell due. One look at a time. */
@@ -79,6 +109,7 @@ export function schedule(m: Manager, delay?: number): void {
   let wait = delay ?? ROUTINES_EVERY_MS
   if (delay === undefined) {
     for (const s of m.seen) {
+      if (!runsHere(s.entry)) continue
       const next = slotsOf(s.entry, t)?.next
       if (next != null) wait = Math.min(wait, next - t + 1000)
     }

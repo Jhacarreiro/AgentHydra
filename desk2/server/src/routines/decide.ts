@@ -178,6 +178,7 @@ const idle = (reason: string, nextRunAt: number | null, state: RoutineState = 'i
 export function judge(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {
   const { entry } = seen
   if (entry.broken !== null || !entry.def) return idle(entry.broken ?? 'its file does not check out', null, 'broken')
+  if (entry.central && !entry.central.placed) return idle(`it runs on ${entry.central.runsOn.join(', ')}, not on this computer`, null, 'elsewhere')
   const def = entry.def
   if (mem.running) return idle('a run is running now', null, 'running')
   if (def.until !== undefined) {

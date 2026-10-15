@@ -131,7 +131,7 @@ function toggleEdit() {
       <PaneSwitch
         :model-value="!routine.paused"
         :label="`Run ${routine.name} on its schedule`"
-        :disabled="busy || routine.kind === null"
+        :disabled="busy || routine.kind === null || routine.state === 'elsewhere'"
         @update:model-value="(on: boolean) => act(on ? { resume: routine.id } : { pause: routine.id })"
       />
     </div>
@@ -142,6 +142,7 @@ function toggleEdit() {
       </div>
       <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ reasonText }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
+      <div v-if="routine.source === 'central'" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">From the central store; runs on {{ routine.runsOn?.join(', ') }}</div>
       <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
         <div v-for="t in totalRows" :key="t.label" class="rounded-(--radius-6) bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
           <dt class="text-ui-sm leading-4 text-text-muted">{{ t.label }}</dt>

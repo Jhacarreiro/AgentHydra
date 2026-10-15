@@ -15,8 +15,20 @@ export const TIMEOUT_DEFAULT = 120
 const ASKED_MAX = 500
 const WHY_MAX = 500
 
-/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one). */
-export type Entry<T extends RoutineDefinition = RoutineDefinition> = { id: string; def: T; broken: null } | { id: string; def: null; broken: string; name?: string }
+/** Where a central routine (routines/central.ts) is kept and where it runs: its document's path and the sha of its text in
+ *  the store, its runner labels, and whether they place it on this computer. */
+export interface CentralMark {
+  path: string
+  docSha: string
+  runsOn: string[]
+  placed: boolean
+}
+
+/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one).
+ *  A central routine's entry carries its `central` mark. */
+export type Entry<T extends RoutineDefinition = RoutineDefinition> =
+  | { id: string; def: T; broken: null; central?: CentralMark }
+  | { id: string; def: null; broken: string; name?: string; central?: CentralMark }
 
 /** The name a file that does not check out still gives itself, so its card keeps its name rather than its file's. */
 function nameIn(raw: string): string | undefined {

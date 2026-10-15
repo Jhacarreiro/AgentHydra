@@ -1,16 +1,17 @@
-import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
-import type { RoutineProposal, RoutinesRequest } from '@shared/routines'
+import type { RoutineProposal, RoutineProposalRequest, RoutinesRequest } from '@shared/routines'
 import { callerKind } from '../caller'
 import { judge } from './decide'
 import { checkDefinition, checkProposal, parseProposalText, ROUTINE_ID } from './manifest'
 import { message } from './proc'
 import { enabled, memOf, save, type Manager } from './manager'
 import { contractOf, writeWhole } from './manager-files'
-import { look } from './manager-look'
+import { look, runsHere } from './manager-look'
 import { startRun } from './manager-runs'
 import { status } from './manager-view'
+import { approveCentral, discardCentral, editCentral, proposeCentral, type Refusal } from './manager-central'
 
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
 const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit'] as const
@@ -18,7 +19,7 @@ type ActionName = (typeof ACTIONS)[number]
 const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } } }, one action per call besides "enabled"'
 
 /** POST /api/routines: does one action (or turns the manager on or off with `enabled`). */
 export async function postRoutine(m: Manager, c: Context) {
@@ -94,9 +95,33 @@ async function runRoutine(m: Manager, c: Context, id: string, t: number) {
   return c.json(status(m))
 }
 
+/** The ids of this computer's routine and proposal files. */
+function localIds(m: Manager): Set<string> {
+  const ids = (dir: string): string[] => {
+    try {
+      return readdirSync(dir).flatMap((f) => (f.endsWith('.json') ? [f.slice(0, -'.json'.length)] : []))
+    } catch {
+      return []
+    }
+  }
+  return new Set([...ids(m.routinesDir), ...ids(m.proposedDir)])
+}
+
+/** A central action's answer: its refusal, or a look and the new status. */
+async function centrally(m: Manager, c: Context, done: Promise<Refusal | null>) {
+  const refused = await done
+  if (refused) return c.json({ error: refused.error }, refused.status)
+  await look(m)
+  return c.json(status(m))
+}
+
+/** Whether `id` is a central document and no file on this computer has it: the action goes to the store. */
+const isCentral = (m: Manager, id: string, file: string): boolean => !!m.central?.docs.has(id) && !existsSync(file)
+
 async function pauseOrResume(m: Manager, c: Context, action: 'pause' | 'resume', id: string, t: number) {
   const s = m.seen.find((x) => x.entry.id === id)
   if (!s) return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing` }, 404)
+  if (!runsHere(s.entry)) return c.json({ error: `"${id}" runs on ${s.entry.central?.runsOn.join(', ')}, not on this computer: ${action} it there` }, 409)
   const path = s.entry.def?.windowsTask
   if (path !== undefined) {
     try {
@@ -117,6 +142,7 @@ async function pauseOrResume(m: Manager, c: Context, action: 'pause' | 'resume',
 async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesRequest['edit']>) {
   const id = edit.id
   const routineFile = join(m.routinesDir, `${id}.json`)
+  if (isCentral(m, id, routineFile)) return centrally(m, c, editCentral(m.central!, id, edit.set, m.clock()))
   let raw: Record<string, unknown>
   try {
     raw = JSON.parse(readFileSync(routineFile, 'utf8')) as Record<string, unknown>
@@ -140,6 +166,11 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
 
 async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
   const raw = body.propose as unknown as Record<string, unknown>
+  if (raw.store !== undefined) {
+    if (raw.store !== 'central') return c.json({ error: 'the proposal is refused: "store" is "central", or left out for this computer' }, 400)
+    if (!m.central) return c.json({ error: `the proposal is refused: this computer reads no central store (${m.centralError ?? 'routines-store.json in its Desk home names one'})` }, 400)
+    return centrally(m, c, proposeCentral(m.central, raw as unknown as RoutineProposalRequest, localIds(m)))
+  }
   const pid = typeof raw.id === 'string' ? raw.id : ''
   let proposal: RoutineProposal
   try {
@@ -149,7 +180,7 @@ async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
   } catch (err) {
     return c.json({ error: `the proposal is refused: ${message(err)}` }, 400)
   }
-  if (existsSync(join(m.routinesDir, `${pid}.json`)) || existsSync(join(m.proposedDir, `${pid}.json`)))
+  if (existsSync(join(m.routinesDir, `${pid}.json`)) || existsSync(join(m.proposedDir, `${pid}.json`)) || m.central?.docs.has(pid))
     return c.json({ error: `"${pid}" already exists as a routine or a proposal` }, 409)
   mkdirSync(m.proposedDir, { recursive: true })
   writeWhole(join(m.proposedDir, `${pid}.json`), contractOf(proposal))
@@ -160,6 +191,8 @@ async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
 /** approve and discard: the window only (checked in postRoutine). Each acts on the proposal file of that id. */
 async function decideProposal(m: Manager, c: Context, action: 'approve' | 'discard', id: string) {
   const proposal = join(m.proposedDir, `${id}.json`)
+  if (isCentral(m, id, proposal))
+    return centrally(m, c, action === 'approve' ? approveCentral(m.central!, id, localIds(m), m.clock()) : discardCentral(m.central!, id, m.clock()))
   if (!existsSync(proposal)) return c.json({ error: `no proposal "${id}" is waiting` }, 404)
   if (action === 'discard') {
     rmSync(proposal, { force: true })

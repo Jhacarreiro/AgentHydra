@@ -3,6 +3,7 @@
 // proposals waiting for the owner's yes. Routines live in AgentHydra 2.0 (Desk, desk2/server/src/plugins/73-routines.ts), so
 // this file keeps no state: it reads Desk's /api/routines, which answers from its last look (no model asked), and turns its
 // times into ISO. An agent may run, pause and propose a routine here; only the owner resumes, approves, discards or edits one.
+// A Desk whose routines-store.json names a central store lists that store's routines too; a proposal can go there.
 import { desk2Present, desk2Url } from './desk2'
 import { type HydraTool, S } from './mcp-client'
 
@@ -34,6 +35,8 @@ interface Routine {
   nextRunAt: number | null
   running: { startedAt: number; pid: number | null; workerId: string | null } | null
   runs: Run[]
+  source?: string
+  runsOn?: string[]
 }
 interface Status {
   enabled: boolean
@@ -42,6 +45,7 @@ interface Status {
   routines: Routine[]
   proposals: Record<string, unknown>[]
   error: string | null
+  store?: Record<string, unknown> | null
 }
 
 const RUNS_SHOWN = 5
@@ -116,20 +120,25 @@ async function routines(args: {
       recent: r.runs
         .slice(0, RUNS_SHOWN)
         .map((x) => ({ ...x, startedAt: iso(x.startedAt), endedAt: iso(x.endedAt) })),
+      ...(r.source ? { source: r.source, runsOn: r.runsOn } : {}),
     })),
     waitingForOwner: json.proposals,
+    store: json.store
+      ? { ...json.store, readAt: iso((json.store.readAt as number | null) ?? null) }
+      : null,
     error: json.error,
   }
 }
 
 const CONTRACT =
-  'name, askedBy (who asked, in their words, with the date), exactly one of schedule (5-field cron, local time), status (argv) or windowsTask (a Windows task path), and for schedule or status exactly one of run (argv) or prompt (an AI run, needs cwd); optional cwd, timeoutMinutes (5-360), until (YYYY-MM-DD), describe (true: an AI describes each run once it ends)'
+  'name, askedBy (who asked, in their words, with the date), exactly one of schedule (5-field cron, local time), status (argv) or windowsTask (a Windows task path), and for schedule or status exactly one of run (argv) or prompt (an AI run, needs cwd); optional cwd, timeoutMinutes (5-360), until (YYYY-MM-DD), describe (true: an AI describes each run once it ends). ' +
+  'For the central store (when the answer has a `store`, which every computer reading it shares): add store "central", runsOn (labels naming the computer it runs on; default this one), timeZone (IANA; a schedule routine keeps it, default this computer\'s) and, rather than cwd, workdir { repo: "owner/name", path } so a computer with that checkout finds the folder; ~/ in cwd and commands is the running computer\'s home'
 
 export const ROUTINES_TOOLS: HydraTool[] = [
   {
     name: 'routines',
     description:
-      "The owner's routines (AgentHydra's routine manager): standing jobs on a schedule, each a command, an AI prompt that runs as a chat, or a Windows scheduled task, with its state (idle, due, running, paused, off, ended, or broken, and why), its schedule, when it last ran and how (ok, busy, failed, timed-out or interrupted, with the last output line, and for a routine whose `describe` is on, an AI's description of what each run did), and when it runs next; plus the proposals waiting for the owner's yes. It looks every 5 minutes and asks no model itself. Answers from its last look in milliseconds; `fresh` looks first. " +
+      "The owner's routines (AgentHydra's routine manager): standing jobs on a schedule, each a command, an AI prompt that runs as a chat, or a Windows scheduled task, with its state (idle, due, running, paused, off, ended, broken, or elsewhere for a central-store routine that runs on another computer, and why), its schedule, when it last ran and how (ok, busy, failed, timed-out or interrupted, with the last output line, and for a routine whose `describe` is on, an AI's description of what each run did), and when it runs next; plus the proposals waiting for the owner's yes. It looks every 5 minutes and asks no model itself. Answers from its last look in milliseconds; `fresh` looks first. " +
       'The owner (2026-10-12): never schedule anything the owner did not ask for. To add a routine you must ask: `propose` it, and it runs only after the owner approves it in Settings > Managers > Routines. Prefer a temporary background task you run and manage yourself over adding a routine or sub-tasks on other things. Only a routine the owner asked for in their own words belongs here. ' +
       "MUTATES: `run` (runs one routine now; refused when it is paused, off, ended, broken or running), `pause` (pauses one, so it never starts on its own) and `propose` (writes a proposal; it never runs until the owner approves it). Only one of them per call. Resume, approve and discard are the owner's alone, in Settings, and so is editing a routine (its Edit form and Describe runs switch).",
     inputSchema: S({

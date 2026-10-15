@@ -44,6 +44,28 @@
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
 // <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
 // Managers > Routines.
+//
+// CENTRAL ROUTINES (owner, 2026-10-15: "move these Routines ... into some sort of centralized location? In the cranium ...
+// for other people to use this"). When <desk home>/routines-store.json names a store, the manager also reads the routines
+// kept there, which every computer reading that store sees: today the CrAInium, as documents routines/<id>.md under one
+// docs repo key, read and written through the person's own Connections server. The file is:
+//   { "store": { "kind": "crainium", "repo": "example/routines" },
+//     "runner": "my-pc",                                   (this computer's name as a runner; default its host name)
+//     "labels": ["gpu"],                                   (more labels it carries; it always carries its name and system)
+//     "repos": { "example/project": "C:/Users/me/project" }, (its checkouts, for a routine's workdir)
+//     "approvers": [{ "name": "Example Owner's laptop", "key": "ed25519:..." }], (other computers whose approvals count)
+//     "approverName": "Example Owner" }                    (the name an approval made here carries)
+// A routine document is a JSON front matter between --- lines, then its body:
+//   kind "routine", format "routine/1", title (its name), askedBy, why (while it is a proposal), the contract's WHEN and
+//   WHAT keys above (a "schedule" also names its IANA "timeZone"), its folder as "workdir": { "repo", "path" } (found
+//   through "repos" on each computer) or "cwd" (a full path, or one starting with ~/), "runsOn" (the runner labels it
+//   runs on: today it runs only on a runner it names), timeoutMinutes, until, describe, and "approval". Its prompt is
+//   the body. A document runs only once a person approved it: "approval" is an Ed25519 signature over its id and
+//   everything in it but the approval, by this computer's approver key (<desk home>/routines-approver.key, made with
+//   the store) or one listed in "approvers". An AI may write a proposal there (POST propose with "store": "central"),
+//   never an approval; any change after an approval makes it a proposal again. A routine placed on another runner is
+//   listed as 'elsewhere' and never run here, and one with the id of a file here is broken: the file runs. The manager
+//   keeps a copy of each document in <desk home>/routines/central/ and runs from it while the store cannot be reached.
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
@@ -63,8 +85,9 @@ export type RoutineOutcome = 'ok' | 'busy' | 'failed' | 'timed-out' | 'interrupt
  * ended     past its `until` day: never runs, still listed
  * broken    its file or its status does not check out (the reason says which)
  * waiting   a proposal waiting for the owner's yes (listed separately, never run)
+ * elsewhere a central routine placed on another runner: listed, never run on this computer
  */
-export type RoutineState = 'idle' | 'due' | 'running' | 'paused' | 'off' | 'ended' | 'broken' | 'waiting'
+export type RoutineState = 'idle' | 'due' | 'running' | 'paused' | 'off' | 'ended' | 'broken' | 'waiting' | 'elsewhere'
 
 /** Which way a routine decides when it runs. */
 export type RoutineKind = 'schedule' | 'status' | 'windowsTask'
@@ -120,6 +143,35 @@ export interface RoutineDefinition {
 /** A proposal an AI wrote: the definition, plus why it should be a routine rather than a background task it runs itself. */
 export interface RoutineProposal extends RoutineDefinition {
   why: string
+  /** 'central': kept in the central store (routines-store.json), where any computer reading it sees it; absent: this PC's file. */
+  source?: 'central'
+  /** A central proposal's runner labels. */
+  runsOn?: string[]
+}
+
+/** POST propose's object: a proposal, and for one kept in the central store `store: "central"` with its central keys
+ *  (runsOn defaults to this runner, a schedule's timeZone to this computer's). */
+export type RoutineProposalRequest = RoutineProposal & {
+  store?: 'central'
+  timeZone?: string
+  workdir?: { repo: string; path: string }
+}
+
+/** The central store this computer reads routines from (GET /api/routines `store`): null when routines-store.json names none. */
+export interface RoutineStoreStatus {
+  /** The CrAInium docs repo key the routine documents live under ('' when routines-store.json does not check out). */
+  repo: string
+  /** This computer's runner name: a routine's runsOn names it to run here. */
+  runner: string
+  labels: string[]
+  /** This computer's approver key: another computer trusts approvals made here by listing it in its "approvers". */
+  approverKey: string
+  /** When the store last answered, ms; null when it never has (the central routines are this computer's copies). */
+  readAt: number | null
+  /** Why the store did not answer, or why routines-store.json does not check out; null when it did. */
+  error: string | null
+  /** Documents under routines/ that are not a routine, each with why (never run, never listed). */
+  problems: { id: string; reason: string }[]
 }
 
 /** One routine, as the last look saw it. */
@@ -159,6 +211,10 @@ export interface Routine {
   runs: RoutineRun[]
   /** How many runs it has ever had (its full history; the card shows the newest 30). */
   runsTotal?: number
+  /** 'central': kept in the central store; absent: this PC's file. */
+  source?: 'central'
+  /** A central routine's runner labels: where it runs. */
+  runsOn?: string[]
 }
 
 /** GET /api/routines. */
@@ -173,6 +229,8 @@ export interface RoutinesStatus {
   proposals: RoutineProposal[]
   /** Why the last look failed as a whole, or null. */
   error: string | null
+  /** The central store, when this computer reads one. */
+  store?: RoutineStoreStatus | null
 }
 
 /**
@@ -188,7 +246,7 @@ export interface RoutinesRequest {
   resume?: string
   approve?: string
   discard?: string
-  propose?: RoutineProposal
+  propose?: RoutineProposalRequest
   edit?: { id: string; set: Record<string, unknown> }
 }
 
