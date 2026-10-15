@@ -1290,6 +1290,17 @@ on a normal install), nothing is recorded or sent, and dispatches answer `ping: 
 the file. Delete it to turn pings back on. `startCliMayte()` starts the outbox (`startCliMaytePing`
 with the real worker feed and transports) and daemon shutdown stops it (`stopCliMaytePing`).
 
+### Completion waits (`server/src/completions.ts`, `POST /api/completions/{wait,seen,finished}`)
+
+Work that outlives the call that started it reports `finished`; the call that is waiting registers a
+`waitFor` and is told once, through the outbox, with `<label> finished; read it with <read>.` A ticket is
+`<kind>:<id>`: `desk-chat:<chat id>` now (a Desk chat's turn ends, reported by the Desk chat manager), and
+`hswarm-job:` and `climayte-worker:` are reserved. The waiter comes from the request's own chat, never from
+the body. A finish nobody waits on is kept 10 minutes; a wait expires after 24 hours; `seen` drops a wait.
+`manager_open` and a `manager_ask` that answers `working` register one, and `manager_read` that answers
+`done` calls `seen`. The completion wait of a Hydra Core seat is registered the same way. Pings off
+(`ping-off`) keeps the wait for the next settle.
+
 ### Moving a worker to another folder (`climayte_send { cwd }`, owner, 2026-10-04)
 
 Hydra Desk moves a chat to another folder when Claude cd's out of its folder; a chat that is a worker

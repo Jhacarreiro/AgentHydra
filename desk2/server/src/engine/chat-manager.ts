@@ -88,7 +88,7 @@ import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
 import type { ServiceRuntime } from './service-runtime'
 
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
+export type ManagerBridge = Pick<Bridge, 'completionFinished' | 'startWorker' |'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
 
 export interface ChatManagerOptions {
   home: string
@@ -229,6 +229,8 @@ interface Entry {
   emitted?: Map<string, string>
   /** What matchWorkers last matched the chat on (the worker list and the chat's own ids): the same input is not matched again. */
   matchKey?: string
+  /** The chat was live at its last check: when it leaves live, the chats waiting on it are told once (turnEnded). */
+  turnLive?: boolean
   /** A CliMayte chat: the worker's session file and the account it was found under, so a poll does not search the session folders again. */
   cwdFile?: { sessionId: string; account: string | null; file: string }
   /** The worker's items as the last poll went through them: the bridge answers the same array while nothing changed. */
@@ -2662,6 +2664,7 @@ export class ChatManager {
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
       this.settleParent(e.chat)
+      this.turnEnded(e)
       return
     }
     if ((event.type === 'item.upsert' || event.type === 'item.delta' || event.type === 'notify') && !this.chats.has(event.chatId)) return
@@ -2736,6 +2739,20 @@ export class ChatManager {
     // A CliMayte worker's status arrives here, not as a runtime event.
     this.sendWaiting(this.chats.get(chat.id))
     this.settleParent(chat)
+    const e = this.chats.get(chat.id)
+    if (e) this.turnEnded(e)
+  }
+
+  /** A chat that was live and no longer is ends its turn once: AgentHydra tells the chats waiting on it (completions.ts). */
+  private turnEnded(e: Entry): void {
+    if (LIVE.has(e.chat.status)) {
+      e.turnLive = true
+      return
+    }
+    if (!e.turnLive) return
+    e.turnLive = false
+    const outcome = e.chat.status === 'error' ? 'failed' : e.chat.status === 'stopped' ? 'cancelled' : 'done'
+    this.bridge.completionFinished(`desk-chat:${e.chat.id}`, outcome).catch(() => {})
   }
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */

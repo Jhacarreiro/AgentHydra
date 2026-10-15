@@ -138,6 +138,7 @@ export type PingKind =
   | 'limited-moved' // information only: hit a 5-hour or weekly limit, resumed on another account
   | 'stuck' // information only: waiting longer than STUCK_AFTER_MS
   | 'swarm-job' // an HSwarm job that outlived the call that started it has finished (swarm-job-ping.ts)
+  | 'finished-later' // registered work a chat waited on has finished (completions.ts); the line is AgentHydra's
 
 const INFO_KINDS: ReadonlySet<PingKind> = new Set(['limited-moved', 'stuck'])
 /** Results the chat can read on its next look: held while the same origin still has live workers. */
@@ -431,10 +432,11 @@ export function pingMessage(
       .map((e) => `• ${e.line}`),
   ]
   if (n > MAX_BULLETS) lines.push(`+${n - MAX_BULLETS} more`)
-  // An HSwarm job's line stands alone: it has no group, no verdict to give.
-  const jobsOnly = events.every((e) => e.kind === 'swarm-job')
+  // An HSwarm job's or a registered wait's line stands alone: it has no group, no verdict to give.
+  const standalone = (k: PingKind | undefined) => k === 'swarm-job' || k === 'finished-later'
+  const jobsOnly = events.every((e) => standalone(e.kind))
   if (jobsOnly) return lines.join('\n')
-  const groups = [...new Set(events.filter((e) => e.kind !== 'swarm-job').map((e) => e.group))]
+  const groups = [...new Set(events.filter((e) => !standalone(e.kind)).map((e) => e.group))]
   for (const g of groups) {
     const ws = workers.filter((w) => w.group === g)
     const count = (...s: CliMayteStatus[]) => ws.filter((w) => s.includes(w.status)).length

@@ -2080,7 +2080,7 @@ let pingOverrides: Partial<CliMaytePingDeps> | null = null
 
 /** A chat origin naming a CliMayte worker's own session is that worker: a manager (or any worker)
  *  that dispatches work hears of it through climayteSend, not its transcript. */
-function originFor(o: CliMayteOrigin | undefined): CliMayteOrigin | undefined {
+export function originFor(o: CliMayteOrigin | undefined): CliMayteOrigin | undefined {
   if (o?.kind !== 'chat') return o
   for (const w of workers.values())
     if (w.sessionId === o.sessionId || w.sessions?.includes(o.sessionId))

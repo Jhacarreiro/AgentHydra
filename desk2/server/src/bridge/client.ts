@@ -516,6 +516,9 @@ export function createClient(opts: HydraClientOptions = {}) {
       (await get<{ rows: AhChatRow[] }>(`/api/chats?limit=1000${archived === 'include' ? '&archived=include' : ''}`)).rows,
     /** The transcript index of the last 24 hours (its default window), newest first. */
     codexChats: async () => (await get<{ rows: AhCodexChatRow[] }>('/api/codex-chats')).rows,
+    /** A Desk chat's turn ended: AgentHydra tells the chats that wait on its ticket (`desk-chat:<id>`). */
+    completionFinished: (ticket: string, outcome: 'done' | 'failed' | 'cancelled') =>
+      post<{ ok: boolean }>('/api/completions/finished', { ticket, outcome }),
     /** Every Codex account (Pin service picks one for a pinned chat's thread). */
     codexInstances: () => get<AhCodexInstance[]>('/api/codex-instances'),
     /** Its cached usage: never a fresh read, which would refresh the login beside an app-server Desk holds. */

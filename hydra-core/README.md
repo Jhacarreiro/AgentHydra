@@ -86,6 +86,7 @@ Set it with `placement <slot|attach|file|off>` in the core's `switch.mjs`.
 - A lead picked through the question tree logs a `use` line with `mode: "become"`, as `core_use` does.
 - Per-message additions need at least three content words in the message and, per entry, a name or title hit or a strong score, with at least two distinct words matched, at most three items, never an entry already in the slot and never one tied to other folders.
 - The slot lists the chat's seats: `Seats in this chat: <name> (<person id>)`, with how to resume one through `core_use` consult.
+- A consult or hire whose seat is still working registers a completion wait (`server/src/completions.ts`): the chat is told once, through CliMayte, when the seat's turn ends.
 
 ## Failures
 

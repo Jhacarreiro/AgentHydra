@@ -2,6 +2,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { CliMayteRole } from '../climayte-lib'
+import { completionsApi } from '../mcp-client'
 import { deskChats, replyWhenDone } from '../mcp-managers'
 import {
   type Caller,
@@ -37,6 +38,11 @@ export interface Daemon {
   report(id: string, waitS: number): Promise<Report | null>
   /** A seat kept as a worker: its session resumes with `text`. */
   send(id: string, text: string): Promise<void>
+  /** The completion registry (completions.ts): tells this chat when a seat it opened finishes. */
+  completions?: {
+    waitFor(input: { ticket: string; label: string; read: string; after: number }): Promise<unknown>
+    seen(ticket: string): Promise<unknown>
+  }
 }
 
 export type UseArgs = {
@@ -105,6 +111,7 @@ function folderOf(files: Files, cwd: string | undefined): string {
 
 export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise<unknown>): Daemon {
   return {
+    completions: completionsApi,
     async dispatch(prompt, title, cwd, persona) {
       const seat = persona ? { role: 'seat', persona } : {}
       const reply = (await api('/api/corch/workers', {
@@ -275,29 +282,57 @@ async function workerSeat(dir: string, args: UseArgs, e: CatalogEntry, daemon: D
 
 const readHint = (e: CatalogEntry) => `core_use { chat, id: "${e.id}", mode: "consult" }`
 
+const seatReadHint = (chat: ChatOfCaller, e: CatalogEntry) =>
+  `core_use { chat: "${chat.key}", id: "${e.id}", mode: "consult" }`
+
+/** Tells this chat when the seat's work finishes. A failed registration never fails the call: it is logged. */
+async function tellWhenSeatDone(
+  daemon: Daemon,
+  dir: string,
+  chat: ChatOfCaller,
+  seat: { chat: string; title: string },
+  after: number,
+  e: CatalogEntry,
+  now: Date,
+) {
+  try {
+    await daemon.completions?.waitFor({
+      ticket: `desk-chat:${seat.chat}`,
+      label: `Seat "${seat.title}"`,
+      read: seatReadHint(chat, e),
+      after,
+    })
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    appendLog(dir, { chat: chat.key, event: 'seat-wait-unregistered', seat: seat.chat, why }, now)
+  }
+}
+
 async function seatConsult(
   dir: string,
   args: UseArgs,
   chat: ChatOfCaller,
   e: CatalogEntry,
   now: Date,
+  daemon: Daemon,
 ) {
   if (!args.question) {
     const seat = seatOf(dir, chat, e)
     if (!seat) throw new Error(`${e.id} has no seat in this chat yet: consult it with a question`)
     const r = await replyWhenDone({ id: seat.chat, title: seat.title }, null, WAIT_S)
-    return r.status === 'done'
-      ? { seat, status: 'done', reply: r.reply }
-      : { seat, status: 'working', read: readHint(e) }
+    if (r.status !== 'done') return { seat, status: 'working', read: seatReadHint(chat, e) }
+    await daemon.completions?.seen(`desk-chat:${seat.chat}`).catch(() => undefined)
+    return { seat, status: 'done', reply: r.reply }
   }
+  const sentAt = Date.now()
   const { seat, sentAfter, opened } = await openOrSend(dir, chat, e, args.question, args.cwd)
   pick(chatPaths(dir, chat.key), e, 'consult')
   const event = opened ? 'seat-opened' : 'seat-resumed'
   appendLog(dir, { chat: chat.key, event, mode: 'consult', id: e.id, seat: seat.chat }, now)
   const r = await replyWhenDone({ id: seat.chat, title: seat.title }, sentAfter, WAIT_S)
-  return r.status === 'done'
-    ? { seat, status: 'done', reply: r.reply }
-    : { seat, status: 'working', read: readHint(e) }
+  if (r.status === 'done') return { seat, status: 'done', reply: r.reply }
+  await tellWhenSeatDone(daemon, dir, chat, seat, sentAt, e, now)
+  return { seat, status: 'working', read: seatReadHint(chat, e) }
 }
 
 async function seatHire(
@@ -306,12 +341,15 @@ async function seatHire(
   chat: ChatOfCaller,
   e: CatalogEntry,
   now: Date,
+  daemon: Daemon,
 ) {
   if (!args.job) throw new Error('hire needs a job: say what the seat does')
+  const sentAt = Date.now()
   const { seat, opened } = await openOrSend(dir, chat, e, args.job, args.cwd)
   pick(chatPaths(dir, chat.key), e, 'hire')
   const event = opened ? 'seat-opened' : 'seat-resumed'
   appendLog(dir, { chat: chat.key, event, mode: 'hire', id: e.id, seat: seat.chat }, now)
+  await tellWhenSeatDone(daemon, dir, chat, seat, sentAt, e, now)
   return { status: 'started', seat }
 }
 
@@ -381,11 +419,11 @@ export async function use(dir: string, args: UseArgs, daemon: Daemon, now = new 
     case 'become':
       return become(dir, args, e, now)
     case 'consult':
-      if (chat?.desk) return seatConsult(dir, args, chat, e, now)
+      if (chat?.desk) return seatConsult(dir, args, chat, e, now, daemon)
       if (args.caller === 'prime') return workerSeat(dir, seatless, e, daemon, now)
       return consult(dir, seatless, e, daemon, now)
     case 'hire':
-      if (chat?.desk) return seatHire(dir, args, chat, e, now)
+      if (chat?.desk) return seatHire(dir, args, chat, e, now, daemon)
       if (args.caller === 'prime') return workerSeat(dir, seatless, e, daemon, now)
       return hire(dir, seatless, e, now)
     case 'load':

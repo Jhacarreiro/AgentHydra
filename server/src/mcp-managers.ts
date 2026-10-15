@@ -14,7 +14,7 @@ import {
 } from './manager-analytics/rsi'
 import { buildStats } from './manager-analytics/stats'
 import { readState } from './manager-analytics/store'
-import { type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
+import { completionsApi, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
 
 const CORE_MODE_REFUSAL =
@@ -99,6 +99,30 @@ function waitSeconds(a: Record<string, unknown>): number {
   return Math.min(MAX_WAIT, Math.max(0, Number.isFinite(n) ? n : DEFAULT_WAIT))
 }
 
+/** The completion registry the manager tools register with (tests replace its methods). */
+export const managerCompletions: Pick<typeof completionsApi, 'waitFor' | 'seen'> = {
+  waitFor: (input) => completionsApi.waitFor(input),
+  seen: (ticket) => completionsApi.seen(ticket),
+}
+
+/** Tells this process's caller when a sub-manager chat's turn ends. A failed registration never fails the tool. */
+async function tellWhenChatDone(
+  chat: { id: string; title?: string | null },
+  after: number,
+): Promise<void> {
+  try {
+    await managerCompletions.waitFor({
+      ticket: `desk-chat:${chat.id}`,
+      label: `Manager chat "${chat.title ?? chat.id}"`,
+      read: `manager_read { chat: "${chat.id}" }`,
+      after,
+    })
+  } catch (err) {
+    const why = err instanceof Error ? err.message : String(err)
+    process.stderr.write(`manager chat ${chat.id}: no completion wait registered (${why})\n`)
+  }
+}
+
 /** Waits for the chat's turn to end and answers its final reply. `sentAfter` is the transcript length before a message
  *  this call sent (null for a read): only items after it count, and the turn must have taken that message. */
 export async function replyWhenDone(
@@ -165,6 +189,7 @@ export const MANAGER_TOOLS: HydraTool[] = [
       if (!cwd) throw new Error('no folder: pass cwd, the calling chat has none')
       const topic = str(a.title).trim()
       const title = (topic ? `${name} · ${topic}` : name).slice(0, 200)
+      const sentAt = Date.now()
       const created = await deskPost('/api/chats', {
         cwd,
         title,
@@ -172,7 +197,10 @@ export const MANAGER_TOOLS: HydraTool[] = [
         parentId: parent.id,
         managerSlug: slug,
       })
-      return { chat: created.id, title: created.title ?? title }
+      const id = String(created.id)
+      const shown = String(created.title ?? title)
+      await tellWhenChatDone({ id, title: shown }, sentAt)
+      return { chat: id, title: shown }
     },
   },
   {
@@ -199,8 +227,11 @@ export const MANAGER_TOOLS: HydraTool[] = [
       if (!message) throw new Error('message is required')
       const chat = pickDeskChat(await deskChats(), str(a.chat))
       const sentAfter = (await transcriptItems(chat.id)).length
+      const sentAt = Date.now()
       await deskPost(`/api/chats/${encodeURIComponent(chat.id)}/messages`, { text: message })
-      return replyWhenDone(chat, sentAfter, waitSeconds(a))
+      const r = await replyWhenDone(chat, sentAfter, waitSeconds(a))
+      if (r.status === 'working') await tellWhenChatDone(chat, sentAt)
+      return r
     },
   },
   {
@@ -223,7 +254,15 @@ export const MANAGER_TOOLS: HydraTool[] = [
     run: async (a: Record<string, unknown>) => {
       if (coreModeOn()) throw new Error(CORE_MODE_REFUSAL)
       const chat = pickDeskChat(await deskChats(), str(a.chat))
-      return replyWhenDone(chat, null, waitSeconds(a))
+      const r = await replyWhenDone(chat, null, waitSeconds(a))
+      if (r.status === 'done') {
+        try {
+          await managerCompletions.seen(`desk-chat:${chat.id}`)
+        } catch {
+          // the wait stays until it expires: the reply was still answered
+        }
+      }
+      return r
     },
   },
   {

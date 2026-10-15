@@ -177,12 +177,17 @@ export function fakeBridge(
     failNext: [] as { err: Error; took?: boolean }[],
     /** Every requestId a start or a send carried, repeats included. */
     requestIds: [] as string[],
+    finished: [] as { ticket: string; outcome: string }[],
     /** takesRequestIds' answer: null when AgentHydra did not answer, false for one from before request ids. */
     takesRequestIds: true as boolean | null,
   }
   const madeFor = new Map<string, AhWorker>()
   const sendIds = new Set<string>()
   const b: ManagerBridge = {
+    completionFinished: async (ticket, outcome) => {
+      state.finished.push({ ticket, outcome })
+      return { ok: true }
+    },
     startWorker: async (task) => {
       if (task.requestId) state.requestIds.push(task.requestId)
       const fail = state.failNext.shift()

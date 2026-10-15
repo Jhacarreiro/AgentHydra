@@ -1114,6 +1114,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     canDeliverNow,
     sendToWorkerNow,
     cancelWorkerHeld,
+    completionFinished: (ticket: string, outcome: 'done' | 'failed' | 'cancelled') =>
+      client.completionFinished(ticket, outcome),
     startWorker,
     workersByIds,
     workerItems,
