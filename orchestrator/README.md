@@ -711,7 +711,7 @@ program needs:
 | `GET /api/claude-native/settings`, `PUT /api/claude-native/settings` | per-profile port, routing mode and `launchDebugger`; automatic startup applies on the next AgentHydra Open |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
-| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat; a `peer_only` caller (Desk's bridge, so the babysitter) goes first through the native send, the app's own peer delivery, which also starts a stopped chat (`route: "native"`). This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
+| `POST /api/sessions/:id/message` | deliver text into a chat: the native send first (the app's own peer delivery, which also starts a stopped chat; `route: "native"`), then the peer pipe of a live engine. Since 2026-10-15 it types into the app's window (the composer) only for a caller that sends `allow_typing: true`, which only AgentHydra's own chat box does; every other caller gets a `never types:` refusal (409) instead. This is `courier.py`'s only route: the courier never types, and a 404 from an older daemon is a failure |
 | `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
 
 The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;

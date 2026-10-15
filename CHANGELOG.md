@@ -16,6 +16,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   there (one inside a long command or waiting on its background jobs counts; one that had finished stays) and checks
   that they run. An app a person quit is left alone, and moved Codex chats are continued from the Codex app (Settings >
   Managers > Instance manager).
+- **AgentHydra no longer types into your Claude windows by itself.** Starting a moved chat again, steering a
+  fan-out member and other automatic messages go through the app's own message delivery, without the window.
+  Before, a chat with nothing running could make AgentHydra raise the window full screen, click through its
+  sidebar and type. Only what you type into AgentHydra's own chat box is still typed into the app.
+- **The Instances list shows an app that signed itself out.** Claude Desktop sometimes signs itself out, for
+  example on its first start after an update, while its stored login still names the account. Such an app is
+  marked Signed out and no longer counts as signed in when a chat, move or fan-out picks an app.
 - **A fresh ChatGPT Free sign-in is no longer undone by Login sync.** Since 2026-10-14 ChatGPT answers sends only
   from a login a browser sign-in made, and sync used to keep whichever copy expired later, often an older one from
   the other PC. A freshly signed-in login now wins and reaches the other PCs. A refused ChatGPT call also names the

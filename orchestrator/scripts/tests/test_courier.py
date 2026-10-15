@@ -168,27 +168,13 @@ class TransientRefusalTest(unittest.TestCase):
 
     def test_mid_turn_with_no_pipe_is_transient(self):
         self.assertTrue(courier._is_transient(
-            self._err(409, '{"error":"peer_only: no peer pipe for this session"}')))
+            self._err(409, '{"error":"no native send and no peer pipe reached it - the courier never types"}')))
 
     def test_a_real_refusal_is_NOT_transient(self):
         """The wrong-chat guard firing is a genuine failure and must still burn the row -
         a deferral there would retry a blind type forever."""
         self.assertFalse(courier._is_transient(
             self._err(422, "no verify snippet derivable from the transcript - refusing to type blind")))
-
-
-class RunActuatorTest(unittest.TestCase):
-    """A hung actuator must read as an ordinary (code, why) failure - never an uncaught
-    subprocess.TimeoutExpired that would skip mark_failed and the results row entirely."""
-
-    def test_a_timeout_is_a_normal_failure_tuple_not_an_exception(self):
-        with mock.patch("pathlib.Path.exists", return_value=True), \
-             mock.patch.object(courier.subprocess, "run",
-                               side_effect=courier.subprocess.TimeoutExpired(
-                                   cmd="deliver_desktop_chat.ps1", timeout=courier.ACTUATOR_TIMEOUT_SECS)):
-            code, out = courier._run_actuator("t", "temp1", "msg", "verify")
-        self.assertEqual(code, 1)
-        self.assertIn("timed out", out)
 
 
 class CourierRailTest(unittest.TestCase):
@@ -340,22 +326,20 @@ class CourierRailTest(unittest.TestCase):
         self.assertTrue(ok, why)
         self.assertTrue(match["peer_only"])
 
-    def test_run_hands_each_rows_window_to_the_gate_and_a_fresh_landing_is_not_deferred(self):
-        """End to end through run(): the shape that hung, with the peer channel dead-lettering as
-        it did live. Without a window the row is deferred as mid-turn (the composer forbidden);
-        with the resume's window it is not peer_only, so the dead letter falls through to the
-        composer - which is how the one 194s landing was delivered."""
+    def test_run_hands_each_rows_window_to_the_gate_and_a_dead_peer_on_an_idle_chat_is_deferred(self):
+        """End to end through run(): the peer channel dead-letters, as it did live, on a chat
+        that has finished its turn. The courier never types, so the row is deferred and stays
+        staged for the next cycle rather than falling through to any composer."""
         self._write_tail(DONE_WAITING, age=60)
         self.live = {"pid": 99, "name": "w"}
         self.stub.routes[f"/api/sessions/{SID}/message"] = (
             422, {"error": "peer wrote-but-no-transcript-growth",
                   "detail": "peer channel did not confirm (wrote-but-no-transcript-growth)"})
         e = self._stage()
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, {e["id"]}, act=True, hand_run=True, idle_after={e["id"]: 15})
-        self.assertFalse(any(r.get("deferred") for r in report["results"]),
-                         f"a finished landing must not be deferred as mid-turn: {report['results']}")
-        act.assert_called()   # not peer_only: the composer is a legitimate fallback here
+        report = courier.run(5, {e["id"]}, act=True, hand_run=True, idle_after={e["id"]: 15})
+        self.assertTrue(report["results"][0]["deferred"])
+        self.assertIn("not typing", report["results"][0]["outcome"])
+        self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
 
     def test_an_idle_live_chat_is_the_normal_target(self):
         self.live = {"pid": 99, "name": "w"}   # alive but quiet, turn completed
@@ -434,9 +418,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         self.stub.routes[f"/api/sessions/{SID}/message"] = {
             "ok": True, "typed": True, "delivered": True, "detail": "transcript growing"}
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, None, act=True)
-        act.assert_not_called()
+        report = courier.run(5, None, act=True)
         self.assertTrue(report["results"][0]["ok"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "delivered")
         posts = [b for p, b in self.stub.posts if p.endswith("/message")]
@@ -447,11 +429,20 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         self.stub.routes[f"/api/sessions/{SID}/message"] = {
             "ok": False, "typed": True, "delivered": False, "detail": "transcript did not grow"}
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, None, act=True)
-        act.assert_not_called()
+        report = courier.run(5, None, act=True)
         self.assertFalse(report["results"][0]["ok"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
+
+    def test_a_404_daemon_is_a_failure_that_never_types(self):
+        """An older daemon has no /message endpoint. The row fails with the reason on record, and
+        nothing falls back to typing into the app."""
+        e = self._stage()
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (404, {"error": "not found"})
+        report = courier.run(5, None, act=True)
+        self.assertEqual(report["results"][0]["outcome"], "the daemon endpoint refused")
+        row = deliverylib.get(e["id"])
+        self.assertEqual(row["state"], "failed")
+        self.assertIn("courier never types", row["lastError"])
 
     # --- A DEFERRAL MUST SURVIVE TO ITS NEXT ATTEMPT -------------------------------------
     # Found live 2026-09-12. `courier --yes --only <id>` refused, correctly, to type into a
@@ -470,20 +461,18 @@ class CourierRailTest(unittest.TestCase):
         self.live = {"pid": 99, "name": "w"}
         e = self._stage()
         self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, None, act=True)
-        act.assert_not_called()   # rail 4: the composer is never the fallback for a live turn
+        report = courier.run(5, None, act=True)   # rail 4: nothing is typed for a live turn
         return e, report
 
     def test_a_mid_turn_peer_refusal_stays_STAGED_and_is_counted_as_a_deferral(self):
         e, report = self._mid_turn_peer_refusal()
         self.assertFalse(report["results"][0]["ok"])
-        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+        self.assertIn("not typing", report["results"][0]["outcome"])
         row = deliverylib.get(e["id"])
         self.assertEqual(row["state"], "staged",
                          "a refusal to interrupt a turn is NOT-YET, never a burned row")
         self.assertEqual(row["deferrals"], 1)
-        self.assertIn("mid-turn", row["lastError"])
+        self.assertIn("never types", row["lastError"])
 
     def test_the_same_command_a_minute_later_still_finds_the_row(self):
         """The whole point: re-running `--only <id>` must not answer 'nothing staged'."""
@@ -502,8 +491,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         deliverylib._update(e["id"], deferrals=deliverylib.MAX_DEFERRALS - 1)
         self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
-        with mock.patch.object(courier, "_run_actuator"):
-            courier.run(5, None, act=True)
+        courier.run(5, None, act=True)
         row = deliverylib.get(e["id"])
         self.assertEqual(row["state"], "expired")
         self.assertIn("deferred", row["lastError"])
@@ -515,45 +503,11 @@ class CourierRailTest(unittest.TestCase):
         _, report = self._mid_turn_peer_refusal()
         self.assertTrue(report["results"][0]["deferred"])
 
-    def test_a_turn_that_ENDED_since_the_plan_is_delivered_not_deferred_again(self):
-        """⛔ THE STALE REFUSAL (found live 2026-09-17, operation b2576cf1). `peer_only` is
-        decided when the batch PLANS, and a batch's resume phase plans every chat and then
-        delivers them one at a time - so the dead-letter arrives minutes later. Chat 44b8262a
-        finished its own turn at 17:05:41 and was still being deferred as "the turn is in
-        flight" at 17:08:14, on a flag nothing re-read. The refusal is re-gated at the moment it
-        is made now: a chat that has since finished takes the composer, which is the whole
-        point of the fallback."""
-        self._write_tail("working on it", age=5, tool_use=True)
-        self.live = {"pid": 99, "name": "w"}
-        e = self._stage()
-
-        self.stub.routes[f"/api/sessions/{SID}/message"] = self.PEER_DEAD
-        real_before = courier._capture_before_state
-
-        def turn_ends_before_the_send(session_id):
-            # The turn ends AFTER the plan and BEFORE the send, which is why the size captured
-            # here already includes it: the duplicate guard sees no growth, and the only thing
-            # still saying "mid-turn" is the stale flag from the plan.
-            self._write_tail(DONE_WAITING, age=400)
-            return real_before(session_id)
-
-        # The stub chat never moves after the type, so the confirm watch runs to its end: 2 s, not
-        # the real 150 s that made this one test 168 s of the file's 380 (2026-10-08).
-        with mock.patch.object(courier, "_capture_before_state",
-                               side_effect=turn_ends_before_the_send), \
-                mock.patch.object(courier, "CONFIRM_SECS", 2), \
-                mock.patch.object(courier, "_run_actuator",
-                                  return_value=(0, "TYPED and verified")) as act:
-            report = courier.run(5, None, act=True)
-        act.assert_called_once()
-        self.assertNotIn("turn is in flight", report["results"][0]["outcome"])
-        self.assertNotEqual(deliverylib.get(e["id"])["state"], "staged",
-                            "a finished turn must not be deferred a second time")
-
     def test_a_turn_still_in_flight_at_the_refusal_is_still_deferred(self):
-        """The other half: re-gating must not become a way around rail 4."""
+        """The other half: a dead peer on a live turn must never be typed into instead."""
         _, report = self._mid_turn_peer_refusal()
-        self.assertIn("turn is in flight", report["results"][0]["outcome"])
+        self.assertTrue(report["results"][0]["deferred"])
+        self.assertIn("not typing", report["results"][0]["outcome"])
 
     def test_a_deferral_burns_no_breaker_attempt_and_files_no_incident(self):
         """The breaker counts futility, not restraint. Before this, four correct mid-turn
@@ -577,9 +531,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         self.stub.routes[f"/api/sessions/{SID}/message"] = (
             409, {"error": "instance temp1 is not running - open it first"})
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, None, act=True)
-        act.assert_not_called()
+        report = courier.run(5, None, act=True)
         self.assertTrue(report["results"][0]["deferred"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
         self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 0)
@@ -592,9 +544,7 @@ class CourierRailTest(unittest.TestCase):
         e = self._stage()
         self.stub.routes[f"/api/sessions/{SID}/message"] = (
             422, {"error": "not rendered in any searched running instance"})
-        with mock.patch.object(courier, "_run_actuator") as act:
-            report = courier.run(5, None, act=True)
-        act.assert_not_called()
+        report = courier.run(5, None, act=True)
         self.assertFalse(report["results"][0].get("deferred"))
         self.assertEqual(deliverylib.get(e["id"])["state"], "failed")
         self.assertEqual(ledgerlib.check("deliver", SID)["attempts"], 1)
@@ -605,43 +555,25 @@ class CourierRailTest(unittest.TestCase):
         # chat dormant (message lost, zombie twin, "Claude has crashed"). The composer is
         # the one delivery channel; this pins that no delivery ever touches /migrate again.
         self._stage()
-        with mock.patch.object(courier, "_run_actuator", side_effect=self._moving_actuator()):
-            report = courier.run(5, None, act=True)
+        self._daemon_confirms()
+        report = courier.run(5, None, act=True)
         self.assertTrue(report["results"][0]["ok"])
         self.assertEqual([p for p, _ in self.stub.posts if "/migrate" in p], [])
-
-    def test_a_boot_from_dormant_counts_as_movement(self):
-        # A composer send into a dormant chat boots its engine; the live registry shows the
-        # fresh process before the first transcript write - that boot IS movement.
-        e = self._stage()
-        self.stub.routes["/api/sessions/live"] = {"count": 0, "sessions": []}
-        calls = {"n": 0}
-
-        def fake_live(sid, matches=None):
-            calls["n"] += 1
-            return None if calls["n"] == 1 else {"pid": 99, "name": "x", "startedAt": 1}
-
-        with mock.patch.object(courier.hydralib, "live_for", side_effect=fake_live), \
-             mock.patch.object(courier, "_run_actuator", return_value=(0, "typed")):
-            report = courier.run(5, None, act=True)
-        self.assertTrue(report["results"][0]["ok"])
-        self.assertEqual(deliverylib.get(e["id"])["state"], "delivered")
 
     def test_the_machine_wide_cap_defers_deliveries_round_robin(self):
         # Owner, 2026-08-31: at most 18 chats running machine-wide; a delivery past the cap
         # DEFERS (stays staged for the next 5-minute cycle) rather than waking a 19th.
         e = self._stage()
+        self._daemon_confirms()
         with mock.patch.object(hydralib, "running_count",
-                               return_value=hydralib.MAX_RUNNING_CHATS), \
-             mock.patch.object(courier, "_run_actuator") as m:
+                               return_value=hydralib.MAX_RUNNING_CHATS):
             report = courier.run(5, None, act=True)
-        m.assert_not_called()
+        self.assertEqual(self._messages_posted(), [])
         self.assertTrue(report["skipped"][0]["why"].startswith("concurrency cap"))
         self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
         # one slot free -> it goes
         with mock.patch.object(hydralib, "running_count",
-                               return_value=hydralib.MAX_RUNNING_CHATS - 1), \
-             mock.patch.object(courier, "_run_actuator", side_effect=self._moving_actuator()):
+                               return_value=hydralib.MAX_RUNNING_CHATS - 1):
             report = courier.run(5, None, act=True)
         self.assertTrue(report["results"][0]["ok"])
 
@@ -661,10 +593,9 @@ class CourierRailTest(unittest.TestCase):
         self.live = {"pid": 4242}
         self.stub.routes["/api/sessions/live"] = {
             "count": hydralib.MAX_RUNNING_CHATS, "sessions": [{"sessionId": SID}]}
+        self._daemon_confirms()
         with mock.patch.object(hydralib, "running_count",
-                               return_value=hydralib.MAX_RUNNING_CHATS), \
-             mock.patch.object(courier, "_run_actuator",
-                               side_effect=self._moving_actuator()):
+                               return_value=hydralib.MAX_RUNNING_CHATS):
             report = courier.run(5, None, act=True)
         self.assertTrue(report["results"], "a message to an ALREADY-RUNNING chat adds no "
                                            "concurrency and must not be held by the cap")
@@ -678,10 +609,9 @@ class CourierRailTest(unittest.TestCase):
         self.stub.routes["/api/sessions/live"] = {"count": hydralib.MAX_RUNNING_CHATS,
                                                   "sessions": []}
         with mock.patch.object(hydralib, "running_count",
-                               return_value=hydralib.MAX_RUNNING_CHATS), \
-             mock.patch.object(courier, "_run_actuator") as m:
+                               return_value=hydralib.MAX_RUNNING_CHATS):
             report = courier.run(5, None, act=True)
-        m.assert_not_called()
+        self.assertEqual(self._messages_posted(), [])
         self.assertTrue(report["skipped"][0]["why"].startswith("concurrency cap"))
         self.assertIn("wake", report["skipped"][0]["why"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
@@ -695,10 +625,9 @@ class CourierRailTest(unittest.TestCase):
                                return_value=hydralib.MAX_RUNNING_CHATS), \
              mock.patch.object(hydralib, "running_by_instance",
                                side_effect=hydralib.DaemonError(
-                                   "/api/sessions/live", None, "live registry unreachable")), \
-             mock.patch.object(courier, "_run_actuator") as m:
+                                   "/api/sessions/live", None, "live registry unreachable")):
             report = courier.run(5, None, act=True)
-        m.assert_not_called()
+        self.assertEqual(self._messages_posted(), [])
         self.assertTrue(report["skipped"][0]["why"].startswith("concurrency cap"))
         self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
 
@@ -709,47 +638,28 @@ class CourierRailTest(unittest.TestCase):
         lock = ledgerlib._state_dir() / "locks" / f"deliver-{e['id']}"
         lock.mkdir(parents=True)
         try:
-            with mock.patch.object(courier, "_run_actuator") as m:
-                report = courier.run(5, None, act=True)
-            m.assert_not_called()
+            report = courier.run(5, None, act=True)
+            self.assertEqual(self._messages_posted(), [])
             self.assertFalse(report["results"][0]["ok"])
             self.assertIn("another courier run", report["results"][0]["outcome"])
             self.assertEqual(deliverylib.get(e["id"])["state"], "staged")
         finally:
             lock.rmdir()
 
-    def test_delivery_confirmed_only_when_the_chat_moves(self):
+    def test_delivery_confirmed_only_when_the_daemon_confirms(self):
         e = self._stage()
-        activity = {"n": 0}
-
-        def fake_actuator(title, instance, message, verify, deadline=None):
-            self.activity = "T2"   # the chat moved
-            activity["n"] += 1
-            return 0, "delivered"
-
-        with mock.patch.object(courier, "_run_actuator", side_effect=fake_actuator):
-            report = courier.run(5, None, act=True)
+        self._daemon_confirms()
+        report = courier.run(5, None, act=True)
         self.assertTrue(report["results"][0]["ok"])
         self.assertEqual(deliverylib.get(e["id"])["state"], "delivered")
         # success clears the breaker count
         self.assertFalse(ledgerlib.check("deliver", SID)["suppressed"])
 
-    def test_sent_but_not_moved_is_never_claimed_delivered(self):
+    def test_a_refusal_is_recorded_with_its_reason(self):
         e = self._stage()
-        with mock.patch.object(courier, "_run_actuator", return_value=(0, "typed")), \
-             mock.patch.object(courier, "CONFIRM_SECS", 1):
-            report = courier.run(5, None, act=True)
-        self.assertFalse(report["results"][0]["ok"])
-        self.assertIn("NOT confirmed", report["results"][0]["outcome"])
-        row = deliverylib.get(e["id"])
-        self.assertEqual(row["state"], "failed")
-        self.assertIn("did not move", row["lastError"])
-
-    def test_actuator_failure_is_recorded_with_its_reason(self):
-        e = self._stage()
-        with mock.patch.object(courier, "_run_actuator",
-                               return_value=(1, "AMBIGUOUS: 2 rendered chats end with that title")):
-            report = courier.run(5, None, act=True)
+        self.stub.routes[f"/api/sessions/{SID}/message"] = (
+            422, {"error": "AMBIGUOUS: 2 rendered chats end with that title"})
+        report = courier.run(5, None, act=True)
         self.assertFalse(report["results"][0]["ok"])
         self.assertIn("AMBIGUOUS", deliverylib.get(e["id"])["lastError"])
 
@@ -782,14 +692,13 @@ class CourierRailTest(unittest.TestCase):
 
         calls = {"n": 0}
 
-        def flaky_actuator(title, instance, message, verify, deadline=None):
+        def flaky_post(path, body, **kwargs):
             calls["n"] += 1
             if calls["n"] == 1:
                 raise RuntimeError("boom - a bug in the send path, not a refusal")
-            activity[sid_b] = "T-moved"
-            return 0, "delivered"
+            return {"ok": True, "delivered": True, "confirmed": True, "route": "native"}
 
-        with mock.patch.object(courier, "_run_actuator", side_effect=flaky_actuator):
+        with mock.patch.object(courier.hydralib, "api_post", side_effect=flaky_post):
             report = courier.run(5, None, act=True)
 
         by_id = {r["id"]: r for r in report["results"]}
@@ -803,23 +712,23 @@ class CourierRailTest(unittest.TestCase):
     def test_the_staged_count_is_measured_before_acting(self):
         # A run that delivered everything must not report "nothing staged" (live-run bug).
         self._stage()
-        with mock.patch.object(courier, "_run_actuator", side_effect=self._moving_actuator()):
-            report = courier.run(5, None, act=True)
+        self._daemon_confirms()
+        report = courier.run(5, None, act=True)
         self.assertEqual(report["staged"], 1)
         self.assertTrue(report["results"][0]["ok"])
 
-    def _moving_actuator(self):
-        def fake(title, instance, message, verify, deadline=None):
-            self.activity = "T-moved"
-            return 0, "delivered"
+    def _daemon_confirms(self):
+        """The daemon's message endpoint takes the send and confirms it - the only channel now."""
+        self.stub.routes[f"/api/sessions/{SID}/message"] = {
+            "ok": True, "delivered": True, "confirmed": True, "route": "native", "detail": "transcript growing"}
 
-        return fake
+    def _messages_posted(self):
+        return [p for p, _ in self.stub.posts if p.endswith("/message")]
 
     def test_plan_only_sends_nothing(self):
         self._stage()
-        with mock.patch.object(courier, "_run_actuator") as m:
-            code, out, _ = run_cli(courier.main, [])
-        m.assert_not_called()
+        code, out, _ = run_cli(courier.main, [])
+        self.assertEqual(self._messages_posted(), [])
         self.assertEqual(code, 0)
         self.assertIn("PLAN ONLY", out)
 
@@ -881,9 +790,8 @@ class CourierRailTest(unittest.TestCase):
         # THE ARMED WINDOW (owner order, 2026-09-01): --yes alone must not act unless a
         # person opened a window (`python orch.py arm`) or passed --force.
         e = self._stage()
-        with mock.patch.object(courier, "_run_actuator") as m:
-            code, out, _ = run_cli(courier.main, ["--yes"])
-        m.assert_not_called()
+        code, out, _ = run_cli(courier.main, ["--yes"])
+        self.assertEqual(self._messages_posted(), [])
         self.assertEqual(code, 0)
         self.assertIn("DISARMED", out)
         self.assertEqual(deliverylib.get(e["id"])["state"], "staged")

@@ -9,6 +9,10 @@
 // `peer_only` for a mid-turn chat, and THIS is where it has to mean something: on a session
 // with no peer pipe the route otherwise falls through to the composer, which TYPES.
 //
+// Since 2026-10-15 never-type is every caller's default (owner: a move's resume had raised his
+// window full screen, minimized it, then clicked through its menus): only `allow_typing: true`,
+// AgentHydra's own chat box, reaches the composer.
+//
 // Routes are exercised through the real registration on a PRIVATE Hono copied from the shared
 // app (see queue-patch-guard.test.ts for why the copy matters). Every collaborator the handler
 // reaches for is mocked, so nothing here touches a real app, a real pipe, or PowerShell.
@@ -108,28 +112,31 @@ beforeEach(() => {
   instances = [{ name: 'temp1', dir: HOME, isRunning: true }]
 })
 
-test('peer_only on a session with no pipe REFUSES instead of typing', async () => {
-  const { status, body } = await post({ text: 'carry on', peer_only: true })
+test.each([
+  ['a caller that asks for nothing (the courier, fan_out_send, archive, CliMayte, spawn)', {}],
+  ['a mid-turn caller (peer_only)', { peer_only: true }],
+  ['peer_only even beside allow_typing', { peer_only: true, allow_typing: true }],
+])('%s, on a session with no pipe, is REFUSED instead of typed', async (_who, flags) => {
+  const { status, body } = await post({ text: 'carry on', ...flags })
   expect(status).toBe(409)
   expect(body.delivered).toBe(false)
   expect(body.route).toBe('peer')
-  expect(String(body.error)).toContain('peer_only')
-  // the peer channel was still tried first - peer_only forbids the FALLBACK, not the attempt
+  expect(String(body.error)).toContain('never types')
+  // the peer channel was still tried first - never-type forbids the FALLBACK, not the attempt
   expect(peerCalls).toEqual([SID])
 })
 
 test('the refusal says why, so a caller can tell "not now" from "went wrong"', async () => {
-  const { body } = await post({ text: 'carry on', peer_only: true })
-  expect(String(body.detail)).toContain('refusing to interrupt a live turn')
-  expect(String(body.detail)).toContain('idle')
+  const { body } = await post({ text: 'carry on' })
+  expect(String(body.detail)).toContain("types into the app's window - refusing")
+  expect(String(body.detail)).toContain('native control')
 })
 
-test('WITHOUT peer_only the same session still falls through to the composer path', async () => {
-  // The guard must be opt-in: a dormant or crashed chat has no pipe either, and the composer
-  // is the only route that can BOOT it - breaking that would make every revive impossible.
-  // With no transcript and no verify_text the composer path refuses at its OWN rail (the
-  // wrong-chat guard), which proves the request got past the peer_only gate without typing.
-  const { status, body } = await post({ text: 'carry on' })
+test("allow_typing (a person's own send) still falls through to the composer path", async () => {
+  // A person who typed into AgentHydra's chat box asked for exactly this. With no transcript and
+  // no verify_text the composer path refuses at its OWN rail (the wrong-chat guard), which proves
+  // the request got past the never-type gate without typing.
+  const { status, body } = await post({ text: 'carry on', allow_typing: true })
   expect(status).toBe(422)
   expect(String(body.error)).toContain('no verify snippet derivable')
 })
@@ -165,8 +172,8 @@ test('the named instance copy wins, and only its own live engine is asked', asyn
   expect(peerHosts).toEqual(['local_copy-on-temp2'])
 })
 
-test('peer_only is not honoured as a truthy string - only a real boolean opts in', async () => {
-  // A JSON body is caller-supplied; a stray "false" or "0" must not silently arm a refusal.
-  const { status } = await post({ text: 'carry on', peer_only: 'false' })
-  expect(status).toBe(422)
+test('allow_typing is not honoured as a truthy string - only a real boolean opts in', async () => {
+  // A JSON body is caller-supplied; a stray "true" or "1" must not silently arm the keyboard.
+  const { status } = await post({ text: 'carry on', allow_typing: 'true' })
+  expect(status).toBe(409)
 })

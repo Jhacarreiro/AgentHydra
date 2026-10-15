@@ -116,8 +116,7 @@ class RowBudgetTest(unittest.TestCase):
         a, b = self._stage(SID_A), self._stage(SID_B)
         started = time.time()
         with mock.patch.object(courier, "ROW_BUDGET_SECS", BUDGET), \
-                mock.patch.object(hydralib, "api_post", side_effect=blocking_post), \
-                mock.patch.object(courier, "_run_actuator", return_value=(1, "no composer here")):
+                mock.patch.object(hydralib, "api_post", side_effect=blocking_post):
             report = courier.run(5, {a["id"], b["id"]}, act=True, hand_run=True)
         took = time.time() - started
 
@@ -148,8 +147,7 @@ class RowBudgetTest(unittest.TestCase):
                                      timeout=timeout)
 
         with mock.patch.object(courier, "ROW_BUDGET_SECS", BUDGET), \
-                mock.patch.object(hydralib, "api_post", side_effect=blocking_post), \
-                mock.patch.object(courier, "_run_actuator", return_value=(1, "no composer here")):
+                mock.patch.object(hydralib, "api_post", side_effect=blocking_post):
             courier.run(5, {a["id"]}, act=True, hand_run=True)
 
         row = deliverylib.get(a["id"])

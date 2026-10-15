@@ -498,7 +498,8 @@ export const streamUrl = (id: string) => `${API_BASE}/api/queue/${id}/stream`
 export const sendSessionMessage = async (id: string, text: string): Promise<{ detail: string }> => {
   const r = await j<{ ok: boolean; detail?: string; error?: string }>(
     `/api/sessions/${encodeURIComponent(id)}/message`,
-    { method: 'POST', body: JSON.stringify({ text }) },
+    // A person's own words: the one caller the route lets type into the app's window (session-message.ts).
+    { method: 'POST', body: JSON.stringify({ text, allow_typing: true }) },
   )
   if (!r.ok) throw new Error(r.error || r.detail || 'Failed to deliver the message.')
   return { detail: r.detail ?? '' }

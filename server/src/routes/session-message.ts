@@ -117,8 +117,17 @@ app.post('/api/sessions/:id/message', async (c) => {
   // runs. It goes in as a message from another session, never as the person, and the app keeps its
   // own refusals (archived, stopped until a person sends; claude-native-send.ts). Where native control
   // is not set up, or nothing reached the app, the pipe is tried as before.
+  //
+  // ⛔ ONLY A PERSON'S OWN SEND TYPES (owner, 2026-10-15). The composer (route 2) raises the app's
+  // window, clicks through its sidebar and types. A move's resume took it on 2026-10-15 and the
+  // owner watched the window go full screen, minimize, and then have its menus clicked. So every
+  // caller is never-type unless it sends `allow_typing: true`, which only AgentHydra's own chat box
+  // does (hydra sendSessionMessage): the courier's resumes and replies, fan_out_send, archive's
+  // preserve prompt, CliMayte's ping and spawn's fallback starter get the native send, the pipe,
+  // or a refusal.
+  const neverType = body.peer_only === true || body.allow_typing !== true
   let nativeWhy = ''
-  if (body.peer_only === true) {
+  if (neverType) {
     const { sendOrHold } = await import('../claude-native-send')
     const fromName =
       typeof body.from === 'string' && body.from.trim()
@@ -213,16 +222,17 @@ app.post('/api/sessions/:id/message', async (c) => {
     // turn is in flight is the one thing the courier's rail 4 forbids. A caller that knows the
     // turn is in flight sets peer_only, and then "no pipe" is a refusal, never a downgrade to
     // the route that would interrupt. Without this the courier could only obey rail 4 by
-    // refusing every live chat up front - which is exactly the bug it was fixed out of.
-    if (body.peer_only === true)
+    // refusing every live chat up front - which is exactly the bug it was fixed out of. Since
+    // 2026-10-15 every caller but a person's own send is never-type (route 0's comment).
+    if (neverType)
       return c.json(
         {
           ok: false,
           route: 'peer',
           delivered: false,
-          error: `peer_only: no peer pipe for this session, and the native send did not reach the app (${nativeWhy})`,
+          error: `never types: no peer pipe for this session, and the native send did not reach the app (${nativeWhy})`,
           detail:
-            'the composer is the only route left and it types - refusing to interrupt a live turn. Retry when the chat is idle.',
+            "the composer is the only route left and it types into the app's window - refusing. Retry once the app runs with native control, or when the chat has a live engine.",
         },
         409,
       )
