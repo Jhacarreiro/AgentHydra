@@ -1,11 +1,14 @@
 // GET and PUT /api/managers/<slug>/avatar: a manager's photo, shown on its chats' rows. PUT takes the raw bytes of a
 // PNG, JPG, WebP or GIF, checked against its declared type and its first bytes; the new photo replaces the old ones.
+// GET /api/personas/<slug>/avatar: the photo of a Hydra Core persona who is no manager (a lead or a seat), read from
+// wherever its portrait lives (engine/core-lead.ts personaPhoto); Desk never writes it.
 
 import { rmSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 import type { ServerContext } from '../context'
-import { AVATAR_TYPES, type AvatarExt, forgetManager, managerAvatar, managerName, managersDir, MANAGER_SLUG } from '../engine/managers'
+import { personaPhoto } from '../engine/core-lead'
+import { AVATAR_TYPES, type AvatarExt, forgetManager, type ManagerAvatar, managerAvatar, managerName, managersDir, MANAGER_SLUG } from '../engine/managers'
 import { sniff } from '../media/cache'
 import { renameOver, writeFlushed } from '../write-flushed'
 
@@ -20,6 +23,17 @@ function refusedSlug(c: Context, slug: string): Response | null {
   return null
 }
 
+function photoResponse(avatar: ManagerAvatar): Response {
+  return new Response(Bun.file(avatar.path), {
+    headers: {
+      'content-type': avatar.contentType,
+      'x-content-type-options': 'nosniff',
+      'content-security-policy': "default-src 'none'",
+      'cache-control': 'no-cache',
+    },
+  })
+}
+
 export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/managers/:slug/avatar', (c) => {
     const slug = c.req.param('slug')
@@ -27,14 +41,14 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (refused) return refused
     const avatar = managerAvatar(slug)
     if (!avatar) return c.json({ error: `${managerName(slug)} has no photo.` }, 404)
-    return new Response(Bun.file(avatar.path), {
-      headers: {
-        'content-type': avatar.contentType,
-        'x-content-type-options': 'nosniff',
-        'content-security-policy': "default-src 'none'",
-        'cache-control': 'no-cache',
-      },
-    })
+    return photoResponse(avatar)
+  })
+
+  app.get('/api/personas/:slug/avatar', (c) => {
+    const slug = c.req.param('slug')
+    if (!MANAGER_SLUG.test(slug)) return c.json({ error: `Not a persona: ${slug}` }, 400)
+    const avatar = personaPhoto(slug)
+    return avatar ? photoResponse(avatar) : c.json({ error: `No photo for ${slug}.` }, 404)
   })
 
   app.put('/api/managers/:slug/avatar', async (c) => {

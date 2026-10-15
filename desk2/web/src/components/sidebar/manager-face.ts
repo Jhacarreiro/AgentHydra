@@ -1,7 +1,9 @@
 // The manager a chat is on, as its sidebar row draws it (owner, 2026-10-13): a small round avatar left of the title,
 // the manager's photo when it has one (~/.agenthydra/managers/<slug>/avatar.*, served by GET /api/managers/:slug/avatar),
 // else its initial on a muted tone of the slug's own. A click on it opens the manager's card (ManagerAvatar.vue), where
-// "Change photo" replaces the photo for every row of that manager. Pure but for the one upload call, so the tests share it.
+// "Change photo" replaces the photo for every row of that manager. With no manager it is the chat's Hydra Core lead or
+// the persona a seat sits as (`role`); a persona who is no manager (`persona`) has its photo from GET
+// /api/personas/:slug/avatar, which Desk does not change. Pure but for the one upload call, so the tests share it.
 
 import { reactive } from 'vue'
 import type { ChatSummary } from '@shared/protocol'
@@ -31,9 +33,13 @@ export interface ManagerFace {
   initial: string
   /** The initial's background and letter colours. */
   tone: { bg: string; fg: string }
-  /** 'Manager: Ada, Head of Design': the avatar's hover label and accessible name. */
+  /** 'Manager: Ada, Head of Design' ('Lead: …', 'Seat: …' for Hydra Core's): the avatar's hover label and accessible name. */
   label: string
+  /** Whether the card offers Change photo: a manager's photo is its folder's, a persona's is read from elsewhere. */
+  canChangePhoto: boolean
 }
+
+const ROLE_WORD = { lead: 'Lead', seat: 'Seat' } as const
 
 export function managerFace(manager: ChatManager): ManagerFace {
   // The newer of this window's upload and the server's photo: another window may have replaced it since.
@@ -41,11 +47,14 @@ export function managerFace(manager: ChatManager): ManagerFace {
   const version = local !== undefined && (manager.photo == null || local > manager.photo) ? local : (manager.photo ?? null)
   const hue = HUES[hash(manager.slug) % HUES.length]!
   const initial = (Array.from(manager.name.trim())[0] ?? '?').toUpperCase()
+  const route = manager.persona ? 'personas' : 'managers'
+  const word = manager.role ? ROLE_WORD[manager.role] : 'Manager'
   return {
-    src: version === null ? null : `/api/managers/${encodeURIComponent(manager.slug)}/avatar?v=${version}`,
+    src: version === null ? null : `/api/${route}/${encodeURIComponent(manager.slug)}/avatar?v=${version}`,
     initial,
     tone: { bg: `oklch(0.36 0.07 ${hue})`, fg: `oklch(0.9 0.06 ${hue})` },
-    label: manager.title ? `Manager: ${manager.name}, ${manager.title}` : `Manager: ${manager.name}`,
+    label: manager.title ? `${word}: ${manager.name}, ${manager.title}` : `${word}: ${manager.name}`,
+    canChangePhoto: !manager.persona,
   }
 }
 

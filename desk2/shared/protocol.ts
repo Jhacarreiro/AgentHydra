@@ -131,8 +131,20 @@ export interface ChatSummary {
    * The manager the chat is on now: its pin, else the one its Claude session's state names. Left out when neither has a persona.
    * title and oneLiner come from its persona.json; photo is its avatar file's mtime in whole ms (a cache-buster), null with no avatar.
    * statsLine is the manager's analytics in one line to show as is ('41 turns · 98% answered'), absent or null before there is data.
+   * With no manager, Hydra Core's persona for the chat (server/src/engine/core-lead.ts): role 'lead' for the chat's lead,
+   * 'seat' for the persona a seat sits as. persona is set for one who is no manager: its photo is GET
+   * /api/personas/:slug/avatar, read from wherever its portrait lives, and is not changed from Desk.
    */
-  manager?: { slug: string; name: string; title: string | null; oneLiner: string | null; photo: number | null; statsLine?: string | null } | null
+  manager?: {
+    slug: string
+    name: string
+    title: string | null
+    oneLiner: string | null
+    photo: number | null
+    statsLine?: string | null
+    role?: 'lead' | 'seat'
+    persona?: true
+  } | null
 }
 
 // Transcript items: the normalized form of the SDK's message stream (and of AgentHydra transcripts)
