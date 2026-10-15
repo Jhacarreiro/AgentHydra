@@ -53,6 +53,8 @@ describe('migrate', () => {
       '0002_rls.sql',
       '0003_view_indexes.sql',
       '0004_grants.sql',
+      '0005_grant_versions_delete.sql',
+      '0006_training_export.sql',
     ])
     expect((await migrate(ctx.db)).applied).toEqual([])
   })
@@ -103,7 +105,7 @@ describe('migrate', () => {
     expect(upd.affectedRows).toBe(0)
   })
 
-  test('versions table is append-only for the runtime role', async () => {
+  test('versions table cannot be updated by the runtime role', async () => {
     await migrate(ctx.db)
     await asApp(ctx.pg, 'user:a', () => ctx.pg.query(insV, ['user:a']))
     expect(
@@ -118,9 +120,9 @@ describe('migrate', () => {
     await expect(
       asApp(ctx.pg, 'user:a', () => ctx.pg.query('UPDATE people_doc_versions SET bytes = 2')),
     ).rejects.toThrow(/permission denied/)
-    await expect(
-      asApp(ctx.pg, 'user:a', () => ctx.pg.query('DELETE FROM people_doc_versions')),
-    ).rejects.toThrow(/permission denied/)
+    // DELETE is allowed (0005) but only inside the caller's own scope, via RLS.
+    const del = await asApp(ctx.pg, 'user:b', () => ctx.pg.query('DELETE FROM people_doc_versions'))
+    expect(del.affectedRows).toBe(0)
   })
 
   test('training_eligible hides opted-out and deleted users', async () => {
