@@ -7,7 +7,7 @@
 // window that just connected keeps the lists it painted from its cache).
 // A window that connects is sent the last of each at once (welcome): broadcasts carry changes only, so
 // a window joining one already open, or reloaded before the old one closed, would otherwise show no
-// sessions until one of them next changed (Michael, 2026-10-04: a refresh showed none).
+// sessions until one of them next changed (the other owner, 2026-10-04: a refresh showed none).
 
 import type { ServerEvent } from '@shared/protocol'
 import { DEFAULT_ACCOUNT_INFO } from './accounts'

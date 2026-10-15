@@ -194,10 +194,10 @@ export const sidebarIcons = {
     ['path', { d: 'M16 18v3' }],
     ['circle', { cx: 16, cy: 15, r: 3 }]
   ]),
-  footer: Settings // the real settings gear (Jacob, 2026-10-04): eight teeth, a circle inside
+  footer: Settings // the real settings gear (the owner, 2026-10-04): eight teeth, a circle inside
 } as const
 
-// The chrome bar's AgentHydra button, in place of the colour logo (Michael, 2026-10-04: "a fun, like,
+// The chrome bar's AgentHydra button, in place of the colour logo (the other owner, 2026-10-04: "a fun, like,
 // outline-y version like the other ones"): the logo's big head with its open jaw and eye, and a smaller
 // head facing back off its neck, on the grid and stroke of the Cloud and Bot beside it.
 export const agentHydraIcon = glyph([

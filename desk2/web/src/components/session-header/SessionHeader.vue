@@ -54,7 +54,7 @@ import { RAIL_TARGETS, railTargets } from '@/components/rail/state'
 import { RAIL_ICON, RAIL_ICON_BTN, RAIL_ROW, RAIL_ROW_BTN } from '@/components/rail/classes'
 
 // Hydra Desk 2's session header for an outside session: what AgentHydra's Sessions tab said and offered
-// about the open session, which this replaces (Michael, 2026-10-04). Its facts, rows of a gray icon and the
+// about the open session, which this replaces (the other owner, 2026-10-04). Its facts, rows of a gray icon and the
 // fact as Claude Desktop's rail draws them (the source with its short id, the account, the folder, the branch,
 // the model; turns, tokens and cost, credentials it printed), and its actions (Find and the ⋯ menu: account,
 // display, session file, terminal, migrate, close) are drawn into the session rail's

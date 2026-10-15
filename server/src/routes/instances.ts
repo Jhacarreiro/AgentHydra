@@ -167,7 +167,7 @@ app.post('/api/instances/:dir/logout', async (c) => {
   const account = readLoginUuid(dir)
   const result = await logoutInstance(dir)
   if (result.ok && account) noteLoggedOutHere(account)
-  // OWNER RULE (Michael, 2026-09-07): signing out clears the usage numbers - session, weekly,
+  // OWNER RULE (2026-09-07): signing out clears the usage numbers - session, weekly,
   // five-hour. logoutInstance already drops our cached IDENTITY for the dir; the cached USAGE
   // outlived it, and since the usage routes serve the cache before checking anything, the row
   // went on showing the signed-out account's percentages. Dropped here so it clears the moment

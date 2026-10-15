@@ -1,6 +1,6 @@
 <script setup lang="ts">
 // The transcript: a windowed list (only the rows near the viewport are in the DOM, so a 3,000-item
-// chat scrolls smoothly), auto-scroll that lets go when Jacob scrolls up (a send, the down arrow's last step
+// chat scrolls smoothly), auto-scroll that lets go when the owner scrolls up (a send, the down arrow's last step
 // or scrolling back down takes it back to the bottom), and a Working row under the last item while the
 // chat's turn runs.
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, toRef, watch, type Directive } from 'vue'
@@ -197,7 +197,7 @@ function estimateRow(r: DisplayRow): number {
   return estimateHeight(it) + (it.kind === 'user' || r.endOfTurn ? 28 : 0)
 }
 
-// Auto-scroll: pinned to the bottom until Jacob scrolls up by any means (wheel, touchpad, scrollbar, keys); only
+// Auto-scroll: pinned to the bottom until the owner scrolls up by any means (wheel, touchpad, scrollbar, keys); only
 // scrolling back down to the bottom, the down arrow's last step or a send re-pins. A reply growing never pulls him down.
 const pinned = ref(true)
 let lastTop = 0
@@ -548,7 +548,7 @@ onMounted(() => {
       heights.set(id, h)
       layout.value.h[idx] = h
       changed = true
-      // A row above the viewport changed size: keep what Jacob is reading where it is (a held row does that itself).
+      // A row above the viewport changed size: keep what the owner is reading where it is (a held row does that itself).
       if (!pinned.value && !held && idx < firstOnScreen) anchorDelta += h - old
     }
     if (!changed) return

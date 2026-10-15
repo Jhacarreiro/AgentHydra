@@ -1,4 +1,4 @@
-// OWNER LAW (Michael, 2026-08-29, after the courier janitor threw all 18 accounts open at once):
+// OWNER LAW (2026-08-29, after the courier janitor threw all 18 accounts open at once):
 // "You're only supposed to open an account if you absolutely MUST. Bc all open ones aren't
 // accessible." The archive-visibility RESTART exists to make a running app redraw its sidebar;
 // for a closed app there is nothing to redraw, and quitting-then-opening one is pure harm. These

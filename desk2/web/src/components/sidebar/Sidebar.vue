@@ -220,7 +220,7 @@ function onCloudSearchKey(e: KeyboardEvent) {
   }
 }
 
-// The order rows keep (Jacob, 2026-10-04: sending a message must not reorder the list; rows are dragged into the
+// The order rows keep (the owner, 2026-10-04: sending a message must not reorder the list; rows are dragged into the
 // order wanted), the one the cloud list keeps too (order.ts). New ones join at the top. Folder groups are not kept
 // in it: they are listed A-Z (logic.ts sortFolders).
 const { order, save: saveOrder } = useSidebarOrder()

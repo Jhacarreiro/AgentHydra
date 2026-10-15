@@ -9,7 +9,7 @@ COLUMNS = (("day", 12), ("jobs/tasks", 11), ("DeepSeek", 10), ("Claude", 11), ("
 
 def usd(v: float | None) -> str:
     """'-' is NOT MEASURED, never zero; a tiny cost keeps its first two significant digits, so a $0.000003
-    ask never prints as $0.0000 (Michael, 2026-09-16: "was it actually free?")."""
+    ask never prints as $0.0000 (the other owner, 2026-09-16: "was it actually free?")."""
     if v is None:
         return "-"
     if v == 0:

@@ -225,7 +225,7 @@ describe('mentions', () => {
   it('finds the @word at the caret, not an email address', () => {
     expect(mentionQuery('look at @web/sr', 15)).toEqual({ start: 8, query: 'web/sr' })
     expect(mentionQuery('@', 1)).toEqual({ start: 0, query: '' })
-    expect(mentionQuery('mail jacob@example.com', 22)).toBeNull()
+    expect(mentionQuery('mail alex@example.com', 22)).toBeNull()
     expect(mentionQuery('@done and more', 14)).toBeNull()
   })
   it('ranks basename prefix before path substring', () => {

@@ -1,6 +1,6 @@
 {
   "name": "hydra-desk",
-  "//": "Hydra Desk 2: Michael's copy of ../desk (2026-10-04), plus hydra/, its own copy of AgentHydra's window (served at /ah/).",
+  "//": "Hydra Desk 2: the other owner's copy of ../desk (2026-10-04), plus hydra/, its own copy of AgentHydra's window (served at /ah/).",
   "private": true,
   "version": "2.0.4",
   "workspaces": ["server", "web", "hydra"],

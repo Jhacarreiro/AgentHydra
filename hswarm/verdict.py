@@ -2,7 +2,7 @@
 
 ~/.hswarm/verdict.json is read by the agent_routing_gate hook (claude-memory home/hooks/agent_routing_gate.py):
 a FRESH `usable: false` makes the gate stop recommending the swarm and accept a Claude fan-out that names its
-model. Found 2026-09-21 on Jacob's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s while the
+model. Found 2026-09-21 on the owner's PC: every hswarm_run errored "No deepseek API key found" in 0.0 s while the
 gate kept sending every session there, because nothing it could read said so.
 
 It judges the AUTO routes a plain hswarm_run takes (tool-using, tool-free, and cc's own), from the shared key

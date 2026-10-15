@@ -1293,7 +1293,7 @@ export class ChatManager {
 
   /**
    * A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
-   * on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
+   * on its bubble would (the owner, 2026-10-05: "every single message, even if I don't have add to queue, always does
    * stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again. `gone`: the chat
    * was deleted meanwhile.
    */

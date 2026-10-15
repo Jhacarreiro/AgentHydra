@@ -1694,7 +1694,7 @@ export const TOOLS: HydraTool[] = [
       if (a.title != null && str(a.title).trim() !== '') args.push('--title', str(a.title).trim())
       if (a.dry_run === true) args.push('--dry-run')
       // Off by default, and migrate_chat enforces the same default independently (exit 7),
-      // so omitting this can only ever be safe. Owner, Michael, 2026-09-05: a move touches
+      // so omitting this can only ever be safe. Owner, 2026-09-05: a move touches
       // unarchived chats only, unless the human asked for that specific chat.
       if (a.archived === true) args.push('--archived')
       // ⛔ THE MOVE MAY OUTLAST THE CALL (2026-09-30): the desktop app's MCP client drops a call at

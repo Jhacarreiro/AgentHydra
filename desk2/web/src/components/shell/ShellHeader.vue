@@ -152,7 +152,7 @@ const PANE_BTN =
 </script>
 
 <template>
-  <!-- Three columns: the title in the middle one, centred on the pane (Michael, 2026-10-04), with each side
+  <!-- Three columns: the title in the middle one, centred on the pane (the other owner, 2026-10-04), with each side
        column at least as wide as the buttons on the right so a long title stops short of them. With the window's own
        title bar (lib/host-window.ts) this row is the title bar: its right end keeps clear of the window's buttons
        (--caption-w), so the pane buttons sit beside them (owner, 2026-10-08: "move these icons, here"). -->

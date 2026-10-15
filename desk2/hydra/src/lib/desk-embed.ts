@@ -1,10 +1,10 @@
 // Hydra Desk 2: this copy of AgentHydra's window runs inside Desk 2, in a frame at /ah/?embed=desk. It has
-// no Sessions tab (Michael, 2026-10-04): Desk's cloud list is the session list and Desk's own view shows a
+// no Sessions tab (the other owner, 2026-10-04): Desk's cloud list is the session list and Desk's own view shows a
 // session, with AgentHydra's session header over it. So "open this chat" (the Instances move dialog, the
 // landing page's session tiles) is asked of Desk, which slides back and opens it. Messages go only to the
 // parent window on this same origin; their shapes are desk2/shared/hydra-embed.ts.
 //
-// Desk also owns the one sidebar (Michael, 2026-10-04: "we only have two things, the sidebar and the
+// Desk also owns the one sidebar (the other owner, 2026-10-04: "we only have two things, the sidebar and the
 // content"): a tab with a list of its own (HSwarm's tree) describes it with useDeskSidebar and hides its
 // own, Desk draws it, and Desk's clicks on it come back here to that tab. Desk can also ask for an
 // account's row in Instances (its session header's account chip), a CliMayte task or an HSwarm job (its

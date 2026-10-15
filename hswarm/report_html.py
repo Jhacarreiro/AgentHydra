@@ -1,15 +1,15 @@
 """One self-contained HTML page from the utilization DB, so the running total can be looked at instead of
-asked for (owner ask, Michael, 2026-09-16). Written to ~/.hswarm/hswarm.html by `hswarm savings`, `hswarm
+asked for (owner ask, 2026-09-16). Written to ~/.hswarm/hswarm.html by `hswarm savings`, `hswarm
 sync` and the daily task; no server, no dependencies, opens in any browser.
 
-Shape (Michael, 2026-09-16, on the first version: "a giant-ass wall of text ... we need charts, graphs,
+Shape (the other owner, 2026-09-16, on the first version: "a giant-ass wall of text ... we need charts, graphs,
 text hierarchy"): one hero figure, a row of stat tiles, charts, the explanations folded away, then the
 tables. Every run has a number that never changes so it can be referred to. Dark theme; a saving is green
 and a loss red; est. Claude sits left of DeepSeek cost, because saved = est. Claude - DeepSeek cost and the
 reader wants to see the subtraction in that order. Chart colours are the dataviz skill's validated dark
 categorical slots 1 and 2 on this surface; status green/red only where the number IS a status.
 
-THREE UNITS, one switch (owner ask, Michael, 2026-09-17: "add a toggle to allow me to see savings via
+THREE UNITS, one switch (owner ask, 2026-09-17: "add a toggle to allow me to see savings via
 money, tokens, and money ... weighted based on the Claude account $200 plan"):
   - List-price $: what the API would have billed. The old page's only unit.
   - Tokens: what a subscription actually rations, and the honest answer to "how much did we not spend".
@@ -303,7 +303,7 @@ def all_rows(c, limit: int = MAX_ROWS) -> list[dict]:
 
 def days_note(n: int) -> str:
     """A one-bar chart is a stat tile pretending to be a chart; say so rather than let it read as broken
-    (Michael, 2026-09-16: "the saved per day only literally shows one day. Is that not dynamic?")."""
+    (the other owner, 2026-09-16: "the saved per day only literally shows one day. Is that not dynamic?")."""
     if n > 1:
         return ""
     return "<div class='note'>One day on record so far. A bar is added for every day the swarm runs; the shape appears as days accumulate.</div>"

@@ -44,7 +44,7 @@ def _parse_tasks(tasks: list[dict], defaults: dict) -> list[Task]:
 
 def _returns_errors(fn):
     """⛔ A TOOL THAT FAILS MUST SAY WHY (2026-09-21). An exception escaping a tool reaches the caller as the bare
-    "Error executing tool <name>". Measured on Jacob's PC: zswarm_ask failed that way three times in a row while
+    "Error executing tool <name>". Measured on the owner's PC: zswarm_ask failed that way three times in a row while
     `zswarm.py ask` answered the same question in 0.24 s, and the caller sent its fact-check to a Sonnet agent
     instead. Return the exception as data - its type, message and the frames that raised it - so the next
     failure names its own cause. (Only on tools that return a dict: a list-typed tool must keep its shape.)"""

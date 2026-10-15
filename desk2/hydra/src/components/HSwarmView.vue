@@ -14,7 +14,7 @@
 // a subsection called waves underneath CLI Mate, instead of having it be in the same window"). Both are
 // AgentHydra's own as well, so they stay in the tree and work while HSwarm is down.
 //
-// In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, Michael, 2026-10-04: one
+// In Hydra Desk 2 the tree is drawn in Desk's own sidebar (lib/desk-embed.ts, the other owner, 2026-10-04: one
 // sidebar for everything): this view describes it row for row (the same rows, dots, stars and search)
 // and hides its own, and Desk's clicks come back to select, toggle and star here.
 import {

@@ -1,5 +1,5 @@
 // Scroll-follow end to end (bun run e2e:scroll; Windows, Edge): the transcript follows a streaming reply only while
-// Jacob is at the bottom. Drives web `#/stream-bench` (the transcript alone, one assistant reply growing a chunk at a time) in
+// the owner is at the bottom. Drives web `#/stream-bench` (the transcript alone, one assistant reply growing a chunk at a time) in
 // headless Edge through CDP, and checks: a reply growing under someone reading higher up never moves them (touchpad-sized wheel
 // steps, a scrollbar drag, a keyboard Page Up, each WHILE it streams); the down arrow at the top right takes them back down; a
 // send (the composer's chat-sent event) takes them down; at the bottom it follows; the up arrow steps back through the messages

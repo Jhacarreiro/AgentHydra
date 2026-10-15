@@ -763,7 +763,7 @@ describe('footer account', () => {
 })
 
 describe('sidebar order', () => {
-  // Jacob, 2026-10-04: sending into Connections shot it to the top; rows keep their place. Owner, 2026-10-09: folder
+  // The owner, 2026-10-04: sending into Connections shot it to the top; rows keep their place. Owner, 2026-10-09: folder
   // groups are never saved, they are listed A-Z by label whatever the order of their rows.
   it('a message sent later moves no row; a new folder joins in its A-Z place; a row drag reorders inside its group', () => {
     const before = [chat('a1', { cwd: 'C:/work/alpha', updatedAt: 30 }), chat('a2', { cwd: 'C:/work/alpha', updatedAt: 20 }), chat('c1', { cwd: 'C:/work/conn', updatedAt: 10 })]

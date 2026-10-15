@@ -123,7 +123,7 @@ def _plan_here(profile, *, min_context, wake=_wake, **kw):
     return plan
 
 
-# Owner, Michael, 2026-09-25: "When something is out of keys, we always advance to the next model in the list
+# Owner, 2026-09-25: "When something is out of keys, we always advance to the next model in the list
 # instead of just... stop." A profile whose every evaluated route is out of keys (decision and code that day:
 # DeepSeek spent, every OpenRouter key 402) steps down to the next profile whose models can still answer,
 # instead of NoCapableSwarmRoute. The plan keeps the profile asked for, names the one it ran at in `below_floor`
@@ -205,7 +205,7 @@ def _task_kw(task):
 
 def _rescue(profile, *, tools, **kw):
     """Every profile below `profile`'s routes, level by level to the bottom (routine is tool-free only), each tagged
-    `rescue` with the level it came from. Owner, Michael, 2026-09-28: "if one key is dead always move on to the next
+    `rescue` with the level it came from. Owner, 2026-09-28: "if one key is dead always move on to the next
     model that is still capable of doing your task ... until you've hit the bottom of the barrel". One level was not
     enough: a critical task with one live critical route had code for a rescue and never reached general's Gemini,
     Groq and Kimi routes."""
@@ -220,7 +220,7 @@ def _rescue(profile, *, tools, **kw):
 
 def rescue_legs(task, plan):
     """The lower profiles' routes, which a task moves to when every route of its own crawls or fails (owner,
-    Michael, 2026-09-27: a check crawling on a slow model moves to another model and loses nothing). Without them
+    the other owner, 2026-09-27: a check crawling on a slow model moves to another model and loses nothing). Without them
     the profile's own last leg had nowhere to go, so it ran untimed: that day 18 refresh tasks sat on GLM 5.3, the
     code profile's last NVIDIA route, for 17 minutes while Kimi K3 one profile down was free and answering. A
     rescue leg is below the task's floors, so a result served by one says so (`below_floor`, run_selected)."""

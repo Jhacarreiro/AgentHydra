@@ -92,7 +92,7 @@ const { view, viewReady } = useUiPrefs()
 const viewFadeOn = ref(viewReady.value)
 watch(viewReady, (ready) => ready && (viewFadeOn.value = true), { flush: 'post' })
 // "Open this chat" asked from another view (the Instances move dialog lists chats; clicking one
-// should land on its transcript). Hydra Desk 2's copy has no Sessions tab (Michael, 2026-10-04: the
+// should land on its transcript). Hydra Desk 2's copy has no Sessions tab (the other owner, 2026-10-04: the
 // cloud list is the same thing): Desk opens the chat in its own view (lib/desk-embed.ts).
 watch(pendingSessionJump, (j) => {
   if (j) openInDesk(takeSessionJump() ?? j)

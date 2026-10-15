@@ -45,7 +45,7 @@ interface RunOptions {
 
 const GIT_ENV: Record<string, string | undefined> = {
   ...process.env,
-  GIT_OPTIONAL_LOCKS: '0', // status must not take index.lock while Jacob's own git works in the repo
+  GIT_OPTIONAL_LOCKS: '0', // status must not take index.lock while the owner's own git works in the repo
   GIT_TERMINAL_PROMPT: '0',
   GIT_LITERAL_PATHSPECS: '1', // a file named '*.ts' or ':x' is that file, not a pattern
   GIT_PAGER: 'cat',

@@ -147,7 +147,7 @@ _DEFAULT_RESUME_TEXT = (
 #: The law this batch enforces, quoted at the caller in every refusal so the reason arrives
 #: WITH the refusal rather than in a doc nobody opens at that moment.
 _ARCHIVE_LAW = (
-    "owner directive (Michael, 2026-09-05, restated ANGRILY 2026-09-13): only move UNARCHIVED "
+    "owner directive (2026-09-05, restated ANGRILY 2026-09-13): only move UNARCHIVED "
     "chats. An archived chat moves ONLY when the human explicitly asked for that chat - never "
     "because an agent set a flag for itself while sweeping an account."
 )
@@ -548,7 +548,7 @@ def _terminate_for(query: str) -> dict:
     return stopped
 
 
-# Owner's standing order (Michael, 2026-09-20): "if the account you're pulling it from is at
+# Owner's standing order (2026-09-20): "if the account you're pulling it from is at
 # 100% usage... always kill. That should be a standing order. Honestly, if it's 98% or above,
 # always kill." A chat left running on a walled account burns the last of its quota and then
 # dies at the wall anyway, so the owner's word is already given for these - no flag needed.

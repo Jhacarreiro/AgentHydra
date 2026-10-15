@@ -74,7 +74,7 @@ export interface ChatRuntimeDeps {
    * Passed to the SDK verbatim and never logged.
    */
   agentHydraMcp?: McpServerConfig | null
-  /** Jacob's main .claude.json whose user-level and folder-local MCP servers every chat gets. undefined = ~/.claude.json, unless agentHydraMcp was injected (then none); null = none. */
+  /** The owner's main .claude.json whose user-level and folder-local MCP servers every chat gets. undefined = ~/.claude.json, unless agentHydraMcp was injected (then none); null = none. */
   mainClaudeJson?: string | null
   now?: () => number
   /** Called once the runtime has closed (idle timer or close()). */
@@ -224,7 +224,7 @@ export function mainConfigFile(given: string | null | undefined, agentHydraMcp: 
 /**
  * AgentHydra copies its worker-only 'Rules for a CliMayte worker' CLAUDE.md into every CLI instance dir, where an
  * interactive chat would load it as user memory. When the instance's CLAUDE.md is that copy, returns the flag
- * setting that skips it and Jacob's real ~/.claude/CLAUDE.md text to put in the system prompt instead.
+ * setting that skips it and the owner's real ~/.claude/CLAUDE.md text to put in the system prompt instead.
  */
 /** The owner's rules as the appended prompt carries them when the account's own CLAUDE.md is swapped out. */
 function rulesText(swap: { real: string } | null): string {
@@ -1080,13 +1080,13 @@ ${slot}` : ''}${rules}` }
     this.finishRequest({ ...item, state: 'accepted', values }, () => p.resolve({ action: 'accept', content: values }))
   }
 
-  /** The chat goes into plan mode (Jacob's switch, or Claude's own EnterPlanMode): remember the mode it leaves. Leaving plan mode forgets it. */
+  /** The chat goes into plan mode (the owner's switch, or Claude's own EnterPlanMode): remember the mode it leaves. Leaving plan mode forgets it. */
   private notePlanEntry(mode: PermissionMode): void {
     if (mode !== 'plan') this.beforePlan = null
     else if (this.chat.permissionMode !== 'plan') this.beforePlan = this.chat.permissionMode
   }
 
-  /** Jacob looked at the chat. */
+  /** The owner looked at the chat. */
   markViewed(): void {
     this.dispatch({ type: 'viewed' })
     this.publishChat()
@@ -1259,7 +1259,7 @@ ${slot}` : ''}${rules}` }
       e = { type: 'usageLimit', resetsAt: null }
       news.limitFromResult = true
     }
-    // A login that failed holds the account out like a limit, so the turn moves on (Jacob, 2026-10-04:
+    // A login that failed holds the account out like a limit, so the turn moves on (the owner, 2026-10-04:
     // sending again into an account whose OAuth expired is the failure).
     if (e.type === 'turnError' && isSignInFailureText(e.message) && this.chat.status !== 'stopped') {
       e = { type: 'usageLimit', resetsAt: null }

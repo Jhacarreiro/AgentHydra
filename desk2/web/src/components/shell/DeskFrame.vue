@@ -493,7 +493,7 @@ function toggleTasks() {
   if (!showTasks.value) return
   toggleSidebar(true)
   // An AgentHydra tab with a list of its own (HSwarm's tree) has the sidebar while it is open, so the
-  // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
+  // tasks would not show: slide back to the desk, as showSessions does (the other owner, 2026-10-04: "toggling ...
   // does nothing in the sidebar").
   if (hydraOpen.value && hydraShown.value) toggleHydra(false)
 }

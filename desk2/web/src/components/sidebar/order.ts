@@ -2,7 +2,7 @@
 // cloud list (cloud/store.ts), so turning the chrome bar's cloud button on or off moves nothing (owner,
 // 2026-10-04: "examine what happens when you enable and disable the cloud icon. For some reason they change
 // order"). It keeps the rows' order only: the folder groups are listed A-Z (logic.ts sortFolders). A saved
-// order wins over activity (Jacob, 2026-10-04): sending a message reorders nothing, rows are dragged into the
+// order wins over activity (the owner, 2026-10-04): sending a message reorders nothing, rows are dragged into the
 // order wanted. Each list adds the rows it shows that the order lacks (logic.ts recordOrder: the desk list's
 // at the top, the cloud list's own at the end) and never moves a saved one, but for one the cloud list added:
 // the first time the desk list shows it, it is new there and goes to the top (SidebarOrder.cloud). This

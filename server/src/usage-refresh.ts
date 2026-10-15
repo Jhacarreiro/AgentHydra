@@ -54,7 +54,7 @@ import {
  * Default sweep interval. Quota moves on the scale of hours, so this only has to be fresh enough
  * to be useful, never fast.
  *
- * ⛔ OWNER RULE (Michael, 2026-09-07): *"I don't want AgentHydra constantly checking for updates on
+ * ⛔ OWNER RULE (2026-09-07): *"I don't want AgentHydra constantly checking for updates on
  * the instances. I only want it to do it when I tell it to... or maybe at best, every 30 minutes."*
  * Thirty is a CEILING on unattended checking, not a tuning knob - do not lower it back toward 15
  * for freshness. The Refresh button is the on-demand path and always forces a real probe; the

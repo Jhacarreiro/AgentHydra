@@ -194,7 +194,7 @@ export function groupChats(
   }
   for (const g of groups) g.entries.sort(newestFirst)
   const archived = filter === 'all' ? archivedRows.sort(newestFirst) : []
-  // A saved order wins over activity, so sending a message moves nothing (Jacob, 2026-10-04). Groups are not saved: they are listed A-Z.
+  // A saved order wins over activity, so sending a message moves nothing (the owner, 2026-10-04). Groups are not saved: they are listed A-Z.
   const order = opts.order
   const rows = (list: SidebarEntry[]) => (order ? stableOrder(list, (e) => e.id, order.rows) : list)
   for (const g of groups) g.entries = rows(g.entries)
@@ -457,7 +457,7 @@ export function deskGlyphs(
 }
 
 /**
- * The row order after rows turned orange (Jacob, 2026-10-04: a chat that finishes and needs checking
+ * The row order after rows turned orange (the owner, 2026-10-04: a chat that finishes and needs checking
  * goes to the top of its project, the latest one first; nothing else moves). `wasOrange` is each row's
  * state last time; a row it does not know yet is not raised (it joins at the top anyway).
  */

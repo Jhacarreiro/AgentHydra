@@ -284,7 +284,7 @@ def route_health(model: str) -> dict:
     return {"serves": "ok" in states or "dead" not in states, "legs": [note for _, note in legs]}
 
 
-# Owner, Michael, 2026-09-25: "ZSwarm should deal with fucking everything. It should deal with which agent to send it
+# Owner, 2026-09-25: "ZSwarm should deal with fucking everything. It should deal with which agent to send it
 # to, which keys are working ... and then rerun them if they're dead." A pinned model is the caller's PREFERENCE, not
 # a reason to fail: a job pinned to a route whose every key was disabled was refused whole (NoCreditLeft), and 15 of
 # 67 pinned builders died PoolSaturated after 120 s with "no other leg", while the same work on the code profile ran
@@ -698,7 +698,7 @@ class JobManager:
         return self.client.pool.pick()
 
     def route(self, model: str) -> str:
-        """The path a task takes right now (owner ask, Michael, 2026-09-17): the cheapest PRIMARY path with
+        """The path a task takes right now (owner ask, 2026-09-17): the cheapest PRIMARY path with
         credit, or - when no primary path has any - the cheapest fallback. Direct DeepSeek is primary at
         every hour; the router legs back it up (config.ROUTES says why). Compared on the measured token
         mix (config.REFERENCE_MIX), never on one rate."""

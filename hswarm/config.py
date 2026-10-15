@@ -2,7 +2,7 @@
 
 Providers are OpenAI-compatible chat endpoints, one TOML file each: the shipped ones in hswarm/providers/, a
 person's own in ~/.hswarm/providers/ (docs/PROVIDERS.md). Adding a provider, a model or a key is a file, never a
-code change (owner asks, Michael, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
+code change (owner asks, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
 spread all over"). ROLES map a kind of work to a model, so a task can say role: "search" and get whatever is wired
 for it on this machine (~/.hswarm/settings.toml).
 
@@ -264,7 +264,7 @@ PANEL: list[str] = []
 # Peak windows, UTC, Monday-Friday: 01:00-04:00 and 06:00-10:00.
 PEAK_WINDOWS = prices.peak_windows()  # DeepSeek's full-rate hours, written once in data/prices.json
 
-# ---- routing (owner ask, Michael, 2026-09-17: take the cheaper path to a model, per call) ----
+# ---- routing (owner ask, 2026-09-17: take the cheaper path to a model, per call) ----
 #
 # One logical model, several paths to it (a model's `route` in its provider file), in two TIERS. Price orders paths
 # WITHIN a tier and never across (route_plan): a path marked `fallback` serves only when no primary path has a key
@@ -344,7 +344,7 @@ _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT = ("decision", "research")
 ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
 
 _CORES = os.cpu_count() or 4
-# Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
+# Process discipline (owner, 2026-09-15: "make sure we don't end up spinning up a billion sub
 # processes and murdering my cpu"). `api` workers are HTTP calls and cost no process; what costs CPU is the
 # children the sandbox spawns (ripgrep, bash, git) and the headless Claude Code `cc` workers. Every child
 # goes through procgate: at most MAX_TOOL_PROCS per server process, MACHINE_MAX_PROCS across every hswarm

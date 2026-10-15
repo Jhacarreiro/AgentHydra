@@ -1,5 +1,5 @@
 // Hydra Desk 2: CliMayte's running tasks under the session that handed them out, in the sidebar (the
-// chrome bar's CliMayte button; Michael, 2026-10-04: "under each active thread, it shows with a little tab
+// chrome bar's CliMayte button; the other owner, 2026-10-04: "under each active thread, it shows with a little tab
 // over in a very compact way, all of these CliMayte running tasks ... if they have a manager, they would
 // tab once more and be under the manager"), another PC's too (owner, 2026-10-04: "I was hoping you'd stick
 // the climayte chats as sub items in the HD2 sidebar. Under the chat which spawned them. Not as its own

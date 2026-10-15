@@ -21,7 +21,7 @@
 //     already right.
 //
 // NOT carried, on purpose:
-//   · permissionMode - owner rule (Michael, 2026-08-28): every migrated chat is bypassPermissions,
+//   · permissionMode - owner rule (2026-08-28): every migrated chat is bypassPermissions,
 //     stamped by session-launch.ts. Carrying the source's mode here would set up a tug-of-war with
 //     that stamp and its sweep.
 //   · enabledMcpTools / remoteMcpServersConfig - those ids name the SOURCE account's connectors;

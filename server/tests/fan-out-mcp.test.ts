@@ -608,7 +608,7 @@ describe('fan_out excludes the calling account by default', () => {
     whoamiAnswers({
       num: 37,
       kind: 'desktop',
-      name: 'Michael',
+      name: 'Alex',
       email: 'm@x',
       handle: configDir,
       ref: `desktop:${configDir}`,
@@ -641,7 +641,7 @@ describe('fan_out excludes the calling account by default', () => {
         return {
           num: 37,
           kind: 'desktop',
-          name: 'Michael',
+          name: 'Alex',
           email: 'm@x',
           handle: configDir,
           ref: 'desktop:x',

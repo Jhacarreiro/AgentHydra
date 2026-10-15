@@ -23,23 +23,23 @@ const MODELS = [
 
 describe('account labels', () => {
   it('names an account by number and plan once, never by email', () => {
-    expect(accountTitle({ id: '128', label: '#128 jacob@example.com (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
-    expect(accountTitle({ id: '128', label: '#128 <jacob@example.com> (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 alex@example.com (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 <alex@example.com> (Pro) (Pro)', plan: 'Pro' })).toBe('#128 · Pro')
     expect(accountTitle({ id: '68', label: '#68 eek (Max 20x)', plan: 'Max 20x' })).toBe('#68 eek · Max 20x')
-    expect(accountTitle({ id: 'default', label: 'jacob@example.com', plan: null })).toBe('Default login')
+    expect(accountTitle({ id: 'default', label: 'alex@example.com', plan: null })).toBe('Default login')
   })
 
   it('reads the plan from the label of a bare AccountRef (a chat account)', () => {
-    expect(accountTitle({ id: '128', label: '#128 jacob@example.com (Pro) (Pro)' })).toBe('#128 · Pro')
+    expect(accountTitle({ id: '128', label: '#128 alex@example.com (Pro) (Pro)' })).toBe('#128 · Pro')
     expect(accountTitle({ id: '7', label: '#7' })).toBe('#7')
   })
 
   it('drops a doubled trailing plan from the short label', () => {
-    expect(accountLabel('#128 jacob@example.com (Pro) (Pro)', 'Pro', '128')).toBe('#128')
+    expect(accountLabel('#128 alex@example.com (Pro) (Pro)', 'Pro', '128')).toBe('#128')
   })
 
   it('keeps emails out of the chat row tooltip', () => {
-    const chat = { title: 'T', status: 'idle', activity: null, climayteActive: 0, account: { id: '128', label: '#128 jacob@example.com (Pro) (Pro)', configDir: null } } as unknown as ChatSummary
+    const chat = { title: 'T', status: 'idle', activity: null, climayteActive: 0, account: { id: '128', label: '#128 alex@example.com (Pro) (Pro)', configDir: null } } as unknown as ChatSummary
     const tip = rowTooltip(chat)
     expect(tip).not.toMatch(EMAIL)
     expect(tip.endsWith('#128 · Pro')).toBe(true)

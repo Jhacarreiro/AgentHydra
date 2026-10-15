@@ -6,7 +6,7 @@ describe('fieldsFromSchema: an MCP requested schema as form fields', () => {
     const fields = fieldsFromSchema({
       type: 'object',
       properties: {
-        name: { type: 'string', title: 'Your name', description: 'As on the invoice', default: 'Jacob' },
+        name: { type: 'string', title: 'Your name', description: 'As on the invoice', default: 'Alex' },
         seats: { type: 'integer', minimum: 1, default: 2 },
         price: { type: 'number' },
         notify: { type: 'boolean', title: 'Notify me', default: true },
@@ -20,7 +20,7 @@ describe('fieldsFromSchema: an MCP requested schema as form fields', () => {
       required: ['name', 'plan', 42],
     })
     expect(fields).toEqual([
-      { name: 'name', label: 'Your name', description: 'As on the invoice', type: 'text', required: true, default: 'Jacob' },
+      { name: 'name', label: 'Your name', description: 'As on the invoice', type: 'text', required: true, default: 'Alex' },
       { name: 'seats', label: 'seats', type: 'number', required: false, integer: true, min: 1, default: 2 },
       { name: 'price', label: 'price', type: 'number', required: false },
       { name: 'notify', label: 'Notify me', type: 'boolean', required: false, default: true },
@@ -53,8 +53,8 @@ describe('checkAnswer: the values sent back to the MCP server', () => {
   })
 
   test('coerces to each field type and drops what the form does not have or left empty', () => {
-    expect(checkAnswer(fields, { name: 'Jacob', seats: '3', notify: 'false', plan: 'max', tags: ['b', 'a', 'b'], extra: 1 })).toEqual({
-      name: 'Jacob',
+    expect(checkAnswer(fields, { name: 'Alex', seats: '3', notify: 'false', plan: 'max', tags: ['b', 'a', 'b'], extra: 1 })).toEqual({
+      name: 'Alex',
       seats: 3,
       notify: false,
       plan: 'max',

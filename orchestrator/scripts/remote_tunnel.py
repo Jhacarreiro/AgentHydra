@@ -18,21 +18,21 @@ prefix of the token so two machines can be compared without either side revealin
 
 ⛔ ONE TUNNEL PER MACHINE. Two connectors on one tunnel is a load-balanced pair, not a
 failover - Cloudflare will split requests between them and half your dashboard hits land on
-the wrong computer. Michael and Jacob each get their own tunnel and their own hostname.
+the wrong computer. Each owner gets their own tunnel and their own hostname.
 
 AUTHENTICATION: a Cloudflare API token in CLOUDFLARE_API_TOKEN (or CF_API_TOKEN) with
 Account:Cloudflare Tunnel:Edit and Zone:DNS:Edit on the target zone. Through the Connections
 MCP the credential can be leased value-blind:
     connections_execute { local: true, tool_name: "shell", params: {
-      command: "python scripts/remote_tunnel.py --provision --name orch-michael",
+      command: "python scripts/remote_tunnel.py --provision --name orch-<name>",
       secrets: [{ service: "cloudflare", as: "CLOUDFLARE_API_TOKEN" }] } }
 
 Usage: python scripts/remote_tunnel.py --status
-       python scripts/remote_tunnel.py --provision --name orch-michael [--hostname H] [--dry-run]
-       python scripts/remote_tunnel.py --provision --name orch-jacob --no-install   (the sibling's)
-       python scripts/remote_tunnel.py --install-token --name orch-michael
-       python scripts/remote_tunnel.py --rotate --name orch-michael [--no-install]   (a leaked token)
-       python scripts/remote_tunnel.py --export-token <file> --name orch-jacob
+       python scripts/remote_tunnel.py --provision --name orch-<name> [--hostname H] [--dry-run]
+       python scripts/remote_tunnel.py --provision --name orch-<other> --no-install   (the sibling's)
+       python scripts/remote_tunnel.py --install-token --name orch-<name>
+       python scripts/remote_tunnel.py --rotate --name orch-<name> [--no-install]   (a leaked token)
+       python scripts/remote_tunnel.py --export-token <file> --name orch-<other>
        python scripts/remote_tunnel.py --import-token <file>
        python scripts/remote_tunnel.py --edge-interface Ethernet | off   (a VPN blocks the edge)
 Exit:  0 ok - 1 a Cloudflare call failed - 2 no API token in the environment -
@@ -81,7 +81,7 @@ GATEWAY_PORT = gateway_port()
 
 # ⛔ ONE LABEL ONLY. lunarwerx.com is on Cloudflare's FREE plan, whose Universal SSL
 # certificate covers `lunarwerx.com` and `*.lunarwerx.com` - ONE level. A two-level name like
-# `michael.orch.lunarwerx.com` resolves and then fails the TLS handshake in every browser,
+# `<name>.orch.lunarwerx.com` resolves and then fails the TLS handshake in every browser,
 # which reads as "the site is broken" rather than "you need Advanced Certificate Manager".
 # Refuse it here instead of shipping a hostname that cannot serve.
 HOSTNAME_RE = re.compile(r"^[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?$")
@@ -318,8 +318,8 @@ def cmd_edge_interface(card: str) -> int:
 def cmd_provision(name: str, hostname: str | None, dry_run: bool, install: bool = True) -> int:
     """`install=False` provisions a tunnel THIS machine will not run - the sibling's. It creates
     the tunnel, its ingress and its DNS record and stops there, deliberately never fetching the
-    connector token, so provisioning Jacob's address from Michael's desk cannot overwrite
-    Michael's own tunnel config (one connector per tunnel: two would load-balance the hostname
+    connector token, so provisioning one owner's address from the other's desk cannot overwrite
+    that owner's own tunnel config (one connector per tunnel: two would load-balance the hostname
     across both computers and half the dashboard hits would land on the wrong one)."""
     label = name if hostname is None else hostname.split(".")[0]
     if not HOSTNAME_RE.match(label):
@@ -529,7 +529,7 @@ def main(argv: list[str]) -> int:
     try:
         if "--provision" in argv:
             if not name:
-                print("--provision needs --name (e.g. orch-michael)", file=sys.stderr)
+                print("--provision needs --name (e.g. orch-<name>)", file=sys.stderr)
                 return 3
             return cmd_provision(name, hostname, "--dry-run" in argv, install="--no-install" not in argv)
         if "--install-token" in argv:

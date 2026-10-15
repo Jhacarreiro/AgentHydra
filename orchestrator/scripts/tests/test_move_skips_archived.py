@@ -1,4 +1,4 @@
-"""A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, Michael, 2026-09-05: "when I tell you to move,
+"""A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, 2026-09-05: "when I tell you to move,
 only move UN archived chats. Not archived ones. Make sure that's the default. Unless asked").
 
 WHY THIS FILE EXISTS, and why the assertions are shaped the way they are. On 2026-09-05 an agent

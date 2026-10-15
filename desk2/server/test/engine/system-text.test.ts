@@ -8,7 +8,7 @@ import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
 import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, userTurns, type InjectedPart } from '../../src/engine/system-text'
 
-// Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
+// Real samples, from the owner's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
 const WORKFLOW_DONE = `<task-notification>
 <task-id>w5ahe9hto</task-id>

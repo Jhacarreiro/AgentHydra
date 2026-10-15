@@ -34,7 +34,7 @@ import { useCloud } from './store'
 // button moves nothing. The rows only this list has follow the desk's in their group, each leading with a
 // cloud (owner, 2026-10-04: "they change order and none display a cloud icon"). A row opens the session
 // (Sidebar decides where: the outside-session view, or AgentHydra while it is open); in select mode it
-// ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (Michael,
+// ticks instead. No title or counts over it: the chrome bar's blue cloud says which list this is (the other owner,
 // 2026-10-04). The search and filter buttons sit beside the New button (Sidebar.vue), as on the desk list.
 const props = defineProps<{
   /** The groups to draw: the store's with the rows Sidebar adds for running work no row lists (sidebar/tasks.ts addToCloudGroups); else the store's. */

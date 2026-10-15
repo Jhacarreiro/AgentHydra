@@ -204,7 +204,7 @@ const openChatsLabel = (n: number) => `${n} open chat${n === 1 ? '' : 's'}`
     <!-- The projects tab leaves 16px more under the tiles (owner, 2026-10-08: the folder row below ran into them); the composer's row is not changed. -->
     <div class="m-auto flex w-full max-w-3xl flex-col items-center" :class="tab === 'projects' ? 'pt-6 pb-10' : 'py-6'">
       <h1 class="flex items-center justify-center gap-1.75 text-center text-[22px] font-normal leading-7 text-text">
-        <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (Jacob, 2026-10-06). -->
+        <!-- The AgentHydra logo, the window's own favicon, where Claude draws its spark (the owner, 2026-10-06). -->
         <img src="/favicon.svg" alt="" class="relative top-px size-5.5 shrink-0" />
         <span>What’s up next{{ name ? `, ${name}` : '' }}?</span>
       </h1>

@@ -1,7 +1,7 @@
 // server/src/desktop-landing.ts - LAND A HOMELESS CHAT IN A DESKTOP APP, and the act lock that
 // serialises every deed that drives an app.
 //
-// WHY THIS MODULE EXISTS (owner order, Michael, 2026-08-31): landing is a PRIMITIVE, in the same
+// WHY THIS MODULE EXISTS (owner order, 2026-08-31): landing is a PRIMITIVE, in the same
 // family as `desktop-archive` and `import-desktop` - "put this chat in an app" and nothing more.
 // It used to live inside a larger subsystem that was cut out of this repo entirely, and the
 // auto-resume monitor depends on it: when a rate-limited chat's window resets and that chat has

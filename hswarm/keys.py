@@ -8,7 +8,7 @@ verbs are the whole surface an operator needs when a key runs out:
   hswarm keys enable <fp>|--all    take a key out of the slot by hand
   hswarm keys disable <fp>         put one in by hand (a key you want to stop using without deleting)
 
-Why the slot exists (owner ask, Michael, 2026-09-17): "when any key runs out of DeepSeek or OpenRouter,
+Why the slot exists (owner ask, 2026-09-17): "when any key runs out of DeepSeek or OpenRouter,
 have it go to, like, a disabled slot so it's not constantly retried." Disabling is sticky - no timer, no
 ladder - so a spent key never costs another worker to rediscover. The way back is a free probe or one of
 the verbs above.

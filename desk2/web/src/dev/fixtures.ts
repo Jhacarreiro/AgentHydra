@@ -16,7 +16,7 @@ export const accountFixtures: AccountInfo[] = [
     id: 'default',
     label: 'Default (Pro)',
     configDir: null,
-    email: 'jacob@example.com',
+    email: 'alex@example.com',
     plan: 'Pro',
     signedIn: true,
     fiveHourPct: 45,

@@ -1,6 +1,6 @@
 """Offline: price-aware routing between paths to the same model.
 
-Owner ask, Michael, 2026-09-17: "lets default to openrouter when off-peak hours and use deepseek when
+Owner ask, the other owner, 2026-09-17: "lets default to openrouter when off-peak hours and use deepseek when
 it costs half as much" - read as meant, take whichever path is cheaper right now. Priced alone that is:
 
   * OFF-PEAK: DeepSeek halves its own rates ($0.0683/1M blended) and beats OpenRouter's flat leg.

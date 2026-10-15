@@ -36,7 +36,7 @@ import { cleanSidebar } from '@/components/sidebar/clean'
 import { tellHydra } from './api'
 
 // Hydra Desk 2: the sidebar of AgentHydra's current tab (HSwarm's tree), drawn here in
-// Desk's sidebar and Desk's look while AgentHydra is open (Michael, 2026-10-04: one sidebar for
+// Desk's sidebar and Desk's look while AgentHydra is open (the other owner, 2026-10-04: one sidebar for
 // everything, beside the content). The copy describes it (shared/hydra-embed.ts) and keeps every rule of
 // what a row says; a click goes back to it. Rows are 26px like the desk list; hovers are the native
 // title, so a 300-row tree costs no tooltip per row.

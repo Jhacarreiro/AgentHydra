@@ -17,7 +17,7 @@ def test_bad_reasoning_effort_is_refused_with_its_reason():
 
 
 def test_a_tool_that_raises_returns_the_reason_not_a_bare_error(monkeypatch):
-    """2026-09-21, Jacob's PC: hswarm_ask failed as a bare "Error executing tool" while the CLI answered."""
+    """2026-09-21, the owner's PC: hswarm_ask failed as a bare "Error executing tool" while the CLI answered."""
     class Boom:
         async def ask_routed(self, *a, **k):
             raise RuntimeError("client has been closed")

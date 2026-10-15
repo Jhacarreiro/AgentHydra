@@ -405,7 +405,7 @@ describe('ChatRuntime: start options', () => {
     expect(opts!.allowDangerouslySkipPermissions).toBeUndefined()
     expect(opts!.disallowedTools).toBeUndefined()
     expect(opts!.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: DESK_APPEND_NO_DELEGATE })
-    expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, Jacob's own desktop for Claude Code. You have a real browser")).toBe(true)
+    expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, the owner's own desktop for Claude Code. You have a real browser")).toBe(true)
     expect(DESK_APPEND_NO_DELEGATE).not.toContain('Sub-agents here are CliMayte workers')
     expect(DESK_APPEND).toContain('Sub-agents here are CliMayte workers')
     // the agenthydra server carries this chat's Desk id, so its desk_chat acts on this chat
@@ -1149,7 +1149,7 @@ describe('ChatRuntime: MCP elicitation', () => {
     expect(() => t.rt.answerElicitation(item.id, { action: 'decline' })).toThrow('no pending elicitation request')
   })
 
-  test('a link: accepted once Jacob says he is done; a link that is not http(s) is not kept', async () => {
+  test('a link: accepted once the owner says he is done; a link that is not http(s) is not kept', async () => {
     const t = await workingChat()
     const { promise } = elicit(t.fake(), { serverName: 'connections', message: 'Sign in', mode: 'url', url: 'https://auth.example.test/start' })
     const item = lastItem(t.items(), 'elicitation')
