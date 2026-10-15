@@ -117,6 +117,7 @@ import {
   DRONE_REFUSAL,
   RUNNER_NEVER_STARTED_NOTICE,
   roleOf,
+  tooBigOf,
 } from './climayte-lib'
 import { archiveLogsWhenDue } from './climayte-log-archive'
 import {
@@ -1023,6 +1024,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
+  if (v.outcome === 'done' && !asking) journalTooBig(w)
   if (w.question && !asking) delete w.question
   // A wave task with no check is judged now, off the main thread, and batched once judged (or at once
   // when it is no wave task after all); with one, when its check ends (gatherAndJudgeCheck).
@@ -1037,6 +1039,14 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
 
   changed(w)
   schedule(50)
+}
+
+/** A turn that ended on a `TOO BIG:` line (tooBigOf) is journaled `too_big`: its summoner takes the job back and
+ *  re-splits it (ROLES.md), and the ping leads with the line (climayte-ping.ts). */
+export function journalTooBig(w: CliMayteWorker): void {
+  // This turn's text only: a chat's earlier turn that said it is no report on this one.
+  const line = tooBigOf(w.results?.at(-1) ?? w.result)
+  if (line) journal(w, 'too_big', { notice: line })
 }
 
 /** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide

@@ -45,7 +45,7 @@
 
 import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CliMayteStatus } from './climayte-lib'
+import { type CliMayteStatus, tooBigOf } from './climayte-lib'
 import { appendInOrder } from './core/append-in-order'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { deliverPeerMessage } from './peer-message'
@@ -121,11 +121,15 @@ export interface PingWorker {
   question?: { text: string; options?: string[]; at: number }
   /** When its origin chat last read it or cancelled it itself (climayte.ts climayteSeen). */
   seenAt?: number
+  /** Its report, each turn's (the last one is read for a TOO BIG: line). */
+  results?: string[]
+  result?: string | null
 }
 
 export type PingKind =
   | 'finished' // its check passed
   | 'needs-verdict' // done, with no check to judge it
+  | 'too-big' // done, its report says TOO BIG: the summoner takes the job back and re-splits it (ROLES.md)
   | 'check-failed' // its check failed; sent back one rung
   | 'failed' // includes a notConverging stop
   | 'cancelled'
@@ -144,6 +148,7 @@ const OUTCOME_KINDS: ReadonlySet<PingKind> = new Set([
   'check-failed',
   'finished',
   'needs-verdict',
+  'too-big',
   'failed',
   'cancelled',
 ])
@@ -240,6 +245,7 @@ function groupReported(e: QueuedPing, queued: QueuedPing[], group: PingWorker[])
 /** A worker line the worker's own state has answered since it was queued. */
 const WORKER_ANSWERED: Partial<Record<PingKind, (w: PingWorker) => boolean>> = {
   'needs-verdict': (w) => w.status === 'done' && verdictCoversNewestWork(w),
+  'too-big': (w) => w.status === 'done' && verdictCoversNewestWork(w),
   // Its own check's verdict is why it was sent: only a later one counts.
   finished: (w) =>
     w.status === 'done' &&
@@ -365,7 +371,14 @@ export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number
   }
   // A worker that asked ended its turn on purpose: that is no finish until it is answered.
   const asking = !!w.question
-  if (w.status === 'done' && check === 'pass' && !asking)
+  const tooBig =
+    w.status === 'done' && entered && !asking ? tooBigOf(w.results?.at(-1) ?? w.result) : null
+  if (tooBig)
+    add(
+      'too-big',
+      `${tooBig} (${who}, done on ${accountLabel(last)}: take the job back and re-split it.)`,
+    )
+  else if (w.status === 'done' && check === 'pass' && !asking)
     add('finished', `${who}: done on ${accountLabel(last)}, check passed.`)
   else if (w.status === 'done' && entered && !asking)
     add('needs-verdict', `${who}: done on ${accountLabel(last)}, needs your verdict.`)
@@ -409,7 +422,13 @@ export function pingMessage(
   const n = events.length
   const lines = [
     `${PING_HEADER} Ping ${lo === hi ? lo : `${lo}-${hi}`}, ${n} update${n === 1 ? '' : 's'} since ${hhmm(Math.min(...events.map((e) => e.at)))}:`,
-    ...events.slice(0, MAX_BULLETS).map((e) => `• ${e.line}`),
+    // A TOO BIG line leads: its job is not done, and the summoner must re-split it.
+    ...[
+      ...events.filter((e) => e.kind === 'too-big'),
+      ...events.filter((e) => e.kind !== 'too-big'),
+    ]
+      .slice(0, MAX_BULLETS)
+      .map((e) => `• ${e.line}`),
   ]
   if (n > MAX_BULLETS) lines.push(`+${n - MAX_BULLETS} more`)
   // An HSwarm job's line stands alone: it has no group, no verdict to give.

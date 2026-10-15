@@ -10,6 +10,7 @@ import {
   climayteCancel,
   climayteRun,
   climayteWaveStart,
+  journalTooBig,
   killsLanded,
   setCliMayteAccountsProvider,
 } from '../src/climayte'
@@ -20,10 +21,12 @@ import {
   DRONE_BRIEF,
   DRONE_REFUSAL,
   roleOf,
+  tooBigOf,
   toReport,
   toView,
   WORKER_BRIEF,
 } from '../src/climayte-lib'
+import { addSeatChat } from '../src/hydra-core/seat-chats'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-roles-'))
 const CWD = join(scratch, 'repo')
@@ -97,7 +100,7 @@ describe('roleOf', () => {
 describe('the refusal text and the briefs', () => {
   test('DRONE_REFUSAL is the exact sentence', () => {
     expect(DRONE_REFUSAL).toBe(
-      'A drone never starts workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.',
+      'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.',
     )
   })
 
@@ -228,5 +231,47 @@ describe('the views carry the role', () => {
     const report = toReport(view)
     expect(report.role).toBe('seat')
     expect(report.persona).toBe(PERSONA)
+  })
+})
+
+describe('a seat opened by core_use', () => {
+  test('a Desk chat listed in seat-chats.json runs as a seat of its persona, manager or not', () => {
+    addSeatChat(CORE, 'chat-seat-board', PERSONA, 'chat-prime-example')
+    const desk = { append: '', mcpServers: {}, chatId: 'chat-seat-board' }
+    const seat = start({ title: 'Board seat', chat: true, desk })
+    expect(seat.role).toBe('seat')
+    expect(seat.persona).toBe(PERSONA)
+    // Any other Desk chat stays the Prime it is.
+    const prime = start({
+      title: 'Plain chat',
+      chat: true,
+      desk: { ...desk, chatId: 'chat-other' },
+    })
+    expect(prime.role).toBe('prime')
+  })
+})
+
+describe('TOO BIG', () => {
+  test('tooBigOf finds the line a report ends with, markdown or not', () => {
+    expect(tooBigOf('Done half.\n\nTOO BIG: split into the API and the UI')).toBe(
+      'TOO BIG: split into the API and the UI',
+    )
+    expect(tooBigOf('- **TOO BIG:** two parts')).toBe('TOO BIG: two parts')
+    expect(tooBigOf('All done; nothing was too big.')).toBeNull()
+    expect(tooBigOf(null)).toBeNull()
+  })
+
+  test('a turn that ends on TOO BIG: is journaled too_big with the line; any other is not', () => {
+    const big = start({ title: 'Too big fixture' })
+    big.results = ['Read the code.\nTOO BIG: one part per service']
+    journalTooBig(big)
+    const fine = start({ title: 'Fine fixture' })
+    fine.results = ['Done. Proof: 12 pass.']
+    journalTooBig(fine)
+    const lines = readJournal(JOURNAL_PATH, {}).filter((e) => e.event === 'too_big')
+    expect(lines.filter((e) => e.id === big.id).map((e) => e.notice)).toEqual([
+      'TOO BIG: one part per service',
+    ])
+    expect(lines.some((e) => e.id === fine.id)).toBe(false)
   })
 })
