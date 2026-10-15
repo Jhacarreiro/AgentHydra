@@ -37,6 +37,8 @@ export const ah = {
   /** Opens a terminal on `claude --resume <id>`; the command comes back either way. */
   resumeInTerminal: (row: AhSessionRow) => call<{ ok: boolean; command: string; reason?: string }>(`/sessions/${sid(row)}/resume-terminal${where(row)}`, { method: 'POST' }),
   instances: () => call<AhInstance[]>('/instances'),
+  /** The whole fleet's numbering, each with the account it is signed into: the names /instances leaves out. */
+  instanceNumbers: () => call<{ kind: string; handle: string; name: string | null; email: string | null }[]>('/instance-numbers'),
   /** The account an instance is signed into, from what is on disk (no sign-in request). */
   instanceAccount: (dir: string) => call<AhInstance['account']>(`/instances/${encodeURIComponent(dir)}/account?noNetwork=1`),
   focusInstance: (dir: string) => call<{ ok: boolean; message?: string }>(`/instances/${encodeURIComponent(dir)}/focus`, { method: 'POST' }),

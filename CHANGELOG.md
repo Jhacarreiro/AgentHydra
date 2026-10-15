@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Move to account names each account by who is signed in.** The list showed each account's folder name; it now
+  shows the signed-in account's name beside its number, as the Instances page does. A name you gave an account still
+  wins.
 - **Moving a chat no longer turns into a copy by a slip of the mouse.** In a chat's menu, Duplicate to account now
   sits beside Fork instead of right under Move to account, whose account list looks the same. A Codex copy is named
   "<title> (copy)" in the sidebar, as a desktop copy already was, so it never looks like the move went wrong.
