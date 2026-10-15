@@ -93,6 +93,19 @@ test('every seat shows its persona: with its photo when one exists, else none (t
   expect(chatFace({ id: other, parentId: PRIME })).toMatchObject({ slug: 'ada-layout', role: 'seat', photo: expect.any(Number) })
 })
 
+test("a seat shows its own persona even when its hydra.md or placement.json names another lead (C4-F7), never that lead's photo", () => {
+  const c = setup()
+  writeChatFile(c.dir, PRIME, 'seats.json', JSON.stringify({ 'person:bo-copy': { chat: SEAT, title: 'Bo Example · invented' } }))
+  // The hook moved the seat's lead to Ada, who has a photo; Bo has none.
+  writeChatFile(c.dir, SEAT, 'hydra.md', hydraMd(`Ada Example - Layout designer. Full text: ${join(c.seats, 'ada-layout.md')}`))
+  writeChatFile(c.dir, SEAT, 'placement.json', placement('person:ada-layout'))
+  expect(chatFace({ id: SEAT, parentId: PRIME })).toMatchObject({ slug: 'bo-copy', name: 'Bo Example', role: 'seat', photo: null, persona: true })
+  // The Prime itself still shows the lead it took.
+  writeChatFile(c.dir, PRIME, 'hydra.md', hydraMd(`Ada Example - Layout designer. Full text: ${join(c.seats, 'ada-layout.md')}`))
+  forgetCoreFaces()
+  expect(chatFace({ id: PRIME })).toMatchObject({ slug: 'ada-layout', role: 'lead' })
+})
+
 test("GET /api/personas/:slug/avatar serves a persona's portrait, and 404s one with none", async () => {
   setup()
   const hono = new Hono()

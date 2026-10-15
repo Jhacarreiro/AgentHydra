@@ -1,7 +1,7 @@
 // The persona a chat's row shows (its manager face, sidebar/manager-face.ts), Hydra Core's included (A2-F7, A4-F7):
-// a pinned manager first; else the chat's Hydra Core lead, a hydra.md `## Lead` line (the chat became someone) before
-// the lead its placement.json keeps; else, for a seat, the persona its Prime's seats.json opened it for; else the
-// manager the old router's session file names. Everything is read from <core dir>/chats/<Desk chat id>/, the key the
+// a pinned manager first; else, for a seat, the persona its Prime's seats.json opened it for (whatever lead the hook
+// later moved it to); else the chat's Hydra Core lead, a hydra.md `## Lead` line (the chat became someone) before
+// the lead its placement.json keeps; else the manager the old router's session file names. Everything is read from <core dir>/chats/<Desk chat id>/, the key the
 // hook and the launches use. A persona who is a manager shows as that manager; any other gets its catalog name and
 // the photo found for it (personaPhoto), or none, when its row draws the initial.
 import { readdirSync, readFileSync, statSync } from 'node:fs'
@@ -170,10 +170,11 @@ export function chatFace(chat: Pick<ChatSummary, 'id'> & Partial<Pick<ChatSummar
   const pinned = chat.managerSlug ? currentManager(chat.managerSlug, null) : null
   if (pinned) return pinned
   if (KEY.test(chat.id)) {
-    const lead = leadOf(chat.id)
-    if (lead) return personaFace(lead, 'lead')
+    // A seat is its persona for good: a lead the hook moved it to (hydra.md, placement.json) never shows in its place (C4-F7).
     const seat = chat.parentId ? seatPersonas().get(chat.id) : undefined
     if (seat) return personaFace(seat, 'seat')
+    const lead = leadOf(chat.id)
+    if (lead) return personaFace(lead, 'lead')
   }
   return chat.sessionId ? currentManager(null, chat.sessionId) : null
 }
