@@ -19,8 +19,17 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 
 ## Where things live
 
-- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
+- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `DOORBELL`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
 - Chat key: `HYDRA_DESK_CHAT_ID` when set, else the Claude `session_id`. Characters outside `A-Za-z0-9_.-` become `_`.
+
+## Doorbell (the CrAInium flowchart)
+
+`<core dir>/DOORBELL` holding `crainium` moves the core off this PC. The flowchart lives in the CrAInium, one per workspace, behind the Connections MCP tool `connections_core`. The hook then only rings it:
+
+- Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
+- After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.
+- Nothing is written under the core folder, and the placement, pack and president rule below are off.
+- Seats, drones and worker shells still get nothing. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
 
 ## President rule (Stop)
 
