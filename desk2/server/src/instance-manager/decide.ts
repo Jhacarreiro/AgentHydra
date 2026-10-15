@@ -129,6 +129,13 @@ const ACCOUNT_DEAD =
 const ACCOUNT_DEAD_NOW = /\b(query error|api_error)\b.*\b(organization|account) (has been |has |is |was )?(disabled|suspended|banned|deactivated)\b/i
 /** A chat's turn that ran to its end: with the account dead, none does (in both logs above, none between the errors). */
 const TURN_DONE = /\[Stop hook\] Query completed for session\b/
+// The app's own sign-in, as it writes it while it runs. It signs itself out with "[account] Navigated to /logout,
+// synthesizing logged-out" (a first start on a newer Claude often does: 17 of 64 such lines in the fleet's logs,
+// 2026-10-15). Narrower than LOGGED_OUT on purpose: a chat's "OAuth token revoked" error is not one, the app authorizes
+// again by itself and its chats run on (one profile, 219 turns, 2026-10-09).
+const APP_SIGNED_OUT = /\[account\] Navigated to \/logout|synthesizing logged-out|Login-state transition \(loggedOut: false\b/i
+/** Signed in again, or a start with its account loaded: an earlier sign-out line no longer says anything. */
+const APP_SIGNED_IN = /Login-state transition \(loggedOut: true\b|claude\.ai account active and logged in\b/i
 
 /** A log line's own time, read as this PC's local time (the app writes local time), ms; null when it has none. */
 export function lineTime(line: string): number | null {
@@ -174,6 +181,20 @@ export function deadFromLog(log: string | null): string | null {
     lines.findLastIndex((l) => LOGGED_IN.test(l)),
   )
   return dead > since ? `its log: ${clip(lines[dead] as string)}` : null
+}
+
+/**
+ * Whether a running app has signed itself out: its log's last sign-out line comes after its last sign-in. AgentHydra's
+ * own sign-in reads the stored login, which outlives this, so such an app looked up and could be given chats it cannot
+ * run. Replayed over every profile's logs (2026-10-15): no chat turn of 12,541 ran to its end while this read signed
+ * out. null when it has not (or there is no log).
+ */
+export function signedOutFromLog(log: string | null): string | null {
+  if (log === null) return null
+  const lines = log.split(/\r?\n/)
+  const out = lines.findLastIndex((l) => LOG_LINE.test(l) && APP_SIGNED_OUT.test(l))
+  if (out < 0 || out < lines.findLastIndex((l) => APP_SIGNED_IN.test(l))) return null
+  return `its log: ${clip(lines[out] as string)}`
 }
 
 /** A Free plan: Claude Code does not run on one, so no chat can work in such an app or be moved into it. */

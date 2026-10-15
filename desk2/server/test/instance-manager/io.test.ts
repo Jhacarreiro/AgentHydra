@@ -86,6 +86,9 @@ test('a Claude app that crashes: its working chat and its quiet one mid-tool-cal
   const p1 = profile('p1', [T0 - 60_000, '[Stop hook] Query completed for session local_a'], [T0 + 5_000, '[process-memory] trigger=interval'])
   const p2 = profile('p2', [T0 - 60_000, '[Stop hook] Query completed for session local_b'])
   const p3 = profile('p3')
+  // #4 is open with the most room, and AgentHydra reads its stored login as signed in; its own log says it signed itself
+  // out on its first start after an update (what Claude Desktop wrote, 2026-10-15). It is never given the chats.
+  const p4 = profile('p4', [T0 - 30_000, 'claude.ai account active and logged in'], [T0 - 30_000, '[account] Navigated to /logout, synthesizing logged-out'])
   const app = { p1Running: true, opStatus: 'running', moved: false }
   // AgentHydra writes an app's ref with a lower-case drive letter and an engine's with the upper-case one.
   const ref = (dir: string) => `desktop:${dir.replace(/^([A-Z]):/, (_m, d: string) => `${d.toLowerCase()}:`)}`
@@ -120,6 +123,7 @@ test('a Claude app that crashes: its working chat and its quiet one mid-tool-cal
             { num: 1, name: 'p1', dir: p1, ref: ref(p1), isRunning: app.p1Running, signedIn: true, account: { status: 'cache', email: 'p1@example.com', planLabel: 'Max 5×' } },
             { num: 2, name: 'p2', dir: p2, ref: ref(p2), isRunning: true, signedIn: true, account: { status: 'cache', email: 'p2@example.com', planLabel: 'Max 20×' } },
             { num: 3, name: 'p3', dir: p3, ref: ref(p3), isRunning: false, signedIn: true, account: { status: 'cache', email: 'p3@example.com', planLabel: 'Free' } },
+            { num: 4, name: 'p4', dir: p4, ref: ref(p4), isRunning: true, signedIn: true, account: { status: 'cache', email: 'p4@example.com', planLabel: 'Max 20×' } },
           ],
           sessions: app.p1Running
             ? [
@@ -138,6 +142,7 @@ test('a Claude app that crashes: its working chat and its quiet one mid-tool-cal
           rows: [
             { kind: 'desktop', num: 2, result: { snapshot: { session: { pct: 10 }, weekAll: { pct: 20 } } }, advice: { severity: 'ok' } },
             { kind: 'desktop', num: 3, result: { snapshot: { session: { pct: 0 }, weekAll: { pct: 0 } } }, advice: { severity: 'ok' } },
+            { kind: 'desktop', num: 4, result: { snapshot: { session: { pct: 0 }, weekAll: { pct: 0 } } }, advice: { severity: 'ok' } },
           ],
         },
       }
@@ -162,10 +167,11 @@ test('a Claude app that crashes: its working chat and its quiet one mid-tool-cal
   const io = { ...daemonIO({ base: hydra.base, outside: async () => outside }), now: () => clock }
   const m = createInstanceManager(io, { memory: {}, recoveries: [] })
   await m.look(true)
-  expect(m.status(true, null).instances.map((i) => [i.num, i.working, i.dead !== null])).toEqual([
-    [1, 1, false],
-    [2, 0, false],
-    [3, 0, true],
+  expect(m.status(true, null).instances.map((i) => [i.num, i.working, i.signedIn, i.dead !== null])).toEqual([
+    [1, 1, true, false],
+    [2, 0, true, false],
+    [3, 0, true, true],
+    [4, 0, false, false],
   ])
 
   // #1 dies without quitting; its engines go with it.

@@ -7,14 +7,24 @@
 // the orchestrator's gate_chat (POST /api/orchestrator/run), opening from POST /api/instances/:dir/open, and the move
 // from the orchestrator's migrate_batch (the same route, polled at /api/orchestrator/operations/:id), the same move
 // AgentHydra's move_chats tool runs: it verifies each landing and starts each chat again with `--resume`. An app whose
-// account died while it stays open is read from its own log (decide.ts deadFromLog).
+// account died, or that signed itself out, while it stays open is read from its own log (decide.ts deadFromLog,
+// signedOutFromLog).
 // Codex: GET /api/codex-instances, /:id/usage, /:id/account, POST /:id/desktop/open and /:id/move-chat.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ExternalSession } from '@shared/protocol'
 import type { ManagedKind } from '@shared/instance-manager'
-import { type AccountProbe, type Candidate, deadFromLog, isFreePlan, type OpenChat, type SeenInstance, type TurnState } from './decide'
+import {
+  type AccountProbe,
+  type Candidate,
+  deadFromLog,
+  isFreePlan,
+  type OpenChat,
+  type SeenInstance,
+  signedOutFromLog,
+  type TurnState,
+} from './decide'
 import type { InstanceManagerIO, Landed, MoveResult } from './engine'
 
 const READ_TIMEOUT_MS = 8_000
@@ -145,6 +155,8 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
       const account = obj(i.account)
       const plan = str(account.planLabel)
       const running = i.isRunning === true
+      // A closed app's log is read only when it is weighed as a target (candidates): every look reads the open ones.
+      const log = running ? readTail(join(dir, 'logs', 'main.log'), DEAD_TAIL_BYTES) : null
       return [
         {
           ref: str(i.ref) ?? `desktop:${dir}`,
@@ -155,9 +167,9 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           email: str(account.email),
           plan,
           running,
-          signedIn: i.signedIn === true && account.status !== 'loggedout',
-          // A closed app's log is read only when it is weighed as a target (candidates): every look reads the open ones.
-          dead: isFreePlan(plan) ? FREE_PLAN : running ? deadFromLog(readTail(join(dir, 'logs', 'main.log'), DEAD_TAIL_BYTES)) : null,
+          // AgentHydra's sign-in is the stored login; an open app that signed itself out says so only in its log.
+          signedIn: i.signedIn === true && account.status !== 'loggedout' && signedOutFromLog(log) === null,
+          dead: isFreePlan(plan) ? FREE_PLAN : deadFromLog(log),
         },
       ]
     })

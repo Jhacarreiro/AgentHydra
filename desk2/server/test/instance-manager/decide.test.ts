@@ -12,6 +12,7 @@ import {
   FORGET_MS,
   rankTargets,
   type SeenInstance,
+  signedOutFromLog,
   STALE_MEMORY_MS,
   type TurnState,
 } from '../../src/instance-manager/decide'
@@ -178,6 +179,23 @@ test("an app's own log marks its account dead while it stays open, until a turn 
   expect(deadFromLog(log([t, 'Session local_x query error: payment required for this model; the plan has ended']))).toBeNull()
   expect(deadFromLog(log([t, '[settings] Banner: your organization has been disabled? learn more']))).toBeNull()
   expect(deadFromLog(null)).toBeNull()
+})
+
+test('an open app that signed itself out reads so from its log, until it signs in again; a chat\'s revoked-token error is not a sign-out', () => {
+  const t = NOW - 120_000
+  const active = 'claude.ai account active and logged in'
+  const toLogout = '[account] Navigated to /logout, synthesizing logged-out'
+  const signIn = '[account] Login-state transition (loggedOut: true → false, uuid: a1 → a1), preserving oauth cache'
+  // What a first start on a newer Claude wrote (2026-10-15): the account loads, then the app goes to its logout page.
+  expect(signedOutFromLog(log([t, active], [t, toLogout]))).toContain('Navigated to /logout')
+  expect(signedOutFromLog(log([t, active], [t, toLogout], [t + 60_000, signIn]))).toBeNull()
+  // A later start that loads its account is signed in, whatever an earlier run wrote.
+  expect(signedOutFromLog(log([t, toLogout], [t + 60_000, active]))).toBeNull()
+  // A chat's failed turn with a revoked token: the app authorized again and its chats ran on (2026-10-09).
+  const revoked = '[CCD CycleHealth] local_x api_error (success): Failed to authenticate: OAuth token revoked. Please run /login'
+  expect(signedOutFromLog(log([t, active], [t + 1_000, revoked]))).toBeNull()
+  expect(signedOutFromLog(log([t, '[account] User is logged out, skipping account ID wait']))).toBeNull()
+  expect(signedOutFromLog(null)).toBeNull()
 })
 
 test('which open chats a going-down cut off: one seen working, one mid-turn, an error as it went down, background jobs it waits on', () => {
