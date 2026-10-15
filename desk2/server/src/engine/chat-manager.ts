@@ -814,6 +814,7 @@ export class ChatManager {
       cwd,
       account,
       accountAuto: auto,
+      ...(req.accountPinned ? { accountPinned: true } : {}),
       model: worker ? WORKER_MODEL : req.model === undefined ? normalizeModel(settings.defaultModel) : normalizeModel(req.model),
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
@@ -1573,6 +1574,8 @@ export class ChatManager {
       e.cwdPending = undefined
     }
     if (p.delegateToCliMayte !== undefined) chat.delegateToCliMayte = p.delegateToCliMayte
+    if (p.accountPinned === true) chat.accountPinned = true
+    else if (p.accountPinned === false) delete chat.accountPinned
     // An account takes effect at the next runtime start (buildOptions reads chat.account); see below.
     if (resolved) {
       chat.account = resolved.account
@@ -2557,7 +2560,8 @@ export class ChatManager {
   private carryToAnotherAccount(chatId: string, signIn: boolean, window: string | null): boolean {
     const e = this.chats.get(chatId)
     const rt = e?.runtime
-    if (!e || !rt || e.chat.workerId !== undefined) return false
+    // Auto off: the chat waits for its own account's reset (the runtime's limit stands).
+    if (!e || !rt || e.chat.workerId !== undefined || e.chat.accountPinned) return false
     const tried = (e.moved ??= [e.chat.account.id])
     if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
     if (signIn) this.signInHeld.set(e.chat.account.id, Date.now() + SIGN_IN_HOLD_MS)
@@ -3186,6 +3190,7 @@ export function parseCreate(body: unknown): CreateChatRequest {
   if (title !== undefined) req.title = title
   const accountId = optString(b, 'accountId')
   if (accountId !== undefined) req.accountId = accountId
+  if (optBool(b, 'accountPinned') === true) req.accountPinned = true
   const model = optNullableString(b, 'model')
   if (model !== undefined) req.model = model
   const effort = optEffort(b)
@@ -3275,7 +3280,7 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service', 'sus']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'accountPinned', 'group', 'cwd', 'note', 'service', 'sus']
 function optSus(b: Record<string, unknown>): SusLevel | undefined {
   if (b.sus === undefined) return undefined
   if (!SUS_LEVELS.includes(b.sus as SusLevel)) throw new ChatError(400, `sus is one of ${SUS_LEVELS.join(', ')}`)
@@ -3302,7 +3307,7 @@ export function parsePatch(body: unknown): ChatPatch {
     if (!title.trim()) throw new ChatError(400, 'title cannot be empty')
     p.title = title
   }
-  for (const k of ['pinned', 'archived', 'unread', 'delegateToCliMayte'] as const) {
+  for (const k of ['pinned', 'archived', 'unread', 'delegateToCliMayte', 'accountPinned'] as const) {
     const v = optBool(b, k)
     if (v !== undefined) p[k] = v
   }

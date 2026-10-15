@@ -16,6 +16,7 @@ import {
   filterSlashCommands,
   folderName,
   loadDraft,
+  menuAccounts,
   modelTriggerLabel,
   prAsk,
   saveDraft,
@@ -177,6 +178,23 @@ describe('labels', () => {
   it('the model trigger shows an id it cannot name as given, and a menu value with its menu label', () => {
     expect(modelTriggerLabel('some-custom-model', [])).toBe('some-custom-model')
     expect(modelTriggerLabel('claude-opus-5-5', [{ value: 'claude-opus-5-5', label: 'Opus 5.5 (1M)' }])).toBe('Opus 5.5 (1M)')
+  })
+
+  // CliMayte names a Desk chat's model by its family; the chip showed the bare word "opus".
+  it('the model trigger names a bare family by its model in the menu', () => {
+    const menu = [{ value: 'claude-opus-5-5', label: 'Opus 5.5' }, { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }]
+    expect(modelTriggerLabel('opus', menu)).toBe('Opus 5.5')
+    expect(modelTriggerLabel('sonnet', menu)).toBe('Sonnet 5.5')
+    expect(modelTriggerLabel('opus', [])).toBe('Opus')
+  })
+
+  // Owner, 2026-10-15: "only show desktop instances"; the chat's own account stays visible when it is not one.
+  it('the account menu lists the logins linked to a Desktop instance by name, then the current one if it is not', () => {
+    const acct = (id: string, desktop: string | null) => ({ id, label: `#1 ${id}`, configDir: null, email: null, plan: null, signedIn: true, fiveHourPct: null, weeklyPct: null, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false, desktop })
+    const all = [acct('a', null), acct('b', 'zeta'), acct('c', 'Alpha'), acct('d', null)]
+    expect(menuAccounts(all, null).map((a) => a.id)).toEqual(['c', 'b'])
+    expect(menuAccounts(all, 'd').map((a) => a.id)).toEqual(['c', 'b', 'd'])
+    expect(menuAccounts(all, 'b').map((a) => a.id)).toEqual(['c', 'b'])
   })
 })
 

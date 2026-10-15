@@ -328,20 +328,22 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
   <div class="flex flex-col" role="region" aria-label="Dev servers">
     <div v-if="view.kind === 'list' || view.kind === 'empty'" class="flex items-center gap-1 px-1 pb-1 pt-1.5">
       <input v-model="filter" type="search" :class="INPUT" placeholder="Filter servers" aria-label="Filter servers" />
-      <DropdownMenu>
-        <Tip label="Scan this PC for projects">
-          <DropdownMenuTrigger as-child>
-            <button type="button" :class="HEADER_BTN" aria-label="Scan this PC for projects">
-              <Loader2 v-if="scanning" class="size-3.5 animate-spin" />
-              <ScanSearch v-else class="size-3.5" />
-            </button>
-          </DropdownMenuTrigger>
-        </Tip>
-        <DropdownMenuContent align="start">
-          <DropdownMenuItem :disabled="scanning" @select="scan('quick')">Quick scan</DropdownMenuItem>
-          <DropdownMenuItem :disabled="scanning" @select="scan('deep')">Deep scan</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Tip label="Scan this PC for projects">
+        <span class="inline-flex">
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button type="button" :class="HEADER_BTN" aria-label="Scan this PC for projects">
+                <Loader2 v-if="scanning" class="size-3.5 animate-spin" />
+                <ScanSearch v-else class="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem :disabled="scanning" @select="scan('quick')">Quick scan</DropdownMenuItem>
+              <DropdownMenuItem :disabled="scanning" @select="scan('deep')">Deep scan</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      </Tip>
       <Tip label="Add a project">
         <button type="button" :class="HEADER_BTN" aria-label="Add a project" @click="pick({ kind: 'add' })"><Plus class="size-3.5" /></button>
       </Tip>

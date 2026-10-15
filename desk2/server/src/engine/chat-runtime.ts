@@ -38,6 +38,7 @@ import type {
   ServerEvent,
   TranscriptItem,
 } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
 import { contextPct } from './describe'
 import { connectorsPending } from '../connectors/registry'
 import { coreSlot, coreSlotDue } from './core-slot'
@@ -54,6 +55,12 @@ import { userTurns } from './system-text'
 import { isUsageLimitText } from './usage-limit'
 import { hostedOf, type HostConnection, type HostedParams, type HostedQuery } from '../host/client'
 import { mediaCache, toStoredImage } from '../media/cache'
+
+/** The setting a chat's own turns run on: a model or effort it does not name is Desk's default (DEFAULT_MODEL, DEFAULT_EFFORT),
+ *  so the window's label is what runs (owner, 2026-10-15: "it should default to Opus 5.5"). */
+function ownSetting(chat: ChatSummary): { model: string | null; effort: Effort | null } {
+  return { model: withoutOldHaiku(chat.model) ?? DEFAULT_MODEL, effort: chat.effort ?? DEFAULT_EFFORT }
+}
 
 /** query()'s own parameters, plus what a chat host needs (SPEC "Chat hosts"); the SDK's query() reads prompt and options. */
 export type QueryImpl = (params: HostedParams) => Query
@@ -412,7 +419,7 @@ export class ChatRuntime {
     pinHaikuModel(env)
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const sus = this.susTurn?.() ?? null
-    this.applied = sus ? { ...sus } : { model: withoutOldHaiku(chat.model), effort: chat.effort }
+    this.applied = sus ? { ...sus } : ownSetting(chat)
     const options: Options = {
       cwd: chat.cwd,
       env,
@@ -950,7 +957,7 @@ ${slot}` : ''}${rules}` }
     const q = this.q
     if (!q || this.susTurn === undefined) return
     const sus = this.susTurn()
-    const want: SusTurn = sus ?? { model: withoutOldHaiku(this.chat.model), effort: this.chat.effort }
+    const want: SusTurn = sus ?? ownSetting(this.chat)
     const had = this.applied
     if (want.model === had.model && want.effort === had.effort) return
     this.applied = { ...want }

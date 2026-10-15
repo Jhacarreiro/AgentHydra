@@ -89,6 +89,7 @@ async function run(
     abortController: abort,
     permissionMode: task.permissionMode as PermissionMode,
     ...(task.model ? { model: task.model } : {}),
+    ...(task.effort ? { effort: task.effort as Options['effort'] } : {}),
     ...(task.thread ? { resume: task.thread.threadId } : {}),
     ...(binary ? { pathToClaudeCodeExecutable: binary } : {}),
   }

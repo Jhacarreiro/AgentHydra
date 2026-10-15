@@ -94,14 +94,18 @@ const routes: Route[] = [
         (await pool.list()).map(({ id, service, label, room }) => ({ id, service, label, room })),
       ),
   ],
-  ['POST', /^\/api\/chats$/, async (_m, req) => json(chats.create(await body(req)), 201)],
+  ['POST', /^\/api\/chats$/, async (_m, req) => json(await chats.create(await body(req)), 201)],
   [
     'POST',
     /^\/api\/chats\/import$/,
     async (_m, req) => json(await chats.importSession(await body(req))),
   ],
   ['GET', /^\/api\/chats\/([^/]+)$/, (m) => json(chats.get(id(m)))],
-  ['PATCH', /^\/api\/chats\/([^/]+)$/, async (m, req) => json(chats.patch(id(m), await body(req)))],
+  [
+    'PATCH',
+    /^\/api\/chats\/([^/]+)$/,
+    async (m, req) => json(await chats.patch(id(m), await body(req))),
+  ],
   [
     'DELETE',
     /^\/api\/chats\/([^/]+)$/,

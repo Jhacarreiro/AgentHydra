@@ -51,8 +51,11 @@ import {
   withFileLines,
   dismissTip,
   draftSlot,
+  EFFORTS,
+  effortLabel,
   modelTriggerLabel,
   nextTip,
+  runEffort,
   prAsk,
   type Tip as TipInfo
 } from './logic'
@@ -65,11 +68,11 @@ import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIG
 import SendSplit from './SendSplit.vue'
 import SusSwitch from './SusSwitch.vue'
 import { susStatus } from './sus'
-import type { SusLevel } from '@shared/protocol'
+import { DEFAULT_MODEL, type SusLevel } from '@shared/protocol'
 import QueueTray from './QueueTray.vue'
 import QueueChip from './QueueChip.vue'
 import { aheadInLine, queuedForChat, sendOrEnqueue, sendWords, type QueuedMessage } from './queue'
-import ContextRing from './ContextRing.vue'
+import AccountMenu from './AccountMenu.vue'
 import NewSessionBar from './NewSessionBar.vue'
 import McpSubmenu from './McpSubmenu.vue'
 import TipBanner from './TipBanner.vue'
@@ -249,6 +252,8 @@ const shown = computed(() => shownSuggestion(suggestion.value, { empty: !hasCont
 // New-session settings (an existing chat's come from the chat itself)
 const newCwd = ref<string | null>(null)
 const newAccount = ref('auto')
+/** The new session's Auto switch off: it waits on its account when that runs out. */
+const newPinned = ref(false)
 const newModel = ref<string | null>(null)
 const newEffort = ref<Effort | null>(null)
 const newMode = ref<PermissionMode>('bypassPermissions')
@@ -259,6 +264,7 @@ function resetNewSession() {
   const sel = desk.selected.value
   newCwd.value = props.demo?.cwd ?? (sel.kind === 'new' && sel.cwd ? sel.cwd : newCwd.value)
   newAccount.value = s?.defaultAccountId ?? 'auto'
+  newPinned.value = false
   newModel.value = s?.defaultModel ?? null
   newEffort.value = s?.defaultEffort ?? null
   newMode.value = s?.defaultPermissionMode ?? 'bypassPermissions'
@@ -283,10 +289,15 @@ async function patch(p: { model?: string | null; effort?: Effort | null; permiss
   }
 }
 
-// Models
+// Models. A chat that names no model or effort runs DEFAULT_MODEL and DEFAULT_EFFORT (owner, 2026-10-15: "it should
+// default to Opus 5.5"), so the menu has no "Account default" and the chip names what runs, effort too ("the model I'm
+// using and the ... thinking level").
 const models = shallowRef<ModelChoice[]>([])
-const modelSplit = computed(() => splitModels(models.value))
+const modelSplit = computed(() => splitModels(models.value.filter((m) => m.value !== 'default')))
+const shownModel = computed(() => model.value ?? DEFAULT_MODEL)
 const modelText = computed(() => modelTriggerLabel(model.value, models.value))
+const effort = computed(() => runEffort(props.chat ? props.chat.effort : newEffort.value))
+const settingText = computed(() => `${modelText.value} · ${effortLabel(effort.value)}`)
 // A chat pinned to Codex or ChatGPT runs its turns there: its word stands in for the Claude model, which does not apply.
 const pinnedWord = computed(() => (props.chat?.service ? SERVICE_WORDS[props.chat.service] : null))
 const SUS_CHIP = 'shrink-0 whitespace-nowrap rounded-[var(--radius-5)] px-1.5 text-ui-sm leading-[18px]'
@@ -296,7 +307,7 @@ const SUS_TONE = {
   bad: 'bg-(--danger-bg) text-(--danger-text)',
 }
 const susLevel = computed<SusLevel>(() => (props.chat ? (props.chat.sus ?? 'fine') : newSus.value))
-const susChip = computed(() => susStatus(susLevel.value, modelText.value, props.chat?.susPick, models.value, pinnedWord.value))
+const susChip = computed(() => susStatus(susLevel.value, settingText.value, props.chat?.susPick, models.value, pinnedWord.value))
 // A chat at work in Claude Desktop runs that app's model, which Desk cannot set; one pinned to Codex or ChatGPT has none.
 const modelEditable = computed(() => !pinnedWord.value && !props.into)
 const modelLockedWhy = computed(() => (props.into && !pinnedWord.value ? 'Claude Desktop is running this chat: change its model there.' : ''))
@@ -308,6 +319,46 @@ function pickSus(level: SusLevel) {
 function pickModel(value: string | null) {
   patch({ model: value })
   openMenu.value = null
+}
+function pickEffort(value: Effort) {
+  patch({ effort: value })
+  openMenu.value = null
+}
+
+// The account menu (the ring's button): a chat's account changes at its next turn; a new session's goes with it.
+const accountAuto = computed(() => (props.chat ? props.chat.accountAuto : newAccount.value === 'auto'))
+const accountNow = computed(() => {
+  if (props.chat) return props.chat.account.id === 'auto' ? null : props.chat.account
+  return newAccount.value === 'auto' ? null : (desk.accounts.value.find((a) => a.id === newAccount.value) ?? null)
+})
+const accountPinned = computed(() => (props.chat ? !!props.chat.accountPinned : newPinned.value))
+const accountLocked = computed(() => {
+  if (props.into) return 'Claude Desktop runs this chat, on the account signed in there.'
+  if (pinnedWord.value) return `${pinnedWord.value} runs this chat's turns, not a Claude account.`
+  if (props.chat && props.chat.workerId !== undefined) return 'CliMayte places this chat. A chat you start now can be put on an account.'
+  return ''
+})
+async function pickAccount(id: string) {
+  if (!props.chat) {
+    newAccount.value = id
+    return
+  }
+  try {
+    await desk.updateChat(props.chat.id, { accountId: id })
+  } catch (e) {
+    showNotice(`Could not change the account: ${errText(e)}`)
+  }
+}
+async function setAccountAuto(on: boolean) {
+  if (!props.chat) {
+    newPinned.value = !on
+    return
+  }
+  try {
+    await desk.updateChat(props.chat.id, { accountPinned: !on })
+  } catch (e) {
+    showNotice(`Could not change Auto: ${errText(e)}`)
+  }
 }
 function onModelKey(e: KeyboardEvent) {
   const i = Number(e.key) - 1
@@ -1024,6 +1075,7 @@ async function createNewChat(body: string, refs: ImageRef[], enqueue: boolean, s
     prompt: body,
     ...(refs.length ? { images: refs } : {}),
     accountId: newAccount.value,
+    ...(newPinned.value ? { accountPinned: true } : {}),
     model: newModel.value,
     effort: newEffort.value,
     permissionMode: newMode.value,
@@ -1482,17 +1534,19 @@ onBeforeUnmount(() => {
           <Tip v-if="!modelEditable" :label="susChip.tip ?? modelLockedWhy" :disabled="!(susChip.tip ?? modelLockedWhy)" side="top">
             <span :class="[SUS_CHIP, SUS_TONE[susChip.tone]]" data-composer-model>{{ susChip.text }}</span>
           </Tip>
-          <DropdownMenu v-else v-bind="menuModel('model')" :modal="!nonModal">
-            <Tip :label="susChip.tip ?? 'Change the model'" side="top">
-              <DropdownMenuTrigger as-child>
-                <button
-                  type="button"
-                  :class="[SUS_CHIP, SUS_TONE[susChip.tone], MODEL_TRIGGER]"
-                  :aria-label="`Model: ${modelText}. Change it`"
-                  data-composer-model
-                >{{ susChip.text }}</button>
-              </DropdownMenuTrigger>
-            </Tip>
+          <!-- The Tip wraps the whole menu, never the trigger alone: its first hover remounts what it holds, and a trigger
+               remounted under a mounted menu leaves the menu no anchor, so it opened at the window's top left. -->
+          <Tip v-else :label="susChip.tip ?? 'Change the model or effort'" side="top">
+          <span class="inline-flex">
+          <DropdownMenu v-bind="menuModel('model')" :modal="!nonModal">
+            <DropdownMenuTrigger as-child>
+              <button
+                type="button"
+                :class="[SUS_CHIP, SUS_TONE[susChip.tone], MODEL_TRIGGER]"
+                :aria-label="`Model: ${settingText}. Change it`"
+                data-composer-model
+              >{{ susChip.text }}</button>
+            </DropdownMenuTrigger>
             <DropdownMenuContent
               side="top"
               align="end"
@@ -1505,39 +1559,66 @@ onBeforeUnmount(() => {
                 v-for="(m, i) in modelSplit.main"
                 :key="m.value"
                 role="menuitemradio"
-                :aria-checked="model === m.value"
+                :aria-checked="shownModel === m.value"
                 :class="ITEM"
                 @select="pickModel(m.value)"
               >
                 <span class="flex-1 whitespace-nowrap">{{ m.label }}</span>
-                <Check v-if="model === m.value" class="-me-1 ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
+                <Check v-if="shownModel === m.value" class="-me-1 ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
                 <span v-else :class="SHORTCUT">{{ i + 1 }}</span>
               </DropdownMenuItem>
               <div role="separator" :class="SEPARATOR" />
               <DropdownMenuSub>
+                <DropdownMenuSubTrigger :class="[ITEM, SUB_TRIGGER]" data-composer-effort>
+                  <span class="flex-1 whitespace-nowrap">Effort</span>
+                  <span class="ps-3 text-(--text-muted)">{{ effortLabel(effort) }}</span>
+                </DropdownMenuSubTrigger>
+                <DropdownMenuSubContent :class="MENU">
+                  <DropdownMenuItem
+                    v-for="x in EFFORTS"
+                    :key="x.value"
+                    role="menuitemradio"
+                    :aria-checked="effort === x.value"
+                    :class="ITEM"
+                    @select="pickEffort(x.value)"
+                  >
+                    <span class="flex-1 whitespace-nowrap">{{ x.label }}</span>
+                    <Check v-if="effort === x.value" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
+                  </DropdownMenuItem>
+                </DropdownMenuSubContent>
+              </DropdownMenuSub>
+              <DropdownMenuSub v-if="modelSplit.more.length">
                 <DropdownMenuSubTrigger :class="[ITEM, SUB_TRIGGER]">More models</DropdownMenuSubTrigger>
                 <DropdownMenuSubContent :class="MENU">
-                  <DropdownMenuItem role="menuitemradio" :aria-checked="!model" :class="ITEM" @select="pickModel(null)">
-                    <span class="flex-1 whitespace-nowrap">Account default</span>
-                    <Check v-if="!model" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
-                  </DropdownMenuItem>
                   <DropdownMenuItem
                     v-for="m in modelSplit.more"
                     :key="m.value"
                     role="menuitemradio"
-                    :aria-checked="model === m.value"
+                    :aria-checked="shownModel === m.value"
                     :class="ITEM"
                     @select="pickModel(m.value)"
                   >
                     <span class="flex-1 whitespace-nowrap">{{ m.label }}</span>
-                    <Check v-if="model === m.value" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
+                    <Check v-if="shownModel === m.value" class="ms-3 size-3.5 text-(--accent)" :stroke-width="3" />
                   </DropdownMenuItem>
                 </DropdownMenuSubContent>
               </DropdownMenuSub>
             </DropdownMenuContent>
           </DropdownMenu>
+          </span>
+          </Tip>
 
-          <ContextRing :pct="chat?.contextPct ?? null" />
+          <AccountMenu
+            :accounts="desk.accounts.value"
+            :current="accountNow"
+            :auto="accountAuto"
+            :pinned="accountPinned"
+            :context-pct="chat?.contextPct ?? null"
+            :locked="accountLocked"
+            :non-modal="nonModal"
+            @pick="pickAccount"
+            @auto="setAccountAuto"
+          />
         </div>
       </div>
     </div>

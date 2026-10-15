@@ -108,10 +108,13 @@ async function usageOf(id: string, path: string): Promise<Used | null> {
   return lastUsed.get(id) ?? null
 }
 
+/** Claude logins someone else is on now (the last read): never picked, but a thread or a pin bound there goes on there. */
+const claudeInUse = new Set<string>()
+
 async function claudeAccounts(): Promise<Account[]> {
-  const live = (await get<CliRow[]>(DAEMON, '/api/cli-instances')).filter(
-    (row) => row.loggedIn && row.inUse !== true,
-  )
+  const live = (await get<CliRow[]>(DAEMON, '/api/cli-instances')).filter((row) => row.loggedIn)
+  claudeInUse.clear()
+  for (const row of live) if (row.inUse === true) claudeInUse.add(row.id)
   const used = await Promise.all(
     live.map((row) =>
       usageOf(row.id, `/api/usage?instance=${encodeURIComponent(String(row.num ?? row.id))}`),
@@ -224,7 +227,7 @@ export function accounts(): Accounts {
     async pick(service, avoid) {
       const now = Date.now()
       const free = (await current())[service].filter(
-        (a) => !avoid.has(a.id) && (holds.get(a.id) ?? 0) <= now,
+        (a) => !avoid.has(a.id) && (holds.get(a.id) ?? 0) <= now && !claudeInUse.has(a.id),
       )
       const [best] =
         service === 'chatgpt'
@@ -256,6 +259,9 @@ export function accounts(): Accounts {
     },
     hold(id, until) {
       holds.set(id, until)
+    },
+    heldUntil(id) {
+      return holds.get(id) ?? 0
     },
   }
 }

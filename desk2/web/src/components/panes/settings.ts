@@ -7,7 +7,7 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'managers' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'managers' | 'alerts' | 'hswarm' | 'connections' | 'people' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 // Ids a saved or linked section used before a rename. CliMayte is part of HSwarm (owner, 2026-10-10).
 export const LEGACY_SECTION: Record<string, SettingsSection> = { climayte: 'hswarm' }
@@ -24,6 +24,7 @@ export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: s
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
   { id: 'hswarm', label: 'HSwarm', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
+  { id: 'people', label: 'People', caption: 'Settings' },
   { id: 'connectors', label: 'Connectors', caption: 'Settings' },
   { id: 'devservers', label: 'Dev servers', caption: 'Settings' },
   { id: 'diagnostics', label: 'Diagnostics', caption: 'This computer' },

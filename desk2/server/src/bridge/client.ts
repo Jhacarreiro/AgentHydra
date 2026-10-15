@@ -157,6 +157,9 @@ export interface AhCliInstance {
   movedAway?: unknown
   /** The owner's priority and caps for AgentHydra's work on this account (AgentHydra's AccountPlacement). */
   placement?: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null } | null
+  /** The Claude Desktop instance this login is linked to: its folder and its name. */
+  associatedDesktopDir?: string | null
+  associatedDesktopLabel?: string | null
 }
 
 /** GET /api/instances: one isolated Claude Desktop instance (`loginUuid`: the account signed in there). */

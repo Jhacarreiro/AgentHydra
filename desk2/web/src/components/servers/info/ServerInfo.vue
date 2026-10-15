@@ -263,23 +263,25 @@ const MENU_ITEM = 'text-ui'
           <ExternalLink class="size-3.5" />Open in browser
         </button>
         <button type="button" :class="BTN" :aria-label="`Edit ${p.name}`" @click="nav.open({ kind: 'edit-server', id: p.id })"><Pencil class="size-3.5" />Edit</button>
-        <DropdownMenu>
-          <Tip label="More">
-            <DropdownMenuTrigger as-child>
-              <button type="button" :class="ICON_BTN" aria-label="More actions"><MoreHorizontal class="size-4" /></button>
-            </DropdownMenuTrigger>
-          </Tip>
-          <DropdownMenuContent align="start">
-            <DropdownMenuItem :class="MENU_ITEM" @select="servers.star(p.id, !p.starred)">{{ p.starred ? 'Unstar' : 'Star' }}</DropdownMenuItem>
-            <DropdownMenuItem :class="MENU_ITEM" @select="attempt(() => setProcessEnabled(p.id, !p.enabled))">{{ p.enabled ? 'Turn autostart off' : 'Turn autostart on' }}</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem :class="MENU_ITEM" @select="copy('command', p.command)">Copy command</DropdownMenuItem>
-            <DropdownMenuItem v-if="address" :class="MENU_ITEM" @select="copy('address', address)">Copy address</DropdownMenuItem>
-            <DropdownMenuItem :class="MENU_ITEM" @select="reveal">Show folder</DropdownMenuItem>
-            <DropdownMenuSeparator />
-            <DropdownMenuItem :class="[MENU_ITEM, 'text-danger-text']" @select="deleting = true">Delete server…</DropdownMenuItem>
-          </DropdownMenuContent>
-        </DropdownMenu>
+        <Tip label="More">
+          <span class="inline-flex">
+            <DropdownMenu>
+              <DropdownMenuTrigger as-child>
+                <button type="button" :class="ICON_BTN" aria-label="More actions"><MoreHorizontal class="size-4" /></button>
+              </DropdownMenuTrigger>
+              <DropdownMenuContent align="start">
+                <DropdownMenuItem :class="MENU_ITEM" @select="servers.star(p.id, !p.starred)">{{ p.starred ? 'Unstar' : 'Star' }}</DropdownMenuItem>
+                <DropdownMenuItem :class="MENU_ITEM" @select="attempt(() => setProcessEnabled(p.id, !p.enabled))">{{ p.enabled ? 'Turn autostart off' : 'Turn autostart on' }}</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem :class="MENU_ITEM" @select="copy('command', p.command)">Copy command</DropdownMenuItem>
+                <DropdownMenuItem v-if="address" :class="MENU_ITEM" @select="copy('address', address)">Copy address</DropdownMenuItem>
+                <DropdownMenuItem :class="MENU_ITEM" @select="reveal">Show folder</DropdownMenuItem>
+                <DropdownMenuSeparator />
+                <DropdownMenuItem :class="[MENU_ITEM, 'text-danger-text']" @select="deleting = true">Delete server…</DropdownMenuItem>
+              </DropdownMenuContent>
+            </DropdownMenu>
+          </span>
+        </Tip>
         <span v-if="copied === 'command'" role="status" class="text-ui-sm text-text-muted">Copied the command.</span>
       </div>
     </header>

@@ -62,11 +62,12 @@ describe('account labels', () => {
 })
 
 describe('model and effort triggers', () => {
-  it('always names a model', () => {
+  // A chat that names no model runs Opus 5.5 (owner, 2026-10-15: "it should default to Opus 5.5, not show Sonnet 5.5").
+  it('always names the model that runs', () => {
     expect(modelTriggerLabel('claude-opus-5-5', MODELS)).toBe('Opus 5.5')
-    expect(modelTriggerLabel(null, MODELS)).toBe('Sonnet 5.5')
-    expect(modelTriggerLabel(null, [{ value: 'default', label: 'Default (Opus 5.5)' }, ...MODELS])).toBe('Opus 5.5')
-    expect(modelTriggerLabel(null, [])).toBe('Sonnet')
+    expect(modelTriggerLabel(null, MODELS)).toBe('Opus 5.5')
+    expect(modelTriggerLabel(null, [{ value: 'default', label: 'Default (Sonnet 5.5)' }, ...MODELS])).toBe('Opus 5.5')
+    expect(modelTriggerLabel(null, [])).toBe('Opus 5.5')
     expect(modelTriggerLabel(null, MODELS)).not.toMatch(/default/i)
   })
 

@@ -55,7 +55,7 @@ describe('settings search', () => {
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'managers', 'alerts', 'hswarm', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+      'general', 'managers', 'alerts', 'hswarm', 'connections', 'people', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
     ])
     expect(stepSection('general', 'ArrowDown')).toBe('managers')
     expect(stepSection('managers', 'ArrowDown')).toBe('alerts')

@@ -12,7 +12,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatSummary, DeskSettings, ServerEvent, TranscriptItem } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL, type ChatSummary, type DeskSettings, type ServerEvent, type TranscriptItem } from '@shared/protocol'
 import { ChatRuntime, INTERRUPT_GRACE_MS, type QueryImpl } from '../../../src/engine/chat-runtime'
 import { isUsageLimitText } from '../../../src/engine/usage-limit'
 import { DESK_APPEND, DESK_APPEND_NO_DELEGATE } from '../../../src/engine/desk-prompt'
@@ -359,8 +359,9 @@ describe('ChatRuntime: start options', () => {
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: DESK_APPEND })
     expect(o.disallowedTools).toEqual(['Agent', 'Task'])
     expect(o.resume).toBeUndefined()
-    expect(o.model).toBeUndefined()
-    expect(o.effort).toBeUndefined()
+    // A chat that names no model runs Opus 5.5 at Extra (owner, 2026-10-15: "it should default to Opus 5.5").
+    expect(o.model).toBe(DEFAULT_MODEL)
+    expect(o.effort).toBe(DEFAULT_EFFORT)
     expect(typeof o.canUseTool).toBe('function')
     expect(typeof o.stderr).toBe('function')
     expect(o.mcpServers).toBeUndefined()

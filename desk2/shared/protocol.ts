@@ -20,6 +20,11 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermiss
 export type CollapseMode = 'off' | 'button' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+/** What a Claude turn runs on when the chat names no model or effort (owner, 2026-10-15: "it should default to Opus
+ *  5.5"). Xhigh is how Desk chats ran as CliMayte workers before the new core. The window names these for a null. */
+export const DEFAULT_MODEL = 'claude-opus-5-5'
+export const DEFAULT_EFFORT: Effort = 'xhigh'
+
 /** Which Claude login a chat runs under. configDir null = the machine's default ~/.claude login. */
 export interface AccountRef {
   id: string // 'default' or the AgentHydra CLI instance id
@@ -73,7 +78,10 @@ export interface ChatSummary {
   account: AccountRef
   /** The account was placed by 'auto' (not named): a usage limit moves the chat to another account. */
   accountAuto: boolean
-  model: string | null // null = the account's default model
+  /** Auto off (the account menu's Auto switch): when its account runs out, the chat waits for the reset there instead
+   *  of moving to the next account with room. Absent = it moves. */
+  accountPinned?: boolean
+  model: string | null // none named runs DEFAULT_MODEL
   effort: Effort | null
   permissionMode: PermissionMode
   delegateToCliMayte: boolean // sub-agents go to CliMayte (Agent/Task tools disallowed)
@@ -628,6 +636,8 @@ export interface AccountInfo extends AccountRef {
   /** The owner's caps (1-84): this account's line in place of the fleet's 85%. Absent or null: the fleet's. */
   maxFiveHourPct?: number | null
   maxWeeklyPct?: number | null
+  /** The Claude Desktop instance this login is linked to (its name, e.g. 'moarz'); absent or null when it has none. */
+  desktop?: string | null
 }
 
 // Git (the bar above the composer, and the diff pane)
@@ -709,6 +719,7 @@ export interface CreateChatRequest {
   images?: ImageRef[]
   title?: string
   accountId?: string // 'auto' (default) or an AccountRef id
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   model?: string | null
   effort?: Effort | null
   permissionMode?: PermissionMode
@@ -756,6 +767,7 @@ export interface ChatPatch {
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
   accountId?: string // takes effect at the next runtime start
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
   note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note
