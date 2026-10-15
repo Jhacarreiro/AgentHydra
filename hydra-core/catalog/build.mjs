@@ -33,6 +33,8 @@ const OWNER = typeof CFG.ownerName === 'string' ? CFG.ownerName : ''
 const COMPANY = typeof CFG.companyId === 'string' ? CFG.companyId : ''
 const SEATS = Array.isArray(CFG.seats) ? CFG.seats.filter((x) => x && x.slug && x.name && x.personaId) : []
 const SUE_DIR = cfgPath('sueDir')
+// sueDir names the checkout's sue/ folder; the store and mind scripts sit at the checkout root above it.
+const SUE_ROOT = SUE_DIR && !existsSync(`${SUE_DIR}/store/store.mjs`) ? SUE_DIR.replace(/\/[^/]*$/, '') : SUE_DIR
 
 const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill']
 const TIERS = ['intern', 'employee', 'manager', 'owner']
@@ -513,7 +515,7 @@ function owners(add) {
     id: 'instrument:sue-roster', kind: 'instrument', name: 'Sue roster', title: 'The Sues (with their Ape and Art groups) and you-sue, kept in the sue-dredd store',
     when: "You need a Sue, Ape or Art persona, or the owner's you-sue: the live roster is read from the sue-dredd store, never listed here.",
     tags: ['sue', 'ape', 'art', 'you-sue', 'roster', 'sue-dredd'], cost: 'low',
-    how: 'AgentHydra `sue { action: "personas" }` returns the live roster (Sues, Ape, Art, you-sue). One person\'s document: `node ' + (SUE_DIR ? `${SUE_DIR}/store/store.mjs` : '<sue-dredd>/store/store.mjs') + ' get <id|slug>`. One person\'s mind: `node ' + (SUE_DIR ? `${SUE_DIR}/sue/mind.mjs` : '<sue-dredd>/sue/mind.mjs') + ' pull <personaId> <out.md>`. Nothing is copied into the catalog.',
+    how: 'AgentHydra `sue { action: "personas" }` returns the live roster (Sues, Ape, Art, you-sue). One person\'s document: `node ' + (SUE_ROOT ? `${SUE_ROOT}/store/store.mjs` : '<sue-dredd>/store/store.mjs') + ' get <id|slug>`. One person\'s mind: `node ' + (SUE_ROOT ? `${SUE_ROOT}/sue/mind.mjs` : '<sue-dredd>/sue/mind.mjs') + ' pull <personaId> <out.md>`. Nothing is copied into the catalog.',
     load: { type: 'tool', call: 'sue { action: "personas" }' }, source: 'sue-dredd sue/README.md (personas action), store/store.mjs get, sue/mind.mjs pull'
   })
 }
