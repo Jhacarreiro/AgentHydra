@@ -68,6 +68,15 @@ Set it with `placement <slot|attach|file|off>` in the core's `switch.mjs`.
 - `log.jsonl` moves to `log-YYYY-MM.jsonl` when a new month starts or it passes 20 MB. `core_stats` (last 31 days, or `days`) and `track` (last 30 days) read only the months they need.
 - hydra.md keeps its last 20 scope-log lines; `sent.json` drops a session whose list has not changed in 7 days, and keeps `(lead owed)`.
 
+## Lead
+
+- A chat's lead is picked once, at its first pack, by one small model call to the HSwarm decide door (`AGENTHYDRA_DECIDE_URL`, default `http://127.0.0.1:7793/api/decide`, token from `AGENTHYDRA_HSWARM_TOKEN_FILE`, default `~/.hswarm/console-token`). It gets the five managers' one-liners from the catalog and answers a manager or `none` for a chore; a message spanning several fields is Paige's. A launch waits at most 5 s and asks three times (majority), the hook path 1 s and asks once. `AGENTHYDRA_LEAD_MODEL` picks the model; `off` skips the call.
+- When the call fails or runs out of time the word ranker picks (content words only, the shared `how` text not scored, managers not sorted above stronger experts). Each pick logs `lead-pick` with its path (`model` or `words`) and ms.
+- The lead follows the work: on a substantive owner message (not "keep going" or a chore) that the current lead barely matches, or that the word ranker gives to another lead, the hook asks the model whether the lead still fits. When the work moved, the message gets a short lead-change note with the new lead's brief (whole under 9,500 characters, else its first two sections and the become line), `hydra.md`'s `## Lead` is rewritten so the next launch's slot carries it, and `lead-shift` is logged. On a timeout the current lead stays.
+- A lead picked through the question tree logs a `use` line with `mode: "become"`, as `core_use` does.
+- Per-message additions need at least three content words in the message and, per entry, a name or title hit or a strong score, with at least two distinct words matched, at most three items, never an entry already in the slot and never one tied to other folders.
+- The slot lists the chat's seats: `Seats in this chat: <name> (<person id>)`, with how to resume one through `core_use` consult.
+
 ## Failures
 
 A hook error is written into the injected context as `Hydra Core hook error: ...`. An unknown event or unreadable stdin exits 1 with the message on stderr.
