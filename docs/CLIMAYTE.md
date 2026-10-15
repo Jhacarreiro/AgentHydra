@@ -781,7 +781,8 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   edited (read from the sessions' transcripts like the uncommitted check), and one of them has
   another session's uncommitted changes (`git status` in the task's folder; `failsOnlyOnOthersFiles`,
   the note then says so), else 2, so a test the task's own change broke stays its fail; a transcript
-  that cannot be read is unknown, so 2. A wave's fail
+  that cannot be read is unknown, so 2. A shared file left with only another session's hunks no longer
+  fails the check: a dirty file counts only while its uncommitted diff still holds a line this worker wrote. A wave's fail
   (`judgeInWave`) is 1 for commits outside the brief's paths, else 2. Retries, send-backs and
   status are unchanged: only the severity is new. Scorecard rows carry `slip`, `rework`, `failed`,
   `excluded` and `score`.

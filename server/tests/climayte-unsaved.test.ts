@@ -4,11 +4,12 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import {
-  editedPaths,
+  type FileEdits,
   failsOnlyOnOthersFiles,
   outputPaths,
+  parseEdits,
   saysNoCommit,
   uncommittedOf,
 } from '../src/climayte-unsaved'
@@ -30,7 +31,28 @@ const toolLine = (name: string, input: Record<string, unknown>, at: string) =>
     message: { role: 'assistant', content: [{ type: 'tool_use', id: 't', name, input }] },
   })
 
-describe('editedPaths', () => {
+const edit = (at: number, wrote: string[] = [], old: string[] = []): FileEdits => ({
+  at,
+  wrote: new Set(wrote),
+  old: new Set(old),
+  capped: false,
+})
+
+/** A repository under `root` with `files` (repo-relative) committed as its first commit. */
+function repoWith(name: string, files: Record<string, string>): string {
+  const dir = join(root, name)
+  mkdirSync(dir, { recursive: true })
+  git(dir, 'init', '-q')
+  for (const [rel, text] of Object.entries(files)) {
+    mkdirSync(dirname(join(dir, rel)), { recursive: true })
+    writeFileSync(join(dir, rel), text)
+  }
+  git(dir, 'add', '-A')
+  git(dir, 'commit', '-q', '-m', 'start')
+  return dir
+}
+
+describe('parseEdits', () => {
   test('names what Edit, Write, MultiEdit and NotebookEdit changed, never what Read opened', () => {
     const at = '2020-10-05T12:00:00.000Z'
     const later = '2020-10-05T12:05:00.000Z'
@@ -43,7 +65,7 @@ describe('editedPaths', () => {
       toolLine('NotebookEdit', { notebook_path: '/repo/book.ipynb' }, at),
       toolLine('Edit', { file_path: '/repo/new.ts', old_string: 'x', new_string: 'y' }, later),
     ].join('\n')
-    const got = editedPaths(text, join(root, 'base'))
+    const got = parseEdits(text, join(root, 'base'))
     expect([...got.keys()].map((p) => p.replaceAll('\\', '/'))).toEqual([
       expect.stringMatching(/\/repo\/new\.ts$/),
       `${join(root, 'base', 'src', 'rel.ts').replaceAll('\\', '/')}`,
@@ -51,7 +73,31 @@ describe('editedPaths', () => {
       expect.stringMatching(/\/repo\/book\.ipynb$/),
     ])
     // The newest write to a file is the one kept.
-    expect([...got.values()][0]).toBe(Date.parse(later))
+    expect([...got.values()][0]?.at).toBe(Date.parse(later))
+  })
+
+  test('keeps the usable lines a worker wrote or replaced, per file', () => {
+    const at = '2020-10-05T12:00:00.000Z'
+    const multi = join(root, 'multi.ts')
+    const book = join(root, 'book.ipynb')
+    const text = [
+      toolLine(
+        'MultiEdit',
+        {
+          file_path: multi,
+          edits: [
+            { old_string: 'const oldOne = 1', new_string: 'const newOne = 2' },
+            { old_string: '}', new_string: '});' },
+          ],
+        },
+        at,
+      ),
+      toolLine('NotebookEdit', { notebook_path: book, new_source: 'print(hello)\n\n' }, at),
+    ].join('\n')
+    const got = parseEdits(text, root)
+    expect([...(got.get(multi)?.wrote ?? [])]).toEqual(['const newOne = 2'])
+    expect([...(got.get(multi)?.old ?? [])]).toEqual(['const oldOne = 1'])
+    expect([...(got.get(book)?.wrote ?? [])]).toEqual(['print(hello)'])
   })
 })
 
@@ -78,13 +124,13 @@ describe('uncommittedOf', () => {
     utimesSync(join(repo, 'peer.ts'), peerTime, peerTime)
     writeFileSync(join(root, 'outside.ts'), 'elsewhere\n') // outside the repository
 
-    const edits = new Map<string, number>(
+    const edits = new Map<string, FileEdits>(
       ['src/kept.ts', 'src/fresh/new.ts', 'saved.ts', 'scratch.log', 'peer.ts'].map((p) => [
         join(repo, p),
-        now,
+        edit(now),
       ]),
     )
-    edits.set(join(root, 'outside.ts'), now)
+    edits.set(join(root, 'outside.ts'), edit(now))
     expect(await uncommittedOf(join(repo, 'src'), edits)).toEqual([
       'src/fresh/new.ts',
       'src/kept.ts',
@@ -97,8 +143,75 @@ describe('uncommittedOf', () => {
     const plain = join(root, 'plain')
     mkdirSync(plain, { recursive: true })
     writeFileSync(join(plain, 'a.ts'), 'a\n')
-    expect(await uncommittedOf(plain, new Map([[join(plain, 'a.ts'), Date.now()]]))).toEqual([])
+    expect(await uncommittedOf(plain, new Map([[join(plain, 'a.ts'), edit(Date.now())]]))).toEqual(
+      [],
+    )
   })
+
+  test("a shared file left with only another session's hunk is not this worker's", async () => {
+    const dir = repoWith('peer-hunk', { 'src/shared.ts': 'export const base = 1\n' })
+    const file = join(dir, 'src', 'shared.ts')
+    writeFileSync(file, 'export const base = 1\nexport const first = 2\n')
+    git(dir, 'add', 'src/shared.ts')
+    git(dir, 'commit', '-q', '-m', 'the worker')
+    writeFileSync(file, 'export const base = 1\nexport const first = 2\nexport const second = 4\n')
+    const edits = new Map([[file, edit(Date.now(), ['export const first = 2'])]])
+    expect(await uncommittedOf(dir, edits)).toEqual([])
+  }, 30_000)
+
+  test("a worker's own line still uncommitted in a file is its unsaved work", async () => {
+    const dir = repoWith('own-line', { 'src/mine.ts': 'export const base = 1\n' })
+    const file = join(dir, 'src', 'mine.ts')
+    writeFileSync(file, 'export const base = 1\nexport const mine = 3\n')
+    const edits = new Map([[file, edit(Date.now(), ['export const mine = 3'])]])
+    expect(await uncommittedOf(dir, edits)).toEqual(['src/mine.ts'])
+  }, 30_000)
+
+  test('a line the worker only deleted and left uncommitted is its unsaved work', async () => {
+    const dir = repoWith('deleted-line', {
+      'src/legacy.ts': 'export const legacy = helper(alpha)\nexport const keep = 1\n',
+    })
+    const file = join(dir, 'src', 'legacy.ts')
+    writeFileSync(file, 'export const keep = 1\n')
+    const edits = new Map([[file, edit(Date.now(), [], ['export const legacy = helper(alpha)'])]])
+    expect(await uncommittedOf(dir, edits)).toEqual(['src/legacy.ts'])
+  }, 30_000)
+
+  test('an untracked file the worker wrote is its unsaved work', async () => {
+    const dir = repoWith('untracked', { 'README.md': 'readme text here\n' })
+    const file = join(dir, 'src', 'fresh.ts')
+    mkdirSync(dirname(file), { recursive: true })
+    writeFileSync(file, 'export const fresh = wrote(beta)\n')
+    const edits = new Map([[file, edit(Date.now(), ['export const fresh = wrote(beta)'])]])
+    expect(await uncommittedOf(dir, edits)).toEqual(['src/fresh.ts'])
+  }, 30_000)
+
+  test("trivial lines a worker wrote never tie it to another session's brace-only hunk", async () => {
+    const dir = repoWith('braces', { 'src/c.ts': 'export const base = 0\n' })
+    const file = join(dir, 'src', 'c.ts')
+    writeFileSync(file, 'export const base = 0\n});\n}\n')
+    const at = new Date().toISOString()
+    const edits = parseEdits(
+      toolLine(
+        'Edit',
+        {
+          file_path: file,
+          old_string: 'export const base = 0',
+          new_string: 'export const base = 0\n});\n}',
+        },
+        at,
+      ),
+      dir,
+    )
+    expect(await uncommittedOf(dir, edits)).toEqual([])
+  }, 30_000)
+
+  test('a dirty file with no line sets is counted as before', async () => {
+    const dir = repoWith('no-sets', { 'src/n.ts': 'export const base = 1\n' })
+    const file = join(dir, 'src', 'n.ts')
+    writeFileSync(file, 'export const base = 1\nexport const more = 5\n')
+    expect(await uncommittedOf(dir, new Map([[file, edit(Date.now())]]))).toEqual(['src/n.ts'])
+  }, 30_000)
 })
 
 describe('saysNoCommit', () => {

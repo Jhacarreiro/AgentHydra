@@ -2,6 +2,9 @@
 // passes (climayte.ts judgeCheck). A check's exit code says the work runs; it says nothing about
 // whether the work was saved. On 2026-10-05 a worker's check passed with 15 of its files uncommitted,
 // and the task sat 'done' for 2h26m while the two tasks after it waited on work that was never in git.
+// A dirty file counts only while its uncommitted diff still holds a line this worker wrote or replaced, so a
+// shared file left with another session's hunks is not failed on (2026-10-15: w-5b2762e2 and w-7e085215 were
+// failed over files whose leftover hunks were other workers').
 
 import { realpathSync, statSync } from 'node:fs'
 import { readFile, stat } from 'node:fs/promises'
@@ -21,6 +24,11 @@ const TASK_READ_BUDGET = 128 * 1024 * 1024
 const PEER_SLACK_MS = 30_000
 /** The most paths named in one `git status`, well under Windows' command-line limit. */
 const PATHSPEC_CHUNK = 200
+/** A line is matched only with at least this many non-space characters; each file keeps at most
+ *  MAX_LINES_PER_FILE lines per set, and an untracked file is read for its lines up to OWN_BYTES. */
+const MIN_LINE_CHARS = 4
+const MAX_LINES_PER_FILE = 5000
+const OWN_BYTES = 8 * 1024 * 1024
 
 /** A task that says its changes stay uncommitted (the orchestrator commits them, or only a draft is
  *  wanted) is not held to a commit: "do not commit", "Do NOT run git commit, git add or git push",
@@ -82,10 +90,60 @@ export async function dirtyFiles(cwd: string): Promise<string[] | null> {
   return files
 }
 
-/** Each file the transcript's Edit, Write, MultiEdit and NotebookEdit calls changed, absolute, with
- *  the time of the newest such call (ms; Infinity when its line has no timestamp). */
-export function editedPaths(jsonl: string, cwd: string): Map<string, number> {
-  const out = new Map<string, number>()
+/** What a file's edit calls did: `at` is the newest such call (ms; Infinity when its line has no timestamp),
+ *  `wrote` and `old` the usable lines they wrote and replaced (usableLine), and `capped` says a set hit
+ *  MAX_LINES_PER_FILE, so the sets are not the whole and the file is counted as before. */
+export type FileEdits = { at: number; wrote: Set<string>; old: Set<string>; capped: boolean }
+
+type EditInput = {
+  file_path?: unknown
+  notebook_path?: unknown
+  old_string?: unknown
+  new_string?: unknown
+  content?: unknown
+  new_source?: unknown
+  edits?: unknown
+}
+
+/** A line as an edit's lines and git's diff lines are compared: trimmed, or null when it has fewer than
+ *  MIN_LINE_CHARS non-space characters or no letter or digit (`}`, `});`), which unrelated code shares. */
+function usableLine(raw: string): string | null {
+  const line = raw.trim()
+  if (line.replace(/\s/g, '').length < MIN_LINE_CHARS || !/[\p{L}\p{N}]/u.test(line)) return null
+  return line
+}
+
+function usableLines(text: unknown): string[] {
+  if (typeof text !== 'string') return []
+  return text
+    .split('\n')
+    .map(usableLine)
+    .filter((l): l is string => l !== null)
+}
+
+function addCapped(file: FileEdits, into: Set<string>, lines: Iterable<string>): void {
+  for (const line of lines) {
+    if (into.has(line)) continue
+    if (into.size >= MAX_LINES_PER_FILE) {
+      file.capped = true
+      return
+    }
+    into.add(line)
+  }
+}
+
+function fileEdits(map: Map<string, FileEdits>, key: string): FileEdits {
+  let file = map.get(key)
+  if (!file) {
+    file = { at: 0, wrote: new Set(), old: new Set(), capped: false }
+    map.set(key, file)
+  }
+  return file
+}
+
+/** Each file the transcript's Edit, Write, MultiEdit and NotebookEdit calls changed, absolute (FileEdits). */
+export function parseEdits(jsonl: string, cwd: string): Map<string, FileEdits> {
+  const out = new Map<string, FileEdits>()
   for (const raw of jsonl.split('\n')) {
     if (!raw.includes('"tool_use"')) continue
     let rec: { timestamp?: unknown; message?: { content?: unknown } }
@@ -99,12 +157,20 @@ export function editedPaths(jsonl: string, cwd: string): Map<string, number> {
     const at = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
     for (const c of content as Array<{ type?: unknown; name?: unknown; input?: unknown }>) {
       if (c?.type !== 'tool_use' || !EDIT_TOOLS.has(String(c.name))) continue
-      const input = (c.input ?? {}) as { file_path?: unknown; notebook_path?: unknown }
+      const input = (c.input ?? {}) as EditInput
       const p = input.file_path ?? input.notebook_path
       if (typeof p !== 'string' || !p) continue
       const abs = isAbsolute(p) ? p : resolve(cwd, p)
-      const time = Number.isNaN(at) ? Number.POSITIVE_INFINITY : at
-      out.set(abs, Math.max(out.get(abs) ?? 0, time))
+      const file = fileEdits(out, abs)
+      file.at = Math.max(file.at, Number.isNaN(at) ? Number.POSITIVE_INFINITY : at)
+      const items = [input, ...(Array.isArray(input.edits) ? (input.edits as EditInput[]) : [])]
+      for (const item of items) {
+        if (!item || typeof item !== 'object') continue
+        addCapped(file, file.wrote, usableLines(item.new_string))
+        addCapped(file, file.wrote, usableLines(item.content))
+        addCapped(file, file.wrote, usableLines(item.new_source))
+        addCapped(file, file.old, usableLines(item.old_string))
+      }
     }
   }
   return out
@@ -133,23 +199,28 @@ async function git(cwd: string, args: string[]): Promise<string | null> {
   return r.code === 0 ? r.stdout : null
 }
 
-/** Of `edits` (from editedPaths), the ones inside `cwd`'s repository that git still shows changed or
- *  untracked and that nobody changed after the session's last write to them: repo-relative, sorted.
- *  Ignored files never show. [] outside a repository. */
-export async function uncommittedOf(cwd: string, edits: Map<string, number>): Promise<string[]> {
+/** A dirty file of `uncommittedOf`: repo-relative, whether git shows it untracked, and what its session wrote. */
+type Candidate = { rel: string; untracked: boolean; own: FileEdits }
+
+/** Of `edits` (from parseEdits), the ones inside `cwd`'s repository that git still shows changed or untracked,
+ *  that nobody changed after the session's last write to them, and whose uncommitted diff still holds a line
+ *  the session wrote or replaced: repo-relative, sorted. A file whose remaining diff holds none of those lines
+ *  is another session's (2026-10-15: w-5b2762e2 and w-7e085215 were failed over shared files that held only
+ *  other workers' hunks). Ignored files never show. [] outside a repository. */
+export async function uncommittedOf(cwd: string, edits: Map<string, FileEdits>): Promise<string[]> {
   if (!edits.size) return []
   const shown = (await git(cwd, ['rev-parse', '--show-toplevel']))?.trim()
   if (!shown) return []
   const top = canonical(shown)
-  const lastWrite = new Map<string, number>()
+  const written = new Map<string, FileEdits>()
   const rels: string[] = []
-  for (const [abs, at] of edits) {
+  for (const [abs, file] of edits) {
     const rel = relative(top, canonical(abs)).replaceAll('\\', '/')
     if (!rel || rel.startsWith('../') || rel === '..' || isAbsolute(rel)) continue
-    lastWrite.set(keyOf(rel), at)
+    written.set(keyOf(rel), file)
     rels.push(rel)
   }
-  const dirty = new Set<string>()
+  const dirty = new Map<string, boolean>()
   for (let i = 0; i < rels.length; i += PATHSPEC_CHUNK) {
     const out = await git(top, [
       '--literal-pathspecs',
@@ -165,22 +236,99 @@ export async function uncommittedOf(cwd: string, edits: Map<string, number>): Pr
     for (let j = 0; j < parts.length; j++) {
       const e = parts[j] as string
       if (e.length < 4) continue
-      dirty.add(e.slice(3))
+      dirty.set(e.slice(3), e[0] === '?')
       if (e[0] === 'R' || e[0] === 'C') j++ // a rename's source path follows it
     }
   }
-  const left: string[] = []
-  for (const rel of dirty) {
-    const at = lastWrite.get(keyOf(rel))
-    if (at === undefined) continue
+  const candidates: Candidate[] = []
+  for (const [rel, untracked] of dirty) {
+    const own = written.get(keyOf(rel))
+    if (!own) continue
     try {
-      if (statSync(join(top, rel)).mtimeMs > at + PEER_SLACK_MS) continue
+      if (statSync(join(top, rel)).mtimeMs > own.at + PEER_SLACK_MS) continue
     } catch {
       continue // gone since: whoever removed it owns that
     }
-    left.push(rel)
+    candidates.push({ rel, untracked, own })
   }
-  return left.sort()
+  const notOurs = await unownedLines(top, candidates)
+  return candidates
+    .map((c) => c.rel)
+    .filter((rel) => !notOurs.has(rel))
+    .sort()
+}
+
+/** The candidates whose uncommitted content holds none of the lines their session wrote or replaced. A
+ *  candidate with no usable lines, a capped set, or a git answer that does not come stays counted. */
+async function unownedLines(top: string, candidates: Candidate[]): Promise<Set<string>> {
+  const checkable = candidates.filter((c) => !c.own.capped && (c.own.wrote.size || c.own.old.size))
+  const notOurs = new Set<string>()
+  for (const c of checkable.filter((c) => c.untracked)) {
+    const text = await textUnder(join(top, c.rel), OWN_BYTES)
+    if (text !== null && !usableLines(text).some((l) => c.own.wrote.has(l))) notOurs.add(c.rel)
+  }
+  const tracked = checkable.filter((c) => !c.untracked)
+  for (let i = 0; i < tracked.length; i += PATHSPEC_CHUNK) {
+    const chunk = tracked.slice(i, i + PATHSPEC_CHUNK)
+    const out = await git(top, [
+      '-c',
+      'core.quotePath=false',
+      '--literal-pathspecs',
+      'diff',
+      'HEAD',
+      '--no-color',
+      '--no-ext-diff',
+      '-U0',
+      '--src-prefix=a/',
+      '--dst-prefix=b/',
+      '--',
+      ...chunk.map((c) => c.rel),
+    ])
+    if (out === null) continue
+    const diffs = diffLines(
+      out,
+      chunk.map((c) => c.rel),
+    )
+    for (const c of chunk) {
+      const d = diffs.get(c.rel)
+      if (!d) continue
+      const mine =
+        [...d.added].some((l) => c.own.wrote.has(l)) || [...d.removed].some((l) => c.own.old.has(l))
+      if (!mine) notOurs.add(c.rel)
+    }
+  }
+  return notOurs
+}
+
+/** Per file of a `git diff -U0` output for `rels`: the usable lines it adds and removes. A file the output
+ *  does not name is absent. */
+function diffLines(
+  out: string,
+  rels: string[],
+): Map<string, { added: Set<string>; removed: Set<string> }> {
+  const headers = new Map(
+    rels.map((rel): [string, string] => [`diff --git a/${rel} b/${rel}`, rel]),
+  )
+  const found = new Map<string, { added: Set<string>; removed: Set<string> }>()
+  let cur: { added: Set<string>; removed: Set<string> } | undefined
+  let inHunk = false
+  for (const line of out.split('\n')) {
+    if (line.startsWith('diff --git ')) {
+      const rel = headers.get(line.replace(/\r$/, ''))
+      cur = undefined
+      if (rel !== undefined) {
+        cur = { added: new Set(), removed: new Set() }
+        found.set(rel, cur)
+      }
+      inHunk = false
+    } else if (cur && line.startsWith('@@')) {
+      inHunk = true
+    } else if (cur && inHunk && (line[0] === '+' || line[0] === '-')) {
+      const text = usableLine(line.slice(1))
+      if (text) (line[0] === '+' ? cur.added : cur.removed).add(text)
+    }
+  }
+  return found
 }
 
 /** The brief files `prompt` names (BRIEF_PATH), absolute (a relative one from `cwd`), first named first. */
@@ -198,11 +346,11 @@ export function briefPaths(prompt: string, cwd: string): string[] {
   return out
 }
 
-/** A brief file's text, or null when it is missing, not a file or over BRIEF_BYTES. */
-async function briefText(path: string): Promise<string | null> {
+/** A file's text, or null when it is missing, not a file or over `limit` bytes. */
+async function textUnder(path: string, limit: number): Promise<string | null> {
   try {
     const s = await stat(path)
-    return s.isFile() && s.size <= BRIEF_BYTES ? await readFile(path, 'utf8') : null
+    return s.isFile() && s.size <= limit ? await readFile(path, 'utf8') : null
   } catch {
     return null
   }
@@ -219,7 +367,7 @@ export async function saysNoCommit(
   if (typeof w.commit === 'boolean') return !w.commit
   if (NO_COMMIT.test(w.prompt)) return true
   for (const path of briefPaths(w.prompt, w.cwd)) {
-    const text = await briefText(path)
+    const text = await textUnder(path, BRIEF_BYTES)
     if (text && NO_COMMIT.test(text)) return true
   }
   return false
@@ -242,9 +390,9 @@ export function editedFilesOf(w: CliMayteWorker, accounts: CliMayteAccount[]): s
   return [...editsOf(w, accounts).keys()].map((p) => p.replaceAll('\\', '/'))
 }
 
-function editsOf(w: CliMayteWorker, accounts: CliMayteAccount[]): Map<string, number> {
+function editsOf(w: CliMayteWorker, accounts: CliMayteAccount[]): Map<string, FileEdits> {
   const dirs = transcriptCandidates(w, accounts).map((c) => c.configDir)
-  const edits = new Map<string, number>()
+  const edits = new Map<string, FileEdits>()
   let budget = TASK_READ_BUDGET
   for (const id of [...new Set([...(w.sessions ?? []), w.sessionId])].reverse()) {
     if (!id || budget <= 0) continue
@@ -253,7 +401,13 @@ function editsOf(w: CliMayteWorker, accounts: CliMayteAccount[]): Map<string, nu
       if (!file) continue
       const text = tailText(file, Math.min(TRANSCRIPT_TAIL, budget))
       budget -= Buffer.byteLength(text)
-      for (const [p, at] of editedPaths(text, w.cwd)) edits.set(p, Math.max(edits.get(p) ?? 0, at))
+      for (const [p, f] of parseEdits(text, w.cwd)) {
+        const into = fileEdits(edits, p)
+        into.at = Math.max(into.at, f.at)
+        if (f.capped) into.capped = true
+        addCapped(into, into.wrote, f.wrote)
+        addCapped(into, into.old, f.old)
+      }
       break
     }
   }
