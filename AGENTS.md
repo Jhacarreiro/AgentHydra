@@ -81,6 +81,11 @@ real agent homes (`~/.claude`, `~/.claude-instances`, `~/.codex`, `~/.hswarm`, `
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` the shell started with) and a remove of the working folder; point a test at its
 scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
 
+Hydra Core lives in `hydra-core/` and `server/src/hydra-core/` (see `hydra-core/README.md`).
+`cloud/agenthydra-api/` is AgentHydra's own API (see its README). People and persona text never
+enter the repo (the pre-commit people guard, `.githooks/check-people.mjs`), and repo files never
+carry the real API host or server address: write `api.agenthydra.example.com`.
+
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)
 
 - **AgentHydra is 2.0: never release 1.x.** The window that was Hydra Desk 2 (`desk2/`) is

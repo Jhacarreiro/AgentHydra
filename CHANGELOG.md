@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A new "Your people" page sets up your managers.** When you have no managers yet, AgentHydra asks for the person whose rulings win and which managers you want, and writes them for you. Skip it and it stays out of the way; it is always in Settings under Your people.
+- **Your people can follow you to other PCs from AgentHydra's own server.** The cloud home is now AgentHydra's server, not your Connections Data Locker, and Sign in with Connections is only how it knows who you are. The newer copy of a person wins, and the older one is kept in a backup folder.
 - **Fan-out chats start without touching your Claude window, on the model you choose.** On an account with native control, the Claude app starts the chat itself, so no window is raised and nothing is clicked. A chat runs on Opus 5.5 at xhigh effort unless the task names another model or effort, and never on Fable unless asked. An account without native control still opens its chat through its window.
 - **The Delegation panel is easier to read.** Each service is its own card: its runs, tasks, tokens and cost as labelled figures, a line saying how its runs ended, then a model table whose headings no longer run into each other.
 - **AgentHydra is now free for noncommercial use.** From this release it is licensed under PolyForm

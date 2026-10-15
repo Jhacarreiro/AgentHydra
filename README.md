@@ -150,17 +150,18 @@ you already have.
 **TL;DR**
 
 - **This PC (the default):** your people are folders under `~/.agenthydra/people/`, the format in [docs/PEOPLE.md](docs/PEOPLE.md).
-- **Connections:** in Settings → People, pick Connections, then Sign in with Connections. Your people follow you to your other PCs.
+- **AgentHydra's cloud:** in Settings → Your people, pick the cloud home, then Sign in with Connections. Your people follow you to your other PCs.
 - **Safe sync:** the newer copy of a person wins, the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
 
 <details>
 <summary>How it works</summary>
 
-- This PC always keeps the working copy, because Hydra Core's catalog reads those folders. Connections is a second home that is kept in step with it.
-- Sign-in uses the public `@cnct/connect` package (loopback sign-in, scopes `openid profile email photo`). Its tokens live in a private file, `~/.agenthydra/connections.json`, never in the repo. Each person is one key in your Connections Data Locker.
+- This PC always keeps the working copy, because Hydra Core's catalog reads those folders. The cloud home is a second copy that is kept in step with it.
+- The cloud home is AgentHydra's own API (people are its first module, source in `cloud/agenthydra-api/`). Connections only signs you in: its token proves who you are, and your people are stored on AgentHydra's server, not in Connections.
+- Sign-in uses the public `@cnct/connect` package (loopback sign-in, scopes `openid profile email photo`). Its tokens live in a private file, `~/.agenthydra/connections.json`, never in the repo.
 - Sync runs when AgentHydra starts, right after you sign in, a few seconds after you change a person, and on Sync now. After a pull it rebuilds the Hydra Core catalog, so new people show at once.
-- A build with no Connections app id says "not set up" in Settings and This PC keeps working. To use your own, set `AGENTHYDRA_CONNECTIONS_APP_ID`.
-- The choice is saved in `~/.agenthydra/people-store.json`. Deleting a person on this PC does not delete it from Connections.
+- The API address comes from `AGENTHYDRA_API_URL`. With it unset, the cloud choice says "not set up" and This PC keeps working.
+- The choice is saved in `~/.agenthydra/people-store.json`. Deleting a person on this PC does not delete it from the cloud.
 
 </details>
 

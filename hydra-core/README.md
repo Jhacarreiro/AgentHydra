@@ -19,7 +19,7 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 
 ## Where things live
 
-- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `PLACEMENT` and `ASK` flags, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
+- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
 - Chat key: `HYDRA_DESK_CHAT_ID` when set, else the Claude `session_id`. Characters outside `A-Za-z0-9_.-` become `_`.
 
 ## President rule (Stop)
@@ -47,18 +47,50 @@ Other hooks are left alone. A Manager Hydra router entry (any command ending in 
 
 ## Placement
 
-`<core dir>/PLACEMENT` says where a chat's pack (the folder's rules and what the chat needs) reaches the model. Absent means the INJECT behaviour above, unchanged.
+`<core dir>/PLACEMENT` says where a chat's pack (the folder's rules and what the chat needs) reaches the model. Absent means off: with no `PLACEMENT` and no `INJECT` flag the hook injects nothing into a message.
 
 - `slot`: the pack goes into a Prime chat's appended system prompt, at most 24,000 characters (the slot's own cap; the hook's 10,000-character limit does not apply there). The lead's full brief goes in first; when the folder rules do not fit beside it they are cut to their head plus a pointer to the full file. The whole appended prompt (Desk's own text plus the slot) stays within 32,000 characters: a slot that would pass it is built again to the room left, and a `placement` line with `phase: "cut"` is logged.
 - The pack is rebuilt on every launch and resume from what the chat keeps in `chats/<key>/placement.json`: its lead and its first owner message, both stored at its first launch. `slot.md` is rewritten only when the rebuilt text differs, and the stored hash is the hash of that text, so the prompt cache holds while nothing changed. A pack-code change, an edited rule or brief, or a rebuilt catalog reaches every chat on its next launch; `hydra.md`'s scope log does not touch it, and only its `## Lead` line does. A new session in the same chat (a handoff) keeps the chat's lead instead of ranking its first message again. Every launch, fresh or resumed, counts its session as one with the pack in its prompt, so no such session is sent the full pack again with a message.
 - `file`: the pack is written to `chats/<key>/pack.md` (same rebuild rule, at most 9,500 characters). The appended prompt gets one line that names the file's absolute path and asks the chat to read it before it acts.
-- `attach`: the INJECT path, at most 9,500 characters.
+- `attach`: the pack is attached to each message, at most 9,500 characters. An `INJECT` file holding `ON` does the same with `PLACEMENT` absent.
 - `<core dir>/ASK`: absent, or anything but `off`, means ask is on. Under `slot` and `file` each owner message's injection then starts with the core_scope line (call `core_scope`, answer with `core_answer` until it says go). The chat answers the difficulty question and picks its own persona; the pick lands in `hydra.md` and the next launch's slot carries that brief. No model picks a lead at launch and no lead shift runs. `off` turns the line off and brings back the model pick and lead shift (see Lead). Slash commands and pings that are not the owner's (task notifications, "Not from the user") get nothing.
 - Under `slot` and `file` the per-message hook sends no full pack. After the scope line (when asking) it attaches only strong matches not already placed, at most 2,000 characters, else nothing. They are scored on the owner's own words: the hook drops the Send now and urgent prefaces, a handoff's note and document (keeping the messages the earlier session missed), and task notifications or reminders queued with the message, and records the same text in `prompt.txt`. After a compaction (SessionStart `compact`) the hook clears the session's list in `sent.json`, so additions the compaction dropped can be sent again. The SessionStart re-injection of `hydra.md` is off under every placement.
 - A non-Desk chat's slot is keyed by the session being launched, the key the hook uses, so a handoff's new session finds it.
 - Logged to `log.jsonl`: `placement` at each Prime launch or resume, the hook's per-message placement with the match ids and characters added, and under `file` a `pack_read` on the first Stop of a session, recording whether the chat read `pack.md` and whether that was its first tool call. `track` shows counts, mean characters, reuse rate and read rate per placement.
 
-Set it with `placement <slot|attach|file|off>` and `ask <on|off>` in the core's `switch.mjs`.
+There is no switch script in this repo. Write the flag files by hand (see Continue the manager bench for what each holds).
+
+## Continue the manager bench
+
+For a contributor or a new PC. People and persona text live in your own `~/.agenthydra/`, never in this repo. The folder format is in [docs/PEOPLE.md](../docs/PEOPLE.md).
+
+**Flags.** Each is a one-word file in the core folder.
+
+- `ON`: core mode. The hook does nothing unless this file exists.
+- `PLACEMENT`: `slot`, `attach` or `file` (see Placement). Anything else, or no file, is off.
+- `ASK`: `off` turns the scope question off; absent or anything else keeps it on.
+- `INJECT`: holds `ON` to attach the pack to each message with no `PLACEMENT`.
+
+**How a lead is picked.** With ASK on, the chat answers the scope question tree (`server/src/hydra-core/tree.ts`) and picks its own lead. With ASK off, one small model call picks the lead from the managers' one-liners, and the word ranker is the fallback (`server/src/hydra-core/lead.ts`). See Lead.
+
+**Add a manager.**
+
+1. Make `~/.agenthydra/people/manager/<slug>/` with `persona.json` and `brief.md`. The older layout `~/.agenthydra/managers/<slug>/` (same files, plus an optional `playbook/` folder the catalog does not read) still works, and Desk still needs a manager there too (see the known gap in docs/PEOPLE.md).
+2. Run `node hydra-core/catalog/build.mjs`, then `node hydra-core/catalog/build.mjs --check`.
+
+**Edit a manager.** Edit `persona.json` or `brief.md` by hand and rebuild. There is no editor yet. Settings > Your people only adds people.
+
+**Hire or consult.** `core_use` with `mode: "hire"` or `"consult"` runs the person as a seat. A `climayte_run` task with `role: 'seat'` and a `persona` only tags the worker. Its prompt must point at the person's brief, or the worker does not read it.
+
+**On a new PC.**
+
+1. `bun install` and `bun install --cwd desk2`.
+2. Start the daemon (port 7787).
+3. Get your people: the Your people first run, or copy the folders into `~/.agenthydra/people/`.
+4. Build the catalog (above).
+5. Write `ON` and `PLACEMENT` (for example `slot`) in the core folder.
+
+Desk and CliMayte chats wire the hook themselves. `install.mjs` is for plain CLI sessions.
 
 ## What the log records
 
@@ -80,7 +112,7 @@ Set it with `placement <slot|attach|file|off>` and `ask <on|off>` in the core's 
 
 ## Lead
 
-- By default (ASK absent or on) a slot or file chat picks its own lead: core_scope asks the difficulty question, `no 1` loads nothing, 2 or more shows the persona list, and the pick is written to `hydra.md`'s `## Lead`, which the next launch's slot carries. A chat whose `placement.json` already stores a lead keeps it until `hydra.md` names one. The model pick and lead shift below run only with `<core dir>/ASK` set to `off` (`switch.mjs ask off`).
+- By default (ASK absent or on) a slot or file chat picks its own lead: core_scope asks the difficulty question, `no 1` loads nothing, 2 or more shows the persona list, and the pick is written to `hydra.md`'s `## Lead`, which the next launch's slot carries. A chat whose `placement.json` already stores a lead keeps it until `hydra.md` names one. The model pick and lead shift below run only with `<core dir>/ASK` set to `off` (write `off` into `<core dir>/ASK`).
 - With ASK off, a chat's lead is picked once, at its first pack, by one small model call to the HSwarm decide door (`AGENTHYDRA_DECIDE_URL`, default `http://127.0.0.1:7793/api/decide`, token from `AGENTHYDRA_HSWARM_TOKEN_FILE`, default `~/.hswarm/console-token`). It gets the five managers' one-liners from the catalog and answers a manager, or `none`: a message with no work in it (ok, thanks, a greeting, a bare "keep going"), or a small task a chat finishes alone in a few minutes (a fact, a status, a rename, a typo, a git or npm command, a fix of a few lines, a quick question), so a chat that needs no help reads no brief. Size is judged first, and a small task (a bug whose fix is a few lines, or one the message calls quick) is `none` (not Gus) even in a field a manager owns, unless it spends money or changes a database schema, a migration or customers' data (an ad spend or audience change, a schema column or migration), which stays that field's manager's; a message spanning several fields is Marcus's; a continuation that names its work ("continue with the ad bid fix") is that work's; the lead is the field where the fix lives, not where the symptom shows. A launch waits at most 5 s and asks three times (majority), the hook path 1 s and asks once. `AGENTHYDRA_LEAD_MODEL` picks the model; `off` skips the call.
 - The call never blocks an event loop: it is an async fetch with its own timer. The daemon's `/api/core/pack` awaits the pick before it builds the pack, a CliMayte Prime launch is held a scheduler tick while its pick runs (`leadPickPending`), keeping the launch slot it took so later-ranked work does not start in its place (with no model to ask, `AGENTHYDRA_LEAD_MODEL=off`, it is not held), and the Desk server runs the slot build in a child process it awaits. The pack and placement builders themselves never call the model; they take the finished pick.
 - When the call fails or runs out of time the word ranker picks (content words only, the shared `how` text not scored, managers not sorted above stronger experts). Each pick logs `lead-pick` with its path (`model` or `words`) and ms.

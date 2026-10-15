@@ -50,6 +50,17 @@ The Sue, Dredd and price check engines in `engines/` read their people from this
 `expert/sue-<id>` (the Sue document under `sue` in `persona.json`, her mind in `brief.md`), a Dredd seat is a
 `dredd-seat` person. See `engines/README.md`. `AGENTHYDRA_PEOPLE_HOME` points the engines at another people folder.
 
+## Where people are stored
+
+- **This PC:** the folders above. Each person is `persona.json`, an optional `brief.md` and an optional `learnings.json` (what the person has learned). This is the working copy; the catalog reads it.
+- **AgentHydra's cloud:** an optional second home on AgentHydra's own API, reached with Sign in with Connections (Connections only signs you in). It is off until `AGENTHYDRA_API_URL` is set; with it unset, This PC keeps working. See `cloud/agenthydra-api/README.md`.
+- **Sync:** the newer copy of a person wins. The older one is saved in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file. After a pull the catalog is rebuilt.
+- **Your choice** is kept in `~/.agenthydra/people-store.json`.
+
+## Known gap: managers
+
+Managers under `people/manager/` are in the catalog. Desk's manager face and photo (`desk2/server/src/engine/managers.ts`) and seat pinning (`server/src/hydra-core/seats.ts`, `server/src/mcp-managers.ts`) still read only the legacy `~/.agenthydra/managers/` folder. Until that is fixed, keep a manager there too.
+
 ## Commands
 
 - `node hydra-core/catalog/build.mjs` rewrites `<core>/catalog/generated-*.json` and `skips.json`.

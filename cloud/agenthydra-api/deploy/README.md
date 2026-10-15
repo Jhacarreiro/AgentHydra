@@ -11,9 +11,11 @@ Files here use placeholders only. Nothing in this folder holds a real host, IP, 
 | `AGENTHYDRA_DB_*_PASSWORD`, `AGENTHYDRA_MASTER_KEY`, `AGENTHYDRA_AUDIT_SALT` | Generated on the box by `bootstrap.sh` with `openssl rand`, never printed. Keep an offline copy of the master key. |
 | `/etc/agenthydra/diskguard.env` (optional) | `AGENTHYDRA_MIN_FREE_GB` (default 15), `AGENTHYDRA_MAX_PG_GB` (default 20), `AGENTHYDRA_FLAG_DIR` (default `/run/agenthydra`; the server returns 503 on writes while `write-block` exists there). |
 
+The release tarball comes from `build-release.sh [out-dir]` in this folder (run it anywhere with bun installed). It prints two lines: the tarball path, then its sha256. Those are the `<tarball>` and `<sha256>` that step 4 takes.
+
 Also needed on the box: the pinned `bun` at `/opt/agenthydra-api/bin/bun` (root-owned), the release tarball, and `backup.sh` / the export entry point from the release.
 
-## Order (needs the owner's go; plan section 10)
+## Order (needs the owner's go; the rollout plan is kept outside this repo)
 
 1. Disk first: run the safe docker cleaner (never volumes). Proof: `df -h /` before and after, under 70 %.
 2. `sudo ./bootstrap.sh`. Proof: `id agenthydra`; `stat -c '%U %a' /etc/agenthydra` = `root 700`; `stat -c '%U %a' /etc/agenthydra/api.env` = `root 600`; `docker ps --filter name=agenthydra-pg`; `ss -tlnH | grep 5433` shows `127.0.0.1` only.
@@ -31,7 +33,7 @@ Point `current` back at the previous release (`ln -sfn /opt/agenthydra-api/relea
 
 ## Backups
 
-`backup.sh` (timer `agenthydra-backup`, 03:30 UTC) dumps the `agenthydra` database as `agenthydra_backup`, pipes it straight into `age` (or `gpg` if age is missing) using the owner's PUBLIC key, uploads the ciphertext to S3 with server-side encryption, keeps the newest 7 in `/var/backups/agenthydra` (0700) and writes `/var/backups/agenthydra/last-backup` (unix seconds) for `/healthz`. Settings live in `/etc/agenthydra/backup.env` (copy `backup.env.example`, root, 0600).
+`backup.sh` (timer `agenthydra-backup`, 03:30 UTC) dumps the `agenthydra` database as `agenthydra_backup`, pipes it straight into `age` (or `gpg` if age is missing) using the owner's PUBLIC key, uploads the ciphertext to S3 with server-side encryption, keeps the newest 7 in `/var/backups/agenthydra` (0711, dumps 0600 root) and writes `/var/backups/agenthydra/last-backup` (unix seconds) for `/healthz`. Settings live in `/etc/agenthydra/backup.env` (copy `backup.env.example`, root, 0600).
 
 The owner creates once:
 
