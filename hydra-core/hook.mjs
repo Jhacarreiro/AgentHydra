@@ -472,7 +472,7 @@ export async function run(input, env = process.env) {
   if (!existsSync(path.join(dir, "ON"))) return null;
   const skip = skipOf(env, dir);
   if (skip) {
-    if (event !== "Stop") logSkip(input, env, dir, skip);
+    if (event !== "Stop" && !doorbellOf(dir)) logSkip(input, env, dir, skip);
     return null;
   }
   if (doorbellOf(dir)) {

@@ -75,7 +75,10 @@ test("the local president rule stays out of it: a question at Stop is not blocke
     assert.equal(await run(stop, envFor(dir)), null);
   }));
 
-test("a drone still gets nothing", () =>
+test("a drone or a seat still gets nothing, and its skip is not kept here either", () =>
   withDoorbell(async (dir) => {
+    const before = readdirSync(dir).sort();
     assert.equal(await run(turn("move notes"), envFor(dir, { AGENTHYDRA_ROLE: "drone" })), null);
+    assert.equal(await run(turn("what do you think?"), envFor(dir, { AGENTHYDRA_ROLE: "seat" })), null);
+    assert.deepEqual(readdirSync(dir).sort(), before);
   }));

@@ -29,7 +29,7 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 - Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
 - After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.
 - Nothing is written under the core folder, and the placement, pack and president rule below are off.
-- Seats, drones and worker shells still get nothing. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
+- Seats, drones and worker shells still get nothing, and their skips are not logged. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
 
 ## President rule (Stop)
 
