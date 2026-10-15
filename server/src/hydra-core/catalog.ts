@@ -22,7 +22,8 @@ export const FAMILIES = [
   'you-sue',
   'creator',
 ] as const
-const ID = /^(person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
+/** A catalog id: <kind>:<slug>. */
+export const ID = /^(person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
 
 /** A tier's rung on the ladder, 1 (intern) to 4 (owner); 0 for no tier. */
 export const tierRank = (tier: string | undefined): number =>

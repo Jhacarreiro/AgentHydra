@@ -1,7 +1,7 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { isAbsolute } from 'node:path'
+import { isAbsolute, join } from 'node:path'
 import { contentWords } from '../mcp-find'
-import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
+import { type CatalogEntry, ID as ID_SHAPE, loadCatalog, loadRef, loadText } from './catalog'
 import { doubted, type Feedback, readFeedback, stale } from './feedback'
 import { detailOf, rankEntries, terms } from './find'
 import { leadName, parseHydra } from './hydra-md'
@@ -99,7 +99,7 @@ export interface Pack {
   pasted: string[]
   bytes: number
   ms: number
-  /** The lead the pack used: its catalog id (`lead:<name>` for a hydra.md lead not in the catalog), else null. */
+  /** The lead the pack used: its catalog id (a hydra.md lead missing from the catalog: person:<manager folder>), else null. */
   lead: string | null
   /** What the pack did to the lead brief the chat owes: set it (the id, sent as a pointer), clear it (null), or neither. */
   owed?: string | null
@@ -141,22 +141,108 @@ function seatOf(dir: string, chat: { key: string; aliases: string[] }, e: Catalo
   return seatReader(dir, chat, e)
 }
 
-/** The personas seated under this chat, read through the seat roster, so a handoff knows whom it consulted. */
-function seatsLine(dir: string, chat: string, entries: CatalogEntry[]): string {
-  const seated = entries.filter(
-    (e) => e.kind === 'person' && seatOf(dir, { key: chat, aliases: [] }, e),
-  )
-  if (!seated.length) return ''
-  return `Seats in this chat: ${seated.map((e) => `${e.name} (${e.id})`).join(', ')}; resume one with core_use { chat: "${chat}", id: "<person id>", mode: "consult" }.`
+function readJsonFile(file: string): unknown {
+  try {
+    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined
+  } catch {
+    return undefined
+  }
 }
 
+const UNDER_PERSON = /^- (consult|hire) (person:[a-z0-9-]+)\b/
+
+/**
+ * The personas this chat has seated or consulted, one line each, so a new session of the chat (a handoff, a resume)
+ * knows whom it can go back to: the seat roster, the consult jobs use.ts keeps in consults.json, and hydra.md's
+ * "Under you" list.
+ */
+function seatsLine(
+  dir: string,
+  chat: string,
+  entries: CatalogEntry[],
+  files: { root: string; hydraMd: string },
+): string {
+  const facts = new Map<string, string[]>()
+  const add = (id: string, fact: string) => {
+    const list = facts.get(id) ?? []
+    if (!list.includes(fact)) list.push(fact)
+    facts.set(id, list)
+  }
+  for (const e of entries) {
+    if (e.kind !== 'person') continue
+    const seat = seatOf(dir, { key: chat, aliases: [] }, e) as { chat?: unknown } | undefined
+    if (seat) add(e.id, typeof seat.chat === 'string' ? `seat chat ${seat.chat}` : 'seated')
+  }
+  const consults = readJsonFile(join(files.root, 'consults.json'))
+  if (consults && typeof consults === 'object' && !Array.isArray(consults))
+    for (const [id, job] of Object.entries(consults))
+      if (ID_SHAPE.test(id) && typeof job === 'string') add(id, `last consult job ${job}`)
+  const doc = existsSync(files.hydraMd) ? parseHydra(readFileSync(files.hydraMd, 'utf8')) : null
+  for (const line of doc?.under ?? []) {
+    const m = UNDER_PERSON.exec(line)
+    if (m) add(m[2], m[1] === 'hire' ? 'hired' : 'consulted')
+  }
+  if (!facts.size) return ''
+  const named = new Map(entries.map((e) => [e.id, e.name]))
+  const lines = [...facts].map(([id, list]) => {
+    const name = named.get(id)
+    return `- ${name ? `${name} (${id})` : id}: ${list.join(', ')}`
+  })
+  return [
+    `Seats and consults in this chat; resume one with core_use { chat: "${chat}", id: "<person id>", mode: "consult" } (with no question it reads the last answer):`,
+    ...lines,
+  ].join('\n')
+}
+
+/** Lines a cut may list as left out, and the characters each may take. */
+const CUT_HEADS = 6
+const CUT_HEAD_CHARS = 60
+/** How far before the last line end a heading may sit and still be the cut point, so a section is not split. */
+const HEADING_SLACK = 1500
+const HEADING = /^(?:#{1,3} |--- \S+ \(.*\) ---$)/
+/**
+ * The head of `body` that fits `room` with a note saying where it was cut and which headings it left out. The cut
+ * falls on a heading when one is near, else on a line end, else on a space; only one unbroken run of text is cut
+ * mid-word.
+ */
 function cutHead(body: string, room: number, where: string): { text: string; kept: number } {
   if (body.length <= room) return { text: body, kept: body.length }
-  const note = (n: number) =>
-    `\n[cut at ${n} of ${body.length} characters; the rest is in ${where}]`
-  let kept = Math.max(0, room - note(room).length)
-  if (/[\uD800-\uDBFF]/.test(body[kept - 1] ?? '')) kept--
-  if (kept === 0) return { text: '', kept: 0 }
+  const lineCount = body.split('\n').length
+  const note = (n: number) => {
+    const line = body.slice(0, n).split('\n').length
+    const heads = body
+      .slice(n)
+      .split('\n')
+      .filter((l) => HEADING.test(l))
+      .map((l) => (l.length > CUT_HEAD_CHARS ? `${l.slice(0, CUT_HEAD_CHARS - 3)}...` : l))
+    const left = heads.length
+      ? `; left out: ${heads.slice(0, CUT_HEADS).join(', ')}${heads.length > CUT_HEADS ? ` and ${heads.length - CUT_HEADS} more` : ''}`
+      : ''
+    return `\n[cut at line ${line} of ${lineCount} (${n} of ${body.length} characters)${left}; the rest is in ${where}]`
+  }
+  const fits = (n: number) => n + note(n).length <= room
+  // Every note fits in this much, so only cut points inside the last stretch need trying.
+  const most = room - note(0).length
+  const floor = Math.max(0, Math.floor(most / 2))
+  const points = (re: RegExp): number[] => {
+    const out: number[] = []
+    for (let m = re.exec(body); m && m.index <= room; m = re.exec(body))
+      if (m.index >= floor) out.push(m.index)
+    return out.reverse()
+  }
+  const best = (list: number[]) => list.find((n) => n > 0 && fits(n))
+  const line = best(points(/\n/g))
+  const heading =
+    line === undefined
+      ? undefined
+      : best(points(/\n(?=#{1,3} |--- \S)/g).filter((n) => n <= line && line - n <= HEADING_SLACK))
+  let kept = heading ?? line ?? best(points(/\s/g))
+  if (kept === undefined) {
+    kept = Math.max(0, room - note(room).length)
+    if (/[\uD800-\uDBFF]/.test(body[kept - 1] ?? '')) kept--
+    while (kept > 0 && !fits(kept)) kept--
+  }
+  if (kept <= 0) return { text: '', kept: 0 }
   return { text: body.slice(0, kept) + note(kept), kept }
 }
 
@@ -175,6 +261,22 @@ function hydraLeadEntry(
 ): CatalogEntry | undefined {
   const people = entries.filter((e) => e.kind === 'person')
   return people.find((e) => loadRef(e) === path) ?? people.find((e) => e.name === name)
+}
+
+const MANAGER_BRIEF = /[\\/]managers[\\/]([a-z0-9][a-z0-9-]*)[\\/]brief\.md$/i
+
+/**
+ * A hydra.md lead's catalog id: its catalog entry's, else the person id its manager folder names (a manager's id is
+ * person:<folder>, so a lead the catalog has lost for now keeps its real id), else null.
+ */
+function hydraLeadId(
+  entries: CatalogEntry[],
+  hydra: { name: string; path: string },
+): string | null {
+  const known = hydraLeadEntry(entries, hydra.path, hydra.name)?.id
+  if (known) return known
+  const id = `person:${MANAGER_BRIEF.exec(hydra.path)?.[1]?.toLowerCase() ?? ''}`
+  return ID_SHAPE.test(id) ? id : null
 }
 
 function leadFileText(path: string): string {
@@ -265,10 +367,12 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
         : wordLead(entries, req.prompt, feedback)?.id
   const persona = personaId ? catalog.get(personaId) : undefined
   const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
-  let lead: { id: string; name: string; text: string } | null = null
+  // A hydra.md lead with no catalog id is pasted with a first or full pack and never logged under a made-up id.
+  let lead: { id: string | null; name: string; text: string; ref?: string } | null = null
+  const hydraId = hydra ? hydraLeadId(entries, hydra) : null
   if (hydra) {
-    const id = hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`
-    if (fresh(id)) lead = { id, name: hydra.name, text: leadFileText(hydra.path) }
+    if (hydraId ? fresh(hydraId) : mode !== 'delta')
+      lead = { id: hydraId, name: hydra.name, text: leadFileText(hydra.path), ref: hydra.path }
   } else if (chosen && fresh(chosen.id))
     lead = { id: chosen.id, name: chosen.name, text: loadText(chosen) }
   else if (persona && fresh(persona.id))
@@ -290,7 +394,9 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const fits = (s: Sections) => frame(parts(s)).length <= cap
   const leadFull = lead ? `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd() : ''
   const leadPointer = lead
-    ? `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
+    ? lead.id
+      ? `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
+      : `Lead for this message: ${lead.name}. Read the brief at ${lead.ref}.`
     : ''
   // A slot keeps room for the lead's brief (its pointer when the brief alone is too long) before the folder rules
   // fill it: every manager brief is longer than the attach cap, so rules first left the lead a pointer.
@@ -322,11 +428,11 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
       owed = null
     } else if (fits({ ...s, lead: leadPointer })) {
       s = { ...s, lead: leadPointer }
-      owed = lead.id
+      owed = lead.id ?? undefined
     }
   }
 
-  const seats = mode === 'delta' ? '' : seatsLine(dir, req.chat, entries)
+  const seats = mode === 'delta' ? '' : seatsLine(dir, req.chat, entries, files)
   if (seats && fits({ ...s, seats })) s = { ...s, seats }
 
   const overflow: CatalogEntry[] = []
@@ -350,13 +456,11 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   }
 
   const text = frame(parts(s))
-  const pasted = [...ids, ...inlineIds, ...(s.lead === leadFull && lead ? [lead.id] : [])]
-  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.id] : []))
+  const pasted = [...ids, ...inlineIds, ...(s.lead === leadFull && lead?.id ? [lead.id] : [])]
+  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead?.id ? [lead.id] : []))
   const bytes = Buffer.byteLength(text, 'utf8')
   const ms = Math.round(performance.now() - started)
-  const used = hydra
-    ? (hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`)
-    : (lead?.id ?? (fixed ? (req.lead ?? null) : null))
+  const used = hydra ? hydraId : (lead?.id ?? (fixed ? (req.lead ?? null) : null))
   if (req.dry) return { mode, text, ids, pasted, bytes, ms, lead: used, owed }
 
   if (owed === null) clearLeadOwed(sent)
