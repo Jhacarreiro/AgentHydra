@@ -102,6 +102,7 @@ import {
   sizeTasks,
   taskSettings,
 } from './climayte-dispatch'
+import { newestSaid } from './climayte-doing'
 import { ETA_PROMPT_VERSION, etaTookSeconds } from './climayte-eta'
 import { appendEtaRow, reviewRow, saidRow, settledRow } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
@@ -720,6 +721,11 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
     w.lastActivity = latest
     w.stepAt = Date.now()
     w.updatedAt = w.stepAt
+  }
+  const said = newestSaid(r.recent)
+  if (said !== null && said !== w.saidLine) {
+    w.saidLine = said
+    w.saidAt = Date.now()
   }
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
   // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.

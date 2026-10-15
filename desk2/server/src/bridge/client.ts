@@ -210,6 +210,8 @@ export interface AhWorker {
   /** What it is doing now, and the epoch ms that began; null or absent when it is not running or waiting. */
   doing?: string | null
   doingSince?: number | null
+  doingKind?: 'hold' | 'said' | 'step' | 'wait' | null
+  lastStepAt?: number | null
   /** ISO time a `waiting` worker is expected to start (AgentHydra's waitUntil); absent otherwise. */
   waitUntil?: string | null
   /** Epoch ms a retrying or queued worker is held until; null or absent when it is not. */
@@ -267,6 +269,10 @@ export interface AhRemoteWorker {
   originTitle?: string | null
   sessions?: string[]
   folder?: string | null
+  doing?: string | null
+  doingSince?: number | null
+  doingKind?: 'hold' | 'said' | 'step' | 'wait' | null
+  lastStepAt?: number | null
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */

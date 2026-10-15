@@ -10,7 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
-import { doingOf } from './climayte-doing'
+import { type DoingKind, doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
@@ -255,6 +255,8 @@ export interface CliMayteWorker {
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
   stepAt?: number // when lastActivity last changed (epoch ms)
+  saidLine?: string // the text of its newest narration line (`said:`, noteActivity)
+  saidAt?: number // when saidLine last changed (epoch ms)
   stateAt?: { key: string; at: number } // when its state (stateKey, climayte-doing.ts) last changed
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the kit
   tokens?: CliMayteTokens // summed the same way; absent on tasks recorded before 2026-09-30
@@ -557,6 +559,8 @@ export type CliMayteWorkerView = CliMayteOriginFields &
     ranS: number // seconds its CLI sessions actually ran, summed over every attempt
     doing: string | null // what it is doing now (doingOf), null when finished
     doingSince: number | null // when that began (epoch ms)
+    doingKind: DoingKind | null // what kind of line doing is (climayte-doing.ts)
+    lastStepAt: number // when its newest event came (stepAt, else its state's time)
     /** The model the CLI reported at init on its newest attempt that got that far (`model` and
      *  `effort` are what was asked for). */
     reportedModel: string | null
@@ -2246,7 +2250,10 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
     // between a finished task and its follow-up, are not time it ran.
     ranS: ranSeconds(w, now),
     ...doingOf(w),
+    lastStepAt: w.stepAt ?? w.stateAt?.at ?? w.createdAt,
     stepAt: undefined,
+    saidLine: undefined,
+    saidAt: undefined,
     stateAt: undefined,
     reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
     verdicts: w.verdicts?.map(({ units, ...v }) => ({

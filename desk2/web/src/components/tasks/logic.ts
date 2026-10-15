@@ -26,6 +26,24 @@ export interface TaskAgent {
   /** What a worker is doing now (its hold reason while held), and since when (epoch ms). */
   doing?: string | null
   doingSince?: number | null
+  doingKind?: DoingKind | null
+  /** When the worker last took a tool step (epoch ms); a running worker quiet for QUIET_MS shows as quiet. */
+  lastStepAt?: number | null
+}
+
+export type DoingKind = 'hold' | 'said' | 'step' | 'wait'
+
+/** A running worker with no tool step for this long is quiet, not doing its last line. */
+export const QUIET_MS = 15 * 60_000
+const SAID_AGO_MS = 2 * 60_000
+
+export interface DoingOf {
+  name: string
+  doing: string
+  kind: DoingKind | null
+  state: AgentState
+  since: number | null
+  lastStepAt: number | null
 }
 
 export interface TaskPhase {
@@ -104,6 +122,8 @@ function toAgent(w: CliMayteWorker): TaskAgent {
     etaMin: w.eta?.minutes ?? null,
     doing: w.doing ?? null,
     doingSince: w.doingSince ?? null,
+    doingKind: w.doingKind ?? null,
+    lastStepAt: w.lastStepAt ?? null,
   }
 }
 
@@ -334,23 +354,83 @@ export function etaShort(minutes: number): string {
   return m < 60 ? `~${m}m` : `~${Math.floor(m / 60)}h ${String(m % 60).padStart(2, '0')}m`
 }
 
+/** A quiet running worker's time since its last tool step; null when it is not quiet. */
+const quietMs = (d: DoingOf, now: number): number | null =>
+  d.state === 'running' && d.lastStepAt !== null && now - d.lastStepAt >= QUIET_MS ? now - d.lastStepAt : null
+
+/** 'for 6 min', 'no update for 18 min', '3 min ago' (a line said earlier), '' when there is no time to show. */
+function doingTime(d: DoingOf, now: number): string {
+  const quiet = quietMs(d, now)
+  if (quiet !== null) return `no update for ${minutesText(Math.floor(quiet / 60_000))}`
+  if (d.since === null) return ''
+  if (d.kind === 'said') {
+    const ms = now - d.since
+    return ms < SAID_AGO_MS ? '' : `${minutesText(Math.floor(ms / 60_000))} ago`
+  }
+  return forText(d.since, now)
+}
+
+/** One task's doing with its time: 'Waiting for CPU: 99% busy · for 6 min'. */
+export function doingLine(d: DoingOf, now: number): string {
+  return [d.doing, doingTime(d, now)].filter(Boolean).join(' · ')
+}
+
+/** The reason's head, before its first colon: 'Waiting for CPU' from 'Waiting for CPU: 99% busy'. */
+const headOf = (doing: string): string => {
+  const colon = doing.indexOf(':')
+  return (colon < 0 ? doing : doing.slice(0, colon)).trim()
+}
+
+const lowerFirst = (s: string): string => s.charAt(0).toLowerCase() + s.slice(1)
+
+/** The label's parts for several tasks: two waiting groups, then the working and quiet counts. */
+function doingParts(doings: readonly DoingOf[], now: number): string[] {
+  const byHead = new Map<string, DoingOf[]>()
+  for (const d of doings.filter((x) => x.state === 'waiting')) {
+    const head = headOf(d.doing)
+    byHead.set(head, [...(byHead.get(head) ?? []), d])
+  }
+  const groups = [...byHead]
+    .map(([head, ds]) => ({ head, ds, since: Math.min(...ds.map((d) => d.since ?? Number.POSITIVE_INFINITY)) }))
+    .sort((a, b) => a.since - b.since)
+  const parts = groups.slice(0, 2).map((g) => {
+    const since = Number.isFinite(g.since) ? g.since : null
+    return [`${g.ds.length} ${lowerFirst(g.head)}`, forText(since, now)].filter(Boolean).join(' ')
+  })
+  const more = groups.slice(2).reduce((sum, g) => sum + g.ds.length, 0)
+  if (more > 0) parts.push(`+${more} more waiting`)
+
+  const running = doings.filter((d) => d.state === 'running')
+  const quiet = running.filter((d) => quietMs(d, now) !== null)
+  const working = running.length - quiet.length
+  if (working > 0) parts.push(`${working} working`)
+  if (quiet.length > 0) {
+    const since = Math.min(...quiet.map((d) => d.lastStepAt ?? Number.POSITIVE_INFINITY))
+    parts.push(`${quiet.length} quiet ${forText(since, now)}`)
+  }
+  return parts
+}
+
 /**
  * The inline row under the last message: '1 running task', '3 running tasks · 2 finished', '4 finished
- * tasks', '' when none; with `eta` (the running workers' latest estimate end, and the time now) it says
- * how long is left after the running count: '3 running tasks · about 5 min left · 50+ finished'.
+ * tasks', '' when none. With one task it names what that task is doing: '1 running task · Waiting for CPU:
+ * 99% busy · for 6 min'. With more, the waiting tasks come first, grouped by reason, then how many are
+ * working or quiet, then the estimate and the finished count: '3 running tasks · 1 waiting for CPU for 6
+ * min · 2 working · about 11 min left · 5 finished'.
  */
 export function runningLabel(
   n: number,
-  finished = 0,
-  eta?: { endsAt: number | null; now: number },
-  doing?: { text: string; since: number | null; now: number },
+  finished: number,
+  now: number,
+  endsAt: number | null,
+  doings: readonly DoingOf[],
 ): string {
   const done = finished > 0 ? `${finished}${finished >= FINISHED_CAP ? '+' : ''} finished` : ''
   if (n <= 0) return done ? `${done} ${finished === 1 ? 'task' : 'tasks'}` : ''
   const running = `${n} running ${n === 1 ? 'task' : 'tasks'}`
-  const left = eta && eta.endsAt !== null ? etaLeft(eta.endsAt, eta.now) : ''
-  const held = doing ? [doing.text, forText(doing.since, doing.now)] : []
-  return [running, ...held, left, done].filter(Boolean).join(' · ')
+  const left = endsAt !== null ? etaLeft(endsAt, now) : ''
+  const parts = n === 1 && doings.length === 1 ? [doingLine(doings[0], now)] : doingParts(doings, now)
+  return [running, ...parts, left, done].filter(Boolean).join(' · ')
 }
 
 /** 'for 40 s', 'for 6 min', 'for 1 h 20 min'; '' when the start is not known. */
@@ -360,19 +440,42 @@ export function forText(since: number | null, now: number): string {
   return ms < 60_000 ? `for ${Math.max(0, Math.floor(ms / 1000))} s` : `for ${minutesText(Math.floor(ms / 60_000))}`
 }
 
-/** The running and waiting agents' current doings, the longest-held first: the muted row names the first. */
-export function doingsOf(units: TaskUnit[]): Array<{ name: string; doing: string; since: number | null }> {
-  return units
-    .flatMap((u) => u.phases.flatMap((p) => p.agents))
-    .filter((a): a is TaskAgent & { doing: string } => !!a.doing && (a.state === 'running' || a.state === 'waiting'))
-    .map((a) => ({ name: a.name, doing: a.doing, since: a.doingSince ?? null }))
-    .sort((a, b) => (a.since ?? Number.MAX_SAFE_INTEGER) - (b.since ?? Number.MAX_SAFE_INTEGER))
+/** An agent's current doing, when it is running or waiting and has one. */
+export function doingOfAgent(a: TaskAgent): DoingOf | null {
+  if (!a.doing || (a.state !== 'running' && a.state !== 'waiting')) return null
+  return {
+    name: a.name,
+    doing: a.doing,
+    kind: a.doingKind ?? null,
+    state: a.state,
+    since: a.doingSince ?? null,
+    lastStepAt: a.lastStepAt ?? null,
+  }
 }
 
-/** The row's hover text: one line per doing, 'Name · what it is doing · for 6 min'. */
-export function doingTitle(doings: ReturnType<typeof doingsOf>, now: number): string {
-  return doings.map((d) => [d.name, d.doing, forText(d.since, now)].filter(Boolean).join(' · ')).join('\n')
+/** The running and waiting agents' current doings: waiting first, then the longest-held. */
+export function doingsOf(units: TaskUnit[]): DoingOf[] {
+  return units
+    .flatMap((u) => u.phases.flatMap((p) => p.agents))
+    .map(doingOfAgent)
+    .filter((d): d is DoingOf => d !== null)
+    .sort(
+      (a, b) =>
+        (a.state === 'waiting' ? 0 : 1) - (b.state === 'waiting' ? 0 : 1) ||
+        (a.since ?? Number.MAX_SAFE_INTEGER) - (b.since ?? Number.MAX_SAFE_INTEGER),
+    )
 }
+
+/** The panel's and hover's one line for a doing: 'Name: what it is doing (for 6 min)'. */
+export function doingTitle(doings: readonly DoingOf[], now: number): string {
+  return doings
+    .map((d) => {
+      const time = doingTime(d, now)
+      return time ? `${d.name}: ${d.doing} (${time})` : `${d.name}: ${d.doing}`
+    })
+    .join('\n')
+}
+
 
 /** '11m 06s', '45s', '1h 02m'. */
 export function formatElapsed(ms: number): string {

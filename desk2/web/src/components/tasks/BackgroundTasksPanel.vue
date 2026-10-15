@@ -20,7 +20,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useClock } from '@/lib/clock'
 import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
-import { canStop, elapsedOf, etaLeft, etaShort, forText, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { canStop, doingLine, doingOfAgent, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 import { useSessionTasks } from './session'
 
 const props = defineProps<{
@@ -79,6 +79,10 @@ const ticking = computed(() => lists.value.running.length > 0 || lists.value.fin
 const frozenNow = Date.now()
 const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
 const now = computed(() => clock.value?.now.value ?? frozenNow)
+const doingText = (a: TaskAgent): string => {
+  const d = doingOfAgent(a)
+  return d ? doingLine(d, now.value) : ''
+}
 let clockScope: EffectScope | null = null
 watch(
   ticking,
@@ -312,7 +316,7 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
                     <td class="truncate p-0">
                       <button v-if="a.sessionId" type="button" class="max-w-full truncate text-start hover:underline" @click="openAgent(a)">{{ a.name }}</button>
                       <span v-else>{{ a.name }}</span>
-                      <span v-if="a.doing" class="font-normal text-(--text-muted)"> · {{ a.doing }}<span v-if="a.doingSince != null"> · {{ forText(a.doingSince, now) }}</span></span>
+                      <span v-if="doingText(a)" class="font-normal text-(--text-muted)"> · {{ doingText(a) }}</span>
                     </td>
                     <td class="hidden truncate p-0 @sm:table-cell">{{ a.model || '–' }}</td>
                     <td class="p-0 text-end">{{ formatTokens(a.tokens) }}</td>

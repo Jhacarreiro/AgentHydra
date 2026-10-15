@@ -48,15 +48,7 @@ watch(
 onBeforeUnmount(() => clockScope?.stop())
 
 const now = computed(() => clock.value?.now.value ?? Date.now())
-const label = computed(() => {
-  const first = doings.value[0]
-  return runningLabel(
-    lists.value.running.length,
-    lists.value.finished.length,
-    { endsAt: etaEndsAt.value, now: now.value },
-    first ? { text: first.doing, since: first.since, now: now.value } : undefined,
-  )
-})
+const label = computed(() => runningLabel(lists.value.running.length, lists.value.finished.length, now.value, etaEndsAt.value, doings.value))
 const title = computed(() => (doings.value.length ? doingTitle(doings.value, now.value) : undefined))
 </script>
 

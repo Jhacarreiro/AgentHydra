@@ -14,7 +14,9 @@ import {
   openPhase,
   panelLists,
   phaseSquares,
+  QUIET_MS,
   runningLabel,
+  type DoingOf,
   workerUnits
 } from '../../src/components/tasks/logic'
 
@@ -225,27 +227,71 @@ describe('panelLists', () => {
   })
 })
 
+const doing = (over: Partial<DoingOf>): DoingOf => ({
+  name: 'Fix',
+  doing: 'Waiting for CPU: 99% busy',
+  kind: 'hold',
+  state: 'waiting',
+  since: 0,
+  lastStepAt: null,
+  ...over,
+})
+
 test('labels and formats', () => {
-  expect(runningLabel(0)).toBe('')
-  expect(runningLabel(1)).toBe('1 running task')
-  expect(runningLabel(3)).toBe('3 running tasks')
-  expect(runningLabel(1, 2)).toBe('1 running task · 2 finished')
-  expect(runningLabel(0, 1)).toBe('1 finished task')
-  expect(runningLabel(0, 50)).toBe('50+ finished tasks')
-  expect(runningLabel(3, 50, { endsAt: 300_000, now: 0 })).toBe('3 running tasks · about 5 min left · 50+ finished')
-  expect(runningLabel(1, 0, { endsAt: null, now: 0 })).toBe('1 running task')
-  expect(runningLabel(0, 2, { endsAt: 300_000, now: 0 })).toBe('2 finished tasks')
-  expect(runningLabel(1, 5, { endsAt: 1_020_000, now: 360_000 }, { text: 'Waiting for CPU: 99% busy over the last 30 s', since: 0, now: 360_000 })).toBe(
-    '1 running task · Waiting for CPU: 99% busy over the last 30 s · for 6 min · about 11 min left · 5 finished',
+  expect(runningLabel(0, 0, 0, null, [])).toBe('')
+  expect(runningLabel(1, 0, 0, null, [])).toBe('1 running task')
+  expect(runningLabel(3, 0, 0, null, [])).toBe('3 running tasks')
+  expect(runningLabel(1, 2, 0, null, [])).toBe('1 running task · 2 finished')
+  expect(runningLabel(0, 1, 0, null, [])).toBe('1 finished task')
+  expect(runningLabel(0, 50, 0, null, [])).toBe('50+ finished tasks')
+  expect(runningLabel(0, 2, 0, 300_000, [])).toBe('2 finished tasks')
+  expect(runningLabel(3, 50, 0, 300_000, [])).toBe('3 running tasks · about 5 min left · 50+ finished')
+  expect(runningLabel(1, 5, 360_000, 1_020_000, [doing({ since: 0 })])).toBe(
+    '1 running task · Waiting for CPU: 99% busy · for 6 min · about 11 min left · 5 finished',
   )
-  expect(runningLabel(2, 0, undefined, { text: 'Bash bun test ./server/tests', since: 300_000, now: 330_000 })).toBe(
-    '2 running tasks · Bash bun test ./server/tests · for 30 s',
+  expect(
+    runningLabel(3, 5, 360_000, 1_020_000, [
+      doing({ name: 'Fix', since: 0 }),
+      doing({ name: 'A', state: 'running', kind: 'step', doing: 'Bash bun test ./server/tests', since: 300_000, lastStepAt: 300_000 }),
+      doing({ name: 'B', state: 'running', kind: 'said', doing: 'Reading the diff', since: 300_000, lastStepAt: 300_000 }),
+    ]),
+  ).toBe('3 running tasks · 1 waiting for CPU for 6 min · 2 working · about 11 min left · 5 finished')
+  expect(runningLabel(2, 0, 1_200_000, null, [doing({ since: 840_000 }), doing({ name: 'B', since: 900_000 })])).toBe(
+    '2 running tasks · 2 waiting for CPU for 6 min',
   )
-  expect(runningLabel(1, 0, undefined, { text: 'Waiting for memory: 2 GB free', since: 0, now: 3_900_000 })).toBe(
-    '1 running task · Waiting for memory: 2 GB free · for 1 h 5 min',
+  expect(
+    runningLabel(7, 5, 1_200_000, 1_440_000, [
+      doing({ name: 'R', doing: 'Waiting for room: this task is expected to use about 20%', since: 0 }),
+      doing({ name: 'M', doing: 'Waiting for memory: 2 GB free', since: 300_000 }),
+      doing({ name: 'S', doing: 'Waiting for a reset: acct has used 80%', since: 600_000 }),
+      doing({ name: 'C1', since: 840_000 }),
+      doing({ name: 'C2', since: 900_000 }),
+      doing({ name: 'W', state: 'running', kind: 'step', doing: 'Bash bun test', since: 1_100_000, lastStepAt: 1_140_000 }),
+      doing({ name: 'Q', state: 'running', kind: 'step', doing: 'Bash ls', since: 120_000, lastStepAt: 120_000 }),
+    ]),
+  ).toBe(
+    '7 running tasks · 1 waiting for room for 20 min · 1 waiting for memory for 15 min · +3 more waiting · 1 working · 1 quiet for 18 min · about 4 min left · 5 finished',
+  )
+  expect(runningLabel(1, 0, QUIET_MS - 1_000, null, [doing({ state: 'running', kind: 'step', doing: 'Bash ls', since: 0, lastStepAt: 0 })])).toBe(
+    '1 running task · Bash ls · for 14 min',
+  )
+  expect(runningLabel(1, 0, QUIET_MS, null, [doing({ state: 'running', kind: 'step', doing: 'Bash ls', since: 0, lastStepAt: 0 })])).toBe(
+    '1 running task · Bash ls · no update for 15 min',
+  )
+  expect(runningLabel(1, 0, 1_200_000, null, [doing({ state: 'running', kind: 'said', doing: 'Reading the diff', since: 900_000, lastStepAt: 900_000 })])).toBe(
+    '1 running task · Reading the diff · 5 min ago',
+  )
+  expect(runningLabel(1, 0, 1_200_000, null, [doing({ state: 'running', kind: 'said', doing: 'Reading the diff', since: 1_150_000, lastStepAt: 1_150_000 })])).toBe(
+    '1 running task · Reading the diff',
+  )
+  expect(runningLabel(1, 0, 1_200_000, null, [doing({ state: 'running', kind: 'wait', doing: 'Waiting: Monitor build-job', since: 720_000, lastStepAt: 720_000 })])).toBe(
+    '1 running task · Waiting: Monitor build-job · for 8 min',
   )
   expect(forText(null, 1_000)).toBe('')
-  expect(doingTitle([{ name: 'Fix', doing: 'Waiting for CPU', since: 0 }], 120_000)).toBe('Fix · Waiting for CPU · for 2 min')
+  expect(doingTitle([doing({ since: 0 })], 120_000)).toBe('Fix: Waiting for CPU: 99% busy (for 2 min)')
+  expect(doingTitle([doing({ state: 'running', kind: 'step', doing: 'Bash ls', since: 0, lastStepAt: 0 })], QUIET_MS)).toBe(
+    'Fix: Bash ls (no update for 15 min)',
+  )
   const agent = (name: string, state: 'running' | 'waiting' | 'done', doingSince: number | null) => ({
     id: name, name, model: '', tokens: null, startedAt: null, endedAt: null, state, sessionId: null, etaMin: null,
     doing: state === 'done' ? null : `${name} doing`, doingSince,
