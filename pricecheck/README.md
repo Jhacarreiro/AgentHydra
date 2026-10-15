@@ -4,9 +4,11 @@ Everything a person sees on a page costs them something: a word to read, a butto
 
 **TL;DR**
 
-- **Any repo.** Vue, React (JSX/TSX), Svelte and plain HTML. No setup to start; `.pricecheck.json` tunes it.
+- **Any repo.** Vue, React (JSX/TSX), Svelte and plain HTML. A JSX `a ? X : Y` or `a && X` prices only its dearer arm. No setup to start; `.pricecheck.json` tunes it.
 - **Two measurers, one price list.** Static reads the code (the page and every component it renders, in seconds, for gates). Live renders the page in a real browser at desktop and phone width, prices what is actually on screen, and names the component that drew each thing.
-- **Every point is attributed.** A page's price is the sum of its files' shares, so "the footer costs 14 of this page's 40" is a fact, not a guess.
+- **Every point is attributed.** A page's price is the sum of its files' shares, so "the footer costs 14 of this page's 40" is a fact, not a guess. `page <file> --tree` shows what each rendered component costs, nested.
+- **Only what can show at once.** A condition known where a component is used decides what it shows: a prop the caller passes or leaves out, a name computed from props, `v-show` set to false. Sibling `v-if`s that can never be true together count once, and a page that switches on a phone or desktop flag is priced at both widths (the dearer is its price; `byViewport` has both).
+- **Pages are pages.** A component another template renders, or an app's `index.html` shell, is not counted as a page of its own.
 - **A ratchet per repo.** `.pricecheck/baseline.json` freezes each page's price. Prices only fall; a rise needs `raisedTo` and a `reason`.
 - **Weighted by real traffic when you have it.** `.pricecheck/views.json` (page or route to daily views) turns a price into what the page costs your users per day, which is how pages are ranked.
 - **In every chat.** AgentHydra's MCP server exposes it as `price_check` tools, and a change's price shows up as it is built.
@@ -38,6 +40,7 @@ Static measures word, control, choice, field, feature, media and product. Live m
 ```
 node pricecheck/bin/pricecheck.mjs scan    [--root <repo>] [--json]   every page, most expensive first
 node pricecheck/bin/pricecheck.mjs page    <file> [--root <repo>]     one page and the file each point comes from
+        [--tree [--depth N] [--min P]]                                  the render tree, each component with its points
 node pricecheck/bin/pricecheck.mjs diff    [--root <repo>]            what the working tree's changes cost
 node pricecheck/bin/pricecheck.mjs check   [--root <repo>]            exit 1 on an unreasoned rise or an unfrozen page
 node pricecheck/bin/pricecheck.mjs freeze  [--root <repo>] [--reason "<why>"]
@@ -50,6 +53,8 @@ node pricecheck/bin/pricecheck.mjs live    <url> [--cdp <endpoint>]   price the 
 
 - `lib/model.mjs`: the price list and the rollup. Every measurer emits items `{ unit, count, file, line?, note? }` and nothing else.
 - `lib/static/`: page discovery, template reading per framework, the component graph, the static measurer and its CLI.
+- `lib/static/i18n.mjs`: the English catalogs (JSON and TS/JS message modules under any `locales`, `locale`, `i18n`, `lang` or `messages` folder, with an `en`, `en-US` or `en-GB` folder or file), so a translated key counts the words a reader sees. In a monorepo a page reads the catalog nearest to it.
+- `lib/static/conditions.mjs`: what a template condition is worth given the props at the call site (true, false or unknown).
 - `lib/live/`: the in-page measuring script and a dependency-free Chrome DevTools Protocol client.
 - `lib/ledger.mjs`: the baseline, the ratchet, views weighting.
 - `bin/pricecheck.mjs`: hands each command to the measurer that answers it.

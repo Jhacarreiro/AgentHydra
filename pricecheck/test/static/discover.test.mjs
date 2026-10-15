@@ -5,6 +5,7 @@ import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { discoverPages, fileRoute, isPageFile } from '../../lib/static/discover.mjs'
+import { makeGraph } from '../../lib/static/graph.mjs'
 
 const fixture = (name) => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
 const files = (pages) => pages.map((p) => p.file)
@@ -97,6 +98,72 @@ group('discovery per framework', () => {
       { file: 'one/App.vue', route: '/' },
       { file: 'two/App.tsx', route: '/' },
     ])
+  })
+
+  test('a page-named component that another template renders is a component, not a page', () => {
+    const root = repo({
+      'src/components/RowEmptyStateView.vue': '<template><p>Nothing here yet</p></template>',
+      'src/components/Table.vue': "<script setup>import RowEmptyStateView from './RowEmptyStateView.vue'</script>\n<template><RowEmptyStateView /></template>",
+      'src/views/Home.vue': "<script setup>import Table from '../components/Table.vue'</script>\n<template><Table /></template>",
+    })
+    const graph = makeGraph(root)
+    expect(files(discoverPages(root, {}, graph.resolveFile, graph))).toEqual(['src/views/Home.vue'])
+  })
+
+  test('a page-named component rendered through a lazy import() binding is a component', () => {
+    const root = repo({
+      'src/views/dev/LedgerPanelView.vue': '<template><p>Ledger</p></template>',
+      'src/views/Workbench.vue': '<script setup>const Panel = defineAsync(() => import("./dev/LedgerPanelView.vue"))</script>\n<template><Panel v-if="open" /></template>',
+    })
+    const graph = makeGraph(root)
+    expect(files(discoverPages(root, {}, graph.resolveFile, graph))).toEqual(['src/views/Workbench.vue'])
+  })
+
+  test('a page-named component nothing renders stays a page', () => {
+    const root = repo({ 'src/components/LonelyPage.vue': '<template><p>Lonely</p></template>' })
+    const graph = makeGraph(root)
+    expect(files(discoverPages(root, {}, graph.resolveFile, graph))).toEqual(['src/components/LonelyPage.vue'])
+  })
+
+  test('a router or file-routed page stays a page even when another template renders it', () => {
+    const root = repo({
+      'src/router.ts': [
+        "import { createRouter, createWebHistory } from 'vue-router'",
+        "import Plans from './views/Plans.vue'",
+        "const routes = [{ path: '/pricing', component: Plans }]",
+        'export const router = createRouter({ history: createWebHistory(), routes })',
+        '',
+      ].join('\n'),
+      'src/views/Plans.vue': '<template><p>Plans</p></template>',
+      'src/components/Shell.vue': "<script setup>import Plans from '../views/Plans.vue'</script>\n<template><Plans /></template>",
+      'app/pricing/page.tsx': 'export default function P() { return <p>Pricing</p> }',
+    })
+    const graph = makeGraph(root)
+    expect(discoverPages(root, {}, graph.resolveFile, graph)).toEqual([
+      { file: 'app/pricing/page.tsx', route: '/pricing' },
+      { file: 'src/views/Plans.vue', route: '/pricing' },
+    ])
+  })
+
+  test('the views and pages folder rule does not apply below a components folder', () => {
+    const root = repo({
+      'src/components/workspace/views/host/HostRowChip.vue': '<template><p>Host</p></template>',
+      'src/components/pages/Crumb.vue': '<template><p>Crumb</p></template>',
+      'src/views/Bar.vue': '<template><p>Bar</p></template>',
+    })
+    expect(files(discoverPages(root))).toEqual(['src/views/Bar.vue'])
+    expect(isPageFile('src/components/workspace/views/host/HostRowChip.vue')).toBe(false)
+    expect(isPageFile('src/views/Bar.vue')).toBe(true)
+  })
+
+  test('an html file that is only an app shell is not a page; a static page with content is', () => {
+    const root = repo({
+      'index.html': '<!doctype html><html><head><script>x()</script></head><body>\n  <div id="app"></div>\n  <noscript>Turn on JavaScript</noscript>\n  <script type="module" src="/src/main.ts"></script>\n</body></html>',
+      'about.html': '<body><h1>About us</h1></body>',
+      'docs.html': '<body><div id="root"></div><p>Read the docs</p></body>',
+      'boot.html': '<body><style>#app:empty { min-height: 100vh }</style><div id="app"></div><!-- note --></body>',
+    })
+    expect(files(discoverPages(root))).toEqual(['about.html', 'docs.html'])
   })
 
   test('config pages globs replace discovery', () => {

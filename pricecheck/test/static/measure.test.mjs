@@ -43,6 +43,15 @@ group('vue', () => {
     expect(price(dir, 'src/views/Help.vue').units.word).toBe(6)
   })
 
+  test('a page in one app of a monorepo reads its own app catalog, not a sibling one', () => {
+    const dir = repo({
+      'services/a/web/src/i18n/messages/en-US/page.ts': 'export const m = { title: "Alpha title words" }',
+      'packages/b/src/i18n/messages/en-US/page.ts': 'export const m = { title: "Beta" }',
+      'services/a/web/src/views/Home.vue': '<template><p>{{ tr("title") }}</p><i18n-t keypath="title" /></template>',
+    })
+    expect(price(dir, 'services/a/web/src/views/Home.vue').units.word).toBe(6)
+  })
+
   test('a named import from a plain module is not priced as a component', () => {
     const dir = repo({
       'src/menu.ts': 'export function Items() {\n  return "lots of words in a plain module"\n}\n',

@@ -248,7 +248,7 @@ function textItems(ctx, sc, node) {
       icons++
       return ' '
     }
-    return ctx.i18n.text(sc.exprs[+n]) ?? ' x '
+    return ctx.i18n.text(sc.exprs[+n], sc.file) ?? ' x '
   })
   const count = wordsIn(s)
   const items = count ? [{ unit: 'word', count, file: sc.file, line: node.line }] : []
@@ -320,7 +320,7 @@ function classify(ctx, sc, el, cond) {
 function i18nItems(ctx, sc, el) {
   const raw = el.attrs.keypath ?? el.attrs[':keypath'] ?? el.attrs.id ?? el.attrs[':id'] ?? ''
   const literal = String(raw).replace(/^[{'"`\s]+|[}'"`\s]+$/g, '')
-  const text = ctx.i18n.keyText(literal) ?? ctx.i18n.text(String(raw))
+  const text = ctx.i18n.keyText(literal, sc.file) ?? ctx.i18n.text(String(raw), sc.file)
   return [{ unit: 'word', count: text == null ? 1 : wordsIn(text), file: sc.file, line: el.line, note: text == null ? 'unresolved message' : undefined }]
 }
 

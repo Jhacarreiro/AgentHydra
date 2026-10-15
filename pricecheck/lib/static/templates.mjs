@@ -8,6 +8,8 @@ const RE_OPEN = /<([A-Za-z][\w.:-]*)/y
 const RE_CLOSE = /<\/([A-Za-z][\w.:-]*)?\s*>/y
 const RE_NAME = /[^\s=>/"'{]+/y
 const RE_BARE = /[^\s>]+/y
+const JSX_AFTER = new Set(['(', '[', '{', ',', '?', ':', '&', '|', '='])
+const NULLISH = new Set(['', 'null', 'undefined', 'false', 'true'])
 
 const lineStarts = (src) => {
   const starts = [0]
@@ -81,6 +83,134 @@ function readTag(src, j) {
   }
 }
 
+function skipString(src, k, end) {
+  const q = src[k]
+  for (let m = k + 1; m < end; m++) {
+    if (src[m] === '\\') m++
+    else if (src[m] === q) return m
+  }
+  return end
+}
+
+const isJsxStart = (src, k) => {
+  const next = src[k + 1] ?? ''
+  if (next !== '>' && !/[A-Za-z]/.test(next)) return false
+  let p = k - 1
+  while (p >= 0 && /\s/.test(src[p])) p--
+  if (p < 0 || JSX_AFTER.has(src[p])) return true
+  return (src[p] === '>' && src[p - 1] === '=') || src.slice(Math.max(0, p - 5), p + 1) === 'return'
+}
+
+/** Index just past the JSX element that starts at src[j]. */
+function skipJsx(src, j, end) {
+  if (src.startsWith('<>', j)) j += 2
+  else {
+    RE_OPEN.lastIndex = j
+    const om = RE_OPEN.exec(src)
+    if (!om) return j + 1
+    const open = readTag(src, j + om[0].length)
+    if (open.selfClosing) return Math.min(open.end, end)
+    j = open.end
+  }
+  while (j < end) {
+    const c = src[j]
+    if (c === '<') {
+      if (src[j + 1] === '/') {
+        const e = src.indexOf('>', j)
+        return e < 0 ? end : e + 1
+      }
+      j = skipJsx(src, j, end)
+    } else if (c === '{') j = skipGroup(src, j, end)
+    else j++
+  }
+  return end
+}
+
+/** Index just past the bracket group that opens at src[j]. */
+function skipGroup(src, j, end) {
+  let depth = 0
+  for (let k = j; k < end; k++) {
+    const c = src[k]
+    if (c === '"' || c === "'" || c === '`') k = skipString(src, k, end)
+    else if (c === '<' && isJsxStart(src, k)) k = skipJsx(src, k, end) - 1
+    else if (c === '(' || c === '[' || c === '{') depth++
+    else if ((c === ')' || c === ']' || c === '}') && --depth === 0) return k + 1
+  }
+  return end
+}
+
+function firstJsx(src, s, e) {
+  for (let k = s; k < e; k++) {
+    const c = src[k]
+    if (c === '"' || c === "'" || c === '`') k = skipString(src, k, e)
+    else if (c === '<' && isJsxStart(src, k)) return k
+  }
+  return -1
+}
+
+/** The ?, : and && operators outside brackets, strings and JSX. */
+function topTokens(src, s, e) {
+  const toks = []
+  let depth = 0
+  for (let k = s; k < e; k++) {
+    const c = src[k]
+    if (c === '"' || c === "'" || c === '`') k = skipString(src, k, e)
+    else if (c === '<' && isJsxStart(src, k)) k = skipJsx(src, k, e) - 1
+    else if (c === '(' || c === '[' || c === '{') depth++
+    else if (c === ')' || c === ']' || c === '}') depth--
+    else if (depth === 0 && c === '?' && src[k + 1] === '?') k++
+    else if (depth === 0 && c === '?' && src[k + 1] !== '.') toks.push({ t: '?', at: k })
+    else if (depth === 0 && c === ':') toks.push({ t: ':', at: k })
+    else if (depth === 0 && c === '&' && src[k + 1] === '&') {
+      toks.push({ t: '&&', at: k })
+      k++
+    }
+  }
+  return toks
+}
+
+function unwrap(src, s, e) {
+  for (;;) {
+    while (s < e && /\s/.test(src[s])) s++
+    while (e > s && /\s/.test(src[e - 1])) e--
+    if (s < e && src[s] === '(' && skipGroup(src, s, e) === e) {
+      s++
+      e--
+    } else return [s, e]
+  }
+}
+
+/**
+ * A conditional expression as { when, ranges, hasElse }: ranges[k] is the source of branch k, when[k] its condition.
+ * `a ? A : b ? B : C` gives one chain of three ranges; `a && A` gives one range with no else.
+ */
+function conditional(src, s, e) {
+  ;[s, e] = unwrap(src, s, e)
+  const toks = topTokens(src, s, e)
+  const q = toks.find((t) => t.t === '?')
+  if (q) {
+    let nest = 0
+    let colon = -1
+    for (const t of toks) {
+      if (t.at <= q.at) continue
+      if (t.t === '?') nest++
+      else if (t.t === ':' && nest-- === 0) {
+        colon = t.at
+        break
+      }
+    }
+    if (colon < 0) return null
+    const when = [src.slice(s, q.at).trim()]
+    const ranges = [[q.at + 1, colon]]
+    const rest = conditional(src, colon + 1, e)
+    if (!rest) return { when, ranges: [...ranges, [colon + 1, e]], hasElse: true }
+    return { when: [...when, ...rest.when], ranges: [...ranges, ...rest.ranges], hasElse: rest.hasElse }
+  }
+  const and = toks.filter((t) => t.t === '&&').pop()
+  if (and) return { when: [src.slice(s, and.at).trim()], ranges: [[and.at + 2, e]], hasElse: false }
+  return null
+}
+
 /** Parses src[from, to) into { root, exprs }. The root is a '#root' element; unclosed tags close with their parent. */
 export function parseMarkup(src, mode = 'html', from = 0, to = src.length) {
   const starts = lineStarts(src)
@@ -119,6 +249,10 @@ export function parseMarkup(src, mode = 'html', from = 0, to = src.length) {
     if (push) stack.push(el)
     return el
   }
+  const pushElse = (at) => {
+    emitText()
+    top().children.push({ type: 'el', tag: 'pc-else', attrs: {}, children: [], line: lineOf(at) })
+  }
   const closeTo = (tag) => {
     for (let k = stack.length - 1; k > 0; k--) {
       if (stack[k].tag.toLowerCase() === tag) {
@@ -128,88 +262,115 @@ export function parseMarkup(src, mode = 'html', from = 0, to = src.length) {
       }
     }
   }
+  let scan = null
+  const renderRange = (s, e) => {
+    const [u0, u1] = unwrap(src, s, e)
+    const text = src.slice(u0, u1)
+    if (NULLISH.has(text)) return
+    const lt = firstJsx(src, u0, u1)
+    if (lt < 0) return holder(text, u0)
+    const sub = conditional(src, u0, u1)
+    if (sub) renderConditional(sub, u0)
+    else scan(lt, u1)
+  }
+  const renderConditional = (cond, at) => {
+    const depth = stack.length
+    openEl('pc-if', { when: cond.when }, at, true)
+    cond.ranges.forEach(([s, e], k) => {
+      if (k > 0) pushElse(at)
+      renderRange(s, e)
+    })
+    emitText()
+    stack.length = depth
+  }
 
-  let i = from
-  while (i < to) {
-    const c = src[i]
-    if (c === '<' && i + 1 < to) {
-      if (src.startsWith('<!--', i)) {
-        const e = src.indexOf('-->', i + 4)
-        i = e < 0 ? to : e + 3
-        continue
-      }
-      if (src[i + 1] === '!' || src[i + 1] === '?') {
-        const e = src.indexOf('>', i)
-        i = e < 0 ? to : e + 1
-        continue
-      }
-      RE_CLOSE.lastIndex = i
-      const cm = RE_CLOSE.exec(src)
-      if (cm && i < to) {
-        closeTo((cm[1] ?? '').toLowerCase())
-        i += cm[0].length
-        continue
-      }
-      if (src.startsWith('<>', i)) {
-        openEl('', {}, i, true)
-        i += 2
-        continue
-      }
-      RE_OPEN.lastIndex = i
-      const om = RE_OPEN.exec(src)
-      if (om) {
-        const tag = om[1]
-        const { attrs, end, selfClosing } = readTag(src, i + om[0].length)
-        i = end
-        const lower = tag.toLowerCase()
-        if (RAW.has(lower)) {
-          emitText()
-          const close = src.toLowerCase().indexOf(`</${lower}`, i)
-          i = close < 0 ? to : src.indexOf('>', close) + 1
+  scan = (from, to) => {
+    let i = from
+    while (i < to) {
+      const c = src[i]
+      if (c === '<' && i + 1 < to) {
+        if (src.startsWith('<!--', i)) {
+          const e = src.indexOf('-->', i + 4)
+          i = e < 0 ? to : e + 3
           continue
         }
-        openEl(tag, attrs, i, !selfClosing && !VOID.has(lower))
+        if (src[i + 1] === '!' || src[i + 1] === '?') {
+          const e = src.indexOf('>', i)
+          i = e < 0 ? to : e + 1
+          continue
+        }
+        RE_CLOSE.lastIndex = i
+        const cm = RE_CLOSE.exec(src)
+        if (cm && i < to) {
+          closeTo((cm[1] ?? '').toLowerCase())
+          i += cm[0].length
+          continue
+        }
+        if (src.startsWith('<>', i)) {
+          openEl('', {}, i, true)
+          i += 2
+          continue
+        }
+        RE_OPEN.lastIndex = i
+        const om = RE_OPEN.exec(src)
+        if (om) {
+          const tag = om[1]
+          const { attrs, end, selfClosing } = readTag(src, i + om[0].length)
+          i = end
+          const lower = tag.toLowerCase()
+          if (RAW.has(lower)) {
+            emitText()
+            const close = src.toLowerCase().indexOf(`</${lower}`, i)
+            i = close < 0 ? to : src.indexOf('>', close) + 1
+            continue
+          }
+          openEl(tag, attrs, i, !selfClosing && !VOID.has(lower))
+          continue
+        }
+      }
+      if (c === '{' && mode === 'vue' && src.startsWith('{{', i)) {
+        const e = src.indexOf('}}', i + 2)
+        const end = e < 0 || e >= to ? to : e + 2
+        holder(src.slice(i + 2, end - 2), i)
+        i = end
         continue
       }
-    }
-    if (c === '{' && mode === 'vue' && src.startsWith('{{', i)) {
-      const e = src.indexOf('}}', i + 2)
-      const end = e < 0 || e >= to ? to : e + 2
-      holder(src.slice(i + 2, end - 2), i)
-      i = end
-      continue
-    }
-    if (c === '{' && mode === 'svelte') {
-      const end = Math.min(skipBalanced(src, i), to)
-      const body = src.slice(i + 1, end - 1).trim()
-      if (body.startsWith('#')) {
-        const kind = body.slice(1).split(/\s/)[0]
-        const tag = SVELTE_BLOCK[kind]
-        if (tag) openEl(tag, {}, i, true)
-      } else if (body.startsWith(':')) {
-        emitText()
-        top().children.push({ type: 'el', tag: 'pc-else', attrs: {}, children: [], line: lineOf(i) })
-      } else if (body.startsWith('/')) {
-        const kind = body.slice(1).trim()
-        if (SVELTE_BLOCK[kind]) closeTo(SVELTE_BLOCK[kind])
-      } else holder(body, i)
-      i = end
-      continue
-    }
-    if (c === '{' && mode === 'jsx') {
-      const end = Math.min(skipBalanced(src, i), to)
-      const expr = src.slice(i + 1, end - 1)
-      const lt = expr.indexOf('<')
-      if (lt >= 0) i = i + 1 + lt
-      else {
-        holder(expr, i)
+      if (c === '{' && mode === 'svelte') {
+        const end = Math.min(skipBalanced(src, i), to)
+        const body = src.slice(i + 1, end - 1).trim()
+        if (body.startsWith('#')) {
+          const kind = body.slice(1).split(/\s/)[0]
+          const tag = SVELTE_BLOCK[kind]
+          if (tag) openEl(tag, {}, i, true)
+        } else if (body.startsWith(':')) {
+          pushElse(i)
+        } else if (body.startsWith('/')) {
+          const kind = body.slice(1).trim()
+          if (SVELTE_BLOCK[kind]) closeTo(SVELTE_BLOCK[kind])
+        } else holder(body, i)
         i = end
+        continue
       }
-      continue
+      if (c === '{' && mode === 'jsx') {
+        const end = Math.min(skipGroup(src, i, to), to)
+        const lo = i + 1
+        const hi = end - 1
+        const lt = firstJsx(src, lo, hi)
+        const cond = lt >= 0 ? conditional(src, lo, hi) : null
+        if (cond) renderConditional(cond, i)
+        else if (lt >= 0) {
+          i = lt
+          continue
+        } else holder(src.slice(lo, hi), i)
+        i = end
+        continue
+      }
+      addText(c, i)
+      i++
     }
-    addText(c, i)
-    i++
   }
+
+  scan(from, to)
   emitText()
   return { root, exprs }
 }
