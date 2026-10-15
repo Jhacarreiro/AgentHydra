@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **When a Claude Desktop or Codex app goes down with chats running, the Instance manager moves them and starts them
+  again.** If the app crashed, was signed out, or its plan or organization stopped working, it opens the same kind of
+  app on the account with the most room left, moves the chats there and checks that they run. An app a person quit
+  is left alone, and moved Codex chats are continued from the Codex app (Settings > Managers > Instance manager).
 - **A fresh ChatGPT Free sign-in is no longer undone by Login sync.** Since 2026-10-14 ChatGPT answers sends only
   from a login a browser sign-in made, and sync used to keep whichever copy expired later, often an older one from
   the other PC. A freshly signed-in login now wins and reaches the other PCs. A refused ChatGPT call also names the
