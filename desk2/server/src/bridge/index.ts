@@ -46,7 +46,7 @@ import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollo
 import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
-import { resumeAccount, type ResumeData } from './resume'
+import { resumeAccount, withDesktopAccounts, type ResumeData } from './resume'
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -539,7 +539,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       (r): r is NonNullable<typeof r> => r !== null,
     )
     const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
-    const mapped = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
+    const mapped = withDesktopAccounts(mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who)), who)
     const list = o.throwaway ? mapped : mapped.filter((s) => !isThrowawayCwd(s.cwd))
     rememberTitles(list)
     return sessionMeta(list, onAccountIds(inp))
@@ -573,9 +573,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     const base: ExternalInputs = inp ?? { agentStatus: [], live: [], chats: [], sessions: [], workers: [] }
     const sessions = row ? [...base.sessions.filter((s) => s.session_id !== id), row] : base.sessions
     const who = await resumeData()
-    const found = mapExternal({ ...base, sessions, wanted: new Set([id]), knownTitle }, new Set(), now(), (q) => resumeAccount(q, who)).find(
-      (s) => s.id === id,
-    )
+    const found = withDesktopAccounts(
+      mapExternal({ ...base, sessions, wanted: new Set([id]), knownTitle }, new Set(), now(), (q) => resumeAccount(q, who)),
+      who,
+    ).find((s) => s.id === id)
     if (!found) throw new BridgeError('http', `AgentHydra does not know session ${id}`, 404)
     return sessionMeta([found], onAccountIds(base))[0] ?? found
   }

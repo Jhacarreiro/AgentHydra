@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AhCliInstance } from '../../src/bridge/client'
 import { mapExternal } from '../../src/bridge/external'
-import { canResume, configRootOf, resumeAccount, sameLogin, type ResumeData } from '../../src/bridge/resume'
+import { canResume, configRootOf, desktopAccount, resumeAccount, sameLogin, type ResumeData } from '../../src/bridge/resume'
 
 const home = mkdtempSync(join(tmpdir(), 'desk-resume-'))
 afterAll(() => rmSync(home, { recursive: true, force: true }))
@@ -55,6 +55,15 @@ describe('resumeAccount: the CLI instance whose folder already holds the session
     expect(resumeAccount({ source: 'climayte', instance: '#68', instanceNum: 68, configRoot: null }, data)).toBeNull()
     expect(resumeAccount({ source: 'codex', instance: null, instanceNum: null, configRoot: null }, data)).toBeNull()
   })
+})
+
+test('desktopAccount: a Desktop chat is on the login linked to its app, else the CLI instance on the same login', () => {
+  const linked: ResumeData = { ...data, clis: [...data.clis, cli(170, { associatedDesktopDir: data.desktops[0]!.dir })] }
+  expect(desktopAccount('eek', linked)).toBe('cli-170')
+  expect(desktopAccount('#51', linked)).toBe('cli-170')
+  expect(desktopAccount('Other', data)).toBe('cli-135')
+  expect(desktopAccount('eek', data)).toBeNull()
+  expect(desktopAccount('unknown', data)).toBeNull()
 })
 
 test('sameLogin prefers the account uuid, else the email', () => {

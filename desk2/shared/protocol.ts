@@ -378,6 +378,9 @@ export interface ExternalSession {
   accountId: string | null
   /** A Codex chat's: the Codex account (AgentHydra's instance id) whose folder holds it, where it continues in place. */
   codexAccountId?: string
+  /** A Claude Desktop chat's: the CLI instance on the account signed in to the app that runs it (resume.ts desktopAccount).
+   *  Left out when none is known. */
+  desktopAccountId?: string
   /** Idle in someone else's window, and a Claude Code session or a Codex chat whose account is known: the composer can carry it on. */
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
