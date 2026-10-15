@@ -1,4 +1,5 @@
 import { callerAndChat } from './hydra-core/caller'
+import { loadCatalog } from './hydra-core/catalog'
 import { movers, readFeedback } from './hydra-core/feedback'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
@@ -162,7 +163,7 @@ export const CORE_TOOLS: HydraTool[] = [
       const dir = coreDir()
       return {
         ...statsOf(dir, new Date(Date.now() - days * 24 * 60 * 60 * 1000)),
-        learned: movers(readFeedback(dir)),
+        learned: movers(readFeedback(dir), loadCatalog(dir).entries),
       }
     },
   },

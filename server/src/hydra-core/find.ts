@@ -107,7 +107,7 @@ export function rankEntries(
       if (opts.mode && !modesOf(e).includes(opts.mode)) continue
       const rank = opts.tiers ? opts.tiers.indexOf(e.tier ?? '') : 0
       if (rank < 0) continue
-      const score = scoreEntry(e, t, opts.noHow) * priorOf(opts.feedback ?? null, e.id)
+      const score = scoreEntry(e, t, opts.noHow) * priorOf(opts.feedback ?? null, e)
       if (score > 0 && score >= (opts.min ?? 0)) scored.push({ entry: e, rank, score })
     }
   scored.sort((a, b) =>

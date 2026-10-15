@@ -35,11 +35,12 @@ const MATCH_POINTERS = 3
  *  words of the message, and a message of at least MATCH_WORDS content words. */
 const MATCH_STRONG = 10
 const MATCH_WORDS = 3
-/** What an entry needs to be attached: MATCH_MIN, one more when it was rejected more often than taken; knowledge
- *  offered STALE_OFFERS times and never taken is not attached at all. */
-function attachable(fb: Feedback | null, e: CatalogEntry, score: number): boolean {
-  if (e.kind === 'knowledge' && stale(fb, e.id)) return false
-  return score >= (doubted(fb, e.id) ? MATCH_MIN + 1 : MATCH_MIN)
+/** What a match sent as a pointer also needs, since there a take (loading or picking it) is observable: one more
+ *  than MATCH_MIN when it was rejected more often than taken, and for knowledge, a take within STALE_OFFERS offers.
+ *  Text pasted in full (reading it is the use) and exempt entries (pinned rulings, folder rules) never are. */
+function pointable(fb: Feedback | null, e: CatalogEntry, score: number): boolean {
+  if (e.kind === 'knowledge' && stale(fb, e)) return false
+  return !doubted(fb, e) || score >= MATCH_MIN + 1
 }
 
 const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
@@ -92,6 +93,8 @@ export interface Pack {
   mode: PackMode
   text: string
   ids: string[]
+  /** The ids whose full text the pack pasted (folder rules, inline knowledge, the lead's brief): not offers. */
+  pasted: string[]
   bytes: number
   ms: number
   /** The lead the pack used: its catalog id (`lead:<name>` for a hydra.md lead not in the catalog), else null. */
@@ -236,7 +239,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const feedback = readFeedback(dir)
   const matches = rankEntries(entries, req.prompt, { feedback }).filter(
     (s) =>
-      attachable(feedback, s.entry, s.score) &&
+      s.score >= MATCH_MIN &&
       s.entry.kind !== 'person' &&
       !mainIds.has(s.entry.id) &&
       !foreign(s.entry) &&
@@ -247,6 +250,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     .slice(0, INLINE_MATCHES)
     .map((s) => s.entry)
   const rest = matches.map((s) => s.entry).filter((e) => !inline.includes(e))
+  const scoreOf = new Map(matches.map((s) => [s.entry.id, s.score]))
 
   const hydra = hydraLead(files.hydraMd)
   const fixed = !hydra && req.lead !== undefined
@@ -335,6 +339,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
 
   const pointerIds: string[] = []
   for (const e of [...overflow, ...rest]) {
+    if (!pointable(feedback, e, scoreOf.get(e.id) ?? 0)) continue
     const next = { ...s, pointers: [...s.pointers, `- ${e.id} - ${e.when} (${loadRef(e)})`] }
     if (fits(next)) {
       s = next
@@ -343,21 +348,26 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   }
 
   const text = frame(parts(s))
+  const pasted = [...ids, ...inlineIds, ...(s.lead === leadFull && lead ? [lead.id] : [])]
   ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.id] : []))
   const bytes = Buffer.byteLength(text, 'utf8')
   const ms = Math.round(performance.now() - started)
   const used = hydra
     ? (hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`)
     : (lead?.id ?? (fixed ? (req.lead ?? null) : null))
-  if (req.dry) return { mode, text, ids, bytes, ms, lead: used, owed }
+  if (req.dry) return { mode, text, ids, pasted, bytes, ms, lead: used, owed }
 
   if (owed === null) clearLeadOwed(sent)
   else if (owed) setLeadOwed(sent, owed)
   const record = mode === 'delta' ? [...seen, ...ids] : ids
   sent[req.session] = [...new Set(record)]
   writeSent(files.sent, sent, req.session, now)
-  appendLog(dir, { event: 'pack', chat: req.chat, session: req.session, mode, ids, bytes, ms }, now)
-  return { mode, text, ids, bytes, ms, lead: used, owed }
+  appendLog(
+    dir,
+    { event: 'pack', chat: req.chat, session: req.session, mode, ids, pasted, bytes, ms },
+    now,
+  )
+  return { mode, text, ids, pasted, bytes, ms, lead: used, owed }
 }
 
 /** Whether a pack ranks its lead on the prompt: no hydra.md lead, no fixed lead, and a first or full pack. */
@@ -471,7 +481,7 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       ? []
       : rankEntries(entries, req.prompt, { content: true, feedback }).filter((s) => {
           if (
-            !attachable(feedback, s.entry, s.score) ||
+            s.score < MATCH_MIN ||
             s.entry.kind === 'person' ||
             mainIds.has(s.entry.id) ||
             foreign(s.entry) ||
@@ -484,6 +494,7 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
   const inline: string[] = []
   const pointers: string[] = []
   const ids: string[] = []
+  const pasted: string[] = []
   for (const { entry, score } of hits) {
     if (ids.length >= MATCH_INLINE) break
     if (loadText(entry).trim()) {
@@ -491,11 +502,12 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       if (next.length <= cap) {
         inline.push(entryBlock(entry))
         ids.push(entry.id)
+        pasted.push(entry.id)
         scores[entry.id] = Math.round(score * 10) / 10
         continue
       }
     }
-    if (pointers.length < MATCH_POINTERS) {
+    if (pointers.length < MATCH_POINTERS && pointable(feedback, entry, score)) {
       const line = `- ${entry.id} - ${entry.when} (${loadRef(entry)})`
       if (matchText(inline, [...pointers, line]).length <= cap) {
         pointers.push(line)
@@ -526,6 +538,7 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       placement: req.placement,
       chars: text.length,
       ids,
+      pasted,
       scores,
       ...(shift ? { lead: shift.to } : {}),
     },

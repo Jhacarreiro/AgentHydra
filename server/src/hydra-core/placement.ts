@@ -178,6 +178,7 @@ export function placeChat(
       placement: req.placement,
       chars: text.length,
       ids: pack.ids,
+      pasted: pack.pasted,
       hash,
       reused,
       fresh: req.fresh,

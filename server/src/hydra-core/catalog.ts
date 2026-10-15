@@ -52,6 +52,8 @@ export interface CatalogEntry {
   how: string
   load: Load
   source?: string
+  /** Set by loadCatalog for an entry from PINNED_FILE: the owner's standing rulings, which feedback never moves. */
+  pinned?: true
 }
 
 export interface Skip {
@@ -138,6 +140,9 @@ export function checkEntry(raw: unknown): { entry: CatalogEntry } | { why: strin
   return { entry }
 }
 
+/** The catalog file of the owner's pinned rulings. */
+export const PINNED_FILE = 'generated-pinned.json'
+
 const rank = (file: string) => (file.startsWith('generated-') ? 0 : 1)
 
 /** Loads catalog/generated-*.json, then catalog/hand-*.json; a hand entry with the same id replaces the generated one. */
@@ -169,7 +174,7 @@ export function loadCatalog(dir: string): Catalog {
       if ('why' in r) {
         const id = raw && typeof raw === 'object' ? (raw as { id?: unknown }).id : undefined
         skipped.push({ file, id: typeof id === 'string' ? id : undefined, why: r.why })
-      } else entries.set(r.entry.id, r.entry)
+      } else entries.set(r.entry.id, file === PINNED_FILE ? { ...r.entry, pinned: true } : r.entry)
     }
   }
   return { entries, skipped }

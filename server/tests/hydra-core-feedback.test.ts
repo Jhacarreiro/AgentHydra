@@ -2,8 +2,10 @@ import { afterEach, beforeEach, expect, spyOn, test } from 'bun:test'
 import * as fs from 'node:fs'
 import { existsSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import type { CatalogEntry } from '../src/hydra-core/catalog'
+import { type CatalogEntry, loadCatalog } from '../src/hydra-core/catalog'
 import {
+  doubted,
+  exempt,
   type Feedback,
   feedbackPath,
   foldFeedback,
@@ -12,6 +14,7 @@ import {
   needsPath,
   priorOf,
   readFeedback,
+  stale,
 } from '../src/hydra-core/feedback'
 import { rankEntries } from '../src/hydra-core/find'
 import { appendLog, readLog } from '../src/hydra-core/log'
@@ -111,21 +114,37 @@ test('B4b-1: the fold counts offered, taken, rejected and reported per entry fro
     ],
   ])
   const fb = foldFeedback(dir, now)
+  // The pack and placement lines carry no `pasted` list: their knowledge and person ids may have been pasted
+  // in full, so they count as pasted, not offered; the run's shown list is an offer.
   expect(fb.entries['knowledge:brand-notes']).toEqual({
-    offered: 3,
+    offered: 1,
+    pasted: 2,
     taken: 0,
     rejected: 1,
     reported: 0,
   })
-  expect(fb.entries['person:iris-ui']).toEqual({ offered: 2, taken: 1, rejected: 0, reported: 2 })
-  expect(fb.entries['person:ops-lead']).toEqual({ offered: 0, taken: 1, rejected: 0, reported: 1 })
+  expect(fb.entries['person:iris-ui']).toEqual({
+    offered: 1,
+    pasted: 1,
+    taken: 1,
+    rejected: 0,
+    reported: 2,
+  })
+  expect(fb.entries['person:ops-lead']).toEqual({
+    offered: 0,
+    pasted: 0,
+    taken: 1,
+    rejected: 0,
+    reported: 1,
+  })
   expect(fb.entries['instrument:screen-capture']).toEqual({
     offered: 1,
+    pasted: 0,
     taken: 0,
     rejected: 1,
     reported: 0,
   })
-  expect(fb.base).toBeCloseTo(2 / 6, 5)
+  expect(fb.base).toBeCloseTo(2 / 3, 5)
   expect(JSON.parse(readFileSync(feedbackPath(dir), 'utf8'))).toEqual(fb)
 })
 
@@ -164,44 +183,216 @@ test('B4b-2: the prior raises a taken entry and lowers a rejected one, only past
     ...fb,
     entries: { 'knowledge:alpha': { offered: 9, taken: 0, rejected: 9, reported: 0 } },
   }
-  expect(priorOf(young, 'knowledge:alpha')).toBe(1)
-  expect(priorOf(null, 'knowledge:alpha')).toBe(1)
+  expect(priorOf(young, { id: 'knowledge:alpha' })).toBe(1)
+  expect(priorOf(null, { id: 'knowledge:alpha' })).toBe(1)
   // Bounded: a perfect record moves the score by at most half.
   const best: Feedback = {
     ...fb,
     base: 0,
     entries: { 'knowledge:alpha': { offered: 400, taken: 400, rejected: 0, reported: 0 } },
   }
-  expect(priorOf(best, 'knowledge:alpha')).toBe(1.25)
+  expect(priorOf(best, { id: 'knowledge:alpha' })).toBe(1.25)
 })
 
-test('B4b-3: packs and per-message additions drop knowledge offered 50+ times and never taken', () => {
-  const notes = join(dir, 'brand-notes.md')
-  writeFileSync(notes, 'Brand notes: colours and type for the dashboard.\n')
-  plantFeedback({ 'knowledge:brand-notes': { offered: 60, taken: 0, rejected: 0, reported: 0 } })
-  const prompt = 'which brand colours and type rules apply to the dashboard'
+test('B4b-3: a pack drops knowledge offered as a pointer 50+ times and never taken', () => {
+  writeFileSync(
+    join(dir, 'catalog', 'hand-extra.json'),
+    JSON.stringify([k('zeta-notes', 'quarterly ledger', { how: 'open it' })]),
+  )
+  // A score of MATCH_MIN: a one-line pointer, where taking it (core_find, core_use) is logged.
+  const prompt = 'quarterly ledger'
+  // Base 0: the prior is about 1, so only the stale rule can drop it.
+  plantFeedback({ 'knowledge:zeta-notes': { offered: 60, taken: 0, rejected: 0, reported: 0 } }, 0)
   const pack = packFor(
     dir,
     { chat: 'p1', session: 's1', cwd: 'C:/Users/me/app', prompt, lead: null, dry: true },
     now,
   )
-  expect(pack.ids).not.toContain('knowledge:brand-notes')
-  fs.mkdirSync(chatPaths(dir, 'p2').root, { recursive: true })
-  writeSent(chatPaths(dir, 'p2').sent, { s1: [] }, 's1', now)
-  const m = matchFor(
-    dir,
-    { chat: 'p2', session: 's1', cwd: 'C:/Users/me/app', prompt, placement: 'file' },
-    now,
-  )
-  expect(m.ids).not.toContain('knowledge:brand-notes')
+  expect(pack.ids).not.toContain('knowledge:zeta-notes')
   // Taken once, it stays.
-  plantFeedback({ 'knowledge:brand-notes': { offered: 60, taken: 1, rejected: 0, reported: 0 } })
+  plantFeedback({ 'knowledge:zeta-notes': { offered: 60, taken: 1, rejected: 0, reported: 0 } }, 0)
   const kept = packFor(
     dir,
     { chat: 'p3', session: 's1', cwd: 'C:/Users/me/app', prompt, lead: null, dry: true },
     now,
   )
-  expect(kept.ids).toContain('knowledge:brand-notes')
+  expect(kept.ids).toContain('knowledge:zeta-notes')
+})
+
+test('B4b-fix-1b: knowledge pasted in full is never dropped as stale nor held to the doubted bar', () => {
+  const notes = join(dir, 'brand-notes.md')
+  writeFileSync(notes, 'Brand notes: colours and type for the dashboard.\n')
+  // Counts that dropped it before: offered 60 and 500, never taken, rejected more often than taken. Base 0 keeps
+  // the prior about 1, so only the stale rule and the doubted bar are in play.
+  for (const offered of [60, 500]) {
+    plantFeedback({ 'knowledge:brand-notes': { offered, taken: 0, rejected: 5, reported: 0 } }, 0)
+    // A score of 22 (a name hit): pasted in full in the pack and in the per-message match.
+    const prompt = 'the brand notes: colours and type rules for the dashboard'
+    const pack = packFor(
+      dir,
+      { chat: `p${offered}`, session: 's1', cwd: 'C:/Users/me/app', prompt, lead: null, dry: true },
+      now,
+    )
+    expect(pack.ids).toContain('knowledge:brand-notes')
+    expect(pack.text).toContain('Brand notes: colours and type for the dashboard.')
+    const chat = `m${offered}`
+    fs.mkdirSync(chatPaths(dir, chat).root, { recursive: true })
+    writeSent(chatPaths(dir, chat).sent, { s1: [] }, 's1', now)
+    const m = matchFor(
+      dir,
+      { chat, session: 's1', cwd: 'C:/Users/me/app', prompt, placement: 'file' },
+      now,
+    )
+    expect(m.ids).toContain('knowledge:brand-notes')
+    expect(m.text).toContain('Brand notes: colours and type for the dashboard.')
+    // A score of 16 puts it below INLINE_MIN in the pack: a pointer, where the stale rule drops it.
+    const weak = packFor(
+      dir,
+      {
+        chat: `w${offered}`,
+        session: 's1',
+        cwd: 'C:/Users/me/app',
+        prompt: 'which brand colours and type rules apply to the dashboard',
+        lead: null,
+        dry: true,
+      },
+      now,
+    )
+    expect(weak.ids).not.toContain('knowledge:brand-notes')
+  }
+})
+
+test('B4b-fix-1a: a pinned ruling and a folder rule are exempt from every feedback effect', () => {
+  const text = join(dir, 'house-ruling.md')
+  writeFileSync(text, 'House ruling: never force-push a shared branch.\n')
+  const file = { type: 'file', path: text } as const
+  // No pinned- prefix on the id: the catalog marks a pinned entry by the file it came from.
+  writeFileSync(
+    join(dir, 'catalog', 'generated-pinned.json'),
+    JSON.stringify([k('house-ruling', 'quarterly ledger', { how: 'read it', load: file })]),
+  )
+  writeFileSync(
+    join(dir, 'catalog', 'hand-extra.json'),
+    JSON.stringify([
+      k('plain-ruling', 'quarterly ledger', { how: 'read it', load: file }),
+      k('repo-rules', 'quarterly ledger', {
+        how: 'read it',
+        load: file,
+        tags: ['repo'],
+        folders: ['C:/Users/me/other'],
+      }),
+    ]),
+  )
+  const never = { offered: 500, taken: 0, rejected: 9, reported: 0 }
+  plantFeedback({
+    'knowledge:house-ruling': never,
+    'knowledge:plain-ruling': never,
+    'knowledge:repo-rules': never,
+  })
+  const catalog = loadCatalog(dir).entries
+  const pinned = catalog.get('knowledge:house-ruling') as CatalogEntry
+  const plain = catalog.get('knowledge:plain-ruling') as CatalogEntry
+  const rule = catalog.get('knowledge:repo-rules') as CatalogEntry
+  expect(pinned.pinned).toBe(true)
+  expect(plain.pinned).toBeUndefined()
+  const fb = readFeedback(dir)
+  for (const e of [pinned, rule]) {
+    expect(exempt(e)).toBe(true)
+    expect(priorOf(fb, e)).toBe(1)
+    expect(stale(fb, e)).toBe(false)
+    expect(doubted(fb, e)).toBe(false)
+  }
+  expect(exempt(plain)).toBe(false)
+  expect(priorOf(fb, plain)).toBeLessThan(1)
+  // A score of exactly MATCH_MIN, offered as a pointer: the pinned ruling is attached at the normal bar, the
+  // same entry outside the pinned catalog is not.
+  const pack = packFor(
+    dir,
+    {
+      chat: 'x1',
+      session: 's1',
+      cwd: 'C:/Users/me/app',
+      prompt: 'quarterly ledger',
+      lead: null,
+      dry: true,
+    },
+    now,
+  )
+  expect(pack.ids).toContain('knowledge:house-ruling')
+  expect(pack.ids).not.toContain('knowledge:plain-ruling')
+  const inFolder = packFor(
+    dir,
+    {
+      chat: 'x2',
+      session: 's1',
+      cwd: 'C:/Users/me/other',
+      prompt: 'quarterly ledger',
+      lead: null,
+      dry: true,
+    },
+    now,
+  )
+  expect(inFolder.ids).toContain('knowledge:repo-rules')
+  const learned = movers(fb, catalog)
+  expect([...learned.up, ...learned.down].map((m) => m.id)).toEqual(['knowledge:plain-ruling'])
+})
+
+test('B4b-fix-1c: the fold counts pasted text apart from pointer offers; the prior and core_stats see offers only', () => {
+  writeFileSync(
+    join(dir, 'catalog', 'hand-extra.json'),
+    JSON.stringify([k('zeta-notes', 'quarterly ledger', { how: 'open it' })]),
+  )
+  // The pack's log line names what it pasted in full.
+  const brand = 'the brand notes: colours and type rules for the dashboard'
+  packFor(
+    dir,
+    { chat: 'f1', session: 's1', cwd: 'C:/Users/me/app', prompt: brand, lead: null },
+    now,
+  )
+  packFor(
+    dir,
+    { chat: 'f2', session: 's1', cwd: 'C:/Users/me/app', prompt: 'quarterly ledger', lead: null },
+    now,
+  )
+  const packs = readLog(dir).events.filter((e) => e.event === 'pack')
+  expect(packs[0].pasted).toContain('knowledge:brand-notes')
+  expect(packs[1].ids).toContain('knowledge:zeta-notes')
+  expect(packs[1].pasted).not.toContain('knowledge:zeta-notes')
+  fs.mkdirSync(chatPaths(dir, 'f3').root, { recursive: true })
+  writeSent(chatPaths(dir, 'f3').sent, { s1: [] }, 's1', now)
+  const placed = matchFor(
+    dir,
+    { chat: 'f3', session: 's1', cwd: 'C:/Users/me/app', prompt: brand, placement: 'file' },
+    now,
+  )
+  expect(placed.ids).toContain('knowledge:brand-notes')
+  const line = readLog(dir).events.find((e) => e.event === 'placement' && e.phase === 'message')
+  expect(line?.pasted).toContain('knowledge:brand-notes')
+
+  // Pasted 60 times and never taken: before, 60 offers that lowered its prior and listed it in core_stats.
+  rmSync(join(dir, 'log.jsonl'), { force: true })
+  for (let i = 0; i < 60; i++)
+    plant([
+      [
+        5,
+        {
+          event: 'pack',
+          chat: `c${i}`,
+          ids: ['knowledge:brand-notes', 'knowledge:zeta-notes'],
+          pasted: ['knowledge:brand-notes'],
+        },
+      ],
+    ])
+  const fb = foldFeedback(dir, now)
+  expect(fb.entries['knowledge:brand-notes']).toMatchObject({ offered: 0, pasted: 60, taken: 0 })
+  expect(fb.entries['knowledge:zeta-notes']).toMatchObject({ offered: 60, pasted: 0, taken: 0 })
+  expect(fb.base).toBe(0)
+  const catalog = loadCatalog(dir).entries
+  expect(priorOf(fb, catalog.get('knowledge:brand-notes') as CatalogEntry)).toBe(1)
+  expect(stale(fb, catalog.get('knowledge:brand-notes') as CatalogEntry)).toBe(false)
+  expect(stale(fb, catalog.get('knowledge:zeta-notes') as CatalogEntry)).toBe(true)
+  const learned = movers(fb, catalog)
+  expect([...learned.up, ...learned.down].map((m) => m.id)).not.toContain('knowledge:brand-notes')
 })
 
 test('B4b-3: an entry rejected more often than taken needs a score above MATCH_MIN', () => {

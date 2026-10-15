@@ -1,11 +1,14 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { MODES } from './catalog'
+import { type CatalogEntry, MODES } from './catalog'
 import { readLog } from './log'
 import { coreDir } from './paths'
 
 export interface EntryFeedback {
+  /** Offers where a take is observable: a pointer line, a find or page result, a pick list. */
   offered: number
+  /** Times its full text was pasted into a chat, where reading it is the use and no take follows. Not an offer. */
+  pasted?: number
   taken: number
   rejected: number
   reported: number
@@ -53,15 +56,17 @@ interface Need {
   need?: string
 }
 
-/** Per entry: offered (pack, placement, find, a run's shown list once), taken (a pick, a core_use), rejected
- *  (`more` and `none` misses), reported (score - 3 over reports whose run took it, minus 1 per overruled). */
+/** Per entry: offered (a pack or placement pointer, a find result, a run's shown list once), pasted (a pack or
+ *  placement that pasted its full text; a line from before `pasted` was logged counts its knowledge and person ids
+ *  as pasted), taken (a pick, a core_use), rejected (`more` and `none` misses), reported (score - 3 over reports
+ *  whose run took it, minus 1 per overruled). */
 export function foldEvents(events: Ev[]): {
   entries: Record<string, EntryFeedback>
   needs: Need[]
 } {
   const entries: Record<string, EntryFeedback> = {}
   const of = (id: string) => {
-    entries[id] ??= { offered: 0, taken: 0, rejected: 0, reported: 0 }
+    entries[id] ??= { offered: 0, pasted: 0, taken: 0, rejected: 0, reported: 0 }
     return entries[id]
   }
   const runOf = new Map<string, number>()
@@ -82,10 +87,15 @@ export function foldEvents(events: Ev[]): {
     const chat = str(e.chat)
     const run = typeof e.run === 'number' ? e.run : undefined
     if (e.step === 'start' && run !== undefined) runOf.set(chat, run)
-    if (
-      (e.event === 'pack' || e.event === 'placement' || e.event === 'find') &&
-      Array.isArray(e.ids)
-    )
+    if ((e.event === 'pack' || e.event === 'placement') && Array.isArray(e.ids)) {
+      const pasted = Array.isArray(e.pasted) ? new Set(e.pasted) : null
+      for (const id of new Set(e.ids))
+        if (typeof id !== 'string') continue
+        else if (pasted ? pasted.has(id) : /^(?:knowledge|person):/.test(id))
+          of(id).pasted = (of(id).pasted ?? 0) + 1
+        else of(id).offered++
+    }
+    if (e.event === 'find' && Array.isArray(e.ids))
       for (const id of new Set(e.ids)) if (typeof id === 'string') of(id).offered++
     if (Array.isArray(e.shown)) {
       const key = `${chat}#${run}`
@@ -204,23 +214,32 @@ export function readFeedback(dir: string): Feedback | null {
 
 const clamp = (x: number, lo: number, hi: number) => Math.min(hi, Math.max(lo, x))
 
+/** What feedback needs of an entry: its id, and what marks it exempt. */
+export type Rated = Pick<CatalogEntry, 'id'> &
+  Partial<Pick<CatalogEntry, 'kind' | 'folders' | 'pinned'>>
+
+/** The owner's pinned rulings and folder rules: feedback never drops them, raises their bar or moves their score. */
+export function exempt(e: Rated): boolean {
+  return e.pinned === true || (e.kind === 'knowledge' && (e.folders?.length ?? 0) > 0)
+}
+
 /** The score multiplier an entry's record earns: a smoothed take rate against the catalog's, bounded to ±25%. */
-export function priorOf(fb: Feedback | null, id: string): number {
-  const f = fb?.entries[id]
-  if (!fb || !f || f.offered < PRIOR_OFFERS) return 1
+export function priorOf(fb: Feedback | null, e: Rated): number {
+  const f = fb?.entries[e.id]
+  if (!fb || !f || f.offered < PRIOR_OFFERS || exempt(e)) return 1
   return 1 + 0.5 * clamp((f.taken + 1) / (f.offered + 2) - fb.base, -0.5, 0.5)
 }
 
 /** Offered STALE_OFFERS times or more and never taken. */
-export function stale(fb: Feedback | null, id: string): boolean {
-  const f = fb?.entries[id]
-  return !!f && f.offered >= STALE_OFFERS && f.taken === 0
+export function stale(fb: Feedback | null, e: Rated): boolean {
+  const f = fb?.entries[e.id]
+  return !!f && !exempt(e) && f.offered >= STALE_OFFERS && f.taken === 0
 }
 
 /** Rejected more often than taken. */
-export function doubted(fb: Feedback | null, id: string): boolean {
-  const f = fb?.entries[id]
-  return !!f && f.rejected > f.taken
+export function doubted(fb: Feedback | null, e: Rated): boolean {
+  const f = fb?.entries[e.id]
+  return !!f && !exempt(e) && f.rejected > f.taken
 }
 
 export interface Mover extends EntryFeedback {
@@ -228,13 +247,18 @@ export interface Mover extends EntryFeedback {
   prior: number
 }
 
-/** The entries the prior moves most, up and down. */
+/** The entries the prior moves most, up and down; `catalog` marks the exempt ones, which never move. */
 export function movers(
   fb: Feedback | null,
+  catalog: Map<string, CatalogEntry> = new Map(),
   n = 5,
 ): { at: string | null; up: Mover[]; down: Mover[] } {
   const all: Mover[] = Object.entries(fb?.entries ?? {})
-    .map(([id, f]) => ({ id, ...f, prior: Math.round(priorOf(fb, id) * 1000) / 1000 }))
+    .map(([id, f]) => ({
+      id,
+      ...f,
+      prior: Math.round(priorOf(fb, catalog.get(id) ?? { id }) * 1000) / 1000,
+    }))
     .filter((m) => m.prior !== 1)
   return {
     at: fb?.at ?? null,
