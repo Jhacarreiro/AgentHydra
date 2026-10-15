@@ -23,7 +23,7 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@
 import { settingsIcons } from '@/lib/icons'
 import { canCollapse, inHost } from '@/lib/host-window'
 import { usePaneApi } from './api'
-import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
+import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
@@ -62,10 +62,6 @@ const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) =>
 
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
-
-const SEGMENTS = 'flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px'
-const SEGMENT =
-  'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-ui leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
 
 const local = ref<DeskSettings | null>(null)
 const models = shallowRef<ModelChoice[]>([])
@@ -286,15 +282,6 @@ async function loadBridge() {
 // Segmented control: arrows move the choice, as in a radio group.
 function onCollapseKey(e: KeyboardEvent) {
   onSegmentKey(e, COLLAPSE_MODES.indexOf(local.value?.collapseMode ?? 'off'), COLLAPSE_MODES.length, (i) => save({ collapseMode: COLLAPSE_MODES[i]! }))
-}
-function onSegmentKey(e: KeyboardEvent, current: number, count: number, pick: (i: number) => void) {
-  const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
-  if (!step) return
-  e.preventDefault()
-  const next = (current + step + count) % count
-  pick(next)
-  const group = (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="radio"]')
-  group[next]?.focus()
 }
 const effortIndex = computed(() => Math.max(0, efforts.findIndex((x) => x.value === (local.value?.defaultEffort ?? null))))
 

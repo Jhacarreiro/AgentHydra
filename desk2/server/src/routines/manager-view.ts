@@ -30,6 +30,8 @@ function routineView(m: Manager, s: Seen, t: number): Routine {
     until: def?.until ?? null,
     paused: def?.windowsTask !== undefined ? s.task?.state === 'Disabled' : mem.paused,
     describe: def?.describe === true,
+    modes: def?.modes ? [...def.modes.options] : null,
+    mode: def?.modes && s.reading?.mode && def.modes.options.includes(s.reading.mode) ? s.reading.mode : null,
     headline: s.reading?.headline ?? null,
     totals: s.reading?.totals ?? null,
     settings: s.reading?.settings ?? null,
