@@ -271,6 +271,12 @@ function reconcile<T extends { id: string }>(old: T[], next: T[]): T[] {
   return out.length === old.length && out.every((o, i) => o === old[i]) ? old : out
 }
 
+/** Stores a split list pair, each side keeping its old array (and rows) when the push changed nothing in it: a push that moved only
+ *  the other PCs' workers, or one task's tokens, then leaves every list the sidebar derives from the rest alone. */
+function keepSplit<K extends 'workers' | 'remoteWorkers' | 'swarmJobs' | 'remoteSwarmJobs'>(next: Pick<DeskStoreState, K>): void {
+  for (const key of Object.keys(next) as K[]) store[key] = reconcile(store[key] as { id: string }[], next[key] as { id: string }[]) as DeskStoreState[K]
+}
+
 // The lists' browser copies are written once things settle, not on every broadcast; leaving the page writes them at once.
 const pendingCache = new Map<string, unknown>()
 let cacheTimer: ReturnType<typeof setTimeout> | null = null
@@ -566,12 +572,12 @@ function handleServerEvent(event: ServerEvent) {
       break
 
     case 'climayte.update':
-      Object.assign(store, splitWorkers(event.workers))
+      keepSplit(splitWorkers(event.workers))
       cacheLater('workers', event.workers)
       break
 
     case 'swarm.update':
-      Object.assign(store, splitJobs(event.jobs))
+      keepSplit(splitJobs(event.jobs))
       break
 
     case 'accounts.update':

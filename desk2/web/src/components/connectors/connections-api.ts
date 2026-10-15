@@ -19,10 +19,20 @@ import {
 
 export const connectorList = ref<ConnectorView[] | null>(null)
 
+let lastText = ''
+let lastList: ConnectorView[] | null = null
+
 export async function refreshConnectorList(): Promise<void> {
   try {
     const res = await fetch(CONNECTORS)
-    if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) connectorList.value = ((await res.json()) as ConnectorsResponse).connectors
+    if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) {
+      // An unchanged answer (the common one, a poll a second while a connector starts) must not swap the list and redraw its watchers.
+      const text = await res.text()
+      if (text === lastText && connectorList.value && connectorList.value === lastList) return
+      lastText = text
+      connectorList.value = (JSON.parse(text) as ConnectorsResponse).connectors
+      lastList = connectorList.value
+    }
   } catch {
     /* the server is restarting: keep what was last seen */
   }
