@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Unassign works on a chat left under an old login.** Move to account > Unassigned refused a chat filed under an account its app was signed into before, with "Expected one exact native session match, found 0". The app never loads such a chat, so AgentHydra now archives it by its flag on disk, the way a move already did.
 - **A new instance is made in one click, with no name asked.** The plus on the Desktop, Codex and DeepSeek tables creates the instance at once and gives it the next free name. The sign-in note that came with the create dialog is gone, and you can still rename an instance from its row menu.
 - **AgentHydra reads usage less when nobody is looking.** An hour after you last had AgentHydra on screen, it checks your accounts at most every 4 hours instead of at your set interval, and it catches up as soon as you look again. CliMayte no longer re-reads an account that is full until its reset.
 - **An open menu closes when you click into AgentHydra's pane.** A menu, popover or dropdown in Desk used to stay open when the click landed in AgentHydra's pane. AgentHydra's own menus now close on a click on Desk too, and clicking into another app leaves them as they are.
