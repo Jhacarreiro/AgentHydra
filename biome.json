@@ -34,8 +34,7 @@
       "!**/tests/server-lib",
       "!**/tests/mocks",
       "!orchestrator/state",
-      "!server/mcp-api-levels",
-      "!pricecheck/test/fixtures"
+      "!server/mcp-api-levels"
     ]
   },
   "css": { "formatter": { "enabled": false }, "linter": { "enabled": false } },

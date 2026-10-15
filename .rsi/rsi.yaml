@@ -94,3 +94,12 @@ metrics:
     pick: 'json:$.points'
     gate: exact
     light: true
+  # How often pricecheck's advice went bad (undone, misled, or marked wrong or undone), across every project with advice.
+  - id: pricecheck.advice.bad_rate
+    kind: count
+    better: lower
+    unit: share
+    measure: "python scripts/rsi/pricecheck-advice-bad-rate.py"
+    pick: 'json:$.bad_rate'
+    gate: exact
+    repeat: 1
