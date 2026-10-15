@@ -5,9 +5,11 @@ import './components/servers/browser-request'
 import { pauseMotionWhenAway } from './lib/pause-motion'
 import { installImeCompositionGuard } from './lib/ime-composition-guard'
 import { reloadOnChunkFailure } from './lib/chunk-reload'
+import { closeLayersOnFrameClick } from './lib/frame-dismiss'
 
 installImeCompositionGuard()
 pauseMotionWhenAway()
+closeLayersOnFrameClick()
 reloadOnChunkFailure(window, sessionStorage)
 
 if (window.location.hash.startsWith('#/parity/')) void import('./dev/parity/ParityPage.vue').then((m) => createApp(m.default).mount('#app'))

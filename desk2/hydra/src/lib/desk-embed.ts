@@ -208,6 +208,17 @@ function setDeskHidden(next: boolean): void {
 if (EMBEDDED) {
   watchDeskVisibility()
   document.addEventListener('mousedown', onTitleBarDown)
+  // A click on Desk never reaches this document, so a menu open here stayed open over it: reka's layers close on a
+  // pointerdown heard here. Focus going to Desk's own page is that click as this document sees it
+  // (desk2/web/src/lib/frame-dismiss.ts is the same the other way round). Focus going to another app closes nothing.
+  window.addEventListener('blur', () =>
+    window.setTimeout(() => {
+      if (window.parent.document.hasFocus())
+        document.documentElement.dispatchEvent(
+          new PointerEvent('pointerdown', { bubbles: true, cancelable: true, pointerType: 'mouse', button: 0 }),
+        )
+    }, 0),
+  )
   // The tab on screen's sidebar, sent whenever it changes (the tab, or what its build reads). It is not
   // held back while the pane is out of view: a tree that changes then (a Desk ask switched the tab) would
   // leave Desk drawing the old one for a moment when the pane slides back in.
