@@ -85,11 +85,23 @@ def validate(payload, prompt, existing, *, temporary=True):
         raise ClaudeError('The prepared text did not match. No message was sent.', code='browser_preparation_invalid')
     if temporary and payload.get('history_and_training_disabled') is not True:
         raise ClaudeError('The website did not confirm Temporary Chat. No message was sent.', code='privacy_not_verified')
+    if temporary and not existing and payload.get('temporary_chat_requests_personalization') is True:
+        raise ClaudeError('The prepared chat enabled personalization. No message was sent.', code='privacy_not_verified')
     if existing:
         if payload.get('conversation_id') != existing.get('conversation_id') or payload.get('parent_message_id') != existing.get('current_node'):
             raise ClaudeError('The website selected a different chat or branch. No message was sent.', code='browser_preparation_invalid')
     elif payload.get('conversation_id'):
         raise ClaudeError('The website selected an existing chat. No message was sent.', code='browser_preparation_invalid')
+
+
+def request_headers(headers):
+    """Validate authorization before dispatch and exclude connection-owned headers."""
+    banned = {'cookie','host','content-length','connection','accept-encoding','transfer-encoding'}
+    headers = {k: v for k, v in headers.items() if k.lower() not in banned}
+    authorization = next((v for k,v in headers.items() if k.lower() == 'authorization'), '')
+    if not isinstance(authorization, str) or not authorization.startswith('Bearer ') or not authorization[7:].strip() or '\r' in authorization or '\n' in authorization:
+        raise ClaudeError('The prepared request has no account authorization. No message was sent.', code='browser_preparation_invalid')
+    return headers
 
 
 def prepare(http, prompt, existing=None, *, directory, model, temporary=True, on_id=None):
@@ -113,10 +125,6 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
     started = time.monotonic()
     browser = None
     missing_before = markers_missing(http.saved_state()['cookies'])
-    # Some accounts reject the Python generation transport even with current
-    # markers and first-party preparation. Use the ordinary website's HTTP
-    # request consistently; readback remains authenticated HTTP.
-    browser_send = True
     dispatch = {'network_id': None, 'status': None, 'sent': False}
     identity_verified = False
     server_id = None
@@ -177,20 +185,19 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
                     return
                 try:
                     payload = json.loads(raw or '{}')
-                    validate(payload, prompt, existing, temporary=temporary)
                     payload['model'] = model
-                    if browser_send:
-                        if not event.network_id:
-                            raise ValueError('No network request identity')
-                        dispatch.update(sent=True, network_id=event.network_id)
-                        encoded = base64.b64encode(json.dumps(payload).encode()).decode()
-                        # Missing markers require a completed ordinary browser
-                        # request. This IS the requested message, never a probe
-                        # followed by another send. Block any subsequent retry.
-                        await tab.send(zd.cdp.fetch.continue_request(event.request_id, post_data=encoded))
-                    else:
-                        await tab.send(zd.cdp.fetch.fail_request(event.request_id, zd.cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
-                    captured.set_result((payload, dict(request.headers)))
+                    if temporary and not existing:
+                        payload['temporary_chat_requests_personalization'] = False
+                    validate(payload, prompt, existing, temporary=temporary)
+                    headers = request_headers(dict(request.headers))
+                    if not event.network_id:
+                        raise ValueError('No network request identity')
+                    dispatch.update(sent=True, network_id=event.network_id)
+                    encoded = base64.b64encode(json.dumps(payload).encode()).decode()
+                    # This IS the requested message, never a probe followed by
+                    # another send. Block any subsequent website retry.
+                    await tab.send(zd.cdp.fetch.continue_request(event.request_id, post_data=encoded))
+                    captured.set_result((payload, headers))
                 except Exception:
                     if not dispatch['sent']:
                         await tab.send(zd.cdp.fetch.fail_request(event.request_id, zd.cdp.network.ErrorReason.BLOCKED_BY_CLIENT))
@@ -220,7 +227,7 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
             adopt_cookies(http, cookies)
             context = {'authorization','user-agent','oai-language','oai-did','chatgpt-account-id'}
             http.session.headers.update({k:v for k,v in headers.items() if k.lower() in context})
-            if browser_send:
+            if dispatch['sent']:
                 deadline = time.monotonic() + min(90, http.timeout)
                 own_message = payload['messages'][0].get('id')
                 while time.monotonic() < deadline:
@@ -248,17 +255,10 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
                     await asyncio.sleep(.3)
                 else:
                     raise ClaudeError('The browser message outcome is not confirmed. No second message was sent.', code='stream_interrupted') from None
-            # These are the real request's values, never fabricated browser hints.
-            banned = {'cookie','host','content-length','connection','accept-encoding','transfer-encoding'}
-            headers = {k: v for k, v in headers.items() if k.lower() not in banned}
-            authorization = next((v for k,v in headers.items() if k.lower() == 'authorization'), '')
-            if not authorization.startswith('Bearer ') or '\r' in authorization or '\n' in authorization:
-                raise ClaudeError('The prepared request has no account authorization. No message was sent.', code='browser_preparation_invalid')
-            payload['model'] = model
             return {'payload': payload, 'headers': headers,
-                **({'already_sent': True, 'server_id': server_id} if browser_send else {}),
+                'already_sent': True, 'server_id': server_id,
                 'metrics': {'seconds': round(time.monotonic()-started, 2), 'browser_preparation': True,
-                    'browser_closed_before_send': not browser_send, 'browser_completed_send': browser_send,
+                    'browser_closed_before_send': False, 'browser_completed_send': True,
                     'renewed_browser_markers': missing_before}}
         finally:
             if browser:

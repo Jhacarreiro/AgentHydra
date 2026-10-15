@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from claudfree.chatgpt.browser_request import browser_slot, markers_missing, validate
+from claudfree.chatgpt.browser_request import browser_slot, markers_missing, request_headers, validate
 from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL
 from claudfree.errors import ClaudeError
 
@@ -19,6 +19,17 @@ def payload():
 
 
 class BrowserRequestTests(unittest.TestCase):
+    def test_authorization_is_required_before_dispatch(self):
+        for authorization in [None, '', 'Bearer ', 'Bearer fixture\r\nOther: invalid', 'Basic fixture']:
+            with self.subTest(authorization=authorization), self.assertRaises(ClaudeError):
+                request_headers({'Authorization':authorization})
+        with self.assertRaises(ClaudeError):request_headers({})
+
+    def test_real_authorization_is_retained_without_connection_owned_headers(self):
+        headers=request_headers({'authorization':'Bearer fixture-only','Cookie':'private',
+            'Host':'chatgpt.com','Content-Length':'1','oai-did':'fixture-device'})
+        self.assertEqual(headers,{'authorization':'Bearer fixture-only','oai-did':'fixture-device'})
+
     def test_three_browser_slots_queue_without_launching_a_fourth_and_release(self):
         with tempfile.TemporaryDirectory() as root, patch.dict('os.environ',{'CLAUDFREE_CACHE_DIR':root}):
             with ExitStack() as held:
@@ -45,6 +56,7 @@ class BrowserRequestTests(unittest.TestCase):
         existing={'conversation_id':str(uuid4()),'current_node':str(uuid4())}
         bad=[{**payload(),'action':'variant'},{**payload(),'messages':[]},
              {**payload(),'history_and_training_disabled':False},
+             {**payload(),'temporary_chat_requests_personalization':True},
              {**payload(),'conversation_id':str(uuid4())}]
         other=payload();other['messages'][0]['content']['parts']=['Other text'];bad.append(other)
         malformed=payload();malformed['messages'][0]['author']=None;bad.append(malformed)

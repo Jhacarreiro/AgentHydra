@@ -30,12 +30,12 @@ def _check_chat(http, registry, entry):
 
 
 class ChatGPTClient(Client):
-    """Use private chats by local name or UUID without starting a browser.
+    """Use private chats by local name or UUID with verified first-party sends.
 
     state_dir selects the shared root; ChatGPT state always lives in its chatgpt/
     subfolder. Login is manual. HTTP reads send a Temporary Chat routing marker.
-    Automatic sending prepares each request in an owned ordinary browser. Expired
-    browser markers complete the requested message there once; no message is retried.
+    Automatic sending restores saved cookies and completes the requested message
+    in an owned ordinary browser once; HTTP verifies readback without resending.
     auto_prepare=False requires an explicit prepare() before sending.
     Explicit legacy prepare() uses a short JavaScript process.
     No transcript is stored unless export_dir is supplied. Calls are serialized.
@@ -220,7 +220,8 @@ class ChatGPTClient(Client):
 
     def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL):
         # Verify the reference and privacy before preparing. Reuse this
-        # authenticated connection for preparation, POST and readback.
+        # authenticated connection for preparation and readback. The ordinary
+        # browser dispatches the automatic generation request exactly once.
         measurements = []
         prepared_request = None
         entry = registry.record(
@@ -310,7 +311,7 @@ class ChatGPTClient(Client):
             "default_privacy": {"temporary": True, "personalization": False},
             "browser_required_for": ["login", "message_send"],
             "preparation_methods": {"default": "first_party_browser_http", "explicit_legacy": "javascript"},
-            "preparation_runtime": "Installed Chrome/Edge with zendriver; restores saved cookies without submitting login. Owned profile closes after preparation or the single browser renewal message.",
+            "preparation_runtime": "Installed Chrome/Edge with zendriver; restores saved cookies without submitting login. The browser sends the requested message once, then its owned profile closes after authenticated HTTP readback.",
             "commands": {
                 name: "Use --provider chatgpt"
                 for name in [
@@ -367,7 +368,7 @@ class ChatGPTClient(Client):
                 "Temporary privacy is verified before reading/resuming. Creation requests unpersonalized mode; HTTP reads do not independently verify personalization.",
                 "Names and UUIDs are stored without transcripts. HTTP supplies the Temporary Chat routing cookie automatically, enabling reads after the browser closes while the service permits access.",
                 "Offline listings do not verify availability; readable/resumable=null means unknown. --check performs HTTP reads.",
-                "chat/resume prepare the exact prompt, branch, privacy mode and model. The browser request is blocked before HTTP dispatch, or completes that one message when browser markers need renewal. Read-only commands never prepare. auto_prepare=False retains explicit legacy preparation.",
+                "chat/resume validate the exact prompt, branch, privacy mode and model before allowing one ordinary browser HTTP request. HTTP readback never posts again. Read-only commands never open a browser. auto_prepare=False retains explicit legacy preparation.",
                 "prepare optionally collects up to eight single-use preparations without sending messages. prepared reports local readiness, not a required next step.",
                 "Automatic preparation credentials remain in memory and are single-use. The local handle is recorded before preparation and linked to a browser-created conversation before readback, so an uncertain outcome can be reviewed without resending. Explicit legacy preparations remain account-bound with a five-minute cutoff.",
                 "read extracts visible text, code and links on the selected conversation branch, excluding hidden reasoning and raw tool payloads.",
