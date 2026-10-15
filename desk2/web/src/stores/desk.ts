@@ -741,6 +741,13 @@ function takeQueue(next: QueueState) {
   if (!queueState.value || next.rev >= queueState.value.rev) queueState.value = next
 }
 
+// The queue lines drawn at the click, until their POST answers: the server's QueueItem takes each one's place.
+const queuePlaceholders = shallowRef<QueueItem[]>([])
+
+function queueWithPlaceholders(q: QueueState | null): QueueState | null {
+  return q && queuePlaceholders.value.length ? { ...q, items: [...q.items, ...queuePlaceholders.value] } : q
+}
+
 /** A queue request; a refusal ({ error } with 400/404/409) rejects with the server's own words. */
 async function queueJson<T>(path: string, method: string, body?: unknown): Promise<T> {
   const res = await fetch(`${BASE_URL}/queue${path}`, {
@@ -1034,12 +1041,31 @@ function chatBusy(chatId: string): boolean {
   return chat.status === 'working' || chat.status === 'needs_you' || (chat.status === 'starting' && chat.turnStartedAt !== null) || chat.queuedCount > 0
 }
 
-function markSendFailed(chatId: string, itemId: string, reason: string) {
+function patchUserItem(chatId: string, itemId: string, patch: { queued?: boolean; sendFailed?: string }) {
   const key = resolveChatId(chatId)
   const items = chatItems(key) ?? unloadedUpserts.get(key)
   const at = items ? indexOfItem(key, items, itemId) : -1
   const item = items?.[at]
-  if (items && item?.kind === 'user') replaceItem(items, at, { ...item, sendFailed: reason })
+  if (items && item?.kind === 'user') replaceItem(items, at, { ...item, ...patch })
+}
+
+function markSendFailed(chatId: string, itemId: string, reason: string) {
+  patchUserItem(chatId, itemId, { sendFailed: reason })
+}
+
+function pendingQueueItem(req: QueueAddRequest): QueueItem {
+  const now = Date.now()
+  const base = {
+    id: `pending-queue:${++pendingSeq}`,
+    rev: 0,
+    createdAt: now,
+    updatedAt: now,
+    state: 'waiting' as const,
+    reason: null,
+    text: req.kind === 'message' ? req.text : (req.prompt ?? ''),
+    ...(req.images?.length ? { images: req.images } : {})
+  }
+  return req.kind === 'message' ? { ...base, kind: 'message', chatId: req.chatId } : { ...base, kind: 'chat', cwd: req.cwd, startedChatId: null }
 }
 
 /** Posts a message whose bubble is already drawn; a failure marks the bubble Not sent and resolves null. */
@@ -1164,7 +1190,7 @@ export function useDesk() {
     settings: computed(() => store.settings),
     connected: computed(() => store.connected),
     selected: computed(() => store.selected),
-    queue: computed(() => queueState.value),
+    queue: computed(() => queueWithPlaceholders(queueState.value)),
     rowKeyOf,
 
     // Actions
@@ -1251,13 +1277,33 @@ export function useDesk() {
       }
     },
 
-    /** Send now on a message queued behind a running turn: the turn stops and that message goes at once. */
+    /**
+     * Send now on a message queued behind a running turn: the turn stops and that message goes at once. The queued line
+     * leaves at the click and its bubble shows; a refusal marks the bubble Not sent and puts the line back.
+     */
     async sendNow(chatId: string, itemId?: string): Promise<SendNowResult> {
-      return fetchJson<SendNowResult>(`/chats/${chatId}/send-now`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ itemId } satisfies SendNowRequest)
-      })
+      const clicked = performance.now()
+      const key = resolveChatId(chatId)
+      const items = chatItems(key)
+      const at = items && itemId ? indexOfItem(key, items, itemId) : -1
+      const item = items?.[at]
+      const queued = !!itemId && item?.kind === 'user' && !!item.queued
+      if (queued) {
+        patchUserItem(key, itemId, { queued: false })
+        reportAtPaint('click_to_bubble', clicked, key)
+      }
+      try {
+        const result = await fetchJson<SendNowResult>(`/chats/${chatId}/send-now`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ itemId } satisfies SendNowRequest)
+        })
+        if (queued && !result.stopped) patchUserItem(key, itemId, { queued: true })
+        return result
+      } catch (err) {
+        if (queued) patchUserItem(key, itemId, { queued: true, sendFailed: reasonOf(err) })
+        throw err
+      }
     },
 
     /** Cancel on a message held behind a turn: it is never sent, and its text and pictures come back to the box. */
@@ -1643,8 +1689,24 @@ export function useDesk() {
     },
 
     // The send queue: the item answers are also broadcast as queue.update; the queue answers are taken at once.
+    /** The queued line is drawn at the click; a refusal takes it back and rejects, and the composer puts the text back. */
     async queueAdd(req: QueueAddRequest): Promise<QueueItem> {
-      return queueJson('', 'POST', req)
+      const clicked = performance.now()
+      const placeholder = pendingQueueItem(req)
+      queuePlaceholders.value = [...queuePlaceholders.value, placeholder]
+      reportAtPaint('click_to_bubble', clicked, req.kind === 'message' ? req.chatId : undefined)
+      const dropPlaceholder = () => (queuePlaceholders.value = queuePlaceholders.value.filter((p) => p !== placeholder))
+      try {
+        const item = await queueJson<QueueItem>('', 'POST', req)
+        dropPlaceholder()
+        if (queueState.value && !queueState.value.items.some((i) => i.id === item.id)) {
+          queueState.value = { ...queueState.value, items: [...queueState.value.items, item] }
+        }
+        return item
+      } catch (err) {
+        dropPlaceholder()
+        throw err
+      }
     },
 
     async queueEdit(id: string, patch: QueuePatch): Promise<QueueItem> {
