@@ -24,7 +24,7 @@ const REPO = /^[a-z0-9][\w.-]{0,99}\/[\w.-]{1,100}$/
 const KEY = /^ed25519:[A-Za-z0-9_-]{43}$/
 
 /** The local contract's keys a routine document's front matter carries (its name is `title`, its prompt the body). */
-const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe']
+const CONTRACT_KEYS = ['askedBy', 'schedule', 'status', 'windowsTask', 'run', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes']
 const CENTRAL_KEYS = ['kind', 'format', 'title', 'description', 'why', 'timeZone', 'workdir', 'runsOn', 'approval']
 /** What an approval does not sign: the approval itself, and the one-line description a store's page shows. */
 const UNSIGNED = ['approval', 'description']
@@ -235,6 +235,7 @@ export function definitionOn(doc: RoutineDoc, runner: Runner): RoutineDefinition
   const def = checkDefinition(doc.id, contractOf(doc, cwdOn(doc.front, runner)))
   if (def.run) def.run = def.run.map((a) => homeOf(a, runner.home))
   if (def.status) def.status = def.status.map((a) => homeOf(a, runner.home))
+  if (def.modes) def.modes = { ...def.modes, set: def.modes.set.map((a) => homeOf(a, runner.home)) }
   return def
 }
 

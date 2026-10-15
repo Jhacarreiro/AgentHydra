@@ -20,6 +20,8 @@ export interface Reading {
   headline: string | null
   totals: Record<string, number> | null
   settings: Record<string, string | number | boolean> | null
+  /** The mode it says is in force (a routine with `modes`), cut to 20 characters; null when it says none. */
+  mode: string | null
   /** Other top-level numbers the status printed (ticks, budget): at most 12. */
   numbers: Record<string, number> | null
   /** Groups of trend objects ({ latest, previous, best, trend }) the status printed, by group name (rsi). */
@@ -98,6 +100,7 @@ export function parseReading(stdout: string): Reading {
     headline: headline || null,
     totals: o.totals ? Object.fromEntries(totals) : null,
     settings: settingsOf(o.settings),
+    mode: typeof o.mode === 'string' && o.mode ? o.mode.slice(0, 20) : null,
     ...extrasOf(o),
   }
 }

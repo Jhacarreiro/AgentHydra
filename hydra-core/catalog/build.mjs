@@ -110,34 +110,52 @@ function costOf(text) {
 }
 
 // ---------- validation (shared by build and --check) ----------
+// Each rule is [isBad(entry), message]. Walking the table in order keeps the first-error-wins
+// behaviour and the error order the checks always had.
+const firstFailure = (rules, e) => {
+  for (const [bad, msg] of rules) if (bad(e)) return msg
+  return null
+}
+const ENTRY_RULES = [
+  [(e) => !KINDS.includes(e.kind), 'bad kind'],
+  [(e) => !e.id.startsWith(e.kind + ':') || e.id.length <= e.kind.length + 1 || /\s/.test(e.id), 'bad id'],
+  [(e) => e.when.length >= 160, 'when too long'],
+  [(e) => /[\r\n]/.test(e.when), 'when not one line'],
+  [(e) => e.how.length > 600, 'how too long'],
+  [(e) => e.name.length > 120, 'name too long'],
+  [(e) => e.title != null && (typeof e.title !== 'string' || e.title.length > 200), 'bad title'],
+  [(e) => !Array.isArray(e.tags) || e.tags.some((t) => typeof t !== 'string'), 'bad tags'],
+  [(e) => !COSTS.includes(e.cost), 'bad cost'],
+]
+const PERSON_RULES = [
+  [(e) => !TIERS.includes(e.tier), 'person without valid tier'],
+  [(e) => !FAMILIES.includes(e.family), 'person without valid family'],
+  [(e) => e.tier === 'owner' && Array.isArray(e.modes) && e.modes.includes('become'), 'owner tier is consult only'],
+  [(e) => e.reportsTo != null && !(typeof e.reportsTo === 'string' && e.reportsTo.startsWith('person:')), 'reportsTo must be a person id'],
+  [(e) => e.division != null && (typeof e.division !== 'string' || !e.division), 'bad division'],
+  [(e) => !Array.isArray(e.modes) || !e.modes.length || e.modes.some((m) => !MODES.includes(m)), 'person without valid modes'],
+]
+const NON_PERSON_RULES = [
+  [(e) => e.tier != null || e.modes != null || e.family != null || e.reportsTo != null || e.division != null, 'person fields on a non-person'],
+]
+const FOLDER_RULES = [
+  [(e) => e.folders != null && (!Array.isArray(e.folders) || e.folders.some((f) => typeof f !== 'string')), 'bad folders'],
+]
+const LOAD_FIELD_RULES = [['file', 'path'], ['skill', 'name'], ['tool', 'call']].map(([type, field]) => [
+  (e) => e.load.type === type && (typeof e.load[field] !== 'string' || !e.load[field]),
+  `load ${type} without ${field}`,
+])
+const LOAD_RULES = [
+  [(e) => !e.load || typeof e.load !== 'object' || !LOAD_TYPES.includes(e.load.type), 'bad load'],
+  ...LOAD_FIELD_RULES,
+  [(e) => JSON.stringify(e).length > 3000, 'entry too long (persona text inside the JSON?)'],
+]
+
 export function validate(e) {
   if (!e || typeof e !== 'object' || Array.isArray(e)) return 'not an object'
   for (const k of ['id', 'kind', 'name', 'when', 'how', 'source']) if (typeof e[k] !== 'string' || !e[k].trim()) return `missing ${k}`
-  if (!KINDS.includes(e.kind)) return 'bad kind'
-  if (!e.id.startsWith(e.kind + ':') || e.id.length <= e.kind.length + 1 || /\s/.test(e.id)) return 'bad id'
-  if (e.when.length >= 160) return 'when too long'
-  if (/[\r\n]/.test(e.when)) return 'when not one line'
-  if (e.how.length > 600) return 'how too long'
-  if (e.name.length > 120) return 'name too long'
-  if (e.title != null && (typeof e.title !== 'string' || e.title.length > 200)) return 'bad title'
-  if (!Array.isArray(e.tags) || e.tags.some((t) => typeof t !== 'string')) return 'bad tags'
-  if (!COSTS.includes(e.cost)) return 'bad cost'
-  if (e.kind === 'person') {
-    if (!TIERS.includes(e.tier)) return 'person without valid tier'
-    if (!FAMILIES.includes(e.family)) return 'person without valid family'
-    if (e.tier === 'owner' && Array.isArray(e.modes) && e.modes.includes('become')) return 'owner tier is consult only'
-    if (e.reportsTo != null && !(typeof e.reportsTo === 'string' && e.reportsTo.startsWith('person:'))) return 'reportsTo must be a person id'
-    if (e.division != null && (typeof e.division !== 'string' || !e.division)) return 'bad division'
-    if (!Array.isArray(e.modes) || !e.modes.length || e.modes.some((m) => !MODES.includes(m))) return 'person without valid modes'
-  } else if (e.tier != null || e.modes != null || e.family != null || e.reportsTo != null || e.division != null) return 'person fields on a non-person'
-  if (e.folders != null && (!Array.isArray(e.folders) || e.folders.some((f) => typeof f !== 'string'))) return 'bad folders'
-  const l = e.load
-  if (!l || typeof l !== 'object' || !LOAD_TYPES.includes(l.type)) return 'bad load'
-  if (l.type === 'file' && (typeof l.path !== 'string' || !l.path)) return 'load file without path'
-  if (l.type === 'skill' && (typeof l.name !== 'string' || !l.name)) return 'load skill without name'
-  if (l.type === 'tool' && (typeof l.call !== 'string' || !l.call)) return 'load tool without call'
-  if (JSON.stringify(e).length > 3000) return 'entry too long (persona text inside the JSON?)'
-  return null
+  return firstFailure(ENTRY_RULES, e) || firstFailure(e.kind === 'person' ? PERSON_RULES : NON_PERSON_RULES, e)
+    || firstFailure(FOLDER_RULES, e) || firstFailure(LOAD_RULES, e)
 }
 
 // ---------- source runner ----------
@@ -201,30 +219,41 @@ function managers(add, skip) {
 function people(add, skip) {
   const org = safeJson(ORG) || {}
   for (const family of PEOPLE_FAMILIES) {
-    for (const d of safeDir(`${PEOPLE}/${family}`)) {
-      if (!d.isDirectory()) continue
-      const dir = `${PEOPLE}/${family}/${d.name}`
-      const p = safeJson(`${dir}/persona.json`)
-      if (!p) { skip('no persona.json', `${family}/${d.name}`); continue }
-      const slug = slugify(p.slug || d.name)
-      const id = `person:${slug.startsWith(family + '-') ? slug : family + '-' + slug}`
-      const tier = TIERS.includes(p.tier) ? p.tier : FAMILY_TIER[family]
-      const modes = Array.isArray(p.modes) ? p.modes.filter((m) => MODES.includes(m)) : []
-      const briefPath = `${dir}/${str(p.brief) || 'brief.md'}`
-      const hasBrief = isFile(briefPath)
-      const useModes = modes.length ? modes : hasBrief ? ['become', 'consult'] : ['consult']
-      add({
-        id, kind: 'person', name: str(p.name) || slug, title: str(p.title) || undefined, tier, family,
-        division: (org[slug] && org[slug].division) || undefined, reportsTo: org[slug] && org[slug].reportsTo ? `person:${org[slug].reportsTo}` : undefined,
-        when: oneLine(p.oneLiner || p.jev || p.title || p.name),
-        tags: tagsAll(Array.isArray(p.keywords) ? p.keywords : [], p.role, family),
-        modes: useModes, cost: COSTS.includes(p.cost) ? p.cost : 'medium',
-        how: `core_use { chat, id: "${id}", mode: ${useModes.map((m) => `"${m}"`).join(' | ')} }. Becoming loads its brief into this chat.`,
-        load: hasBrief ? { type: 'file', path: briefPath } : { type: 'none' },
-        source: `${dir}/persona.json (oneLiner, keywords, brief)`
-      })
-    }
+    for (const d of safeDir(`${PEOPLE}/${family}`)) if (d.isDirectory()) addPersonFolder(add, skip, family, d.name, org)
   }
+}
+
+function orgFields(org, slug) {
+  const o = org[slug]
+  return { division: (o && o.division) || undefined, reportsTo: o && o.reportsTo ? `person:${o.reportsTo}` : undefined }
+}
+
+function personModes(p, hasBrief) {
+  const modes = Array.isArray(p.modes) ? p.modes.filter((m) => MODES.includes(m)) : []
+  if (modes.length) return modes
+  return hasBrief ? ['become', 'consult'] : ['consult']
+}
+
+function addPersonFolder(add, skip, family, name, org) {
+  const dir = `${PEOPLE}/${family}/${name}`
+  const p = safeJson(`${dir}/persona.json`)
+  if (!p) { skip('no persona.json', `${family}/${name}`); return }
+  const slug = slugify(p.slug || name)
+  const id = `person:${slug.startsWith(family + '-') ? slug : family + '-' + slug}`
+  const tier = TIERS.includes(p.tier) ? p.tier : FAMILY_TIER[family]
+  const briefPath = `${dir}/${str(p.brief) || 'brief.md'}`
+  const hasBrief = isFile(briefPath)
+  const useModes = personModes(p, hasBrief)
+  add({
+    id, kind: 'person', name: str(p.name) || slug, title: str(p.title) || undefined, tier, family,
+    ...orgFields(org, slug),
+    when: oneLine(p.oneLiner || p.jev || p.title || p.name),
+    tags: tagsAll(Array.isArray(p.keywords) ? p.keywords : [], p.role, family),
+    modes: useModes, cost: COSTS.includes(p.cost) ? p.cost : 'medium',
+    how: `core_use { chat, id: "${id}", mode: ${useModes.map((m) => `"${m}"`).join(' | ')} }. Becoming loads its brief into this chat.`,
+    load: hasBrief ? { type: 'file', path: briefPath } : { type: 'none' },
+    source: `${dir}/persona.json (oneLiner, keywords, brief)`
+  })
 }
 
 // ---------- 2. skills ----------
@@ -264,6 +293,13 @@ function skills(add, skip) {
 // ---------- 3. Dredd ----------
 function dredd(add, skip) {
   if (!DREDD) return
+  addDreddDocket(add)
+  dreddInstruments(add, skip)
+  dreddSeats(add, skip)
+  dreddMemberCapabilities(add, skip)
+}
+
+function addDreddDocket(add) {
   const doc = existsSync(`${DREDD}/README.md`) ? { type: 'file', path: `${DREDD}/README.md` } : { type: 'none' }
   add({
     id: 'instrument:dredd', kind: 'instrument', name: 'Dredd', title: 'Docket: which instruments to convene for an ask',
@@ -272,25 +308,40 @@ function dredd(add, skip) {
     how: `AgentHydra \`dredd { action: "docket", ask: "<the ask>" }\` (or \`node ${DREDD}/dredd.mjs "<the ask>"\`). Follow the docket; skipping an instrument it named takes a one-line reason.`,
     load: doc, source: `${DREDD}/bench.json ($doc); Connections lane brief 'Dredd first'`
   })
-  const bench = safeJson(`${DREDD}/bench.json`)
-  if (!bench || !Array.isArray(bench.instruments)) skip('bench.json missing or no instruments array')
-  else {
-    for (const i of bench.instruments) {
-      const id = slugify(i && i.id)
-      if (!id) { skip('instrument without id'); continue }
-      const w = str(i.when)
-      const when = w.length >= 40 ? w : `${str(i.judges)} ${w}`
-      let load = { type: 'none' }
-      const docRef = str(i.doc).split(/[,(]/)[0].trim()
-      if (docRef) for (const base of [CONN, DREDD, DREDD.replace(/\/[^/]*$/, '')].filter(Boolean)) if (isFile(`${base}/${docRef}`) && !/\/$/.test(docRef)) { load = { type: 'file', path: `${base}/${docRef}` }; break }
-      add({
-        id: `instrument:${id}`, kind: 'instrument', name: str(i.name) || id, when: oneLine(when || i.name),
-        tags: tagsOf(i.plane, i.owner, i.domains || [], id.split('-')), cost: costOf(i.cost),
-        how: capHow(`Dredd convenes it in a docket: AgentHydra dredd tool { action: "docket", ask }.${i.run ? ' Runner: ' + str(i.run) + '.' : ''}${i.doc ? ' Doc: ' + str(i.doc) + '.' : ''}`),
-        load, source: `${DREDD}/bench.json instruments[id=${id}] (when, judges, run, doc, cost)`
-      })
+}
+
+function instrumentLoad(i) {
+  const docRef = str(i.doc).split(/[,(]/)[0].trim()
+  if (docRef) {
+    for (const base of [CONN, DREDD, DREDD.replace(/\/[^/]*$/, '')].filter(Boolean)) {
+      if (isFile(`${base}/${docRef}`) && !/\/$/.test(docRef)) return { type: 'file', path: `${base}/${docRef}` }
     }
   }
+  return { type: 'none' }
+}
+
+function instrumentHow(i) {
+  return capHow(`Dredd convenes it in a docket: AgentHydra dredd tool { action: "docket", ask }.${i.run ? ' Runner: ' + str(i.run) + '.' : ''}${i.doc ? ' Doc: ' + str(i.doc) + '.' : ''}`)
+}
+
+function dreddInstruments(add, skip) {
+  const bench = safeJson(`${DREDD}/bench.json`)
+  if (!bench || !Array.isArray(bench.instruments)) { skip('bench.json missing or no instruments array'); return }
+  for (const i of bench.instruments) {
+    const id = slugify(i && i.id)
+    if (!id) { skip('instrument without id'); continue }
+    const w = str(i.when)
+    const when = w.length >= 40 ? w : `${str(i.judges)} ${w}`
+    add({
+      id: `instrument:${id}`, kind: 'instrument', name: str(i.name) || id, when: oneLine(when || i.name),
+      tags: tagsOf(i.plane, i.owner, i.domains || [], id.split('-')), cost: costOf(i.cost),
+      how: instrumentHow(i),
+      load: instrumentLoad(i), source: `${DREDD}/bench.json instruments[id=${id}] (when, judges, run, doc, cost)`
+    })
+  }
+}
+
+function dreddSeats(add, skip) {
   for (const f of safeDir(`${DREDD}/seats`)) {
     if (!f.isFile() || !f.name.endsWith('.json')) continue
     const path = `${DREDD}/seats/${f.name}`
@@ -306,6 +357,9 @@ function dredd(add, skip) {
       load: { type: 'file', path }, source: `${path} (id, name, rooms, jev, keywords)`
     })
   }
+}
+
+function dreddMemberCapabilities(add, skip) {
   const mb = safeJson(`${DREDD}/member-bench.json`)
   if (mb && Array.isArray(mb.capabilities)) {
     for (const c of mb.capabilities) {

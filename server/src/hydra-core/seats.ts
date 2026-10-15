@@ -3,7 +3,8 @@
 // seat-chats.json, which the daemon reads to give the seat's worker the role `seat` (climayte.ts seatTask).
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname } from 'node:path'
-import { deskPost, managerName, transcriptItems } from '../mcp-managers'
+import { deskPost, transcriptItems } from '../desk-client'
+import { managerName } from '../mcp-managers'
 import type { ChatOfCaller } from './caller'
 import { type CatalogEntry, loadText } from './catalog'
 import { chatPaths } from './paths'

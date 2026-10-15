@@ -3,8 +3,9 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { replyWhenDone } from '../src/desk-client'
 import { managerRoots } from '../src/manager-folders'
-import { MANAGER_TOOLS, managerName, replyWhenDone } from '../src/mcp-managers'
+import { MANAGER_TOOLS, managerName } from '../src/mcp-managers'
 
 const tool = (name: string) => {
   const t = MANAGER_TOOLS.find((x) => x.name === name)

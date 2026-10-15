@@ -47,7 +47,11 @@ const text = (v: unknown, key: string): string => {
 }
 
 /** The keys this contract knows; `tick` is refused with its replacement. */
-const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe']
+const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe', 'modes']
+/** A mode option: what the card shows (first letter capitalised) and what `modes.set` is handed. */
+export const MODE_OPTION = /^[a-z][a-z0-9-]{0,19}$/
+const MODES_MIN = 2
+const MODES_MAX = 5
 
 /** The object a routine file holds, or the reason it does not hold one. */
 function objectOf(value: unknown): Record<string, unknown> {
@@ -113,6 +117,21 @@ function setDescribe(def: RoutineDefinition, o: Record<string, unknown>, when: s
   def.describe = o.describe
 }
 
+/** A status routine's `modes`: its options and the command that takes one. Only a status routine has them: its status is
+ *  what says which one is in force. */
+function setModes(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
+  if (o.modes === undefined) return
+  if (when !== 'status') throw new Error('only a status routine has "modes": its status says which one is in force')
+  const modes = o.modes as Record<string, unknown> | null
+  const shape = `"modes" must be { "options": ${MODES_MIN} to ${MODES_MAX} different names (a-z, 0-9 and -, starting with a letter), "set": a command }`
+  if (!modes || typeof modes !== 'object' || Array.isArray(modes) || Object.keys(modes).some((k) => k !== 'options' && k !== 'set')) throw new Error(shape)
+  const options = modes.options
+  if (!Array.isArray(options) || options.length < MODES_MIN || options.length > MODES_MAX) throw new Error(shape)
+  if (!options.every((x) => typeof x === 'string' && MODE_OPTION.test(x)) || new Set(options).size !== options.length) throw new Error(shape)
+  if (!isArgv(modes.set)) throw new Error('"modes.set" must be a command: a list of strings, the program first (run with no shell)')
+  def.modes = { options: options as string[], set: modes.set }
+}
+
 /** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
 export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
   if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
@@ -135,6 +154,7 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
   setTimeoutMinutes(def, o)
   setUntil(def, o)
   setDescribe(def, o, when)
+  setModes(def, o, when)
   return def
 }
 

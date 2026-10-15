@@ -149,6 +149,7 @@ export interface ChatSummary {
     title: string | null
     oneLiner: string | null
     photo: number | null
+    photoUrl?: string | null
     statsLine?: string | null
     role?: 'lead' | 'seat'
     persona?: true

@@ -2,7 +2,7 @@
 // and kept by the chat's Desk id (placement.json), as a CliMayte chat launch does; its Claude process carries
 // HYDRA_DESK_CHAT_ID so the hook keys its messages by the same chat; and a new session in the chat keeps its lead.
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
+import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk'
@@ -69,11 +69,17 @@ async function launch(over: Partial<ChatSummary>, text: string): Promise<Options
   return seen
 }
 
+/** ASK off, as server/tests/hydra-core-slot.test.ts sets it: a chat asks by default and then ranks no lead at launch. */
+function askOff(fixture: CoreFixture): CoreFixture {
+  writeFileSync(join(fixture.dir, 'ASK'), 'off')
+  return fixture
+}
+
 const append = (o: Options) => (o.systemPrompt as { append: string }).append
 const placed = (dir: string) => JSON.parse(readFileSync(join(dir, 'chats', CHAT, 'placement.json'), 'utf8'))
 
 test('a fresh chat under slot gets its slot by Desk chat id, launched with the session placement.json records', async () => {
-  core = coreFixture({ on: true, placement: 'slot' })
+  core = askOff(coreFixture({ on: true, placement: 'slot' }))
   const o = await launch({}, 'sketch the dashboard layout')
   expect(o.env?.HYDRA_DESK_CHAT_ID).toBe(CHAT)
   expect(append(o)).toContain('Ada Example: invented brief for dashboard layouts.')
@@ -84,7 +90,7 @@ test('a fresh chat under slot gets its slot by Desk chat id, launched with the s
 })
 
 test('a new session in the chat (a handoff) keeps the lead its first message picked', async () => {
-  core = coreFixture({ on: true, placement: 'slot' })
+  core = askOff(coreFixture({ on: true, placement: 'slot' }))
   await launch({}, 'sketch the dashboard layout')
   const next = await launch({ sessionId: 'b1c2d3e4-0000-4000-8000-000000000001' }, 'now edit the release notes copy')
   expect(next.resume).toBe('b1c2d3e4-0000-4000-8000-000000000001')
@@ -95,7 +101,7 @@ test('a new session in the chat (a handoff) keeps the lead its first message pic
 })
 
 test('under file placement the prompt names the pack file', async () => {
-  core = coreFixture({ on: true, placement: 'file' })
+  core = askOff(coreFixture({ on: true, placement: 'file' }))
   const o = await launch({}, 'sketch the dashboard layout')
   expect(append(o)).toContain(join(core.dir, 'chats', CHAT, 'pack.md'))
   expect(readFileSync(join(core.dir, 'chats', CHAT, 'pack.md'), 'utf8')).toContain('Ada Example')
@@ -117,7 +123,7 @@ test('no slot with core mode off, under attach, or for a sub-chat; the chat id s
 })
 
 test('the Desk server keeps serving while a chat places its slot: a timer fires before the placement is back', async () => {
-  core = coreFixture({ on: true, placement: 'slot' })
+  core = askOff(coreFixture({ on: true, placement: 'slot' }))
   const started = performance.now()
   let placedMs = 0
   const slot = coreSlot({ chat: CHAT, session: 'c1d2e3f4-0000-4000-8000-000000000002', fresh: true, cwd: 'C:/Users/me/app', prompt: 'sketch the dashboard layout', rest: 0 })

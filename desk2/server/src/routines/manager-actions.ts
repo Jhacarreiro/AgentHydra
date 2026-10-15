@@ -5,8 +5,8 @@ import type { RoutineProposal, RoutineProposalRequest, RoutinesRequest } from '@
 import { callerKind } from '../caller'
 import { judge } from './decide'
 import { checkDefinition, checkProposal, parseProposalText, ROUTINE_ID } from './manifest'
-import { message } from './proc'
-import { enabled, memOf, save, type Manager } from './manager'
+import { lastLineOf, message, runArgv } from './proc'
+import { enabled, memOf, readStatus, save, type Manager } from './manager'
 import { contractOf, writeWhole } from './manager-files'
 import { look, runsHere } from './manager-look'
 import { startRun } from './manager-runs'
@@ -14,12 +14,14 @@ import { status } from './manager-view'
 import { approveCentral, discardCentral, editCentral, proposeCentral, type Refusal } from './manager-central'
 
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
-const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit'] as const
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode'] as const
 type ActionName = (typeof ACTIONS)[number]
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit']
+const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit', 'mode']
 const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
+/** How long a routine's `modes.set` command may take. */
+const MODE_MS = 60_000
 
 /** POST /api/routines: does one action (or turns the manager on or off with `enabled`). */
 export async function postRoutine(m: Manager, c: Context) {
@@ -31,7 +33,7 @@ export async function postRoutine(m: Manager, c: Context) {
   const [action] = actions
   if (body.enabled !== undefined && !owner) return c.json(OWNER_ONLY, 403)
   if (action !== undefined && OWNER_ACTIONS.includes(action) && !owner) return c.json(OWNER_ONLY, 403)
-  const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : (body[action as 'run'] ?? '')
+  const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : action === 'mode' ? body.mode!.id : (body[action as 'run'] ?? '')
   if (action !== undefined && action !== 'propose' && !ROUTINE_ID.test(id)) return c.json({ error: `"${id}" is not a routine id` }, 400)
 
   if (body.enabled !== undefined && body.enabled !== m.ctx.settings().routines) m.ctx.updateSettings({ routines: body.enabled })
@@ -47,6 +49,8 @@ export async function postRoutine(m: Manager, c: Context) {
       return pauseOrResume(m, c, action, id, t)
     case 'edit':
       return editRoutine(m, c, body.edit!)
+    case 'mode':
+      return setMode(m, c, body.mode!)
     case 'propose':
       return proposeRoutine(m, c, body)
     default:
@@ -54,15 +58,17 @@ export async function postRoutine(m: Manager, c: Context) {
   }
 }
 
+/** Whether one action carries the value it takes. */
+function typedAction(body: RoutinesRequest, k: ActionName): boolean {
+  if (k === 'propose') return typeof body.propose === 'object' && body.propose !== null
+  if (k === 'edit') return typeof body.edit?.id === 'string' && typeof body.edit.set === 'object' && body.edit.set !== null && !Array.isArray(body.edit.set)
+  if (k === 'mode') return typeof body.mode?.id === 'string' && typeof body.mode.value === 'string'
+  return typeof body[k] === 'string'
+}
+
 /** A body with one action (or `enabled` alone), each action with the value it takes. */
 function wellFormed(body: RoutinesRequest, actions: ActionName[]): boolean {
-  const typed = actions.every((k) =>
-    k === 'propose'
-      ? typeof body.propose === 'object' && body.propose !== null
-      : k === 'edit'
-        ? typeof body.edit?.id === 'string' && typeof body.edit.set === 'object' && body.edit.set !== null && !Array.isArray(body.edit.set)
-        : typeof body[k] === 'string',
-  )
+  const typed = actions.every((k) => typedAction(body, k))
   return !(
     (body.enabled !== undefined && typeof body.enabled !== 'boolean') ||
     actions.length > 1 ||
@@ -161,6 +167,27 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
   }
   writeWhole(routineFile, next)
   await look(m)
+  return c.json(status(m))
+}
+
+/** `mode`: the owner's pick on the card's Mode row. The routine's own `modes.set` takes it (its argv, the option appended),
+ *  and its status, read again, says the mode now in force; the manager keeps no mode of its own. */
+async function setMode(m: Manager, c: Context, pick: NonNullable<RoutinesRequest['mode']>) {
+  const s = m.seen.find((x) => x.entry.id === pick.id)
+  const def = s?.entry.def
+  if (!s || !def) return c.json({ error: `no routine "${pick.id}" is registered, or its file does not check out` }, 404)
+  if (!runsHere(s.entry)) return c.json({ error: `"${pick.id}" runs on ${s.entry.central?.runsOn.join(', ')}, not on this computer: set its mode there` }, 409)
+  if (!def.modes) return c.json({ error: `"${pick.id}" has no modes` }, 400)
+  if (!def.modes.options.includes(pick.value)) return c.json({ error: `"${pick.value}" is not one of ${def.modes.options.join(', ')}` }, 400)
+  let output = ''
+  const r = await runArgv([...def.modes.set, pick.value], { cwd: def.cwd, timeoutMs: MODE_MS, onOutput: (text) => (output = (output + text).slice(-4000)) })
+  if (r.timedOut || r.error !== null || r.code !== 0) {
+    const why = r.timedOut ? 'it timed out after 60 seconds' : r.error !== null ? `it could not start: ${r.error}` : `it exited ${r.code ?? 'without a code'}`
+    const line = lastLineOf(output)
+    return c.json({ error: `"${pick.id}" did not take ${pick.value}: ${why}${line ? ` (${line})` : ''}` }, 500)
+  }
+  const fresh = await readStatus(def)
+  m.seen = m.seen.map((x) => (x.entry.id === pick.id ? { ...x, ...fresh } : x))
   return c.json(status(m))
 }
 

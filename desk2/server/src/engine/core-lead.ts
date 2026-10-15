@@ -11,6 +11,7 @@ import { type CatalogEntry, loadCatalog } from '../../../../server/src/hydra-cor
 import { leadName, parseHydra } from '../../../../server/src/hydra-core/hydra-md'
 import { coreDir } from './hydra-core-mode'
 import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
+import { inRepoPeople, peopleAddon } from '../../../../server/src/people-host'
 import { currentManager, type ManagerAvatar, managerAvatar, managerName, newestAvatar } from './managers'
 
 export type ChatFace = NonNullable<ChatSummary['manager']>
@@ -156,6 +157,17 @@ function personaFace(id: string, role: 'lead' | 'seat'): ChatFace {
 
 /** The face a chat's row shows, or null for none (see the top of this file). */
 export function chatFace(chat: Pick<ChatSummary, 'id'> & Partial<Pick<ChatSummary, 'managerSlug' | 'sessionId' | 'parentId'>>): ChatFace | null {
+  const addon = peopleAddon()
+  if (addon?.face) {
+    const face = addon.face({
+      id: chat.id,
+      managerSlug: chat.managerSlug ?? null,
+      sessionId: chat.sessionId ?? null,
+      parentId: chat.parentId ?? null,
+    })
+    return face ? { ...face, title: face.title ?? null, oneLiner: face.oneLiner ?? null, photo: null, persona: true } : null
+  }
+  if (!inRepoPeople()) return null
   const pinned = chat.managerSlug ? currentManager(chat.managerSlug, null) : null
   if (pinned) return pinned
   if (KEY.test(chat.id)) {

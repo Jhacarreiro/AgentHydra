@@ -122,8 +122,7 @@ export class ChatgptRuntime extends ServiceRuntime {
   private async deliver(sent: Sent): Promise<void> {
     try {
       const all = this.deps.free.allInstances()
-      const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
-      const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
+      const { bound, holder } = this.boundAccount(all)
       const picked = holder ?? pickChatgptAccount(all, this.avoid, this.deps.held, this.now(), this.occupied)
       if ('why' in picked) {
         if (picked.limited) return this.allLimited(picked.why)
@@ -132,18 +131,36 @@ export class ChatgptRuntime extends ServiceRuntime {
       const account = await this.whenFree(picked, !!holder, sent)
       if (!account) return
       const fresh = !holder
-      const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
-      const prompt = lead ? fit(lead.text, sent.text) : sent.text
-      if (prompt.length > PROMPT_MAX) throw new Error(`ChatGPT takes messages of up to ${PROMPT_MAX.toLocaleString()} characters.`)
+      const { prompt, lead } = this.promptFor(sent, fresh)
       if (sent.images?.length) this.line('info', 'ChatGPT here reads text only, so the pictures were not sent.')
       const job = this.startJob(account, prompt, fresh ? null : bound!.threadId)
       const result = await this.wait(job.id, sent)
       if (this.current !== sent || !result) return
       this.settle(sent, job.id, account, fresh, lead, result)
     } catch (err) {
-      if (this.current !== sent) return
-      this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
+      this.failMessage(sent, err)
     }
+  }
+
+  /** The chat's own account and thread, while the account is still there and not avoided: the thread is resumed there. */
+  private boundAccount(all: readonly FreeInstance[]) {
+    const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
+    const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
+    return { bound, holder }
+  }
+
+  /** The prompt for the message: the handoff a new ChatGPT chat reads first, fitted in ahead of the message; too long is an error. */
+  private promptFor(sent: Sent, fresh: boolean): { prompt: string; lead: { text: string; from: string } | null } {
+    const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
+    const prompt = lead ? fit(lead.text, sent.text) : sent.text
+    if (prompt.length > PROMPT_MAX) throw new Error(`ChatGPT takes messages of up to ${PROMPT_MAX.toLocaleString()} characters.`)
+    return { prompt, lead }
+  }
+
+  /** Ends the message with the error it failed on, unless it was already stopped or replaced. */
+  private failMessage(sent: Sent, err: unknown): void {
+    if (this.current !== sent) return
+    this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
   }
 
   /** Starts the message as a job on the account: a new ChatGPT chat when `resumeId` is null, else a resume of that chat. */

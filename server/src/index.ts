@@ -156,7 +156,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
-import { peopleAddonPresent } from './people-addon'
+import { getPeopleAddon, inRepoPeople, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -1224,8 +1224,12 @@ const pointerReassertTimer = setInterval(() => {
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 
+// Set when the Manager Hydra turn collector starts (the primary install, while the people code lives here).
+let stopManagerAnalytics: (() => void) | null = null
+
 /** Clear the interval timers started at boot, so none ticks while the daemon is going away. */
 function stopBackgroundTimers(): void {
+  stopManagerAnalytics?.()
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
@@ -1719,10 +1723,16 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only, and only
-// with the people add-on (server/src/people-addon.ts).
-if (IS_PRIMARY_INSTALL && peopleAddonPresent()) {
-  startManagerAnalytics((worker) =>
+// The people add-on (server/src/people-host.ts) starts its own timers; the in-repo ones run only while the people code
+// lives here and the add-on module is absent.
+registerPeopleVerdicts((worker) =>
+  storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
+)
+if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
+
+// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
+if (IS_PRIMARY_INSTALL && inRepoPeople()) {
+  stopManagerAnalytics = startManagerAnalytics((worker) =>
     storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
   )
   startManagerJudge()

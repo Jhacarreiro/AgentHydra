@@ -49,7 +49,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { Hook } from './climayte-signal'
-import { type AddonOpts, peopleAddonPresent } from './people-addon'
+import { inRepoPeople, type PeopleOpts, peopleAddon } from './people-host'
 
 const STAMP = '.agenthydra-owner-sync.json'
 
@@ -459,8 +459,10 @@ const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/
  *  has settings of its own, so the owner's never reach a CliMayte chat, and the router picks which manager the
  *  chat is on every message. Only those groups: the owner's other hooks stay his. None when the file is missing or
  *  unreadable, and always without the people add-on (server/src/people-addon.ts). */
-export function ownerRouterHooks(ownerDir: string, addon?: AddonOpts): Array<{ hooks: Hook[] }> {
-  if (!peopleAddonPresent(addon)) return []
+export function ownerRouterHooks(ownerDir: string, addon?: PeopleOpts): Array<{ hooks: Hook[] }> {
+  const fromAddon = peopleAddon()?.routerHooks
+  if (fromAddon) return fromAddon(ownerDir)
+  if (!inRepoPeople(addon)) return []
   let groups: unknown
   try {
     groups = (
