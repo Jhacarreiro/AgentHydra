@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **The model's name under the message box is now the model menu.** Click it to pick a model; the name changes with
+  the pick. The three-dot button is gone. A Claude Desktop chat shows the model it really runs on (it said Sonnet 5.5
+  on chats running Opus 5.5), and Fine, Sus and Bad each explain themselves on hover.
 - **A chat's Delegation card shows what it sent to HSwarm and CliMayte.** Its rail card lists each service's runs and
   failures; a click opens the runs by model, with their tokens marked as estimates.
 - **A moved chat the open app will not put on Bypass goes on Auto.** Before, it stayed on that app's asking default

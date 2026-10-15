@@ -74,6 +74,8 @@ export interface AhChatRow {
   lastActivityAt: string | null // ISO
   unread: boolean // Claude Desktop's dot: a turn finished after the app last had the chat in focus
   cwd: string | null
+  /** The model the chat's record names (claude-opus-5-5 and the like); null or absent when it names none. */
+  model?: string | null
   effort?: string | null
   /** The parent chat's local id (`local_<id>`) when another chat started this one; null or absent otherwise. */
   spawnedFrom?: string | null

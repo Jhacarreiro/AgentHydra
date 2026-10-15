@@ -1,7 +1,8 @@
 <script setup lang="ts">
 import { ref } from 'vue'
 import { SUS_LEVELS, type SusLevel } from '@shared/protocol'
-import { nextSusLevel, SUS_LABEL } from './sus'
+import { Tip } from '@/components/ui/tooltip'
+import { nextSusLevel, SUS_LABEL, SUS_TIP } from './sus'
 
 const props = defineProps<{ level: SusLevel }>()
 const emit = defineEmits<{ pick: [level: SusLevel] }>()
@@ -28,16 +29,17 @@ function onKeydown(e: KeyboardEvent) {
 
 <template>
   <div ref="group" role="radiogroup" aria-label="Sus level" :class="GROUP" @keydown="onKeydown">
-    <button
-      v-for="s in SUS_LEVELS"
-      :key="s"
-      type="button"
-      role="radio"
-      :data-sus="s"
-      :aria-checked="level === s"
-      :tabindex="level === s ? 0 : -1"
-      :class="[BUTTON, level === s ? SELECTED[s] : '']"
-      @click="emit('pick', s)"
-    >{{ SUS_LABEL[s] }}</button>
+    <Tip v-for="s in SUS_LEVELS" :key="s" :label="SUS_TIP[s]" side="top">
+      <button
+        type="button"
+        role="radio"
+        :data-sus="s"
+        :aria-checked="level === s"
+        :aria-description="SUS_TIP[s]"
+        :tabindex="level === s ? 0 : -1"
+        :class="[BUTTON, level === s ? SELECTED[s] : '']"
+        @click="emit('pick', s)"
+      >{{ SUS_LABEL[s] }}</button>
+    </Tip>
   </div>
 </template>

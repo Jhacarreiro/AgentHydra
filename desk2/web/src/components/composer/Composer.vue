@@ -79,7 +79,7 @@ import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
-import { EllipsisVertical, Info } from '@lucide/vue'
+import { Info } from '@lucide/vue'
 import { ANNOTATED_EVENT, openViewerAt, tileKey, viewerKindOf, type Annotated, type ViewerPicture } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
@@ -297,6 +297,11 @@ const SUS_TONE = {
 }
 const susLevel = computed<SusLevel>(() => (props.chat ? (props.chat.sus ?? 'fine') : newSus.value))
 const susChip = computed(() => susStatus(susLevel.value, modelText.value, props.chat?.susPick, models.value, pinnedWord.value))
+// A chat at work in Claude Desktop runs that app's model, which Desk cannot set; one pinned to Codex or ChatGPT has none.
+const modelEditable = computed(() => !pinnedWord.value && !props.into)
+const modelLockedWhy = computed(() => (props.into && !pinnedWord.value ? 'Claude Desktop is running this chat: change its model there.' : ''))
+const MODEL_TRIGGER =
+  'cursor-pointer transition-colors duration-[60ms] hover:bg-(--fill-secondary) hover:text-(--text) data-[state=open]:bg-(--fill-secondary) data-[state=open]:text-(--text) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent-text)'
 function pickSus(level: SusLevel) {
   if (level !== susLevel.value) void patch({ sus: level })
 }
@@ -1471,17 +1476,23 @@ onBeforeUnmount(() => {
 
         <div class="flex items-center gap-1">
           <SusSwitch :level="susLevel" @pick="pickSus" />
-          <Tip v-if="susChip.tip" :label="susChip.tip" side="top">
-            <span :class="[SUS_CHIP, SUS_TONE[susChip.tone]]">{{ susChip.text }}</span>
+          <!-- The model's name is the model menu's button (owner, 2026-10-15: "get rid of the triple dot ... when you click the
+               model name, it opens the fly-out"). It says what the next turn runs on (susStatus), so Sus and Bad still show
+               their routing; a chat pinned elsewhere or at work in another app shows it without a menu. -->
+          <Tip v-if="!modelEditable" :label="susChip.tip ?? modelLockedWhy" :disabled="!(susChip.tip ?? modelLockedWhy)" side="top">
+            <span :class="[SUS_CHIP, SUS_TONE[susChip.tone]]" data-composer-model>{{ susChip.text }}</span>
           </Tip>
-          <span v-else :class="[SUS_CHIP, SUS_TONE[susChip.tone]]">{{ susChip.text }}</span>
-
-          <DropdownMenu v-if="!pinnedWord" v-bind="menuModel('model')" :modal="!nonModal">
-            <DropdownMenuTrigger as-child>
-              <button type="button" :class="TOOL_ICON" :aria-label="`Model: ${modelText}`" title="More model options">
-                <EllipsisVertical class="size-3.5" />
-              </button>
-            </DropdownMenuTrigger>
+          <DropdownMenu v-else v-bind="menuModel('model')" :modal="!nonModal">
+            <Tip :label="susChip.tip ?? 'Change the model'" side="top">
+              <DropdownMenuTrigger as-child>
+                <button
+                  type="button"
+                  :class="[SUS_CHIP, SUS_TONE[susChip.tone], MODEL_TRIGGER]"
+                  :aria-label="`Model: ${modelText}. Change it`"
+                  data-composer-model
+                >{{ susChip.text }}</button>
+              </DropdownMenuTrigger>
+            </Tip>
             <DropdownMenuContent
               side="top"
               align="end"

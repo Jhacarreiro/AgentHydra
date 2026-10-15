@@ -171,7 +171,8 @@ export interface ChatListRow {
   /** Claude Desktop's unread dot (DossierChat.unread). */
   unread: boolean
   cwd: string | null
-  /** The chat's effort level and ultracode flag as its record holds them (DossierChat). */
+  /** The chat's model, effort level and ultracode flag as its record holds them (DossierChat). */
+  model: string | null
   effort: string | null
   ultracode: boolean | null
   /** The parent chat's local id (`local_<id>`, the parent's chatId) when another chat started this
@@ -351,6 +352,7 @@ export function listChats(
       lastActivityAt: c.lastActivityAt,
       unread: c.unread,
       cwd: c.cwd,
+      model: c.model,
       effort: c.effort,
       ultracode: c.ultracode,
       spawnedFrom: c.spawnedFrom,

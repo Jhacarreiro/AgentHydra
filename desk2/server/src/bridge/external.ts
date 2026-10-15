@@ -173,7 +173,17 @@ export function mapExternal(
   const fromIndex = (
     id: string,
     source: ExternalSession['source'],
-    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean; parentId?: string; codexAccountId?: string },
+    base: {
+      title?: string | null
+      cwd?: string | null
+      instance?: string | null
+      last?: number | null
+      root?: string | null
+      unread?: boolean
+      parentId?: string
+      codexAccountId?: string
+      model?: string | null
+    },
   ) => {
     const row = index.get(id)
     const h = hooks.get(id)
@@ -196,7 +206,9 @@ export function mapExternal(
       status,
       activity: hookActivity(h),
       lastActivityAt: last,
-      model: null,
+      // The model the chat's record names, so the composer says what the chat runs on (owner, 2026-10-15: it said
+      // Sonnet 5.5 on a chat running Opus 5.5, because this was always null and null reads as the default).
+      model: base.model ?? null,
       accountId,
       ...(base.codexAccountId ? { codexAccountId: base.codexAccountId } : {}),
       canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
@@ -210,7 +222,15 @@ export function mapExternal(
   }
 
   for (const c of chats.values())
-    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
+    fromIndex(c.sessionId, 'desktop', {
+      title: c.title,
+      cwd: c.cwd,
+      instance: c.instance,
+      last: iso(c.lastActivityAt),
+      unread: c.unread,
+      parentId: parentIdOf(c),
+      model: c.model ?? null,
+    })
   for (const c of inp.codexChats ?? [])
     fromIndex(c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId })
   // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript

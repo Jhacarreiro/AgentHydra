@@ -6,6 +6,13 @@ export const SUS_LEARNING_TURNS = 20
 
 export const SUS_LABEL: Record<SusLevel, string> = { fine: 'Fine', sus: 'Sus', bad: 'Bad' }
 
+/** What each level does, on hover (owner, 2026-10-15: "when I hover over those, they explain what each one does"). */
+export const SUS_TIP: Record<SusLevel, string> = {
+  fine: 'Fine: the chat runs on the model you pick beside this.',
+  sus: `Sus: the chat runs on whichever model and effort has pushed back least on your work (refusals, "are you sure", lectures). Until one has ${SUS_LEARNING_TURNS} counted turns, it uses the model you picked.`,
+  bad: "Bad: Codex answers the chat's next turns instead of Claude.",
+}
+
 /** The level an arrow key moves a radio group to, or null for any other key. */
 export function nextSusLevel(current: SusLevel, key: string): SusLevel | null {
   const i = SUS_LEVELS.indexOf(current)
