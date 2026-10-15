@@ -1,6 +1,6 @@
-// The people store: one interface, two homes ("This PC" and "Connections"). docs/PEOPLE.md is the format.
-// A person is one record: its persona.json, its optional brief, and its learnings. This PC keeps the working copy
-// (the folders the Hydra Core catalog reads); Connections is a synced second home.
+// The people store: one interface, two homes ("This PC" and "CrAInium"). docs/PEOPLE.md is the format.
+// A person is one record: its persona.json, its optional brief, its learnings and its playbook and avatar files.
+// This PC keeps the working copy (the folders the Hydra Core catalog reads); CrAInium is a private synced second home.
 
 export const FAMILIES = ['manager', 'board', 'expert', 'dredd-seat', 'creator'] as const
 export type Family = (typeof FAMILIES)[number]
@@ -10,6 +10,13 @@ export interface Learning {
   id: string
   text: string
   at: string
+}
+
+/** A person-folder file besides the three above: `playbook/<name>.md` as text, `avatar.jpg|png|webp` as base64. */
+export interface PersonFile {
+  path: string
+  text?: string
+  base64?: string
 }
 
 export interface PersonRecord {
@@ -24,6 +31,8 @@ export interface PersonRecord {
   learnings: Learning[]
   /** ISO time of the last change: newer wins in a sync. */
   updatedAt: string
+  /** The playbook and avatar files, when the person has any. */
+  files?: PersonFile[]
 }
 
 export interface PersonSummary {
@@ -34,7 +43,7 @@ export interface PersonSummary {
   updatedAt: string
 }
 
-export type HomeKind = 'pc' | 'connections'
+export type HomeKind = 'pc' | 'crainium'
 
 export interface PeopleHome {
   kind: HomeKind
@@ -63,5 +72,5 @@ export function summaryOf(r: PersonRecord): PersonSummary {
   return { id: r.id, family: r.family, slug: r.slug, name, updatedAt: r.updatedAt }
 }
 
-/** A thing the Connections home cannot do right now, in words for the Settings page. */
+/** A thing the CrAInium home cannot do right now, in words for the Settings page. */
 export class HomeUnavailable extends Error {}

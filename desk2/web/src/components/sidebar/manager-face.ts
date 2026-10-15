@@ -1,5 +1,5 @@
 // The manager a chat is on, as its sidebar row draws it (owner, 2026-10-13): a small round avatar left of the title,
-// the manager's photo when it has one (~/.agenthydra/managers/<slug>/avatar.*, served by GET /api/managers/:slug/avatar),
+// the manager's photo when it has one (avatar.* in its people or legacy managers folder, served by GET /api/managers/:slug/avatar),
 // else its initial on a muted tone of the slug's own. A click on it opens the manager's card (ManagerAvatar.vue), where
 // "Change photo" replaces the photo for every row of that manager. With no manager it is the chat's Hydra Core lead or
 // the persona a seat sits as (`role`); a persona who is no manager (`persona`) has its photo from GET

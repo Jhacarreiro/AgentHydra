@@ -1,16 +1,13 @@
 import { describe, expect, test } from 'bun:test'
 import type { PeopleStoreStatus } from '../../web/src/components/people/where-types'
-import { ago, initialsOf, syncLine, whereView } from '../../web/src/components/people/where-logic'
+import { ago, syncLine, whereView } from '../../web/src/components/people/where-logic'
 
 const status = (over: Partial<PeopleStoreStatus> = {}): PeopleStoreStatus => ({
   home: 'pc',
-  configured: true,
-  signedIn: false,
-  account: null,
+  crainium: { available: false },
   syncing: false,
   lastSyncAt: null,
   error: null,
-  note: null,
   ...over
 })
 const NOW = Date.parse('2026-01-01T12:00:00Z')
@@ -29,19 +26,13 @@ describe('where your people live', () => {
     expect(syncLine(status({ lastSyncAt: '2026-01-01T11:55:00Z' }), NOW)).toBe('Synced 5 min ago')
   })
 
-  test('with no app id Connections cannot be picked and shows no sign-in or sync', () => {
-    expect(whereView(status({ configured: false }))).toEqual({ canPick: false, showAccount: false, showSignIn: false, showSync: false })
+  test('CrAInium cannot be picked, and shows no sync, until the door answers', () => {
+    expect(whereView(status())).toEqual({ canPick: false, showSync: false })
+    expect(whereView(status({ crainium: { available: true, owner: 'example', people: 3 } }))).toEqual({ canPick: true, showSync: false })
   })
 
-  test('signed out shows Sign in; signed in on Connections shows the account and Sync now', () => {
-    expect(whereView(status({ home: 'connections' }))).toMatchObject({ showSignIn: true, showSync: false })
-    const on = whereView(status({ home: 'connections', signedIn: true, account: { name: 'Example Owner', email: 'owner@example.com' } }))
-    expect(on).toMatchObject({ showAccount: true, showSignIn: false, showSync: true })
-    expect(whereView(status({ signedIn: true, account: { name: 'A B', email: null } })).showSync).toBe(false)
-  })
-
-  test('initials of an account name', () => {
-    expect(initialsOf('Example Owner')).toBe('EO')
-    expect(initialsOf('')).toBe('')
+  test('Sync now shows only on CrAInium with the door answering', () => {
+    expect(whereView(status({ home: 'crainium', crainium: { available: true } })).showSync).toBe(true)
+    expect(whereView(status({ home: 'crainium', crainium: { available: false, reason: 'away' } })).showSync).toBe(false)
   })
 })

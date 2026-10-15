@@ -1,17 +1,17 @@
 <script setup lang="ts">
-import { Cloud, LogIn, LogOut, Monitor, RefreshCw } from '@lucide/vue'
+import { Cloud, Monitor, RefreshCw } from '@lucide/vue'
 import type { PeopleHomeKind, PeopleStoreStatus } from './where-types'
 import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import { BUTTON } from '@/components/panes/settings-styles'
-import { chooseHome, loadStatus, signIn, signOut, syncNow } from './where-api'
-import { initialsOf, syncLine, whereView } from './where-logic'
+import { chooseHome, loadStatus, syncNow } from './where-api'
+import { syncLine, whereView } from './where-logic'
 
-// Settings → People → "Where your people live": This PC (the default) or the person's Connections account.
+// Settings → People → "Where your people live": This PC (the default) or CrAInium (private).
 // Its own component and route (/api/people-store), registered once in Settings; the first-run "Your people" page
-// is a separate component. Connections with no app id in this build says so and This PC keeps working.
+// is a separate component. CrAInium shows only when this PC can reach it; otherwise This PC is the only choice.
 const status = shallowRef<PeopleStoreStatus | null>(null)
 const failure = ref<string | null>(null)
-const busy = ref<'home' | 'signin' | 'signout' | 'sync' | null>(null)
+const busy = ref<'home' | 'sync' | null>(null)
 const now = ref(Date.now())
 let tick: ReturnType<typeof setInterval> | null = null
 
@@ -49,8 +49,6 @@ onBeforeUnmount(() => tick && clearInterval(tick))
 const SEG = 'flex h-7 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] px-3 text-ui transition-colors duration-[60ms] focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:opacity-50'
 const ON = 'bg-accent-bg text-accent font-medium'
 const OFF = 'text-text-2 hover:bg-fill-hover'
-const FILLED =
-  'flex h-7 shrink-0 cursor-default items-center gap-1.5 rounded-[var(--radius-6)] bg-accent px-3 text-ui font-medium text-white transition-opacity duration-[60ms] hover:opacity-90 focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:opacity-50'
 </script>
 
 <template>
@@ -65,30 +63,13 @@ const FILLED =
           <button type="button" role="radio" :aria-checked="status.home === 'pc'" :class="[SEG, status.home === 'pc' ? ON : OFF]" :disabled="busy !== null" @click="pick('pc')">
             <Monitor class="size-3.5" aria-hidden="true" /> This PC
           </button>
-          <button type="button" role="radio" :aria-checked="status.home === 'connections'" :class="[SEG, status.home === 'connections' ? ON : OFF]" :title="view.canPick ? undefined : 'Not set up in this build yet'" :disabled="busy !== null || !view.canPick" @click="pick('connections')">
-            <Cloud class="size-3.5" aria-hidden="true" /> Connections
+          <button v-if="view.canPick || status.home === 'crainium'" type="button" role="radio" :aria-checked="status.home === 'crainium'" :class="[SEG, status.home === 'crainium' ? ON : OFF]" :disabled="busy !== null || !view.canPick" @click="pick('crainium')">
+            <Cloud class="size-3.5" aria-hidden="true" /> CrAInium (private)
           </button>
         </div>
       </div>
 
-      <div v-if="status.note" class="border-b border-border py-3.5 text-ui leading-4.75 text-text-muted" data-testid="not-configured">{{ status.note }}</div>
-
-      <div v-if="view.showAccount || view.showSignIn" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5">
-        <div class="flex min-w-50 flex-1 items-center gap-2.5">
-          <template v-if="view.showAccount && status.account">
-            <span class="flex size-7 shrink-0 items-center justify-center rounded-full bg-accent-bg text-ui-sm font-medium text-accent" aria-hidden="true">{{ initialsOf(status.account.name) }}</span>
-            <div class="min-w-0">
-              <div class="truncate text-ui leading-5 text-text" data-testid="account-name">{{ status.account.name }}</div>
-              <div v-if="status.account.email" class="truncate text-ui-sm leading-4 text-text-muted">{{ status.account.email }}</div>
-            </div>
-          </template>
-          <span v-else class="text-ui leading-5 text-text-muted">Not signed in</span>
-        </div>
-        <button v-if="view.showSignIn" type="button" :class="status.home === 'connections' ? FILLED : BUTTON" :disabled="busy !== null" :aria-busy="busy === 'signin'" @click="run('signin', signIn)">
-          <LogIn class="size-3.5" aria-hidden="true" /> {{ busy === 'signin' ? 'Waiting for your browser…' : 'Sign in with Connections' }}
-        </button>
-        <button v-else type="button" :class="BUTTON" :disabled="busy !== null" @click="run('signout', signOut)"><LogOut class="mr-1.5 size-3.5" aria-hidden="true" /> Sign out</button>
-      </div>
+      <div v-if="status.home === 'crainium' && !view.canPick && status.crainium.reason" class="border-b border-border py-3.5 text-ui leading-4.75 text-text-muted" data-testid="crainium-away">{{ status.crainium.reason }}</div>
 
       <div v-if="view.showSync" class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5">
         <div class="min-w-50 flex-1 text-ui leading-5 text-text-2" data-testid="sync-line">

@@ -19,6 +19,7 @@ import { isAbsolute, join, resolve } from 'node:path'
 import { APP_ROOT } from './config'
 import { type HydraTool, MCP_CALL_BUDGET_MS, S, str } from './mcp-client'
 import { folderOf } from './mcp-dashboards'
+import { findSueDredd } from './sue-dredd-home'
 
 const WAIT_MS = MCP_CALL_BUDGET_MS - 8_000
 
@@ -121,10 +122,10 @@ const ENTRY: Record<Engine, string> = {
 
 /** The folder holding `engine`: SUE_DREDD_HOME when it has the engine, else the sue-dredd folder beside the AgentHydra checkout. */
 export function resolveCheckout(engine: Engine, env: SueDreddDeps['env'], appRoot: string): string {
+  const found = findSueDredd(ENTRY[engine], env, appRoot)
+  if (found) return found
   const fromEnv = str(env.SUE_DREDD_HOME).trim()
   const beside = join(resolve(appRoot), '..', 'sue-dredd')
-  const tried = fromEnv ? [resolve(fromEnv), beside] : [beside]
-  for (const home of tried) if (existsSync(join(home, ENTRY[engine]))) return home
   const env_ = fromEnv
     ? `SUE_DREDD_HOME (${resolve(fromEnv)}) has no ${ENTRY[engine]}`
     : 'SUE_DREDD_HOME is not set'

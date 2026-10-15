@@ -2,21 +2,16 @@
 // (server/src/people-store/service.ts PeopleStatus), served by server/src/plugins/76-people-store.ts.
 export const PEOPLE_STORE = '/api/people-store'
 export const PEOPLE_STORE_HOME = `${PEOPLE_STORE}/home`
-export const PEOPLE_STORE_SIGNIN = `${PEOPLE_STORE}/signin`
-export const PEOPLE_STORE_SIGNOUT = `${PEOPLE_STORE}/signout`
 export const PEOPLE_STORE_SYNC = `${PEOPLE_STORE}/sync`
 
-export type PeopleHomeKind = 'pc' | 'connections'
+export type PeopleHomeKind = 'pc' | 'crainium'
 
 export interface PeopleStoreStatus {
   home: PeopleHomeKind
-  /** False when this build has no Connections app id. */
-  configured: boolean
-  signedIn: boolean
-  account: { name: string; email: string | null } | null
+  /** CrAInium (private): `available` is true only when the door is here and answering. */
+  crainium: { available: boolean; owner?: string; people?: number; reason?: string }
   syncing: boolean
   lastSyncAt: string | null
   /** Plain words, or null when the last sync was fine. */
   error: string | null
-  note: string | null
 }

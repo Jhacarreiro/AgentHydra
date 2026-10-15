@@ -57,11 +57,64 @@ test('people folders and legacy manager folders become person entries', () => {
         id: string
       }[]
     ).map((e) => e.id)
-  expect(ids('generated-people.json').sort()).toEqual(['person:ada', 'person:expert-grace'])
-  expect(ids('generated-managers.json')).toEqual(['person:lin'])
+  expect(ids('generated-people.json')).toEqual(['person:expert-grace'])
+  expect(ids('generated-managers.json').sort()).toEqual(['person:ada', 'person:lin'])
   const loaded = loadCatalog(join(home, '.agenthydra/core'))
   expect(loaded.entries.has('person:expert-grace')).toBe(true)
   expect(loaded.skipped).toEqual([])
+})
+
+const managerEntries = () =>
+  JSON.parse(
+    readFileSync(join(home, '.agenthydra/core/catalog/generated-managers.json'), 'utf8'),
+  ) as {
+    id: string
+    name: string
+    load: { path?: string }
+  }[]
+
+test('a manager in both homes is one entry, and the people copy wins', () => {
+  put('.agenthydra/people/manager/ada/persona.json', {
+    name: 'Ada From People',
+    oneLiner: 'People copy',
+  })
+  put('.agenthydra/managers/ada/persona.json', { name: 'Ada From Legacy', oneLiner: 'Legacy copy' })
+  expect(run().status).toBe(0)
+  const ada = managerEntries().filter((e) => e.id === 'person:ada')
+  expect(ada).toHaveLength(1)
+  expect(ada[0].name).toBe('Ada From People')
+})
+
+test('a legacy manager with no people copy keeps its legacy brief', () => {
+  put('.agenthydra/people/manager/ada/persona.json', { name: 'Ada', oneLiner: 'People copy' })
+  put('.agenthydra/managers/ada/brief.md', 'legacy brief')
+  put('.agenthydra/managers/lin/persona.json', { name: 'Lin', oneLiner: 'Legacy only' })
+  put('.agenthydra/managers/lin/brief.md', 'lin brief')
+  expect(run().status).toBe(0)
+  const byId = new Map(managerEntries().map((e) => [e.id, e]))
+  expect(byId.get('person:ada')?.load.path).toMatch(/\.agenthydra\/managers\/ada\/brief\.md$/)
+  expect(byId.get('person:lin')?.load.path).toMatch(/\.agenthydra\/managers\/lin\/brief\.md$/)
+})
+
+test('no person id appears twice across the generated catalog files', () => {
+  put('.agenthydra/people/manager/ada/persona.json', { name: 'Ada', oneLiner: 'People copy' })
+  put('.agenthydra/managers/ada/persona.json', { name: 'Ada', oneLiner: 'Legacy copy' })
+  put('.agenthydra/managers/lin/persona.json', { name: 'Lin', oneLiner: 'Legacy only' })
+  put('.agenthydra/people/expert/grace/persona.json', { name: 'Grace', oneLiner: 'Expert' })
+  expect(run().status).toBe(0)
+  const files = ['generated-managers.json', 'generated-people.json']
+  const ids = files.flatMap((f) =>
+    (
+      JSON.parse(readFileSync(join(home, '.agenthydra/core/catalog', f), 'utf8')) as {
+        id: string
+      }[]
+    ).map((e) => e.id),
+  )
+  expect(ids.filter((id) => id.startsWith('person:')).sort()).toEqual([
+    'person:ada',
+    'person:expert-grace',
+    'person:lin',
+  ])
 })
 
 test('owner sources are read only from sources.json', () => {

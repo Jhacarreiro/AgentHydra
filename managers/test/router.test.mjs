@@ -79,6 +79,7 @@ async function withRig(fn) {
     return {
       ...base,
       AGENTHYDRA_MANAGERS_DIR: managers,
+      AGENTHYDRA_PEOPLE_DIR: path.join(root, "people"),
       AGENTHYDRA_CONSOLE_TOKEN_FILE: path.join(root, "console-token"),
       AGENTHYDRA_JEV_PORT: String(stub.port),
       ...extra,

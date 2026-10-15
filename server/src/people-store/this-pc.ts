@@ -1,4 +1,5 @@
-// "This PC": the docs/PEOPLE.md folders, ~/.agenthydra/people/<family>/<slug>/{persona.json, brief.md, learnings.json}.
+// "This PC": the docs/PEOPLE.md folders, ~/.agenthydra/people/<family>/<slug>/{persona.json, brief.md, learnings.json,
+// playbook/<name>.md, avatar.jpg|png|webp}.
 import {
   existsSync,
   mkdirSync,
@@ -15,6 +16,7 @@ import {
   FAMILIES,
   type Learning,
   type PeopleHome,
+  type PersonFile,
   type PersonRecord,
   type PersonSummary,
   parseId,
@@ -31,6 +33,37 @@ function readJson<T>(file: string): T | null {
     // floor-ok: a missing or half-written file is a person we skip, never a crash
     return null
   }
+}
+
+const PLAYBOOK = /^[a-z0-9][a-z0-9._-]{0,80}\.md$/
+const AVATARS = ['avatar.jpg', 'avatar.png', 'avatar.webp']
+const AVATAR_MAX = 512 * 1024
+
+/** The playbook and avatar files of a person folder, with the newest mtime among them. */
+function readFiles(d: string): { files: PersonFile[]; newest: number } {
+  const files: PersonFile[] = []
+  let newest = 0
+  try {
+    for (const n of readdirSync(join(d, 'playbook')).sort()) {
+      if (!PLAYBOOK.test(n)) continue
+      const f = join(d, 'playbook', n)
+      files.push({ path: `playbook/${n}`, text: readFileSync(f, 'utf8') })
+      newest = Math.max(newest, mtimeMs(f))
+    }
+  } catch {
+    // floor-ok: a person with no playbook folder
+  }
+  for (const n of AVATARS) {
+    const f = join(d, n)
+    try {
+      if (statSync(f).size > AVATAR_MAX) continue
+      files.push({ path: n, base64: readFileSync(f).toString('base64') })
+      newest = Math.max(newest, mtimeMs(f))
+    } catch {
+      // floor-ok: a person with no avatar of this kind
+    }
+  }
+  return { files, newest }
 }
 
 const mtimeMs = (file: string): number => {
@@ -60,7 +93,9 @@ export function createThisPcHome(opts: { home?: string } = {}): PeopleHome {
       // floor-ok: a person with no brief
     }
     const learnings = readJson<Learning[]>(join(d, 'learnings.json'))
+    const extra = readFiles(d)
     const newest = Math.max(
+      extra.newest,
       mtimeMs(join(d, 'persona.json')),
       mtimeMs(briefFile),
       mtimeMs(join(d, 'learnings.json')),
@@ -73,6 +108,7 @@ export function createThisPcHome(opts: { home?: string } = {}): PeopleHome {
       brief,
       learnings: Array.isArray(learnings) ? learnings : [],
       updatedAt: new Date(newest).toISOString(),
+      ...(extra.files.length ? { files: extra.files } : {}),
     }
   }
 
@@ -115,10 +151,29 @@ export function createThisPcHome(opts: { home?: string } = {}): PeopleHome {
       const learnings = join(d, 'learnings.json')
       if (record.learnings.length || existsSync(learnings))
         writeFileSync(learnings, `${JSON.stringify(record.learnings, null, 2)}\n`)
+      // Only the known playbook and avatar paths are written; a file the record lacks is never removed.
+      const extras: string[] = []
+      for (const f of record.files ?? []) {
+        const isPlaybook = /^playbook\/[^/]+$/.test(f.path) && PLAYBOOK.test(f.path.slice(9))
+        if (!isPlaybook && !AVATARS.includes(f.path)) continue
+        const target = join(d, ...f.path.split('/'))
+        if (isPlaybook) {
+          if (typeof f.text !== 'string') continue
+          mkdirSync(join(d, 'playbook'), { recursive: true })
+          writeFileSync(target, f.text)
+        } else {
+          if (typeof f.base64 !== 'string') continue
+          const bytes = Buffer.from(f.base64, 'base64')
+          if (bytes.length > AVATAR_MAX) continue
+          writeFileSync(target, bytes)
+        }
+        extras.push(target)
+      }
       // The record's own time becomes the files' time, so a pulled copy equals its source.
       const t = new Date(record.updatedAt)
       if (!Number.isNaN(t.getTime())) {
-        for (const f of [persona, briefFile, learnings]) if (existsSync(f)) utimesSync(f, t, t)
+        for (const f of [persona, briefFile, learnings, ...extras])
+          if (existsSync(f)) utimesSync(f, t, t)
       }
     },
     async delete(id) {

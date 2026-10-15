@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename } from 'node:path'
+import { managerFile } from '../manager-folders'
 import { findTranscript } from '../transcript'
 import { type MergedTurn, mergeTurns } from './collect'
-import { appendJsonl, managersDir, ROUTES_FILE, readJsonl, readState, TURNS_FILE } from './store'
+import { appendJsonl, ROUTES_FILE, readJsonl, readState, TURNS_FILE } from './store'
 import {
   type JudgeRecord,
   type LineRef,
@@ -116,12 +117,11 @@ export function facetNamesOf(persona: unknown): string[] {
 }
 
 function readManagerFiles(slug: string): { rubric: string; facets: string[] } | null {
-  const dir = join(managersDir(), slug)
-  const briefPath = join(dir, 'brief.md')
-  if (!existsSync(briefPath)) return null
-  const personaPath = join(dir, 'persona.json')
+  const briefPath = managerFile(slug, 'brief.md')
+  if (!briefPath) return null
+  const personaPath = managerFile(slug, 'persona.json')
   let facets: string[] = []
-  if (existsSync(personaPath)) {
+  if (personaPath) {
     try {
       facets = facetNamesOf(JSON.parse(readFileSync(personaPath, 'utf8')))
     } catch {

@@ -6,12 +6,8 @@ import {
   renameSync,
   writeFileSync,
 } from 'node:fs'
-import { homedir } from 'node:os'
 import { join } from 'node:path'
-
-export function managersDir(): string {
-  return process.env.AGENTHYDRA_MANAGERS_DIR || join(homedir(), '.agenthydra', 'managers')
-}
+import { managersDir } from '../manager-folders'
 
 export function analyticsDir(): string {
   return join(managersDir(), 'analytics')

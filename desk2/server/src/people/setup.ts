@@ -3,17 +3,14 @@
 // ~/.agenthydra/managers folders count as managers already set up.
 
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
-import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { PERSON_SLUG, slugOf, type PeopleSaveRequest, type PeopleSaveResponse, type PeopleState, type PersonDraft } from '@shared/people'
-import { managersDir } from '../engine/managers'
+import { managersDir, peopleDir } from '../../../../server/src/manager-folders'
 import { writeFlushed } from '../write-flushed'
 import { STARTERS } from './starters'
 
 const BUILDER = resolve(import.meta.dir, '../../../../hydra-core/catalog/build.mjs')
 const MAX_TEXT = 8000
-
-export const peopleDir = (): string => join(homedir(), '.agenthydra', 'people')
 
 function folders(dir: string): string[] {
   try {

@@ -23,6 +23,7 @@ const noDaemon: Daemon = {
 let dir = ''
 let savedFetch: typeof fetch
 let savedManagers: string | undefined
+let savedPeople: string | undefined
 let answers = true
 let chats = new Map<string, Record<string, unknown>>()
 let transcripts = new Map<string, { kind: string; text: string }[]>()
@@ -83,6 +84,8 @@ beforeEach(() => {
   writeFileSync(join(managers, 'iris-ui', 'persona.json'), JSON.stringify({ name: 'Iris Example' }))
   savedManagers = process.env.AGENTHYDRA_MANAGERS_DIR
   process.env.AGENTHYDRA_MANAGERS_DIR = managers
+  savedPeople = process.env.AGENTHYDRA_PEOPLE_DIR
+  process.env.AGENTHYDRA_PEOPLE_DIR = join(dir, 'people')
   savedFetch = globalThis.fetch
   chats = new Map([
     [
@@ -102,7 +105,21 @@ afterEach(() => {
   globalThis.fetch = savedFetch
   if (savedManagers === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
   else process.env.AGENTHYDRA_MANAGERS_DIR = savedManagers
+  if (savedPeople === undefined) delete process.env.AGENTHYDRA_PEOPLE_DIR
+  else process.env.AGENTHYDRA_PEOPLE_DIR = savedPeople
   rmSync(dir, { recursive: true, force: true })
+})
+
+test('a seat opens for a manager that is only in the people home', async () => {
+  rmSync(join(dir, 'managers', 'iris-ui'), { recursive: true, force: true })
+  mkdirSync(join(dir, 'people', 'manager', 'iris-ui'), { recursive: true })
+  writeFileSync(
+    join(dir, 'people', 'manager', 'iris-ui', 'persona.json'),
+    JSON.stringify({ name: 'Iris People' }),
+  )
+  const r = await consult('person:iris-ui', 'Layout for the login page?')
+  expect(r).toMatchObject({ status: 'done', seat: { chat: 'chat-seat-1' } })
+  expect(seatPosts()[0].body).toMatchObject({ managerSlug: 'iris-ui' })
 })
 
 const consult = (

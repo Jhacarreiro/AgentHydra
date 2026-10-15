@@ -3,6 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { managerRoots } from '../src/manager-folders'
 import { MANAGER_TOOLS, managerName, replyWhenDone } from '../src/mcp-managers'
 
 const tool = (name: string) => {
@@ -14,25 +15,32 @@ const tool = (name: string) => {
 
 let dir = ''
 const oldDir = process.env.AGENTHYDRA_MANAGERS_DIR
+const oldPeople = process.env.AGENTHYDRA_PEOPLE_DIR
 const oldChat = process.env.HYDRA_DESK_CHAT_ID
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-managers-'))
-  process.env.AGENTHYDRA_MANAGERS_DIR = dir
+  process.env.AGENTHYDRA_MANAGERS_DIR = join(dir, 'managers')
+  process.env.AGENTHYDRA_PEOPLE_DIR = join(dir, 'people')
   delete process.env.HYDRA_DESK_CHAT_ID
-  mkdirSync(join(dir, 'example-manager'))
+  mkdirSync(join(dir, 'managers', 'example-manager'), { recursive: true })
   writeFileSync(
-    join(dir, 'example-manager', 'persona.json'),
+    join(dir, 'managers', 'example-manager', 'persona.json'),
     JSON.stringify({ slug: 'example-manager', name: 'Example Manager' }),
   )
-  mkdirSync(join(dir, 'nameless'))
-  writeFileSync(join(dir, 'nameless', 'persona.json'), JSON.stringify({ slug: 'nameless' }))
+  mkdirSync(join(dir, 'managers', 'nameless'), { recursive: true })
+  writeFileSync(
+    join(dir, 'managers', 'nameless', 'persona.json'),
+    JSON.stringify({ slug: 'nameless' }),
+  )
 })
 
 afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true })
   if (oldDir === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
   else process.env.AGENTHYDRA_MANAGERS_DIR = oldDir
+  if (oldPeople === undefined) delete process.env.AGENTHYDRA_PEOPLE_DIR
+  else process.env.AGENTHYDRA_PEOPLE_DIR = oldPeople
   if (oldChat === undefined) delete process.env.HYDRA_DESK_CHAT_ID
   else process.env.HYDRA_DESK_CHAT_ID = oldChat
 })
@@ -74,6 +82,28 @@ describe('manager_ask and manager_read refuse', () => {
 })
 
 describe('the persona name', () => {
+  it('reads the people folder first and the legacy folder when the people one has no persona', () => {
+    mkdirSync(join(dir, 'people', 'manager', 'both'), { recursive: true })
+    writeFileSync(
+      join(dir, 'people', 'manager', 'both', 'persona.json'),
+      JSON.stringify({ slug: 'both', name: 'People Copy' }),
+    )
+    mkdirSync(join(dir, 'managers', 'both'), { recursive: true })
+    writeFileSync(
+      join(dir, 'managers', 'both', 'persona.json'),
+      JSON.stringify({ slug: 'both', name: 'Legacy Copy' }),
+    )
+    mkdirSync(join(dir, 'managers', 'legacy-only'), { recursive: true })
+    writeFileSync(
+      join(dir, 'managers', 'legacy-only', 'persona.json'),
+      JSON.stringify({ slug: 'legacy-only', name: 'Legacy Only' }),
+    )
+    expect(managerName('both')).toBe('People Copy')
+    expect(managerName('legacy-only')).toBe('Legacy Only')
+  })
+  it('lists the two homes people first', () => {
+    expect(managerRoots()).toEqual([join(dir, 'people', 'manager'), join(dir, 'managers')])
+  })
   it('is read from the managers folder', () => {
     expect(managerName('example-manager')).toBe('Example Manager')
   })

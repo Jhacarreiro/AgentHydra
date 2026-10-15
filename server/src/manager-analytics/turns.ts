@@ -236,7 +236,7 @@ export function promptOf(ref: LineRef): PromptInfo | null {
 
 export interface TurnContext {
   session: string
-  managersDir: string
+  managerRoots: string[]
   deskChat: string | null
   parentChat: string | null
   /** The manager and routing decision in force when a turn starts at `promptTs`; null skips the turn. */
@@ -354,8 +354,12 @@ function addEntry(
     const input = b.input
     if (name === 'Read' && typeof input?.file_path === 'string') {
       const fp = input.file_path.split('\\').join('/')
-      const root = ctx.managersDir.split('\\').join('/')
-      if (fp.startsWith(`${root}/`) && fp.includes('/playbook/') && fp.endsWith('.md'))
+      const roots = ctx.managerRoots.map((r) => r.split('\\').join('/'))
+      if (
+        roots.some((root) => fp.startsWith(`${root}/`)) &&
+        fp.includes('/playbook/') &&
+        fp.endsWith('.md')
+      )
         d.facets.add(basename(fp))
     } else if (name === 'manager_ask') {
       d.asks.push({ chat: chatKey(input), idx: step.n })

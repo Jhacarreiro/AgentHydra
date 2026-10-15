@@ -28,8 +28,15 @@ const QUESTIONS = {
 const fmt = (n) => n.toFixed(2);
 const escapeRegExp = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 
+// Two-home persona rule, shared with server/src/manager-folders.ts (keep the two in step): people/manager/<slug>/ first,
+// the legacy managers/<slug>/ second, a folder in both is one manager. sessions/ and router.log stay in the legacy folder.
 export function managersDir(env = process.env) {
   return env.AGENTHYDRA_MANAGERS_DIR || path.join(os.homedir(), ".agenthydra", "managers");
+}
+
+export function managerRoots(env = process.env) {
+  const people = env.AGENTHYDRA_PEOPLE_DIR || path.join(os.homedir(), ".agenthydra", "people");
+  return [path.join(people, "manager"), managersDir(env)];
 }
 
 export function personaProblem(persona, dir) {
@@ -45,36 +52,40 @@ export function personaProblem(persona, dir) {
   return null;
 }
 
-export function loadPersonas(root) {
+export function loadPersonas(roots) {
   const personas = [];
   const skipped = [];
-  if (!existsSync(root)) return { personas, skipped };
-  const entries = readdirSync(root, { withFileTypes: true }).sort((a, b) => a.name.localeCompare(b.name));
-  for (const entry of entries) {
-    if (!entry.isDirectory()) continue;
-    const dir = path.join(root, entry.name);
-    const file = path.join(dir, "persona.json");
-    if (!existsSync(file)) continue;
+  const names = new Set();
+  for (const root of roots) {
+    if (!existsSync(root)) continue;
+    for (const entry of readdirSync(root, { withFileTypes: true })) {
+      if (entry.isDirectory() && existsSync(path.join(root, entry.name, "persona.json"))) names.add(entry.name);
+    }
+  }
+  for (const name of [...names].sort((a, b) => a.localeCompare(b))) {
+    const homes = roots.map((root) => path.join(root, name));
+    const dir = homes.find((home) => existsSync(path.join(home, "persona.json")));
     let data;
     try {
-      data = JSON.parse(readFileSync(file, "utf8"));
+      data = JSON.parse(readFileSync(path.join(dir, "persona.json"), "utf8"));
     } catch (error) {
-      skipped.push({ folder: entry.name, reason: `persona.json: ${error.message}` });
+      skipped.push({ folder: name, reason: `persona.json: ${error.message}` });
       continue;
     }
-    const problem = personaProblem(data, dir);
+    const briefDir = homes.find((home) => existsSync(path.join(home, String(data?.brief)))) ?? dir;
+    const problem = personaProblem(data, briefDir);
     if (problem) {
-      skipped.push({ folder: entry.name, reason: problem });
+      skipped.push({ folder: name, reason: problem });
       continue;
     }
     if (personas.some((p) => p.slug === data.slug)) {
-      skipped.push({ folder: entry.name, reason: `duplicate slug ${data.slug}` });
+      skipped.push({ folder: name, reason: `duplicate slug ${data.slug}` });
       continue;
     }
     personas.push({
       ...data,
       dir,
-      briefPath: path.join(dir, data.brief),
+      briefPath: path.join(briefDir, data.brief),
       keywords: Array.isArray(data.keywords) ? data.keywords.filter((k) => typeof k === "string") : [],
       playbook: Array.isArray(data.playbook) ? data.playbook : [],
     });
@@ -262,7 +273,7 @@ export async function run(input, env = process.env) {
   const prompt = typeof input.prompt === "string" ? input.prompt : "";
   if (prompt.trimStart().startsWith("/")) return null;
   const root = managersDir(env);
-  const { personas, skipped } = loadPersonas(root);
+  const { personas, skipped } = loadPersonas(managerRoots(env));
   if (!personas.length) return null;
   const at = new Date().toISOString();
   const logFile = path.join(root, "router.log");

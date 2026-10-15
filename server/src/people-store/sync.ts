@@ -15,7 +15,7 @@ export interface SyncResult {
 
 export const backupDir = (home?: string): string => join(agentHydraDir(home), 'people-backup')
 
-function backUp(dir: string, side: 'pc' | 'connections', r: PersonRecord): void {
+function backUp(dir: string, side: 'pc' | 'crainium', r: PersonRecord): void {
   const stamp = new Date().toISOString().replace(/[:.]/g, '-')
   const folder = join(dir, stamp)
   mkdirSync(folder, { recursive: true })
@@ -59,7 +59,7 @@ export async function syncPeople(o: SyncOptions): Promise<SyncResult> {
         res.pulled++
       } else if (a && b && time(a) !== time(b)) {
         if (time(a) > time(b)) {
-          backUp(o.backupDir, 'connections', b)
+          backUp(o.backupDir, 'crainium', b)
           await o.remote.put(a)
           res.pushed++
         } else {

@@ -19,27 +19,14 @@ export function syncLine(st: PeopleStoreStatus, now = Date.now()): string {
 }
 
 export interface WhereView {
-  /** Connections can be picked (it has an app id). */
+  /** CrAInium (private) can be picked: the door is here and answering. */
   canPick: boolean
-  showAccount: boolean
-  showSignIn: boolean
   showSync: boolean
 }
 
 export function whereView(st: PeopleStoreStatus): WhereView {
-  const onConnections = st.home === 'connections'
   return {
-    canPick: st.configured,
-    showAccount: st.configured && st.signedIn && st.account !== null,
-    showSignIn: st.configured && !st.signedIn,
-    showSync: onConnections && st.configured && st.signedIn
+    canPick: st.crainium.available,
+    showSync: st.home === 'crainium' && st.crainium.available
   }
 }
-
-export const initialsOf = (name: string): string =>
-  name
-    .split(/\s+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((w) => w[0]?.toUpperCase() ?? '')
-    .join('')

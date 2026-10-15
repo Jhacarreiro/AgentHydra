@@ -75,7 +75,7 @@ For a contributor or a new PC. People and persona text live in your own `~/.agen
 
 **Add a manager.**
 
-1. Make `~/.agenthydra/people/manager/<slug>/` with `persona.json` and `brief.md`. The older layout `~/.agenthydra/managers/<slug>/` (same files, plus an optional `playbook/` folder the catalog does not read) still works, and Desk still needs a manager there too (see the known gap in docs/PEOPLE.md).
+1. Make `~/.agenthydra/people/manager/<slug>/` with `persona.json`, `brief.md` and optionally `playbook/*.md` and `avatar.jpg`. The older layout `~/.agenthydra/managers/<slug>/` still works; a slug in both is one manager and the people copy wins (docs/PEOPLE.md).
 2. Run `node hydra-core/catalog/build.mjs`, then `node hydra-core/catalog/build.mjs --check`.
 
 **Edit a manager.** Edit `persona.json` or `brief.md` by hand and rebuild. There is no editor yet. Settings > Your people only adds people.
@@ -86,7 +86,7 @@ For a contributor or a new PC. People and persona text live in your own `~/.agen
 
 1. `bun install` and `bun install --cwd desk2`.
 2. Start the daemon (port 7787).
-3. Get your people: the Your people first run, or copy the folders into `~/.agenthydra/people/`.
+3. Get your people: the Your people first run, or copy the folders into `~/.agenthydra/people/`. An owner with the private sue-dredd checkout and SSH to the persona server picks CrAInium in Settings → Your people instead, and the managers are pulled down. To put managers into CrAInium the first time, run `node store/import-managers.mjs --from <folder of manager folders>` in the sue-dredd checkout (a dry run), then again with `--write`; the rows are stored under that PC's owner.
 4. Build the catalog (above).
 5. Write `ON` and `PLACEMENT` (for example `slot`) in the core folder.
 

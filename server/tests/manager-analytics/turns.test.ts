@@ -55,7 +55,7 @@ function reply(
 
 const ctx = (over: Partial<TurnContext> = {}): TurnContext => ({
   session: 's1',
-  managersDir: scratch,
+  managerRoots: [scratch],
   deskChat: 'chat-1',
   parentChat: null,
   pick: () => ({

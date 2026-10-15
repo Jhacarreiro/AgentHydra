@@ -8,7 +8,8 @@ import { join } from 'node:path'
 import type { Context, Hono } from 'hono'
 import type { ServerContext } from '../context'
 import { personaPhoto } from '../engine/core-lead'
-import { AVATAR_TYPES, type AvatarExt, forgetManager, type ManagerAvatar, managerAvatar, managerName, managersDir, MANAGER_SLUG } from '../engine/managers'
+import { MANAGER_SLUG, managerWriteDir } from '../../../../server/src/manager-folders'
+import { AVATAR_TYPES, type AvatarExt, forgetManager, type ManagerAvatar, managerAvatar, managerName } from '../engine/managers'
 import { sniff } from '../media/cache'
 import { renameOver, writeFlushed } from '../write-flushed'
 
@@ -64,7 +65,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     if (bytes.length > MAX_AVATAR_BYTES) return c.json({ error: TOO_BIG }, 413)
     if (sniff(bytes) !== ext) return c.json({ error: NOT_A_PHOTO }, 415)
 
-    const dir = join(managersDir(), slug)
+    const dir = managerWriteDir(slug)
     const file = join(dir, `avatar.${ext}`)
     const tmp = join(dir, `avatar.${ext}.${process.pid}.${Date.now()}.tmp`)
     try {

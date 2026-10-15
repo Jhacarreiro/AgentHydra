@@ -1,6 +1,6 @@
 // Where your people live (Settings → People): /api/people-store answers the status, PUT .../home picks This PC or
-// Connections, POST .../signin, .../signout and .../sync act on it. The store itself is AgentHydra's
-// (server/src/people-store/): the people on this PC or in the person's Connections account, synced.
+// CrAInium and POST .../sync syncs them. The store itself is AgentHydra's (server/src/people-store/): the people on
+// this PC or in CrAInium (a private store reached through a door command), synced.
 // Only Desk 2's own page may call it (own-page.ts); Desk's localOnly guard runs first on every route.
 // The store is loaded when the first call or the start-up sync needs it, so a missing package never stops Desk 2.
 import type { Context, Hono } from 'hono'
@@ -31,25 +31,13 @@ export default function plugin(app: Hono): void {
     const denied = guard(c)
     if (denied) return denied
     const body = (await c.req.json().catch(() => null)) as { home?: unknown } | null
-    if (body?.home !== 'pc' && body?.home !== 'connections') return c.json({ error: 'home must be pc or connections' }, 400)
+    if (body?.home !== 'pc' && body?.home !== 'crainium') return c.json({ error: 'home must be pc or crainium' }, 400)
     try {
       return c.json(await (await service()).setHome(body.home))
     } catch (e) {
       return c.json({ error: words(e) }, 409)
     }
   })
-  for (const action of ['signin', 'signout'] as const) {
-    app.post(`/api/people-store/${action}`, async (c) => {
-      const denied = guard(c)
-      if (denied) return denied
-      try {
-        const s = await service()
-        return c.json(action === 'signin' ? await s.signIn() : await s.signOut())
-      } catch (e) {
-        return c.json({ error: words(e) }, 409)
-      }
-    })
-  }
   app.post('/api/people-store/sync', async (c) => {
     const denied = guard(c)
     if (denied) return denied

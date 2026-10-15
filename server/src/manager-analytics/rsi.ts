@@ -2,16 +2,10 @@ import { spawn } from 'node:child_process'
 import { createHash, randomUUID } from 'node:crypto'
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
 import { basename, dirname, join } from 'node:path'
+import { managerFile, managerRoots, managersDir, managerWriteDir } from '../manager-folders'
 import type { MergedTurn } from './collect'
 import { buildStats, facetsOf } from './stats'
-import {
-  analyticsDir,
-  analyticsPath,
-  appendJsonl,
-  managersDir,
-  readJsonl,
-  writeJsonAtomic,
-} from './store'
+import { analyticsDir, analyticsPath, appendJsonl, readJsonl, writeJsonAtomic } from './store'
 import type { JudgeRecord } from './turns'
 
 const DAY_MS = 86_400_000
@@ -124,12 +118,12 @@ const round2 = (x: number): number => Math.round(x * 100) / 100
 const round3 = (x: number): number => Math.round(x * 1000) / 1000
 
 function personaDir(slug: string): string {
-  return join(managersDir(), slug)
+  return managerWriteDir(slug)
 }
 
 function readPersona(slug: string): Persona | null {
-  const file = join(personaDir(slug), 'persona.json')
-  if (!existsSync(file)) return null
+  const file = managerFile(slug, 'persona.json')
+  if (!file) return null
   return JSON.parse(readFileSync(file, 'utf8')) as Persona
 }
 
@@ -233,8 +227,8 @@ const sha256 = (path: string): string =>
 function hashFiles(slug: string, files: string[]): Record<string, string> {
   const out: Record<string, string> = {}
   for (const f of files) {
-    const path = join(personaDir(slug), f)
-    out[f] = existsSync(path) ? sha256(path) : 'missing'
+    const path = managerFile(slug, f)
+    out[f] = path ? sha256(path) : 'missing'
   }
   return out
 }
@@ -341,7 +335,7 @@ export async function start(input: { manager: string; facet?: string }, deps: Rs
   const slug = input.manager
   if (!SLUG.test(slug)) return refuse(`"${slug}" is not a manager slug`)
   const persona = readPersona(slug)
-  if (!persona) return refuse(`no persona ${slug} under ${managersDir()}`)
+  if (!persona) return refuse(`no persona ${slug} under ${managerRoots().join(' or ')}`)
   const open = trialViews().find((v) => v.trial.manager === slug && OPEN_FOR_START.has(v.status))
   if (open) {
     return refuse(
@@ -369,14 +363,14 @@ export async function start(input: { manager: string; facet?: string }, deps: Rs
   }
   const files = [persona.brief, entry.file]
   for (const f of files) {
-    if (!existsSync(join(personaDir(slug), f))) return refuse(`missing ${f} in ${slug}`)
+    if (!managerFile(slug, f)) return refuse(`missing ${f} in ${slug}`)
   }
   const baseline = measureOf(turns, slug, now - WINDOW_MS, now)
   const id = `${slug}-${now.toString(36)}-${randomUUID().slice(0, 8)}`
   for (const f of files) {
     const dest = join(backupDir(id), f)
     mkdirSync(dirname(dest), { recursive: true })
-    copyFileSync(join(personaDir(slug), f), dest)
+    copyFileSync(managerFile(slug, f) ?? join(personaDir(slug), f), dest)
   }
   let workerId: string
   try {

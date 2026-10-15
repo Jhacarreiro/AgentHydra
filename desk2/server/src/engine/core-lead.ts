@@ -10,7 +10,8 @@ import type { ChatSummary } from '@shared/protocol'
 import { type CatalogEntry, loadCatalog } from '../../../../server/src/hydra-core/catalog'
 import { leadName, parseHydra } from '../../../../server/src/hydra-core/hydra-md'
 import { coreDir } from './hydra-core-mode'
-import { currentManager, type ManagerAvatar, MANAGER_SLUG, managerAvatar, managerName, newestAvatar } from './managers'
+import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
+import { currentManager, type ManagerAvatar, managerAvatar, managerName, newestAvatar } from './managers'
 
 export type ChatFace = NonNullable<ChatSummary['manager']>
 

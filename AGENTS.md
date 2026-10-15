@@ -82,7 +82,8 @@ real agent homes (`~/.claude`, `~/.claude-instances`, `~/.codex`, `~/.hswarm`, `
 scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
 
 Hydra Core lives in `hydra-core/` and `server/src/hydra-core/` (see `hydra-core/README.md`).
-`cloud/agenthydra-api/` is AgentHydra's own API (see its README). People and persona text never
+People sync to CrAInium, the owners' private persona store, through the private sue-dredd checkout's people door
+(docs/PEOPLE.md); AgentHydra's own API (`cloud/agenthydra-api/`) was retired on 2026-10-15. People and persona text never
 enter the repo (the pre-commit people guard, `.githooks/check-people.mjs`), and repo files never
 carry the real API host or server address: write `api.agenthydra.example.com`.
 

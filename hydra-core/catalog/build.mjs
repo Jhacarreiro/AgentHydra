@@ -37,8 +37,8 @@ const SUE_DIR = cfgPath('sueDir')
 const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill']
 const TIERS = ['intern', 'employee', 'manager', 'owner']
 const FAMILIES = ['intern', 'manager', 'board', 'expert', 'dredd-seat', 'sue', 'ape', 'art', 'you-sue', 'creator']
-const PEOPLE_FAMILIES = ['manager', 'board', 'expert', 'dredd-seat', 'creator']
-const FAMILY_TIER = { manager: 'manager', board: 'manager', expert: 'employee', 'dredd-seat': 'employee', creator: 'owner' }
+const PEOPLE_FAMILIES = ['board', 'expert', 'dredd-seat', 'creator']
+const FAMILY_TIER = { board: 'manager', expert: 'employee', 'dredd-seat': 'employee', creator: 'owner' }
 const MODES = ['become', 'consult', 'hire']
 const COSTS = ['free', 'low', 'medium', 'high']
 const LOAD_TYPES = ['file', 'skill', 'tool', 'none']
@@ -163,16 +163,23 @@ function runSource(name, fn) {
   console.log(`${name}: ${out.length} entries, ${skips.count} skipped`)
 }
 
-// ---------- 1. managers ----------
+// ---------- 1. managers: people/manager/<slug>/ first, legacy managers/<slug>/ second; one entry per slug ----------
+const MANAGER_HOMES = [`${PEOPLE}/manager`, MANAGERS]
 function managers(add, skip) {
   const org = safeJson(ORG) || {}
-  for (const d of safeDir(MANAGERS)) {
-    if (!d.isDirectory()) continue
-    const dir = `${MANAGERS}/${d.name}`
+  const names = new Set()
+  for (const home of MANAGER_HOMES) for (const d of safeDir(home)) if (d.isDirectory()) names.add(d.name)
+  const seen = new Set()
+  for (const name of names) {
+    const dirs = MANAGER_HOMES.map((home) => `${home}/${name}`)
+    const dir = dirs.find((x) => safeJson(`${x}/persona.json`))
+    if (!dir) { if (dirs.some((x) => existsSync(`${x}/brief.md`)) || ['research', 'sessions', 'analytics'].includes(name)) continue; skip('no persona.json', name); continue }
     const p = safeJson(`${dir}/persona.json`)
-    if (!p) { if (existsSync(`${dir}/brief.md`) || d.name === 'research' || d.name === 'sessions' || d.name === 'analytics') continue; skip('no persona.json', d.name); continue }
-    const slug = slugify(p.slug || d.name)
-    const briefPath = `${dir}/${str(p.brief) || 'brief.md'}`
+    const slug = slugify(p.slug || name)
+    if (seen.has(slug)) continue
+    seen.add(slug)
+    const briefName = str(p.brief) || 'brief.md'
+    const briefPath = `${dirs.find((x) => isFile(`${x}/${briefName}`)) || dir}/${briefName}`
     const hasBrief = isFile(briefPath)
     const id = `person:${slug}`
     add({
@@ -198,12 +205,12 @@ function people(add, skip) {
       const p = safeJson(`${dir}/persona.json`)
       if (!p) { skip('no persona.json', `${family}/${d.name}`); continue }
       const slug = slugify(p.slug || d.name)
-      const id = family === 'manager' ? `person:${slug}` : `person:${slug.startsWith(family + '-') ? slug : family + '-' + slug}`
+      const id = `person:${slug.startsWith(family + '-') ? slug : family + '-' + slug}`
       const tier = TIERS.includes(p.tier) ? p.tier : FAMILY_TIER[family]
       const modes = Array.isArray(p.modes) ? p.modes.filter((m) => MODES.includes(m)) : []
       const briefPath = `${dir}/${str(p.brief) || 'brief.md'}`
       const hasBrief = isFile(briefPath)
-      const useModes = modes.length ? modes : family === 'manager' ? ['become', 'consult', 'hire'] : hasBrief ? ['become', 'consult'] : ['consult']
+      const useModes = modes.length ? modes : hasBrief ? ['become', 'consult'] : ['consult']
       add({
         id, kind: 'person', name: str(p.name) || slug, title: str(p.title) || undefined, tier, family,
         division: (org[slug] && org[slug].division) || undefined, reportsTo: org[slug] && org[slug].reportsTo ? `person:${org[slug].reportsTo}` : undefined,
@@ -486,7 +493,7 @@ function boardroom(add, skip) {
 // ---------- 9. Owner tier and the Sue roster: pointers into Connections, never copies ----------
 function owners(add) {
   if (!OWNER) return
-  const seatCall = (personaId) => `connections_execute { endpoint_id: "boardroom_personas_export_brief", project: "${COMPANY}", body: { personaId: "${personaId}", companyId: "${COMPANY}", topic: "<the exact question>" } } returns his brief and the rules that fit.`
+  const seatCall = (personaId) => `connections_execute { endpoint_id: "boardroom_personas_export_brief", project: "${COMPANY}", body: { personaId: "${personaId}", companyId: "${COMPANY}", topic: "<the exact question>" } } returns his brief and the rules that fit. No sue-dredd door replaces a Boardroom seat brief; it stays in Connections.`
   const ask = 'python ~/.claude/tools/creaitor/creaitor.py ask --option="A: ..." --option="B: ..." --repo=<name> -- "<the exact question>"'
   add({
     id: 'person:creaitor', kind: 'person', name: 'CreAItor', title: 'Answers as the owner of this machine, from his rulings and past answers',
@@ -503,11 +510,11 @@ function owners(add) {
     })
   }
   add({
-    id: 'instrument:sue-roster', kind: 'instrument', name: 'Sue roster', title: 'The Sues (with their Ape and Art groups) and you-sue, stored on the Postal server',
-    when: "You need a Sue, Ape or Art persona, or the owner's you-sue: the live roster is fetched from the Postal server's store, never listed here.",
-    tags: ['sue', 'ape', 'art', 'you-sue', 'roster', 'connections'], cost: 'low',
-    how: 'AgentHydra `sue { action: "personas" }` returns the live roster (Sues, Ape, Art, you-sue); the engine fetches it from the Connections store, never copied locally. Reading one person mind (boardroom_personas_sue_mind) has no sue-dredd engine action (sue/README.md lists none), so that one call stays: connections_execute { endpoint_id: "boardroom_personas_sue_mind", params: { sueId } }. Code: ' + (SUE_DIR || 'the sue engine') + '.',
-    load: { type: 'tool', call: 'sue { action: "personas" }' }, source: 'sue-dredd/sue/README.md (personas action); Studio /v1/mcp/sue/people/list and /mind (cranium sue_personas on the Postal server)'
+    id: 'instrument:sue-roster', kind: 'instrument', name: 'Sue roster', title: 'The Sues (with their Ape and Art groups) and you-sue, kept in the sue-dredd store',
+    when: "You need a Sue, Ape or Art persona, or the owner's you-sue: the live roster is read from the sue-dredd store, never listed here.",
+    tags: ['sue', 'ape', 'art', 'you-sue', 'roster', 'sue-dredd'], cost: 'low',
+    how: 'AgentHydra `sue { action: "personas" }` returns the live roster (Sues, Ape, Art, you-sue). One person\'s document: `node ' + (SUE_DIR ? `${SUE_DIR}/store/store.mjs` : '<sue-dredd>/store/store.mjs') + ' get <id|slug>`. One person\'s mind: `node ' + (SUE_DIR ? `${SUE_DIR}/sue/mind.mjs` : '<sue-dredd>/sue/mind.mjs') + ' pull <personaId> <out.md>`. Nothing is copied into the catalog.',
+    load: { type: 'tool', call: 'sue { action: "personas" }' }, source: 'sue-dredd sue/README.md (personas action), store/store.mjs get, sue/mind.mjs pull'
   })
 }
 

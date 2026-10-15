@@ -28,7 +28,8 @@ files; the catalog holds only the one-liner and the path.
 
 ## Legacy managers
 
-`~/.agenthydra/managers/<slug>/persona.json` is still read as a manager, so existing managers need no move.
+`~/.agenthydra/managers/<slug>/persona.json` is still read as a manager, so existing managers need no move. When
+the same slug is under `people/manager/`, that copy wins (see Managers below).
 
 ## Other sources
 
@@ -53,14 +54,18 @@ folders.
 
 ## Where people are stored
 
-- **This PC:** the folders above. Each person is `persona.json`, an optional `brief.md` and an optional `learnings.json` (what the person has learned). This is the working copy; the catalog reads it.
-- **AgentHydra's cloud:** an optional second home on AgentHydra's own API, reached with Sign in with Connections (Connections only signs you in). It is off until `AGENTHYDRA_API_URL` is set; with it unset, This PC keeps working. See `cloud/agenthydra-api/README.md`.
+- **This PC:** the folders above. Each person is `persona.json`, an optional `brief.md`, an optional `learnings.json` (what the person has learned), and for a manager its `playbook/*.md` and `avatar.jpg|png|webp`. This is the working copy; the catalog reads it.
+- **CrAInium (owners only):** the owners' private persona store on their own server, reached over SSH by the people door, a command in the private sue-dredd checkout (`store/people-door.mjs`; `crainium.command` in `~/.agenthydra/people-store.json` overrides it). AgentHydra finds the checkout as it finds Sue and Dredd. The door prints JSON for `status`, `list`, `get <family>/<slug>` and `put` (the record on stdin), refuses another owner's rows, and never deletes. Without the door, only This PC shows. Code: `server/src/people-store/crainium-home.ts`.
 - **Sync:** the newer copy of a person wins. The older one is saved in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file. After a pull the catalog is rebuilt.
 - **Your choice** is kept in `~/.agenthydra/people-store.json`.
 
-## Known gap: managers
+## Managers: two folders, one manager
 
-Managers under `people/manager/` are in the catalog. Desk's manager face and photo (`desk2/server/src/engine/managers.ts`) and seat pinning (`server/src/hydra-core/seats.ts`, `server/src/mcp-managers.ts`) still read only the legacy `~/.agenthydra/managers/` folder. Until that is fixed, keep a manager there too.
+Every reader of a manager's persona, brief, playbook and avatar (Desk's face and photo, seat pinning, the router, the
+catalog, manager analytics) looks in `people/manager/<slug>/` first and the legacy `~/.agenthydra/managers/<slug>/`
+second (`server/src/manager-folders.ts`; `managers/router.mjs` and `hydra-core/catalog/build.mjs` carry the same rule).
+A slug in both is one manager and the people copy wins. Runtime state (`sessions/`, `analytics/`, `router.log`) stays
+in the legacy folder.
 
 ## Commands
 

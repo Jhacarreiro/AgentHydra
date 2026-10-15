@@ -1,14 +1,9 @@
-// The people store as the app uses it: which home the person chose, the working copy on this PC, the LunarWerx people
-// server home, sync (on start, on sign-in, debounced after a change, or on demand) and the status Settings shows.
+// The people store as the app uses it: which home the person chose (This PC or CrAInium), the working copy on this PC,
+// the CrAInium door, sync (on start, debounced after a change, or on demand) and the status Settings shows.
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
-import type { ConnectionsAccount } from './connections-signin'
-import {
-  createPeopleServerAdapter,
-  NOT_CONFIGURED,
-  type PeopleServerAdapter,
-} from './people-server-home'
+import { createCrainiumHome, type DoorStatus, doorStatus, findDoor } from './crainium-home'
 import { backupDir, type SyncResult, syncPeople } from './sync'
 import { agentHydraDir, createThisPcHome } from './this-pc'
 import {
@@ -27,26 +22,26 @@ export interface PeopleConfig {
 
 export interface PeopleStatus {
   home: HomeKind
-  /** False when AGENTHYDRA_API_URL is not set: the status says so and This PC keeps working. */
-  configured: boolean
-  signedIn: boolean
-  account: ConnectionsAccount | null
+  /** Whether the CrAInium door is here and answering; `reason` says why not, in plain words. */
+  crainium: DoorStatus
   syncing: boolean
   lastSyncAt: string | null
   /** Plain words, or null when the last sync was fine. */
   error: string | null
-  note: string | null
 }
-
-export type HomeAdapter = Omit<PeopleServerAdapter, 'home'> & { home(): PeopleHome }
 
 export interface PeopleServiceOptions {
   home?: string
-  adapter?: HomeAdapter
+  /** The door's argv. Default: found from the settings file or the private checkout; null means no door. */
+  door?: string[] | null
+  doorTimeoutMs?: number
   /** Rebuilds the Hydra Core catalog after a pull. Default runs hydra-core/catalog/build.mjs. */
   rebuild?: () => Promise<void>
   debounceMs?: number
 }
+
+const STATUS_CACHE_MS = 15_000
+const NO_DOOR = 'CrAInium is not set up on this PC. This PC keeps your people.'
 
 const REPO_BUILD = resolve(import.meta.dir, '../../../hydra-core/catalog/build.mjs')
 
@@ -65,7 +60,8 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
     try {
       const c = JSON.parse(readFileSync(configFile, 'utf8')) as Partial<PeopleConfig>
       return {
-        home: c.home === 'connections' ? 'connections' : 'pc',
+        // a saved 'connections' home (retired) reads as This PC
+        home: c.home === 'crainium' ? 'crainium' : 'pc',
         lastSync: c.lastSync ?? null,
       }
     } catch {
@@ -77,34 +73,36 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
     mkdirSync(agentHydraDir(opts.home), { recursive: true })
     writeFileSync(configFile, `${JSON.stringify(c, null, 2)}\n`)
   }
-  const adapter = opts.adapter ?? createPeopleServerAdapter({ home: opts.home })
+  const door = (): string[] | null => (opts.door !== undefined ? opts.door : findDoor(opts))
   let syncing: Promise<SyncResult> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
+  let cached: { at: number; status: DoorStatus } | null = null
+
+  async function crainiumStatus(): Promise<DoorStatus> {
+    if (cached && Date.now() - cached.at < STATUS_CACHE_MS) return cached.status
+    const status = await doorStatus(door(), opts.doorTimeoutMs ?? 8000)
+    cached = { at: Date.now(), status }
+    return status
+  }
 
   async function syncNow(): Promise<SyncResult> {
     if (syncing) return syncing
     const run = async (): Promise<SyncResult> => {
       const cfg = readConfig()
-      const a = adapter
+      const argv = door()
       let res: SyncResult
-      if (cfg.home !== 'connections')
+      if (cfg.home !== 'crainium')
         res = { at: new Date().toISOString(), pulled: 0, pushed: 0, backedUp: 0, error: null }
-      else if (!a.configured)
-        res = {
-          at: new Date().toISOString(),
-          pulled: 0,
-          pushed: 0,
-          backedUp: 0,
-          error: NOT_CONFIGURED,
-        }
+      else if (!argv)
+        res = { at: new Date().toISOString(), pulled: 0, pushed: 0, backedUp: 0, error: NO_DOOR }
       else
         res = await syncPeople({
           local,
-          remote: a.home(),
+          remote: createCrainiumHome(argv, opts.doorTimeoutMs),
           backupDir: backupDir(opts.home),
           afterPull: opts.rebuild ?? rebuildCatalog,
         })
-      if (cfg.home === 'connections') writeConfig({ ...readConfig(), lastSync: res })
+      if (cfg.home === 'crainium') writeConfig({ ...readConfig(), lastSync: res })
       return res
     }
     syncing = run().finally(() => {
@@ -115,7 +113,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
 
   /** A change to a person: push soon (debounced). Never throws; a failure lands in the status. */
   function changed(): void {
-    if (readConfig().home !== 'connections') return
+    if (readConfig().home !== 'crainium') return
     if (timer) clearTimeout(timer)
     timer = setTimeout(() => void syncNow(), opts.debounceMs ?? 3000)
     if (typeof timer === 'object' && 'unref' in timer) timer.unref()
@@ -128,47 +126,25 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
     config: readConfig,
     async status(): Promise<PeopleStatus> {
       const cfg = readConfig()
-      const a = adapter
-      let account: ConnectionsAccount | null = null
-      let signedIn = false
-      let error = cfg.home === 'connections' ? (cfg.lastSync?.error ?? null) : null
-      try {
-        signedIn = await a.signedIn()
-        account = signedIn ? await a.account() : null
-      } catch (e) {
-        error = e instanceof Error ? e.message : String(e)
-      }
       return {
         home: cfg.home,
-        configured: a.configured,
-        signedIn,
-        account,
+        crainium: await crainiumStatus(),
         syncing: syncing !== null,
         lastSyncAt: cfg.lastSync?.at ?? null,
-        error,
-        note: a.configured ? null : NOT_CONFIGURED,
+        error: cfg.home === 'crainium' ? (cfg.lastSync?.error ?? null) : null,
       }
     },
-    /** Choose where the people live. The people server without a URL is refused in words; This PC always works. */
+    /** Choose where the people live. CrAInium without a door is refused in words; This PC always works. */
     async setHome(home: HomeKind): Promise<PeopleStatus> {
-      if (home === 'connections' && !adapter.configured) throw new Error(NOT_CONFIGURED)
+      if (home === 'crainium' && !door()) throw new Error(NO_DOOR)
       writeConfig({ ...readConfig(), home })
-      if (home === 'connections' && (await adapter.signedIn().catch(() => false))) void syncNow()
+      if (home === 'crainium') void syncNow()
       return this.status()
     },
-    async signIn(): Promise<PeopleStatus> {
-      await adapter.signIn()
-      void syncNow()
-      return this.status()
-    },
-    async signOut(): Promise<PeopleStatus> {
-      await adapter.signOut()
-      return this.status()
-    },
-    /** Pull on start: quietly, and only when the person chose Connections and is signed in. */
+    /** Pull on start: quietly, and only when the person chose CrAInium. */
     async syncOnStart(): Promise<void> {
-      if (readConfig().home !== 'connections') return
-      if (await adapter.signedIn().catch(() => false)) await syncNow()
+      if (readConfig().home !== 'crainium') return
+      await syncNow()
     },
     list: (): Promise<PersonSummary[]> => local.list(),
     get: (id: string): Promise<PersonRecord | null> => local.get(id),
@@ -178,7 +154,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
       changed()
     },
     async delete(id: string): Promise<void> {
-      // Deleting a person here never reaches the people server: a pull would bring them back, which is the safe side.
+      // Deleting a person here never reaches CrAInium: a pull would bring them back, which is the safe side.
       await local.delete(id)
     },
     async addLearning(id: string, text: string): Promise<Learning | null> {

@@ -2,8 +2,6 @@
 import {
   PEOPLE_STORE,
   PEOPLE_STORE_HOME,
-  PEOPLE_STORE_SIGNIN,
-  PEOPLE_STORE_SIGNOUT,
   PEOPLE_STORE_SYNC,
   type PeopleHomeKind,
   type PeopleStoreStatus
@@ -29,6 +27,4 @@ const post = (path: string, body: unknown = {}) => call(path, { method: 'POST', 
 
 export const loadStatus = () => call(PEOPLE_STORE)
 export const chooseHome = (home: PeopleHomeKind) => call(PEOPLE_STORE_HOME, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ home }) })
-export const signIn = () => post(PEOPLE_STORE_SIGNIN)
-export const signOut = () => post(PEOPLE_STORE_SIGNOUT)
 export const syncNow = () => post(PEOPLE_STORE_SYNC)

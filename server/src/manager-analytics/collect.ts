@@ -3,13 +3,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { CliMayteVerdict } from '../climayte-scorecard'
 import { CONFIG_DIR } from '../config'
+import { managerRoots, managersDir } from '../manager-folders'
 import { findTranscriptAsync } from '../transcript'
 import type { SignalLabel } from './signal'
 import { buildStats } from './stats'
 import {
   appendJsonl,
   type CollectState,
-  managersDir,
   type OpenTurn,
   ROUTES_FILE,
   readJsonl,
@@ -334,7 +334,7 @@ export async function collectPass(opts: PassOptions = {}): Promise<PassResult> {
       endOffset,
       {
         session,
-        managersDir: managersDir(),
+        managerRoots: managerRoots(),
         deskChat: row?.id ?? null,
         parentChat: row?.parentId ?? null,
         pick: pickerFor(entries, sf, row),

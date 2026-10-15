@@ -1,5 +1,4 @@
-export * from './connections-signin'
-export * from './people-server-home'
+export * from './crainium-home'
 export * from './service'
 export * from './sync'
 export * from './this-pc'

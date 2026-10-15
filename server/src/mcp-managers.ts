@@ -1,8 +1,6 @@
 // server/src/mcp-managers.ts - manager_open, manager_ask and manager_read: a Manager Hydra manager opens sub-manager chats
 // under the Desk chat it runs in, and talks to them through the Desk window's own routes.
 import { readFileSync } from 'node:fs'
-import { homedir } from 'node:os'
-import { join } from 'node:path'
 import { coreModeOn } from './hydra-core-mode'
 import { loadMerged, openTurnsOf, readDeskIndex, titlesOf } from './manager-analytics/collect'
 import {
@@ -14,13 +12,13 @@ import {
 } from './manager-analytics/rsi'
 import { buildStats } from './manager-analytics/stats'
 import { readState } from './manager-analytics/store'
+import { MANAGER_SLUG, managerFile } from './manager-folders'
 import { completionsApi, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
 import { deskBase, pickDeskChat } from './mcp-find'
 
 const CORE_MODE_REFUSAL =
   'Core mode: sub-manager chats are off. Use core_use { chat, id, mode: "consult" | "hire" } to ask or hire a hidden copy.'
 
-const MANAGER_SLUG = /^[a-z0-9][a-z0-9-]{0,80}$/
 const DEFAULT_WAIT = 30
 const MAX_WAIT = 35
 
@@ -38,14 +36,14 @@ interface TranscriptItem {
   text?: string
 }
 
-/** A manager's display name from its persona.json (the same folder Manager Hydra keeps its managers in). */
+/** A manager's display name from its persona.json (people store first, then the legacy managers folder). */
 export function managerName(slug: string): string {
   if (!MANAGER_SLUG.test(slug)) throw new Error(`"${slug}" is not a manager slug`)
-  const dir =
-    process.env.AGENTHYDRA_MANAGERS_DIR?.trim() || join(homedir(), '.agenthydra', 'managers')
+  const file = managerFile(slug, 'persona.json')
   let persona: unknown
   try {
-    persona = JSON.parse(readFileSync(join(dir, slug, 'persona.json'), 'utf8'))
+    if (!file) throw new Error('no persona.json')
+    persona = JSON.parse(readFileSync(file, 'utf8'))
   } catch {
     throw new Error(`no manager "${slug}": it has no persona.json`)
   }

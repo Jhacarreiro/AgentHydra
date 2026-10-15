@@ -10,6 +10,7 @@ import { Hono } from 'hono'
 import type { ServerContext } from '../../src/context'
 import { ChatManager } from '../../src/engine/chat-manager'
 import { chatFace, forgetCoreFaces } from '../../src/engine/core-lead'
+import { forgetManager } from '../../src/engine/managers'
 import { DEFAULT_SETTINGS } from '../../src/settings'
 import avatars from '../../src/plugins/37-manager-avatars'
 import { type CoreFixture, coreFixture, PNG, writeChatFile } from '../fixtures/hydra-core'
@@ -19,6 +20,7 @@ const PRIME = '7f0c1d2e-0000-4000-8000-00000000000a'
 const SEAT = '7f0c1d2e-0000-4000-8000-00000000000b'
 
 const savedManagers = process.env.AGENTHYDRA_MANAGERS_DIR
+const savedPeople = process.env.AGENTHYDRA_PEOPLE_DIR
 let core: CoreFixture | null = null
 let managers: string | null = null
 
@@ -29,6 +31,8 @@ afterEach(() => {
   managers = null
   if (savedManagers === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
   else process.env.AGENTHYDRA_MANAGERS_DIR = savedManagers
+  if (savedPeople === undefined) delete process.env.AGENTHYDRA_PEOPLE_DIR
+  else process.env.AGENTHYDRA_PEOPLE_DIR = savedPeople
   forgetCoreFaces()
 })
 
@@ -82,6 +86,21 @@ test('a lead who is a manager shows as that manager, with the photo in its folde
   const face = chatFace({ id: PRIME })
   expect(face).toMatchObject({ slug: 'ada-layout', name: 'Ada Manager', title: 'Head of layout', role: 'lead' })
   expect(face?.persona).toBeUndefined()
+  expect(face?.photo).toEqual(expect.any(Number))
+})
+
+test('a lead in both homes shows the people copy, with the photo from its people folder', () => {
+  const c = setup()
+  process.env.AGENTHYDRA_PEOPLE_DIR = join(managers!, 'people')
+  forgetManager('ada-layout')
+  mkdirSync(join(managers!, 'ada-layout'))
+  writeFileSync(join(managers!, 'ada-layout', 'persona.json'), JSON.stringify({ name: 'Ada Legacy', title: 'Old title' }))
+  mkdirSync(join(managers!, 'people', 'manager', 'ada-layout'), { recursive: true })
+  writeFileSync(join(managers!, 'people', 'manager', 'ada-layout', 'persona.json'), JSON.stringify({ name: 'Ada People', title: 'Head of layout' }))
+  writeFileSync(join(managers!, 'people', 'manager', 'ada-layout', 'avatar.png'), PNG)
+  writeChatFile(c.dir, PRIME, 'placement.json', placement('person:ada-layout'))
+  const face = chatFace({ id: PRIME })
+  expect(face).toMatchObject({ slug: 'ada-layout', name: 'Ada People', title: 'Head of layout', role: 'lead' })
   expect(face?.photo).toEqual(expect.any(Number))
 })
 
