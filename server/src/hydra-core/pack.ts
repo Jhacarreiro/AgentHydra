@@ -274,7 +274,7 @@ const MANAGER_BRIEF = /[\\/]managers[\\/]([a-z0-9][a-z0-9-]*)[\\/]brief\.md$/i
 
 /**
  * A hydra.md lead's catalog id: its catalog entry's, else the person id its manager folder names (a manager's id is
- * person:<folder>, so a lead the catalog has lost for now keeps its real id), else null.
+ * person:<folder>, so a lead the catalog does not list still keeps its real id), else null.
  */
 function hydraLeadId(
   entries: CatalogEntry[],
@@ -330,6 +330,221 @@ export function readPlaced(file: string): Placed | null {
  * in the system prompt, passes its own cap and gets the lead brief before the folder rules fill it).
  * Later messages get only what this session has not been sent yet.
  */
+/** The reader types the pack helpers take, so they stay in step with what the readers return. */
+type CatalogMap = ReturnType<typeof loadCatalog>['entries']
+type FeedbackRead = ReturnType<typeof readFeedback>
+type HydraLead = NonNullable<ReturnType<typeof hydraLead>>
+type ChatFiles = ReturnType<typeof chatPaths>
+type SentMap = ReturnType<typeof readSent>
+
+interface PackLead {
+  id: string | null
+  name: string
+  text: string
+  ref?: string
+}
+
+/** The matches a pack may use: knowledge strong enough to paste in full, and the rest as one-line pointers. */
+function packMatches(
+  entries: CatalogEntry[],
+  prompt: string,
+  feedback: FeedbackRead,
+  keep: (e: CatalogEntry) => boolean,
+) {
+  const matches = rankEntries(entries, prompt, { feedback }).filter(
+    (s) => s.score >= MATCH_MIN && s.entry.kind !== 'person' && keep(s.entry),
+  )
+  const inline = matches
+    .filter((s) => s.entry.kind === 'knowledge' && s.score >= INLINE_MIN)
+    .slice(0, INLINE_MATCHES)
+    .map((s) => s.entry)
+  const rest = matches.map((s) => s.entry).filter((e) => !inline.includes(e))
+  const scoreOf = new Map(matches.map((s) => [s.entry.id, s.score]))
+  return { inline, rest, scoreOf }
+}
+
+function entryLead(e: CatalogEntry): PackLead {
+  return { id: e.id, name: e.name, text: loadText(e) }
+}
+
+/**
+ * The lead a pack pastes or points to, and the id it is logged under. A hydra.md lead comes first; a fixed lead or the
+ * model's pick (else the word ranker) follows, on a first or full pack only.
+ */
+function packLead(
+  req: PackRequest,
+  mode: PackMode,
+  hydra: HydraLead | null,
+  fixed: boolean,
+  entries: CatalogEntry[],
+  catalog: CatalogMap,
+  feedback: FeedbackRead,
+  fresh: (id: string) => boolean,
+): { hydraId: string | null; lead: PackLead | null } {
+  if (hydra) {
+    // A hydra.md lead with no catalog id is pasted with a first or full pack and never logged under a made-up id.
+    const hydraId = hydraLeadId(entries, hydra)
+    const take = hydraId ? fresh(hydraId) : mode !== 'delta'
+    const lead = take
+      ? { id: hydraId, name: hydra.name, text: leadFileText(hydra.path), ref: hydra.path }
+      : null
+    return { hydraId, lead }
+  }
+  // A first pack takes the model's pick made before it (pickForPack); a later one keeps to the word ranker.
+  const personaId = fixed
+    ? undefined
+    : mode !== 'delta' && req.pick
+      ? (req.pick.id ?? undefined)
+      : wordLead(entries, req.prompt, feedback)?.id
+  const persona = personaId ? catalog.get(personaId) : undefined
+  const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
+  if (chosen && fresh(chosen.id)) return { hydraId: null, lead: entryLead(chosen) }
+  if (persona && fresh(persona.id)) return { hydraId: null, lead: entryLead(persona) }
+  return { hydraId: null, lead: null }
+}
+
+function leadPointerLine(chat: string, lead: PackLead): string {
+  if (!lead.id) return `Lead for this message: ${lead.name}. Read the brief at ${lead.ref}.`
+  return `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${chat}", id: "${lead.id}", mode: "become" }.`
+}
+
+function packFrame(mode: PackMode, chat: string, parts: string[]): string {
+  if (mode === 'delta')
+    return parts.length ? ['Hydra Core, new for this message:', ...parts].join('\n\n') : ''
+  return [
+    'Hydra Core attached for this chat and message:',
+    ...parts,
+    `More is one core_find { need: "<what you need>", chat: "${chat}" } away; no other manager call is needed.`,
+  ].join('\n\n')
+}
+
+function sectionParts(s: Sections): string[] {
+  return [s.folder, ...matchParts(s.inline, s.pointers), s.lead, s.seats].filter(Boolean)
+}
+
+/**
+ * The folder rules that fit the cap beside the reserved lead text: the block (cut where the room ends) and the ids
+ * the cut kept in full.
+ */
+function fitFolder(
+  folder: CatalogEntry[],
+  cwd: string,
+  cap: number,
+  reserved: string,
+  frame: (parts: string[]) => string,
+): { text: string; ids: string[] } {
+  if (!folder.length) return { text: '', ids: [] }
+  const prefix = `Folder rules for ${cwd}:\n\n`
+  const blocks = folder.map(entryBlock)
+  const cut = cutHead(
+    blocks.join('\n\n'),
+    cap - frame(reserved ? [prefix, reserved] : [prefix]).length,
+    folder.map(loadRef).join(', '),
+  )
+  if (cut.kept <= 0) return { text: '', ids: [] }
+  let end = -2
+  const ends = blocks.map((b) => (end += b.length + 2))
+  return {
+    text: prefix + cut.text,
+    ids: folder.filter((_, i) => ends[i] <= cut.kept).map((e) => e.id),
+  }
+}
+
+/**
+ * The lead in full when it fits the sections so far, else as its pointer; `owed` is the lead brief the chat still has
+ * to load (null when it was pasted, undefined when neither fits).
+ */
+function fitLead(
+  s: Sections,
+  lead: PackLead | null,
+  leadFull: string,
+  leadPointer: string,
+  fits: (s: Sections) => boolean,
+): { s: Sections; owed: string | null | undefined } {
+  if (!lead) return { s, owed: undefined }
+  if (fits({ ...s, lead: leadFull })) return { s: { ...s, lead: leadFull }, owed: null }
+  if (fits({ ...s, lead: leadPointer }))
+    return { s: { ...s, lead: leadPointer }, owed: lead.id ?? undefined }
+  return { s, owed: undefined }
+}
+
+/** The inline matches that fit; the ones that do not go on to the pointers. */
+function fitInline(
+  s: Sections,
+  inline: CatalogEntry[],
+  fits: (s: Sections) => boolean,
+): { s: Sections; ids: string[]; overflow: CatalogEntry[] } {
+  let current = s
+  const ids: string[] = []
+  const overflow: CatalogEntry[] = []
+  for (const e of inline) {
+    const next = { ...current, inline: [...current.inline, entryBlock(e)] }
+    if (fits(next)) {
+      current = next
+      ids.push(e.id)
+    } else overflow.push(e)
+  }
+  return { s: current, ids, overflow }
+}
+
+function fitPointers(
+  s: Sections,
+  candidates: CatalogEntry[],
+  feedback: FeedbackRead,
+  scoreOf: Map<string, number>,
+  fits: (s: Sections) => boolean,
+): { s: Sections; ids: string[] } {
+  let current = s
+  const ids: string[] = []
+  for (const e of candidates) {
+    if (!pointable(feedback, e, scoreOf.get(e.id) ?? 0)) continue
+    const line = `- ${e.id} - ${e.when} (${loadRef(e)})`
+    const next = { ...current, pointers: [...current.pointers, line] }
+    if (fits(next)) {
+      current = next
+      ids.push(e.id)
+    }
+  }
+  return { s: current, ids }
+}
+
+/** Keeps what a built pack sent: the lead brief it owes or clears, the session's sent ids, and its log line. */
+function recordPack(
+  dir: string,
+  req: PackRequest,
+  files: ChatFiles,
+  sent: SentMap,
+  seen: Set<string>,
+  pack: Pack,
+  now: Date,
+): void {
+  if (pack.owed === null) clearLeadOwed(sent)
+  else if (pack.owed) setLeadOwed(sent, pack.owed)
+  const record = pack.mode === 'delta' ? [...seen, ...pack.ids] : pack.ids
+  sent[req.session] = [...new Set(record)]
+  writeSent(files.sent, sent, req.session, now)
+  appendLog(
+    dir,
+    {
+      event: 'pack',
+      chat: req.chat,
+      session: req.session,
+      mode: pack.mode,
+      ids: pack.ids,
+      pasted: pack.pasted,
+      bytes: pack.bytes,
+      ms: pack.ms,
+    },
+    now,
+  )
+}
+
+/**
+ * What Agent Hydra attaches to a chat message: the folder's rules and the matching knowledge, the lead, and a
+ * closing line the first time. The text stays within TOTAL_CAP so Claude Code does not save it to a file (a slot,
+ * in the system prompt, passes its own cap and gets the lead brief before the folder rules fill it).
+ * Later messages get only what this session has not been sent yet.
+ */
 export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const started = performance.now()
   const files = chatPaths(dir, req.chat)
@@ -348,139 +563,60 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const foreign = foreignTo(req.cwd)
 
   const feedback = readFeedback(dir)
-  const matches = rankEntries(entries, req.prompt, { feedback }).filter(
-    (s) =>
-      s.score >= MATCH_MIN &&
-      s.entry.kind !== 'person' &&
-      !mainIds.has(s.entry.id) &&
-      !foreign(s.entry) &&
-      fresh(s.entry.id),
+  const { inline, rest, scoreOf } = packMatches(
+    entries,
+    req.prompt,
+    feedback,
+    (e) => !mainIds.has(e.id) && !foreign(e) && fresh(e.id),
   )
-  const inline = matches
-    .filter((s) => s.entry.kind === 'knowledge' && s.score >= INLINE_MIN)
-    .slice(0, INLINE_MATCHES)
-    .map((s) => s.entry)
-  const rest = matches.map((s) => s.entry).filter((e) => !inline.includes(e))
-  const scoreOf = new Map(matches.map((s) => [s.entry.id, s.score]))
 
   const hydra = hydraLead(files.hydraMd)
   const fixed = !hydra && req.lead !== undefined
-  // A first pack takes the model's pick made before it (pickForPack); a later one keeps to the word ranker.
-  const personaId =
-    hydra || fixed
-      ? undefined
-      : mode !== 'delta' && req.pick
-        ? (req.pick.id ?? undefined)
-        : wordLead(entries, req.prompt, feedback)?.id
-  const persona = personaId ? catalog.get(personaId) : undefined
-  const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
-  // A hydra.md lead with no catalog id is pasted with a first or full pack and never logged under a made-up id.
-  let lead: { id: string | null; name: string; text: string; ref?: string } | null = null
-  const hydraId = hydra ? hydraLeadId(entries, hydra) : null
-  if (hydra) {
-    if (hydraId ? fresh(hydraId) : mode !== 'delta')
-      lead = { id: hydraId, name: hydra.name, text: leadFileText(hydra.path), ref: hydra.path }
-  } else if (chosen && fresh(chosen.id))
-    lead = { id: chosen.id, name: chosen.name, text: loadText(chosen) }
-  else if (persona && fresh(persona.id))
-    lead = { id: persona.id, name: persona.name, text: loadText(persona) }
+  const { hydraId, lead } = packLead(req, mode, hydra, fixed, entries, catalog, feedback, fresh)
 
-  const frame = (parts: string[]) =>
-    mode === 'delta'
-      ? parts.length
-        ? ['Hydra Core, new for this message:', ...parts].join('\n\n')
-        : ''
-      : [
-          'Hydra Core attached for this chat and message:',
-          ...parts,
-          `More is one core_find { need: "<what you need>", chat: "${req.chat}" } away; no other manager call is needed.`,
-        ].join('\n\n')
-  const parts = (s: Sections) =>
-    [s.folder, ...matchParts(s.inline, s.pointers), s.lead, s.seats].filter(Boolean)
+  const frame = (parts: string[]) => packFrame(mode, req.chat, parts)
   const cap = req.cap ?? TOTAL_CAP
-  const fits = (s: Sections) => frame(parts(s)).length <= cap
+  const fits = (s: Sections) => frame(sectionParts(s)).length <= cap
   const leadFull = lead ? `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd() : ''
-  const leadPointer = lead
-    ? lead.id
-      ? `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
-      : `Lead for this message: ${lead.name}. Read the brief at ${lead.ref}.`
-    : ''
+  const leadPointer = lead ? leadPointerLine(req.chat, lead) : ''
   // A slot keeps room for the lead's brief (its pointer when the brief alone is too long) before the folder rules
   // fill it: every manager brief is longer than the attach cap, so rules first left the lead a pointer.
   const reserved = req.cap && lead ? (frame([leadFull]).length <= cap ? leadFull : leadPointer) : ''
 
-  let s: Sections = { folder: '', lead: '', seats: '', inline: [], pointers: [] }
-  const ids: string[] = []
-
-  if (folder.length) {
-    const prefix = `Folder rules for ${req.cwd}:\n\n`
-    const blocks = folder.map(entryBlock)
-    const cut = cutHead(
-      blocks.join('\n\n'),
-      cap - frame(reserved ? [prefix, reserved] : [prefix]).length,
-      folder.map(loadRef).join(', '),
-    )
-    if (cut.kept > 0) {
-      s.folder = prefix + cut.text
-      let end = -2
-      const ends = blocks.map((b) => (end += b.length + 2))
-      ids.push(...folder.filter((_, i) => ends[i] <= cut.kept).map((e) => e.id))
-    }
-  }
-
-  let owed: string | null | undefined
-  if (lead) {
-    if (fits({ ...s, lead: leadFull })) {
-      s = { ...s, lead: leadFull }
-      owed = null
-    } else if (fits({ ...s, lead: leadPointer })) {
-      s = { ...s, lead: leadPointer }
-      owed = lead.id ?? undefined
-    }
-  }
-
+  const folderRules = fitFolder(folder, req.cwd, cap, reserved, frame)
+  const withLead = fitLead(
+    { folder: folderRules.text, lead: '', seats: '', inline: [], pointers: [] },
+    lead,
+    leadFull,
+    leadPointer,
+    fits,
+  )
+  let s = withLead.s
   const seats = mode === 'delta' ? '' : seatsLine(dir, req.chat, entries, files)
   if (seats && fits({ ...s, seats })) s = { ...s, seats }
+  const inlined = fitInline(s, inline, fits)
+  const pointed = fitPointers(inlined.s, [...inlined.overflow, ...rest], feedback, scoreOf, fits)
+  s = pointed.s
 
-  const overflow: CatalogEntry[] = []
-  const inlineIds: string[] = []
-  for (const e of inline) {
-    const next = { ...s, inline: [...s.inline, entryBlock(e)] }
-    if (fits(next)) {
-      s = next
-      inlineIds.push(e.id)
-    } else overflow.push(e)
-  }
-
-  const pointerIds: string[] = []
-  for (const e of [...overflow, ...rest]) {
-    if (!pointable(feedback, e, scoreOf.get(e.id) ?? 0)) continue
-    const next = { ...s, pointers: [...s.pointers, `- ${e.id} - ${e.when} (${loadRef(e)})`] }
-    if (fits(next)) {
-      s = next
-      pointerIds.push(e.id)
-    }
-  }
-
-  const text = frame(parts(s))
-  const pasted = [...ids, ...inlineIds, ...(s.lead === leadFull && lead?.id ? [lead.id] : [])]
-  ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead?.id ? [lead.id] : []))
+  const text = frame(sectionParts(s))
+  const leadId = lead?.id
+  const pasted = [
+    ...folderRules.ids,
+    ...inlined.ids,
+    ...(s.lead === leadFull && leadId ? [leadId] : []),
+  ]
+  const ids = [
+    ...folderRules.ids,
+    ...inlined.ids,
+    ...pointed.ids,
+    ...(s.lead && leadId ? [leadId] : []),
+  ]
   const bytes = Buffer.byteLength(text, 'utf8')
   const ms = Math.round(performance.now() - started)
   const used = hydra ? hydraId : (lead?.id ?? (fixed ? (req.lead ?? null) : null))
-  if (req.dry) return { mode, text, ids, pasted, bytes, ms, lead: used, owed }
-
-  if (owed === null) clearLeadOwed(sent)
-  else if (owed) setLeadOwed(sent, owed)
-  const record = mode === 'delta' ? [...seen, ...ids] : ids
-  sent[req.session] = [...new Set(record)]
-  writeSent(files.sent, sent, req.session, now)
-  appendLog(
-    dir,
-    { event: 'pack', chat: req.chat, session: req.session, mode, ids, pasted, bytes, ms },
-    now,
-  )
-  return { mode, text, ids, pasted, bytes, ms, lead: used, owed }
+  const pack: Pack = { mode, text, ids, pasted, bytes, ms, lead: used, owed: withLead.owed }
+  if (!req.dry) recordPack(dir, req, files, sent, seen, pack, now)
+  return pack
 }
 
 /** Whether a pack ranks its lead on the prompt: no hydra.md lead, no fixed lead, and a first or full pack. */
@@ -565,6 +701,83 @@ export async function pickForMatch(
  * pack (placement.json `started`) gets only what the pack did not hold; any other session gets the full pack
  * on its first message, then only what it has not been sent.
  */
+/** The ranked hits a message may draw on: strong enough, with two distinct words of the message in their name or text. */
+type MessageHits = ReturnType<typeof rankEntries>
+
+function messageHits(
+  prompt: string,
+  entries: CatalogEntry[],
+  feedback: FeedbackRead,
+  keep: (e: CatalogEntry) => boolean,
+): MessageHits {
+  if (contentWords(prompt).length < MATCH_WORDS) return []
+  const need = terms(prompt, true)
+  return rankEntries(entries, prompt, { content: true, feedback }).filter((s) => {
+    if (s.score < MATCH_MIN || s.entry.kind === 'person' || !keep(s.entry)) return false
+    const d = detailOf(s.entry, need)
+    return (d.strong || s.score >= MATCH_STRONG) && new Set(d.hits).size >= 2
+  })
+}
+
+interface PickedMatches {
+  inline: string[]
+  pointers: string[]
+  ids: string[]
+  pasted: string[]
+  scores: Record<string, number>
+}
+
+const oneDecimal = (n: number) => Math.round(n * 10) / 10
+
+/** Pastes a hit's full text when its text is not empty and the message still fits the cap with it. */
+function pasteMatch(
+  picked: PickedMatches,
+  entry: CatalogEntry,
+  score: number,
+  cap: number,
+): boolean {
+  if (!loadText(entry).trim()) return false
+  const block = entryBlock(entry)
+  if (matchText([...picked.inline, block], picked.pointers).length > cap) return false
+  picked.inline.push(block)
+  picked.ids.push(entry.id)
+  picked.pasted.push(entry.id)
+  picked.scores[entry.id] = oneDecimal(score)
+  return true
+}
+
+/** Points to a hit as one line, when it may be pointed to, there is room for a pointer, and the line fits the cap. */
+function pointMatch(
+  picked: PickedMatches,
+  entry: CatalogEntry,
+  score: number,
+  feedback: FeedbackRead,
+  cap: number,
+): void {
+  if (picked.pointers.length >= MATCH_POINTERS || !pointable(feedback, entry, score)) return
+  const line = `- ${entry.id} - ${entry.when} (${loadRef(entry)})`
+  if (matchText(picked.inline, [...picked.pointers, line]).length > cap) return
+  picked.pointers.push(line)
+  picked.ids.push(entry.id)
+  picked.scores[entry.id] = oneDecimal(score)
+}
+
+function fillMatches(hits: MessageHits, feedback: FeedbackRead, cap: number): PickedMatches {
+  const picked: PickedMatches = { inline: [], pointers: [], ids: [], pasted: [], scores: {} }
+  for (const { entry, score } of hits) {
+    if (picked.ids.length >= MATCH_INLINE) break
+    if (!pasteMatch(picked, entry, score, cap)) pointMatch(picked, entry, score, feedback, cap)
+  }
+  return picked
+}
+
+/** The message's text with the lead-shift note first, its own "new for this message" heading dropped. */
+function shiftedText(note: string, adds: string): string {
+  return [note, adds.replace(/^Hydra Core, new for this message:\n\n/, '')]
+    .filter(Boolean)
+    .join('\n\n')
+}
+
 export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Match {
   const files = chatPaths(dir, req.chat)
   const sent = readSent(files.sent)
@@ -603,56 +816,17 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
     ? Math.max(0, Math.min(MATCH_CAP, TOTAL_CAP - shift.note.length - 2))
     : MATCH_CAP
 
-  const need = terms(req.prompt, true)
-  const scores: Record<string, number> = {}
   const feedback = readFeedback(dir)
-  const hits =
-    contentWords(req.prompt).length < MATCH_WORDS
-      ? []
-      : rankEntries(entries, req.prompt, { content: true, feedback }).filter((s) => {
-          if (
-            s.score < MATCH_MIN ||
-            s.entry.kind === 'person' ||
-            mainIds.has(s.entry.id) ||
-            foreign(s.entry) ||
-            seen.has(s.entry.id)
-          )
-            return false
-          const d = detailOf(s.entry, need)
-          return (d.strong || s.score >= MATCH_STRONG) && new Set(d.hits).size >= 2
-        })
-  const inline: string[] = []
-  const pointers: string[] = []
-  const ids: string[] = []
-  const pasted: string[] = []
-  for (const { entry, score } of hits) {
-    if (ids.length >= MATCH_INLINE) break
-    if (loadText(entry).trim()) {
-      const next = matchText([...inline, entryBlock(entry)], pointers)
-      if (next.length <= cap) {
-        inline.push(entryBlock(entry))
-        ids.push(entry.id)
-        pasted.push(entry.id)
-        scores[entry.id] = Math.round(score * 10) / 10
-        continue
-      }
-    }
-    if (pointers.length < MATCH_POINTERS && pointable(feedback, entry, score)) {
-      const line = `- ${entry.id} - ${entry.when} (${loadRef(entry)})`
-      if (matchText(inline, [...pointers, line]).length <= cap) {
-        pointers.push(line)
-        ids.push(entry.id)
-        scores[entry.id] = Math.round(score * 10) / 10
-      }
-    }
-  }
-  const adds = ids.length ? matchText(inline, pointers) : ''
-  const text = shift
-    ? [shift.note, adds.replace(/^Hydra Core, new for this message:\n\n/, '')]
-        .filter(Boolean)
-        .join('\n\n')
-    : adds
-  const sentIds = [...ids, ...(shift ? [shift.to] : [])]
+  const hits = messageHits(
+    req.prompt,
+    entries,
+    feedback,
+    (e) => !mainIds.has(e.id) && !foreign(e) && !seen.has(e.id),
+  )
+  const picked = fillMatches(hits, feedback, cap)
+  const adds = picked.ids.length ? matchText(picked.inline, picked.pointers) : ''
+  const text = shift ? shiftedText(shift.note, adds) : adds
+  const sentIds = [...picked.ids, ...(shift ? [shift.to] : [])]
 
   if (sentIds.length || req.session in sent) {
     sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...sentIds])]
@@ -667,9 +841,9 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       session: req.session,
       placement: req.placement,
       chars: text.length,
-      ids,
-      pasted,
-      scores,
+      ids: picked.ids,
+      pasted: picked.pasted,
+      scores: picked.scores,
       ...(shift ? { lead: shift.to } : {}),
     },
     now,

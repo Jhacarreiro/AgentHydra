@@ -13,7 +13,7 @@ import { packLine, placeChat, placementOf } from '../src/hydra-core/placement'
 import { buildTrack } from '../src/hydra-core/track'
 import { scratch } from './hydra-core-fixture'
 
-const T = Date.parse('2026-10-14T09:00:00Z')
+const T = Date.parse('2019-10-23T09:00:00Z')
 const CWD = 'C:/Users/me/app'
 const RULES = 'Repo rules: the invented test app uses one button style.'
 const PRICING = 'Pricing tables: the invented plans cost 3, 5 and 8 coins a month.'

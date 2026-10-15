@@ -960,37 +960,35 @@ function lookAtInstall(w: CliMayteWorker, at: Attempt, events: unknown[], end: E
     })
 }
 
-function finish(w: CliMayteWorker, events: unknown[]): void {
-  const at = w.attempts[w.attempts.length - 1]
-  if (at?.outcome !== 'running') return
+/** The attempt's end read off its log and events, or null while an install look is pending (or has
+ *  just started, and settles the attempt when it ends). */
+function attemptEnd(w: CliMayteWorker, at: Attempt, events: unknown[]): EndRead | null {
   let end = installLooks.get(at.log)
-  if (end === null) return
-  if (end) installLooks.delete(at.log)
-  else {
-    const hadRunnerPid =
-      !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
-    const stderr = tailText(at.errLog, 4_000)
-    const read = withStops(
-      at,
-      classifyAttempt(events, stderr, at.started === true),
-      w.chat === true,
-    )
-    end = { v: read, stderr, hadRunnerPid }
-    if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
-      lookAtInstall(w, at, events, end)
-      return
-    }
+  if (end === null) return null
+  if (end) {
+    installLooks.delete(at.log)
+    return end
   }
-  const { stderr, hadRunnerPid } = end
-  cleanUpRunner(w, at)
-  const v =
-    end.v.outcome === 'interrupted' && at.runner && !hadRunnerPid
-      ? { ...end.v, notice: RUNNER_NEVER_STARTED_NOTICE }
-      : end.v
-  rmSync(signalPath(w.id), { force: true })
-  removeWorkerFiles(w.id)
-  forgetRead(at.log)
-  const now = Date.now()
+  const hadRunnerPid =
+    !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
+  const stderr = tailText(at.errLog, 4_000)
+  const read = withStops(at, classifyAttempt(events, stderr, at.started === true), w.chat === true)
+  end = { v: read, stderr, hadRunnerPid }
+  if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
+    lookAtInstall(w, at, events, end)
+    return null
+  }
+  return end
+}
+
+/** Records how the attempt ended on the attempt, the worker's turn count and its results. */
+function recordAttemptEnd(
+  w: CliMayteWorker,
+  at: Attempt,
+  v: EndRead['v'],
+  events: unknown[],
+  now: number,
+): number {
   if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
   at.outcome = v.outcome
   at.notice = v.notice
@@ -1003,6 +1001,55 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   const spent = charge(w, at)
   w.turns += v.turns
   keepResults(w, at, v)
+  return spent
+}
+
+/** The message's estimate settles when its turn ends done, not to ask: the working time since the
+ *  `ETA:` line is the sample the next briefs are calibrated on (climayte-eta.ts). */
+function settleEta(w: CliMayteWorker, v: EndRead['v'], asking: boolean, now: number): void {
+  if (
+    v.outcome !== 'done' ||
+    asking ||
+    w.status === 'failed' ||
+    !w.eta ||
+    w.eta.tookS !== undefined
+  )
+    return
+  w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
+  w.eta.doneAt = now
+  void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+}
+
+/** Where a settled turn goes next. A wave task with no check is judged now, off the main thread, and
+ *  batched once judged (or at once when it is no wave task after all); with one, when its check ends
+ *  (gatherAndJudgeCheck). */
+function routeSettled(w: CliMayteWorker, now: number, asking: boolean): void {
+  const judging = !asking && w.status === 'done' && !w.check && waveTaskOf(w) !== null
+  if (judging)
+    judgeWave(w, null, () => addToWaveBatch(w, now)).catch((err) =>
+      console.error(`[climayte] ${w.id}: its wave task could not be judged:`, err),
+    )
+  if (!asking && w.status === 'done' && w.check) startCheck(w)
+  if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
+  if (asking) escalateAsking(w, now)
+}
+
+function finish(w: CliMayteWorker, events: unknown[]): void {
+  const at = w.attempts[w.attempts.length - 1]
+  if (at?.outcome !== 'running') return
+  const end = attemptEnd(w, at, events)
+  if (!end) return
+  const { stderr, hadRunnerPid } = end
+  cleanUpRunner(w, at)
+  const v =
+    end.v.outcome === 'interrupted' && at.runner && !hadRunnerPid
+      ? { ...end.v, notice: RUNNER_NEVER_STARTED_NOTICE }
+      : end.v
+  rmSync(signalPath(w.id), { force: true })
+  removeWorkerFiles(w.id)
+  forgetRead(at.log)
+  const now = Date.now()
+  const spent = recordAttemptEnd(w, at, v, events, now)
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -1013,19 +1060,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   // check runs and no wave batch is woken until the answer resumes it. A question left when the
   // turn went on (a message was already queued) is answered.
   const asking = w.status === 'done' && !!w.question
-  // The message's estimate settles when its turn ends done, not to ask: the working time since the
-  // `ETA:` line is the sample the next briefs are calibrated on (climayte-eta.ts).
-  if (
-    v.outcome === 'done' &&
-    !asking &&
-    w.status !== 'failed' &&
-    w.eta &&
-    w.eta.tookS === undefined
-  ) {
-    w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
-    w.eta.doneAt = now
-    void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
-  }
+  settleEta(w, v, asking, now)
   // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
     w.error =
@@ -1033,16 +1068,7 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   journalFinish(w, at, v, spent)
   if (v.outcome === 'done' && !asking) journalTooBig(w)
   if (w.question && !asking) delete w.question
-  // A wave task with no check is judged now, off the main thread, and batched once judged (or at once
-  // when it is no wave task after all); with one, when its check ends (gatherAndJudgeCheck).
-  const judging = !asking && w.status === 'done' && !w.check && waveTaskOf(w) !== null
-  if (judging)
-    judgeWave(w, null, () => addToWaveBatch(w, now)).catch((err) =>
-      console.error(`[climayte] ${w.id}: its wave task could not be judged:`, err),
-    )
-  if (!asking && w.status === 'done' && w.check) startCheck(w)
-  if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
-  if (asking) escalateAsking(w, now)
+  routeSettled(w, now, asking)
 
   changed(w)
   schedule(50)
@@ -1663,37 +1689,54 @@ function reconcileWaveTask(id: string, task: CliMayteWave['tasks'][number], now:
   const w = workers.get(task.workerId)
   if (!w || w.wave !== id) return
   try {
-    if (w.status === 'done') {
-      // With a check, only its own latest pass settles the task (a fail sends the worker back).
-      const last = w.verdicts?.at(-1)
-      if (w.question) {
-        escalateAsking(w, now)
-        return
-      }
-      // A fail by check or wave that sent nothing back (refused, or the top rung) ends the key.
-      if (
-        last?.verdict === 'fail' &&
-        (last.by === 'check' || last.by === 'wave') &&
-        !w.pending.length
-      ) {
-        failStuckTask(w, last.note ?? 'failed with no send-back', now)
-        return
-      }
-      if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
-      judgeWave(w, w.check ? true : null).catch((err) =>
-        console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
-      )
-    } else if (w.status === 'failed' || w.status === 'cancelled') {
-      const found = liveWave(id)
-      const t = found?.wave.tasks.find((x) => x.key === task.key)
-      if (!found || !t) return
-      t.state = 'failed'
-      modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
-      addToWaveBatch(w, now, true)
-    }
+    if (w.status === 'done') judgeFinishedWaveTask(id, task, w, now)
+    else if (w.status === 'failed' || w.status === 'cancelled') failWaveTask(id, task, w, now)
   } catch (err) {
     console.error(`[climayte] wave ${id}: could not reconcile ${task.key}:`, err)
   }
+}
+
+/** A finished worker's wave task: judged on its check and commits (judgeWave). */
+function judgeFinishedWaveTask(
+  id: string,
+  task: CliMayteWave['tasks'][number],
+  w: CliMayteWorker,
+  now: number,
+): void {
+  // With a check, only its own latest pass settles the task (a fail sends the worker back).
+  const last = w.verdicts?.at(-1)
+  if (w.question) {
+    escalateAsking(w, now)
+    return
+  }
+  // A fail by check or wave that sent nothing back (refused, or the top rung) ends the key.
+  if (
+    last?.verdict === 'fail' &&
+    (last.by === 'check' || last.by === 'wave') &&
+    !w.pending.length
+  ) {
+    failStuckTask(w, last.note ?? 'failed with no send-back', now)
+    return
+  }
+  if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
+  judgeWave(w, w.check ? true : null).catch((err) =>
+    console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
+  )
+}
+
+/** A failed or cancelled worker's wave task ends `failed`. */
+function failWaveTask(
+  id: string,
+  task: CliMayteWave['tasks'][number],
+  w: CliMayteWorker,
+  now: number,
+): void {
+  const found = liveWave(id)
+  const t = found?.wave.tasks.find((x) => x.key === task.key)
+  if (!found || !t) return
+  t.state = 'failed'
+  modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
+  addToWaveBatch(w, now, true)
 }
 
 /** Judge the tasks of a wave its finished workers name; a wave past `running` is settled. */

@@ -628,46 +628,22 @@ def _spawn_once(inst: dict, folder: str, prompt: str, binary: str) -> dict:
             "skippedForeign": foreign, "started": started, "modeSet": mode_set}
 
 
-def main(argv: list[str]) -> int:
-    clilib.use_utf8_console()
-    if "--help" in argv or "-h" in argv:
-        print(__doc__.strip())
-        return 0
-    as_json = "--json" in argv
-    folder = prompt = instance = model = effort = None
+_VALUE_FLAGS = {"--folder": "folder", "--prompt": "prompt", "--instance": "instance",
+                "--model": "model", "--effort": "effort"}
+
+
+def _parse_value_flags(argv: list[str]) -> dict[str, str | None]:
+    opts: dict[str, str | None] = {name: None for name in _VALUE_FLAGS.values()}
     i = 0
     while i < len(argv):
         a = argv[i]
-        if a == "--folder" and i + 1 < len(argv):
-            folder = argv[i + 1]; i += 2; continue
-        if a == "--prompt" and i + 1 < len(argv):
-            prompt = argv[i + 1]; i += 2; continue
-        if a == "--instance" and i + 1 < len(argv):
-            instance = argv[i + 1]; i += 2; continue
-        if a == "--model" and i + 1 < len(argv):
-            model = argv[i + 1]; i += 2; continue
-        if a == "--effort" and i + 1 < len(argv):
-            effort = argv[i + 1]; i += 2; continue
+        if a in _VALUE_FLAGS and i + 1 < len(argv):
+            opts[_VALUE_FLAGS[a]] = argv[i + 1]; i += 2; continue
         i += 1
-    if not folder or not prompt:
-        print(__doc__.strip(), file=sys.stderr)
-        return 3
-    if not Path(folder).is_dir():
-        print(f"REFUSED: {folder!r} is not a directory - a chat cannot start there",
-              file=sys.stderr)
-        return 3
+    return opts
 
-    try:
-        result = spawn(folder, prompt, instance, force="--force" in argv,
-                       model=model, effort=effort)
-    except hydralib.DaemonError as err:
-        print(f"spawn FAILED: {err}", file=sys.stderr)
-        return 1
 
-    # `ok` only says the instance and binary resolved; whether the first turn actually
-    # STARTED is `started`. The human-readable line and the exit code say which (review
-    # 2026-09-01: the success sentence and exit 0 used to print for a chat that never ran).
-    running = str(result.get("started") or "").startswith("running")
+def _print_spawn_result(result: dict, running: bool, as_json: bool) -> None:
     if as_json:
         print(json.dumps(result, indent=2))
     elif result["ok"]:
@@ -685,6 +661,36 @@ def main(argv: list[str]) -> int:
                   f"started={result['started']}. Check the app.", file=sys.stderr)
     else:
         print(f"REFUSED: {result['why']}", file=sys.stderr)
+
+
+def main(argv: list[str]) -> int:
+    clilib.use_utf8_console()
+    if "--help" in argv or "-h" in argv:
+        print(__doc__.strip())
+        return 0
+    as_json = "--json" in argv
+    opts = _parse_value_flags(argv)
+    folder, prompt = opts["folder"], opts["prompt"]
+    if not folder or not prompt:
+        print(__doc__.strip(), file=sys.stderr)
+        return 3
+    if not Path(folder).is_dir():
+        print(f"REFUSED: {folder!r} is not a directory - a chat cannot start there",
+              file=sys.stderr)
+        return 3
+
+    try:
+        result = spawn(folder, prompt, opts["instance"], force="--force" in argv,
+                       model=opts["model"], effort=opts["effort"])
+    except hydralib.DaemonError as err:
+        print(f"spawn FAILED: {err}", file=sys.stderr)
+        return 1
+
+    # `ok` only says the instance and binary resolved; whether the first turn actually
+    # STARTED is `started`. The human-readable line and the exit code say which (review
+    # 2026-09-01: the success sentence and exit 0 used to print for a chat that never ran).
+    running = str(result.get("started") or "").startswith("running")
+    _print_spawn_result(result, running, as_json)
     if not result["ok"]:
         return 5 if result.get("duplicateOf") else 2
     return 0 if running else 4

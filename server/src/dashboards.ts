@@ -418,6 +418,86 @@ async function exists(p: string): Promise<boolean> {
   }
 }
 
+type ParsedChange = DashboardChange & { by: string }
+
+/** Writes one file of a change into the staged copy; a file may not replace a folder. */
+async function writeFileChange(at: (p: string) => string, f: DashboardFile): Promise<void> {
+  const data = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8')
+  if (data.length > MAX_FILE_BYTES)
+    fail(`${f.path} is ${data.length} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
+  if ((await exists(at(f.path))) && !(await lstat(at(f.path))).isFile())
+    fail(`${f.path} is a folder here; write a file inside it or remove it first`)
+  await mkdir(dirname(at(f.path)), { recursive: true })
+  await writeFile(at(f.path), data)
+}
+
+/** Replaces the one place the edit's "old" text occurs in the staged copy; it must occur exactly once. */
+async function applyEdit(at: (p: string) => string, e: DashboardEdit, i: number): Promise<void> {
+  let text: string
+  try {
+    text = await readFile(at(e.path), 'utf8')
+  } catch {
+    fail(`edits[${i}]: ${e.path} does not exist; create it with files first`)
+  }
+  const first = text.indexOf(e.old)
+  if (first < 0)
+    fail(
+      `edits[${i}]: the "old" text was not found in ${e.path}; read the file again, it may have changed`,
+    )
+  if (text.includes(e.old, first + 1))
+    fail(
+      `edits[${i}]: the "old" text occurs more than once in ${e.path}; include more surrounding text so it is unique`,
+    )
+  await writeFile(at(e.path), text.slice(0, first) + e.new + text.slice(first + e.old.length))
+}
+
+/** Builds the staged copy: the previous site (or the `from` folder, or nothing when cleared), then the change. */
+async function stageChange(change: ParsedChange, site: string, staging: string): Promise<void> {
+  if (change.from) await copyFrom(change.from, staging)
+  else if (!change.clear) await cp(site, staging, { recursive: true, preserveTimestamps: true })
+  const at = (p: string) => join(staging, ...p.split('/'))
+  for (const f of change.files ?? []) await writeFileChange(at, f)
+  for (const [i, e] of (change.edits ?? []).entries()) await applyEdit(at, e, i)
+  for (const p of change.remove ?? []) await rm(at(p), { force: true })
+}
+
+/** Swaps the staged copy in as site/; the old site waits as site.old until the swap is complete. */
+async function publishStaging(dir: string, site: string, staging: string): Promise<void> {
+  await rm(join(dir, 'site.old'), { recursive: true, force: true })
+  await rename(site, join(dir, 'site.old'))
+  await rename(staging, site)
+  await rm(join(dir, 'site.old'), { recursive: true, force: true })
+}
+
+/** After a failed write: drop the staged copy, and put the old site back if the swap had moved it away. */
+async function recoverSite(dir: string, site: string, staging: string): Promise<void> {
+  await rm(staging, { recursive: true, force: true })
+  if (!(await exists(site)) && (await exists(join(dir, 'site.old'))))
+    await rename(join(dir, 'site.old'), site)
+}
+
+/** Records who wrote last, stops the backend when its declaration changed, and reads the site back. */
+async function recordWrite(
+  id: string,
+  workspace: string,
+  change: ParsedChange,
+  previous: Meta | null,
+): Promise<DashboardRead> {
+  const dir = dirOf(id)
+  const backend = change.backend === undefined ? previous?.backend : (change.backend ?? undefined)
+  const meta: Meta = {
+    workspace,
+    name: basename(workspace),
+    updatedBy: change.by,
+    updatedAt: new Date().toISOString(),
+    ...(backend ? { backend } : {}),
+  }
+  await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
+  if (JSON.stringify(previous?.backend ?? null) !== JSON.stringify(backend ?? null))
+    stopDashboardBackend(id)
+  return fullRead(id, workspace)
+}
+
 export async function writeDashboard(folder: string, raw: unknown): Promise<DashboardRead> {
   const change = parseChange(raw)
   const workspace = workspaceOf(folder)
@@ -435,60 +515,14 @@ export async function writeDashboard(folder: string, raw: unknown): Promise<Dash
     const staging = join(dir, `.staging-${randomBytes(4).toString('hex')}`)
     try {
       await mkdir(staging, { recursive: true })
-      if (change.from) await copyFrom(change.from, staging)
-      else if (!change.clear) await cp(site, staging, { recursive: true, preserveTimestamps: true })
-      const at = (p: string) => join(staging, ...p.split('/'))
-      for (const f of change.files ?? []) {
-        const data = Buffer.from(f.content, f.encoding === 'base64' ? 'base64' : 'utf8')
-        if (data.length > MAX_FILE_BYTES)
-          fail(`${f.path} is ${data.length} bytes; a file is at most ${MAX_FILE_BYTES} (5 MB)`)
-        if ((await exists(at(f.path))) && !(await lstat(at(f.path))).isFile())
-          fail(`${f.path} is a folder here; write a file inside it or remove it first`)
-        await mkdir(dirname(at(f.path)), { recursive: true })
-        await writeFile(at(f.path), data)
-      }
-      for (const [i, e] of (change.edits ?? []).entries()) {
-        let text: string
-        try {
-          text = await readFile(at(e.path), 'utf8')
-        } catch {
-          fail(`edits[${i}]: ${e.path} does not exist; create it with files first`)
-        }
-        const first = text.indexOf(e.old)
-        if (first < 0)
-          fail(
-            `edits[${i}]: the "old" text was not found in ${e.path}; read the file again, it may have changed`,
-          )
-        if (text.indexOf(e.old, first + 1) >= 0)
-          fail(
-            `edits[${i}]: the "old" text occurs more than once in ${e.path}; include more surrounding text so it is unique`,
-          )
-        await writeFile(at(e.path), text.slice(0, first) + e.new + text.slice(first + e.old.length))
-      }
-      for (const p of change.remove ?? []) await rm(at(p), { force: true })
+      await stageChange(change, site, staging)
       checkLimits(await walk(staging))
-      await rm(join(dir, 'site.old'), { recursive: true, force: true })
-      await rename(site, join(dir, 'site.old'))
-      await rename(staging, site)
-      await rm(join(dir, 'site.old'), { recursive: true, force: true })
+      await publishStaging(dir, site, staging)
     } catch (err) {
-      await rm(staging, { recursive: true, force: true })
-      if (!(await exists(site)) && (await exists(join(dir, 'site.old'))))
-        await rename(join(dir, 'site.old'), site)
+      await recoverSite(dir, site, staging)
       throw err
     }
-    const backend = change.backend === undefined ? previous?.backend : (change.backend ?? undefined)
-    const meta: Meta = {
-      workspace,
-      name: basename(workspace),
-      updatedBy: change.by,
-      updatedAt: new Date().toISOString(),
-      ...(backend ? { backend } : {}),
-    }
-    await writeFile(join(dir, 'meta.json'), JSON.stringify(meta, null, 2))
-    if (JSON.stringify(previous?.backend ?? null) !== JSON.stringify(backend ?? null))
-      stopDashboardBackend(id)
-    return fullRead(id, workspace)
+    return recordWrite(id, workspace, change, previous)
   })
 }
 
@@ -681,6 +715,62 @@ export async function startDeclaredBackends(): Promise<void> {
   }
 }
 
+/** The decoded path's segments, or null for a path that cannot be read safely (bad escapes, a NUL or a backslash). */
+function sitePathSegments(pathname: string): string[] | null {
+  let decoded: string
+  try {
+    decoded = decodeURIComponent(pathname)
+  } catch {
+    return null
+  }
+  if (decoded.includes('\0') || decoded.includes('\\')) return null
+  return decoded.split('/').filter(Boolean)
+}
+
+/** The real path of an existing file or folder, or null when there is none. */
+async function realOrNull(p: string): Promise<string | null> {
+  try {
+    return await realpath(p)
+  } catch {
+    return null
+  }
+}
+
+/** Answers a GET or HEAD for a file under the site folder; a folder answers with its index.html. */
+async function serveSiteFile(
+  site: string,
+  url: URL,
+  segs: string[],
+  isHead: boolean,
+): Promise<Response> {
+  const html = (body: string, status = 200) =>
+    new Response(isHead ? null : body, {
+      status,
+      headers: { 'content-type': TYPES.html as string, ...SITE_HEADERS },
+    })
+  const siteReal = await realOrNull(site)
+  if (siteReal === null) return html(PLACEHOLDER)
+  let real = await realOrNull(join(siteReal, ...segs))
+  if (real === null) return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
+  if (real !== siteReal && !real.startsWith(siteReal + sep)) return text(404, 'not found')
+  if ((await stat(real)).isDirectory()) {
+    if (segs.length && !url.pathname.endsWith('/'))
+      return new Response(null, {
+        status: 301,
+        headers: { location: `${url.pathname}/${url.search}`, ...SITE_HEADERS },
+      })
+    real = await realOrNull(join(real, 'index.html'))
+    if (real === null) return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
+    if (!real.startsWith(siteReal + sep)) return text(404, 'not found')
+  }
+  const body = await readFile(real)
+  const type = TYPES[extname(real).slice(1).toLowerCase()] ?? 'application/octet-stream'
+  return new Response(isHead ? null : body, {
+    status: 200,
+    headers: { 'content-type': type, 'content-length': String(body.length), ...SITE_HEADERS },
+  })
+}
+
 /** A Response when the request's Host names a dashboard site (answered here, never reaching /api), else null. */
 export async function serveDashboardSite(req: Request): Promise<Response | null> {
   const id = dashboardHostId(req.headers.get('host'))
@@ -691,57 +781,10 @@ export async function serveDashboardSite(req: Request): Promise<Response | null>
   if (req.method !== 'GET' && req.method !== 'HEAD')
     return text(405, 'a dashboard site only answers GET and HEAD', { allow: 'GET, HEAD' })
   if (!ID_RE.test(id) || !(await exists(dirOf(id)))) return text(404, 'no such dashboard')
-  let segs: string[]
-  try {
-    const decoded = decodeURIComponent(url.pathname)
-    if (decoded.includes('\0') || decoded.includes('\\')) return text(400, 'bad path')
-    segs = decoded.split('/').filter(Boolean)
-  } catch {
-    return text(400, 'bad path')
-  }
+  const segs = sitePathSegments(url.pathname)
+  if (!segs) return text(400, 'bad path')
   if (segs.some((s) => s === '.' || s === '..')) return text(404, 'not found')
   const isHead = req.method === 'HEAD'
   if (segs[0] === '_hydra') return hydraFeed(id, segs.slice(1), isHead)
-  const site = siteOf(id)
-  const html = (body: string, status = 200) =>
-    new Response(isHead ? null : body, {
-      status,
-      headers: { 'content-type': TYPES.html as string, ...SITE_HEADERS },
-    })
-  let siteReal: string
-  try {
-    siteReal = await realpath(site)
-  } catch {
-    return html(PLACEHOLDER)
-  }
-  let target = join(siteReal, ...segs)
-  let real: string
-  try {
-    real = await realpath(target)
-  } catch {
-    if (segs.length === 0) return html(PLACEHOLDER)
-    return text(404, 'not found')
-  }
-  if (real !== siteReal && !real.startsWith(siteReal + sep)) return text(404, 'not found')
-  const s = await stat(real)
-  if (s.isDirectory()) {
-    if (segs.length && !url.pathname.endsWith('/'))
-      return new Response(null, {
-        status: 301,
-        headers: { location: `${url.pathname}/${url.search}`, ...SITE_HEADERS },
-      })
-    target = join(real, 'index.html')
-    try {
-      real = await realpath(target)
-    } catch {
-      return segs.length === 0 ? html(PLACEHOLDER) : text(404, 'not found')
-    }
-    if (!real.startsWith(siteReal + sep)) return text(404, 'not found')
-  }
-  const body = await readFile(real)
-  const type = TYPES[extname(real).slice(1).toLowerCase()] ?? 'application/octet-stream'
-  return new Response(isHead ? null : body, {
-    status: 200,
-    headers: { 'content-type': type, 'content-length': String(body.length), ...SITE_HEADERS },
-  })
+  return serveSiteFile(siteOf(id), url, segs, isHead)
 }

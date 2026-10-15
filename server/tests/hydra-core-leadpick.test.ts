@@ -35,7 +35,7 @@ import { answer, scope } from '../src/hydra-core/tree'
 import { contentWords } from '../src/mcp-find'
 import { scratch, startChat } from './hydra-core-fixture'
 
-const T = Date.parse('2026-10-14T09:00:00Z')
+const T = Date.now()
 
 /** The call sites' shape: the model's pick awaited first, then the synchronous build. */
 const packed = async (d: string, req: PackRequest, now = new Date(T)) =>
@@ -590,7 +590,7 @@ describe('per-message additions (A1-F4, A3 finding 6)', () => {
 
 test('a lead picked through the question tree logs a become as core_use does (A2-F6)', async () => {
   const chat = 'chat-example-tree'
-  const now = new Date('2026-10-13T10:00:00.000Z')
+  const now = new Date('2019-10-22T10:00:00.000Z')
   startChat(dir, chat, 'Rebuild the dashboard layout')
   scope(dir, chat, now)
   for (const a of [

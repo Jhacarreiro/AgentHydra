@@ -33,7 +33,10 @@ function writeJson(file: string, v: unknown): void {
  *  session id), the key's own seat winning. */
 function readRoster(dir: string, chat: Pick<ChatOfCaller, 'key' | 'aliases'>): Seats {
   const old = chat.aliases.map((k) => readJson<Seats>(chatPaths(dir, k).seats) ?? {})
-  return Object.assign({}, ...old, readJson<Seats>(chatPaths(dir, chat.key).seats) ?? {})
+  const roster: Seats = {}
+  for (const seats of [...old, readJson<Seats>(chatPaths(dir, chat.key).seats) ?? {}])
+    for (const [k, v] of Object.entries(seats)) roster[k] = v
+  return roster
 }
 
 /** The manager whose slug is the persona's id after the colon, when its persona.json exists. */

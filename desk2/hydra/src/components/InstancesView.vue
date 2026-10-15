@@ -1668,7 +1668,8 @@ onUnmounted(() => {
             :key="inst.dir"
             :columns="columns"
             :row="rowModels.get(inst.dir)!"
-            :style="orderStyle(inst)"
+            class="order-(--row-order)"
+            :style="{ '--row-order': orderStyle(inst)?.order }"
             :menu-open="rowMenuOpen === inst.dir"
             @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >

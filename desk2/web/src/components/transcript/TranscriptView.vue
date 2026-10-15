@@ -17,7 +17,7 @@ import { prefixOffsets, rowAt, visibleRange } from './lib/window'
 import { nextMessageStep, sentOverIndex, stepTarget } from './lib/steps'
 import { provideTranscript } from './context'
 import { revealTarget, type RevealTarget } from './lib/reveal'
-import { COLLAPSE_MS } from './lib/motion'
+import { COLLAPSE_MS, reducedMotion } from './lib/motion'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuLabel, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { MENU_CONTENT, MENU_ITEM } from '@/components/sidebar/menuClasses'
 import { Tip } from '@/components/ui/tooltip'
@@ -408,7 +408,7 @@ function glideTo(to: string | null) {
   stopGlide()
   userScrolls()
   pinned.value = false
-  const ms = typeof matchMedia === 'function' && matchMedia('(prefers-reduced-motion: reduce)').matches ? 0 : GLIDE_MS
+  const ms = reducedMotion() ? 0 : GLIDE_MS
   glide = { to, t0: performance.now(), ms, eased: 0, frame: 0, last: Number.NaN, still: 0, after: 0 }
   heading.value = { to }
   glide.frame = requestAnimationFrame(glideFrame)
@@ -849,7 +849,7 @@ watch(
            (12px in, 24 wide, 12 clear of the text; owner, 2026-10-14: they sat on a right-hand message's picture).
            Scrolled to the bottom, the last row stands 150px over the composer (owner, 2026-10-10: "when scrolled to the
            bottom, have the bottom spacing be gapped like 150px"; on 2026-10-08 the 20px under it was a turn's gap). -->
-      <div class="mx-auto w-full max-w-210 px-9 pb-[150px] @max-[864px]:pr-12 @max-[560px]:pl-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
+      <div class="mx-auto w-full max-w-210 px-9 pb-37.5 @max-[864px]:pe-12 @max-[560px]:ps-4" :style="{ paddingTop: `${20 + (insetTop ?? 0)}px` }">
         <div v-if="!items.length && !showWorking" class="py-16 text-center text-ui-lg text-text-muted">{{ emptyText }}</div>
         <div class="relative" :style="{ height: `${padTop}px` }">
           <div v-if="loadingOlder" class="absolute inset-x-0 bottom-0 flex justify-center py-3 text-text-muted" role="status" aria-label="Loading earlier messages" data-testid="older-spinner">
@@ -893,7 +893,7 @@ watch(
          opens between them. -->
     <div
       v-if="prevStep !== null || showStepDown || peekItem"
-      class="pointer-events-none absolute z-[9] flex flex-col gap-1 transition-[right] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
+      class="pointer-events-none absolute z-9 flex flex-col gap-1 transition-[right] duration-(--dur-slow) ease-(--ease-snap) motion-reduce:transition-none"
       :style="{ top: `${(insetTop ?? 0) + 12}px`, right: 'calc(var(--rail-over, 0px) + 0.75rem)' }"
     >
       <span class="flex size-6">

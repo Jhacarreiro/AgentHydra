@@ -12,13 +12,14 @@ const props = defineProps<{
   mono?: boolean
   numeric?: boolean
   muted?: boolean
+  truncate?: boolean
 }>()
 </script>
 
 <template>
   <td
     data-slot="table-cell"
-    :class="cn(tableCellVariants({ size, align, weight, mono, numeric, muted }), props.class)"
+    :class="cn(tableCellVariants({ size, align, weight, mono, numeric, muted, truncate }), props.class)"
   >
     <slot />
   </td>

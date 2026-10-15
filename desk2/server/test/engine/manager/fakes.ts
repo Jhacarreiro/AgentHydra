@@ -145,11 +145,11 @@ export const ACCOUNT_68: AccountInfo = {
   inUse: false,
 }
 
-/** `older`: sessions past the list's 24 hours, which only the single-session read finds. `picked`: one more account listed. */
-export function fakeBridge(
-  o: { picked?: AccountRef; external?: ExternalSession[]; older?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; workers?: CliMayteWorker[]; roots?: string[] } = {},
-) {
-  const state = {
+type FakeBridgeOptions = { picked?: AccountRef; external?: ExternalSession[]; older?: ExternalSession[]; items?: Record<string, TranscriptItem[]>; workers?: CliMayteWorker[]; roots?: string[] }
+
+/** The record the fake keeps of what the manager asked, and the knobs a test turns. */
+function fakeBridgeState(o: FakeBridgeOptions) {
+  return {
     workers: o.workers ?? [],
     /** CliMayte: the workers started (their tasks), the messages sent, the cancels, and what workersByIds answers. */
     started: [] as StartWorker[],
@@ -181,6 +181,59 @@ export function fakeBridge(
     /** takesRequestIds' answer: null when AgentHydra did not answer, false for one from before request ids. */
     takesRequestIds: true as boolean | null,
   }
+}
+
+type FakeBridgeState = ReturnType<typeof fakeBridgeState>
+
+async function startFakeWorker(s: FakeBridgeState, madeFor: Map<string, AhWorker>, task: StartWorker) {
+  if (task.requestId) s.requestIds.push(task.requestId)
+  const fail = s.failNext.shift()
+  if (fail && !fail.took) throw fail.err
+  const again = task.requestId ? madeFor.get(task.requestId) : undefined
+  if (again) {
+    if (fail) throw fail.err
+    return again
+  }
+  s.started.push(task)
+  const n = s.started.length
+  const row = ahWorker({ id: `w${n}`, title: task.title, cwd: task.cwd, prompt: task.prompt, model: task.model ?? null, sessionId: `worker-session-${n}` })
+  s.rows.push(row)
+  if (task.requestId) madeFor.set(task.requestId, row)
+  if (fail) throw fail.err
+  return row
+}
+
+async function sendFakeToWorker(
+  s: FakeBridgeState,
+  sendIds: Set<string>,
+  id: string,
+  text: string,
+  cwd: string | undefined,
+  urgent: boolean | undefined,
+  requestId: string | undefined,
+  setting: { model: string; effort: string } | undefined,
+) {
+  if (requestId) s.requestIds.push(requestId)
+  const fail = s.failNext.shift()
+  if (fail && !fail.took) throw fail.err
+  if (!requestId || !sendIds.has(requestId)) s.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}), ...(setting ? { setting } : {}) })
+  if (requestId) sendIds.add(requestId)
+  if (fail) throw fail.err
+  return urgent === true && s.nowStops
+}
+
+async function sendFakeNow(s: FakeBridgeState, id: string, text?: string) {
+  s.sentNow.push({ id, ...(text ? { text } : {}) })
+  const running = s.rows.find((r) => r.id === id)?.status === 'running'
+  if (!running) return { stopped: false, message: 'Not running: what it holds goes as its next turn.' }
+  return s.nowStops
+    ? { stopped: true, message: 'Stopped its running work; the same session continues now with this message.' }
+    : { stopped: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' }
+}
+
+/** `older`: sessions past the list's 24 hours, which only the single-session read finds. `picked`: one more account listed. */
+export function fakeBridge(o: FakeBridgeOptions = {}) {
+  const state = fakeBridgeState(o)
   const madeFor = new Map<string, AhWorker>()
   const sendIds = new Set<string>()
   const b: ManagerBridge = {
@@ -188,42 +241,11 @@ export function fakeBridge(
       state.finished.push({ ticket, outcome })
       return { ok: true }
     },
-    startWorker: async (task) => {
-      if (task.requestId) state.requestIds.push(task.requestId)
-      const fail = state.failNext.shift()
-      if (fail && !fail.took) throw fail.err
-      const again = task.requestId ? madeFor.get(task.requestId) : undefined
-      if (again) {
-        if (fail) throw fail.err
-        return again
-      }
-      state.started.push(task)
-      const n = state.started.length
-      const row = ahWorker({ id: `w${n}`, title: task.title, cwd: task.cwd, prompt: task.prompt, model: task.model ?? null, sessionId: `worker-session-${n}` })
-      state.rows.push(row)
-      if (task.requestId) madeFor.set(task.requestId, row)
-      if (fail) throw fail.err
-      return row
-    },
-    sendToWorker: async (id, text, cwd, urgent, _desk, requestId, setting) => {
-      if (requestId) state.requestIds.push(requestId)
-      const fail = state.failNext.shift()
-      if (fail && !fail.took) throw fail.err
-      if (!requestId || !sendIds.has(requestId)) state.sentToWorker.push({ id, text, ...(cwd ? { cwd } : {}), ...(urgent ? { urgent } : {}), ...(setting ? { setting } : {}) })
-      if (requestId) sendIds.add(requestId)
-      if (fail) throw fail.err
-      return urgent === true && state.nowStops
-    },
+    startWorker: (task) => startFakeWorker(state, madeFor, task),
+    sendToWorker: (id, text, cwd, urgent, _desk, requestId, setting) => sendFakeToWorker(state, sendIds, id, text, cwd, urgent, requestId, setting),
     takesRequestIds: async () => state.takesRequestIds,
     canDeliverNow: async () => state.deliverNow,
-    sendToWorkerNow: async (id, text) => {
-      state.sentNow.push({ id, ...(text ? { text } : {}) })
-      const running = state.rows.find((r) => r.id === id)?.status === 'running'
-      if (!running) return { stopped: false, message: 'Not running: what it holds goes as its next turn.' }
-      return state.nowStops
-        ? { stopped: true, message: 'Stopped its running work; the same session continues now with this message.' }
-        : { stopped: false, message: 'That message is not held any more: it was delivered, or its turn has begun.' }
-    },
+    sendToWorkerNow: (id, text) => sendFakeNow(state, id, text),
     cancelWorkerHeld: async (id, text) => {
       if (!state.cancelHeldRoute) throw new Error('This AgentHydra cannot take back a held message yet: it needs its update')
       state.heldCancels.push({ id, text })

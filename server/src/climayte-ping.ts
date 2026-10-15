@@ -45,7 +45,7 @@
 
 import { existsSync, readFileSync, renameSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CliMayteStatus, tooBigOf } from './climayte-lib'
+import { type CliMayteStatus, tooBigOf, verdictCoversNewestWork } from './climayte-lib'
 import { appendInOrder } from './core/append-in-order'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { deliverPeerMessage } from './peer-message'
@@ -212,17 +212,6 @@ export function snapshotOf(w: PingWorker, prev: PingSnapshot | null, now: number
   }
 }
 
-/** A verdict covers the worker's newest work: the last verdict is stamped and no attempt started
- *  after it. A follow-up or a sent-back fail makes the worker unjudged again. climayte_status's
- *  `judged` is this and "not live". */
-export function verdictCoversNewestWork(w: {
-  verdicts?: Array<{ at?: number }>
-  attempts: Array<{ startedAt: number }>
-}): boolean {
-  const at = w.verdicts?.at(-1)?.at
-  return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
-}
-
 /** A sent-back line is history once the same worker has a newer outcome waiting behind it. */
 function sentBackSuperseded(e: QueuedPing, queued: QueuedPing[]): boolean {
   return (
@@ -320,24 +309,21 @@ function limitStop(a: PingAttempt): string | null {
   return null
 }
 
-/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
- *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
-export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number): PingEvent[] {
-  const p = prev ?? NEW_WORKER
-  const n = w.attempts.length
-  const who = `${w.id} "${cut(w.title, TITLE_MAX)}"`
-  const out: PingEvent[] = []
-  const add = (kind: PingKind, line: string, index = n) =>
-    out.push({
-      key: `${w.id}:${kind}:${index}`,
-      kind,
-      workerId: w.id,
-      group: w.group,
-      at: now,
-      line,
-    })
+/** A ping event of this worker, keyed by the attempt it is about (the newest one by default). */
+function eventOf(
+  w: PingWorker,
+  now: number,
+  kind: PingKind,
+  line: string,
+  index = w.attempts.length,
+): PingEvent {
+  return { key: `${w.id}:${kind}:${index}`, kind, workerId: w.id, group: w.group, at: now, line }
+}
 
-  for (let i = Math.max(1, p.attempts); i < n; i++) {
+/** Each attempt since the last look that ended at a usage limit and resumed on another account. */
+function limitMoves(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent[] {
+  const out: PingEvent[] = []
+  for (let i = Math.max(1, p.attempts); i < w.attempts.length; i++) {
     const before = w.attempts[i - 1]
     const after = w.attempts[i]
     if (before.account.id === after.account.id) continue
@@ -347,55 +333,117 @@ export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number
       0,
       Math.round((after.startedAt - (before.endedAt ?? after.startedAt)) / 1000),
     )
-    add(
-      'limited-moved',
-      `${who}: ${accountLabel(before)} ${stop}; resumed on ${accountLabel(after)} after ${gap}s.`,
-      i + 1,
+    out.push(
+      eventOf(
+        w,
+        now,
+        'limited-moved',
+        `${who}: ${accountLabel(before)} ${stop}; resumed on ${accountLabel(after)} after ${gap}s.`,
+        i + 1,
+      ),
     )
-  }
-
-  const judged = (w.verdicts ?? []).slice(p.verdicts).filter((v) => v.by === 'check')
-  const check = judged.at(-1)?.verdict ?? null
-  const last = w.attempts.at(-1)
-  const entered = w.status !== p.status
-  if (check === 'fail') {
-    const back = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
-    add('check-failed', `${who}: check failed, ${back ? 'sent back' : 'not sent back'}.`)
-  }
-  if (w.question && w.question.at !== p.question) {
-    const opts = w.question.options?.length ? ` Options: ${w.question.options.join(' | ')}.` : ''
-    add(
-      'asking',
-      `${who}: asks: ${cut(w.question.text.replace(/\s+/g, ' '), QUESTION_MAX)}${opts}`,
-      w.question.at,
-    )
-  }
-  // A worker that asked ended its turn on purpose: that is no finish until it is answered.
-  const asking = !!w.question
-  const tooBig =
-    w.status === 'done' && entered && !asking ? tooBigOf(w.results?.at(-1) ?? w.result) : null
-  if (tooBig)
-    add(
-      'too-big',
-      `${tooBig} (${who}, done on ${accountLabel(last)}: take the job back and re-split it.)`,
-    )
-  else if (w.status === 'done' && check === 'pass' && !asking)
-    add('finished', `${who}: done on ${accountLabel(last)}, check passed.`)
-  else if (w.status === 'done' && entered && !asking)
-    add('needs-verdict', `${who}: done on ${accountLabel(last)}, needs your verdict.`)
-  if (w.status === 'failed' && entered)
-    add('failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
-  if (w.status === 'cancelled' && entered) add('cancelled', `${who}: cancelled.`)
-  if (
-    w.status === 'waiting' &&
-    p.status === 'waiting' &&
-    p.waitingSince != null &&
-    now - p.waitingSince > STUCK_AFTER_MS
-  ) {
-    const mins = Math.round((now - p.waitingSince) / 60_000)
-    add('stuck', `${who}: waiting ${mins} min: ${reason(w.error, 'no account is free')}.`)
   }
   return out
+}
+
+function checkFailedEvent(
+  w: PingWorker,
+  now: number,
+  who: string,
+  check: 'pass' | 'fail' | null,
+): PingEvent | null {
+  if (check !== 'fail') return null
+  const back = w.status === 'queued' || w.status === 'running' || w.status === 'waiting'
+  return eventOf(
+    w,
+    now,
+    'check-failed',
+    `${who}: check failed, ${back ? 'sent back' : 'not sent back'}.`,
+  )
+}
+
+function questionEvent(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent | null {
+  const q = w.question
+  if (!q || q.at === p.question) return null
+  const opts = q.options?.length ? ` Options: ${q.options.join(' | ')}.` : ''
+  return eventOf(
+    w,
+    now,
+    'asking',
+    `${who}: asks: ${cut(q.text.replace(/\s+/g, ' '), QUESTION_MAX)}${opts}`,
+    q.at,
+  )
+}
+
+/** A worker that ended its work on this look: too big to finish here, passed its check, or waiting
+ *  for a verdict. A worker that asked ended its turn on purpose: that is no finish until it is
+ *  answered. */
+function endedEvent(
+  w: PingWorker,
+  now: number,
+  who: string,
+  check: 'pass' | 'fail' | null,
+  entered: boolean,
+): PingEvent | null {
+  if (w.status !== 'done' || w.question) return null
+  const lastAccount = accountLabel(w.attempts.at(-1))
+  const tooBig = entered ? tooBigOf(w.results?.at(-1) ?? w.result) : null
+  if (tooBig)
+    return eventOf(
+      w,
+      now,
+      'too-big',
+      `${tooBig} (${who}, done on ${lastAccount}: take the job back and re-split it.)`,
+    )
+  if (check === 'pass')
+    return eventOf(w, now, 'finished', `${who}: done on ${lastAccount}, check passed.`)
+  if (entered)
+    return eventOf(w, now, 'needs-verdict', `${who}: done on ${lastAccount}, needs your verdict.`)
+  return null
+}
+
+/** A worker that has waited longer than STUCK_AFTER_MS, since it was first seen waiting. */
+function stuckEvent(w: PingWorker, p: PingSnapshot, now: number, who: string): PingEvent | null {
+  const since = p.waitingSince
+  const stuck =
+    w.status === 'waiting' &&
+    p.status === 'waiting' &&
+    since != null &&
+    now - since > STUCK_AFTER_MS
+  if (!stuck || since == null) return null
+  const mins = Math.round((now - since) / 60_000)
+  return eventOf(
+    w,
+    now,
+    'stuck',
+    `${who}: waiting ${mins} min: ${reason(w.error, 'no account is free')}.`,
+  )
+}
+
+/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
+ *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
+/** What changed for the dispatching chat between `prev` (null: a worker not seen before) and `w`.
+ *  Pure: the outbox drops a key it already holds or delivered, so calling this again is safe. */
+export function pingEvents(prev: PingSnapshot | null, w: PingWorker, now: number): PingEvent[] {
+  const p = prev ?? NEW_WORKER
+  const who = `${w.id} "${cut(w.title, TITLE_MAX)}"`
+  const judged = (w.verdicts ?? []).slice(p.verdicts).filter((v) => v.by === 'check')
+  const check = judged.at(-1)?.verdict ?? null
+  const entered = w.status !== p.status
+  const events = limitMoves(w, p, now, who)
+  for (const e of [
+    checkFailedEvent(w, now, who, check),
+    questionEvent(w, p, now, who),
+    endedEvent(w, now, who, check, entered),
+    entered && w.status === 'failed'
+      ? eventOf(w, now, 'failed', `${who}: failed: ${failedReason(w)}; details in climayte_status.`)
+      : null,
+    entered && w.status === 'cancelled' ? eventOf(w, now, 'cancelled', `${who}: cancelled.`) : null,
+    stuckEvent(w, p, now, who),
+  ]) {
+    if (e) events.push(e)
+  }
+  return events
 }
 
 /** Local wall-clock time, HH:MM. */

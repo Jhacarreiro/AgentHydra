@@ -55,17 +55,8 @@ const { enabled: tooltipsEnabled } = useTooltipConfig()
 // tracks (subgrid, so its cells line up with the header), and each row's `order` (InstanceRow's style)
 // is its rank. The header is order -1, and the skeleton and empty bodies sit after every row.
 // Tracks: Name takes what is left, every other column its content (see the grid's columns below).
-const MERGED_TABLE = [
-  'grid [grid-template-columns:var(--merged-cols)]',
-  '[&>thead]:col-span-full [&>thead]:grid [&>thead]:[grid-template-columns:subgrid] [&>thead]:[order:-1]',
-  '[&>thead>tr]:col-span-full [&>thead>tr]:grid [&>thead>tr]:[grid-template-columns:subgrid]',
-  '[&>tbody]:contents',
-  '[&_tbody>tr]:col-span-full [&_tbody>tr]:grid [&_tbody>tr]:[grid-template-columns:subgrid] [&_tbody>tr]:items-center',
-  // A table cell takes its width from the track; the header's width classes would fix it instead.
-  '[&_th]:w-auto',
-  // The name cell is max-w-0 so a table truncates it; in a grid that would collapse it to nothing.
-  '[&_td.max-w-0]:max-w-none [&_td.max-w-0]:min-w-0',
-].join(' ')
+// A table cell takes its width from the track; the header's width classes would fix it instead.
+// The name cell is max-w-0 so a table truncates it; in a grid that would collapse it to nothing.
 const AFTER_ROWS = '[&>tr]:[order:1000000]'
 const mergedCols = computed(() =>
   props.columns.map((c) => (c.key === 'name' ? 'minmax(0,1fr)' : 'auto')).join(' '),
@@ -75,11 +66,18 @@ const mergedCols = computed(() =>
 <template>
   <!-- Rows about a third shorter (owner, 2026-10-06): 41px became ~27: py-px cells around the 24px
        buttons, and a h-7 header: the kit's tight rows, which only these tables ask for. -->
-  <!-- The style goes on the container, which the table inherits the track list from (--merged-cols). -->
+  <!-- Attributes go on the container: the table inherits --merged-cols and reads its ancestor's data-merged. -->
   <Table
     :density="density"
     rows="tight"
-    :class="merged ? MERGED_TABLE : undefined"
+    :data-merged="merged || undefined"
+    class="in-data-merged:grid in-data-merged:[grid-template-columns:var(--merged-cols)]
+      in-data-merged:[&>thead]:col-span-full in-data-merged:[&>thead]:grid in-data-merged:[&>thead]:[grid-template-columns:subgrid] in-data-merged:[&>thead]:[order:-1]
+      in-data-merged:[&>thead>tr]:col-span-full in-data-merged:[&>thead>tr]:grid in-data-merged:[&>thead>tr]:[grid-template-columns:subgrid]
+      in-data-merged:[&>tbody]:contents
+      in-data-merged:[&_tbody>tr]:col-span-full in-data-merged:[&_tbody>tr]:grid in-data-merged:[&_tbody>tr]:[grid-template-columns:subgrid] in-data-merged:[&_tbody>tr]:items-center
+      in-data-merged:[&_th]:w-auto
+      in-data-merged:[&_td.max-w-0]:max-w-none in-data-merged:[&_td.max-w-0]:min-w-0"
     :style="merged ? { '--merged-cols': mergedCols } : undefined"
   >
     <TableHeader sticky>

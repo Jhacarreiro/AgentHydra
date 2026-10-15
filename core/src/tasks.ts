@@ -286,75 +286,102 @@ function listRows(raw: string | null): TaskRow[] {
     .slice(0, limit)
 }
 
+/** Creates a task from a POST body and starts it in the background; the reply is the queued task's id. */
+async function createTask(req: Request): Promise<Response> {
+  let body: unknown
+  try {
+    body = await req.json()
+  } catch {
+    return json({ error: 'The body must be JSON.' }, 400)
+  }
+  const spec = parseSpec(body)
+  if (typeof spec === 'string') return json({ error: spec }, 400)
+  const t = newTask(spec)
+  void route(t).catch((err) =>
+    finish(t, 'failed', { error: err instanceof Error ? err.message : String(err) }),
+  )
+  return json({ id: t.row.id, status: 'queued' }, 201)
+}
+
+/** GET lists the newest tasks and POST creates one; any other method is refused. */
+async function taskCollection(req: Request, url: URL): Promise<Response> {
+  if (req.method === 'GET') return json(listRows(url.searchParams.get('limit')))
+  if (req.method !== 'POST') return json({ error: 'Use GET or POST.' }, 405)
+  return createTask(req)
+}
+
+/** Long poll: answers when the task settles or after `seconds`, whichever comes first. */
+async function waitFor(t: Live, url: URL): Promise<Response> {
+  const raw = Number(url.searchParams.get('seconds') ?? 30)
+  const seconds = Number.isFinite(raw) ? Math.min(50, Math.max(1, raw)) : 30
+  let timer: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    t.settled,
+    new Promise<void>((resolveTimer) => (timer = setTimeout(resolveTimer, seconds * 1000))),
+  ])
+  clearTimeout(timer)
+  return json(t.row)
+}
+
+/** Continues a settled task on its own thread; the reply is 202 before the new turn has run. */
+async function sendTo(t: Live, req: Request): Promise<Response> {
+  const o = await jsonBody(req)
+  if (!o) return json({ error: 'The body must be JSON.' }, 400)
+  const text = typeof o.text === 'string' ? o.text.trim() : ''
+  if (!text) return json({ error: 'text must be non-empty text' }, 400)
+  if (t.row.status === 'queued' || t.row.status === 'running')
+    return json({ error: 'The task is still running: send once it has settled.' }, 409)
+  if (!t.picked)
+    return json({ error: 'This task ran on HSwarm, which keeps no thread to continue.' }, 409)
+  void followUp(t, t.picked, text).catch((err) =>
+    finish(t, 'failed', { error: err instanceof Error ? err.message : String(err) }),
+  )
+  return json(t.row, 202)
+}
+
+/** Records a pass or fail verdict, with an optional note, on a task that has finished. */
+async function recordVerdict(t: Live, req: Request): Promise<Response> {
+  const o = await jsonBody(req)
+  if (!o) return json({ error: 'The body must be JSON.' }, 400)
+  if (typeof o.pass !== 'boolean') return json({ error: 'pass must be true or false' }, 400)
+  if (o.note !== undefined && typeof o.note !== 'string')
+    return json({ error: 'note must be text' }, 400)
+  if (t.row.status !== 'done' && t.row.status !== 'failed')
+    return json({ error: 'A verdict needs a task that is done or failed.' }, 409)
+  const pass = o.pass
+  update(t, {
+    verdict: { pass, note: typeof o.note === 'string' ? o.note : null, at: Date.now() },
+  })
+  return json(t.row)
+}
+
+/** The routes under one task: GET reads it, and wait, cancel, send and verdict act on it. */
+async function taskAction(
+  t: Live,
+  action: string | undefined,
+  req: Request,
+  url: URL,
+): Promise<Response> {
+  if (!action) return req.method === 'GET' ? json(t.row) : json({ error: 'Use GET.' }, 405)
+  if (action === 'wait' && req.method === 'GET') return waitFor(t, url)
+  if (action === 'cancel' && req.method === 'POST') {
+    cancel(t)
+    return json(t.row)
+  }
+  if (action === 'send' && req.method === 'POST') return sendTo(t, req)
+  if (action === 'verdict' && req.method === 'POST') return recordVerdict(t, req)
+  return json({ error: 'Use GET or POST on this path.' }, 405)
+}
+
 /** The /api/tasks routes; null for any other path, so the server goes on to its own routes. */
 export function taskRoutes(): (req: Request, url: URL) => Promise<Response | null> {
   return async (req, url) => {
     const m = /^\/api\/tasks(?:\/([^/]+)(?:\/(wait|cancel|send|verdict))?)?$/.exec(url.pathname)
     if (!m) return null
     const [, id, action] = m
-    if (!id) {
-      if (req.method === 'GET') return json(listRows(url.searchParams.get('limit')))
-      if (req.method !== 'POST') return json({ error: 'Use GET or POST.' }, 405)
-      let body: unknown
-      try {
-        body = await req.json()
-      } catch {
-        return json({ error: 'The body must be JSON.' }, 400)
-      }
-      const spec = parseSpec(body)
-      if (typeof spec === 'string') return json({ error: spec }, 400)
-      const t = newTask(spec)
-      void route(t).catch((err) =>
-        finish(t, 'failed', { error: err instanceof Error ? err.message : String(err) }),
-      )
-      return json({ id: t.row.id, status: 'queued' }, 201)
-    }
+    if (!id) return taskCollection(req, url)
     const t = tasks.get(id)
     if (!t) return json({ error: 'No such task.' }, 404)
-    if (!action) return req.method === 'GET' ? json(t.row) : json({ error: 'Use GET.' }, 405)
-    if (action === 'wait' && req.method === 'GET') {
-      const raw = Number(url.searchParams.get('seconds') ?? 30)
-      const seconds = Number.isFinite(raw) ? Math.min(50, Math.max(1, raw)) : 30
-      let timer: ReturnType<typeof setTimeout> | undefined
-      await Promise.race([
-        t.settled,
-        new Promise<void>((resolveTimer) => (timer = setTimeout(resolveTimer, seconds * 1000))),
-      ])
-      clearTimeout(timer)
-      return json(t.row)
-    }
-    if (action === 'cancel' && req.method === 'POST') {
-      cancel(t)
-      return json(t.row)
-    }
-    if (action === 'send' && req.method === 'POST') {
-      const o = await jsonBody(req)
-      if (!o) return json({ error: 'The body must be JSON.' }, 400)
-      const text = typeof o.text === 'string' ? o.text.trim() : ''
-      if (!text) return json({ error: 'text must be non-empty text' }, 400)
-      if (t.row.status === 'queued' || t.row.status === 'running')
-        return json({ error: 'The task is still running: send once it has settled.' }, 409)
-      if (!t.picked)
-        return json({ error: 'This task ran on HSwarm, which keeps no thread to continue.' }, 409)
-      void followUp(t, t.picked, text).catch((err) =>
-        finish(t, 'failed', { error: err instanceof Error ? err.message : String(err) }),
-      )
-      return json(t.row, 202)
-    }
-    if (action === 'verdict' && req.method === 'POST') {
-      const o = await jsonBody(req)
-      if (!o) return json({ error: 'The body must be JSON.' }, 400)
-      if (typeof o.pass !== 'boolean') return json({ error: 'pass must be true or false' }, 400)
-      if (o.note !== undefined && typeof o.note !== 'string')
-        return json({ error: 'note must be text' }, 400)
-      if (t.row.status !== 'done' && t.row.status !== 'failed')
-        return json({ error: 'A verdict needs a task that is done or failed.' }, 409)
-      const pass = o.pass
-      update(t, {
-        verdict: { pass, note: typeof o.note === 'string' ? o.note : null, at: Date.now() },
-      })
-      return json(t.row)
-    }
-    return json({ error: 'Use GET or POST on this path.' }, 405)
+    return taskAction(t, action, req, url)
   }
 }

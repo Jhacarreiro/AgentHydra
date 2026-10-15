@@ -98,6 +98,10 @@ between server/ and web/.
   A test that swaps a global (`fetch`, `WebSocket`, a DOM stand-in) saves the real one first and puts it back in an
   `afterAll` or `afterEach`: on 2026-10-12 a store test's stubs, left behind, failed 286 tests in later files. The
   preload names the file that leaves one swapped (the next file's first test fails with it) and puts it back.
+  The preload also gives each test file a TEMP folder of its own and removes it after that file, while a shared module
+  (a fixture under `server/test/fixtures/`) is loaded once per run: such a module makes its temp folder when it is
+  called, never at import (2026-10-15: a root made at import was gone for every later file, and 5 core-slot tests
+  failed with ENOENT).
 - A Desk on any home but `~/.hydra-desk-2` (a test's, an e2e script's, a probe's) is a throwaway: it never joins
   Login sync and sets up no Free runtime (`server/src/real-home.ts`, 2026-10-07: before, one pulled every Free login
   into %TEMP%). Never gate that on `NODE_ENV`: e2e scripts and probes run outside `bun test`.

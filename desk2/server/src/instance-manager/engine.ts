@@ -392,6 +392,69 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     return r.chats.some((c) => c.state === 'pending') ? 'some' : 'none'
   }
 
+  /** Reads why the app went down and which chats it cut off mid-work, then leaves the chats or chooses an account for them. */
+  async function judge(r: Tracked, now: number, from: SeenInstance | undefined): Promise<void> {
+    const inst = from ? { ...from, email: from.email ?? r.fromInstance.email } : r.fromInstance
+    const [probe, log] = await Promise.all([io.probe(inst), io.appLog(inst)])
+    const why = causeOf({ closed: !inst.running, lastUpAt: lastUpOf(r), instance: inst }, probe, log)
+    const unread = probe === null || (inst.kind === 'desktop' && log === null)
+    if (!acts(why.cause) && unread && now - r.at < GRACE_MS + READ_RETRY_MS) {
+      change(r, 'waiting', `could not read why ${label(inst)} went down yet; reading again`)
+      return
+    }
+    const sorted = acts(why.cause) ? await sortCutOff(r, now) : 'none'
+    if (sorted === 'reread') return
+    r.cause = why.cause
+    r.causeDetail = why.detail
+    r.fromInstance = inst
+    if (!acts(why.cause)) {
+      change(r, 'left', why.cause === 'quit' ? `${why.detail}: a person closed it, so its chats stay` : `${why.detail}; nothing was moved`)
+      return
+    }
+    if (sorted === 'none') {
+      const n = r.chats.length
+      change(r, 'left', `${why.detail}; none of its ${n} open chat${n === 1 ? '' : 's'} was cut off mid-work, so nothing was moved`)
+      return
+    }
+    await choose(r, now)
+  }
+
+  /** An account opened for a recovery: its chats move once it is up and has settled, or it is passed over if it never comes up. */
+  async function waitOpened(r: Tracked, now: number): Promise<void> {
+    const to = r.toInstance ? seen.find((i) => i.ref === r.toInstance?.ref) : undefined
+    if (to && isUp(to)) {
+      r.toInstance = to
+      r.upSince ??= now
+      if (now - r.upSince >= OPEN_SETTLE_MS) await startMove(r)
+      return
+    }
+    if (now - (r.openedAt ?? r.updatedAt) >= OPEN_TIMEOUT_MS) {
+      if (r.toInstance) r.passed.push(r.toInstance.ref)
+      r.toInstance = null
+      r.to = null
+      change(r, 'waiting', 'the account opened for it did not come up in time; the next one is tried')
+    }
+  }
+
+  /** A chat move in progress: starts it when none has begun, then settles its chats once AgentHydra reports on it. */
+  async function followMove(r: Tracked, now: number): Promise<void> {
+    if (!r.operationId) {
+      await startMove(r)
+      return
+    }
+    const res = await io.moveResult(r.operationId)
+    if (res === null) {
+      if (now - (r.movedAt ?? r.updatedAt) >= MOVE_TIMEOUT_MS) change(r, 'failed', 'the move did not finish in time; AgentHydra keeps its record')
+      return
+    }
+    if ('error' in res) {
+      for (const c of r.chats) if (c.state === 'pending') setChat(r, c.id, 'failed', res.error)
+      change(r, 'failed', `the move failed: ${res.error}`)
+      return
+    }
+    settleMove(r, res.results)
+  }
+
   /** One step of one recovery. */
   async function step(r: Tracked, now: number): Promise<void> {
     const from = seen.find((i) => i.ref === r.from.ref)
@@ -402,29 +465,7 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       return
     }
     if (unjudged(r)) {
-      const inst = from ? { ...from, email: from.email ?? r.fromInstance.email } : r.fromInstance
-      const [probe, log] = await Promise.all([io.probe(inst), io.appLog(inst)])
-      const why = causeOf({ closed: !inst.running, lastUpAt: lastUpOf(r), instance: inst }, probe, log)
-      const unread = probe === null || (inst.kind === 'desktop' && log === null)
-      if (!acts(why.cause) && unread && now - r.at < GRACE_MS + READ_RETRY_MS) {
-        change(r, 'waiting', `could not read why ${label(inst)} went down yet; reading again`)
-        return
-      }
-      const sorted = acts(why.cause) ? await sortCutOff(r, now) : 'none'
-      if (sorted === 'reread') return
-      r.cause = why.cause
-      r.causeDetail = why.detail
-      r.fromInstance = inst
-      if (!acts(why.cause)) {
-        change(r, 'left', why.cause === 'quit' ? `${why.detail}: a person closed it, so its chats stay` : `${why.detail}; nothing was moved`)
-        return
-      }
-      if (sorted === 'none') {
-        const n = r.chats.length
-        change(r, 'left', `${why.detail}; none of its ${n} open chat${n === 1 ? '' : 's'} was cut off mid-work, so nothing was moved`)
-        return
-      }
-      await choose(r, now)
+      await judge(r, now, from)
       return
     }
     if (r.state === 'waiting') {
@@ -432,37 +473,11 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       return
     }
     if (r.state === 'opening') {
-      const to = r.toInstance ? seen.find((i) => i.ref === r.toInstance?.ref) : undefined
-      if (to && isUp(to)) {
-        r.toInstance = to
-        r.upSince ??= now
-        if (now - r.upSince >= OPEN_SETTLE_MS) await startMove(r)
-        return
-      }
-      if (now - (r.openedAt ?? r.updatedAt) >= OPEN_TIMEOUT_MS) {
-        if (r.toInstance) r.passed.push(r.toInstance.ref)
-        r.toInstance = null
-        r.to = null
-        change(r, 'waiting', 'the account opened for it did not come up in time; the next one is tried')
-      }
+      await waitOpened(r, now)
       return
     }
     if (r.state === 'moving') {
-      if (!r.operationId) {
-        await startMove(r)
-        return
-      }
-      const res = await io.moveResult(r.operationId)
-      if (res === null) {
-        if (now - (r.movedAt ?? r.updatedAt) >= MOVE_TIMEOUT_MS) change(r, 'failed', 'the move did not finish in time; AgentHydra keeps its record')
-        return
-      }
-      if ('error' in res) {
-        for (const c of r.chats) if (c.state === 'pending') setChat(r, c.id, 'failed', res.error)
-        change(r, 'failed', `the move failed: ${res.error}`)
-        return
-      }
-      settleMove(r, res.results)
+      await followMove(r, now)
       return
     }
     if (r.state === 'watching') await watch(r, now)

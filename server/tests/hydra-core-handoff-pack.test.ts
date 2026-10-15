@@ -8,7 +8,7 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { placeChat } from '../src/hydra-core/placement'
 import { scratch } from './hydra-core-fixture'
 
-const T = new Date('2026-10-15T09:00:00Z')
+const T = new Date('2019-10-24T09:00:00Z')
 const CWD = 'C:/Users/me/app'
 const ID_SHAPE = /^(?:person|instrument|worker|knowledge|skill):[a-z0-9-]+$/
 

@@ -56,7 +56,7 @@ const zoneFormats = new Map<string, Intl.DateTimeFormat>()
 function zoneFormat(zone: string): Intl.DateTimeFormat {
   let fmt = zoneFormats.get(zone)
   if (!fmt) {
-    fmt = new Intl.DateTimeFormat('en-US', { timeZone: zone, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h23' })
+    fmt = new Intl.DateTimeFormat(undefined, { timeZone: zone, weekday: 'long', month: 'long', day: 'numeric', hour: 'numeric', minute: '2-digit', hourCycle: 'h23' })
     zoneFormats.set(zone, fmt)
   }
   return fmt

@@ -7,7 +7,7 @@ import { scratch } from './hydra-core-fixture'
 
 let dir = ''
 const chat = 'chat-example-use'
-const now = new Date('2026-10-13T10:00:00.000Z')
+const now = new Date('2019-10-22T10:00:00.000Z')
 
 let savedPort: string | undefined
 beforeEach(() => {

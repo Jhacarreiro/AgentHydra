@@ -11,7 +11,7 @@ import { scratch, startChat } from './hydra-core-fixture'
 const CWD = 'C:/Users/me/project'
 const CHAT = 'chat-example-lead'
 const SESSION = 'session-example-1'
-const now = new Date('2026-10-14T10:00:00.000Z')
+const now = new Date(Date.now())
 const daemon: Daemon = {
   dispatch: async () => 'job-example',
   report: async () => null,

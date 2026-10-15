@@ -64,21 +64,21 @@ const nextDue = (ms: number | null) => (ms == null ? t('hswarm.v.managers.routin
                   {{ r.name }}
                 </button>
               </TableCell>
-              <TableCell class="whitespace-nowrap text-xs">
+              <TableCell size="xs" class="whitespace-nowrap">
                 <span class="inline-flex items-center gap-1.5">
                   <span class="size-2 rounded-full" :class="MANAGER_DOT_CLASS[routineDot(r.state)]" />
                   {{ t(`hswarm.v.managers.state.${r.state}`) }}
                 </span>
               </TableCell>
-              <TableCell class="whitespace-nowrap text-xs">
+              <TableCell size="xs" class="whitespace-nowrap">
                 <template v-if="r.runs[0]">
                   <span :class="outcomeTone(r.runs[0].outcome)">{{ t(`hswarm.v.managers.outcome.${r.runs[0].outcome}`) }}</span>
                   · {{ timeAgo(r.runs[0].endedAt) }}
                 </template>
                 <template v-else>{{ t('hswarm.v.managers.routine.noRun') }}</template>
               </TableCell>
-              <TableCell class="whitespace-nowrap text-xs">{{ r.state === 'off' || r.state === 'broken' || r.state === 'paused' || r.state === 'ended' ? '—' : nextDue(r.nextRunAt) }}</TableCell>
-              <TableCell class="max-w-[18rem] truncate text-xs" :title="r.reason">{{ r.headline ?? r.reason }}</TableCell>
+              <TableCell size="xs" class="whitespace-nowrap">{{ r.state === 'off' || r.state === 'broken' || r.state === 'paused' || r.state === 'ended' ? '—' : nextDue(r.nextRunAt) }}</TableCell>
+              <TableCell size="xs" class="max-w-[18rem]" truncate :title="r.reason">{{ r.headline ?? r.reason }}</TableCell>
             </TableRow>
           </TableBody>
         </Table>

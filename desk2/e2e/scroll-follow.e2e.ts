@@ -362,6 +362,7 @@ try {
       const rec = { writes: 0, frames: [], t0: Infinity };
       Object.defineProperty(Element.prototype, 'scrollTop', { configurable: true, get: d.get, set(v) { if (this.matches?.(SC)) rec.writes++; d.set.call(this, v) } });
       const finish = () => {
+        cancelAnimationFrame(raf);
         Object.defineProperty(Element.prototype, 'scrollTop', d);
         // Landed: the first frame from which every later one is at the bottom.
         const off = rec.frames.findLastIndex((f) => f.distance > 2);
@@ -373,9 +374,9 @@ try {
         const el = document.querySelector(SC);
         const t = performance.now() - rec.t0;
         if (el && t >= 0 && el.scrollHeight > 2 * el.clientHeight) rec.frames.push({ t, distance: el.scrollHeight - el.scrollTop - el.clientHeight, client: el.clientHeight });
-        if (t < 2000) requestAnimationFrame(sampleFrame); else finish();
+        if (t < 2000) raf = requestAnimationFrame(sampleFrame); else finish();
       };
-      requestAnimationFrame(sampleFrame);
+      let raf = requestAnimationFrame(sampleFrame);
       const land = () => { rec.t0 = performance.now(); bench.arrive(list) };
       if ('${how}' === 'switch') { rec.t0 = performance.now(); bench.mount('long', list, false) }
       else if ('${how}' === 'arrive') { bench.mount('long', [], true); setTimeout(land, 0) }

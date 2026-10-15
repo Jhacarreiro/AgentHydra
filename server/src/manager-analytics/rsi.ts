@@ -559,6 +559,7 @@ export function startTrialSettling(): void {
       console.error(`[manager-rsi] settle failed: ${(e as Error).message}`),
     )
   }
+  // arkitect-allow: side-effect-teardown - started once at daemon boot (index.ts) and settles trials for the daemon's whole life
   setTimeout(() => setInterval(tick, SETTLE_EVERY_MS), SETTLE_FIRST_MS)
 }
 

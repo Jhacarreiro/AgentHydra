@@ -38,6 +38,7 @@ export const tableCellVariants = cva('p-2 align-middle whitespace-nowrap has-[[r
     mono: { true: 'font-mono', false: '' },
     numeric: { true: 'tabular-nums', false: '' },
     muted: { true: 'text-muted-foreground', false: '' },
+    truncate: { true: 'truncate', false: '' },
   },
   defaultVariants: {
     size: "default",
@@ -46,6 +47,7 @@ export const tableCellVariants = cva('p-2 align-middle whitespace-nowrap has-[[r
     mono: false,
     numeric: false,
     muted: false,
+    truncate: false,
   },
 })
 

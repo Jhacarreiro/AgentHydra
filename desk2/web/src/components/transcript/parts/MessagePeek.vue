@@ -70,7 +70,7 @@ onBeforeUnmount(disarm)
 </script>
 
 <template>
-  <div class="pointer-events-none absolute inset-x-0 z-[9] overflow-hidden" :style="{ top: `${top}px` }">
+  <div class="pointer-events-none absolute inset-x-0 z-9 overflow-hidden" :style="{ top: `${top}px` }">
     <Transition
       enter-from-class="-translate-y-full opacity-0"
       leave-to-class="-translate-y-full opacity-0"

@@ -8,7 +8,7 @@ import { scratch } from './hydra-core-fixture'
 
 const PRIME = 'chat-prime'
 const FOLDER = 'C:/Users/me/example-folder'
-const now = new Date('2026-10-14T10:00:00.000Z')
+const now = new Date('2019-10-23T10:00:00.000Z')
 
 const noDaemon: Daemon = {
   dispatch: async () => {

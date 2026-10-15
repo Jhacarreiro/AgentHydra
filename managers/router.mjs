@@ -267,11 +267,94 @@ function readState(file) {
   return JSON.parse(readFileSync(file, "utf8"));
 }
 
+// A CliMayte worker is an employee, not a manager; a Desk chat runs as a CliMayte chat and is routed.
+function isRoutedTurn(prompt, env) {
+  if (env.AGENTHYDRA_CLIMAYTE_WORKER && !env.AGENTHYDRA_CLIMAYTE_CHAT) return false;
+  return !prompt.trimStart().startsWith("/");
+}
+
+function route(source, decision) {
+  return { source, note: null, decision };
+}
+
+// Picks the manager for this message: an env pin, a session pin, an @name, a continuation, or a score.
+async function chooseRoute(prompt, personas, { current, state, envPin, mentioned }, env) {
+  if (envPin) {
+    if (!personas.some((p) => p.slug === envPin)) throw new Error(`AGENTHYDRA_MANAGER names no manager: ${envPin}`);
+    return route("router", { slug: envPin, why: "pinned by AGENTHYDRA_MANAGER", p: null });
+  }
+  if (state.pinned && current) return route("router", { slug: current, why: "pinned in session", p: null });
+  if (mentioned) return route("at-name", { slug: mentioned.slug, why: `@${mentioned.name} in the message`, p: null });
+  if (current && isContinuation(prompt)) return route("continuation", { slug: current, why: "continuation", p: null });
+  const scored = await scoreMessage(prompt, personas, env);
+  return { source: scored.source, note: scored.note, decision: pick(scored.scores, current, personas) };
+}
+
+function nextSessionState(state, { at, persona, decision, pinned, messages, full, swapped, transcriptPath }) {
+  return {
+    manager: persona ? persona.slug : null,
+    since: swapped ? at : state.since,
+    pinned,
+    messages,
+    lastFullAt: full ? messages : state.lastFullAt,
+    history: swapped
+      ? [...state.history, { at, manager: persona.slug, why: decision.why, p: decision.p }].slice(-HISTORY_MAX)
+      : state.history,
+    transcriptPath,
+  };
+}
+
+function writeState(file, next) {
+  mkdirSync(path.dirname(file), { recursive: true });
+  writeFileSync(file, `${JSON.stringify(next, null, 2)}\n`);
+}
+
+function logRoute(logFile, { at, sessionId, next, decision, source, swapped, messages, full, note }) {
+  const p = decision.p == null ? "" : ` p=${fmt(decision.p)}`;
+  const noteText = note ? ` note="${note}"` : "";
+  appendFileSync(
+    logFile,
+    `${at} session=${sessionId} manager=${next.manager ?? "none"} ${swapped ? "SWAP" : "stay"} (${decision.why}${p}) source=${source} message=${messages}${full ? " full" : ""}${noteText}\n`,
+  );
+}
+
+function routeLine({ at, sessionId, persona, swapped, decision, source, messages, pinned, prompt, input, env, transcriptPath }) {
+  return {
+    v: 1,
+    at,
+    session: sessionId,
+    manager: persona.slug,
+    decision: swapped ? "swap" : "stay",
+    why: decision.why,
+    source,
+    p: decision.p ?? null,
+    message: messages,
+    pinned,
+    deskChat: env.HYDRA_DESK_CHAT_ID || null,
+    cwd: typeof input.cwd === "string" ? input.cwd : process.cwd(),
+    transcriptPath,
+    promptChars: prompt.length,
+  };
+}
+
+function routeOutput(persona, personas, { full, briefText, reason, note, swapped, analyticsError }) {
+  const injection = buildInjection(persona, personas, { full, briefText, reason });
+  const output = {
+    hookSpecificOutput: {
+      hookEventName: "UserPromptSubmit",
+      additionalContext: note ? `Manager Hydra routing note: ${note}.\n${injection}` : injection,
+    },
+  };
+  const messageLines = [];
+  if (swapped) messageLines.push(`Now: ${persona.name}, ${persona.title}${note ? ` (${note})` : ""}`);
+  if (analyticsError) messageLines.push(`Manager Hydra error: analytics line not written (${analyticsError})`);
+  if (messageLines.length) output.systemMessage = messageLines.join("\n");
+  return output;
+}
+
 export async function run(input, env = process.env) {
-  // A CliMayte worker is an employee, not a manager; a Desk chat runs as a CliMayte chat and is routed.
-  if (env.AGENTHYDRA_CLIMAYTE_WORKER && !env.AGENTHYDRA_CLIMAYTE_CHAT) return null;
   const prompt = typeof input.prompt === "string" ? input.prompt : "";
-  if (prompt.trimStart().startsWith("/")) return null;
+  if (!isRoutedTurn(prompt, env)) return null;
   const root = managersDir(env);
   const { personas, skipped } = loadPersonas(managerRoots(env));
   if (!personas.length) return null;
@@ -287,26 +370,7 @@ export async function run(input, env = process.env) {
   const envPin = (env.AGENTHYDRA_MANAGER ?? "").trim();
   const mentioned = mentionedManager(prompt, personas);
 
-  let decision;
-  let source = "router";
-  let note = null;
-  if (envPin) {
-    if (!personas.some((p) => p.slug === envPin)) throw new Error(`AGENTHYDRA_MANAGER names no manager: ${envPin}`);
-    decision = { slug: envPin, why: "pinned by AGENTHYDRA_MANAGER", p: null };
-  } else if (state.pinned && current) {
-    decision = { slug: current, why: "pinned in session", p: null };
-  } else if (mentioned) {
-    source = "at-name";
-    decision = { slug: mentioned.slug, why: `@${mentioned.name} in the message`, p: null };
-  } else if (current && isContinuation(prompt)) {
-    source = "continuation";
-    decision = { slug: current, why: "continuation", p: null };
-  } else {
-    const scored = await scoreMessage(prompt, personas, env);
-    source = scored.source;
-    note = scored.note;
-    decision = pick(scored.scores, current, personas);
-  }
+  const { source, note, decision } = await chooseRoute(prompt, personas, { current, state, envPin, mentioned }, env);
 
   const persona = personas.find((p) => p.slug === decision.slug) ?? null;
   const swapped = persona !== null && persona.slug !== current;
@@ -314,64 +378,23 @@ export async function run(input, env = process.env) {
   const briefText = full ? readFileSync(persona.briefPath, "utf8") : "";
   const reason = swapped ? (current ? `swapped from ${current}` : "assigned") : `re-injected at message ${messages}`;
   const transcriptPath = typeof input.transcript_path === "string" ? input.transcript_path : null;
-  const next = {
-    manager: persona ? persona.slug : null,
-    since: swapped ? at : state.since,
-    pinned: Boolean(envPin) || state.pinned,
-    messages,
-    lastFullAt: full ? messages : state.lastFullAt,
-    history: swapped
-      ? [...state.history, { at, manager: persona.slug, why: decision.why, p: decision.p }].slice(-HISTORY_MAX)
-      : state.history,
-    transcriptPath,
-  };
-  mkdirSync(path.dirname(sessionFile), { recursive: true });
-  writeFileSync(sessionFile, `${JSON.stringify(next, null, 2)}\n`);
-  const p = decision.p == null ? "" : ` p=${fmt(decision.p)}`;
-  const noteText = note ? ` note="${note}"` : "";
-  appendFileSync(
-    logFile,
-    `${at} session=${sessionId} manager=${next.manager ?? "none"} ${swapped ? "SWAP" : "stay"} (${decision.why}${p}) source=${source} message=${messages}${full ? " full" : ""}${noteText}\n`,
-  );
+  const pinned = Boolean(envPin) || state.pinned;
+  const next = nextSessionState(state, { at, persona, decision, pinned, messages, full, swapped, transcriptPath });
+  writeState(sessionFile, next);
+  logRoute(logFile, { at, sessionId, next, decision, source, swapped, messages, full, note });
   if (!persona) return null;
 
   let analyticsError = null;
   try {
     mkdirSync(path.join(root, "analytics"), { recursive: true });
-    const line = {
-      v: 1,
-      at,
-      session: sessionId,
-      manager: persona.slug,
-      decision: swapped ? "swap" : "stay",
-      why: decision.why,
-      source,
-      p: decision.p ?? null,
-      message: messages,
-      pinned: next.pinned,
-      deskChat: env.HYDRA_DESK_CHAT_ID || null,
-      cwd: typeof input.cwd === "string" ? input.cwd : process.cwd(),
-      transcriptPath,
-      promptChars: prompt.length,
-    };
+    const line = routeLine({ at, sessionId, persona, swapped, decision, source, messages, pinned, prompt, input, env, transcriptPath });
     appendFileSync(path.join(root, "analytics", "routes.jsonl"), `${JSON.stringify(line)}\n`);
   } catch (error) {
     analyticsError = error.message;
     appendFileSync(logFile, `${at} session=${sessionId} analytics ERROR ${error.message}\n`);
   }
 
-  const injection = buildInjection(persona, personas, { full, briefText, reason });
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: "UserPromptSubmit",
-      additionalContext: note ? `Manager Hydra routing note: ${note}.\n${injection}` : injection,
-    },
-  };
-  const messageLines = [];
-  if (swapped) messageLines.push(`Now: ${persona.name}, ${persona.title}${note ? ` (${note})` : ""}`);
-  if (analyticsError) messageLines.push(`Manager Hydra error: analytics line not written (${analyticsError})`);
-  if (messageLines.length) output.systemMessage = messageLines.join("\n");
-  return output;
+  return routeOutput(persona, personas, { full, briefText, reason, note, swapped, analyticsError });
 }
 
 export async function main(text, env = process.env) {

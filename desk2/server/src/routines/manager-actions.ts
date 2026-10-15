@@ -1,0 +1,182 @@
+import { existsSync, mkdirSync, readFileSync, rmSync } from 'node:fs'
+import { join } from 'node:path'
+import type { Context } from 'hono'
+import type { RoutineProposal, RoutinesRequest } from '@shared/routines'
+import { callerKind } from '../caller'
+import { judge } from './decide'
+import { checkDefinition, checkProposal, parseProposalText, ROUTINE_ID } from './manifest'
+import { message } from './proc'
+import { enabled, memOf, save, type Manager } from './manager'
+import { contractOf, writeWhole } from './manager-files'
+import { look } from './manager-look'
+import { startRun } from './manager-runs'
+import { status } from './manager-view'
+
+/** The actions a caller may ask for, one per call; and those only the window may ask for. */
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit'] as const
+type ActionName = (typeof ACTIONS)[number]
+const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit']
+const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
+const SHAPE =
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } } }, one action per call besides "enabled"'
+
+/** POST /api/routines: does one action (or turns the manager on or off with `enabled`). */
+export async function postRoutine(m: Manager, c: Context) {
+  const body = (await c.req.json().catch(() => null)) as RoutinesRequest | null
+  if (!body || typeof body !== 'object' || Array.isArray(body)) return c.json({ error: SHAPE }, 400)
+  const actions = ACTIONS.filter((k) => body[k] !== undefined)
+  if (!wellFormed(body, actions)) return c.json({ error: SHAPE }, 400)
+  const owner = callerKind(c.req.raw.headers) === 'window'
+  const [action] = actions
+  if (body.enabled !== undefined && !owner) return c.json(OWNER_ONLY, 403)
+  if (action !== undefined && OWNER_ACTIONS.includes(action) && !owner) return c.json(OWNER_ONLY, 403)
+  const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : (body[action as 'run'] ?? '')
+  if (action !== undefined && action !== 'propose' && !ROUTINE_ID.test(id)) return c.json({ error: `"${id}" is not a routine id` }, 400)
+
+  if (body.enabled !== undefined && body.enabled !== m.ctx.settings().routines) m.ctx.updateSettings({ routines: body.enabled })
+  if (body.enabled === true) await look(m)
+  if (action === undefined) return c.json(status(m))
+
+  const t = m.clock()
+  switch (action) {
+    case 'run':
+      return runRoutine(m, c, id, t)
+    case 'pause':
+    case 'resume':
+      return pauseOrResume(m, c, action, id, t)
+    case 'edit':
+      return editRoutine(m, c, body.edit!)
+    case 'propose':
+      return proposeRoutine(m, c, body)
+    default:
+      return decideProposal(m, c, action, id)
+  }
+}
+
+/** A body with one action (or `enabled` alone), each action with the value it takes. */
+function wellFormed(body: RoutinesRequest, actions: ActionName[]): boolean {
+  const typed = actions.every((k) =>
+    k === 'propose'
+      ? typeof body.propose === 'object' && body.propose !== null
+      : k === 'edit'
+        ? typeof body.edit?.id === 'string' && typeof body.edit.set === 'object' && body.edit.set !== null && !Array.isArray(body.edit.set)
+        : typeof body[k] === 'string',
+  )
+  return !(
+    (body.enabled !== undefined && typeof body.enabled !== 'boolean') ||
+    actions.length > 1 ||
+    (actions.length === 0 && body.enabled === undefined) ||
+    !typed
+  )
+}
+
+/** `run`: a Windows task runs through Windows; any other routine starts now, when its judge says it may. */
+async function runRoutine(m: Manager, c: Context, id: string, t: number) {
+  await look(m)
+  const s = m.seen.find((x) => x.entry.id === id)
+  if (!s) return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing` }, 404)
+  const def = s.entry.def
+  const mem = memOf(m, s.entry, t)
+  if (def?.windowsTask !== undefined) {
+    const j = judge(s, mem, t, enabled(m), false)
+    if (j.state !== 'idle') return c.json({ error: `"${id}" is ${j.state}: ${j.reason}` }, 409)
+    try {
+      await m.tasks.run(def.windowsTask)
+    } catch (err) {
+      return c.json({ error: `Windows refused to run "${id}": ${message(err)}` }, 500)
+    }
+    await look(m)
+    return c.json(status(m))
+  }
+  const j = judge(s, mem, t, enabled(m), true)
+  if (!j.start || !def) return c.json({ error: `"${id}" is ${j.state}: ${j.reason}` }, 409)
+  startRun(m, def, mem, null)
+  return c.json(status(m))
+}
+
+async function pauseOrResume(m: Manager, c: Context, action: 'pause' | 'resume', id: string, t: number) {
+  const s = m.seen.find((x) => x.entry.id === id)
+  if (!s) return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing` }, 404)
+  const path = s.entry.def?.windowsTask
+  if (path !== undefined) {
+    try {
+      await m.tasks.setEnabled(path, action === 'resume')
+    } catch (err) {
+      return c.json({ error: `Windows refused to ${action} "${id}": ${message(err)}` }, 500)
+    }
+  } else {
+    memOf(m, s.entry, t).paused = action === 'pause'
+    save(m)
+  }
+  await look(m)
+  return c.json(status(m))
+}
+
+/** `edit`: the owner's edit (its Edit form, its Describe runs switch) writes the routine's own file: the keys `set` names,
+ *  null removing one, every other key as it was. One that would not check out is refused and the file left alone. */
+async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesRequest['edit']>) {
+  const id = edit.id
+  const routineFile = join(m.routinesDir, `${id}.json`)
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(readFileSync(routineFile, 'utf8')) as Record<string, unknown>
+  } catch {
+    return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing or not JSON` }, 404)
+  }
+  const next: Record<string, unknown> = { ...raw }
+  for (const [key, value] of Object.entries(edit.set)) {
+    if (value === null) delete next[key]
+    else next[key] = value
+  }
+  try {
+    checkDefinition(id, next)
+  } catch (err) {
+    return c.json({ error: `"${id}" was not saved: ${message(err)}` }, 409)
+  }
+  writeWhole(routineFile, next)
+  await look(m)
+  return c.json(status(m))
+}
+
+async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
+  const raw = body.propose as unknown as Record<string, unknown>
+  const pid = typeof raw.id === 'string' ? raw.id : ''
+  let proposal: RoutineProposal
+  try {
+    const rest = { ...raw }
+    delete rest.id
+    proposal = checkProposal(pid, rest)
+  } catch (err) {
+    return c.json({ error: `the proposal is refused: ${message(err)}` }, 400)
+  }
+  if (existsSync(join(m.routinesDir, `${pid}.json`)) || existsSync(join(m.proposedDir, `${pid}.json`)))
+    return c.json({ error: `"${pid}" already exists as a routine or a proposal` }, 409)
+  mkdirSync(m.proposedDir, { recursive: true })
+  writeWhole(join(m.proposedDir, `${pid}.json`), contractOf(proposal))
+  await look(m)
+  return c.json(status(m))
+}
+
+/** approve and discard: the window only (checked in postRoutine). Each acts on the proposal file of that id. */
+async function decideProposal(m: Manager, c: Context, action: 'approve' | 'discard', id: string) {
+  const proposal = join(m.proposedDir, `${id}.json`)
+  if (!existsSync(proposal)) return c.json({ error: `no proposal "${id}" is waiting` }, 404)
+  if (action === 'discard') {
+    rmSync(proposal, { force: true })
+    await look(m)
+    return c.json(status(m))
+  }
+  if (existsSync(join(m.routinesDir, `${id}.json`))) return c.json({ error: `a routine "${id}" already exists` }, 409)
+  let approved: RoutineProposal
+  try {
+    approved = parseProposalText(id, readFileSync(proposal, 'utf8'))
+  } catch (err) {
+    return c.json({ error: `the proposal does not check out: ${message(err)}` }, 400)
+  }
+  const body2 = contractOf(approved)
+  delete body2.why
+  writeWhole(join(m.routinesDir, `${id}.json`), body2)
+  rmSync(proposal, { force: true })
+  await look(m)
+  return c.json(status(m))
+}

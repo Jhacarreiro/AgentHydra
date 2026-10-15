@@ -408,8 +408,8 @@ export class ChatRuntime {
     return join(this.store.home, 'logs', `${this.chat.id}.log`)
   }
 
-  /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
-  buildOptions(): Options {
+  /** The environment the SDK process starts with: the base env, then this chat's account, manager and id. */
+  private buildEnv(): Record<string, string | undefined> {
     const chat = this.chat
     const env: Record<string, string | undefined> = { ...this.baseEnv, ...SESSION_STATE_ENV }
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
@@ -419,6 +419,13 @@ export class ChatRuntime {
     // The hook keys this chat's messages by it (hydra-core/hook.mjs), as it does a CliMayte chat's.
     env.HYDRA_DESK_CHAT_ID = chat.id
     pinHaikuModel(env)
+    return env
+  }
+
+  /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
+  buildOptions(): Options {
+    const chat = this.chat
+    const env = this.buildEnv()
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const sus = this.susTurn?.() ?? null
     this.applied = sus ? { ...sus } : ownSetting(chat)
@@ -436,6 +443,25 @@ export class ChatRuntime {
       onElicitation: this.onElicitation,
       stderr: (data: string) => this.onStderr(data),
     }
+    this.applyLaunchChoices(options)
+    // A fresh session under Hydra Core's slot starts with an id Desk picks, so placement.json names it as launched with its pack.
+    const session = chat.sessionId ?? this.slotPlaced?.session ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
+    this.applySession(options, session)
+    const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
+    this.applySettings(options, swap)
+    const rules = rulesText(swap)
+    // Built before the launch (placeSlot), so this synchronous build never waits on Hydra Core's placement.
+    const slot = session && this.slotPlaced?.session === session ? this.slotPlaced.text : null
+    if (slot || swap) options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}${slot ? `
+
+${slot}` : ''}${rules}` }
+    this.applyMcpServers(options, addOns.mcpServers)
+    return options
+  }
+
+  /** The binary, permission mode, model and effort a start passes to the SDK, and the tools a CliMayte-delegating chat drops. */
+  private applyLaunchChoices(options: Options): void {
+    const chat = this.chat
     // Always the binary Desk resolved: the SDK would look for its own platform package, which a release does not ship.
     const binary = this.binaryPath ?? this.claudeCode.path()
     if (binary) options.pathToClaudeCodeExecutable = binary
@@ -445,8 +471,11 @@ export class ChatRuntime {
     if (this.applied.model) options.model = withoutOldHaiku(this.applied.model) ?? undefined
     if (this.applied.effort) options.effort = this.applied.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
-    // A fresh session under Hydra Core's slot starts with an id Desk picks, so placement.json names it as launched with its pack.
-    const session = chat.sessionId ?? this.slotPlaced?.session ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
+  }
+
+  /** Resumes the chat's own session, or starts the given one; a fork's first start copies its source under a new id. */
+  private applySession(options: Options, session: string | null): void {
+    const chat = this.chat
     if (chat.sessionId) options.resume = chat.sessionId
     else if (session) options.sessionId = session
     if (!chat.sessionId && chat.forkedFrom) {
@@ -457,22 +486,24 @@ export class ChatRuntime {
       const at = this.forkAt?.()
       if (at) options.resumeSessionAt = at
     }
-    const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
+  }
+
+  /** The settings a start passes: the worker-rules swap's excludes, Hydra Core's, and the owner's hooks for an extra account. */
+  private applySettings(options: Options, swap: { excludes: string[] } | null): void {
+    const chat = this.chat
     const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
     const claudeMdExcludes = [...(swap?.excludes ?? []), ...coreChatExcludes()]
     if (claudeMdExcludes.length || hooks) options.settings = { ...(claudeMdExcludes.length ? { claudeMdExcludes } : {}), ...(hooks ? { hooks } : {}) }
-    const rules = rulesText(swap)
-    // Built before the launch (placeSlot), so this synchronous build never waits on Hydra Core's placement.
-    const slot = session && this.slotPlaced?.session === session ? this.slotPlaced.text : null
-    if (slot || swap) options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}${slot ? `
+  }
 
-${slot}` : ''}${rules}` }
+  /** The MCP servers a start passes: the add-ons', what plain `claude` gets in this folder, and Desk's own agenthydra. */
+  private applyMcpServers(options: Options, addOnServers: ReturnType<typeof chatAddOns>['mcpServers']): void {
+    const chat = this.chat
     const mcp = this.agentHydraMcp === undefined ? readAgentHydraMcp() : this.agentHydraMcp
     // What plain `claude` gets in this folder under the main config, on whatever account the chat runs; Hydra Desk's own agenthydra wins.
     // A running connector's servers sit under the person's own config of the same name.
-    const servers = { ...addOns.mcpServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: withDeskChatId(mcp, chat.id) } : {}) }
+    const servers = { ...addOnServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: withDeskChatId(mcp, chat.id) } : {}) }
     if (Object.keys(servers).length) options.mcpServers = servers
-    return options
   }
 
   /**

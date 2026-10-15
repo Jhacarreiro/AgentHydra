@@ -4,7 +4,7 @@ import { join } from 'node:path'
 import { buildTrack } from '../src/hydra-core/track'
 import { scratch } from './hydra-core-fixture'
 
-const T = Date.parse('2026-10-13T12:00:00Z')
+const T = Date.parse('2019-10-22T12:00:00Z')
 const iso = (ms: number) => new Date(ms).toISOString()
 const line = (o: object) => `${JSON.stringify(o)}\n`
 const user = (sid: string, at: number, text: string) =>

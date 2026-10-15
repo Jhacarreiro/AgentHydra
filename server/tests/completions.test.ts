@@ -1,5 +1,5 @@
-import { describe, expect, test } from 'bun:test'
-import { mkdtempSync, readdirSync, readFileSync } from 'node:fs'
+import { afterAll, describe, expect, test } from 'bun:test'
+import { mkdtempSync, readdirSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { CliMayteOrigin, PingEvent } from '../src/climayte-ping'
@@ -11,10 +11,13 @@ import {
   waitFromBody,
 } from '../src/completions'
 
+const ROOT = mkdtempSync(join(tmpdir(), 'completions-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
+
 function harness(start = 1_000) {
   const sent: { origin: CliMayteOrigin; events: PingEvent[] }[] = []
   const deps = {
-    file: join(mkdtempSync(join(tmpdir(), 'completions-')), 'completions.json'),
+    file: join(mkdtempSync(join(ROOT, 'completions-')), 'completions.json'),
     emit: (origin: CliMayteOrigin, events: PingEvent[]) => {
       sent.push({ origin, events })
       return true

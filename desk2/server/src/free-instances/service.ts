@@ -428,39 +428,45 @@ export class FreeInstances {
   /** Returns the message's token estimate, or null for anything that was not an answered message. */
   private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
     const instance = this.instance(r.instanceId)
-    if (result.usage) {
-      // A row read before plans were kept (2026-10-09) has its plan only in its last reading. Start from that, or
-      // every account already on Go or Pro would be told as newly paid on its first reading after the update.
-      if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
-      instance.usage = result.usage
-      this.notePlan(instance, result.usage.plan ?? null)
-      try { this.onUsage?.(instance) } catch { /* a watcher's failure never fails a reading */ }
-    }
+    if (result.usage) this.applyUsage(instance, result.usage)
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
-    if (result.chats) {
-      // Looked up by id, not searched per chat: an account's list of ~1,500 chats against ~22,000 threads held the
-      // server 2 to 6 s a list, every list read (2026-10-10, loop-stalls.jsonl: 220 s in a day).
-      const known = new Map(this.store.data.threads.map(t => [t.id, t]))
-      const forgotten = new Set(this.store.data.forgotten)
-      for (const chat of result.chats) {
-        const id = `${r.instanceId}/${chat.chat_id}`
-        if (chat.is_temporary === true && !forgotten.has(id)) {
-          const existing = known.get(id)
-          this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false, known)
-        }
-      }
-    }
-    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {
-      if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
-      const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
-      const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
-      if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
-      this.noteThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
-    }
+    if (result.chats) this.applyChats(r, result.chats)
+    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) this.applyChatThread(r, instance, result)
     const spent = result.ok ? this.countTokens(r, result) : null
     this.store.save()
     return spent
+  }
+  /** Takes a reading's usage as the row's, and tells the watchers, after noting any plan change. */
+  private applyUsage(instance: FreeInstance, usage: NonNullable<FreeResult['usage']>): void {
+    // A row read before plans were kept (2026-10-09) has its plan only in its last reading. Start from that, or
+    // every account already on Go or Pro would be told as newly paid on its first reading after the update.
+    if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
+    instance.usage = usage
+    this.notePlan(instance, usage.plan ?? null)
+    try { this.onUsage?.(instance) } catch { /* a watcher's failure never fails a reading */ }
+  }
+  /** Keeps each temporary chat of a listing as a thread, unless it was forgotten. */
+  private applyChats(r: FreeRequest, chats: NonNullable<FreeResult['chats']>): void {
+    // Looked up by id, not searched per chat: an account's list of ~1,500 chats against ~22,000 threads held the
+    // server 2 to 6 s a list, every list read (2026-10-10, loop-stalls.jsonl: 220 s in a day).
+    const known = new Map(this.store.data.threads.map(t => [t.id, t]))
+    const forgotten = new Set(this.store.data.forgotten)
+    for (const chat of chats) {
+      const id = `${r.instanceId}/${chat.chat_id}`
+      if (chat.is_temporary === true && !forgotten.has(id)) {
+        const existing = known.get(id)
+        this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false, known)
+      }
+    }
+  }
+  /** Records a chat-type command's outcome on its thread, and marks the account signed in when the chat is private. */
+  private applyChatThread(r: FreeRequest, instance: FreeInstance, result: FreeResult): void {
+    if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
+    const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
+    const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
+    if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
+    this.noteThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
   }
   /** A message adds to the account's token estimate (tokens.ts): what it sent, the thread it continues included, and
    *  the reply. A chat that was read gives its thread's length, so a later continuation counts what it holds. */

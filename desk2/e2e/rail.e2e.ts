@@ -144,7 +144,7 @@ try {
         const col = document.querySelector('[data-transcript-scroller] > div')
         if (!up || !col) return null
         const c = col.getBoundingClientRect()
-        return Math.round(up.getBoundingClientRect().left - (c.right - parseFloat(getComputedStyle(col).paddingRight)))
+        return Math.round(up.getBoundingClientRect().left - (c.right - parseFloat(getComputedStyle(col).paddingInlineEnd)))
       })()`)) as number | null
       gaps.push(`${width}: ${gap ?? 'no arrows'}`)
       if (gap === null || gap < 11) ok = false

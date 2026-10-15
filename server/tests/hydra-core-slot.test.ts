@@ -15,7 +15,7 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { APPEND_MAX, placeChat, SLOT_CAP } from '../src/hydra-core/placement'
 import { scratch } from './hydra-core-fixture'
 
-const T = Date.parse('2026-10-14T09:00:00Z')
+const T = Date.parse('2019-10-23T09:00:00Z')
 const CWD = 'C:/Users/me/app'
 const RULES = 'Repo rules: the invented test app uses one button style.'
 const LEAD_PROMPT = 'sketch the dashboard layout'

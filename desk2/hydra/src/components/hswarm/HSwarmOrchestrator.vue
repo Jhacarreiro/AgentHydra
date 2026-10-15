@@ -62,9 +62,9 @@ const p = computed(() => props.managers.orchestrator)
           </TableHeader>
           <TableBody>
             <TableRow v-for="a in p.acts" :key="`${a.at}-${a.id}`">
-              <TableCell class="whitespace-nowrap text-xs">{{ timeAgo(a.at) }}</TableCell>
-              <TableCell class="max-w-[16rem] truncate">{{ a.title }}</TableCell>
-              <TableCell class="text-xs">
+              <TableCell size="xs" class="whitespace-nowrap">{{ timeAgo(a.at) }}</TableCell>
+              <TableCell class="max-w-[16rem]" truncate>{{ a.title }}</TableCell>
+              <TableCell size="xs">
                 {{ t(`hswarm.v.managers.orchestrator.did.${a.did}`, a.did) }}
                 <span class="text-muted-foreground">· {{ a.error ?? a.detail ?? '' }}</span>
               </TableCell>

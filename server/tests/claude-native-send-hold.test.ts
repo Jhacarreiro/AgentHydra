@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'bun:test'
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { afterAll, describe, expect, it } from 'bun:test'
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import {
@@ -15,10 +15,12 @@ const req = {
   fromName: 'CliMayte',
 }
 const HOUR = 60 * 60 * 1000
+const ROOT = mkdtempSync(join(tmpdir(), 'native-hold-'))
+afterAll(() => rmSync(ROOT, { recursive: true, force: true }))
 
 /** A fake app: scripted send answers, a transcript that holds the refs it was given, and an idle flag. */
 function app(answers: HoldSendResult[]) {
-  const dir = mkdtempSync(join(tmpdir(), 'native-hold-'))
+  const dir = mkdtempSync(join(ROOT, 'app-'))
   const journalPath = join(dir, 'held-sends.json')
   const sent: string[] = []
   const transcript = new Set<string>()
@@ -108,7 +110,7 @@ describe('native send hold', () => {
   })
 
   it('settles a send the daemon was stopped in from the transcript, not by a blind resend', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'native-hold-'))
+    const dir = mkdtempSync(join(ROOT, 'stopped-'))
     const journalPath = join(dir, 'held-sends.json')
     writeFileSync(
       journalPath,
@@ -170,7 +172,7 @@ describe('native send hold', () => {
   })
 
   it('sends a message held by an earlier daemon once its chat is idle, with no new hold', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'native-hold-'))
+    const dir = mkdtempSync(join(ROOT, 'earlier-'))
     const journalPath = join(dir, 'held-sends.json')
     writeFileSync(
       journalPath,
@@ -203,7 +205,7 @@ describe('native send hold', () => {
   })
 
   it('does not send a held message whose attempt another daemon has already claimed', async () => {
-    const dir = mkdtempSync(join(tmpdir(), 'native-hold-'))
+    const dir = mkdtempSync(join(ROOT, 'claimed-'))
     const journalPath = join(dir, 'held-sends.json')
     writeFileSync(
       journalPath,

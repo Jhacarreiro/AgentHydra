@@ -790,7 +790,7 @@ describe('waitsForRoom', () => {
 })
 
 describe('fullUntilReset: no reading opens the account before its reset, so CliMayte does not read it', () => {
-  const now = Date.parse('2026-10-14T12:00:00Z')
+  const now = Date.parse('2019-10-23T12:00:00Z')
   const hours = (h: number) => now + h * 3_600_000
   const days = (d: number) => hours(d * 24)
   const at = (

@@ -37,6 +37,13 @@ interface Live {
   idle: Promise<void>
 }
 
+/** A message that is streaming in: its kind, when it began, and the text so far. */
+interface StreamState {
+  kind: 'assistant_text' | 'thinking'
+  ts: number
+  text: string
+}
+
 const errorText = (err: unknown): string => (err instanceof Error ? err.message : String(err))
 
 /** When a limit ends, from Codex's "...or try again at 2:48 AM." (local time): the next time the clock reads it, else
@@ -67,6 +74,42 @@ function pictures(images: Image[] = []): Record<string, unknown>[] {
   })
 }
 
+/** An item Codex has started: it is remembered as running, its items are shown and its activity is named. */
+function itemStarted(
+  sink: TurnSink,
+  running: Map<string, { startedAt: number }>,
+  p: Record<string, unknown>,
+  now: number,
+): void {
+  const item = p.item as CodexItem
+  const startedAt = typeof p.startedAtMs === 'number' ? p.startedAtMs : now
+  running.set(item.id, { startedAt })
+  if (item.type !== 'agentMessage' && item.type !== 'reasoning')
+    for (const i of codexItems(item, { now, startedAt })) sink.item(i)
+  const activity = activityOf(item)
+  if (activity) sink.activity(activity)
+}
+
+/** An item Codex has finished: its final items replace what streamed, and it is no longer running. */
+function itemCompleted(
+  sink: TurnSink,
+  streams: Map<string, StreamState>,
+  running: Map<string, { startedAt: number }>,
+  p: Record<string, unknown>,
+  now: number,
+): void {
+  const item = p.item as CodexItem
+  const s = streams.get(item.id)
+  const startedAt = s?.ts ?? running.get(item.id)?.startedAt
+  running.delete(item.id)
+  streams.delete(item.id)
+  const endedAt = typeof p.completedAtMs === 'number' ? p.completedAtMs : now
+  for (const i of codexItems(item, { now, startedAt, endedAt })) sink.item(i)
+  // A message that ended with no text (only its deltas were seen) keeps what streamed.
+  if (s && !codexItems(item, { now }).length && s.text.trim())
+    sink.item({ kind: s.kind, id: item.id, ts: s.ts, text: s.text })
+}
+
 export function codexBackend(): Backend {
   const live = new Map<string, Live>()
 
@@ -82,10 +125,7 @@ export function codexBackend(): Backend {
       let ended = false
       let graceTimer: ReturnType<typeof setTimeout> | undefined
       const started = Date.now()
-      const streams = new Map<
-        string,
-        { kind: 'assistant_text' | 'thinking'; ts: number; text: string }
-      >()
+      const streams = new Map<string, StreamState>()
       const running = new Map<string, { startedAt: number }>()
 
       let finish!: (result: TurnEnd) => void
@@ -145,35 +185,18 @@ export function codexBackend(): Backend {
           case 'turn/started':
             turnId = (p.turn as { id: string }).id
             return
-          case 'item/started': {
-            const item = p.item as CodexItem
-            const startedAt = typeof p.startedAtMs === 'number' ? p.startedAtMs : now
-            running.set(item.id, { startedAt })
-            if (item.type !== 'agentMessage' && item.type !== 'reasoning')
-              for (const i of codexItems(item, { now, startedAt })) sink.item(i)
-            const activity = activityOf(item)
-            if (activity) sink.activity(activity)
+          case 'item/started':
+            itemStarted(sink, running, p, now)
             return
-          }
           case 'item/agentMessage/delta':
             stream(String(p.itemId), 'assistant_text', String(p.delta ?? ''))
             return
           case 'item/reasoning/summaryTextDelta':
             stream(String(p.itemId), 'thinking', String(p.delta ?? ''))
             return
-          case 'item/completed': {
-            const item = p.item as CodexItem
-            const s = streams.get(item.id)
-            const startedAt = s?.ts ?? running.get(item.id)?.startedAt
-            running.delete(item.id)
-            streams.delete(item.id)
-            const endedAt = typeof p.completedAtMs === 'number' ? p.completedAtMs : now
-            for (const i of codexItems(item, { now, startedAt, endedAt })) sink.item(i)
-            // A message that ended with no text (only its deltas were seen) keeps what streamed.
-            if (s && !codexItems(item, { now }).length && s.text.trim())
-              sink.item({ kind: s.kind, id: item.id, ts: s.ts, text: s.text })
+          case 'item/completed':
+            itemCompleted(sink, streams, running, p, now)
             return
-          }
           case 'turn/plan/updated':
             sink.item({
               kind: 'todos',

@@ -26,7 +26,8 @@ import type {
   ServerEvent,
 } from '@shared/protocol'
 import { createMediaCache, MAX_MEDIA_BYTES, type MediaCache, MEDIA_ROUTE } from '../media/cache'
-import { ChatBusyError, ChatError, type ChatManager, checkCwd, type Json, LIVE, obj, optBool, optString, parseCreate } from './chat-manager'
+import { ChatBusyError, ChatError, type ChatManager, checkCwd, LIVE } from './chat-manager'
+import { type Json, obj, optBool, optString, parseCreate } from './chat-requests'
 import { AsyncFile } from '../async-file'
 
 /** What the queue needs of the chat manager (tests fake it). */

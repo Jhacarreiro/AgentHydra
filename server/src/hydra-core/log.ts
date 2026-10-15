@@ -96,55 +96,82 @@ const bump = (m: Record<string, number>, k: string) => {
   m[k] = (m[k] ?? 0) + 1
 }
 
+/** The counters statsOf fills in while it walks the events. */
+interface Tally {
+  misses: Record<string, number>
+  noneMisses: Record<string, number>
+  overruled: Record<string, number>
+  questions: Record<string, { asked: number; defaulted: number }>
+  pushback: Record<string, number>
+  finds: { total: number; empty: number }
+  runs: Set<string>
+  reported: Set<string>
+  reports: number
+}
+
+function tallyMiss(t: Tally, id: string, why: unknown): void {
+  bump(t.misses, id)
+  if (why === 'none') bump(t.noneMisses, id)
+}
+
+function tallyFind(t: Tally, e: Record<string, unknown>): void {
+  t.finds.total++
+  if (Array.isArray(e.ids) ? e.ids.length === 0 : e.empty === true) t.finds.empty++
+}
+
+function tallyQuestion(t: Tally, step: string, defaulted: boolean): void {
+  const q = t.questions[step] ?? { asked: 0, defaulted: 0 }
+  t.questions[step] = q
+  q.asked++
+  if (defaulted) q.defaulted++
+}
+
+function tallyReport(t: Tally, e: Record<string, unknown>, chat: string): void {
+  t.reports++
+  if (typeof e.run === 'number') t.reported.add(`${chat}#${e.run}`)
+  for (const id of (e.overruled as string[] | undefined) ?? []) bump(t.overruled, id)
+}
+
+/** Counts one event into the tally; an event no counter reads is skipped. */
+function tallyEvent(t: Tally, e: Record<string, unknown>): void {
+  const chat = typeof e.chat === 'string' ? e.chat : ''
+  if (e.event === 'miss' && typeof e.id === 'string') tallyMiss(t, e.id, e.why)
+  if (e.event === 'find') tallyFind(t, e)
+  if (e.event === 'president-block') bump(t.pushback, chat)
+  if (e.step === 'start') t.runs.add(`${chat}#${e.run}`)
+  else if (typeof e.step === 'string' && e.step !== 'end' && 'answer' in e)
+    tallyQuestion(t, e.step, e.defaulted === true)
+  if (e.event === 'report') tallyReport(t, e, chat)
+}
+
 export function statsOf(dir: string, since?: Date) {
   const { events, corrupt } = readLog(dir, since)
-  const misses: Record<string, number> = {}
-  const noneMisses: Record<string, number> = {}
-  const overruled: Record<string, number> = {}
-  const questions: Record<string, { asked: number; defaulted: number }> = {}
-  const pushback: Record<string, number> = {}
-  const finds = { total: 0, empty: 0 }
-  const runs = new Set<string>()
-  const reported = new Set<string>()
-  let reports = 0
-  for (const e of events) {
-    const chat = typeof e.chat === 'string' ? e.chat : ''
-    if (e.event === 'miss' && typeof e.id === 'string') {
-      bump(misses, e.id)
-      if (e.why === 'none') bump(noneMisses, e.id)
-    }
-    if (e.event === 'find') {
-      finds.total++
-      if (Array.isArray(e.ids) ? e.ids.length === 0 : e.empty === true) finds.empty++
-    }
-    if (e.event === 'president-block') bump(pushback, chat)
-    if (e.step === 'start') runs.add(`${chat}#${e.run}`)
-    else if (typeof e.step === 'string' && e.step !== 'end' && 'answer' in e) {
-      const q = questions[e.step] ?? { asked: 0, defaulted: 0 }
-      questions[e.step] = q
-      q.asked++
-      if (e.defaulted === true) q.defaulted++
-    }
-    if (e.event === 'report') {
-      reports++
-      if (typeof e.run === 'number') reported.add(`${chat}#${e.run}`)
-      for (const id of (e.overruled as string[] | undefined) ?? []) bump(overruled, id)
-    }
+  const t: Tally = {
+    misses: {},
+    noneMisses: {},
+    overruled: {},
+    questions: {},
+    pushback: {},
+    finds: { total: 0, empty: 0 },
+    runs: new Set<string>(),
+    reported: new Set<string>(),
+    reports: 0,
   }
-  const done = [...runs].filter((k) => reported.has(k)).length
+  for (const e of events) tallyEvent(t, e)
+  const done = [...t.runs].filter((k) => t.reported.has(k)).length
   return {
-    misses,
-    noneMisses,
-    overruled,
-    reports,
+    misses: t.misses,
+    noneMisses: t.noneMisses,
+    overruled: t.overruled,
+    reports: t.reports,
     reportRate: {
-      runs: runs.size,
+      runs: t.runs.size,
       reported: done,
-      rate: runs.size ? Math.round((done / runs.size) * 1000) / 1000 : 0,
+      rate: t.runs.size ? Math.round((done / t.runs.size) * 1000) / 1000 : 0,
     },
-    questions,
-    pushback,
-    finds,
+    questions: t.questions,
+    pushback: t.pushback,
+    finds: t.finds,
     corrupt,
   }
 }

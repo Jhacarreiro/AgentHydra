@@ -11,7 +11,7 @@ import { answer, findTool, scope } from '../src/hydra-core/tree'
 import { scratch, startChat } from './hydra-core-fixture'
 
 let dir = ''
-const now = new Date('2026-10-13T10:00:00.000Z')
+const now = new Date('2019-10-22T10:00:00.000Z')
 
 type Ev = Record<string, unknown>
 const events = (): Ev[] => readLog(dir).events
@@ -168,19 +168,19 @@ test('A5-F9: a catalog skip is logged once per file, id and why until the file c
 })
 
 test('A5-F9: log.jsonl rotates into log-YYYY-MM.jsonl at a new month, and readLog takes a since-date', () => {
-  appendLog(dir, { event: 'old' }, new Date('2026-09-30T23:00:00Z'))
-  appendLog(dir, { event: 'new' }, new Date('2026-10-01T01:00:00Z'))
-  expect(existsSync(join(dir, 'log-2026-09.jsonl'))).toBe(true)
+  appendLog(dir, { event: 'old' }, new Date('2019-10-31T23:00:00Z'))
+  appendLog(dir, { event: 'new' }, new Date('2019-11-01T01:00:00Z'))
+  expect(existsSync(join(dir, 'log-2019-10.jsonl'))).toBe(true)
   expect(readFileSync(join(dir, 'log.jsonl'), 'utf8')).not.toContain('"old"')
   expect(readLog(dir).events.map((e) => e.event)).toEqual(['old', 'new'])
-  expect(readLog(dir, new Date('2026-10-01T00:00:00Z')).events.map((e) => e.event)).toEqual(['new'])
+  expect(readLog(dir, new Date('2019-11-01T00:00:00Z')).events.map((e) => e.event)).toEqual(['new'])
 })
 
 test('A5-F9: log.jsonl rotates past 20 MB within a month', () => {
-  const big = `${JSON.stringify({ at: '2026-10-02T00:00:00.000Z', event: 'pad', x: 'y'.repeat(1000) })}\n`
+  const big = `${JSON.stringify({ at: '2019-10-11T00:00:00.000Z', event: 'pad', x: 'y'.repeat(1000) })}\n`
   writeFileSync(join(dir, 'log.jsonl'), big.repeat(21 * 1024))
-  appendLog(dir, { event: 'after' }, new Date('2026-10-03T00:00:00Z'))
-  expect(existsSync(join(dir, 'log-2026-10.jsonl'))).toBe(true)
+  appendLog(dir, { event: 'after' }, new Date('2019-10-12T00:00:00Z'))
+  expect(existsSync(join(dir, 'log-2019-10.jsonl'))).toBe(true)
   expect(readFileSync(join(dir, 'log.jsonl'), 'utf8').trim().split('\n')).toHaveLength(1)
 })
 
@@ -234,9 +234,9 @@ test('A5-F12: hydra.md keeps the last 20 scope-log lines', () => {
 
 test('A5-F12: sent.json drops sessions not seen in 7 days and keeps the lead owed', () => {
   const file = chatPaths(dir, 'f12').sent
-  const t0 = new Date('2026-10-01T00:00:00Z')
+  const t0 = new Date('2019-10-10T00:00:00Z')
   writeSent(file, { old: ['person:iris-ui'], '(lead owed)': ['person:ops-lead'] }, 'old', t0)
-  const later = new Date('2026-10-09T00:00:00Z')
+  const later = new Date('2019-10-18T00:00:00Z')
   writeSent(file, { ...readSent(file), fresh: ['knowledge:brand-notes'] }, 'fresh', later)
   const sent = readSent(file)
   expect(Object.keys(sent).sort()).toEqual(['(lead owed)', 'fresh'])

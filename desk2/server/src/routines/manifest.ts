@@ -37,23 +37,21 @@ const text = (v: unknown, key: string): string => {
 /** The keys this contract knows; `tick` is refused with its replacement. */
 const KEYS = ['name', 'askedBy', 'schedule', 'status', 'windowsTask', 'run', 'prompt', 'cwd', 'timeoutMinutes', 'until', 'describe']
 
-/** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
-export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
-  if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
+/** The object a routine file holds, or the reason it does not hold one. */
+function objectOf(value: unknown): Record<string, unknown> {
   if (!value || typeof value !== 'object' || Array.isArray(value)) throw new Error('the file must hold one JSON object')
-  const o = value as Record<string, unknown>
-  if ('tick' in o) throw new Error('"tick" is gone: a routine that runs a command says "run" (an argv list)')
-  for (const key of Object.keys(o)) if (!KEYS.includes(key) && !allowed.includes(key)) throw new Error(`unknown key "${key}"`)
+  return value as Record<string, unknown>
+}
 
-  const name = text(o.name, 'name')
-  const askedBy = text(o.askedBy, 'askedBy')
-  if (askedBy.length > ASKED_MAX) throw new Error(`"askedBy" must be at most ${ASKED_MAX} characters`)
-
+/** The one of `schedule`, `status` or `windowsTask` the object holds: how the routine decides when it runs. */
+function whenOf(o: Record<string, unknown>): string {
   const whens = ['schedule', 'status', 'windowsTask'].filter((k) => o[k] !== undefined)
   if (whens.length !== 1) throw new Error('a routine has exactly one of "schedule", "status" or "windowsTask"')
-  const when = whens[0]
+  return whens[0]
+}
 
-  const def: RoutineDefinition = { id, name, askedBy, timeoutMinutes: TIMEOUT_DEFAULT }
+/** Sets the `when` field the object holds (a cron expression, a status command or a Windows task), checked. */
+function setWhen(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
   if (when === 'schedule') {
     if (typeof o.schedule !== 'string') throw new Error('"schedule" must be a cron expression in a string')
     parseCron(o.schedule)
@@ -66,38 +64,65 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
       throw new Error('"windowsTask" must be the full path of a Windows task, e.g. "\\Example nightly job"')
     def.windowsTask = o.windowsTask
   }
+}
 
+/** What a routine runs: a Windows task runs nothing of ours, the others run a command or an AI prompt, never both. */
+function setRunOrPrompt(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
   if (when === 'windowsTask') {
     if (o.run !== undefined || o.prompt !== undefined) throw new Error('a windowsTask routine has no "run" or "prompt": Windows runs it')
-  } else {
-    if ((o.run !== undefined) === (o.prompt !== undefined)) throw new Error('a schedule or status routine has exactly one of "run" (a command) or "prompt" (an AI run)')
-    if (o.run !== undefined) {
-      if (!isArgv(o.run)) throw new Error('"run" must be a command: a list of strings, the program first (run with no shell)')
-      def.run = o.run
-    } else def.prompt = text(o.prompt, 'prompt')
+    return
   }
+  if ((o.run !== undefined) === (o.prompt !== undefined)) throw new Error('a schedule or status routine has exactly one of "run" (a command) or "prompt" (an AI run)')
+  if (o.run !== undefined) {
+    if (!isArgv(o.run)) throw new Error('"run" must be a command: a list of strings, the program first (run with no shell)')
+    def.run = o.run
+  } else def.prompt = text(o.prompt, 'prompt')
+}
+
+function setTimeoutMinutes(def: RoutineDefinition, o: Record<string, unknown>): void {
+  if (o.timeoutMinutes === undefined) return
+  const minutes = o.timeoutMinutes
+  if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < TIMEOUT_MIN || minutes > TIMEOUT_MAX)
+    throw new Error(`"timeoutMinutes" must be a number from ${TIMEOUT_MIN} to ${TIMEOUT_MAX}`)
+  def.timeoutMinutes = minutes
+}
+
+function setUntil(def: RoutineDefinition, o: Record<string, unknown>): void {
+  if (o.until === undefined) return
+  if (typeof o.until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.until) || untilEndOf(o.until) === null)
+    throw new Error('"until" must be a day, YYYY-MM-DD')
+  def.until = o.until
+}
+
+function setDescribe(def: RoutineDefinition, o: Record<string, unknown>, when: string): void {
+  if (o.describe === undefined) return
+  if (typeof o.describe !== 'boolean') throw new Error('"describe" must be true or false')
+  if (when === 'windowsTask' && o.describe) throw new Error('a windowsTask routine is not described: Windows runs it, and its output never reaches the manager')
+  def.describe = o.describe
+}
+
+/** The definition in `value`, checked; `allowed` names extra keys that are not part of it (a proposal's `why`). Throws with the reason. */
+export function checkDefinition(id: string, value: unknown, allowed: readonly string[] = []): RoutineDefinition {
+  if (!ROUTINE_ID.test(id)) throw new Error('the id is the file name: 1 to 40 of a-z, 0-9 and -, starting with a letter or digit')
+  const o = objectOf(value)
+  if ('tick' in o) throw new Error('"tick" is gone: a routine that runs a command says "run" (an argv list)')
+  for (const key of Object.keys(o)) if (!KEYS.includes(key) && !allowed.includes(key)) throw new Error(`unknown key "${key}"`)
+
+  const name = text(o.name, 'name')
+  const askedBy = text(o.askedBy, 'askedBy')
+  if (askedBy.length > ASKED_MAX) throw new Error(`"askedBy" must be at most ${ASKED_MAX} characters`)
+
+  const when = whenOf(o)
+  const def: RoutineDefinition = { id, name, askedBy, timeoutMinutes: TIMEOUT_DEFAULT }
+  setWhen(def, o, when)
+  setRunOrPrompt(def, o, when)
 
   if (o.cwd !== undefined) def.cwd = text(o.cwd, 'cwd')
   if (def.prompt !== undefined && def.cwd === undefined) throw new Error('a prompt routine needs "cwd": the folder its chat works in')
 
-  if (o.timeoutMinutes !== undefined) {
-    const minutes = o.timeoutMinutes
-    if (typeof minutes !== 'number' || !Number.isFinite(minutes) || minutes < TIMEOUT_MIN || minutes > TIMEOUT_MAX)
-      throw new Error(`"timeoutMinutes" must be a number from ${TIMEOUT_MIN} to ${TIMEOUT_MAX}`)
-    def.timeoutMinutes = minutes
-  }
-
-  if (o.until !== undefined) {
-    if (typeof o.until !== 'string' || !/^\d{4}-\d{2}-\d{2}$/.test(o.until) || untilEndOf(o.until) === null)
-      throw new Error('"until" must be a day, YYYY-MM-DD')
-    def.until = o.until
-  }
-
-  if (o.describe !== undefined) {
-    if (typeof o.describe !== 'boolean') throw new Error('"describe" must be true or false')
-    if (when === 'windowsTask' && o.describe) throw new Error('a windowsTask routine is not described: Windows runs it, and its output never reaches the manager')
-    def.describe = o.describe
-  }
+  setTimeoutMinutes(def, o)
+  setUntil(def, o)
+  setDescribe(def, o, when)
   return def
 }
 

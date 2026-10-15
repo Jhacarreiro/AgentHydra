@@ -27,6 +27,10 @@ export const badgeVariants = cva(
         true: 'tabular-nums',
         false: '',
       },
+      tone: {
+        default: '',
+        muted: 'text-muted-foreground',
+      },
       dimmed: {
         true: 'opacity-60',
         false: '',
@@ -50,6 +54,7 @@ export const badgeVariants = cva(
       variant: "default",
       size: "default",
       tabular: false,
+      tone: "default",
       dimmed: false,
       interactive: false,
     },

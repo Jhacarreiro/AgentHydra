@@ -106,7 +106,7 @@ function onKey(e: KeyboardEvent) {
         <button
           type="button"
           data-fit="folder"
-          :class="[PILL, 'cursor-default gap-0.5 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent data-[state=open]:bg-fill-hover data-[state=open]:text-text']"
+          :class="[PILL, 'cursor-default gap-0.5 transition-colors duration-60 hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent data-[state=open]:bg-fill-hover data-[state=open]:text-text']"
           :aria-label="`Project ${label}, change project`"
         >
           <span class="truncate">{{ label }}</span>
@@ -132,7 +132,7 @@ function onKey(e: KeyboardEvent) {
           role="option"
           :aria-selected="r.current"
           :title="r.project.path"
-          :class="[MENU_ITEM, 'w-full justify-start text-left', active === i && 'bg-fill-hover']"
+          :class="[MENU_ITEM, 'w-full justify-start text-start', active === i &&'bg-fill-hover']"
           @mouseenter="active = i"
           @click="move(r.project.path)"
         >
@@ -146,7 +146,7 @@ function onKey(e: KeyboardEvent) {
       <div role="separator" :class="MENU_SEPARATOR" />
       <button
         type="button"
-        :class="[MENU_ITEM, 'w-full justify-start text-left', active === chooseRow && 'bg-fill-hover']"
+        :class="[MENU_ITEM, 'w-full justify-start text-start', active === chooseRow && 'bg-fill-hover']"
         @mouseenter="active = chooseRow"
         @click="chooseFolder"
       >

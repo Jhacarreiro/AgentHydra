@@ -5,7 +5,7 @@
 import { describe, expect, test } from 'bun:test'
 import { IDLE_AFTER_MS, IDLE_INTERVAL_MIN, readingDue, sweepIntervalMs } from '../src/usage-refresh'
 
-const now = Date.parse('2026-10-14T12:00:00Z')
+const now = Date.parse('2019-10-23T12:00:00Z')
 const min = (m: number) => m * 60_000
 
 describe('sweepIntervalMs', () => {

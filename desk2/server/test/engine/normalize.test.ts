@@ -114,7 +114,7 @@ describe('hand-built fixtures', () => {
       {
         type: 'assistant',
         uuid: 'u-plan',
-        timestamp: '2026-10-14T16:00:00.000Z',
+        timestamp: new Date(Date.now() - 24 * 3600_000).toISOString(),
         message: {
           id: 'msg_plan',
           role: 'assistant',

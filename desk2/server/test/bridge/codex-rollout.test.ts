@@ -15,26 +15,26 @@ afterAll(() => {
 })
 
 const THREAD = '0199a1b2-c3d4-7e5f-8a9b-0c1d2e3f4a5b'
-const count = (info: object | null) => JSON.stringify({ timestamp: '2026-10-14T10:00:00Z', type: 'event_msg', payload: { type: 'token_count', info } })
+const count = (info: object | null) => JSON.stringify({ timestamp: '2019-10-23T10:00:00Z', type: 'event_msg', payload: { type: 'token_count', info } })
 const usage = (total: number) => ({ input_tokens: total - 40, cached_input_tokens: total - 2000, output_tokens: 40, reasoning_output_tokens: 0, total_tokens: total })
 
 describe('a Codex chat rollout', () => {
   test('is found by its thread id under any home, archived too, and an id that could name a path is refused', async () => {
     const a = temp()
     const b = temp()
-    const day = join(b, 'sessions', '2026', '10', '14')
+    const day = join(b, 'sessions', '2019', '10', '23')
     mkdirSync(day, { recursive: true })
-    mkdirSync(join(a, 'sessions', '2026', '10', '13'), { recursive: true })
-    writeFileSync(join(day, `rollout-2026-10-14T09-00-00-${THREAD}.jsonl`), '')
-    writeFileSync(join(day, 'rollout-2026-10-14T09-30-00-0199a1b2-0000-7e5f-8a9b-0c1d2e3f4a5b.jsonl'), '')
-    expect(await findCodexRollout(THREAD, [a, b])).toBe(join(day, `rollout-2026-10-14T09-00-00-${THREAD}.jsonl`))
+    mkdirSync(join(a, 'sessions', '2019', '10', '22'), { recursive: true })
+    writeFileSync(join(day, `rollout-2019-10-23T09-00-00-${THREAD}.jsonl`), '')
+    writeFileSync(join(day, 'rollout-2019-10-23T09-30-00-0199a1b2-0000-7e5f-8a9b-0c1d2e3f4a5b.jsonl'), '')
+    expect(await findCodexRollout(THREAD, [a, b])).toBe(join(day, `rollout-2019-10-23T09-00-00-${THREAD}.jsonl`))
     expect(await findCodexRollout('0199a1b2-ffff-7e5f-8a9b-0c1d2e3f4a5b', [a, b])).toBeNull()
     expect(await findCodexRollout('../sessions', [a, b])).toBeNull()
     // An archived thread's file moves to archived_sessions/, flat.
     const archivedId = '0199a1b2-aaaa-7e5f-8a9b-0c1d2e3f4a5b'
     mkdirSync(join(a, 'archived_sessions'))
-    writeFileSync(join(a, 'archived_sessions', `rollout-2026-10-13T07-21-12-${archivedId}.jsonl`), '')
-    expect(await findCodexRollout(archivedId, [a, b])).toBe(join(a, 'archived_sessions', `rollout-2026-10-13T07-21-12-${archivedId}.jsonl`))
+    writeFileSync(join(a, 'archived_sessions', `rollout-2019-10-22T07-21-12-${archivedId}.jsonl`), '')
+    expect(await findCodexRollout(archivedId, [a, b])).toBe(join(a, 'archived_sessions', `rollout-2019-10-22T07-21-12-${archivedId}.jsonl`))
   })
 
   test("its context is the last turn's tokens and the model's window; an event with no info is skipped", () => {
@@ -49,8 +49,8 @@ describe('a Codex chat rollout', () => {
 
   test('its last turn is open from task_started until task_complete or turn_aborted; a tail of turn output with no mark is open', () => {
     const f = join(temp(), 'rollout.jsonl')
-    const mark = (type: string) => JSON.stringify({ timestamp: '2026-10-14T10:00:00Z', type: 'event_msg', payload: { type } })
-    const item = JSON.stringify({ timestamp: '2026-10-14T10:00:01Z', type: 'response_item', payload: { type: 'function_call_output', output: 'x' } })
+    const mark = (type: string) => JSON.stringify({ timestamp: '2019-10-23T10:00:00Z', type: 'event_msg', payload: { type } })
+    const item = JSON.stringify({ timestamp: '2019-10-23T10:00:01Z', type: 'response_item', payload: { type: 'function_call_output', output: 'x' } })
     const open = (...lines: string[]) => (writeFileSync(f, lines.join('\n') + '\n'), codexTurnOpen(f))
     expect(open(mark('task_started'), item, count(null), item)).toBe(true)
     expect(open(mark('task_started'), item, mark('task_complete'))).toBe(false)

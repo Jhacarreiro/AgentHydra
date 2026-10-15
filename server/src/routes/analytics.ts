@@ -6,11 +6,11 @@ import {
   dropAnalytics,
   recentEdits,
   refreshAnalytics,
-  sinkReport,
   spendReport,
   tokensByDay,
   warmAnalyticsInBackground,
 } from '../analytics'
+import { sinkReport } from '../analytics-sink-report'
 import { mineCommandCorrections } from '../command-corrections'
 import { app } from '../http-app'
 import { boundedQueryInt } from '../route-helpers'
