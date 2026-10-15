@@ -18,7 +18,13 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
-import { CHAT_NOTE, cliArgv, writeWorkerMcp, writeWorkerSettings } from '../src/climayte-launch'
+import {
+  CHAT_NOTE,
+  cliArgv,
+  workerEnv,
+  writeWorkerMcp,
+  writeWorkerSettings,
+} from '../src/climayte-launch'
 import { type CliMayteAccount, DRONE_BRIEF, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
@@ -67,6 +73,20 @@ const valueAfter = (argv: string[], flag: string): string | undefined =>
   argv[argv.indexOf(flag) + 1]
 
 describe('chat workers', () => {
+  test('every worker launches with its role, so the Hydra Core hook can skip seats and drones', () => {
+    const chat = dispatch({ title: 'a chat', chat: true })
+    const prime = workerEnv(chat, 'C:/Users/me/.claude')
+    expect(prime.AGENTHYDRA_ROLE).toBe('prime')
+    expect(prime.AGENTHYDRA_CLIMAYTE_CHAT).toBe('1')
+    expect(
+      workerEnv({ ...chat, role: 'seat', persona: 'person:example' }, 'C:/Users/me/.claude')
+        .AGENTHYDRA_ROLE,
+    ).toBe('seat')
+    expect(workerEnv(dispatch({ title: 'a drone' }), 'C:/Users/me/.claude').AGENTHYDRA_ROLE).toBe(
+      'drone',
+    )
+  })
+
   test('a chat gets no worker brief, the owner instructions and skills, and Opus xhigh', () => {
     const w = dispatch({ title: 'a chat', chat: true })
     expect(w).toMatchObject({ chat: true, effort: 'xhigh' })

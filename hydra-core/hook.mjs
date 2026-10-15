@@ -32,6 +32,54 @@ export function isWorker(env = process.env) {
   return Boolean(env.AGENTHYDRA_CLIMAYTE_WORKER) && !env.AGENTHYDRA_CLIMAYTE_CHAT;
 }
 
+function seatChatOf(dir, deskChat) {
+  try {
+    return JSON.parse(readFileSync(path.join(dir, "seat-chats.json"), "utf8"))[deskChat] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+/** Why this session gets nothing from Hydra Core (ROLES.md: seats keep their own persona, drones get no pack or
+ *  persona), or null for a Prime or the owner's own chat. A CliMayte launch names the role in AGENTHYDRA_ROLE; a Desk
+ *  chat core_use opened as a seat is listed in seat-chats.json. */
+export function skipOf(env = process.env, dir = coreDir(env)) {
+  const role = (env.AGENTHYDRA_ROLE ?? "").trim();
+  if (role === "seat") return { role, why: "a seat keeps its own persona: no pack, lead or lead change (AGENTHYDRA_ROLE=seat)" };
+  if (role === "drone") return { role, why: "a drone gets no pack or persona (AGENTHYDRA_ROLE=drone)" };
+  const deskChat = (env.HYDRA_DESK_CHAT_ID ?? "").trim();
+  const seat = deskChat ? seatChatOf(dir, deskChat) : null;
+  if (seat) {
+    return { role: "seat", why: `Desk chat is a seat of ${seat.persona} (seat-chats.json): it keeps its own persona` };
+  }
+  if (role !== "prime" && isWorker(env)) {
+    return {
+      role: "drone",
+      why: "started from a CliMayte worker's shell (AGENTHYDRA_CLIMAYTE_WORKER set, AGENTHYDRA_CLIMAYTE_CHAT unset): treated as a drone",
+    };
+  }
+  return null;
+}
+
+function logSkip(input, env, dir, skip) {
+  try {
+    let chat = null;
+    try {
+      chat = chatKey(input, env);
+    } catch {}
+    const line = {
+      at: new Date().toISOString(),
+      event: "hook-skip",
+      chat,
+      hook: input.hook_event_name,
+      role: skip.role,
+      worker: env.AGENTHYDRA_CLIMAYTE_WORKER || null,
+      why: skip.why,
+    };
+    appendFileSync(path.join(dir, "log.jsonl"), `${JSON.stringify(line)}\n`);
+  } catch {}
+}
+
 export function chatKey(input, env = process.env) {
   const raw = (env.HYDRA_DESK_CHAT_ID ?? "").trim() || String(input.session_id ?? "").trim();
   if (!raw) throw new Error("no chat key: HYDRA_DESK_CHAT_ID is unset and the hook input has no session_id");
@@ -371,9 +419,13 @@ function stopCheck(input, env, dir) {
 export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
-  if (isWorker(env)) return null;
   const dir = coreDir(env);
   if (!existsSync(path.join(dir, "ON"))) return null;
+  const skip = skipOf(env, dir);
+  if (skip) {
+    if (event !== "Stop") logSkip(input, env, dir, skip);
+    return null;
+  }
   if (event === "Stop") {
     logPackRead(input, env, dir);
     return stopCheck(input, env, dir);

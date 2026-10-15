@@ -887,6 +887,27 @@ export function cliArgv(
 /** The prompt cache an attempt runs with: 1 hour for a manager and a chat, else 5 minutes. */
 const cacheTtl = (w: CliMayteWorker): '1h' | '5m' => (w.kind === 'manage' || w.chat ? '1h' : '5m')
 
+/** The environment an attempt's CLI runs with. AGENTHYDRA_ROLE tells the Hydra Core hook (hydra-core/hook.mjs)
+ *  which role it is: only a Prime gets the per-message pack and lead changes (ROLES.md). */
+export function workerEnv(w: CliMayteWorker, configDir: string): Record<string, string> {
+  return {
+    ...scrubbedEnv(configDir, w.id),
+    // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
+    // A sub-manager chat runs pinned to its manager.
+    ...(w.chat
+      ? {
+          AGENTHYDRA_CLIMAYTE_CHAT: '1',
+          ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
+          ...(w.desk?.chatId ? { HYDRA_DESK_CHAT_ID: w.desk.chatId } : {}),
+        }
+      : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+    AGENTHYDRA_ROLE: roleOf(w),
+    CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    TERM: 'dumb',
+  }
+}
+
 /** Start the CLI under a runner (climayte-runner.ts), launched outside the daemon: a daemon restart
  *  leaves the CLI running and the next daemon reads it on from its files (owner, 2026-09-30).
  *  Files, never pipes, so nothing ties the CLI to this process. The runner's record, or null after
@@ -933,21 +954,7 @@ function startRunner(
         // A chat keeps the claude.ai connectors (his own `claude` has them: a chat asked to answer
         // a company sends the mail) and the 1-hour cache, since a person's next message is often
         // more than 5 minutes away.
-        env: {
-          ...scrubbedEnv(acct.configDir, w.id),
-          // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
-          // A sub-manager chat runs pinned to its manager.
-          ...(w.chat
-            ? {
-                AGENTHYDRA_CLIMAYTE_CHAT: '1',
-                ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
-                ...(w.desk?.chatId ? { HYDRA_DESK_CHAT_ID: w.desk.chatId } : {}),
-              }
-            : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
-          CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
-          CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-          TERM: 'dumb',
-        },
+        env: workerEnv(w, acct.configDir),
         stdin: promptFile,
         stdout: log,
         stderr: errLog,

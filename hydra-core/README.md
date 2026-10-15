@@ -13,7 +13,7 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 
 ## Files
 
-- `hook.mjs`: the hook. Reads the hook JSON on stdin. Exports `run`, `handle`, `chatKey`, `parseHydraMd`, `coreDir`, `isWorker`.
+- `hook.mjs`: the hook. Reads the hook JSON on stdin. Exports `run`, `handle`, `chatKey`, `parseHydraMd`, `coreDir`, `isWorker`, `skipOf`. Seats (`AGENTHYDRA_ROLE=seat` or a Desk chat in `seat-chats.json`), drones and worker shells get nothing; each skip writes one `hook-skip` line to `log.jsonl` with its reason.
 - `install.mjs`: registers the hook in a `settings.json`. Idempotent. Writes a `.bak-<ms>` backup before any change.
 - `test/*.test.mjs`: `node:test` suites. Run `node --test hydra-core/test/`.
 

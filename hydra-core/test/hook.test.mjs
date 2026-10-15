@@ -7,7 +7,7 @@ import { test } from "node:test";
 import { chatKey, handle, parseHydraMd, run } from "../hook.mjs";
 
 const HOOK = path.resolve(import.meta.dirname, "..", "hook.mjs");
-const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT"];
+const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT", "AGENTHYDRA_ROLE"];
 
 async function withCore(fn) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-hook-"));
@@ -61,6 +61,71 @@ test("a CliMayte chat (worker with a chat id) is not skipped", () => withCore(as
   const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1", AGENTHYDRA_CLIMAYTE_CHAT: "c-1" });
   assert.equal(await run(turn("move notes"), env), null);
   assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), true);
+}));
+
+const skips = (dir) =>
+  existsSync(path.join(dir, "log.jsonl"))
+    ? readFileSync(path.join(dir, "log.jsonl"), "utf8").trim().split(/\r?\n/).map((line) => JSON.parse(line)).filter((e) => e.event === "hook-skip")
+    : [];
+
+test("a seat launched by CliMayte gets no pack and no lead change, and the skip is logged", () => withCore(async (dir) => {
+  turnOn(dir);
+  const env = envFor(dir, {
+    AGENTHYDRA_CLIMAYTE_WORKER: "w-seat",
+    AGENTHYDRA_CLIMAYTE_CHAT: "1",
+    AGENTHYDRA_ROLE: "seat",
+    HYDRA_DESK_CHAT_ID: "desk-seat-1",
+  });
+  assert.equal(await run(turn("what do you think of the plan?"), env), null);
+  assert.equal(await run({ hook_event_name: "SessionStart", session_id: "sess-1", cwd: "C:/Users/me/project" }, env), null);
+  assert.equal(existsSync(path.join(dir, "chats")), false);
+  const logged = skips(dir);
+  assert.equal(logged.length, 2);
+  assert.equal(logged[0].chat, "desk-seat-1");
+  assert.equal(logged[0].role, "seat");
+  assert.equal(logged[0].hook, "UserPromptSubmit");
+  assert.match(logged[0].why, /seat/);
+}));
+
+test("a Desk chat listed in seat-chats.json is a seat: no pack, no lead change, skip logged", () => withCore(async (dir) => {
+  turnOn(dir);
+  writeFileSync(path.join(dir, "seat-chats.json"), JSON.stringify({ "desk-seat-2": { persona: "person:example", parent: "desk-prime" } }));
+  const env = envFor(dir, { HYDRA_DESK_CHAT_ID: "desk-seat-2" });
+  assert.equal(await run(turn("what do you think of the plan?"), env), null);
+  assert.equal(existsSync(path.join(dir, "chats")), false);
+  const [skip] = skips(dir);
+  assert.equal(skip.chat, "desk-seat-2");
+  assert.equal(skip.role, "seat");
+  assert.match(skip.why, /person:example/);
+}));
+
+test("a drone gets nothing from the hook, and the skip is logged", () => withCore(async (dir) => {
+  turnOn(dir);
+  const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "w-drone", AGENTHYDRA_ROLE: "drone" });
+  assert.equal(await run(turn("fix the test"), env), null);
+  assert.equal(existsSync(path.join(dir, "chats")), false);
+  const [skip] = skips(dir);
+  assert.equal(skip.role, "drone");
+  assert.equal(skip.worker, "w-drone");
+}));
+
+test("a chat started from a worker shell is skipped with a logged reason", () => withCore(async (dir) => {
+  turnOn(dir);
+  const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "w-shell", HYDRA_DESK_CHAT_ID: "desk-from-worker" });
+  assert.equal(await run(turn("keep going"), env), null);
+  assert.equal(existsSync(path.join(dir, "chats")), false);
+  const [skip] = skips(dir);
+  assert.equal(skip.chat, "desk-from-worker");
+  assert.equal(skip.worker, "w-shell");
+  assert.match(skip.why, /AGENTHYDRA_CLIMAYTE_WORKER/);
+}));
+
+test("a Prime CliMayte chat (role prime) is not skipped and logs no skip", () => withCore(async (dir) => {
+  turnOn(dir);
+  const env = envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "w-prime", AGENTHYDRA_CLIMAYTE_CHAT: "1", AGENTHYDRA_ROLE: "prime" });
+  await run(turn("move notes"), env);
+  assert.equal(existsSync(path.join(dir, "chats", "sess-1", "prompt.txt")), true);
+  assert.deepEqual(skips(dir), []);
 }));
 
 test("slash commands and a missing ON flag produce no output and write nothing", () => withCore(async (dir) => {
