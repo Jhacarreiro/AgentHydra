@@ -631,8 +631,9 @@ test("the slot lists the chat's seats so a handoff knows whom it consulted", asy
     new Date(T),
   )
   expect(slot.text).toContain(
-    'Seats in this chat: Ivy (person:ivy-ui); resume one with core_use { chat: "seated", id: "<person id>", mode: "consult" }.',
+    'Seats and consults in this chat; resume one with core_use { chat: "seated", id: "<person id>", mode: "consult" }',
   )
+  expect(slot.text).toContain('- Ivy (person:ivy-ui): seat chat desk-chat-1')
 })
 
 describe('the model call never blocks an event loop (B2 review 1)', () => {
