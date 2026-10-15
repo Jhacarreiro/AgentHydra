@@ -255,11 +255,13 @@ app.get('/api/usage/cache', (c) => {
   }
   // A desktop row and its linked CLI login are one account: the newer reading of the two is the desktop row's
   // (usage-live.ts withLinkedReading), so long as the login is still signed in to that desktop's account.
+  // Both must be known: a signed-out login (or an unreadable profile) has no uuid, and its cached reading
+  // may be of the account it held before.
   for (const cli of listCliInstances()) {
     if (!cli.associatedDesktopDir) continue
     const own = readLoginUuid(cli.associatedDesktopDir)
     const theirs = cliAccountUuid(cli.configDir, cli.loggedIn)
-    if (own && theirs && own !== theirs) continue
+    if (!own || !theirs || own !== theirs) continue
     const key = desktopKey(cli.associatedDesktopDir)
     const linked = withLinkedReading(cache[key] ?? null, cache[cliKey(cli.id)] ?? null)
     if (linked) cache[key] = linked
