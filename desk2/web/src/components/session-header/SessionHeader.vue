@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ChevronDown, ChevronUp, Coins, MessagesSquare, Monitor, Search, ShieldAlert, Sparkles, UserRound, X } from '@lucide/vue'
 import type { SearchResult } from '@shared/find'
 import type { ExternalSession, TranscriptItem } from '@shared/protocol'
@@ -88,8 +88,8 @@ const cloud = useCloud()
 // AgentHydra's row for the session, then its usage and credential scan; any of them may not answer
 // (a CliMayte worker's session is not in its index), and the header says what it knows.
 const row = ref<AhSessionRow | null>(null)
-const usage = ref<AhUsage | null>(null)
-const secrets = ref<AhSecrets | null>(null)
+const usage = shallowRef<AhUsage | null>(null)
+const secrets = shallowRef<AhSecrets | null>(null)
 const instances = computed(() => ahInstances.value ?? [])
 
 async function loadUsage(r: AhSessionRow) {
@@ -301,7 +301,7 @@ const searched = ref('')
 let searchTimer: ReturnType<typeof setTimeout> | null = null
 // The server's answer (the whole transcript) is used while the display filters hide nothing; else, or while it is
 // out, the loaded items are scanned.
-const served = ref<{ query: string; result: SearchResult } | null>(null)
+const served = shallowRef<{ query: string; result: SearchResult } | null>(null)
 const serverUsable = computed(() => !!props.search && props.shown.length === props.items.length)
 const hits = computed<FindHit[]>(() => {
   if (!findOpen.value) return []

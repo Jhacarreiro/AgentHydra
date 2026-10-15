@@ -5,7 +5,8 @@ import { statSync } from 'node:fs'
 import { isAbsolute, resolve } from 'node:path'
 import { titleFromPrompt } from '../../desk2/server/src/engine/describe'
 import { ANSWER_NOW, buildHandoff, PINNED } from '../../desk2/server/src/engine/handoff'
-import type { ServerEvent } from '../../desk2/shared/protocol'
+import type { Effort, PermissionMode, ServerEvent } from '../../desk2/shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '../../desk2/shared/protocol'
 import type { Store } from './store'
 import type {
   Account,
@@ -52,6 +53,22 @@ const THROTTLE_RETRY_MS = 15_000
 const THROTTLE_WAIT_MS = 4 * 60_000
 const SELF = `http://127.0.0.1:${process.env.CORE_PORT ?? 7789}/api`
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+const MODES: readonly PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
+const PATCH_KEYS = [
+  'title',
+  'group',
+  'service',
+  'model',
+  'effort',
+  'permissionMode',
+  'accountId',
+  'accountPinned',
+  'unread',
+  'pinned',
+  'archived',
+]
+const MARKS = ['unread', 'pinned', 'archived'] as const
 
 /** A message waiting for its turn. `item` is what the transcript shows (queued until it goes). */
 interface Queued {
@@ -69,6 +86,8 @@ interface Entry {
   queue: Queued[]
   running?: Running
   interrupted: boolean
+  /** The owner put the chat on another account: its next Claude turn starts a new session there that reads the chat. */
+  carry?: boolean
 }
 
 export interface ChatDeps {
@@ -112,19 +131,33 @@ export class Chats {
     return this.d.store.items(id)
   }
 
-  create(body: Json): ChatSummary {
+  /** A new chat with the window's choices (model, effort, mode, account and its Auto switch); its prompt, when there is
+   *  one, is its first message (Desk's CreateChatRequest). */
+  async create(body: Json): Promise<ChatSummary> {
     const cwd = checkCwd(body.cwd)
     const title = body.title === undefined ? '' : str(body.title, 'title').trim()
-    const chat = fresh({ title: title || NEW_TITLE, cwd })
-    this.add({ chat, queue: [], interrupted: false })
-    return chat
+    const prompt = body.prompt === undefined ? '' : str(body.prompt, 'prompt')
+    const e: Entry = {
+      chat: fresh({ title: title || NEW_TITLE, cwd }),
+      queue: [],
+      interrupted: false,
+    }
+    const apply = await this.setting(e, body)
+    apply()
+    this.add(e)
+    if (prompt.trim() || images(body.images).length)
+      this.send(e.chat.id, { text: prompt, images: body.images })
+    return e.chat
   }
 
-  patch(id: string, body: Json): ChatSummary {
+  async patch(id: string, body: Json): Promise<ChatSummary> {
     const e = this.entry(id)
     for (const key of Object.keys(body)) {
-      if (!['title', 'group', 'service'].includes(key))
-        throw new ChatError(400, `${key} cannot be changed`)
+      if (!PATCH_KEYS.includes(key)) throw new ChatError(400, `${key} cannot be changed`)
+    }
+    for (const k of MARKS) {
+      if (k in body && typeof body[k] !== 'boolean')
+        throw new ChatError(400, `${k} must be true or false`)
     }
     const title = 'title' in body ? str(body.title, 'title').trim() : undefined
     if (title === '') throw new ChatError(400, 'title cannot be empty')
@@ -139,11 +172,68 @@ export class Chats {
     ) {
       throw new ChatError(400, 'service must be codex, chatgpt or null')
     }
+    const apply = await this.setting(e, body)
+    if (!this.alive(e)) throw new ChatError(404, `no chat ${id}`)
+    const was = e.chat.account.id
+    apply()
+    if (e.chat.account.id !== was) {
+      this.line(
+        e,
+        'info',
+        e.carry
+          ? `This chat now runs on ${e.chat.account.label}. Its next reply starts a new session there that reads this chat first.`
+          : `This chat now runs on ${e.chat.account.label}.`,
+      )
+    }
     if (title !== undefined) e.chat.title = title
     if ('group' in body) e.chat.group = group
+    for (const k of MARKS) if (k in body) e.chat[k] = body[k] as boolean
     if ('service' in body) this.pin(e, (body.service as 'codex' | 'chatgpt' | null) ?? null)
     this.save(e)
     return e.chat
+  }
+
+  /**
+   * The chat's own setting from a create or patch body, checked in full before anything changes; the answer applies it.
+   * A model or effort it does not name runs DEFAULT_MODEL and DEFAULT_EFFORT. `accountId` names a signed-in Claude login
+   * (the owner's pin, never moved by the picker while it has room) or 'auto'; `accountPinned` is the Auto switch off: the
+   * chat then waits for its own account's reset instead of moving on.
+   */
+  private async setting(e: Entry, body: Json): Promise<() => void> {
+    let model: string | null | undefined
+    if ('model' in body) {
+      const m = body.model === null ? '' : str(body.model, 'model').trim()
+      model = m === '' || m === 'default' ? null : m
+    }
+    if ('effort' in body && body.effort !== null && !EFFORTS.includes(body.effort as Effort))
+      throw new ChatError(400, `effort must be one of ${EFFORTS.join(', ')}, or null`)
+    if ('permissionMode' in body && !MODES.includes(body.permissionMode as PermissionMode))
+      throw new ChatError(400, `permissionMode must be one of ${MODES.join(', ')}`)
+    if ('accountPinned' in body && typeof body.accountPinned !== 'boolean')
+      throw new ChatError(400, 'accountPinned must be true or false')
+    const accountId = 'accountId' in body ? str(body.accountId, 'accountId').trim() : undefined
+    const named =
+      accountId && accountId !== 'auto' ? await this.d.accounts.find('claude', accountId) : null
+    if (accountId && accountId !== 'auto' && !named)
+      throw new ChatError(400, `No signed-in Claude account ${accountId}.`)
+    return () => {
+      const c = e.chat
+      if (model !== undefined) c.model = model
+      if ('effort' in body) c.effort = body.effort as Effort | null
+      if ('permissionMode' in body) c.permissionMode = body.permissionMode as PermissionMode
+      if (body.accountPinned === true) c.accountPinned = true
+      else if (body.accountPinned === false) delete c.accountPinned
+      if (accountId === 'auto' || accountId === '') c.accountAuto = true
+      if (named && (named.id !== c.account.id || c.accountAuto)) {
+        // A session lives on its login: on another one the next turn starts a new session that reads the chat first.
+        if (c.sessionId && named.id !== c.account.id) {
+          c.sessionId = null
+          e.carry = true
+        }
+        c.account = { id: named.id, label: named.label, configDir: named.home }
+        c.accountAuto = false
+      }
+    }
   }
 
   async remove(id: string): Promise<void> {
@@ -340,16 +430,22 @@ export class Chats {
     const service = running.service
     const backend = this.backend.get(service)
     if (!backend) return { ok: false, error: `No ${LABEL[service]} backend in this core` }
-    let lead = this.leadFor(e, service, sentId)
+    const carried = service === 'claude' && e.carry === true
+    e.carry = undefined
+    let lead = carried
+      ? this.handoff(e, 0, sentId, { why: 'the owner moved it to another account' })
+      : this.leadFor(e, service, sentId)
     e.chat.serviceRanOn = service === 'claude' ? undefined : service
     let thread = this.boundThread(e, service)
     const avoid = new Set<string>()
     /** Logins that throttled this message: tried again once the rest are spent, for up to THROTTLE_WAIT_MS. */
     const throttled = new Set<string>()
     for (;;) {
-      const picked = await this.accountFor(service, thread, avoid)
+      const picked = await this.accountFor(e, service, thread, avoid)
       if (!this.alive(e)) return { ok: false }
       if ('why' in picked) {
+        if (picked.until !== undefined)
+          return { ok: false, error: picked.why, limitedUntil: picked.until }
         if (!throttled.size || Date.now() - started > THROTTLE_WAIT_MS)
           return { ok: false, error: picked.why }
         // Every login with room is throttling: a 429 passes, so the message waits and tries them again (2026-10-14,
@@ -360,6 +456,11 @@ export class Chats {
         continue
       }
       if (e.interrupted) return { ok: false }
+      if (thread && picked.id !== thread.accountId) {
+        // The thread's login cannot take it now (signed out, or held by a limit): a new thread here reads the chat first.
+        thread = undefined
+        lead = this.handoff(e, 0, sentId, { why: 'the account it ran on is not available' })
+      }
       this.bindAccount(e, service, picked)
       // The turn before this one may still hold the thread: its backend lets go only after it has ended (Codex's
       // unsubscribe), so a queued message waits for that here instead of resuming the thread under it.
@@ -374,7 +475,8 @@ export class Chats {
         images: imgs,
         thread,
         permissionMode: e.chat.permissionMode,
-        model: e.chat.model,
+        model: service === 'claude' ? (e.chat.model ?? DEFAULT_MODEL) : e.chat.model,
+        effort: service === 'claude' ? (e.chat.effort ?? DEFAULT_EFFORT) : e.chat.effort,
       }
       const turn = backend.start(task, picked, this.sink(e, service))
       running.turn = turn
@@ -383,7 +485,11 @@ export class Chats {
       const end = await turn.done
       if (!this.alive(e) || e.interrupted || (end.limitedUntil === undefined && !end.throttled))
         return end
-      if (end.throttled && thread && Date.now() - started < THROTTLE_WAIT_MS) {
+      if (
+        end.throttled &&
+        (thread || e.chat.accountPinned) &&
+        Date.now() - started < THROTTLE_WAIT_MS
+      ) {
         // A thread lives on its login: a throttle there is waited out on the same thread, not moved.
         console.warn(
           `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} throttled; waiting`,
@@ -393,6 +499,8 @@ export class Chats {
       }
       if (end.limitedUntil !== undefined) this.d.accounts.hold(picked.id, end.limitedUntil)
       else throttled.add(picked.id)
+      // Auto off: the chat waits for its own account's reset rather than move on.
+      if (end.limitedUntil !== undefined && e.chat.accountPinned) return end
       avoid.add(picked.id)
       console.warn(
         `[core:chat] ${e.chat.id.slice(0, 8)} ${service} ${picked.id.slice(0, 8)} ${end.limitedUntil === undefined ? 'throttled' : `held until ${new Date(end.limitedUntil).toISOString()}`}: ${end.error ?? ''}`,
@@ -425,8 +533,10 @@ export class Chats {
     const ok = end.ok
     const error = ok ? undefined : interrupted ? 'Interrupted' : (end.error ?? 'The turn failed')
     const stopped = ok || interrupted
-    e.chat.status = stopped ? 'idle' : 'error'
+    const limited = !stopped && end.limitedUntil !== undefined
+    e.chat.status = stopped ? 'idle' : limited ? 'limited' : 'error'
     e.chat.lastError = stopped ? null : (error ?? null)
+    e.chat.limitResetsAt = limited ? (end.limitedUntil ?? null) : null
     e.chat.activity = null
     e.chat.turnStartedAt = null
     const now = Date.now()
@@ -473,18 +583,33 @@ export class Chats {
     return e.chat.serviceThreads?.[service]
   }
 
-  /** The account a thread is bound to when the chat has one there, else the picker's choice. */
+  /** The chat's own account (its thread's, else the Claude login the owner named) while it can take the turn, else the
+   *  picker's choice. With Auto off the chat never leaves its own: `until` says when that account's limit resets. */
   private async accountFor(
+    e: Entry,
     service: Service,
     thread: ServiceThread | undefined,
     avoid: ReadonlySet<string>,
-  ): Promise<Account | { why: string }> {
-    if (thread) {
-      const bound = await this.d.accounts.find(service, thread.accountId)
-      if (bound) return bound
-      console.warn(
-        `[core:chat] ${service} thread's account ${thread.accountId.slice(0, 8)} is not listed`,
-      )
+  ): Promise<Account | { why: string; until?: number }> {
+    const own =
+      thread?.accountId ??
+      (service === 'claude' && !e.chat.accountAuto ? e.chat.account.id : undefined)
+    if (own && !avoid.has(own)) {
+      const a = await this.d.accounts.find(service, own)
+      const until = this.d.accounts.heldUntil(own)
+      if (a && until <= Date.now()) return a
+      if (e.chat.accountPinned) {
+        const name = a?.label ?? e.chat.account.label
+        return a
+          ? {
+              why: `${name} is out of room until ${timeOf(until)}. Auto is off, so this chat waits for it.`,
+              until,
+            }
+          : {
+              why: `${name} is not signed in. Auto is off, so this chat stays on it: sign it in, or turn Auto on.`,
+            }
+      }
+      if (!a) console.warn(`[core:chat] ${service} account ${own.slice(0, 8)} is not listed`)
     }
     return this.d.accounts.pick(service, avoid)
   }
@@ -594,6 +719,11 @@ function images(v: unknown): Image[] {
       ...(typeof i.name === 'string' ? { name: i.name } : {}),
     }
   })
+}
+
+/** '4:05 PM': when a held account's limit resets, as the chat says it. */
+function timeOf(ms: number): string {
+  return new Date(ms).toLocaleTimeString('en-US', { hour: 'numeric', minute: '2-digit' })
 }
 
 function message(err: unknown): string {

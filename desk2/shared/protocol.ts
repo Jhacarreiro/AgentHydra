@@ -20,6 +20,11 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermiss
 export type CollapseMode = 'off' | 'button' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+/** What a Claude turn runs on when the chat names no model or effort (owner, 2026-10-15: "it should default to Opus
+ *  5.5"). Xhigh is how Desk chats ran as CliMayte workers before the new core. The window names these for a null. */
+export const DEFAULT_MODEL = 'claude-opus-5-5'
+export const DEFAULT_EFFORT: Effort = 'xhigh'
+
 /** Which Claude login a chat runs under. configDir null = the machine's default ~/.claude login. */
 export interface AccountRef {
   id: string // 'default' or the AgentHydra CLI instance id
@@ -73,7 +78,10 @@ export interface ChatSummary {
   account: AccountRef
   /** The account was placed by 'auto' (not named): a usage limit moves the chat to another account. */
   accountAuto: boolean
-  model: string | null // null = the account's default model
+  /** Auto off (the account menu's Auto switch): when its account runs out, the chat waits for the reset there instead
+   *  of moving to the next account with room. Absent = it moves. */
+  accountPinned?: boolean
+  model: string | null // none named runs DEFAULT_MODEL
   effort: Effort | null
   permissionMode: PermissionMode
   delegateToCliMayte: boolean // sub-agents go to CliMayte (Agent/Task tools disallowed)
@@ -370,6 +378,9 @@ export interface ExternalSession {
   accountId: string | null
   /** A Codex chat's: the Codex account (AgentHydra's instance id) whose folder holds it, where it continues in place. */
   codexAccountId?: string
+  /** A Claude Desktop chat's: the CLI instance on the account signed in to the app that runs it (resume.ts desktopAccount).
+   *  Left out when none is known. */
+  desktopAccountId?: string
   /** Idle in someone else's window, and a Claude Code session or a Codex chat whose account is known: the composer can carry it on. */
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
@@ -418,6 +429,17 @@ export interface DesktopMessageResult {
 export interface DesktopStopResult {
   ok: boolean
   reason?: string
+}
+
+/** POST /api/external/sessions/:id/setting: the model and effort of a chat Claude Desktop runs, set in that app as its
+ *  own pickers set them (owner, 2026-10-15: "I want to ... change it inside Agent Hydra"). 200 { ok: true } once the
+ *  app shows them; otherwise a non-2xx answer with { error } saying what the app kept. */
+export interface DesktopSettingRequest {
+  model?: string
+  effort?: Effort
+}
+export interface DesktopSettingResult {
+  ok: boolean
 }
 
 /**
@@ -520,6 +542,7 @@ export interface CliMayteWorker {
   sessionId: string | null // the worker's current Claude Code session, for its live transcript
   originSessionId: string | null // the session id of the chat that dispatched it, when known
   originWorkerId?: string | null // the worker that dispatched it, when a worker did
+  chat?: boolean // the worker a Desk chat runs as (its own chat's, or another's): never another chat's dispatch
   originTitle?: string | null // the title of the chat that dispatched it, as its own PC knows it (another PC's only)
   sessions?: string[] // every session the worker has had (a handoff gives it a new sessionId and keeps the old ones here)
   folder?: string | null // another PC's only: the last name of the folder it runs in, never the path (its `cwd` stays null)
@@ -628,6 +651,12 @@ export interface AccountInfo extends AccountRef {
   /** The owner's caps (1-84): this account's line in place of the fleet's 85%. Absent or null: the fleet's. */
   maxFiveHourPct?: number | null
   maxWeeklyPct?: number | null
+  /** The name on the account (its profile name, e.g. 'kai'); null when AgentHydra has read none. The one name an
+   *  account goes by on screen, never a folder's (owner, 2026-10-15: "the account folder name is useless"). */
+  name?: string | null
+  /** The Claude Desktop instance this login is linked to (that instance's folder label, never shown); absent or null
+   *  when it has none. */
+  desktop?: string | null
 }
 
 // Git (the bar above the composer, and the diff pane)
@@ -709,6 +738,7 @@ export interface CreateChatRequest {
   images?: ImageRef[]
   title?: string
   accountId?: string // 'auto' (default) or an AccountRef id
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   model?: string | null
   effort?: Effort | null
   permissionMode?: PermissionMode
@@ -756,6 +786,7 @@ export interface ChatPatch {
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
   accountId?: string // takes effect at the next runtime start
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
   note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note

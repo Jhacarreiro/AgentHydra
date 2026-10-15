@@ -40,19 +40,23 @@ export function managerName(slug: string): string | null {
   return text(personaOf(slug)?.name)
 }
 
-/** The newest avatar.png, .jpg, .webp or .gif in the manager's folder; photo is its mtime in whole ms. */
-export function managerAvatar(slug: string): ManagerAvatar | null {
-  if (!MANAGER_SLUG.test(slug)) return null
-  const dir = join(managersDir(), slug)
+/** The newest `<name>.png`, `.jpg`, `.webp` or `.gif` in a folder; photo is its mtime in whole ms. */
+export function newestAvatar(dir: string, name: string): ManagerAvatar | null {
   let newest: ManagerAvatar | null = null
   for (const ext of Object.keys(AVATAR_TYPES) as AvatarExt[]) {
-    const path = join(dir, `avatar.${ext}`)
+    const path = join(dir, `${name}.${ext}`)
     const st = statSync(path, { throwIfNoEntry: false })
     if (!st?.isFile()) continue
     const photo = Math.floor(st.mtimeMs)
     if (!newest || photo > newest.photo) newest = { path, ext, contentType: AVATAR_TYPES[ext], photo }
   }
   return newest
+}
+
+/** The newest avatar.png, .jpg, .webp or .gif in the manager's folder; photo is its mtime in whole ms. */
+export function managerAvatar(slug: string): ManagerAvatar | null {
+  if (!MANAGER_SLUG.test(slug)) return null
+  return newestAvatar(join(managersDir(), slug), 'avatar')
 }
 
 function sessionManager(sessionId: string): string | null {

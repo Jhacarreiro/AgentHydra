@@ -145,11 +145,12 @@ test('a crashed app with two working chats: the roomiest same-kind account is op
   expect(m.status(true, null).recoveries.map((r) => [r.state, r.chats.map((x) => x.id)])).toEqual([['waiting', ['s1', 's2']]])
   expect(w.opened).toEqual([])
 
-  // Past the grace: a crash, so #2 (Max 20x, closed) is opened rather than #3. Both were seen working: no gate is asked.
+  // Past the grace: a crash, so #2 (Max 20x, closed) is opened rather than #3. Both were seen working and the gate has
+  // no verdict on either, so both go.
   w.now += GRACE_MS
   await m.look(true)
   let r = m.status(true, null).recoveries[0]
-  expect([r?.state, r?.cause, r?.to?.num, w.opened, w.gated]).toEqual(['opening', 'crashed', 2, [2], []])
+  expect([r?.state, r?.cause, r?.to?.num, w.opened, w.gated]).toEqual(['opening', 'crashed', 2, [2], ['s1', 's2']])
 
   // #2 comes up; the chats move once it has settled.
   w.now += 20_000

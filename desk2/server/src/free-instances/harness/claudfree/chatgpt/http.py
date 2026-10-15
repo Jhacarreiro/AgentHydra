@@ -267,18 +267,6 @@ class ChatGPTHttp:
         return {"cookies": prune_per_chat_cookies(cookies), "origins": self.original.get("origins", [])}
 
     def _request(self, method, path, **kwargs):
-        if path == "/api/auth/session":
-            # Only the split session cookie is needed for this endpoint. Avoid
-            # sending analytics, device and unrelated chat cookies on every call.
-            jar = requests.cookies.RequestsCookieJar()
-            for cookie in self.session.cookies:
-                if re.fullmatch(r"__Secure-next-auth\.session-token(?:\.\d+)?", cookie.name):
-                    jar.set_cookie(cookie)
-            prepared = requests.Request(method, BASE + path).prepare()
-            kwargs["headers"] = {
-                **kwargs.get("headers", {}),
-                "Cookie": requests.cookies.get_cookie_header(jar, prepared) or "",
-            }
         try:
             response = self.session.request(
                 method, BASE + path, timeout=(10, self.timeout), allow_redirects=False, **kwargs
@@ -303,6 +291,11 @@ class ChatGPTHttp:
             code, message = (
                 "login_required",
                 "ChatGPT requires sign-in. Run login --provider chatgpt.",
+            )
+        elif status == 404 and method == "POST" and path == "/backend-api/f/conversation" and detail and "model not found" in detail.lower():
+            code, message = (
+                "model_not_found",
+                "ChatGPT refused message generation with Model not found. Signing in is not a verified fix; no second message was sent.",
             )
         elif status == 404:
             code, message = (
@@ -364,10 +357,20 @@ class ChatGPTHttp:
         server_id = valid_uuid(server_id)
         # This boolean marker selects Temporary Chat lookup; it is not an auth
         # credential. The authenticated server still decides account access.
+        path = "/backend-api/conversation/" + server_id
+        marker = "history_off_" + server_id
+        jar = self.session.cookies.copy()
+        for cookie in list(jar):
+            if cookie.name == marker:
+                jar.clear(cookie.domain, cookie.path, cookie.name)
+        jar.set(marker, "1", domain="chatgpt.com", path="/", secure=True)
+        prepared = requests.Request("GET", BASE + path).prepare()
         body = self._json(
             "GET",
-            "/backend-api/conversation/" + server_id,
-            headers={"Cookie": "history_off_" + server_id + "=1"},
+            path,
+            # Override only this routing marker in a copy of the FULL jar. A
+            # marker-only header would replace every authentication cookie.
+            headers={"Cookie": requests.cookies.get_cookie_header(jar, prepared) or ""},
         )
         if body.get("conversation_id") != server_id:
             raise ClaudeError("ChatGPT returned a different conversation.", code="invalid_response")
@@ -418,7 +421,7 @@ class ChatGPTHttp:
         listed = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
         return resolve(prefer, listed) or default_text(listed)[0] or TEXT_MODEL
 
-    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL):
+    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL, prepared_request=None):
         """One private POST. A prepared credential is consumed before transmission."""
         if not isinstance(prompt, str) or not prompt.strip():
             raise ClaudeError("Supply a nonempty prompt.", code="invalid_arguments")
@@ -427,19 +430,31 @@ class ChatGPTHttp:
         if model != TEXT_MODEL and not (isinstance(model, str) and SLUG.fullmatch(model)):
             raise ClaudeError("That ChatGPT model is not one AgentHydra sends.", code="invalid_model")
         previous = {m["id"] for m in visible_messages(existing)} if existing else set()
-        payload = _send_payload(prompt, existing, model)
+        payload = prepared_request['payload'] if prepared_request else _send_payload(prompt, existing, model)
         server_id = payload.get("conversation_id")
         headers = {"Accept": "text/event-stream"}
-        if self.preparations is not None:
+        if prepared_request:
+            from .browser_request import validate
+            validate(payload, prompt, existing)
+            if payload.get('model') != model:
+                raise ClaudeError('The prepared request selected a different model. No message was sent.', code='browser_preparation_invalid')
+            headers.update(prepared_request['headers'])
+        elif self.preparations is not None:
             headers.update(self.preparations.take(self.account_key))
-        response = self._request(
-            "POST",
-            "/backend-api/f/conversation",
-            json=payload,
-            stream=True,
-            headers=headers,
-        )
-        server_id, complete = _read_stream(response, server_id, on_id)
+        if prepared_request and prepared_request.get('already_sent'):
+            server_id = valid_uuid(prepared_request['server_id'])
+            if on_id:
+                on_id(server_id)
+            complete = True
+        else:
+            response = self._request(
+                "POST",
+                "/backend-api/f/conversation",
+                json=payload,
+                stream=True,
+                headers=headers,
+            )
+            server_id, complete = _read_stream(response, server_id, on_id)
         body = self.read(server_id)
         messages = visible_messages(body)
         fresh = [m for m in messages if m["role"] == "assistant" and m["id"] not in previous]

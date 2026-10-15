@@ -7,14 +7,24 @@
 // the orchestrator's gate_chat (POST /api/orchestrator/run), opening from POST /api/instances/:dir/open, and the move
 // from the orchestrator's migrate_batch (the same route, polled at /api/orchestrator/operations/:id), the same move
 // AgentHydra's move_chats tool runs: it verifies each landing and starts each chat again with `--resume`. An app whose
-// account died while it stays open is read from its own log (decide.ts deadFromLog).
+// account died, or that signed itself out, while it stays open is read from its own log (decide.ts deadFromLog,
+// signedOutFromLog).
 // Codex: GET /api/codex-instances, /:id/usage, /:id/account, POST /:id/desktop/open and /:id/move-chat.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
 import { basename, join } from 'node:path'
 import type { ExternalSession } from '@shared/protocol'
 import type { ManagedKind } from '@shared/instance-manager'
-import { type AccountProbe, type Candidate, deadFromLog, isFreePlan, type OpenChat, type SeenInstance, type TurnState } from './decide'
+import {
+  type AccountProbe,
+  type Candidate,
+  deadFromLog,
+  isFreePlan,
+  type OpenChat,
+  type SeenInstance,
+  signedOutFromLog,
+  type TurnState,
+} from './decide'
 import type { InstanceManagerIO, Landed, MoveResult } from './engine'
 
 const READ_TIMEOUT_MS = 8_000
@@ -106,14 +116,15 @@ export function moveResultOf(row: unknown): MoveResult | null {
 export function turnOf(v: Json): TurnState | null {
   const state = str(v.state)
   if (!state) return null
-  const outstanding = obj(v.background).outstanding
+  // background_work answers scanned: false (and no jobs) when it could not read the transcript: unknown, not none.
+  const bg = obj(v.background)
   return {
     state,
     kind: str(obj(v.crashed).kind),
     idle: v.idle !== null && typeof v.idle === 'object',
     lane: str(obj(v.finished).lane),
     quietSecs: num(v.quiet_secs),
-    outstanding: Array.isArray(outstanding) ? outstanding.length : 0,
+    outstanding: bg.scanned === true && Array.isArray(bg.outstanding) ? bg.outstanding.length : null,
     cause: str(v.cause) ?? '',
   }
 }
@@ -144,6 +155,8 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
       const account = obj(i.account)
       const plan = str(account.planLabel)
       const running = i.isRunning === true
+      // A closed app's log is read only when it is weighed as a target (candidates): every look reads the open ones.
+      const log = running ? readTail(join(dir, 'logs', 'main.log'), DEAD_TAIL_BYTES) : null
       return [
         {
           ref: str(i.ref) ?? `desktop:${dir}`,
@@ -154,9 +167,9 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           email: str(account.email),
           plan,
           running,
-          signedIn: i.signedIn === true && account.status !== 'loggedout',
-          // A closed app's log is read only when it is weighed as a target (candidates): every look reads the open ones.
-          dead: isFreePlan(plan) ? FREE_PLAN : running ? deadFromLog(readTail(join(dir, 'logs', 'main.log'), DEAD_TAIL_BYTES)) : null,
+          // AgentHydra's sign-in is the stored login; an open app that signed itself out says so only in its log.
+          signedIn: i.signedIn === true && account.status !== 'loggedout' && signedOutFromLog(log) === null,
+          dead: isFreePlan(plan) ? FREE_PLAN : deadFromLog(log),
         },
       ]
     })
@@ -241,13 +254,9 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           { method: 'POST', body: JSON.stringify({ script: 'gate_chat', args, timeoutMs: GATE_TIMEOUT_MS }) },
           GATE_TIMEOUT_MS + 15_000,
         )
+        // Anything but a verdict is no verdict, exit 3 too: a chat AgentHydra's index lost for a moment answers it as
+        // well as one with no transcript, and the engine asks again until its reread window ends.
         const b = obj(r?.body)
-        if (r?.status === 200 && b.exitCode === 3) {
-          // gate_chat's own answer that no verdict exists (no transcript): asking again would say the same.
-          const why = (str(b.stderr) ?? '').trim().split(/\r?\n/)[0] || 'AgentHydra’s gate cannot read its transcript'
-          out.set(c.id, { state: 'ungateable', kind: null, idle: false, lane: null, quietSecs: null, outstanding: 0, cause: why })
-          continue
-        }
         const report = r?.status === 200 && b.exitCode === 0 ? scriptReport(str(b.stdout) ?? '') : null
         out.set(c.id, report ? turnOf(report) : null)
       }
@@ -393,9 +402,11 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
     if (!plan || plan.status !== 200) return { error: plan ? errorOf(plan.body, `answered ${plan.status}`) : 'AgentHydra did not answer' }
     const p = obj(plan.body)
     const chats = Array.isArray(p.chats) ? p.chats.map(obj) : []
+    const byId = new Map<unknown, (typeof chats)[number]>()
+    for (const c of chats) if (!byId.has(c.id)) byId.set(c.id, c)
     const results: MoveResult[] = []
     for (const id of ids) {
-      const chat = chats.find((c) => c.id === id)
+      const chat = byId.get(id)
       if (!chat) {
         results.push({ id, landed: false, resumed: false, detail: 'it is not among the Codex account’s open chats' })
         continue

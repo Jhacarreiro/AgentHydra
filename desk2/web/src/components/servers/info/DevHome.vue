@@ -18,12 +18,15 @@ import StatTile from './kit/StatTile.vue'
 // server's row opens the server.
 const servers = useDevServers()
 const projects = computed(() => servers.projects.value)
-const groups = computed(() => groupServers(projects.value ?? []))
+const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(!!b.starred) - Number(!!a.starred))
+// Each group's button states and starred-first rows are worked out once per poll, not once per render.
+const groups = computed(() =>
+  groupServers(projects.value ?? []).map((g) => ({ ...g, actions: groupActions(g.servers), rows: starredFirst(g.servers) }))
+)
 const all = computed(() => (projects.value ?? []).flatMap((p) => p.processes))
 const running = computed(() => all.value.filter((x) => x.status === 'running').length)
 const errors = computed(() => all.value.reduce((n, x) => n + (x.errorCount ?? 0), 0))
 const firing = computed(() => all.value.filter((x) => x.alertsFiring).length)
-const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(!!b.starred) - Number(!!a.starred))
 </script>
 
 <template>
@@ -76,15 +79,15 @@ const starredFirst = (list: DevWebProcess[]) => [...list].sort((a, b) => Number(
           </h3>
           <span v-if="g.servers.length" :class="g.running && g.running === g.servers.length ? chip('success') : CHIP" class="tnum">{{ g.running }} of {{ g.servers.length }} running</span>
           <span class="flex-1" />
-          <Tip v-if="groupActions(g.servers).start" label="Start all">
+          <Tip v-if="g.actions.start" label="Start all">
             <button type="button" :class="ICON_BTN" :disabled="servers.busy.value.has(allKey(g.project))" :aria-label="`Start all in ${g.project.name}`" @click="servers.actAll(g.project, 'start')"><Play class="size-3.5" /></button>
           </Tip>
-          <Tip v-if="groupActions(g.servers).stop" label="Stop all">
+          <Tip v-if="g.actions.stop" label="Stop all">
             <button type="button" :class="ICON_BTN" :disabled="servers.busy.value.has(allKey(g.project))" :aria-label="`Stop all in ${g.project.name}`" @click="servers.actAll(g.project, 'stop')"><Square class="size-3.5" /></button>
           </Tip>
         </div>
         <Card v-if="g.servers.length" flush>
-          <ServerRows :processes="starredFirst(g.servers)" />
+          <ServerRows :processes="g.rows" />
         </Card>
         <Card v-else>
           <p class="text-ui leading-5 text-text-muted">No servers in this project yet. Open it to add one.</p>

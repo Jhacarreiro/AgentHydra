@@ -22,12 +22,14 @@ WHAT IT DOES, and every rail it keeps:
     TREE_MAX_NODES chats (--max-nodes / --max-depth / --ceiling-pct only lower them). The parent
     is --parent when named, else found from --caller-session (the MCP passes the calling chat's
     own session ids), so a member that names nothing is still bound by its group.
-  - SPAWNS each chat through spawn_chat.py - the app's own claude://code/new deeplink into a
-    RUNNING desktop app, trust pre-written, composer submitted, bypass set at birth - so every
-    chat is VISIBLE in a sidebar the owner reads. Nothing headless, ever.
-  - ONE AT A TIME. Each spawn drives a window through the accessibility tree; two lanes driving
-    two windows in the same second is how text lands in the wrong pane. Sequential is slower
-    (~30-90 s per chat) and correct.
+  - SPAWNS each chat through spawn_chat.py into a RUNNING desktop app, trust pre-written and
+    bypass set at birth, so every chat is VISIBLE in a sidebar the owner reads. Nothing headless,
+    ever. On a profile with native control the app's own start call opens it on the pinned model
+    and effort, with no window raised and nothing clicked (2026-10-15); only a profile without it
+    still takes the claude://code/new deeplink and the composer actuator.
+  - ONE AT A TIME. A deeplink spawn drives a window through the accessibility tree; two lanes
+    driving two windows in the same second is how text lands in the wrong pane. Sequential is
+    slower (~30-90 s per chat) and correct.
   - REMEMBERS the group in state/fanouts.json, so `status` reads every member's gate verdict
     (working / idle / stalled / finished / crashed) with its last words, and `send` delivers one
     follow-up into all of them through the daemon's message route (native peer channel for a
@@ -74,9 +76,12 @@ Usage: python fan_out.py --spec <file.json | '{"tasks":[...]}'> [--per-account N
        python fan_out.py recover <group> [--force] [--json] # each failed member's recipe, once
        python fan_out.py delete <group> [--force] [--json]  # every member chat, everywhere
        python fan_out.py beacon <group> --beacon '{"member": N, "mode": "...", ...}' [--json]
-Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "...", "artifact": "..."}, ...],
-        "group": "<name>"}
-       (a bare list of tasks is accepted too; `title` and `artifact` are optional)
+Spec:  {"tasks": [{"title": "...", "folder": "<dir>", "prompt": "...", "artifact": "...",
+                   "model": "claude-opus-5-5", "effort": "xhigh"}, ...],
+        "group": "<name>", "model": "<model>", "effort": "<effort>"}
+       (a bare list of tasks is accepted too; `title`, `artifact`, `model` and `effort` are
+       optional. A task's model/effort beats the group's, which beats the default claude-opus-5-5
+       at xhigh. Never Fable unless a spec names it.)
 Receipt: every prompt carries a task receipt (token, repo, task id, expected artifact) the chat
        is asked to echo first (lib/receiptlib.py); `status` classifies each member delivered /
        no-echo / wrong-task / never-started / wrong-chat / pending. --receipt-secs N waits up to N
@@ -332,6 +337,15 @@ def parse_spec(raw: str) -> dict:
         artifact = str(t.get("artifact") or "").strip()
         if artifact:
             task["artifact"] = artifact
+        # the model and effort the chat is pinned to: the task's own, else the spec's (group
+        # level), else spawn_chat's default (claude-opus-5-5, xhigh). Never Fable unless named.
+        model = str(t.get("model") or data.get("model") or spawn_chat.DEFAULT_MODEL).strip()
+        effort = str(t.get("effort") or data.get("effort") or spawn_chat.DEFAULT_EFFORT).strip()
+        problem = spawn_chat.check_model_effort(model, effort)
+        if problem:
+            raise ValueError(f"task {i}: {problem}")
+        task["model"] = model
+        task["effort"] = effort
         tasks.append(task)
     name = str(data.get("group") or "").strip() or None
     return {"group": name, "tasks": tasks}
@@ -718,6 +732,8 @@ def _member(assignment: dict) -> dict:
         "title": task["title"],
         "folder": task["folder"],
         "prompt": task["prompt"],
+        "model": task.get("model"),
+        "effort": task.get("effort"),
         "instance": (f"#{target['num']} {target['name']}" if target else None),
         "instanceNum": target["num"] if target else None,
         "sessionId": None,
@@ -795,7 +811,9 @@ def _spawn_member(group: dict, m: dict, target: dict, spawned_ids: set,
     # force=True here lifts ONLY spawn_chat's own duplicate check, which this function has
     # already run with the group's members excluded; every other rail in spawn() stays.
     try:
-        res = spawn_chat.spawn(m["folder"], typed, str(target["num"]), force=True)
+        res = spawn_chat.spawn(m["folder"], typed, str(target["num"]), force=True,
+                               model=m.get("model") or spawn_chat.DEFAULT_MODEL,
+                               effort=m.get("effort") or spawn_chat.DEFAULT_EFFORT)
     except hydralib.DaemonError as err:
         res = {"ok": False, "why": f"daemon failure during spawn: {err.detail or err}"}
     m["state"], m["why"] = _spawn_state(res)
@@ -804,7 +822,8 @@ def _spawn_member(group: dict, m: dict, target: dict, spawned_ids: set,
                                           "composerCleared", "landedIn",
                                           "modeSet", "trustDialog", "window",
                                           "unboundSessionId", "skippedForeign",
-                                          "retried")
+                                          "retried", "route", "model", "effort",
+                                          "desktopSessionId", "modelKept", "effortKept")
                   if k in res}
     m["spawnedAt"] = _now_iso()
     if m["sessionId"]:

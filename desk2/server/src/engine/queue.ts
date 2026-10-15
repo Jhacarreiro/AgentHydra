@@ -632,13 +632,12 @@ export class QueueManager {
    */
   private async readBack(images: ImageRef[] | undefined): Promise<ImageRef[] | undefined> {
     if (!images) return undefined
-    const out: ImageRef[] = []
-    for (const img of images) {
+    const hits = images.map((img) => {
       const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
       if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
-      out.push({ ...img, dataBase64: (await readFile(hit.path)).toString('base64') })
-    }
-    return out
+      return hit
+    })
+    return Promise.all(images.map(async (img, i) => ({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })))
   }
 
   // queue.json

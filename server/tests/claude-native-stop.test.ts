@@ -1,18 +1,11 @@
 // The native stop runs inside Claude Desktop's main process; here the shipped expression runs against a stand-in of
 // that process (its module cache holding a session manager), so what it would call in the app is what is checked.
 import { expect, test } from 'bun:test'
-import * as crypto from 'node:crypto'
 import * as path from 'node:path'
-import { runInNewContext } from 'node:vm'
-import { nativeProgram } from '../src/core/claude-native/native-program'
+import { nativeApp } from './native-app'
 
-const CLI = '0b6f2b0e-1111-4c4c-9a9a-123456789abc'
-const PID = 4242
-const appPath = path.resolve('/example-app/resources/app')
-const profileDir = path.resolve('/Users/me/.claude-instances/example')
-
-/** A desktop app whose one chat (`local_a`, CLI id CLI) has `session`; `onInterrupt` is the app's own
- *  interruptSession, so a test decides what the app's state shows after the call. */
+/** A desktop app whose one chat (`local_a`) has `session`; `onInterrupt` is the app's own interruptSession, so a test
+ *  decides what the app's state shows after the call. */
 function desktop(
   session: Record<string, unknown>,
   onInterrupt: (s: Record<string, any>) => void | Promise<void> = (s) => {
@@ -20,64 +13,15 @@ function desktop(
   },
 ) {
   const calls: { id: string; reason: string }[] = []
-  const chat: Record<string, any> = {
-    sessionId: 'local_a',
-    cliSessionId: CLI,
-    isArchived: false,
-    isRunning: true,
-    ...session,
-  }
-  const manager = {
-    sessions: new Map([['local_a', chat]]),
-    currentAccountId: 'acct',
-    currentOrgId: 'org',
-    userDataPath: profileDir,
-    waitForInitialization: async () => {},
-    getSessionList: async () => [],
-    archiveSession: async () => {},
-    archiveCascadeClosureOf: () => [],
-    losableWorkKind: () => null,
-    startingSessionIds: new Set<string>(),
-    hasPendingUserInput: () => false,
-    localLineageIds: () => [],
+  const app = nativeApp(session, {
     interruptSession: async (id: string, reason: string) => {
       calls.push({ id, reason })
-      await onInterrupt(chat)
+      await onInterrupt(app.chat)
     },
-  }
-  const file = path.join(appPath, 'index.chunk-example.js')
-  const appRequire = Object.assign(
-    (name: string) => (name === 'node:fs' ? { readFileSync: () => 'bundle' } : crypto),
-    { cache: { [file]: { loaded: true, exports: { claudeCodeSessionManager: manager } } } },
-  )
-  const app = {
-    getAppPath: () => appPath,
-    isReady: () => true,
-    getPath: () => profileDir,
-    getVersion: () => '1.0.0',
-  }
-  const rootRequire = (name: string) =>
-    name === 'electron'
-      ? { app }
-      : name === 'node:path'
-        ? path
-        : { createRequire: () => appRequire }
-  const fakeProcess = { pid: PID, platform: process.platform, mainModule: { require: rootRequire } }
+  })
   const stop = (request: { profileDir?: string; cliSessionId?: string } = {}) =>
-    runInNewContext(
-      nativeProgram({
-        action: 'stop',
-        pid: PID,
-        profileDir: request.profileDir ?? profileDir,
-        cliSessionId: request.cliSessionId ?? CLI,
-      }),
-      {
-        process: fakeProcess,
-        setTimeout,
-        clearTimeout,
-      },
-    ) as Promise<any>
-  return { calls, chat, stop }
+    app.run({ action: 'stop', ...request })
+  return { calls, chat: app.chat, stop }
 }
 
 test("a working chat is stopped through the app's own interruptSession, once, and verified by its state", async () => {

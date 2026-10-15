@@ -3,6 +3,10 @@
 // (TranscriptView's revealStep). Drawn after the line's words, on WorkingFooter and ExternalSessionView's live lines.
 import { ChevronRight } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
+
+// The click is declared, not left as an attribute: an undeclared @click falls through to Tip, whose root renders no element
+// of its own (InterestSlot and the tooltip provider do not pass attributes on), so the listener never reached the button.
+const emit = defineEmits<{ click: [] }>()
 </script>
 
 <template>
@@ -11,6 +15,7 @@ import { Tip } from '@/components/ui/tooltip'
       type="button"
       class="-mx-0.5 grid size-5 shrink-0 place-items-center rounded text-text-muted transition-colors duration-60 hover:bg-fill-hover hover:text-text"
       aria-label="Show this step"
+      @click="emit('click')"
     >
       <ChevronRight class="size-3.5" />
     </button>

@@ -1,10 +1,11 @@
 import { onScopeDispose, reactive, ref, shallowRef } from 'vue'
 import type { FreeCommand, FreeHealth, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
+import { sameData } from '@/lib/reconcile'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
 const instances = ref<FreeInstance[]>([])
-const threads = ref<FreeThread[]>([])
+const threads = shallowRef<FreeThread[]>([])
 /** How many threads have a message running, from the status read. */
 const running = ref(0)
 /** The pages listing the threads that are open (CliMayte's): only they read the list. It holds every private chat
@@ -37,7 +38,7 @@ function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
   let same = old.length === next.length
   const merged = next.map((x, n) => {
     const o = before.get(x.id)
-    const keep = !!o && JSON.stringify(o) === JSON.stringify(x)
+    const keep = !!o && sameData(o, x)
     if (!keep || old[n] !== o) same = false
     return keep ? o! : x
   })
@@ -57,9 +58,9 @@ async function snapshot(): Promise<void> {
   instances.value = keepUnchanged(instances.value, status.instances)
   running.value = status.running
   const estimate = status.tokens ?? {}
-  if (JSON.stringify(estimate) !== JSON.stringify(tokens.value)) tokens.value = estimate
+  if (!sameData(estimate, tokens.value)) tokens.value = estimate
   const hour = status.health ?? {}
-  if (JSON.stringify(hour) !== JSON.stringify(health.value)) health.value = hour
+  if (!sameData(hour, health.value)) health.value = hour
   // Desk's own reads (the rolling refresh, a keepalive nudge) show no spinner: only what someone started does.
   for (const job of status.jobs) if (job.state === 'running' && !job.auto) jobs[job.instanceId] = job
   loaded.value = true

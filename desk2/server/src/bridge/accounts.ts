@@ -76,6 +76,8 @@ export function toAccountInfo(i: AhCliInstance, busyAccountIds: ReadonlySet<stri
     priority: i.placement?.priority ?? 0,
     maxFiveHourPct: i.placement?.maxSessionPct ?? null,
     maxWeeklyPct: i.placement?.maxWeekPct ?? null,
+    name: i.accountName?.trim() || null,
+    desktop: i.associatedDesktopDir ? (i.associatedDesktopLabel ?? null) : null,
   }
 }
 

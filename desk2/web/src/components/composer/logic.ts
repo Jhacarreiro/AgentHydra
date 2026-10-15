@@ -1,7 +1,8 @@
 // Pure composer logic: slash command filtering, per-chat drafts, image validation, labels.
 // No Vue and no DOM here, so web/test/composer can test it with plain bun.
 
-import type { ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
+import type { AccountInfo, AccountRef, ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 
 // Slash commands
@@ -150,20 +151,10 @@ export const EFFORTS: { value: Effort; label: string }[] = [
 /** The stop the slider marks "Recommended" (the real popover marks one stop with a taller pill). */
 export const RECOMMENDED_EFFORT: Effort = 'medium'
 
-export function modeLabel(mode: PermissionMode): string {
-  return PERMISSION_MODES.find((m) => m.value === mode)?.label ?? mode
-}
-
 /** null = the account's default effort, shown as "Default". */
 export function effortLabel(effort: Effort | null): string {
   if (effort == null) return 'Default'
   return EFFORTS.find((e) => e.value === effort)?.label ?? String(effort)
-}
-
-/** Slider position of an effort; the default (null) sits on the recommended stop. */
-export function effortIndex(effort: Effort | null): number {
-  const i = EFFORTS.findIndex((e) => e.value === (effort ?? RECOMMENDED_EFFORT))
-  return i < 0 ? 0 : i
 }
 
 /** The model menu: the first `numbered` models get number shortcuts, the rest go under "More models". */
@@ -282,15 +273,49 @@ export function shownSuggestion(suggestion: string | null | undefined, s: { empt
 // New-session labels and tips
 
 /**
- * The model trigger always names a model, like the real "Sonnet 5.5": null (the account default) is
- * named by a "Default (<model>)" entry when the runtime lists one, else by the Sonnet model in the menu,
- * Claude Code's default on a subscription (the real new-session screen of a Max account shows it).
+ * The model trigger always names the model that runs, like the real "Opus 5.5". A chat that names none runs
+ * DEFAULT_MODEL (owner, 2026-10-15: "it should default to Opus 5.5"); a bare family ('opus', how CliMayte names a Desk
+ * chat's model) is named by that family's model in the menu.
  */
 export function modelTriggerLabel(model: string | null, models: { value: string; label: string }[]): string {
-  if (model) return models.find((m) => m.value === model)?.label ?? modelName(model)
-  const named = models.find((m) => m.value === 'default')?.label.match(/\(([^)]*\d[^)]*)\)/)?.[1]
-  if (named) return named.trim()
-  return models.find((m) => /sonnet/i.test(m.value))?.label ?? models.find((m) => m.value !== 'default')?.label ?? 'Sonnet'
+  const m = model ?? DEFAULT_MODEL
+  const listed = models.find((x) => x.value === m)
+  if (listed) return listed.label
+  if (/^(opus|sonnet|haiku|fable)$/i.test(m)) {
+    const family = models.find((x) => x.value !== 'default' && x.value.toLowerCase().includes(m.toLowerCase()))
+    return family?.label ?? `${m[0]!.toUpperCase()}${m.slice(1).toLowerCase()}`
+  }
+  return modelName(m)
+}
+
+/** The effort that runs, as the model chip and the Effort menu name it: the chat's own, else DEFAULT_EFFORT. */
+export function runEffort(effort: Effort | null | undefined): Effort {
+  return effort ?? DEFAULT_EFFORT
+}
+
+/** Used percent of an account's tighter window, or null when neither was read. */
+export function accountUsedPct(a: Pick<AccountInfo, 'fiveHourPct' | 'weeklyPct'>): number | null {
+  const read = [a.fiveHourPct, a.weeklyPct].filter((p): p is number => typeof p === 'number')
+  return read.length ? Math.round(Math.max(...read)) : null
+}
+
+/** What an account is called on screen: the name on the account (its profile name), else its number; never a folder's
+ *  name (owner, 2026-10-15: "the account folder name is useless ... I only ever want to see ... the name on the account"). */
+export function accountShownName(a: { id: string; label: string; number?: number; name?: string | null }): string {
+  const name = a.name?.trim()
+  if (name) return name
+  if (a.id === 'default') return 'Default login'
+  const num = a.number ?? /^#(\d+)/.exec(a.label)?.[1]
+  return num == null ? 'Account' : `#${num}`
+}
+
+/** The account menu's rows (owner, 2026-10-15: "only show desktop instances"): each login linked to a Claude Desktop
+ *  instance, by the name on the account, then the chat's own account when it is not one of them. */
+export function menuAccounts(accounts: AccountInfo[], currentId: string | null): AccountInfo[] {
+  const byName = (a: AccountInfo, b: AccountInfo) => accountShownName(a).localeCompare(accountShownName(b), undefined, { sensitivity: 'base' })
+  const desktop = accounts.filter((a) => a.desktop).sort(byName)
+  const own = accounts.find((a) => a.id === currentId && !a.desktop)
+  return own ? [...desktop, own] : desktop
 }
 
 /** The effort the trigger names: the chat's own, else the settings default, else the recommended stop. */
@@ -310,7 +335,7 @@ export interface Tip {
 export const TIPS: Tip[] = [
   { id: 'climayte', text: 'Sub-agents run through CliMayte, so a long task will not block this chat.', action: 'climayte' },
   { id: 'model', text: 'Pick the model for this session anytime with', link: '/model', action: 'model' },
-  { id: 'account', text: 'New sessions run on the account chosen from your profile at the bottom left.' },
+  { id: 'account', text: 'Put a chat on one account, or let it move when that runs out, from the circle under the box.' },
   { id: 'queue', text: 'Send while Claude works and the message waits its turn; Esc stops the turn.' }
 ]
 

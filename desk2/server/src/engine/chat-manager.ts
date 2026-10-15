@@ -55,7 +55,7 @@ import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
 import type { AhWorker, WorkerSendSetting } from '../bridge/client'
-import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
+import { isActiveWorkerStatus, keptWorkerIds, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
@@ -814,6 +814,7 @@ export class ChatManager {
       cwd,
       account,
       accountAuto: auto,
+      ...(req.accountPinned ? { accountPinned: true } : {}),
       model: worker ? WORKER_MODEL : req.model === undefined ? normalizeModel(settings.defaultModel) : normalizeModel(req.model),
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
@@ -1573,6 +1574,8 @@ export class ChatManager {
       e.cwdPending = undefined
     }
     if (p.delegateToCliMayte !== undefined) chat.delegateToCliMayte = p.delegateToCliMayte
+    if (p.accountPinned === true) chat.accountPinned = true
+    else if (p.accountPinned === false) delete chat.accountPinned
     // An account takes effect at the next runtime start (buildOptions reads chat.account); see below.
     if (resolved) {
       chat.account = resolved.account
@@ -2193,14 +2196,18 @@ export class ChatManager {
     return file
   }
 
-  /** Sets climayteActive (its active workers and running seats) and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
+  /** Sets climayteActive (its active workers and running seats), drops the stored workerIds that are another chat's, and adds the workers now matched; true when workerIds changed. */
   private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
     const mine = workersOfChat(workers, chat)
     chat.climayteActive = mine.filter((w) => w.active).length + this.seatsRunning(chat.id)
+    const others = new Set<string>()
+    for (const e of this.chats.values()) if (e.chat.id !== chat.id && e.chat.workerId) others.add(e.chat.workerId)
     const ids = chat.workerIds ?? []
-    const fresh = mine.map((w) => w.id).filter((id) => !ids.includes(id))
-    if (!fresh.length) return false
-    chat.workerIds = [...ids, ...fresh]
+    const kept = keptWorkerIds(workers, chat, others)
+    const keptSet = new Set(kept)
+    const fresh = mine.map((w) => w.id).filter((id) => !keptSet.has(id))
+    if (!fresh.length && kept.length === ids.length) return false
+    chat.workerIds = [...kept, ...fresh]
     return true
   }
 
@@ -2222,10 +2229,10 @@ export class ChatManager {
     if (!e) return
     const parent = e.chat
     const before = parent.climayteActive
-    this.matchWorkers(parent, this.bridge.lastWorkers())
+    const grew = this.matchWorkers(parent, this.bridge.lastWorkers())
     const n = parent.climayteActive
-    if (n === before) return
-    if (n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
+    if (n === before && !grew) return
+    if (n !== before && n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.upsert', chat: this.view(parent) })
     this.settleParent(parent)
@@ -2557,7 +2564,8 @@ export class ChatManager {
   private carryToAnotherAccount(chatId: string, signIn: boolean, window: string | null): boolean {
     const e = this.chats.get(chatId)
     const rt = e?.runtime
-    if (!e || !rt || e.chat.workerId !== undefined) return false
+    // Auto off: the chat waits for its own account's reset (the runtime's limit stands).
+    if (!e || !rt || e.chat.workerId !== undefined || e.chat.accountPinned) return false
     const tried = (e.moved ??= [e.chat.account.id])
     if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
     if (signIn) this.signInHeld.set(e.chat.account.id, Date.now() + SIGN_IN_HOLD_MS)
@@ -2701,8 +2709,8 @@ export class ChatManager {
       // A closed runtime took its background tasks with it: their items say so, and stop counting.
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
       this.sendWaiting(e)
-      this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
+      this.store.saveChats(this.stored())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
       this.settleParent(e.chat)
       this.turnEnded(e)
@@ -3186,6 +3194,7 @@ export function parseCreate(body: unknown): CreateChatRequest {
   if (title !== undefined) req.title = title
   const accountId = optString(b, 'accountId')
   if (accountId !== undefined) req.accountId = accountId
+  if (optBool(b, 'accountPinned') === true) req.accountPinned = true
   const model = optNullableString(b, 'model')
   if (model !== undefined) req.model = model
   const effort = optEffort(b)
@@ -3275,7 +3284,7 @@ function optGroup(b: Json): string | null | undefined {
   return name
 }
 
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service', 'sus']
+const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'accountPinned', 'group', 'cwd', 'note', 'service', 'sus']
 function optSus(b: Record<string, unknown>): SusLevel | undefined {
   if (b.sus === undefined) return undefined
   if (!SUS_LEVELS.includes(b.sus as SusLevel)) throw new ChatError(400, `sus is one of ${SUS_LEVELS.join(', ')}`)
@@ -3302,7 +3311,7 @@ export function parsePatch(body: unknown): ChatPatch {
     if (!title.trim()) throw new ChatError(400, 'title cannot be empty')
     p.title = title
   }
-  for (const k of ['pinned', 'archived', 'unread', 'delegateToCliMayte'] as const) {
+  for (const k of ['pinned', 'archived', 'unread', 'delegateToCliMayte', 'accountPinned'] as const) {
     const v = optBool(b, k)
     if (v !== undefined) p[k] = v
   }

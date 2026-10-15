@@ -142,11 +142,14 @@ function viaJobs(
   }
   const routed = new Map<string, SwarmJob | null>()
   const named = new Set<string>()
+  // The seen jobs by PC, each PC's in the order they were seen, so a worker is only tried against its own PC's jobs.
+  const seenByPc = new Map<string | null, SwarmJob[]>()
+  for (const x of seen.values()) addTo(seenByPc, x.pc ?? null, x)
   const out = workers.map((w) => {
     if (!isRouted(w)) return w
     let j: SwarmJob | undefined
-    for (const x of seen.values()) {
-      if ((x.pc ?? null) === (w.pc ?? null) && w.group!.startsWith(`${ROUTED}${x.id}-`)) {
+    for (const x of seenByPc.get(w.pc ?? null) ?? []) {
+      if (w.group!.startsWith(`${ROUTED}${x.id}-`)) {
         j = x
         break
       }
@@ -236,10 +239,11 @@ interface WorkerIndex {
   byOrigin: Map<string, CliMayteWorker[]>
 }
 
-function addTo(index: Map<string, CliMayteWorker[]>, key: string, w: CliMayteWorker): void {
-  const list = index.get(key)
-  if (list) list.push(w)
-  else index.set(key, [w])
+/** Adds an item to the list a map keeps under its key, the list starting with that item. */
+function addTo<K, V>(map: Map<K, V[]>, key: K, item: V): void {
+  const list = map.get(key)
+  if (list) list.push(item)
+  else map.set(key, [item])
 }
 
 function indexWorkers(workers: CliMayteWorker[]): WorkerIndex {
@@ -330,7 +334,7 @@ function listRow(ix: WorkerIndex, r: NestRow, self: Set<string>, owner: Readonly
   out.lists.set(r.key, list)
   for (const n of list) {
     const key = keyOf(n.worker)
-    out.listedBy.set(key, [...(out.listedBy.get(key) ?? []), r.key])
+    addTo(out.listedBy, key, r.key)
   }
 }
 
@@ -542,7 +546,7 @@ function placeJobs(st: AddedRows, rows: readonly NestRow[], jobs: readonly Swarm
   for (const j of newestJobs) if (j.active) homeOf(st, rowFor, j, true)
   for (const j of newestJobs) {
     const home = homeOf(st, rowFor, j, false)
-    if (typeof home === 'string') jobsByRow.set(home, [...(jobsByRow.get(home) ?? []), j])
+    if (typeof home === 'string') addTo(jobsByRow, home, j)
     else if (home && home.job !== j) home.jobs.push(j)
   }
   return jobsByRow
@@ -664,7 +668,7 @@ function placeAdded<G extends { label: string }, R>(
       if (!labels.has(folder)) labels.set(folder, name)
     }
     if (p.hidden.has(folder) && !p.showHidden) continue
-    byFolder.set(folder, [...(byFolder.get(folder) ?? []), r])
+    addTo(byFolder, folder, r)
   }
   const out = groups.map((g) => {
     const folder = p.folderOf(g)
@@ -683,21 +687,28 @@ function placeAdded<G extends { label: string }, R>(
   return sortFolders(out)
 }
 
+/** The placing both added lists give placeAdded: a desk group is its folder's, its rows are its entries. */
+function deskGroupPlacing(o: AddedPlacing) {
+  return {
+    order: o.order,
+    hidden: o.hidden,
+    showHidden: o.showHidden,
+    folderOf: (g: ChatGroup) => (g.cwd ? folderKey(g.cwd) : g.key === '' ? '' : null),
+    rowsOf: (g: ChatGroup) => g.entries,
+    at: (e: SidebarEntry) => e.at,
+    withRows: (g: ChatGroup, entries: SidebarEntry[]) => ({ ...g, entries }),
+    make: (folder: string, cwd: string | null, label: string, entries: SidebarEntry[], hidden: boolean): ChatGroup => ({ key: cwd ?? folder, label, cwd, entries, ...(hidden ? { hidden } : {}) })
+  }
+}
+
 /** The desk list's folder groups (logic.ts groupChats) with this PC's added rows, each drawn as an outside session's row (addedEntry) and ordered as a new row of the list. */
 export function addToDeskGroups(groups: readonly ChatGroup[], rows: readonly AddedRow[], o: AddedPlacing): ChatGroup[] {
   const names = new Map(rows.map((r) => [r.id, r.folder]))
   return placeAdded<ChatGroup, SidebarEntry>(groups, rows.map(addedEntry), {
-    order: o.order,
-    hidden: o.hidden,
-    showHidden: o.showHidden,
-    folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.key === '' ? '' : null),
-    rowsOf: (g) => g.entries,
+    ...deskGroupPlacing(o),
     cwdOf: (e) => (e.kind === 'chat' ? e.chat.cwd : e.session.cwd) || null,
     nameOf: (e) => names.get(e.id) ?? null,
-    at: (e) => e.at,
-    sort: (list) => stableOrder(list, (e) => e.id, o.order.rows),
-    withRows: (g, entries) => ({ ...g, entries }),
-    make: (folder, cwd, label, entries, hidden) => ({ key: cwd ?? folder, label, cwd, entries, ...(hidden ? { hidden } : {}) })
+    sort: (list) => stableOrder(list, (e) => e.id, o.order.rows)
   })
 }
 
@@ -711,17 +722,10 @@ export function addRemoteToDeskGroups(groups: readonly ChatGroup[], sessions: re
   const remote = new Set(sessions.map((s) => s.id))
   const entries = sessions.map((session): SidebarEntry => ({ kind: 'external', id: session.id, at: session.lastActivityAt ?? 0, session }))
   return placeAdded<ChatGroup, SidebarEntry>(groups, entries, {
-    order: o.order,
-    hidden: o.hidden,
-    showHidden: o.showHidden,
-    folderOf: (g) => (g.cwd ? folderKey(g.cwd) : g.key === '' ? '' : null),
-    rowsOf: (g) => g.entries,
+    ...deskGroupPlacing(o),
     cwdOf: () => null,
     nameOf: (e) => (e.kind === 'external' && e.session.cwd ? folderLabel(e.session.cwd) : null),
-    at: (e) => e.at,
-    sort: (list) => stableOrder(list, (e) => e.id, o.order.rows, (e) => remote.has(e.id)),
-    withRows: (g, list) => ({ ...g, entries: list }),
-    make: (folder, cwd, label, list, hidden) => ({ key: cwd ?? folder, label, cwd, entries: list, ...(hidden ? { hidden } : {}) })
+    sort: (list) => stableOrder(list, (e) => e.id, o.order.rows, (e) => remote.has(e.id))
   })
 }
 

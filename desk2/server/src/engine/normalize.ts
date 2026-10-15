@@ -21,7 +21,7 @@ import {
   type ToolResult,
   type TranscriptItem,
 } from '@shared/protocol'
-import { cut, describeToolActivity } from './describe'
+import { cut, describeToolActivity, str } from './describe'
 import { resetsAtMs, type NotifyReason } from './status'
 import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurns, type TaskNotice } from './system-text'
 import { MEDIA_ROUTE, mediaCache, RENDERABLE, type MediaCache } from '../media/cache'
@@ -82,10 +82,6 @@ export const LIMIT_LABEL: Record<string, string> = {
   seven_day_sonnet: 'weekly Sonnet',
   seven_day_overage_included: 'weekly',
   overage: 'extra usage',
-}
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : ''
 }
 
 function firstLine(text: string): string {
@@ -307,6 +303,11 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
     for (const id of blockCount.keys()) {
       if (blockCount.size <= MAX_KEPT_MESSAGES) break
       blockCount.delete(id)
+    }
+    // A denial is only read for a tool still held here, so one whose tool was pruned is dead.
+    for (const id of denied) {
+      if (denied.size <= MAX_KEPT_TOOLS) break
+      if (!tools.has(id)) denied.delete(id)
     }
   }
 

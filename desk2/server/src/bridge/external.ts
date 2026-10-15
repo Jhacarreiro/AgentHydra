@@ -134,7 +134,11 @@ export function mapExternal(
   const chats = new Map(inp.chats.filter((c) => c.sessionId && !c.archived).map((c) => [c.sessionId, c]))
   // A chat's parent is the listed chat whose local id its spawnedFrom names: same instance first, else any.
   const byLocalId = new Map<string, AhChatRow[]>()
-  for (const c of chats.values()) byLocalId.set(c.chatId, [...(byLocalId.get(c.chatId) ?? []), c])
+  for (const c of chats.values()) {
+    const same = byLocalId.get(c.chatId)
+    if (same) same.push(c)
+    else byLocalId.set(c.chatId, [c])
+  }
   const parentIdOf = (c: AhChatRow): string | undefined => {
     if (!c.spawnedFrom || c.spawnedFrom === c.chatId) return undefined
     const named = (byLocalId.get(c.spawnedFrom) ?? []).filter((p) => p.sessionId !== c.sessionId)

@@ -9,8 +9,10 @@ import {
   deadFromLog,
   detect,
   ERROR_WITH_DOWN_MS,
+  FORGET_MS,
   rankTargets,
   type SeenInstance,
+  signedOutFromLog,
   STALE_MEMORY_MS,
   type TurnState,
 } from '../../src/instance-manager/decide'
@@ -82,6 +84,8 @@ test('an app that was up with chats open and is down now is noticed once; idle, 
   // An app the read did not list keeps its memory, so it is still noticed when it comes back down in a later read.
   const dropped = detect(first.memory, [b], [], NOW + 20_000)
   expect(detect(dropped.memory, [{ ...a, running: false }], [], NOW + 40_000).down.map((d) => d.instance.num)).toEqual([1])
+  // One unlisted for FORGET_MS was removed: it is forgotten, not carried in every later memory.
+  expect(Object.keys(detect(dropped.memory, [b], [], NOW + FORGET_MS + 1).memory)).toEqual([b.ref])
 })
 
 test('why it went down: a sign-out or a dead account beats a clean quit, start-up noise is not a sign-out, and a log that stops without a quit is a crash', () => {
@@ -166,9 +170,32 @@ test("an app's own log marks its account dead while it stays open, until a turn 
   expect(deadFromLog(log([t, done], [t + 1_000, orgOff]))).toContain('organization has disabled')
   expect(deadFromLog(log([t, orgOff], [t + 1_000, done]))).toBeNull()
   expect(deadFromLog(log([t, orgOff], [t + 1_000, signIn]))).toBeNull()
-  // A usage limit resets by itself: not a dead account.
+  expect(deadFromLog(log([t, '[CCD CycleHealth] local_x api_error (success): Your organization has disabled Claude subscription access']))).toContain(
+    'organization has disabled',
+  )
+  // A usage limit resets by itself: not a dead account. Nor is a line that only mentions a plan or a payment, or an
+  // account-dead phrase outside a chat's failed turn: a match takes a running app's chats off it.
   expect(deadFromLog(log([t, "Session local_x query error: Claude Code returned an error result: You've hit your session limit"]))).toBeNull()
+  expect(deadFromLog(log([t, 'Session local_x query error: payment required for this model; the plan has ended']))).toBeNull()
+  expect(deadFromLog(log([t, '[settings] Banner: your organization has been disabled? learn more']))).toBeNull()
   expect(deadFromLog(null)).toBeNull()
+})
+
+test('an open app that signed itself out reads so from its log, until it signs in again; a chat\'s revoked-token error is not a sign-out', () => {
+  const t = NOW - 120_000
+  const active = 'claude.ai account active and logged in'
+  const toLogout = '[account] Navigated to /logout, synthesizing logged-out'
+  const signIn = '[account] Login-state transition (loggedOut: true → false, uuid: a1 → a1), preserving oauth cache'
+  // What a first start on a newer Claude wrote (2026-10-15): the account loads, then the app goes to its logout page.
+  expect(signedOutFromLog(log([t, active], [t, toLogout]))).toContain('Navigated to /logout')
+  expect(signedOutFromLog(log([t, active], [t, toLogout], [t + 60_000, signIn]))).toBeNull()
+  // A later start that loads its account is signed in, whatever an earlier run wrote.
+  expect(signedOutFromLog(log([t, toLogout], [t + 60_000, active]))).toBeNull()
+  // A chat's failed turn with a revoked token: the app authorized again and its chats ran on (2026-10-09).
+  const revoked = '[CCD CycleHealth] local_x api_error (success): Failed to authenticate: OAuth token revoked. Please run /login'
+  expect(signedOutFromLog(log([t, active], [t + 1_000, revoked]))).toBeNull()
+  expect(signedOutFromLog(log([t, '[account] User is logged out, skipping account ID wait']))).toBeNull()
+  expect(signedOutFromLog(null)).toBeNull()
 })
 
 test('which open chats a going-down cut off: one seen working, one mid-turn, an error as it went down, background jobs it waits on', () => {
@@ -184,7 +211,9 @@ test('which open chats a going-down cut off: one seen working, one mid-turn, an 
     ...fields,
   })
   const cases: [string, boolean, TurnState | null, boolean | null][] = [
-    ['seen working, whatever the gate says', true, v('finished', { lane: 'archive-candidate' }), true],
+    ['seen working, with no verdict', true, null, true],
+    ['seen working, a finished turn that does not claim done', true, v('finished', { lane: 'needs-input-review' }), true],
+    ['seen working, its turn ended on a done recap', true, v('finished', { lane: 'archive-candidate' }), false],
     ['an engine alive mid-turn', false, v('running'), true],
     ['an engine alive and idle', false, v('running', { idle: true }), false],
     ['died mid-turn', false, v('crashed', { kind: 'mid-turn' }), true],
@@ -194,7 +223,8 @@ test('which open chats a going-down cut off: one seen working, one mid-turn, an 
     ['finished, waiting on background jobs', false, v('finished', { lane: 'needs-input-review', outstanding: 1 }), true],
     ['stopped by a person, jobs or not', false, v('finished', { lane: 'human', outstanding: 1 }), false],
     ['finished', false, v('finished', { lane: 'archive-candidate' }), false],
-    ['no transcript to gate', false, v('ungateable'), false],
+    ['finished, its jobs not scanned', false, v('finished', { lane: 'needs-input-review', outstanding: null }), null],
+    ['a state it does not know', false, v('something-new'), false],
     ['no verdict read', false, null, null],
   ]
   expect(cases.map(([name, busy, t]) => [name, cutOff(busy, t, lastUp, NOW)?.cut ?? null])).toEqual(cases.map(([name, , , want]) => [name, want]))

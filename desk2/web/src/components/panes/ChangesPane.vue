@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, onBeforeUnmount, onMounted, shallowRef, watch } from 'vue'
 import { tab } from '@/components/servers/styles'
 import { changesTabFor, showChangesSwitch } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab, watchRepoYeti } from '@/components/connectors/repoyeti-state'
@@ -18,14 +18,18 @@ const side = computed(() => changesTabFor(changesTab.value, repoYeti.value))
 
 // Asked on a timer, not per status poll: the answer moves only when HEAD or the base does, and the server caches it.
 const PREVIEW_MS = 15_000
-const preview = ref<MergeConflictPreview | null>(null)
+const preview = shallowRef<MergeConflictPreview | null>(null)
 const previewLine = computed(() => (preview.value ? mergePreviewLine(preview.value) : null))
 let previewTimer: ReturnType<typeof setInterval> | null = null
 async function refreshPreview() {
   const cwd = props.cwd
   const next = await loadMergePreview(cwd)
-  // A folder's answer that lands after the pane moved on to another folder is dropped.
-  if (cwd === props.cwd) preview.value = next
+  // A folder's answer that lands after the pane moved on to another folder is dropped. An unchanged answer writes nothing.
+  if (cwd === props.cwd && JSON.stringify(next) !== JSON.stringify(preview.value)) preview.value = next
+}
+// Nobody reads the preview while the window is hidden: the timer skips those ticks, and showing it again asks once.
+function onVisibilityChange() {
+  if (!document.hidden) refreshPreview()
 }
 watch(
   () => props.cwd,
@@ -39,11 +43,15 @@ let stop: (() => void) | null = null
 onMounted(() => {
   stop = watchRepoYeti()
   refreshPreview()
-  previewTimer = setInterval(refreshPreview, PREVIEW_MS)
+  previewTimer = setInterval(() => {
+    if (!document.hidden) refreshPreview()
+  }, PREVIEW_MS)
+  document.addEventListener('visibilitychange', onVisibilityChange)
 })
 onBeforeUnmount(() => {
   stop?.()
   if (previewTimer) clearInterval(previewTimer)
+  document.removeEventListener('visibilitychange', onVisibilityChange)
 })
 </script>
 

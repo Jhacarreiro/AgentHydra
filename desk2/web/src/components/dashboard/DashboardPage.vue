@@ -44,7 +44,8 @@ async function load(): Promise<void> {
   try {
     const d = await getDashboard(cwd)
     if (mine !== seq) return
-    dash.value = d
+    // An unchanged answer (most polls) must not swap the dashboard in: everything that reads it would re-run.
+    if (JSON.stringify(d) !== JSON.stringify(dash.value)) dash.value = d
     problem.value = null
     void refreshDashboards()
   } catch (err) {
@@ -77,6 +78,12 @@ function stop(): void {
   timer = undefined
 }
 
+// A hidden or minimised window stops asking, and starts again (with a read) when it is shown.
+function onVisibility(): void {
+  if (document.hidden) stop()
+  else if (props.active && props.cwd) start()
+}
+
 watch(
   () => [props.active, props.cwd] as const,
   ([active, cwd], prev) => {
@@ -87,12 +94,16 @@ watch(
       project.value = null
       if (cwd) void loadProject(cwd)
     }
-    if (active && cwd) start()
+    if (active && cwd && !document.hidden) start()
     else if (!active) stop()
   },
   { immediate: true }
 )
-onBeforeUnmount(stop)
+document.addEventListener('visibilitychange', onVisibility)
+onBeforeUnmount(() => {
+  stop()
+  document.removeEventListener('visibilitychange', onVisibility)
+})
 
 function reload(): void {
   reloads.value++

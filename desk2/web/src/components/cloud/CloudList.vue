@@ -190,6 +190,10 @@ const ROW = LIST_ROW
 const newFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : newChatFolder(g.cwd, g.rows.map((r) => ({ cwd: r.cwd, at: r.lastActivityAt }))))
 /** What a group's menu describes: its project's folder, else the group's own or its newest chat's (the desk list's rule). */
 const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.projectFolderOf?.(g) ?? newFolderOf(g)))
+// Both folders of every group, worked out once per change of the groups and not on each redraw of a group's head and menu.
+const folders = computed(() => new Map(shownGroups.value.map((g) => [g.key, { add: newFolderOf(g), menu: menuFolderOf(g) }] as const)))
+const addOf = (g: CloudGroup) => folders.value.get(g.key)?.add ?? null
+const menuOf = (g: CloudGroup) => folders.value.get(g.key)?.menu ?? null
 </script>
 
 <template>
@@ -233,10 +237,10 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
         </button>
       </Tip>
       <span class="flex-1" />
-      <GroupDashboardButton :folder="menuFolderOf(g)" :label="g.label" />
-      <TodoButton :folder="menuFolderOf(g)" :label="g.label" />
-      <Tip v-if="newFolderOf(g)" :label="`New session in ${g.label}`">
-        <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', newFolderOf(g)!)">
+      <GroupDashboardButton :folder="menuOf(g)" :label="g.label" />
+      <TodoButton :folder="menuOf(g)" :label="g.label" />
+      <Tip v-if="addOf(g)" :label="`New session in ${g.label}`">
+        <button type="button" :class="HEADER_BTN" :aria-label="`New session in ${g.label}`" @click="emit('new-session', addOf(g)!)">
           <component :is="shellGlyphs.groupNew" class="size-4" />
         </button>
       </Tip>
@@ -270,8 +274,8 @@ const menuFolderOf = (g: CloudGroup) => (g.key === RESULTS_KEY ? null : (props.p
       <ContextMenuContent :class="MENU_CONTENT" @open-auto-focus="focusFirstItem">
         <!-- A project folder's group gets the desk list's menu (sidebar/ProjectMenuItems.vue; the sidebar mounts its dialog). -->
         <ProjectMenuItems
-          v-if="menuFolderOf(g)"
-          :folder="menuFolderOf(g)!"
+          v-if="menuOf(g)"
+          :folder="menuOf(g)!"
           :label="g.label"
           :collapsed="collapsed.has(g.key)"
           :hidden="!!g.hidden"

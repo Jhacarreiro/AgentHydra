@@ -366,7 +366,12 @@ function nestAll(): NestedTasks | null {
 /** The rows added for running work no drawn row lists (tasks.ts AddedRow), by id. */
 const addedRows = computed(() => new Map((nesting.value?.added ?? []).map((a) => [a.id, a])))
 /** The added row a row key (`external:` or `cloud:`, then its id) is, if any: among the threads (every one), and among the drawn ones. */
-const threadAddedAt = (key: string) => (threadNesting.value?.added ?? []).find((a) => a.id === key.slice(key.indexOf(':') + 1))
+const threadAddedById = computed(() => {
+  const out = new Map<string, AddedRow>()
+  for (const a of threadNesting.value?.added ?? []) if (!out.has(a.id)) out.set(a.id, a)
+  return out
+})
+const threadAddedAt = (key: string) => threadAddedById.value.get(key.slice(key.indexOf(':') + 1))
 const tasksOf = (key: string) => threadNesting.value?.byRow.get(key) ?? threadAddedAt(key)?.nodes ?? null
 const jobsOf = (key: string) => threadNesting.value?.jobsByRow.get(key) ?? threadAddedAt(key)?.jobs ?? null
 /** An added row that is itself a running HSwarm job no chat is known to have called: its dot pulses blue and a folded heading counts it with the jobs. */
@@ -424,6 +429,9 @@ const foldOf = (key: string) => {
   const open = !folded.value.has(key)
   return { count: kids.length, open, running: !open && kids.some(entryRunning), needsYou: !open && kids.some((e) => entryGlyph(e).tone === 'warning') }
 }
+/** Each drawn row's fold button and sub-items, by row key: built once per change, since a row's template reads them several times. */
+const rowParts = computed(() => new Map(drawnList.value.flatMap((g) => g.entries.map((e) => [entryKey(e), { fold: foldOf(entryKey(e)), sub: rowSub(entryKey(e)) }] as const))))
+const partsOf = (e: SidebarEntry) => rowParts.value.get(entryKey(e))
 /** A group's icon: its Project Hydra project's icon, or null for none (projectOfGroup). The cloud list uses it too. */
 const iconOfGroup = (g: Pick<ChatGroup, 'key' | 'cwd' | 'label'>) => projectOfGroup(g, keptProjects.value)?.icon ?? null
 /** Each group's heading icon, by group key. */
@@ -1416,8 +1424,8 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => rowAction(entry, item, () => act({ kind: 'chat', chat: entry.chat }, item))"
                 @rename="(title: string) => mark({ kind: 'chat', chat: entry.chat }, { title })"
               >
-                <FoldButton v-if="foldOf(`chat:${entry.id}`)" v-bind="foldOf(`chat:${entry.id}`)!" @toggle="toggleFolded(`chat:${entry.id}`)" />
-                <SubBadges v-if="rowSub(`chat:${entry.id}`).badges.length" :row-key="`chat:${entry.id}`" :badges="rowSub(`chat:${entry.id}`).badges" />
+                <FoldButton v-if="partsOf(entry)?.fold" v-bind="partsOf(entry)!.fold!" @toggle="toggleFolded(entryKey(entry))" />
+                <SubBadges v-if="partsOf(entry)?.sub.badges.length" :row-key="entryKey(entry)" :badges="partsOf(entry)!.sub.badges" />
               </ChatRow>
               <ExternalRow
                 v-else
@@ -1433,10 +1441,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
                 @action="(item: RowMenuItem) => rowAction(entry, item, () => externalAct(entry.session, item))"
                 @rename="(title: string | null) => renameExternal(entry.session, title)"
               >
-                <FoldButton v-if="foldOf(`external:${entry.id}`)" v-bind="foldOf(`external:${entry.id}`)!" @toggle="toggleFolded(`external:${entry.id}`)" />
-                <SubBadges v-if="rowSub(`external:${entry.id}`).badges.length" :row-key="`external:${entry.id}`" :badges="rowSub(`external:${entry.id}`).badges" />
+                <FoldButton v-if="partsOf(entry)?.fold" v-bind="partsOf(entry)!.fold!" @toggle="toggleFolded(entryKey(entry))" />
+                <SubBadges v-if="partsOf(entry)?.sub.badges.length" :row-key="entryKey(entry)" :badges="partsOf(entry)!.sub.badges" />
               </ExternalRow>
-              <TaskRows v-if="rowSub(`${entry.kind}:${entry.id}`).nodes.length || rowSub(`${entry.kind}:${entry.id}`).jobs.length" :nodes="rowSub(`${entry.kind}:${entry.id}`).nodes" :jobs="rowSub(`${entry.kind}:${entry.id}`).jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
+              <TaskRows v-if="partsOf(entry)?.sub.nodes.length || partsOf(entry)?.sub.jobs.length" :nodes="partsOf(entry)!.sub.nodes" :jobs="partsOf(entry)!.sub.jobs" :selected-id="selectedExternalId" @open="openTask" @open-job="openJob" />
             </div>
           </TransitionGroup>
         </section>

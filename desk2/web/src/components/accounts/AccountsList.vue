@@ -39,6 +39,11 @@ function windows(a: AccountInfo) {
   ]
 }
 
+// Each row's tooltip and window bars are built once per change of the rows or the clock, not on every render.
+const viewRows = computed(() =>
+  rows.value.map((row) => ({ row, tip: rowTip(row, now.value), wins: row.account ? windows(row.account) : [] }))
+)
+
 function dotClass(row: AccountRow): string {
   const a = row.account
   if (!a || !a.signedIn) return 'border border-text-muted opacity-50'
@@ -119,7 +124,7 @@ const ROW =
       class="flex min-h-0 flex-1 flex-col gap-px overflow-y-auto [scrollbar-width:thin]"
       @keydown="onKey"
     >
-      <Tip v-for="row in rows" :key="row.id" :label="rowTip(row, now)" side="right" align="center">
+      <Tip v-for="{ row, tip, wins } in viewRows" :key="row.id" :label="tip" side="right" align="center">
         <button
           type="button"
           role="option"
@@ -144,7 +149,7 @@ const ROW =
           <span v-if="!row.account" class="min-w-0 truncate text-ui-sm leading-4 text-text-muted">{{ pickLabel ? `right now: ${pickLabel}` : '' }}</span>
           <span v-else-if="row.disabled" class="shrink-0 text-ui-sm leading-4 text-text-muted">Signed out</span>
           <span v-else class="flex shrink-0 items-center gap-2.5">
-            <span v-for="w in windows(row.account)" :key="w.name" class="flex items-center gap-1">
+            <span v-for="w in wins" :key="w.name" class="flex items-center gap-1">
               <span class="text-3xs leading-4 text-text-muted">{{ w.name }}</span>
               <span class="h-1 w-7 overflow-hidden rounded-full bg-(--fill-secondary)">
                 <span class="block h-full rounded-full" :style="{ width: `${Math.max(0, Math.min(100, w.pct ?? 0))}%`, background: barColor(w.pct) }" />

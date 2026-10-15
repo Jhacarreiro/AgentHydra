@@ -6,7 +6,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { SDKMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { AccountInfo, TranscriptItem } from '@shared/protocol'
+import { DEFAULT_EFFORT, type AccountInfo, type TranscriptItem } from '@shared/protocol'
 import { ChatManager, ChatError, climayteSetting, parsePatch, restoreSetting } from '../../../src/engine/chat-manager'
 import type { CodexDirectory } from '../../../src/engine/codex/accounts'
 import type { OpenAppServer, ThreadListener } from '../../../src/engine/codex/app-server'
@@ -120,7 +120,8 @@ test('a turn whose closing text pushes back counts as pushback', async () => {
   await waitFor(() => q.all.length === 1)
   q.last().push(state('running'), reply('Are you sure you want to touch your production server?', 'model-own-0001'), result('end_turn'), state('idle'))
   await waitFor(() => m.get(chat.id).status === 'idle')
-  expect(m.pushbackRows()[0]).toMatchObject({ effort: 'default', turns: 1, pushback: 1, refusals: 0, pushbackRate: 1 })
+  // A chat that names no effort runs, and so is counted under, the default (owner, 2026-10-15).
+  expect(m.pushbackRows()[0]).toMatchObject({ effort: DEFAULT_EFFORT, turns: 1, pushback: 1, refusals: 0, pushbackRate: 1 })
 })
 
 test('bad pins the chat to Codex, fine or sus unpins it, and without Codex the patch is the 409', async () => {

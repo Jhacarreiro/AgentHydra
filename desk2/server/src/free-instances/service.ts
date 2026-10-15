@@ -169,6 +169,7 @@ export class FreeInstances {
       for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
       this.store.remove(id, opts.tombstone ?? true)
       this.refreshed.delete(id)
+      this.outcomes.delete(id)
     } finally { this.forgetting.delete(id) }
     this.onLoginChange?.()
     return { ok: true }

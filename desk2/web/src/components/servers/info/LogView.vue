@@ -6,7 +6,7 @@ const cache = memo<Line[]>()
 </script>
 
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { ArrowDownToLine, Check, Copy, Eraser, Search } from '@lucide/vue'
 import type { DevWebLogLine } from '@shared/devwebui'
 import { Tip } from '@/components/ui/tooltip'
@@ -20,7 +20,7 @@ import Segmented from './kit/Segmented.vue'
 // up (or turns Follow off), "Load older" pages back from the oldest seq, and Clear only empties this view (the log on
 // disk stays). A line without a seq (an outside server's note) is kept once. The tab draws a toolbar, not a heading.
 const props = defineProps<{ processId: string }>()
-const lines = ref<DevWebLogLine[]>([])
+const lines = shallowRef<DevWebLogLine[]>([])
 const more = ref(false)
 const filter = ref('')
 const only = ref<'all' | 'stderr'>('all')

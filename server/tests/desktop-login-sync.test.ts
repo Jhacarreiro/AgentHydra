@@ -17,6 +17,7 @@ import { createHash, randomUUID } from 'node:crypto'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import {
+  cliAccountIdentity,
   createCliInstance,
   deleteCliInstance,
   getCliInstance,
@@ -313,10 +314,43 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       )
     const login = () =>
       JSON.parse(readFileSync(join(cliDir, '.credentials.json'), 'utf8')).claudeAiOauth
+    // Anthropic's profile read: every desk-* token is the desktop's account, whatever the folder held.
+    const profileReads: string[] = []
+    const realFetch = globalThis.fetch
+    globalThis.fetch = (async (_url: unknown, init?: RequestInit) => {
+      profileReads.push(
+        (new Headers(init?.headers).get('authorization') ?? '').replace(/^Bearer /, ''),
+      )
+      return Response.json({
+        account: { uuid: randomUUID(), email: 'alex@example.com', full_name: 'Alex Example' },
+        organization: { uuid: randomUUID(), name: 'Example org', organization_type: 'claude_max' },
+      })
+    }) as unknown as typeof fetch
+    // The folder still names the account it held before the link.
+    writeFileSync(
+      join(cliDir, '.claude.json'),
+      JSON.stringify({
+        numStartups: 4,
+        oauthAccount: {
+          accountUuid: randomUUID(),
+          emailAddress: 'pc-two@example.com',
+          fullName: 'Example Owner',
+        },
+      }),
+    )
     try {
       await desktopHas('desk-1', far)
       linkCliInstanceToDesktop(id, dir, 'feeds')
       expect(await feedLinkedCliLogins()).toBe(1)
+      // The folder now names the fed login's account, keeps the CLI's own settings, and the next pass
+      // reads no profile for the same token.
+      expect(cliAccountIdentity(cliDir)).toEqual({
+        email: 'alex@example.com',
+        name: 'Alex Example',
+      })
+      expect(JSON.parse(readFileSync(join(cliDir, '.claude.json'), 'utf8')).numStartups).toBe(4)
+      await feedLinkedCliLogins()
+      expect(profileReads).toEqual(['desk-1'])
       // The Claude Code grant, and no refresh token: that one stays the desktop app's.
       expect(login()).toEqual({
         accessToken: 'desk-1',
@@ -343,7 +377,11 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       )
       expect(await feedCliFromDesktop(getCliInstance(id)!)).toBe('own-login')
       expect(login().accessToken).toBe('own')
+      // A renewed grant is one more profile read; a sign-in of the folder's own is never read.
+      await feedLinkedCliLogins()
+      expect(profileReads).toEqual(['desk-1', 'desk-2'])
     } finally {
+      globalThis.fetch = realFetch
       deleteCliInstance(id, getCliInstance(id)?.name)
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }

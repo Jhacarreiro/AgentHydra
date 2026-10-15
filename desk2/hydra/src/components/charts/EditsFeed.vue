@@ -10,7 +10,7 @@
 // styles, shows without reading a path. The chips are gray: they were six hues, one per file type,
 // on a page where colour is kept for what matters (owner, 2026-10-05: "adding, like, a thousand
 // colors to it isn't gonna help"). The newest few files show; the rest fold behind "+N more".
-import { computed, ref } from 'vue'
+import { computed, onScopeDispose, ref } from 'vue'
 import type { EditEntry } from '@/lib/api'
 import { timeAgo } from '@/lib/format'
 
@@ -63,6 +63,19 @@ const rows = computed<Row[]>(() => {
   return [...seen.values()].sort((a, b) => (b.ts ?? 0) - (a.ts ?? 0))
 })
 const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, TOP)))
+
+// timeAgo reads Date.now() but nothing here reacts to it, so a row's age would freeze between renders.
+// This ticks every 10 s (the finest step timeAgo shows is seconds) and skips the tick while hidden.
+const now = ref(Date.now())
+const ticker = setInterval(() => {
+  if (!document.hidden) now.value = Date.now()
+}, 10_000)
+onScopeDispose(() => clearInterval(ticker))
+/** Reads the tick, so the template re-renders each time the clock moves. */
+const ago = (ts: number) => {
+  void now.value
+  return timeAgo(ts)
+}
 </script>
 
 <template>
@@ -85,7 +98,7 @@ const shown = computed(() => (expanded.value ? rows.value : rows.value.slice(0, 
         class="shrink-0 rounded-full bg-muted px-1.5 text-3xs tabular-nums text-muted-foreground"
       >&times;{{ r.count }}</span>
       <span class="shrink-0 text-3xs tabular-nums text-muted-foreground">
-        {{ r.ts ? timeAgo(r.ts) : '' }}
+        {{ r.ts ? ago(r.ts) : '' }}
       </span>
     </li>
     <li v-if="rows.length > TOP" class="px-1">

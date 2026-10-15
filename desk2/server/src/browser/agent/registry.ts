@@ -305,10 +305,11 @@ export const TOOL_DEFS: ToolDef[] = [
             .map((r) => ({ port: r.port as number, dir: r.dir, name: r.profile.name }))
       if (ports.length === 0)
         return "OPEN BROWSER WINDOWS (0): none open on this workspace's saved profiles"
-      for (const p of ports) {
+      const tabLists = await Promise.all(ports.map((p) => pageTabs(p.port)))
+      for (const [i, p] of ports.entries()) {
         const ledger = p.dir ? readLedger(p.dir) : new Map<string, { chat: string; at: number }>()
         lines.push(`\n${p.name} (debugging port ${p.port}):`)
-        const tabs = await pageTabs(p.port)
+        const tabs = tabLists[i]
         if (tabs.length === 0) lines.push('  (no pages)')
         for (const t of tabs) {
           const owner = ledger.get(t.id)

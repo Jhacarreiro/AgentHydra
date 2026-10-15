@@ -157,6 +157,11 @@ export interface AhCliInstance {
   movedAway?: unknown
   /** The owner's priority and caps for AgentHydra's work on this account (AgentHydra's AccountPlacement). */
   placement?: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null } | null
+  /** The Claude Desktop instance this login is linked to: its folder and its name. */
+  associatedDesktopDir?: string | null
+  associatedDesktopLabel?: string | null
+  /** The name on the signed-in account (its profile name). */
+  accountName?: string | null
 }
 
 /** GET /api/instances: one isolated Claude Desktop instance (`loginUuid`: the account signed in there). */
@@ -204,6 +209,8 @@ export interface AhWorker {
   effort: string | null
   reportedModel?: string | null
   kind?: string | null
+  /** Set on the worker a Desk chat runs as. */
+  chat?: boolean
   result: string | null
   error: string | null
   lastActivity: string | null
@@ -616,6 +623,10 @@ export function createClient(opts: HydraClientOptions = {}) {
     /** Claude Desktop's own Stop for a working chat (the daemon's native stop); answers { ok, verified } or a BridgeError. */
     stopDesktopChat: (sessionId: string) =>
       request<{ ok: boolean; verified?: boolean; route?: string }>('POST', `/api/sessions/${enc(sessionId)}/stop`, {}, DELIVERY_TIMEOUT_MS),
+    /** A working Claude Desktop chat's model and effort, set in the app as its pickers set them (the daemon's native
+     *  setting); answers { ok, verified, model, effort } with what the app kept, or a BridgeError. */
+    setDesktopChatSetting: (sessionId: string, setting: { model?: string; effort?: string }) =>
+      request<{ ok: boolean; verified?: boolean; model?: string | null; effort?: string | null }>('POST', `/api/sessions/${enc(sessionId)}/setting`, setting, DELIVERY_TIMEOUT_MS),
     /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
     branchSession: (sessionId: string, uuid: string, title: string) =>
       post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),

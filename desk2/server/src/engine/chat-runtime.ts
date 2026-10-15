@@ -38,6 +38,7 @@ import type {
   ServerEvent,
   TranscriptItem,
 } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
 import { contextPct } from './describe'
 import { connectorsPending } from '../connectors/registry'
 import { coreSlot, coreSlotDue } from './core-slot'
@@ -54,6 +55,12 @@ import { userTurns } from './system-text'
 import { isUsageLimitText } from './usage-limit'
 import { hostedOf, type HostConnection, type HostedParams, type HostedQuery } from '../host/client'
 import { mediaCache, toStoredImage } from '../media/cache'
+
+/** The setting a chat's own turns run on: a model or effort it does not name is Desk's default (DEFAULT_MODEL, DEFAULT_EFFORT),
+ *  so the window's label is what runs (owner, 2026-10-15: "it should default to Opus 5.5"). */
+function ownSetting(chat: ChatSummary): { model: string | null; effort: Effort | null } {
+  return { model: withoutOldHaiku(chat.model) ?? DEFAULT_MODEL, effort: chat.effort ?? DEFAULT_EFFORT }
+}
 
 /** query()'s own parameters, plus what a chat host needs (SPEC "Chat hosts"); the SDK's query() reads prompt and options. */
 export type QueryImpl = (params: HostedParams) => Query
@@ -169,6 +176,8 @@ export const INTERRUPT_GRACE_MS = 1500
 const STDERR_TAIL_LINES = 20
 /** Images larger than this (base64 chars) are kept out of the stored transcript. */
 const MAX_STORED_IMAGE_CHARS = 200_000
+/** The running tool ids remembered as written; past it the oldest is forgotten. */
+const MAX_STORED_RUNNING = 1000
 
 /** The account's login is broken (AgentHydra climayte-lib.ts AUTH_RE): no turn on it can work until it is signed in again. */
 const SIGN_IN_TEXT =
@@ -412,7 +421,7 @@ export class ChatRuntime {
     pinHaikuModel(env)
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const sus = this.susTurn?.() ?? null
-    this.applied = sus ? { ...sus } : { model: withoutOldHaiku(chat.model), effort: chat.effort }
+    this.applied = sus ? { ...sus } : ownSetting(chat)
     const options: Options = {
       cwd: chat.cwd,
       env,
@@ -704,7 +713,7 @@ ${slot}` : ''}${rules}` }
     for (const item of replayed.values()) {
       const prev = stored.get(item.id)
       if (prev && sameItem(prev, item)) {
-        if (item.kind === 'tool_use' && item.status === 'running') this.storedRunning.add(item.id)
+        if (item.kind === 'tool_use' && item.status === 'running') this.rememberRunning(item.id)
       } else this.upsert(item)
     }
   }
@@ -950,7 +959,7 @@ ${slot}` : ''}${rules}` }
     const q = this.q
     if (!q || this.susTurn === undefined) return
     const sus = this.susTurn()
-    const want: SusTurn = sus ?? { model: withoutOldHaiku(this.chat.model), effort: this.chat.effort }
+    const want: SusTurn = sus ?? ownSetting(this.chat)
     const had = this.applied
     if (want.model === had.model && want.effort === had.effort) return
     this.applied = { ...want }
@@ -1401,12 +1410,18 @@ ${slot}` : ''}${rules}` }
     if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return
-      this.storedRunning.add(item.id)
+      this.rememberRunning(item.id)
     }
     // A request re-opened after a restart is on disk as it was.
     const prev = this.reopened?.stored.get(item.id)
     if (prev && sameItem(prev, item)) return
     this.store.appendItem(this.chat.id, forStore(item))
+  }
+
+  /** Notes a running tool as written; a Set keeps insertion order, so the first id is the oldest. */
+  private rememberRunning(id: string): void {
+    this.storedRunning.add(id)
+    if (this.storedRunning.size > MAX_STORED_RUNNING) this.storedRunning.delete(this.storedRunning.values().next().value as string)
   }
 
   private notify(reason: Extract<ServerEvent, { type: 'notify' }>['reason'], body: string): void {

@@ -132,11 +132,20 @@ const sortedClaude = computed(() =>
  * keeps its terminal badge as well, and a linked row names that desktop row, so the two windows
  * agree about the same machine.
  */
+/** The name of each desktop row by its dir, the first row winning as a find would, so a linked CLI row
+ *  reads its desktop's name in one lookup rather than a scan of every desktop row on each render. */
+const desktopNameByDir = computed(() => {
+  const byDir = new Map<string, string>()
+  for (const desktop of claude.value) {
+    if (!byDir.has(desktop.dir)) byDir.set(desktop.dir, desktop.label ?? desktop.name)
+  }
+  return byDir
+})
 /** The desktop row a CLI login is linked to, or null (unlinked, or linked to a row that is gone). */
 function linkedDesktopName(cli: CliInstance): string | null {
   const dir = cli.associatedDesktopDir
-  const desktop = dir ? claude.value.find((i) => i.dir === dir) : undefined
-  return desktop ? (desktop.label ?? desktop.name) : null
+  const name = dir ? desktopNameByDir.value.get(dir) : undefined
+  return name ?? null
 }
 /** The linked ones, per desktop dir, for that row's badge. */
 const linkedCliByDir = computed(() => {

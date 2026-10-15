@@ -481,6 +481,8 @@ export class ProjectList {
 
     const chats = this.chatsOf(outside)
     this.seen = new Set(chats.flatMap((c) => (c.sessionId ? [c.sessionId] : [])))
+    // A session the list no longer shows is not kept in memory either (save() already leaves it out of the file).
+    for (const id of this.placed.keys()) if (!this.seen.has(id)) this.placed.delete(id)
     const { placing, placedAway } = this.placeChats(chats, rows, places)
     for (const dir of this.deps.recent()) places.own(dir)?.sources.add('recent')
     this.folderIcons = plainIcons(rows)

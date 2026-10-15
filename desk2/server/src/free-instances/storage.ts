@@ -81,16 +81,17 @@ export class FreeStorage {
   }
   create(provider: FreeProvider, name?: string): FreeInstance {
     const instance: FreeInstance = { id: randomUUID(), num: Math.max(0, ...this.data.instances.map(i => i.num)) + 1, provider, name: name ?? (provider === 'claude' ? 'Claude' : 'ChatGPT'), autoName: name === undefined, loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
-    mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
-    this.data.instances.push(instance)
-    this.save()
-    return instance
+    return this.insert(instance)
   }
   /** An account another PC shares (free-instances/sync.ts): its id and name, and its number unless one here has it. */
   adopt(shared: Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>): FreeInstance {
     const taken = this.data.instances.some(i => i.num === shared.num)
     const num = taken ? Math.max(0, ...this.data.instances.map(i => i.num)) + 1 : shared.num
     const instance: FreeInstance = { ...shared, num, autoName: generic(shared.name), loggedIn: false, checkedAt: null, lastSignedInAt: null, lastActiveAt: null, usage: null }
+    return this.insert(instance)
+  }
+  /** Adds a new account and its state folder, then saves. */
+  private insert(instance: FreeInstance): FreeInstance {
     mkdirSync(join(this.home, 'free', 'instances', instance.id), { recursive: true })
     this.data.instances.push(instance)
     this.save()

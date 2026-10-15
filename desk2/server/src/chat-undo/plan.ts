@@ -203,8 +203,10 @@ export function applyUndo(transcript: string, cwd: string, paths: readonly strin
   const want = new Set(paths)
   const result: ChatUndoResult = { done: [], skipped: [] }
   const now = entries(transcript, cwd)
+  const byPath = new Map<string, (typeof now)[number]>()
+  for (const x of now) if (!byPath.has(x.file.path)) byPath.set(x.file.path, x)
   for (const path of want) {
-    const e = now.find((x) => x.file.path === path)
+    const e = byPath.get(path)
     if (!e) result.skipped.push({ path, reason: 'nothing to undo in it any more' })
     else if (e.file.state !== 'ready') result.skipped.push({ path, reason: e.file.reason ?? 'not safe to undo' })
     else {

@@ -596,10 +596,11 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
         taskError = `Windows could not read its tasks: ${message(err)}`
       }
     }
+    const taskOf = new Map(readings.map((r) => [r.path, r]))
     const reads = await Promise.all(
       entries.map(async (entry): Promise<Seen> => {
         const path = entry.def?.windowsTask
-        if (path !== undefined) return { entry, reading: null, readError: taskError, task: readings.find((r) => r.path === path) ?? null }
+        if (path !== undefined) return { entry, reading: null, readError: taskError, task: taskOf.get(path) ?? null }
         const status = entry.def ? await readStatus(entry.def) : { reading: null, readError: null }
         return { entry, reading: status.reading, readError: status.readError, task: null }
       }),

@@ -125,6 +125,17 @@ export function readTail(path: string, max = TAIL_BYTES): string {
   }
 }
 
+/** The `cwd` a transcript line carries, or null: a blank line, a line still being written, or one cut at its start. */
+function lineCwd(line: string): string | null {
+  if (!line) return null
+  try {
+    const rec = JSON.parse(line) as { cwd?: unknown }
+    return typeof rec.cwd === 'string' && rec.cwd ? rec.cwd : null
+  } catch {
+    return null
+  }
+}
+
 /**
  * The folder Claude Code says the session is in now: the `cwd` of the newest line that has one (every
  * transcript line carries it, and it follows the Bash tool's `cd`). Reads the file's end only; null when
@@ -135,14 +146,8 @@ export function lastCwd(path: string): string | null {
   for (const max of [64 * 1024, TAIL_BYTES]) {
     const lines = readTail(path, max).split('\n')
     for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i]!.trim()
-      if (!line) continue
-      try {
-        const rec = JSON.parse(line) as { cwd?: unknown }
-        if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd
-      } catch {
-        // the tail's first line may be cut
-      }
+      const cwd = lineCwd(lines[i]!.trim())
+      if (cwd) return cwd
     }
     if (size <= max) break
   }
@@ -199,14 +204,8 @@ export function firstCwdFrom(path: string, offset: number): string | null {
     closeSync(fd)
   }
   for (const raw of buf.subarray(0, read).toString('utf8').split('\n')) {
-    const line = raw.trim()
-    if (!line) continue
-    try {
-      const rec = JSON.parse(line) as { cwd?: unknown }
-      if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd
-    } catch {
-      // a line still being written, or the offset fell mid-line
-    }
+    const cwd = lineCwd(raw.trim())
+    if (cwd) return cwd
   }
   return null
 }

@@ -1,3 +1,4 @@
+import { tryNativeNew } from '../claude-native-new'
 import { resolveAccount } from '../core/accounts'
 import { noteLoggedOutHere, setLoginSyncExcluded } from '../core/cli-login-sync'
 import { detectDesktopInstall } from '../core/desktop-install'
@@ -145,6 +146,21 @@ app.post('/api/instances/:dir/open', async (c) => {
     void readAppAfterOpen(dir).catch((err) =>
       console.error('[instances] app reading after open failed:', err),
     )
+  return c.json(result)
+})
+// Start a new chat inside the RUNNING app with its own start call (claude-native-new.ts): no window,
+// no deeplink, the model and effort pinned. Body: {cwd, prompt, model, effort, bypass?}.
+app.post('/api/instances/:dir/native-new', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  const body = await jsonBody(c)
+  const result = await tryNativeNew(dir, {
+    cwd: String(body.cwd ?? ''),
+    prompt: String(body.prompt ?? ''),
+    model: String(body.model ?? ''),
+    effort: String(body.effort ?? ''),
+    ...(body.bypass !== undefined ? { bypass: body.bypass === true } : {}),
+  })
   return c.json(result)
 })
 app.post('/api/instances/:dir/quit', async (c) => {

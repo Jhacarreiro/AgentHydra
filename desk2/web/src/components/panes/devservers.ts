@@ -1,4 +1,4 @@
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { DevWebSettings } from '@shared/devwebui'
 import { devSettings, saveDevSettings } from '@/components/servers/api'
 import { useDevServers } from '@/components/servers/store'
@@ -7,7 +7,7 @@ const message = (e: unknown) => (e instanceof Error ? e.message : String(e))
 
 export function useDevServerSettings() {
   const dev = useDevServers()
-  const settings = ref<DevWebSettings | null>(null)
+  const settings = shallowRef<DevWebSettings | null>(null)
   const error = ref<string | null>(null)
   const savedAt = ref(0)
   const running = computed(() => dev.status.value?.state === 'running')

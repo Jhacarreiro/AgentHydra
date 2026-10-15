@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
-import type { ChatSummary, DesktopMessageRequest, DesktopMessageResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, DesktopMessageRequest, DesktopMessageResult, DesktopSettingRequest, DesktopSettingResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
@@ -19,7 +19,7 @@ import SessionHeader from '@/components/session-header/SessionHeader.vue'
 import { displayItems, type FindHit } from '@/components/session-header/logic'
 import { displayPrefs } from '@/components/session-header/state'
 import { advanceCursor, cursorMoved, EXTERNAL_PAGE, externalIndexBySession, mergeRecent, prependPage, startCursor, unloadedCount, type OlderCursor } from './paging'
-import { continueLine, externalChat, holderOf, knownResumeAccount, resumable, whereLabel } from './logic'
+import { continueLine, desktopAccountRef, externalChat, holderOf, knownResumeAccount, resumable, whereLabel } from './logic'
 
 // A session running outside Hydra Desk, in the same column as a chat. A Claude Code session from Claude
 // Desktop or a terminal opens like one of its own chats: idle there, the live composer, whose first
@@ -71,12 +71,15 @@ const holdsHere = computed(() => {
 const workingChat = computed(() => {
   const s = session.value
   if (standIn.value || !s || !isWorking.value || !(s.source === 'desktop' || holdsHere.value)) return null
-  return externalChat(s, src.accounts.value)
+  const chat = externalChat(s, src.accounts.value)
+  return s.source === 'desktop' ? { ...chat, account: desktopAccountRef(s, src.accounts.value) } : chat
 })
 const INTO_WHY = 'Text only: a message into a working Claude Desktop chat has no pictures or voice.'
 const HOLD_WHY = 'Text only: a message for a chat at work elsewhere is sent when its turn ends, with no pictures or voice.'
 const into = computed(() =>
-  holdsHere.value ? { send: (text: string) => desk.holdFor(props.sessionId, text), why: HOLD_WHY } : { send: sendInto, why: INTO_WHY, stop: stopInto }
+  holdsHere.value
+    ? { send: (text: string) => desk.holdFor(props.sessionId, text), why: HOLD_WHY }
+    : { send: sendInto, why: INTO_WHY, stop: stopInto, setting: settingInto }
 )
 const queuedLines = computed(() => (holdsHere.value ? desk.heldFor(props.sessionId) : queued.value))
 const heldError = computed(() => desk.heldError(props.sessionId))
@@ -117,6 +120,17 @@ async function sendInto(text: string): Promise<void> {
 async function stopInto(): Promise<void> {
   const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/stop`, { method: 'POST' })
   const body = (await res.json().catch(() => null)) as (Partial<DesktopStopResult> & { error?: string }) | null
+  if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
+}
+// Its model and effort, set in Claude Desktop as the app's own pickers set them (owner, 2026-10-15: "I want to ... change
+// it inside Agent Hydra"); a running turn keeps going and the next one runs on them.
+async function settingInto(s: DesktopSettingRequest): Promise<void> {
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/setting`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(s)
+  })
+  const body = (await res.json().catch(() => null)) as (Partial<DesktopSettingResult> & { error?: string }) | null
   if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
 }
 // A queued message is shown as queued until the transcript shows it (once per matching message).
@@ -291,15 +305,15 @@ watch(
 // Where a session no signed-in CLI instance holds lands (the stand-in's account, the line over its
 // composer), again when Settings' default changes or the accounts arrive: the named default is only
 // found among them, and a holder's sign-in shows there.
+const accountsKey = computed(() => src.accounts.value.map((a) => `${a.id}:${a.signedIn}`).join(','))
 watch(
-  () =>
-    [
-      props.sessionId,
-      session.value?.canResume,
-      session.value?.accountId ?? null,
-      src.settings.value?.defaultAccountId,
-      src.accounts.value.map((a) => `${a.id}:${a.signedIn}`).join(',')
-    ] as const,
+  [
+    () => props.sessionId,
+    () => session.value?.canResume,
+    () => session.value?.accountId ?? null,
+    () => src.settings.value?.defaultAccountId,
+    accountsKey
+  ],
   ([id, can, owner]) => {
     if (can && !holderOf({ accountId: owner }, src.accounts.value)) void desk.ensureLanding(id)
   },

@@ -232,11 +232,12 @@ export async function probeHttp(port: number, address: string, timeoutMs = 800):
     let title: string | null = null
     if ((res.headers.get('content-type') ?? '').includes('html') && res.body) {
       const reader = res.body.getReader()
+      const decoder = new TextDecoder()
       let html = ''
       while (html.length < 65536) {
         const { value, done } = await reader.read()
         if (done) break
-        html += new TextDecoder().decode(value)
+        html += decoder.decode(value)
         if (/<\/title>/i.test(html)) break
       }
       void reader.cancel().catch(() => {})

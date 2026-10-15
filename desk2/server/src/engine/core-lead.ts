@@ -10,7 +10,7 @@ import type { ChatSummary } from '@shared/protocol'
 import { type CatalogEntry, loadCatalog } from '../../../../server/src/hydra-core/catalog'
 import { leadName, parseHydra } from '../../../../server/src/hydra-core/hydra-md'
 import { coreDir } from './hydra-core-mode'
-import { AVATAR_TYPES, type AvatarExt, currentManager, type ManagerAvatar, MANAGER_SLUG, managerAvatar, managerName } from './managers'
+import { currentManager, type ManagerAvatar, MANAGER_SLUG, managerAvatar, managerName, newestAvatar } from './managers'
 
 export type ChatFace = NonNullable<ChatSummary['manager']>
 
@@ -108,18 +108,6 @@ function slugOf(id: string): string {
   const raw = id.startsWith('person:') ? id.slice('person:'.length) : id.replace(/^lead:/, '')
   const slug = raw.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '').slice(0, 80)
   return MANAGER_SLUG.test(slug) ? slug : 'lead'
-}
-
-function newestAvatar(dir: string, name: string): ManagerAvatar | null {
-  let newest: ManagerAvatar | null = null
-  for (const ext of Object.keys(AVATAR_TYPES) as AvatarExt[]) {
-    const path = join(dir, `${name}.${ext}`)
-    const st = statSync(path, { throwIfNoEntry: false })
-    if (!st?.isFile()) continue
-    const photo = Math.floor(st.mtimeMs)
-    if (!newest || photo > newest.photo) newest = { path, ext, contentType: AVATAR_TYPES[ext], photo }
-  }
-  return newest
 }
 
 /** The portraits folders: AGENTHYDRA_PORTRAITS_DIRS, then each `portraits` folder beside a folder that holds a persona's file. */

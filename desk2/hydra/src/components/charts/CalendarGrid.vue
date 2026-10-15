@@ -37,6 +37,8 @@ const props = defineProps<{
 const DAY_LABELS = ['', 'Mon', '', 'Wed', '', 'Fri', '']
 const LABEL_W = 28
 const GAP = 3
+// Built once: a formatter is costly to make, and the month ticks ask for one per month in range.
+const monthName = new Intl.DateTimeFormat(undefined, { month: 'short' })
 
 const wrap = ref<HTMLElement | null>(null)
 const { width } = useElementSize(wrap)
@@ -98,7 +100,7 @@ const monthTicks = computed(() => {
     seen = stamp
     out.push({
       col: c.col,
-      label: c.date.toLocaleDateString(undefined, { month: 'short' }),
+      label: monthName.format(c.date),
     })
   }
   // Roughly 26px of text per label; drop every other one (then every third, …) until they fit.

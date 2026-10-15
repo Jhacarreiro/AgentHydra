@@ -59,6 +59,9 @@ export default {
   running: 'Running',
   stopped: 'Stopped',
   external: 'External',
+  // A running app whose own log says it signed itself out, while its stored login still names an account.
+  signedOutInApp: 'Signed out',
+  signedOutInAppHint: 'The app signed itself out (its log: “{line}”). Sign in again in its window.',
   // Shown while an instance's account is still being worked out. There is no "Resolve" action
   // anymore — every instance resolves itself — so this is the whole of the unresolved state.
   resolving: 'Resolving…',

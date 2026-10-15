@@ -2,7 +2,7 @@
 // safe to put back; POST { paths }: puts the ready ones back. The truth is the chat's own transcript (chat-undo/plan.ts).
 // Own page only. The chat is read from the engine's own route, as the Connections plugin does.
 
-import { readFileSync } from 'node:fs'
+import { readFile } from 'node:fs/promises'
 import type { Hono } from 'hono'
 import type { ChatUndoRequest } from '@shared/connectors'
 import type { ServerContext } from '../context'
@@ -24,7 +24,7 @@ export default function plugin(app: Hono, _ctx: ServerContext): void {
     const file = findSessionJsonl(chat.sessionId, claudeProjectRoots(dir ? [dir] : []), chat.cwd)
     if (!file) return { error: "the chat's transcript was not found", status: 422 }
     try {
-      return { jsonl: readFileSync(file, 'utf8'), cwd: chat.cwd }
+      return { jsonl: await readFile(file, 'utf8'), cwd: chat.cwd }
     } catch {
       return { error: "the chat's transcript could not be read", status: 422 }
     }

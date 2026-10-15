@@ -214,7 +214,7 @@ const FOOT_BTN =
     >
       <span class="min-w-0 flex-1 truncate">{{ s.label }}<span v-if="s.note" class="tnum"> · {{ s.note }}</span></span>
       <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="s.on ? 'bg-accent' : 'bg-(--fill-secondary)'">
-        <span class="absolute top-0.5 size-2.5 rounded-full bg-white transition-[left]" :class="s.on ? 'left-3' : 'left-0.5'" />
+        <span class="absolute top-0.5 left-0.5 size-2.5 rounded-full bg-white transition-transform" :class="s.on ? 'translate-x-2.5' : ''" />
       </span>
     </button>
 

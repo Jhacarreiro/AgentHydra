@@ -62,14 +62,11 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
   const seen = new Map<string, { updatedAt: number; tokens: number | null }>()
 
   async function locate(sessionId: string, dirs: Iterable<string>): Promise<string | null> {
-    for (const dir of dirs) {
-      const root = join(dir, 'projects')
-      let subs: string[] = []
-      try {
-        subs = await readdir(root)
-      } catch {
-        continue
-      }
+    const roots = [...dirs].map((dir) => join(dir, 'projects'))
+    const listed = await Promise.all(roots.map((root) => readdir(root).catch(() => null)))
+    for (const [i, subs] of listed.entries()) {
+      if (!subs) continue
+      const root = roots[i]!
       for (const d of subs) {
         const file = join(root, d, `${sessionId}.jsonl`)
         if (await stat(file).then(() => true, () => false)) return file
@@ -128,11 +125,9 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
       ),
     ]
     const sessions = [...new Set([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])])]
+    const counts = await Promise.all(sessions.map((s) => sessionTokens(s, dirs)))
     let sum: number | null = null
-    for (const s of sessions) {
-      const n = await sessionTokens(s, dirs)
-      if (n !== null) sum = (sum ?? 0) + n
-    }
+    for (const n of counts) if (n !== null) sum = (sum ?? 0) + n
     if (sum === null) return settled
     return settled === null ? sum : Math.max(settled, sum)
   }
@@ -164,5 +159,3 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
     },
   }
 }
-
-export type WorkerTokens = ReturnType<typeof createWorkerTokens>
