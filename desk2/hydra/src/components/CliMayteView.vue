@@ -129,7 +129,8 @@ const {
   refreshCliMayte,
 } = useCliMayteData()
 /** Every row the list shows: this PC's workers, then the other PCs'. */
-const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeThreads.value.map(t => freeThreadRow(t, freeInstances.value.find(i => i.id === t.instanceId)))])
+const freeById = computed(() => new Map(freeInstances.value.map((i) => [i.id, i])))
+const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeThreads.value.map(t => freeThreadRow(t, freeById.value.get(t.instanceId)))])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
 const remoteNotes = computed<Array<{ pc: string; note: string }>>(() =>
   remote.value?.enabled

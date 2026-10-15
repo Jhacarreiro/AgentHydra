@@ -125,6 +125,10 @@ function clearAskResult() {
   askPrompt.value = ''
 }
 
+// Serialised once per reply, not on every render of the page.
+const askJson = computed(() => JSON.stringify(askResult.value, null, 2))
+const doctorJson = computed(() => JSON.stringify(doctorResult.value?.data, null, 2))
+
 const doctorChecks = computed(() => {
   if (!doctorResult.value?.data) return []
   const data = doctorResult.value.data
@@ -305,7 +309,7 @@ onMounted(() => {
             </CardDescription>
           </CardHeader>
           <CardContent>
-            <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm">{{ askResult.answer || askResult.error || JSON.stringify(askResult, null, 2) }}</pre>
+            <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-sm">{{ askResult.answer || askResult.error || askJson }}</pre>
           </CardContent>
         </Card>
       </div>
@@ -357,7 +361,7 @@ onMounted(() => {
               <summary class="cursor-pointer text-sm font-medium text-muted-foreground hover:text-foreground">
                 {{ t('hswarm.v.tools.doctorFullReport') }}
               </summary>
-              <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs mt-2">{{ JSON.stringify(doctorResult.data, null, 2) }}</pre>
+              <pre class="max-h-96 overflow-auto rounded-md bg-muted p-3 text-xs mt-2">{{ doctorJson }}</pre>
             </details>
           </div>
         </div>

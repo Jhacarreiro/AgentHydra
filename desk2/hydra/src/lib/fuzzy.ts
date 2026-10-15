@@ -283,30 +283,6 @@ export function fuzzyMatch(text: string, pattern: string): FuzzyMatch | null {
   return { score: best.score, positions }
 }
 
-/** One slice of a string, marked when its characters were matched. */
-export interface TextRun {
-  text: string
-  hit: boolean
-}
-
-/**
- * Split `text` into alternating plain and matched runs, so a template can bold the hit characters
- * without building HTML. Positions must be ascending (fuzzyMatch returns them so).
- */
-export function highlightRuns(text: string, positions: readonly number[]): TextRun[] {
-  if (positions.length === 0) return text ? [{ text, hit: false }] : []
-  const hits = new Set(positions)
-  const runs: TextRun[] = []
-  let start = 0
-  for (let j = 1; j <= text.length; j++) {
-    if (j === text.length || hits.has(j) !== hits.has(start)) {
-      runs.push({ text: text.slice(start, j), hit: hits.has(start) })
-      start = j
-    }
-  }
-  return runs
-}
-
 /** The fields one row offers a filter box: the first is the one whose hits get highlighted. */
 export interface FuzzyFields {
   /** Shown text; its matched positions are returned for highlighting. */

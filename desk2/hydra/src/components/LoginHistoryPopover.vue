@@ -7,7 +7,7 @@
 // Fetched each time the flyout opens, never with the table: it walks one profile's chat store,
 // which is cheap for the row you asked about and waste for the seventy you did not.
 import { History } from '@lucide/vue'
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { Badge } from '@/components/ui/badge'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -21,7 +21,7 @@ import InfoHint from '@/shell/InfoHint.vue'
 const props = defineProps<{ dir: string; num: number }>()
 const { t } = useI18n()
 
-const history = ref<CMLoginHistory | null>(null)
+const history = shallowRef<CMLoginHistory | null>(null)
 const failed = ref(false)
 
 async function load(open: boolean) {

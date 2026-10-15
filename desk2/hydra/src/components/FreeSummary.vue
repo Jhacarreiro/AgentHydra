@@ -5,10 +5,12 @@
 // came out the same day (owner: "don't need this"); each account's tokens are the table's own column. On All the models
 // are one list of every source's (CombinedModels), so `hideModels` leaves out the answered-by-model list.
 import type { FreeProvider } from '@desk/shared/free-instances'
+import { useTimestamp } from '@vueuse/core'
 import { computed } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import ProviderLogo from '@/components/ProviderLogo.vue'
+import SeriesLegend from '@/components/SeriesLegend.vue'
 import { useFreeInstances } from '@/composables/useFreeInstances'
 import { freeStatDays, useFreeStats } from '@/composables/useFreeStats'
 import { useUsageSpan } from '@/composables/useUsagePeriod'
@@ -25,7 +27,9 @@ const { instances, tokens } = useFreeInstances()
 const { rows, failed } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
 
-const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, tokens.value, tokenWindow.value, freeStatDays.value, Date.now()))
+// The windows are days, so a minute's tick keeps the summary's "now" from freezing at the moment it was first read.
+const now = useTimestamp({ interval: 60_000 })
+const summary = computed(() => summarizeFree(rows.value ?? [], instances.value, tokens.value, tokenWindow.value, freeStatDays.value, now.value))
 const windowLabel = computed(() => ({ '5h': t('freeInstances.stats.window5h'), week: t('freeInstances.stats.windowWeek'), total: t('freeInstances.stats.windowTotal') })[tokenWindow.value])
 const providerLabel = (p: FreeProvider) => (p === 'claude' ? 'Claude' : 'ChatGPT')
 const pct = (x: Pick<FreeTally, 'sent' | 'failed'>) => {
@@ -110,12 +114,7 @@ const messagesTip = (x: FreeTally) => {
         <p v-if="daysEmpty" class="py-2 text-center text-2xs text-muted-foreground">{{ $t('freeInstances.stats.noTokens') }}</p>
         <template v-else>
           <HourBars :hours="dayBars" :series="series" :format-value="formatTokens" height-class="h-20" />
-          <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
-            <li v-for="s in series" :key="s.key" class="flex items-center gap-1">
-              <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>
-              {{ s.label }}
-            </li>
-          </ul>
+          <SeriesLegend :series="series" />
         </template>
       </div>
     </template>

@@ -254,6 +254,13 @@ const nodes = computed<TreeNode[]>(() => {
     (a, b) => Number(b.keys > 0) - Number(a.keys > 0) || a.name.localeCompare(b.name),
   )
   const cl = clients.value ?? CLIENT_IDS.map((c) => ({ client: c, registered: null }))
+  // Each provider's models, grouped once (in list order) rather than scanned per provider.
+  const modelsByProvider = new Map<string, any[]>()
+  for (const m of (s.models ?? []) as any[]) {
+    const list = modelsByProvider.get(m.provider) ?? []
+    list.push(m)
+    modelsByProvider.set(m.provider, list)
+  }
   return [
     { id: 'overview', label: t('hswarm.overview'), icon: LayoutGrid },
     { id: 'savings', label: t('hswarm.savings'), icon: PiggyBank },
@@ -274,9 +281,7 @@ const nodes = computed<TreeNode[]>(() => {
           dotTitle,
           meta: p.keys ? `${p.ready ?? 0}/${p.keys}` : t('hswarm.nav.noKey'),
           dim: !p.enabled,
-          kids: (s.models ?? [])
-            .filter((m: any) => m.provider === p.name)
-            .map((m: any) => ({
+          kids: (modelsByProvider.get(p.name) ?? []).map((m: any) => ({
               id: `providers/${enc(p.name)}/${enc(m.name)}`,
               label: m.label || m.name,
               icon: Cpu,

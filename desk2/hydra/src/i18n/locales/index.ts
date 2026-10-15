@@ -18,16 +18,6 @@ export const LOCALES: LocaleMeta[] = [
   { code: 'en', endonym: 'English', englishName: 'English', status: 'source' },
 ]
 
-export const DEFAULT_LOCALE: LocaleCode = 'en'
-
-export function isSupportedLocale(code: string): code is LocaleCode {
-  return LOCALES.some((l) => l.code === code)
-}
-
 export function localeMeta(code: LocaleCode): LocaleMeta {
   return LOCALES.find((l) => l.code === code) ?? LOCALES[0]
-}
-
-export function isMachineDraft(code: LocaleCode): boolean {
-  return localeMeta(code).status === 'machine-draft'
 }

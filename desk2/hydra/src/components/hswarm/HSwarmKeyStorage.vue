@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, ref, shallowRef } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Badge } from '@/components/ui/badge'
@@ -35,8 +35,8 @@ interface PendingRequest {
   error?: string
 }
 
-const status = ref<VaultStatus | null>(null)
-const requests = ref<PendingRequest[]>([])
+const status = shallowRef<VaultStatus | null>(null)
+const requests = shallowRef<PendingRequest[]>([])
 const busy = ref(false)
 const panel = ref<'init' | 'join' | 'request' | null>(null)
 const kind = ref<'ssh' | 'dir'>('ssh')

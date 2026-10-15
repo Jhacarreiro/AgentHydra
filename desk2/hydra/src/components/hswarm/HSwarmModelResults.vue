@@ -316,7 +316,8 @@ const daily = computed<DailyDay[]>(() => {
   return [...byDay.values()]
 })
 const dayTotal = (d: DailyDay) => Object.values(d.models).reduce((a, b) => a + b, 0) + d.other
-const dayMax = computed(() => Math.max(1, ...daily.value.map(dayTotal)))
+const dayTotals = computed(() => new Map(daily.value.map((d) => [d.date, dayTotal(d)])))
+const dayMax = computed(() => Math.max(1, ...dayTotals.value.values()))
 const colorOf = (name: string) => seriesColor(name, dailyTop.value)
 const rangeLabel = (r: Range) => (r === 'all' ? t('hswarm.v.overview.results.all') : t('hswarm.v.overview.results.days', { n: r }))
 const expander = 'text-2xs font-medium text-muted-foreground hover:text-foreground hover:underline'
@@ -472,9 +473,9 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
               v-for="d in daily"
               :key="d.date"
               class="flex h-full min-w-0 flex-1 flex-col-reverse"
-              :title="`${d.date}: ${dayTotal(d)}`"
+              :title="`${d.date}: ${dayTotals.get(d.date) ?? 0}`"
             >
-              <div class="flex flex-col-reverse h-(--day-h)" :style="{ '--day-h': `${(dayTotal(d) / dayMax) * 100}%` }">
+              <div class="flex flex-col-reverse h-(--day-h)" :style="{ '--day-h': `${((dayTotals.get(d.date) ?? 0) / dayMax) * 100}%` }">
                 <div
                   v-for="name in dailyTop"
                   :key="name"

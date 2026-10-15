@@ -150,8 +150,8 @@ const shownModels = computed(() =>
 
 const typedModels = computed(() => filteredModels.value.filter((m) => m.kind === 'typed'))
 
-const modelRowModels = computed((): HSwarmModelRowModel[] => {
-  return shownModels.value.map((m) => ({
+function rowModelOf(m: Model): HSwarmModelRowModel {
+  return {
     id: m.name,
     name: m.name,
     label: m.label,
@@ -169,30 +169,12 @@ const modelRowModels = computed((): HSwarmModelRowModel[] => {
     onEnabledChange: (v) => toggleModel(m.name, v),
     onPriorityChange: (p) => setPriority(m.name, p),
     onToggleStar: () => toggleStar(m.name),
-  }))
-})
+  }
+}
 
-const typedModelRowModels = computed((): HSwarmModelRowModel[] => {
-  return typedModels.value.map((m) => ({
-    id: m.name,
-    name: m.name,
-    label: m.label,
-    enabled: !!m.enabled,
-    switched_off: !!m.switched_off,
-    priority: m.priority ?? null,
-    provider: m.provider,
-    kind: m.kind,
-    usd_per_1m: m.usd_per_1m,
-    ctx: m.ctx,
-    custom: !!m.custom,
-    vision: !!m.vision,
-    tools: m.tools,
-    auto: !!m.auto,
-    onEnabledChange: (v) => toggleModel(m.name, v),
-    onPriorityChange: (p) => setPriority(m.name, p),
-    onToggleStar: () => toggleStar(m.name),
-  }))
-})
+const modelRowModels = computed((): HSwarmModelRowModel[] => shownModels.value.map(rowModelOf))
+
+const typedModelRowModels = computed((): HSwarmModelRowModel[] => typedModels.value.map(rowModelOf))
 
 const starredModels = computed(() => {
   const starred = allModels.value.filter((m: Model) => m.priority)

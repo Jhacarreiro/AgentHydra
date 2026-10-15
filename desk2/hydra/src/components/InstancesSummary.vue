@@ -15,12 +15,13 @@
 // properly... show the combined list of models"), in place of each block's own.
 import type { FleetUsageHistory, SpendReport } from '@agenthydra/server/types'
 import { ChevronRight } from '@lucide/vue'
-import { useElementSize, useStorage } from '@vueuse/core'
+import { useElementSize, useStorage, useTimestamp } from '@vueuse/core'
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import HourBars from '@/components/charts/HourBars.vue'
 import CombinedModels from '@/components/CombinedModels.vue'
 import FreeSummary from '@/components/FreeSummary.vue'
+import SeriesLegend from '@/components/SeriesLegend.vue'
 import SpendSummary from '@/components/SpendSummary.vue'
 import { Button } from '@/components/ui/button'
 import { useFreeInstances } from '@/composables/useFreeInstances'
@@ -50,10 +51,12 @@ const { rows: freeRows, failed: freeStatsFailed } = useFreeStats()
 const tokenWindow = useDesktopTokenWindow()
 watch([showFree, freeTokens, freeHealth, freeStatDays], ([free]) => { if (free) void refreshFreeStats() }, { immediate: true })
 const { span, freeSpan } = useUsageSpan()
+// The windows are days, so a minute's tick keeps the Free "now" from freezing at the moment it was first read.
+const now = useTimestamp({ interval: 60_000 })
 // The Free accounts' record over the period's days; null with no Free accounts. Its totals are in the Free card's own
 // window; the All line adds its days, the same period as Desktop and CLI (only All time differs: Free keeps 30 days).
 const freeSummary = computed(() =>
-  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, freeStatDays.value, Date.now()) : null,
+  freeInstances.value.length ? summarizeFree(freeRows.value ?? [], freeInstances.value, freeTokens.value, tokenWindow.value, freeStatDays.value, now.value) : null,
 )
 const freeAll = computed(() => freeSummary.value?.totals.all ?? null)
 const freeInDays = computed(() => (freeSummary.value?.days ?? []).reduce((n, d) => n + d.claude + d.chatgpt, 0))
@@ -78,7 +81,7 @@ const sourceLabel = (s: TokenSource) =>
 
 const history = shallowRef<FleetUsageHistory | null>(null)
 const historyFailed = ref(false)
-const tokenDays = ref<Array<{ key: string; values: number[] }> | null>(null)
+const tokenDays = shallowRef<Array<{ key: string; values: number[] }> | null>(null)
 const tokensFailed = ref(false)
 
 async function loadHistory() {
@@ -168,7 +171,7 @@ const tokensEmpty = computed(
 const SPEND_SOURCES = ['desktop', 'cli', 'climayte'] as const
 type SpendSource = (typeof SPEND_SOURCES)[number]
 type BySource<T> = Partial<Record<SpendSource, T>>
-const spendBy = ref<Partial<Record<UsagePeriod, BySource<SpendReport>>>>({})
+const spendBy = shallowRef<Partial<Record<UsagePeriod, BySource<SpendReport>>>>({})
 const failedBy = ref<Partial<Record<UsagePeriod, BySource<boolean>>>>({})
 async function loadSpend(period: UsagePeriod, source: SpendSource) {
   try {
@@ -422,12 +425,7 @@ const headerTip = computed(() => {
             height-class="h-32"
             :format-value="formatTokens"
           />
-          <ul class="mt-1 flex flex-wrap gap-x-3 gap-y-1 text-3xs text-muted-foreground">
-            <li v-for="s in tokenSeries" :key="s.key" class="flex items-center gap-1">
-              <span class="inline-block size-2 rounded-sm bg-(--dot-c)" :style="{ '--dot-c': s.color }"></span>
-              {{ s.label }}
-            </li>
-          </ul>
+          <SeriesLegend :series="tokenSeries" />
         </template>
       </div>
     </div>
