@@ -1,11 +1,12 @@
 // pricecheck/lib/static/cli.mjs - scan, page, diff, check, freeze: the static measurer's commands. run(argv) -> exit code.
+import fs from 'node:fs'
 import path from 'node:path'
 import { execFileSync } from 'node:child_process'
 import { describe, topFiles } from '../model.mjs'
 import { loadConfig } from '../config.mjs'
 import { loadBaseline, saveBaseline, compare, freeze, loadViews } from '../ledger.mjs'
 import { priceRepo, measurePage, session, discoverFor, pricePages, reachingPages } from './measure.mjs'
-import { isPageFile } from './discover.mjs'
+import { isPageFile, TEMPLATE_EXT } from './discover.mjs'
 
 const USAGE = `usage: pricecheck <scan|page|diff|check|freeze> [--root <repo>] [options]
   scan [--json] [--limit N]        every page, most expensive first (by daily exposure when views exist)
@@ -43,22 +44,48 @@ function git(root, args) {
   return execFileSync('git', args, { cwd: root, encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, stdio: ['ignore', 'pipe', 'ignore'] })
 }
 
-function gitShow(root, ref) {
-  const cache = new Map()
-  return (file) => {
-    if (!cache.has(file)) {
-      try {
-        cache.set(file, git(root, ['show', `${ref}:${file}`]))
-      } catch {
-        cache.set(file, null)
-      }
+/** Each file's text at ref, fetched in one `git cat-file --batch` call; null where the file did not exist there. */
+function textsAt(root, ref, files) {
+  const texts = new Map()
+  if (!files.length) return texts
+  const out = execFileSync('git', ['cat-file', '--batch'], {
+    cwd: root,
+    input: `${files.map((f) => `${ref}:./${f}`).join('\n')}\n`,
+    maxBuffer: 512 * 1024 * 1024,
+    stdio: ['pipe', 'pipe', 'ignore'],
+  })
+  let at = 0
+  for (const f of files) {
+    const nl = out.indexOf(10, at)
+    const header = out.toString('utf8', at, nl).split(' ')
+    at = nl + 1
+    if (header.length !== 3 || header[1] !== 'blob') {
+      texts.set(f, null)
+      continue
     }
-    return cache.get(file)
+    const size = Number(header[2])
+    texts.set(f, out.toString('utf8', at, at + size))
+    at += size + 1
   }
+  return texts
+}
+
+/** Files as they were at ref: the markup files changed since ref come from git in one call, every other file from disk. */
+function gitShow(root, ref) {
+  const old = textsAt(root, ref, changedFiles(root, ref).filter((f) => TEMPLATE_EXT.test(f)))
+  const read = (file) => {
+    if (old.has(file)) return old.get(file)
+    try {
+      return fs.readFileSync(path.join(root, file), 'utf8')
+    } catch {
+      return null
+    }
+  }
+  return { read, differs: old }
 }
 
 function changedFiles(root, ref) {
-  const tracked = git(root, ['diff', '--name-only', ref]).split('\n').filter(Boolean)
+  const tracked = git(root, ['diff', '--name-only', '--relative', ref]).split('\n').filter(Boolean)
   const untracked = git(root, ['ls-files', '--others', '--exclude-standard']).split('\n').filter(Boolean)
   return [...new Set([...tracked, ...untracked].map(posix))]
 }
@@ -114,7 +141,10 @@ function changes(opts) {
     const base = loadBaseline(opts.root).pages
     beforeOf = (f) => (base[f] ? { points: base[f].points, byFile: null } : null)
   } else {
-    const hctx = session(opts.root, gitShow(opts.root, against))
+    const { read, differs } = gitShow(opts.root, against)
+    const hctx = session(opts.root, read)
+    // A file unchanged since the ref parses the same: reuse the working tree's parse.
+    for (const [f, t] of ctx.templates) if (!differs.has(f)) hctx.templates.set(f, t)
     const before = new Map(
       pricePages(
         hctx,
