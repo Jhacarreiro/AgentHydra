@@ -25,7 +25,8 @@ PREFIX="${AGENTHYDRA_BACKUP_PREFIX:-agenthydra-api}"
 PGPW=$(grep '^AGENTHYDRA_DB_BACKUP_PASSWORD=' "$API_ENV" | cut -d= -f2-)
 [ -n "$PGPW" ] || die "AGENTHYDRA_DB_BACKUP_PASSWORD not found in api.env"
 
-install -d -m 0700 "$DEST"
+# 0711: the API user can stat the stamp file for /healthz but cannot list or read the (0600) dumps.
+install -d -m 0711 "$DEST"
 ts=$(date -u +%Y%m%dT%H%M%SZ)
 tmp="$DEST/.partial-$ts"
 GNUPGTMP=""
@@ -79,5 +80,6 @@ done
 
 # Only after dump, encrypt and upload all succeeded: the timestamp /healthz reads.
 date -u +%s >"$STAMP_FILE.tmp"
+chmod 0644 "$STAMP_FILE.tmp"
 mv "$STAMP_FILE.tmp" "$STAMP_FILE"
 log "done"
