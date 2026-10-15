@@ -1,0 +1,11 @@
+[Unit]
+Description=AgentHydra API nightly encrypted backup
+After=docker.service
+OnFailure=agenthydra-notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/agenthydra-api/current/deploy/backup.sh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes

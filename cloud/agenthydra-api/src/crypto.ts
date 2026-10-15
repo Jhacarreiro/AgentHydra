@@ -47,7 +47,7 @@ export function open(ring: Keyring, sub: string, sealed: Sealed, aad = ''): Buff
   return Buffer.concat([d.update(buf.subarray(0, buf.length - TAG)), d.final()])
 }
 
-/** Parse `PEOPLE_MASTER_KEYS` like `1:<base64>,2:<base64>`; the highest id is current. */
+/** Parse `AGENTHYDRA_MASTER_KEYS` like `1:<base64>,2:<base64>`; the highest id is current. */
 export function keyringFromEnv(spec: string): Keyring {
   const keys = new Map<number, Uint8Array>()
   for (const part of spec

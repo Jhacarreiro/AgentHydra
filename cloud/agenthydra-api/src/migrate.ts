@@ -32,10 +32,10 @@ export async function migrate(db: Db, dir = defaultMigrationsDir): Promise<{ app
     .filter((f) => /^\d+_.*\.sql$/.test(f))
     .sort()
   await db.exec(
-    'CREATE TABLE IF NOT EXISTS people_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())',
+    'CREATE TABLE IF NOT EXISTS schema_migrations (name text PRIMARY KEY, checksum text NOT NULL, applied_at timestamptz NOT NULL DEFAULT now())',
   )
   const done = new Map(
-    (await db.query('SELECT name, checksum FROM people_migrations')).map((r) => [
+    (await db.query('SELECT name, checksum FROM schema_migrations')).map((r) => [
       r.name as string,
       r.checksum as string,
     ]),
@@ -54,7 +54,7 @@ export async function migrate(db: Db, dir = defaultMigrationsDir): Promise<{ app
     }
     await db.begin(async (tx) => {
       await tx.exec(text)
-      await tx.query('INSERT INTO people_migrations (name, checksum) VALUES ($1, $2)', [name, sum])
+      await tx.query('INSERT INTO schema_migrations (name, checksum) VALUES ($1, $2)', [name, sum])
     })
     applied.push(name)
   }
@@ -62,8 +62,8 @@ export async function migrate(db: Db, dir = defaultMigrationsDir): Promise<{ app
 }
 
 if (import.meta.main) {
-  const url = process.env.PEOPLE_OWNER_DATABASE_URL
-  if (!url) throw new Error('PEOPLE_OWNER_DATABASE_URL is not set')
+  const url = process.env.AGENTHYDRA_OWNER_DATABASE_URL
+  if (!url) throw new Error('AGENTHYDRA_OWNER_DATABASE_URL is not set')
   const sql = new Bun.SQL(url)
   const r = await migrate(fromBunSql(sql))
   console.log(r.applied.length ? `applied: ${r.applied.join(', ')}` : 'up to date')

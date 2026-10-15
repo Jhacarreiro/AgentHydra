@@ -1,5 +1,5 @@
 [Unit]
-Description=People server nightly backup
+Description=AgentHydra API nightly backup
 
 [Timer]
 OnCalendar=*-*-* 03:30:00 UTC

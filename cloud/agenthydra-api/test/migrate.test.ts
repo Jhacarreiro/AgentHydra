@@ -25,7 +25,7 @@ async function fresh() {
 
 /** Run as the non-superuser runtime role (superusers bypass RLS). */
 async function asApp<T>(pg: PGlite, scope: string | null, fn: () => Promise<T>): Promise<T> {
-  await pg.exec('SET ROLE people_app')
+  await pg.exec('SET ROLE agenthydra_app')
   try {
     if (scope !== null) await pg.query("SELECT set_config('people.scope', $1, false)", [scope])
     return await fn()
@@ -72,7 +72,7 @@ describe('migrate', () => {
     const dir = mkdtempSync(join(tmpdir(), 'people-mig-'))
     writeFileSync(join(dir, '0001_bad.sql'), 'CREATE TABLE t1 (a int); SELECT nope FROM missing;')
     await expect(migrate(ctx.db, dir)).rejects.toThrow()
-    expect((await ctx.db.query('SELECT * FROM people_migrations')).length).toBe(0)
+    expect((await ctx.db.query('SELECT * FROM schema_migrations')).length).toBe(0)
     expect((await ctx.db.query("SELECT to_regclass('t1') AS r"))[0]!.r).toBeNull()
   })
 
@@ -129,7 +129,7 @@ describe('migrate', () => {
       INSERT INTO people_users (sub, training_use) VALUES ('in', true), ('out', false);
       INSERT INTO people_users (sub, deleted_at) VALUES ('gone', now());`)
     for (const s of ['in', 'out', 'gone']) await ctx.pg.query(ins, [`user:${s}`])
-    await ctx.pg.exec('SET ROLE people_export')
+    await ctx.pg.exec('SET ROLE agenthydra_export')
     const rows = (await ctx.pg.query('SELECT user_ref FROM training_eligible')).rows as {
       user_ref: string
     }[]

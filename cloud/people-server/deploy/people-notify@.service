@@ -1,7 +1,0 @@
-[Unit]
-Description=People server failure notice for %i
-
-[Service]
-Type=oneshot
-# Writes to the journal at error level; point a monitor at this unit name if one exists.
-ExecStart=/usr/bin/logger -p user.err -t people-notify "unit %i failed"

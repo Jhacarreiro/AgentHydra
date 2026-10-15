@@ -3,7 +3,7 @@
   "configVersion": 1,
   "workspaces": {
     "": {
-      "name": "agenthydra-people-server",
+      "name": "agenthydra-api",
       "dependencies": {
         "jose": "^6.0.0",
       },
