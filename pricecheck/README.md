@@ -56,6 +56,20 @@ node pricecheck/bin/pricecheck.mjs live    <url> [--cdp <endpoint>]   price the 
 
 </details>
 
+<details><summary>Tools</summary>
+
+The MCP tools in `server/src/mcp-pricecheck.ts`. Each runs the CLI once against the calling folder's checkout, inside the call budget.
+
+- `price_check` (listed): `mode` scan, page, diff or check. Scan appends a snapshot to the history.
+- `price_check_next`: the page to trim next, with a brief a worker can run as it is, and the progress since the first snapshot.
+- `price_check_live`: prices a page as a real browser renders it. Read-only; `url` must be http or https.
+- `price_check_freeze` (MUTATES): freezes every page's price as the baseline in `.pricecheck/baseline.json`.
+- `price_check_report` (MUTATES): writes `price/index.html` into the project's dashboard and returns its url. Nothing else is written.
+
+History lives at `<PRICECHECK_HOME or ~/.agenthydra/pricecheck>/history.jsonl`, one line per distinct scan, appended and never rewritten.
+
+</details>
+
 <details><summary>Repo config (.pricecheck.json, all optional)</summary>
 
 ```json
@@ -70,5 +84,31 @@ node pricecheck/bin/pricecheck.mjs live    <url> [--cdp <endpoint>]   price the 
 ```
 
 `pages` overrides page discovery. `alias` adds import aliases beyond those read from `tsconfig.json` / `vite.config.*`. `productOrigins` names the other products whose links count as pushes. `budgets` caps a page's price outright, on top of the ratchet.
+
+</details>
+
+<details><summary>Price tag hook</summary>
+
+A Claude Code `PostToolUse` hook (`hook/price-tag.mjs`) prices each UI edit as it is made. After an `Edit`, `Write` or `MultiEdit` of a `.vue`, `.tsx`, `.jsx`, `.svelte`, `.html` or `.astro` file, or of a `.json`/`.ts`/`.js` file under a `locales`, `locale`, `i18n`, `lang` or `messages` folder, it runs `pricecheck diff --against HEAD` on that file. If a page's price moved, the model gets a note like this for a two-page change:
+
+```
+Price check: this edit makes src/views/SignIn.vue 40 -> 52 points (+12: +9 words, +2 controls in src/views/SignIn.vue).
+Price check: this edit makes src/views/Home.vue 52 -> 45 points, cheaper (-7: -6 words, -1 control in src/views/Home.vue).
+Every point is attention the person pays; cheaper wins. pricecheck page src/views/SignIn.vue shows the whole bill.
+```
+
+- Other files cost nothing: no git call, no CLI run. A CLI error, a timeout (6 s, the process tree is killed) or an unchanged price prints nothing. The hook never exits non-zero and never blocks an edit.
+- At most three pages are named; with more, two are named and the rest are a `+N more pages` line.
+- Kill switch: `PRICECHECK_HOOK=off`, or a file named `hook-off` in `PRICECHECK_HOME` (default `~/.agenthydra/pricecheck`).
+- `PRICECHECK_CLI` points the hook at another CLI script (the tests use a stub).
+- Install into `~/.claude/settings.json` (or `--settings <path>`); it writes a `.bak-<ms>` copy before any change and leaves every other hook alone:
+
+```
+node pricecheck/hook/install.mjs              install (idempotent)
+node pricecheck/hook/install.mjs --status     installed or not
+node pricecheck/hook/install.mjs --uninstall  remove only this entry
+```
+
+Tests: `bun test ./pricecheck/test/hook`.
 
 </details>
