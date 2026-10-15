@@ -28,3 +28,25 @@ Also needed on the box: the pinned `bun` at `/opt/agenthydra-api/bin/bun` (root-
 ## Rollback
 
 Point `current` back at the previous release (`ln -sfn /opt/agenthydra-api/releases/<old> /opt/agenthydra-api/current.new && mv -T /opt/agenthydra-api/current.new /opt/agenthydra-api/current`) and `systemctl restart agenthydra-api`. `agenthydra-api-deploy.sh` does this by itself when the health check fails. To remove the site, delete `/etc/caddy/sites/32-agenthydra-api.caddy`, `caddy validate`, reload, and delete the DNS record. The `agenthydra-pg` container and its volume stay; rows are never dropped.
+
+## Backups
+
+`backup.sh` (timer `agenthydra-backup`, 03:30 UTC) dumps the `agenthydra` database as `agenthydra_backup`, pipes it straight into `age` (or `gpg` if age is missing) using the owner's PUBLIC key, uploads the ciphertext to S3 with server-side encryption, keeps the newest 7 in `/var/backups/agenthydra` (0700) and writes `/var/backups/agenthydra/last-backup` (unix seconds) for `/healthz`. Settings live in `/etc/agenthydra/backup.env` (copy `backup.env.example`, root, 0600).
+
+The owner creates once:
+
+1. A private S3 bucket: block all public access, versioning on, default SSE, a lifecycle rule that expires objects and noncurrent versions after 35 days.
+2. An IAM user allowed only `s3:PutObject` on `arn:aws:s3:::<bucket>/*`; its key goes in the credentials file named in `backup.env`.
+3. An age (or gpg) key pair generated on a trusted machine. Only the public key goes on the box; the private key stays off it.
+4. `awscli` and `age` installed on the box.
+
+Restore test (on a trusted machine, never on the box; needs Docker, the private key, and the aws CLI if downloading):
+
+```
+./restore-test.sh --key <private-key-path> --bucket <bucket> --region <region> [--profile <p>] [--expected counts.txt]
+./restore-test.sh --key <private-key-path> --file ./agenthydra-<ts>.dump.age
+```
+
+It restores into a throwaway `agenthydra_restore_test` database in a scratch `postgres:17` container, prints row counts per table, compares them to `counts.txt` (lines `<table> <count>`, taken read-only from the live DB) and prints PASS or FAIL. Run it before launch and monthly.
+
+The master encryption key (`AGENTHYDRA_MASTER_KEY` in `api.env`) is not in the dumps' protection scope: the data inside is encrypted by the app, so the owner must back that key up separately, or a restored dump cannot be read.
