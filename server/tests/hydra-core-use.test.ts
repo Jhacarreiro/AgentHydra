@@ -41,6 +41,7 @@ function fakeDaemon(report: R | R[]) {
       calls.report.push({ id, waitS })
       return answers.length > 1 ? (answers.shift() as R) : (answers[0] as R)
     },
+    async send() {},
   }
   return { daemon, calls }
 }

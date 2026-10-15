@@ -6,7 +6,7 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DRONE_REFUSAL } from './climayte-lib'
-import { refuse, traceCaller } from './hydra-core/caller'
+import { refuse, traceCaller, untracedRefusal } from './hydra-core/caller'
 import {
   AUTO_DETACH_MS,
   api,
@@ -334,6 +334,7 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
       // After the argument checks: the role is read from the daemon, and a bad call is refused before any request.
       const caller = await traceCaller(a)
       if (caller.role === 'drone') refuse(caller, DRONE_REFUSAL)
+      if (!caller.role) refuse(caller, untracedRefusal('start a fan-out', caller.why))
       const groupName = str(a.group).trim()
       const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
       // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES

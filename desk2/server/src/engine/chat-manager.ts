@@ -78,7 +78,9 @@ import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
 import { ANSWER_NOW, buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
+import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
 import { chatFace, forgetCoreFaces } from './core-lead'
+import { coreDir } from './hydra-core-mode'
 import { forgetManager, MANAGER_SLUG } from './managers'
 import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
@@ -1603,6 +1605,12 @@ export class ChatManager {
     if (e.chat.workerId && e.workerLive !== false) await this.bridge.cancelWorker(e.chat.workerId).catch(() => {})
     this.store.deleteChat(id)
     this.dropItemsBody(id)
+    // Hydra Core keyed this chat's folder, and its seat entry if it is one, by its id (HYDRA_DESK_CHAT_ID).
+    try {
+      forgetChat(coreDir(), id)
+    } catch {
+      // floor-ok: a core folder still held open stays behind; the chat itself is gone either way
+    }
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.removed', chatId: id })
   }

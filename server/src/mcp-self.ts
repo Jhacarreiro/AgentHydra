@@ -246,7 +246,11 @@ export async function callerOrigin(
       why: null,
     }
   } catch (err) {
-    const msg = (err instanceof Error ? err.message : String(err)).split('\n')[0].trim()
+    // The process walk's own words end by asking for a session_id, which this trace never reads (see above).
+    const msg = (err instanceof Error ? err.message : String(err))
+      .split('\n')[0]
+      .replace(/\s*Pass session_id\b.*$/, '')
+      .trim()
     return { origin: null, why: msg || 'the calling chat could not be identified' }
   } finally {
     clearTimeout(timer)

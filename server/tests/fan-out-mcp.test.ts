@@ -8,6 +8,7 @@ import { existsSync, mkdtempSync, readFileSync, rmSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { SERVER_INSTRUCTIONS, TOOLS } from '../src/mcp'
+import { setCallerTranscriptResolver } from '../src/mcp-self'
 
 type Call = { url: string; method: string; body: Record<string, unknown> | null }
 let calls: Call[] = []
@@ -68,8 +69,16 @@ beforeEach(() => {
     savedCallerEnv[k] = process.env[k]
     delete process.env[k]
   }
+  // The caller is a chat no CliMayte worker owns (a Prime): fan_out refuses a caller it cannot trace.
+  setCallerTranscriptResolver(async () => ({
+    sessionId: 'session-example',
+    path: '',
+    home: 'C:/Users/me/.claude',
+    how: 'test resolver',
+  }))
   // @ts-expect-error test stub, narrower than the real fetch signature
   globalThis.fetch = async (url: string, init?: RequestInit) => {
+    if (String(url).includes('/api/corch/workers?session=')) return Response.json([])
     const body = init?.body ? JSON.parse(String(init.body)) : null
     calls.push({ url: String(url), method: init?.method ?? 'GET', body })
     return new Response(JSON.stringify(answer(String(url), body)), {
@@ -80,6 +89,7 @@ beforeEach(() => {
 })
 afterEach(() => {
   globalThis.fetch = originalFetch
+  setCallerTranscriptResolver(null)
   for (const k of CALLER_ENV) {
     const v = savedCallerEnv[k]
     if (v === undefined) delete process.env[k]

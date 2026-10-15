@@ -12,7 +12,11 @@ const CWD = 'C:/Users/me/project'
 const CHAT = 'chat-example-lead'
 const SESSION = 'session-example-1'
 const now = new Date('2026-10-14T10:00:00.000Z')
-const daemon: Daemon = { dispatch: async () => 'job-example', report: async () => null }
+const daemon: Daemon = {
+  dispatch: async () => 'job-example',
+  report: async () => null,
+  send: async () => {},
+}
 let dir = ''
 let leadPath = ''
 

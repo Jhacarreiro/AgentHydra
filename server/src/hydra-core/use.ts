@@ -3,7 +3,14 @@ import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { CliMayteRole } from '../climayte-lib'
 import { deskChats, replyWhenDone } from '../mcp-managers'
-import { type Caller, type ChatOfCaller, chatOfCaller, refuse, type SeatParent } from './caller'
+import {
+  type Caller,
+  type ChatOfCaller,
+  chatOfCaller,
+  refuse,
+  type SeatParent,
+  untracedRefusal,
+} from './caller'
 import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
 import { addPick, emptyDoc, type HydraDoc, leadLine, parseHydra, renderHydra } from './hydra-md'
 import { appendLog } from './log'
@@ -25,8 +32,11 @@ export interface Report {
 }
 
 export interface Daemon {
-  dispatch(prompt: string, title: string, cwd: string): Promise<string>
+  /** `persona`: the worker runs as that persona's seat (role seat). */
+  dispatch(prompt: string, title: string, cwd: string, persona?: string): Promise<string>
   report(id: string, waitS: number): Promise<Report | null>
+  /** A seat kept as a worker: its session resumes with `text`. */
+  send(id: string, text: string): Promise<void>
 }
 
 export type UseArgs = {
@@ -95,12 +105,13 @@ function folderOf(files: Files, cwd: string | undefined): string {
 
 export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise<unknown>): Daemon {
   return {
-    async dispatch(prompt, title, cwd) {
+    async dispatch(prompt, title, cwd, persona) {
+      const seat = persona ? { role: 'seat', persona } : {}
       const reply = (await api('/api/corch/workers', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
         body: JSON.stringify({
-          tasks: [{ prompt, title, kind: 'review', light: true, cwd }],
+          tasks: [{ prompt, title, kind: 'review', light: true, cwd, ...seat }],
           group: GROUP,
         }),
       })) as { workers?: { id?: unknown }[] }
@@ -118,6 +129,15 @@ export function defaultDaemon(api: (path: string, init?: RequestInit) => Promise
       const w = rows.find((x) => x.id === id)
       if (!w) return null
       return { status: String(w.status ?? ''), text: readText(w) }
+    },
+    async send(id, text) {
+      const r = (await api(`/api/corch/workers/${encodeURIComponent(id)}/send`, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ text }),
+      })) as { ok?: boolean; message?: string }
+      if (!r?.ok)
+        throw new Error(`the seat ${id} did not take the message: ${r?.message ?? 'no answer'}`)
     },
   }
 }
@@ -206,6 +226,53 @@ async function consult(dir: string, args: UseArgs, e: CatalogEntry, daemon: Daem
   return { job, status: r.status, text: r.text }
 }
 
+function seatWorkersPath(files: Files): string {
+  return join(files.root, 'seat-workers.json')
+}
+
+function readSeatWorkers(files: Files): Record<string, string> {
+  try {
+    return JSON.parse(readFileSync(seatWorkersPath(files), 'utf8')) as Record<string, string>
+  } catch {
+    return {}
+  }
+}
+
+/** A Prime whose chat has no Desk row: its seat is a CliMayte worker of the persona (role seat), opened once per
+ *  persona per chat and resumed with each new question or job (ROLES.md). */
+async function workerSeat(dir: string, args: UseArgs, e: CatalogEntry, daemon: Daemon, now: Date) {
+  const files = chatPaths(dir, args.chat)
+  const known = readSeatWorkers(files)[e.id]
+  const text = args.mode === 'hire' ? args.job : args.question
+  if (!text) {
+    if (args.mode === 'hire') throw new Error('hire needs a job: say what the seat does')
+    if (!known) throw new Error(`${e.id} has no seat in this chat yet: consult it with a question`)
+  } else if (known) await daemon.send(known, text)
+  const job =
+    known ??
+    (await daemon.dispatch(
+      [`You are now a seat in this chat as ${e.name}: ${e.when}.`, loadText(e), text].join('\n\n'),
+      `${e.name} · ${args.chat}`,
+      folderOf(files, args.cwd),
+      e.id,
+    ))
+  if (text) {
+    if (!known) {
+      mkdirSync(files.root, { recursive: true })
+      const all = { ...readSeatWorkers(files), [e.id]: job }
+      writeFileSync(seatWorkersPath(files), `${JSON.stringify(all, null, 2)}\n`)
+    }
+    pick(files, e, args.mode === 'hire' ? 'hire' : 'consult')
+    const event = known ? 'seat-resumed' : 'seat-opened'
+    appendLog(dir, { chat: args.chat, event, mode: args.mode, id: e.id, seat: job }, now)
+  }
+  if (args.mode === 'hire') return { status: 'started', job }
+  const r = await settled(daemon, job)
+  return r && TERMINAL.includes(r.status)
+    ? { job, status: r.status, text: r.text }
+    : { job, status: 'working', read: readHint(e) }
+}
+
 const readHint = (e: CatalogEntry) => `core_use { chat, id: "${e.id}", mode: "consult" }`
 
 async function seatConsult(
@@ -285,13 +352,21 @@ export async function use(dir: string, args: UseArgs, daemon: Daemon, now = new 
   const e = entryOf(dir, args.id)
   checkMode(e, args.mode)
   const seatMode = args.mode === 'consult' || args.mode === 'hire'
+  // Traced by mcp-core and still nobody: only a Prime opens seats, and this caller cannot show it is one.
+  if (seatMode && args.who && !args.who.role)
+    refuse(args.who, untracedRefusal(`${args.mode} ${e.id}`, args.who.why), {
+      dir,
+      chat: args.chat,
+      mode: args.mode,
+      id: e.id,
+    })
   if (seatMode && (args.caller === 'drone' || args.caller === 'seat'))
     refuse(
       args.who ?? { role: args.caller, worker: null, deskChat: null, why: null },
       refusalOf(args.mode, e.id),
       { dir, chat: args.chat, mode: args.mode, id: e.id },
     )
-  // A Prime, or a caller the daemon could not trace, gets a seat whenever its chat is a Desk chat.
+  // A seat opens under the chat's Desk row; a Prime whose chat has none keeps its seat as a worker.
   const chat = seatMode ? await seatChat(args) : null
   const seatless = {
     ...args,
@@ -307,9 +382,11 @@ export async function use(dir: string, args: UseArgs, daemon: Daemon, now = new 
       return become(dir, args, e, now)
     case 'consult':
       if (chat?.desk) return seatConsult(dir, args, chat, e, now)
+      if (args.caller === 'prime') return workerSeat(dir, seatless, e, daemon, now)
       return consult(dir, seatless, e, daemon, now)
     case 'hire':
       if (chat?.desk) return seatHire(dir, args, chat, e, now)
+      if (args.caller === 'prime') return workerSeat(dir, seatless, e, daemon, now)
       return hire(dir, seatless, e, now)
     case 'load':
       return { id: e.id, text: loadText(e) }

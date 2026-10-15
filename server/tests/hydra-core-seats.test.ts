@@ -15,6 +15,9 @@ const noDaemon: Daemon = {
     throw new Error('a seat never dispatches a worker')
   },
   report: async () => null,
+  send: async () => {
+    throw new Error('a seat never sends to a worker')
+  },
 }
 
 let dir = ''
@@ -230,6 +233,7 @@ test('a consult outside a seat dispatches its worker in the chat folder when no 
       return 'w-1'
     },
     report: async () => ({ status: 'done', text: 'Worker reply' }),
+    send: async () => {},
   }
   const r = await use(
     dir,

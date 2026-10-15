@@ -7,7 +7,7 @@ import { DRONE_REFUSAL } from '../src/climayte-lib'
 import { chatPaths } from '../src/hydra-core/paths'
 import { CORE_TOOLS } from '../src/mcp-core'
 import { FAN_OUT_TOOLS } from '../src/mcp-fan-out'
-import { callerRole, setCallerTranscriptResolver } from '../src/mcp-self'
+import { callerOrigin, callerRole, setCallerTranscriptResolver } from '../src/mcp-self'
 import { scratch } from './hydra-core-fixture'
 
 const PRIME = 'chat-prime'
@@ -79,6 +79,7 @@ function fakeServers(): void {
     posts.push({ path, body })
     if (method === 'POST' && path === '/api/corch/workers')
       return json({ workers: [{ id: 'w-new' }] })
+    if (method === 'POST' && path.endsWith('/send')) return json({ ok: true, message: 'Queued.' })
     if (method === 'POST' && path === '/api/chats') {
       const id = `chat-seat-${nextId++}`
       chats.set(id, {
@@ -108,6 +109,16 @@ function callerIs(sessionId: string): void {
     home: FOLDER,
     how: 'test resolver',
   }))
+}
+
+/** The process walk found no session, as compaction-history.ts says it. */
+const NO_SESSION =
+  "could not tell which Claude Code session is calling: no live session's engine is in the calling process chain (3 processes walked). Pass session_id - your own session id - explicitly."
+
+function untraced(): void {
+  setCallerTranscriptResolver(async () => {
+    throw new Error(NO_SESSION)
+  })
 }
 
 beforeEach(() => {
@@ -155,7 +166,7 @@ test('a drone is found by an earlier session of its worker: role drone', async (
   expect(await callerRole({})).toBe('drone')
 })
 
-test('a caller the daemon cannot trace still gets a seat when its chat is a Desk chat, never a fresh worker', async () => {
+test('a session no worker owns that names a Desk chat gets a seat there, never a fresh worker', async () => {
   callerIs('sess-nobody')
   expect(await callerRole({})).toBeUndefined()
   const r = await coreUse.run({
@@ -169,21 +180,78 @@ test('a caller the daemon cannot trace still gets a seat when its chat is a Desk
   expect(posts.some((p) => p.path === '/api/corch/workers')).toBe(false)
 })
 
-test('a caller with no Desk chat takes the seatless worker path, and the core log says so and why', async () => {
+test('a traced session that is no worker and has no Desk chat is a Prime: its consult opens one seat, a worker of the persona, resumed after', async () => {
   callerIs('sess-nobody')
   mkdirSync(chatPaths(dir, 'chat-nodesk').root, { recursive: true })
   writeFileSync(chatPaths(dir, 'chat-nodesk').cwd, FOLDER)
-  const r = await coreUse.run({
-    chat: 'chat-nodesk',
-    id: 'person:iris-ui',
-    mode: 'consult',
-    question: 'Is the grid right?',
+  const ask = (question?: string) =>
+    coreUse.run({ chat: 'chat-nodesk', id: 'person:iris-ui', mode: 'consult', question })
+  expect(await ask('Is the grid right?')).toMatchObject({ job: 'w-new', status: 'done' })
+  const opened = posts.filter((p) => p.path === '/api/corch/workers')
+  expect(opened).toHaveLength(1)
+  expect((opened[0].body.tasks as Record<string, unknown>[])[0]).toMatchObject({
+    role: 'seat',
+    persona: 'person:iris-ui',
+    cwd: FOLDER,
   })
-  expect(r).toMatchObject({ job: 'w-new', status: 'done', text: 'Old path' })
+  expect(await ask('And the spacing?')).toMatchObject({ job: 'w-new', status: 'done' })
+  expect(posts.filter((p) => p.path === '/api/corch/workers')).toHaveLength(1)
+  expect(posts.filter((p) => p.path === '/api/corch/workers/w-new/send')).toEqual([
+    { path: '/api/corch/workers/w-new/send', body: { text: 'And the spacing?' } },
+  ])
+  expect(await ask()).toMatchObject({ job: 'w-new', status: 'done' })
+  expect(posts.filter((p) => p.path.startsWith('/api/corch/workers'))).toHaveLength(2)
   expect(posts.some((p) => p.path === '/api/chats')).toBe(false)
   const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
-  expect(log).toContain('"event":"seatless"')
-  expect(log).toContain('"why":')
+  expect(log).toContain(
+    '"event":"seat-opened","mode":"consult","id":"person:iris-ui","seat":"w-new"',
+  )
+  expect(log).toContain(
+    '"event":"seat-resumed","mode":"consult","id":"person:iris-ui","seat":"w-new"',
+  )
+  expect(log).not.toContain('"event":"seatless"')
+})
+
+test('a caller that cannot be traced is refused a consult or a hire, told how to be traced, and starts nothing', async () => {
+  untraced()
+  mkdirSync(chatPaths(dir, 'chat-nodesk').root, { recursive: true })
+  for (const chat of ['chat-nodesk', PRIME])
+    for (const mode of ['consult', 'hire']) {
+      const err = await Promise.resolve(
+        coreUse.run({ chat, id: 'person:iris-ui', mode, question: 'Hi?', job: 'Do it' }),
+      ).catch((x: Error) => x)
+      const msg = String((err as Error).message)
+      expect(msg).toContain(`cannot ${mode} person:iris-ui`)
+      expect(msg).toContain("from the chat's own Claude Code session")
+      expect(msg).not.toContain('session_id')
+      expect(msg).not.toMatch(/drone|seat/i)
+    }
+  expect(posts).toEqual([])
+  const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
+  expect(log).toContain(
+    '"event":"refused","mode":"consult","id":"person:iris-ui","caller":"untraced"',
+  )
+  expect(log).not.toContain('"event":"seatless"')
+})
+
+test('fan_out from a caller that cannot be traced is refused before any group starts', async () => {
+  untraced()
+  // `only` names no account: past the role check the old path fails resolving it, so no fan-out runs here.
+  const err = await Promise.resolve(
+    fanOut.run({ tasks: [{ cwd: FOLDER, prompt: 'p' }], only: ['no-such-account'] }),
+  ).catch((x: Error) => x)
+  const msg = String((err as Error).message)
+  expect(msg).toContain('cannot start a fan-out')
+  expect(msg).toContain("from the chat's own Claude Code session")
+  expect(posts).toEqual([])
+})
+
+test('a failed trace never tells the caller to pass a session id, which the trace does not read', async () => {
+  untraced()
+  const r = await callerOrigin({ session_id: 'sess-prime' })
+  expect(r.origin).toBeNull()
+  expect(r.why).toContain('could not tell which Claude Code session is calling')
+  expect(r.why).not.toContain('session_id')
 })
 
 test("the owner's own chat (a Desk chat whose session no worker owns) is a Prime and gets a seat", async () => {

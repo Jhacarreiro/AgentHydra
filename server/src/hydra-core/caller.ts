@@ -45,10 +45,12 @@ export async function traceCaller(
 ): Promise<Caller> {
   const { origin, why } = await callerOrigin(a)
   let worker: WorkerRow | null = null
+  let listed = false
   if (origin) {
     const rows = await api(
       `/api/corch/workers?session=${encodeURIComponent(origin.sessionId)}&all=1`,
     ).catch(() => null)
+    listed = Array.isArray(rows)
     worker = Array.isArray(rows) ? ((rows[0] as WorkerRow | undefined) ?? null) : null
   } else {
     const id = process.env.AGENTHYDRA_CLIMAYTE_WORKER?.trim()
@@ -62,19 +64,25 @@ export async function traceCaller(
     (origin ? chats?.find((c) => c.sessionId === origin.sessionId)?.id : undefined) ??
     null
   // As mcp-self callerRole: a session's list row carries its role (toView); the detail row may predate roles.
+  // A traced session that no CliMayte worker owns is the owner's chat, Desk or not: a Prime (ROLES.md).
   const role = worker
     ? origin
       ? worker.role
       : roleOf(worker)
-    : own
+    : own || listed
       ? ('prime' as const)
       : undefined
   return {
     role,
     worker,
     deskChat: own,
-    why: role ? null : (why ?? 'no CliMayte worker or Desk chat is this session'),
+    why: role ? null : (why ?? "the daemon's worker list could not be read"),
   }
+}
+
+/** The words a caller AgentHydra could not tie to a chat gets back: how to call so the trace works. No role named. */
+export function untracedRefusal(what: string, why: string | null): string {
+  return `AgentHydra could not tell which chat is calling${why ? ` (${why})` : ''}, so this call cannot ${what}. Make the call from the chat's own Claude Code session, through the AgentHydra MCP server that session runs: a call from a script, curl or another process cannot be traced to a chat.`
 }
 
 /** The Desk chat `ref` names: an id or session id exactly, or a title fragment among chats that are no seat (a
