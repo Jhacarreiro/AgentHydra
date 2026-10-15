@@ -214,6 +214,7 @@ import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { loadCatalog } from './hydra-core/catalog'
 import { coreDir } from './hydra-core/paths'
+import { seatChatOf } from './hydra-core/seat-chats'
 import { POINTER_DIR } from './instance'
 import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
 
@@ -1207,7 +1208,7 @@ export function climayteRun(input: {
     throw new Error('tasks must be a non-empty array')
   refuseDrone(input.origin, input.tasks.every((t) => t.sealed) ? input.tasks.length : 0)
   input.tasks.forEach(checkRole)
-  input = { ...input, tasks: input.tasks.map(sealedTask) }
+  input = { ...input, tasks: input.tasks.map((t, i) => sealedTask(seatTask(t), i)) }
   const defaults = runDefaultsOf(input)
   const settings = taskSettings(input.tasks, defaults)
   const cap = input.perAccount ?? 2
@@ -1258,6 +1259,14 @@ function refuseDrone(origin: CliMayteOrigin | undefined, visitors = 0): void {
   }
   journal(w, 'refused', { notice: DRONE_REFUSAL })
   throw new Error(DRONE_REFUSAL)
+}
+
+/** A Desk chat core_use opened as a seat (hydra-core seats.ts, seat-chats.json) runs as a seat of its persona,
+ *  whatever its first message says: Desk forwards only the chat's id, never its parent. */
+function seatTask<T extends RunTask>(t: T): T {
+  const chatId = t.chat === true && !t.role ? t.desk?.chatId : undefined
+  const seat = chatId ? seatChatOf(coreDir(), chatId) : undefined
+  return seat ? { ...t, role: 'seat', persona: seat.persona } : t
 }
 
 /** The role a task names: only a seat, which needs a persona that is in the catalog. */

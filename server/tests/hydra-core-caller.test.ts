@@ -1,5 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
-import { mkdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { join } from 'node:path'
+import { JOURNAL_PATH } from '../src/climayte-core'
+import { readJournal } from '../src/climayte-journal'
 import { DRONE_REFUSAL } from '../src/climayte-lib'
 import { chatPaths } from '../src/hydra-core/paths'
 import { CORE_TOOLS } from '../src/mcp-core'
@@ -9,8 +12,16 @@ import { scratch } from './hydra-core-fixture'
 
 const PRIME = 'chat-prime'
 const FOLDER = 'D:/example/folder'
+const OTHER = 'chat-other'
+const OWNER = 'chat-owner'
 
-type Row = { id: string; role: string; sessionId: string; sessions?: string[] }
+type Row = {
+  id: string
+  role: string
+  sessionId: string
+  sessions?: string[]
+  desk?: { chatId: string }
+}
 
 let dir = ''
 let savedFetch: typeof fetch
@@ -47,7 +58,13 @@ function fakeServers(): void {
       return json(
         workers
           .filter((w) => session && [w.sessionId, ...(w.sessions ?? [])].includes(session))
-          .map((w) => ({ id: w.id, role: w.role })),
+          .map((w) => ({
+            id: w.id,
+            group: 'g-example',
+            title: `Example ${w.id}`,
+            role: w.role,
+            ...(w.desk ? { desk: w.desk } : {}),
+          })),
       )
     }
     if (method === 'GET' && path.startsWith('/api/corch/workers/')) {
@@ -72,7 +89,7 @@ function fakeServers(): void {
         status: 'idle',
       })
       transcripts.set(id, [])
-      say(id, String(body.prompt))
+      if (body.prompt) say(id, String(body.prompt))
       return json({ id, title: body.title })
     }
     if (method === 'POST' && path.endsWith('/messages')) {
@@ -99,10 +116,15 @@ beforeEach(() => {
   delete process.env.AGENTHYDRA_CLIMAYTE_WORKER
   savedFetch = globalThis.fetch
   workers = [
-    { id: 'w-prime', role: 'prime', sessionId: 'sess-prime' },
+    { id: 'w-prime', role: 'prime', sessionId: 'sess-prime', desk: { chatId: PRIME } },
+    { id: 'w-seat', role: 'seat', sessionId: 'sess-seat', desk: { chatId: 'chat-seat-0' } },
     { id: 'w-drone', role: 'drone', sessionId: 'sess-new', sessions: ['sess-drone'] },
   ]
-  chats = new Map([[PRIME, { id: PRIME, title: 'Example prime', cwd: FOLDER, status: 'idle' }]])
+  chats = new Map<string, Record<string, unknown>>([
+    [PRIME, { id: PRIME, title: 'Example prime', cwd: FOLDER, status: 'idle' }],
+    [OTHER, { id: OTHER, title: 'Another chat', cwd: FOLDER, status: 'idle' }],
+    [OWNER, { id: OWNER, sessionId: 'sess-owner', title: 'Owner desktop chat', cwd: FOLDER }],
+  ])
   transcripts = new Map()
   posts = []
   nextId = 1
@@ -133,7 +155,7 @@ test('a drone is found by an earlier session of its worker: role drone', async (
   expect(await callerRole({})).toBe('drone')
 })
 
-test('a session no worker owns has no role, and core_use keeps the old worker path', async () => {
+test('a caller the daemon cannot trace still gets a seat when its chat is a Desk chat, never a fresh worker', async () => {
   callerIs('sess-nobody')
   expect(await callerRole({})).toBeUndefined()
   const r = await coreUse.run({
@@ -143,8 +165,58 @@ test('a session no worker owns has no role, and core_use keeps the old worker pa
     question: 'Is the grid right?',
     cwd: FOLDER,
   })
+  expect(r).toMatchObject({ status: 'done', seat: { chat: 'chat-seat-1' } })
+  expect(posts.some((p) => p.path === '/api/corch/workers')).toBe(false)
+})
+
+test('a caller with no Desk chat takes the seatless worker path, and the core log says so and why', async () => {
+  callerIs('sess-nobody')
+  mkdirSync(chatPaths(dir, 'chat-nodesk').root, { recursive: true })
+  writeFileSync(chatPaths(dir, 'chat-nodesk').cwd, FOLDER)
+  const r = await coreUse.run({
+    chat: 'chat-nodesk',
+    id: 'person:iris-ui',
+    mode: 'consult',
+    question: 'Is the grid right?',
+  })
   expect(r).toMatchObject({ job: 'w-new', status: 'done', text: 'Old path' })
   expect(posts.some((p) => p.path === '/api/chats')).toBe(false)
+  const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
+  expect(log).toContain('"event":"seatless"')
+  expect(log).toContain('"why":')
+})
+
+test("the owner's own chat (a Desk chat whose session no worker owns) is a Prime and gets a seat", async () => {
+  callerIs('sess-owner')
+  const r = await coreUse.run({ id: 'person:iris-ui', mode: 'consult', question: 'Hi?' })
+  expect(r).toMatchObject({
+    seat: { chat: 'chat-seat-1', title: 'Iris Example · Owner desktop chat' },
+  })
+  expect(posts.find((p) => p.path === '/api/chats')?.body.parentId).toBe(OWNER)
+})
+
+test('a Prime opens seats only for its own chat: another Desk chat named as chat is refused', async () => {
+  callerIs('sess-prime')
+  await expect(
+    coreUse.run({ chat: OTHER, id: 'person:iris-ui', mode: 'consult', question: 'Hi?' }),
+  ).rejects.toThrow('core_use works only for the calling chat')
+  expect(posts.filter((p) => p.path === '/api/chats')).toHaveLength(0)
+  expect(existsSync(chatPaths(dir, OTHER).seats)).toBe(false)
+})
+
+test('a Prime that names its chat by title, or names none, files the seat under its Desk chat id', async () => {
+  callerIs('sess-prime')
+  await coreUse.run({
+    chat: 'Example prime',
+    id: 'person:iris-ui',
+    mode: 'consult',
+    question: 'A?',
+  })
+  await coreUse.run({ id: 'person:iris-ui', mode: 'consult', question: 'B?' })
+  expect(posts.filter((p) => p.path === '/api/chats')).toHaveLength(1)
+  expect(JSON.parse(readFileSync(chatPaths(dir, PRIME).seats, 'utf8'))).toMatchObject({
+    'person:iris-ui': { chat: 'chat-seat-1' },
+  })
 })
 
 test('core_use from a Prime chat opens a seat under it, with no env var set', async () => {
@@ -168,18 +240,37 @@ test('core_use from a Prime chat opens a seat under it, with no env var set', as
   expect(posts.some((p) => p.path === '/api/corch/workers')).toBe(false)
 })
 
-test('core_use from a drone is refused and opens no chat', async () => {
-  callerIs('sess-drone')
-  await expect(
-    coreUse.run({ chat: PRIME, id: 'person:iris-ui', mode: 'consult', question: 'Hi?' }),
-  ).rejects.toThrow('A drone cannot consult person:iris-ui')
+test('core_use from a drone or a seat is refused, journaled on its worker and in the core log, and opens no chat', async () => {
+  for (const [session, id] of [
+    ['sess-drone', 'w-drone'],
+    ['sess-seat', 'w-seat'],
+  ]) {
+    callerIs(session)
+    const err = await Promise.resolve(
+      coreUse.run({ chat: PRIME, id: 'person:iris-ui', mode: 'consult', question: 'Hi?' }),
+    ).catch((x: Error) => x)
+    expect(String((err as Error).message)).toBe(
+      'This session cannot consult person:iris-ui: ask whoever started you to consult it.',
+    )
+    const refused = readJournal(JOURNAL_PATH, { id }).filter((e) => e.event === 'refused')
+    expect(refused.at(-1)?.notice).toContain('This session cannot consult person:iris-ui')
+  }
   expect(posts.filter((p) => p.path === '/api/chats')).toHaveLength(0)
+  const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
+  expect(log).toContain('"event":"refused","mode":"consult","id":"person:iris-ui","caller":"drone"')
+  expect(log).toContain('"caller":"seat"')
 })
 
 test('fan_out from a drone is refused, with no env var set', async () => {
   callerIs('sess-drone')
+  const before = readJournal(JOURNAL_PATH, { id: 'w-drone' }).length
   await expect(fanOut.run({ tasks: [{ cwd: FOLDER, prompt: 'p' }] })).rejects.toThrow(DRONE_REFUSAL)
   expect(posts.filter((p) => p.path === '/api/corch/workers')).toHaveLength(0)
+  const after = readJournal(JOURNAL_PATH, { id: 'w-drone' }).slice(before)
+  expect(after.map((e) => e.event)).toEqual(['refused'])
+  expect(after[0]?.notice).toBe(DRONE_REFUSAL)
+  expect(DRONE_REFUSAL).not.toMatch(/drone/i)
+  expect(DRONE_REFUSAL).toContain('TOO BIG:')
 })
 
 test('with no traced caller, the env worker id is the stdio fallback', async () => {

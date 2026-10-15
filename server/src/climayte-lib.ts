@@ -206,7 +206,21 @@ export function roleOf(w: {
 }
 
 export const DRONE_REFUSAL =
-  'A drone never starts workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
+  'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
+
+/** The `TOO BIG:` line a worker's report carries (DRONE_BRIEF, DRONE_REFUSAL): the job was too big for one
+ *  session and the line names the split its summoner should make. Null when the report has none. */
+export function tooBigOf(report: string | null | undefined): string | null {
+  for (const raw of (report ?? '').split('\n')) {
+    // Markdown around it counts: "**TOO BIG:** ..." or "- TOO BIG: ...".
+    const line = raw
+      .replace(/^[\s>*_#-]+/, '')
+      .replace(/^(TOO BIG:)[*_]+/, '$1')
+      .trim()
+    if (line.startsWith('TOO BIG:')) return line.replace(/\s+/g, ' ').slice(0, 400)
+  }
+  return null
+}
 
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars

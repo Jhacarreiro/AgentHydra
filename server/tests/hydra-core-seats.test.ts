@@ -2,6 +2,7 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { chatPaths } from '../src/hydra-core/paths'
+import { readSeatChats } from '../src/hydra-core/seat-chats'
 import { type Daemon, use } from '../src/hydra-core/use'
 import { scratch } from './hydra-core-fixture'
 
@@ -61,7 +62,7 @@ function fakeDesk(): void {
         status: 'idle',
       })
       transcripts.set(id, [])
-      say(id, String(body.prompt))
+      if (body.prompt) say(id, String(body.prompt))
       return json({ id, title: body.title })
     }
     if (method === 'POST' && path.endsWith('/messages')) {
@@ -80,7 +81,12 @@ beforeEach(() => {
   savedManagers = process.env.AGENTHYDRA_MANAGERS_DIR
   process.env.AGENTHYDRA_MANAGERS_DIR = managers
   savedFetch = globalThis.fetch
-  chats = new Map([[PRIME, { id: PRIME, title: 'Example prime', cwd: FOLDER, status: 'idle' }]])
+  chats = new Map([
+    [
+      PRIME,
+      { id: PRIME, sessionId: 'sess-prime', title: 'Example prime', cwd: FOLDER, status: 'idle' },
+    ],
+  ])
   transcripts = new Map()
   posts = []
   gets = []
@@ -104,6 +110,8 @@ const consult = (
 ) => use(dir, { chat: PRIME, id, mode: 'consult', question, caller, cwd }, noDaemon, now)
 
 const seatPosts = () => posts.filter((p) => p.path === '/api/chats')
+const firstMessage = (seat: string) =>
+  String(posts.find((p) => p.path === `/api/chats/${seat}/messages`)?.body.text)
 
 test('a Prime chat consult opens one seat under it, named for the persona and the chat, with its manager slug', async () => {
   const r = await consult('person:iris-ui', 'Layout for the login page?')
@@ -117,7 +125,12 @@ test('a Prime chat consult opens one seat under it, named for the persona and th
     parentId: PRIME,
     managerSlug: 'iris-ui',
     title: 'Iris Example · Example prime',
-    prompt: 'Layout for the login page?',
+  })
+  // Made empty and listed as a seat first, so the worker its first message starts is born a seat.
+  expect(seatPosts()[0].body.prompt).toBeUndefined()
+  expect(firstMessage('chat-seat-1')).toBe('Layout for the login page?')
+  expect(readSeatChats(dir)).toEqual({
+    'chat-seat-1': { persona: 'person:iris-ui', parent: PRIME },
   })
   expect(JSON.parse(readFileSync(chatPaths(dir, PRIME).seats, 'utf8'))).toEqual({
     'person:iris-ui': { chat: 'chat-seat-1', title: 'Iris Example · Example prime' },
@@ -131,7 +144,7 @@ test('a second consult for the same persona reuses its seat: no new chat, the qu
   expect(seatPosts()).toHaveLength(1)
   expect(
     posts.filter((p) => p.path === '/api/chats/chat-seat-1/messages').map((p) => p.body.text),
-  ).toEqual(['Second?'])
+  ).toEqual(['First?', 'Second?'])
 })
 
 test('a different persona opens its own seat, briefed with its catalog text in the first message', async () => {
@@ -140,14 +153,19 @@ test('a different persona opens its own seat, briefed with its catalog text in t
   expect(r).toMatchObject({ seat: { chat: 'chat-seat-2', title: 'Pat Example · Example prime' } })
   const second = seatPosts()[1]
   expect(second.body.managerSlug).toBeUndefined()
-  expect(String(second.body.prompt)).toContain('Prices plans and pricing for a product')
-  expect(String(second.body.prompt)).toContain('Price for the Pro plan?')
+  expect(firstMessage('chat-seat-2')).toContain('Prices plans and pricing for a product')
+  expect(firstMessage('chat-seat-2')).toContain('Price for the Pro plan?')
+  // A persona that is no manager is a seat all the same.
+  expect(readSeatChats(dir)['chat-seat-2']).toEqual({
+    persona: 'person:pricing-expert',
+    parent: PRIME,
+  })
 })
 
-test('a drone or a seat cannot consult or hire: it is refused and no chat opens', async () => {
+test('a drone or a seat cannot consult or hire: it is refused, in words that name no role, and no chat opens', async () => {
   for (const caller of ['drone', 'seat'] as const) {
     await expect(consult('person:iris-ui', 'Hi?', caller)).rejects.toThrow(
-      `A ${caller} cannot consult person:iris-ui`,
+      'This session cannot consult person:iris-ui: ask whoever started you to consult it.',
     )
     await expect(
       use(
@@ -156,7 +174,9 @@ test('a drone or a seat cannot consult or hire: it is refused and no chat opens'
         noDaemon,
         now,
       ),
-    ).rejects.toThrow(`A ${caller} cannot hire person:intern-ivan`)
+    ).rejects.toThrow('This session cannot hire person:intern-ivan')
+    const err = await consult('person:iris-ui', 'Hi?', caller).catch((x: Error) => x)
+    expect(String((err as Error).message)).not.toMatch(/drone|seat/i)
   }
   expect(seatPosts()).toHaveLength(0)
 })
@@ -189,7 +209,7 @@ test('hire opens the seat and returns at once with its id, without waiting for a
     seat: { chat: 'chat-seat-1', title: 'Ivan Example · Example prime' },
   })
   expect(gets).toEqual([])
-  expect(String(seatPosts()[0].body.prompt)).toContain('Pull the pricing numbers')
+  expect(firstMessage('chat-seat-1')).toContain('Pull the pricing numbers')
 })
 
 test('consult with no question reads the seat reply once it is done', async () => {
@@ -219,4 +239,55 @@ test('a consult outside a seat dispatches its worker in the chat folder when no 
   )
   expect(dispatched).toEqual([FOLDER])
   expect(r).toMatchObject({ job: 'w-1', status: 'done', text: 'Worker reply' })
+})
+
+const consultAs = (chat: string, question: string) =>
+  use(
+    dir,
+    { chat, id: 'person:pricing-expert', mode: 'consult', question, caller: 'prime' },
+    noDaemon,
+    now,
+  )
+
+test('the roster is the Desk chat: by title, by id and by session id the chat has one seat per persona', async () => {
+  const a = await consultAs('Example prime', 'First?')
+  // The seat's title holds the Prime's ("Pat Example · Example prime"): the title still names one chat.
+  const b = await consultAs('Example prime', 'Second?')
+  const c = await consultAs(PRIME, 'Third?')
+  const d = await consultAs('sess-prime', 'Fourth?')
+  for (const r of [a, b, c, d]) expect(r).toMatchObject({ seat: { chat: 'chat-seat-1' } })
+  expect(seatPosts()).toHaveLength(1)
+  expect(JSON.parse(readFileSync(chatPaths(dir, PRIME).seats, 'utf8'))).toEqual({
+    'person:pricing-expert': { chat: 'chat-seat-1', title: 'Pat Example · Example prime' },
+  })
+})
+
+test('a roster filed under the key a chat passed before is found again, and kept under the Desk chat id', async () => {
+  chats.set('chat-seat-9', { id: 'chat-seat-9', title: 'Pat Example · old', parentId: PRIME })
+  transcripts.set('chat-seat-9', [])
+  const legacy = chatPaths(dir, 'sess-prime')
+  mkdirSync(legacy.root, { recursive: true })
+  writeFileSync(
+    legacy.seats,
+    JSON.stringify({
+      'person:pricing-expert': { chat: 'chat-seat-9', title: 'Pat Example · old' },
+    }),
+  )
+  const r = await consultAs(PRIME, 'Again?')
+  expect(r).toMatchObject({ seat: { chat: 'chat-seat-9' } })
+  expect(seatPosts()).toHaveLength(0)
+  expect(JSON.parse(readFileSync(chatPaths(dir, PRIME).seats, 'utf8'))).toMatchObject({
+    'person:pricing-expert': { chat: 'chat-seat-9' },
+  })
+})
+
+test('seat opened and seat resumed are logged as different events', async () => {
+  await consultAs(PRIME, 'First?')
+  await consultAs(PRIME, 'Second?')
+  const events = readFileSync(join(dir, 'log.jsonl'), 'utf8')
+    .trim()
+    .split('\n')
+    .map((l) => JSON.parse(l) as { event: string; seat?: string })
+    .filter((e) => e.seat)
+  expect(events.map((e) => e.event)).toEqual(['seat-opened', 'seat-resumed'])
 })

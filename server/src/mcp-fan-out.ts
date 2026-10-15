@@ -6,6 +6,7 @@ import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { DRONE_REFUSAL } from './climayte-lib'
+import { refuse, traceCaller } from './hydra-core/caller'
 import {
   AUTO_DETACH_MS,
   api,
@@ -19,7 +20,7 @@ import {
   stillRunningNote,
   str,
 } from './mcp-client'
-import { callerRole, instanceLabel, selfIdentity } from './mcp-self'
+import { instanceLabel, selfIdentity } from './mcp-self'
 
 /** The orchestrator's arg limit is 4000 characters; a seven-task spec with real prompts can pass
  *  it. Under the limit the spec travels inline (visible in the returned `command`); over it, it is
@@ -331,7 +332,8 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
         }
       })
       // After the argument checks: the role is read from the daemon, and a bad call is refused before any request.
-      if ((await callerRole(a)) === 'drone') throw new Error(DRONE_REFUSAL)
+      const caller = await traceCaller(a)
+      if (caller.role === 'drone') refuse(caller, DRONE_REFUSAL)
       const groupName = str(a.group).trim()
       const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
       // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES
