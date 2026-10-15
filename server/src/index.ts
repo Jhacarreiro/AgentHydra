@@ -18,6 +18,7 @@ import {
   setAutoUpdateIntervalSecs,
   startAutoUpdate,
   stopAutoUpdate,
+  watchPushes,
 } from './auto-update'
 import { startAutomationStampSweep } from './automation-stamp-sweep'
 import { markDispatchReady } from './boot-state'
@@ -1538,6 +1539,8 @@ void Promise.race([
 })
 
 startAutoUpdate()
+// A push from this PC moves the ref live's git folder shares with the working checkout: take it at once.
+if (!IS_RELEASE) void watchPushes(APP_ROOT)
 
 // --- transient-overload retry sweep (ALWAYS ON; see server/src/dispatch.ts) --------------------
 // Re-fires runs that died on a 529 once their few-second backoff elapses. Not behind the scheduler
