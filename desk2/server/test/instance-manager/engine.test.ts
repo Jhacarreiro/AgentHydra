@@ -32,6 +32,9 @@ function app(num: number, fields: Partial<SeenInstance> = {}): SeenInstance {
   }
 }
 
+const codex = (num: number, fields: Partial<SeenInstance> = {}): SeenInstance =>
+  app(num, { kind: 'codex', ref: `codex:id${num}`, handle: `id${num}`, plan: 'Plus', ...fields })
+
 interface World {
   now: number
   apps: SeenInstance[]
@@ -157,10 +160,17 @@ test('a crashed app with two working chats: the roomiest same-kind account is op
   expect(w.moves).toHaveLength(1)
 })
 
-test('a clean quit, an app that comes back by itself, several apps at once and a manager switched off move nothing', async () => {
+test('a clean quit, a Codex app closed for no known reason, an app that comes back by itself, several apps at once and a manager switched off move nothing', async () => {
   const quitLine = (ms: number) => `${stamp(ms)} [info] beforeQuit: handler is ready for quit, so quitting`
-  const cases: { name: string; run: (w: World) => SeenInstance[]; enabled: boolean; state: RecoveryState }[] = [
+  const cases: { name: string; start?: SeenInstance[]; run: (w: World) => SeenInstance[]; enabled: boolean; state: RecoveryState }[] = [
     { name: 'quit', run: (w) => ((w.logs[app(1).ref] = quitLine(T0 + 15_000)), [{ ...app(1), running: false }, app(2)]), enabled: true, state: 'left' },
+    {
+      name: 'codex closed',
+      start: [codex(1), codex(2), codex(3)],
+      run: () => [{ ...codex(1), running: false }, codex(2), codex(3)],
+      enabled: true,
+      state: 'left',
+    },
     { name: 'came back', run: () => [app(1), app(2)], enabled: true, state: 'came-back' },
     {
       name: 'three at once',
@@ -171,7 +181,7 @@ test('a clean quit, an app that comes back by itself, several apps at once and a
     { name: 'off', run: () => [{ ...app(1), running: false }, app(2)], enabled: false, state: 'left' },
   ]
   for (const k of cases) {
-    const ups = [app(1), app(2), app(3)]
+    const ups = k.start ?? [app(1), app(2), app(3)]
     const w = world(ups, ups.map((u) => ({ id: `chat-${u.num}`, title: 'Some work', ref: u.ref })))
     w.usage = { 2: [0, 0], 3: [0, 0] }
     const m = createInstanceManager(io(w), empty())
@@ -186,6 +196,68 @@ test('a clean quit, an app that comes back by itself, several apps at once and a
     expect([k.name, m.status(k.enabled, null).recoveries.map((r) => r.state)]).toEqual([k.name, k.name === 'three at once' ? ['left', 'left', 'left'] : [k.state]])
     expect([k.name, w.opened, w.moves]).toEqual([k.name, [], []])
   }
+})
+
+test('an app that comes back while an account is being opened for its chats keeps them: nothing is moved', async () => {
+  const [a, b] = [app(1), app(2, { plan: 'Max 20×', running: false })]
+  const w = world([a, b], [{ id: 's1', title: 'Fix the parser', ref: a.ref }])
+  w.usage = { 2: [0, 0] }
+  w.logs[a.ref] = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
+  const m = createInstanceManager(io(w), empty())
+  await m.look(true)
+  w.now += 20_000
+  w.apps = [{ ...a, running: false }, b]
+  w.working = []
+  await m.look(true)
+  w.now += GRACE_MS
+  await m.look(true)
+  expect([m.status(true, null).recoveries[0]?.state, w.opened]).toEqual(['opening', [2]])
+
+  // A person starts #1 again; then #2 comes up too.
+  w.now += 20_000
+  w.apps = [a, b]
+  w.working = [{ id: 's1', title: 'Fix the parser', ref: a.ref }]
+  await m.look(true)
+  w.now += 20_000
+  w.apps = [a, { ...b, running: true }]
+  w.now += OPEN_SETTLE_MS
+  await m.look(true)
+  expect([m.status(true, null).recoveries[0]?.state, w.moves]).toEqual(['came-back', []])
+})
+
+test('two apps down together wait on one app opened for both, and give up after two opens rather than opening every account', async () => {
+  const crash = `${stamp(T0 + 10_000)} [info] [process-memory] trigger=interval`
+  const [a, b] = [app(1), app(2)]
+  const closed = [app(3, { plan: 'Max 20×', running: false }), app(4, { plan: 'Max 5×', running: false }), app(5, { plan: 'Pro', running: false })]
+  const w = world([a, b, ...closed], [
+    { id: 's1', title: 'Fix the parser', ref: a.ref },
+    { id: 's2', title: 'Write docs', ref: b.ref },
+  ])
+  w.usage = { 3: [0, 0], 4: [0, 0], 5: [0, 0] }
+  w.logs = { [a.ref]: crash, [b.ref]: crash }
+  const m = createInstanceManager(io(w), empty())
+  await m.look(true)
+  w.now += 20_000
+  w.apps = [{ ...a, running: false }, { ...b, running: false }, ...closed]
+  w.working = []
+  await m.look(true)
+  w.now += GRACE_MS
+  await m.look(true)
+  expect([m.status(true, null).recoveries.map((r) => [r.state, r.to?.num]), w.opened]).toEqual([[['opening', 3], ['opening', 3]], [3]])
+
+  // #3 never comes up: both pass it, and #4 is opened once for both.
+  w.now += 3 * 60_000
+  await m.look(true)
+  w.now += 20_000
+  await m.look(true)
+  expect(w.opened).toEqual([3, 4])
+
+  // #4 never comes up either: both give up, and #5 is never opened.
+  w.now += 3 * 60_000
+  await m.look(true)
+  w.now += 20_000
+  await m.look(true)
+  expect([m.status(true, null).recoveries.map((r) => r.state), w.opened, w.moves]).toEqual([['failed', 'failed'], [3, 4], []])
 })
 
 test('a Desk restart mid-move polls the same move and starts no second one; a chat already being recovered is not taken twice', async () => {
@@ -222,9 +294,7 @@ test('a Desk restart mid-move polls the same move and starts no second one; a ch
   expect(w.moves).toHaveLength(1)
 })
 
-test('a Codex app that closes moves its working chats to another Codex account, never to a Claude one, and says the Codex app continues them', async () => {
-  const codex = (num: number, fields: Partial<SeenInstance> = {}): SeenInstance =>
-    app(num, { kind: 'codex', ref: `codex:id${num}`, handle: `id${num}`, plan: 'Plus', ...fields })
+test('a Codex app signed out as it closes moves its working chats to another Codex account, never to a Claude one, and says the Codex app continues them', async () => {
   const [x, y] = [codex(10, { plan: 'Pro Lite' }), codex(11, { running: false })]
   const claude = app(2, { plan: 'Max 20×' })
   const w = world([x, y, claude], [{ id: 't1', title: 'Port the CLI', ref: x.ref }])
@@ -233,14 +303,14 @@ test('a Codex app that closes moves its working chats to another Codex account, 
   const m = createInstanceManager(io(w), empty())
   await m.look(true)
   w.now += 20_000
-  w.apps = [{ ...x, running: false }, y, claude]
+  w.apps = [{ ...x, running: false, signedIn: false }, y, claude]
   w.working = []
   await m.look(true)
   w.now += GRACE_MS
   await m.look(true)
   expect(w.opened).toEqual([11])
   w.now += 20_000
-  w.apps = [{ ...x, running: false }, { ...y, running: true }, claude]
+  w.apps = [{ ...x, running: false, signedIn: false }, { ...y, running: true }, claude]
   await m.look(true)
   w.now += OPEN_SETTLE_MS
   await m.look(true)

@@ -25,7 +25,7 @@ export type ManagedKind = 'desktop' | 'codex'
  * account-dead  the account answers, but no longer works: its plan ended or its organization was disabled
  * crashed       the app died without quitting: no quit in its log
  * quit          the app quit cleanly with its account still fine: a person, most likely, so the chats stay
- * unknown       nothing said (a Codex app, which keeps no log the manager reads)
+ * unknown       nothing said (a Codex app keeps no log the manager reads): it may be a person's close, so the chats stay
  */
 export type DownCause = 'logged-out' | 'account-dead' | 'crashed' | 'quit' | 'unknown'
 

@@ -88,9 +88,15 @@ export const MOVE_TIMEOUT_MS = 45 * 60_000
 export const WATCH_MS = 10 * 60_000
 /** With no account that has room, it keeps looking this long, then gives up. */
 export const NO_ROOM_MS = 60 * 60_000
-/** More apps than this going down in one look is the PC or a person (a restart, a quit-all), never one account. */
+/** More apps than this going down within one grace is the PC or a person (a restart, a quit-all), never one account. */
 export const MAX_DOWN_AT_ONCE = 2
-/** Recoveries kept for the page. */
+/** A judgment that would leave the chats is not made on a read that failed: the reads are tried again this long. */
+export const READ_RETRY_MS = 2 * 60_000
+/** Apps opened for one recovery (its own opens and ones it waited on for another) before it gives up: never a loop. */
+export const MAX_OPENS = 2
+/** Accounts one recovery tries (opened or refused to open) before it gives up. */
+export const MAX_TRIES = 3
+/** Settled recoveries kept for the page; one still under way is always kept. */
 export const RECOVERIES_KEPT = 30
 
 /** A recovery as the manager tracks it: what the page shows, plus where its steps stand. */
@@ -99,6 +105,8 @@ export interface Tracked extends Recovery {
   toInstance: SeenInstance | null
   /** Accounts already tried and passed over (did not open). */
   passed: string[]
+  /** Apps opened for it so far (MAX_OPENS). */
+  opens?: number
   openedAt?: number
   upSince?: number
   operationId?: string
@@ -135,6 +143,9 @@ export function shown(r: Tracked): Recovery {
 
 const label = (i: SeenInstance): string => `#${i.num} ${i.name}`
 const place = (i: SeenInstance) => ({ ref: i.ref, num: i.num, name: i.name })
+/** Still in its first wait: its cause is not judged yet. */
+const unjudged = (r: Tracked): boolean => r.state === 'waiting' && r.cause === 'unknown' && r.causeDetail === ''
+const SEVERAL = 'several apps went down at once: that is the PC or a person, not one account, so nothing was moved'
 
 export interface InstanceManager {
   look(enabled: boolean): Promise<void>
@@ -190,13 +201,17 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       passed: [],
       newIds: {},
     }
-    if (!alone) change(r, 'left', 'several apps went down at once: that is the PC or a person, not one account, so nothing was moved')
+    if (!alone) change(r, 'left', SEVERAL)
     else if (!enabled) change(r, 'left', 'the instance manager was off, so nothing was moved')
     recoveries.unshift(r)
   }
 
   /** Chooses the account to take the chats and opens it, or moves straight in when it is already up. */
   async function choose(r: Tracked, now: number): Promise<void> {
+    if (r.passed.length >= MAX_TRIES) {
+      change(r, 'failed', `${r.passed.length} accounts were tried and none took the chats; they stay where they were for a person`)
+      return
+    }
     const candidates = await io.candidates(r.kind, seen)
     const ranked = rankTargets(r.fromInstance, candidates).filter((t) => !r.passed.includes(t.instance.ref))
     const best = ranked[0]
@@ -206,20 +221,27 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       return
     }
     const to = best.instance
+    if (!isUp(to) && (r.opens ?? 0) >= MAX_OPENS) {
+      change(r, 'failed', `${r.opens} accounts were opened for these chats and none came up; they stay where they were for a person`)
+      return
+    }
     r.toInstance = to
     r.to = { ...place(to), opened: false }
     if (isUp(to)) {
       await startMove(r)
       return
     }
-    const opened = await io.open(to)
+    // Another recovery is opening the same app: wait for that one rather than opening it twice.
+    const other = recoveries.find((o) => o !== r && o.state === 'opening' && o.toInstance?.ref === to.ref)
+    const opened = other ? { ok: true, detail: '' } : await io.open(to)
     if (!opened.ok) {
       r.passed.push(to.ref)
       change(r, 'waiting', `${label(to)} did not open (${opened.detail}); the next account is tried`)
       return
     }
     r.to.opened = true
-    r.openedAt = io.now()
+    r.opens = (r.opens ?? 0) + 1
+    r.openedAt = other?.openedAt ?? io.now()
     r.upSince = undefined
     change(r, 'opening', `opening ${label(to)} (${best.instance.plan ?? 'plan unknown'}, ${best.usedPct}% used)`)
   }
@@ -232,9 +254,15 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
       change(r, 'done', 'no chat was left to move')
       return
     }
-    const text = resumeText(label(r.fromInstance), label(to), r.cause, r.causeDetail, INSTANCE_MANAGER_FROM)
-    // A source app still running (signed out under it) may hold engines that cannot work any more: they are stopped.
-    const started = await io.startMove(r.fromInstance, to, ids, text, `instance-manager:${r.id}:${to.ref}`, r.fromInstance.running)
+    const from = seen.find((i) => i.ref === r.fromInstance.ref) ?? r.fromInstance
+    if (isUp(from)) {
+      change(r, 'came-back', `${label(from)} came back by itself before the move; its chats are where they were`)
+      return
+    }
+    const text = resumeText(label(from), label(to), r.cause, r.causeDetail, INSTANCE_MANAGER_FROM)
+    // A source app still running signed out may hold engines that cannot work any more: they are stopped. Read now, not
+    // when it went down, so an app that has since closed or signed in again is never asked to stop anything.
+    const started = await io.startMove(from, to, ids, text, `instance-manager:${r.id}:${to.ref}`, from.running && !from.signedIn)
     if ('error' in started) {
       if (started.busy) change(r, r.state, `waiting for another move in AgentHydra to finish (${started.error})`)
       else change(r, 'failed', `the move was refused: ${started.error}`)
@@ -314,19 +342,25 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
   /** One step of one recovery. */
   async function step(r: Tracked, now: number): Promise<void> {
     const from = seen.find((i) => i.ref === r.from.ref)
-    if (r.state === 'waiting' && r.cause === 'unknown' && r.causeDetail === '') {
-      if (now - r.at < GRACE_MS) return
-      if (from && isUp(from)) {
-        change(r, 'came-back', `${label(from)} came back by itself; its chats are where they were`)
-        return
-      }
-      const inst = from ?? r.fromInstance
+    if (unjudged(r) && now - r.at < GRACE_MS) return
+    if ((r.state === 'waiting' || r.state === 'opening') && from && isUp(from)) {
+      const opened = r.state === 'opening' && r.toInstance ? ` (${label(r.toInstance)}, opened for them, stays open)` : ''
+      change(r, 'came-back', `${label(from)} came back by itself; its chats are where they were${opened}`)
+      return
+    }
+    if (unjudged(r)) {
+      const inst = from ? { ...from, email: from.email ?? r.fromInstance.email } : r.fromInstance
       const [probe, log] = await Promise.all([io.probe(inst), io.appLog(inst)])
       const why = causeOf({ closed: !inst.running, lastUpAt: lastUpOf(r), instance: inst }, probe, log)
+      const unread = probe === null || (inst.kind === 'desktop' && log === null)
+      if (!acts(why.cause) && unread && now - r.at < GRACE_MS + READ_RETRY_MS) {
+        change(r, 'waiting', `could not read why ${label(inst)} went down yet; reading again`)
+        return
+      }
       r.cause = why.cause
       r.causeDetail = why.detail
       r.fromInstance = inst
-      if (!acts(why.cause, r.kind)) {
+      if (!acts(why.cause)) {
         change(r, 'left', why.cause === 'quit' ? `${why.detail}: a person closed it, so its chats stay` : `${why.detail}; nothing was moved`)
         return
       }
@@ -397,7 +431,10 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     lastError = null
     const d = detect(memory, all, live, now)
     memory = d.memory
-    const alone = d.down.length <= MAX_DOWN_AT_ONCE
+    // Apps going down one look apart (a restart closes them over several seconds) count together within one grace.
+    const recent = recoveries.filter((r) => now - r.at < GRACE_MS)
+    const alone = recent.length + d.down.length <= MAX_DOWN_AT_ONCE
+    if (!alone) for (const r of recent) if (unjudged(r)) change(r, 'left', SEVERAL)
     for (const down of d.down) begin(down, now, alone, enabled)
     if (enabled) {
       for (const r of recoveries) {
@@ -411,7 +448,11 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     } else {
       for (const r of recoveries) if (!settled(r) && !r.detail.startsWith('paused')) change(r, r.state, `paused: the instance manager is off (${r.detail})`)
     }
-    recoveries.splice(RECOVERIES_KEPT)
+    const done = recoveries.filter(settled)
+    if (done.length > RECOVERIES_KEPT) {
+      const drop = new Set(done.slice(RECOVERIES_KEPT))
+      recoveries = recoveries.filter((r) => !drop.has(r))
+    }
     checkedAt = now
   }
 

@@ -30,6 +30,8 @@ export interface WorkingChat {
 export interface Remembered {
   up: boolean
   lastUpAt: number | null
+  /** The account's address while it was up: a signed-out app reads none, and its own account must still be told apart. */
+  email?: string | null
   /** The chats that were working in it at the last look it was up, by id. */
   working: Record<string, string>
   seenAt: number
@@ -72,13 +74,15 @@ export function detect(
     const fresh = before !== undefined && now - before.seenAt <= STALE_MEMORY_MS
     if (isUp(inst)) {
       const mine = working.filter((w) => w.ref === inst.ref)
-      next[inst.ref] = { up: true, lastUpAt: now, working: Object.fromEntries(mine.map((w) => [w.id, w.title])), seenAt: now }
+      const email = inst.email ?? before?.email ?? null
+      next[inst.ref] = { up: true, lastUpAt: now, email, working: Object.fromEntries(mine.map((w) => [w.id, w.title])), seenAt: now }
       continue
     }
-    next[inst.ref] = { up: false, lastUpAt: before?.lastUpAt ?? null, working: before?.working ?? {}, seenAt: now }
+    const email = inst.email ?? before?.email ?? null
+    next[inst.ref] = { up: false, lastUpAt: before?.lastUpAt ?? null, email, working: before?.working ?? {}, seenAt: now }
     if (!fresh || !before.up) continue
     const chats = Object.entries(before.working).map(([id, title]) => ({ id, title, ref: inst.ref }))
-    if (chats.length) down.push({ instance: inst, lastUpAt: before.lastUpAt ?? before.seenAt, chats, closed: !inst.running })
+    if (chats.length) down.push({ instance: { ...inst, email }, lastUpAt: before.lastUpAt ?? before.seenAt, chats, closed: !inst.running })
   }
   return { memory: next, down }
 }
@@ -86,8 +90,13 @@ export function detect(
 /** Claude Desktop's log lines: "2026-10-15 03:22:20 [info] beforeQuit: handler is ready for quit, so quitting". */
 const LOG_LINE = /^(\d{4})-(\d{2})-(\d{2}) (\d{2}):(\d{2}):(\d{2})\b/
 const QUIT = /\b(beforeQuit|willQuit|before-quit|will-quit)\b/
+// Only the lines a real sign-out writes (read from 12 profiles' logs, 2026-10-15). Claude Desktop also writes "User is
+// logged out, skipping account ID wait" at every start before the account loads, and "invalid_grant" on a routine token
+// refresh it recovers from; either would turn a person's clean quit into a sign-out.
 const LOGGED_OUT =
-  /\b(user is logged out|logged out|signed out|log ?out|sign ?out|session (has )?expired|token (has been |was )?revoked|invalid_grant|re-?authenticate|please (run \/login|log ?in|sign ?in))\b/i
+  /(Login-state transition \(loggedOut: false\b|\bAccount logged out\b|synthesizing logged-out|\bOAuth token (has been |was )?revoked\b)/i
+/** Signed in again after it: an earlier sign-out line no longer says anything. */
+const LOGGED_IN = /Login-state transition \(loggedOut: true\b/i
 const ACCOUNT_DEAD =
   /\b(organization (has been |is |was )?(disabled|suspended|deactivated)|account (has been |is |was )?(disabled|suspended|banned|deactivated)|subscription (has |is )?(expired|ended|lapsed|cancell?ed)|plan (has |is )?(expired|ended)|payment (failed|required)|billing (issue|problem))\b/i
 
@@ -113,8 +122,9 @@ export function causeFromLog(log: string | null, since: number): { cause: DownCa
   })
   const dead = lines.findLast((l) => ACCOUNT_DEAD.test(l))
   if (dead) return { cause: 'account-dead', detail: `its log: ${clip(dead)}` }
-  const out = lines.findLast((l) => LOGGED_OUT.test(l))
-  if (out) return { cause: 'logged-out', detail: `its log: ${clip(out)}` }
+  const outAt = lines.findLastIndex((l) => LOGGED_OUT.test(l))
+  if (outAt >= 0 && outAt > lines.findLastIndex((l) => LOGGED_IN.test(l)))
+    return { cause: 'logged-out', detail: `its log: ${clip(lines[outAt] as string)}` }
   const quit = lines.findLast((l) => QUIT.test(l))
   if (quit) return { cause: 'quit', detail: `it quit cleanly (${clip(quit)})` }
   return { cause: 'crashed', detail: lines.length ? 'its log stops without a quit' : 'its log has nothing since it was last seen up' }
@@ -144,12 +154,11 @@ export function causeOf(
   return { cause: 'unknown', detail: d.instance.kind === 'codex' ? 'the Codex app closed; it keeps no log to say why' : 'its log could not be read' }
 }
 
-/** The causes the manager acts on. A clean quit is a person's (or an update's, which brings the app straight back); a
- *  Codex app that closes says nothing either way, and its chats are moved on the same footing as a crash. */
-export function acts(cause: DownCause, kind: ManagedKind): boolean {
-  if (cause === 'quit') return false
-  if (cause === 'unknown') return kind === 'codex'
-  return true
+/** The causes the manager acts on. A clean quit is a person's (or an update's, which brings the app straight back); an
+ *  unknown cause may be one too, so it is left alone. A Codex app keeps no log: only its account (signed out, or a plan
+ *  turned free) says it went down for a reason the manager acts on. */
+export function acts(cause: DownCause): boolean {
+  return cause !== 'quit' && cause !== 'unknown'
 }
 
 function clip(line: string): string {

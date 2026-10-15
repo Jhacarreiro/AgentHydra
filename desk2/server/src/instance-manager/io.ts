@@ -9,7 +9,7 @@
 // Codex: GET /api/codex-instances, /:id/usage, /:id/account, POST /:id/desktop/open and /:id/move-chat.
 
 import { closeSync, fstatSync, openSync, readSync } from 'node:fs'
-import { join } from 'node:path'
+import { basename, join } from 'node:path'
 import type { ExternalSession } from '@shared/protocol'
 import type { ManagedKind } from '@shared/instance-manager'
 import type { AccountProbe, Candidate, SeenInstance, WorkingChat } from './decide'
@@ -167,13 +167,16 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
     async working(seen) {
       const list = await o.outside()
       if (list === null) return null
-      const byName = new Map(seen.filter((i) => i.kind === 'desktop').map((i) => [i.name.toLowerCase(), i.ref]))
-      const byNum = new Map(seen.filter((i) => i.kind === 'desktop').map((i) => [String(i.num), i.ref]))
+      // A Desktop session names its app by the profile's name, its folder or its number.
+      const desktop = seen.filter((i) => i.kind === 'desktop')
+      const byName = new Map(desktop.map((i) => [i.name.toLowerCase(), i.ref]))
+      const byFolder = new Map(desktop.map((i) => [basename(i.handle).toLowerCase(), i.ref]))
+      const byNum = new Map(desktop.map((i) => [String(i.num), i.ref]))
       return list.flatMap((s): WorkingChat[] => {
         if (s.status !== 'working' || s.fromPc) return []
         if (s.source === 'desktop') {
           const key = (s.instance ?? '').toLowerCase().replace(/^#/, '')
-          const ref = byName.get(key) ?? byNum.get(key)
+          const ref = byName.get(key) ?? byFolder.get(key) ?? byNum.get(key)
           return ref ? [{ id: s.id, title: s.title, ref }] : []
         }
         if (s.source === 'codex' && s.codexAccountId) return [{ id: s.id, title: s.title, ref: `codex:${s.codexAccountId}` }]
