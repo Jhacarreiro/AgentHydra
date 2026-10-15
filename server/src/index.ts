@@ -65,7 +65,7 @@ import { createChatGptContextPack } from './context-pack'
 import { migrateCliInstanceConfigDirs, reconcileCliInstanceDirs } from './core/cli-instances'
 import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
-import { reconcileCodexInstanceDirs } from './core/codex-instances'
+import { giveCodexInstancesOwnerAgents, reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
@@ -1645,6 +1645,10 @@ startExtraUsageGuard()
   const migrated = migrateCliInstanceConfigDirs()
   if (migrated.length)
     console.log(`[cli-instances] repointed ${migrated.length} config dir(s) to ${CONFIG_DIR}`)
+}
+{
+  const given = giveCodexInstancesOwnerAgents()
+  if (given) console.log(`[codex-instances] gave ${given} instance(s) the owner's AGENTS.md`)
 }
 
 // --- registry health: say out loud what the disk and the registries disagree about --------------
