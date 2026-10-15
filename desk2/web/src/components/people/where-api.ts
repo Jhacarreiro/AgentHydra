@@ -1,4 +1,4 @@
-// The calls "Where your people live" makes (shared/people-store.ts).
+// The calls "Where your people live" makes (where-types.ts).
 import {
   PEOPLE_STORE,
   PEOPLE_STORE_HOME,
@@ -7,7 +7,7 @@ import {
   PEOPLE_STORE_SYNC,
   type PeopleHomeKind,
   type PeopleStoreStatus
-} from '@shared/people-store'
+} from './where-types'
 
 async function call(path: string, init?: RequestInit): Promise<PeopleStoreStatus> {
   const res = await fetch(path, init)

@@ -1,5 +1,5 @@
-// Where your people live (Settings → People): the status AgentHydra's /api/people-store answers
-// (server/src/people-store/service.ts PeopleStatus). Desk 2's server passes the calls on.
+// Where your people live (Settings → People): the status /api/people-store answers
+// (server/src/people-store/service.ts PeopleStatus), served by server/src/plugins/76-people-store.ts.
 export const PEOPLE_STORE = '/api/people-store'
 export const PEOPLE_STORE_HOME = `${PEOPLE_STORE}/home`
 export const PEOPLE_STORE_SIGNIN = `${PEOPLE_STORE}/signin`

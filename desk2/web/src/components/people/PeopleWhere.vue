@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { Cloud, LogIn, LogOut, Monitor, RefreshCw } from '@lucide/vue'
-import type { PeopleHomeKind, PeopleStoreStatus } from '@shared/people-store'
+import type { PeopleHomeKind, PeopleStoreStatus } from './where-types'
 import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
 import { BUTTON } from '@/components/panes/settings-styles'
 import { chooseHome, loadStatus, signIn, signOut, syncNow } from './where-api'

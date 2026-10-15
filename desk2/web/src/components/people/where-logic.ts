@@ -1,4 +1,4 @@
-import type { PeopleStoreStatus } from '@shared/people-store'
+import type { PeopleStoreStatus } from './where-types'
 
 /** "just now", "5 min ago", "3 h ago", "2 d ago"; the exact time goes in the tooltip. */
 export function ago(iso: string, now = Date.now()): string {

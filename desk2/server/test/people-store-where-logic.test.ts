@@ -1,6 +1,6 @@
 import { describe, expect, test } from 'bun:test'
-import type { PeopleStoreStatus } from '@shared/people-store'
-import { ago, initialsOf, syncLine, whereView } from '../../src/components/people/where-logic'
+import type { PeopleStoreStatus } from '../../web/src/components/people/where-types'
+import { ago, initialsOf, syncLine, whereView } from '../../web/src/components/people/where-logic'
 
 const status = (over: Partial<PeopleStoreStatus> = {}): PeopleStoreStatus => ({
   home: 'pc',
