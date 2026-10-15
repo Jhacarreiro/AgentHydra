@@ -1,15 +1,14 @@
-// The people store as the app uses it: which home the person chose, the working copy on this PC, the Connections
-// home, sync (on start, on sign-in, debounced after a change, or on demand) and the status Settings shows.
+// The people store as the app uses it: which home the person chose, the working copy on this PC, the LunarWerx people
+// server home, sync (on start, on sign-in, debounced after a change, or on demand) and the status Settings shows.
 import { spawn } from 'node:child_process'
 import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, resolve } from 'node:path'
+import type { ConnectionsAccount } from './connections-signin'
 import {
-  type ConnectionsAccount,
-  type ConnectionsAdapter,
-  createConnectionsAdapter,
+  createPeopleServerAdapter,
   NOT_CONFIGURED,
-  type PeopleScope,
-} from './connections-adapter'
+  type PeopleServerAdapter,
+} from './people-server-home'
 import { backupDir, type SyncResult, syncPeople } from './sync'
 import { agentHydraDir, createThisPcHome } from './this-pc'
 import {
@@ -23,13 +22,12 @@ import {
 
 export interface PeopleConfig {
   home: HomeKind
-  scope: PeopleScope
   lastSync: SyncResult | null
 }
 
 export interface PeopleStatus {
   home: HomeKind
-  /** False when this build has no Connections app id: Connections says so and This PC keeps working. */
+  /** False when AGENTHYDRA_API_URL is not set: the status says so and This PC keeps working. */
   configured: boolean
   signedIn: boolean
   account: ConnectionsAccount | null
@@ -40,9 +38,11 @@ export interface PeopleStatus {
   note: string | null
 }
 
+export type HomeAdapter = Omit<PeopleServerAdapter, 'home'> & { home(): PeopleHome }
+
 export interface PeopleServiceOptions {
   home?: string
-  adapter?: ConnectionsAdapter
+  adapter?: HomeAdapter
   /** Rebuilds the Hydra Core catalog after a pull. Default runs hydra-core/catalog/build.mjs. */
   rebuild?: () => Promise<void>
   debounceMs?: number
@@ -66,25 +66,18 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
       const c = JSON.parse(readFileSync(configFile, 'utf8')) as Partial<PeopleConfig>
       return {
         home: c.home === 'connections' ? 'connections' : 'pc',
-        scope: typeof c.scope === 'string' && c.scope ? c.scope : 'me',
         lastSync: c.lastSync ?? null,
       }
     } catch {
       // floor-ok: no config yet means the default home, This PC
-      return { home: 'pc', scope: 'me', lastSync: null }
+      return { home: 'pc', lastSync: null }
     }
   }
   const writeConfig = (c: PeopleConfig): void => {
     mkdirSync(agentHydraDir(opts.home), { recursive: true })
     writeFileSync(configFile, `${JSON.stringify(c, null, 2)}\n`)
   }
-  const adapterFor = (scope: PeopleScope): ConnectionsAdapter =>
-    opts.adapter ?? createConnectionsAdapter({ home: opts.home, scope })
-  let adapter: ConnectionsAdapter | null = null
-  const getAdapter = (): ConnectionsAdapter => {
-    adapter ??= adapterFor(readConfig().scope)
-    return adapter
-  }
+  const adapter = opts.adapter ?? createPeopleServerAdapter({ home: opts.home })
   let syncing: Promise<SyncResult> | null = null
   let timer: ReturnType<typeof setTimeout> | null = null
 
@@ -92,7 +85,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
     if (syncing) return syncing
     const run = async (): Promise<SyncResult> => {
       const cfg = readConfig()
-      const a = getAdapter()
+      const a = adapter
       let res: SyncResult
       if (cfg.home !== 'connections')
         res = { at: new Date().toISOString(), pulled: 0, pushed: 0, backedUp: 0, error: null }
@@ -135,7 +128,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
     config: readConfig,
     async status(): Promise<PeopleStatus> {
       const cfg = readConfig()
-      const a = getAdapter()
+      const a = adapter
       let account: ConnectionsAccount | null = null
       let signedIn = false
       let error = cfg.home === 'connections' ? (cfg.lastSync?.error ?? null) : null
@@ -156,37 +149,26 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
         note: a.configured ? null : NOT_CONFIGURED,
       }
     },
-    /** Choose where the people live. Connections without an app id is refused in words; This PC always works. */
+    /** Choose where the people live. The people server without a URL is refused in words; This PC always works. */
     async setHome(home: HomeKind): Promise<PeopleStatus> {
-      if (home === 'connections' && !getAdapter().configured) throw new Error(NOT_CONFIGURED)
+      if (home === 'connections' && !adapter.configured) throw new Error(NOT_CONFIGURED)
       writeConfig({ ...readConfig(), home })
-      if (
-        home === 'connections' &&
-        (await getAdapter()
-          .signedIn()
-          .catch(() => false))
-      )
-        void syncNow()
+      if (home === 'connections' && (await adapter.signedIn().catch(() => false))) void syncNow()
       return this.status()
     },
     async signIn(): Promise<PeopleStatus> {
-      await getAdapter().signIn()
+      await adapter.signIn()
       void syncNow()
       return this.status()
     },
     async signOut(): Promise<PeopleStatus> {
-      await getAdapter().signOut()
+      await adapter.signOut()
       return this.status()
     },
     /** Pull on start: quietly, and only when the person chose Connections and is signed in. */
     async syncOnStart(): Promise<void> {
       if (readConfig().home !== 'connections') return
-      if (
-        await getAdapter()
-          .signedIn()
-          .catch(() => false)
-      )
-        await syncNow()
+      if (await adapter.signedIn().catch(() => false)) await syncNow()
     },
     list: (): Promise<PersonSummary[]> => local.list(),
     get: (id: string): Promise<PersonRecord | null> => local.get(id),
@@ -196,7 +178,7 @@ export function createPeopleService(opts: PeopleServiceOptions = {}) {
       changed()
     },
     async delete(id: string): Promise<void> {
-      // Deleting a person here never reaches into Connections: a pull would bring them back, which is the safe side.
+      // Deleting a person here never reaches the people server: a pull would bring them back, which is the safe side.
       await local.delete(id)
     },
     async addLearning(id: string, text: string): Promise<Learning | null> {

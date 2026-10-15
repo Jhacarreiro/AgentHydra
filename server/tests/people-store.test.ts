@@ -2,15 +2,18 @@ import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, statSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createMemoryLocker } from '@cnct/connect'
 import {
   backupDir,
-  createConnectionsAdapter,
+  createPeopleServerAdapter,
   createPeopleService,
   createThisPcHome,
-  lockerKey,
+  type HomeAdapter,
+  HomeUnavailable,
   NOT_CONFIGURED,
+  type PeopleHome,
   type PersonRecord,
+  type PersonSummary,
+  summaryOf,
   syncPeople,
 } from '../src/people-store'
 
@@ -37,12 +40,33 @@ const person = (
   ...extra,
 })
 
-const fakeConnect = (signedIn = true) => ({
-  isSignedIn: async () => signedIn,
-  getAccessToken: async () => 'token',
-  getUser: async () => ({ name: 'Example Owner', email: 'owner@example.com' }),
-  signInLoopback: async () => ({}),
+/** A people home that keeps the docs in memory, standing in for the people server. */
+function memoryHome(): PeopleHome {
+  const docs = new Map<string, PersonRecord>()
+  return {
+    kind: 'connections',
+    async list(): Promise<PersonSummary[]> {
+      return [...docs.values()].map(summaryOf).sort((a, b) => a.id.localeCompare(b.id))
+    },
+    async get(id) {
+      return docs.get(id) ?? null
+    },
+    async put(record) {
+      docs.set(record.id, record)
+    },
+    async delete(id) {
+      docs.delete(id)
+    },
+  }
+}
+
+const serverAdapter = (remote: PeopleHome, signedIn = true): HomeAdapter => ({
+  configured: true,
+  signedIn: async () => signedIn,
+  account: async () => ({ name: 'Example Owner', email: 'owner@example.com' }),
+  signIn: async () => ({ name: 'Example Owner', email: 'owner@example.com' }),
   signOut: async () => {},
+  home: () => remote,
 })
 
 test('This PC home: put, get, list, delete keep the docs/PEOPLE.md folders', async () => {
@@ -72,39 +96,9 @@ test('This PC home refuses an id that could leave the people folder', async () =
   ).rejects.toThrow()
 })
 
-test('Connections home: one person is one locker key, round trip through the memory locker', async () => {
-  const locker = createMemoryLocker()
-  const cn = createConnectionsAdapter({ home, appId: 'app-test', locker, connect: fakeConnect() })
-  const h = cn.home()
-  await h.put(person('ada', '2026-01-01T00:00:00.000Z'))
-  const doc = await locker.get()
-  expect(Object.keys(doc.settings)).toEqual([lockerKey('me', 'manager/ada')])
-  expect((await h.get('manager/ada'))?.persona.name).toBe('Example ada')
-  expect((await h.list()).length).toBe(1)
-  await h.delete('manager/ada')
-  expect((await h.list()).length).toBe(0)
-})
-
-test('Connections home: a company scope is not available yet and says so', async () => {
-  const cn = createConnectionsAdapter({
-    home,
-    appId: 'app-test',
-    scope: 'company-1',
-    locker: createMemoryLocker(),
-    connect: fakeConnect(),
-  })
-  await expect(cn.home().list()).rejects.toThrow('not available yet')
-})
-
 test('sync: a person only on one side is copied to the other, and a pull rebuilds the catalog', async () => {
   const pc = createThisPcHome({ home })
-  const locker = createMemoryLocker()
-  const remote = createConnectionsAdapter({
-    home,
-    appId: 'a',
-    locker,
-    connect: fakeConnect(),
-  }).home()
+  const remote = memoryHome()
   await pc.put(person('mine', '2026-01-01T00:00:00.000Z'))
   await remote.put(person('theirs', '2026-01-02T00:00:00.000Z'))
   let rebuilt = 0
@@ -122,12 +116,7 @@ test('sync: a person only on one side is copied to the other, and a pull rebuild
 
 test('sync conflict: newer wins and the losing copy is kept in the backup folder', async () => {
   const pc = createThisPcHome({ home })
-  const remote = createConnectionsAdapter({
-    home,
-    appId: 'a',
-    locker: createMemoryLocker(),
-    connect: fakeConnect(),
-  }).home()
+  const remote = memoryHome()
   await pc.put(person('ada', '2026-01-01T00:00:00.000Z', { brief: 'old pc brief' }))
   await remote.put(person('ada', '2026-02-01T00:00:00.000Z', { brief: 'newer remote brief' }))
   const r = await syncPeople({ local: pc, remote, backupDir: backupDir(home) })
@@ -150,22 +139,20 @@ test('sync conflict: newer wins and the losing copy is kept in the backup folder
 test('a failed sync reports in words and deletes no local file', async () => {
   const pc = createThisPcHome({ home })
   await pc.put(person('ada', '2026-01-01T00:00:00.000Z'))
-  const broken = {
-    ...createConnectionsAdapter({
-      home,
-      appId: 'a',
-      locker: createMemoryLocker(),
-      connect: fakeConnect(),
-    }).home(),
-    list: async () => Promise.reject(new Error('offline')),
+  const broken: PeopleHome = {
+    ...memoryHome(),
+    list: async () => Promise.reject(new HomeUnavailable('offline')),
   }
   const r = await syncPeople({ local: pc, remote: broken, backupDir: backupDir(home) })
   expect(r.error).toBe('offline')
   expect(await pc.get('manager/ada')).not.toBeNull()
 })
 
-test('no app id: Connections says it is not configured and This PC keeps working', async () => {
-  const svc = createPeopleService({ home, adapter: createConnectionsAdapter({ home, appId: '' }) })
+test('no people server URL: the status says it is not configured and This PC keeps working', async () => {
+  const svc = createPeopleService({
+    home,
+    adapter: createPeopleServerAdapter({ home, baseUrl: '' }),
+  })
   const st = await svc.status()
   expect(st).toMatchObject({ home: 'pc', configured: false, signedIn: false, note: NOT_CONFIGURED })
   await expect(svc.setHome('connections')).rejects.toThrow(NOT_CONFIGURED)
@@ -174,17 +161,21 @@ test('no app id: Connections says it is not configured and This PC keeps working
   expect((await svc.status()).home).toBe('pc')
 })
 
-test('the service on Connections: setting it syncs, and a change pushes after the debounce', async () => {
-  const locker = createMemoryLocker()
-  const adapter = createConnectionsAdapter({ home, appId: 'a', locker, connect: fakeConnect() })
-  const svc = createPeopleService({ home, adapter, rebuild: async () => {}, debounceMs: 5 })
+test('the service on the people server: setting it syncs, and a change pushes after the debounce', async () => {
+  const remote = memoryHome()
+  const svc = createPeopleService({
+    home,
+    adapter: serverAdapter(remote),
+    rebuild: async () => {},
+    debounceMs: 5,
+  })
   await svc.local.put(person('ada', '2026-01-01T00:00:00.000Z'))
   await svc.setHome('connections')
   await svc.syncNow()
-  expect(await adapter.home().get('manager/ada')).not.toBeNull()
+  expect(await remote.get('manager/ada')).not.toBeNull()
   await svc.addLearning('manager/ada', 'Read the brief first')
   await new Promise((r) => setTimeout(r, 80))
-  expect((await adapter.home().get('manager/ada'))?.learnings.length).toBe(1)
+  expect((await remote.get('manager/ada'))?.learnings.length).toBe(1)
   const st = await svc.status()
   expect(st).toMatchObject({ home: 'connections', signedIn: true, error: null })
   expect(st.account?.name).toBe('Example Owner')
