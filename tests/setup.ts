@@ -91,3 +91,12 @@ process.env.ORCH_NO_TUNNEL = '1'
 // The Hydra family's manifest folder is machine-wide (~/.hydra-family): a daemon a test boots must
 // not advertise its throwaway port there, and a peer's real manifest must not leak into a test.
 process.env.HYDRA_FAMILY_DIR = path.join(scratch, 'hydra-family')
+// A suite run inside a CliMayte worker inherits its identity: fan_out and core_use would then refuse
+// as that worker. A test that needs a worker identity sets these itself.
+for (const k of [
+  'AGENTHYDRA_CLIMAYTE_WORKER',
+  'AGENTHYDRA_CLIMAYTE_CHAT',
+  'AGENTHYDRA_MANAGER',
+  'HYDRA_DESK_CHAT_ID',
+])
+  delete process.env[k]
