@@ -1,10 +1,10 @@
-# AgentHydra 2.0 (Hydra Desk 2, Michael's copy of desk/)
+# AgentHydra 2.0 (Hydra Desk 2, the other owner's copy of desk/)
 
 This folder is AgentHydra's window, AgentHydra 2.0: called Hydra Desk 2 until 2026-10-06, when the owner
 named it AgentHydra. What a person sees says AgentHydra (the window title, the shortcut, the launcher's
 messages); the folder, port, data folders, `HydraDesk2.exe` and the mutexes keep Desk 2's names, each a
-migration of its own if ever renamed. It began as a copy of Jacob's Hydra Desk (`../desk`) made on
-2026-10-04 so Michael can try new things on it without touching Jacob's app. Both run side by side: Desk 2 is on port 7798, keeps
+migration of its own if ever renamed. It began as a copy of the owner's Hydra Desk (`../desk`) made on
+2026-10-04 so the other owner can try new things on it without touching the owner's app. Both run side by side: Desk 2 is on port 7798, keeps
 its data in `~/.hydra-desk-2/`, opens in its own native window (`launcher/HydraDesk2.exe`, a WebView2
 host built from `launcher/host`, its data in `%LOCALAPPDATA%\HydraDesk2\webview`), and has its own
 "AgentHydra" shortcut. SPEC.md is the design it started from and still describes what is
@@ -86,7 +86,7 @@ between server/ and web/.
   bracketed `text-[13px]`. A new step goes in the `@theme` block AND in that app's `lib/utils.ts` tailwind-merge
   extension: tailwind-merge reads an unknown `text-*` as a colour, and `cn()` then drops the colour beside it
   (2026-10-13); each app's `utils.test.ts` reads the theme and fails on a step it does not know.
-- `desk/` is Jacob's: a change meant for both apps is made in each, and never by editing `desk/` from
+- `desk/` is the owner's: a change meant for both apps is made in each, and never by editing `desk/` from
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.

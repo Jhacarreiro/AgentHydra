@@ -12,7 +12,7 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
 
 ## Owner rulings
 
-- **2026-09-30, Michael:** "give you a task in a chat ... I want this fully delegated ... delegate
+- **2026-09-30, the other owner:** "give you a task in a chat ... I want this fully delegated ... delegate
   every part of it, except for the absolute bare orchestration level ... orchestrating them only
   to CLI, not desktop instances ... a super fast way to log in to multiple CLI instances ... Ask
   for an email, I'll give it to you, then you open the login page, and then I confirm it."
@@ -21,7 +21,7 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   worker is readable live and steerable in AgentHydra (the CliMayte view, `climayte_status`), and its
   transcript is an ordinary Claude Code session in that account's folder that a person can resume
   by hand. CliMayte is the one named exemption from the headless ban; queue dispatch stays refused.
-- **2026-10-02, Michael:** "the AI in general should know about CliMayte, being a viable option ...
+- **2026-10-02, the other owner:** "the AI in general should know about CliMayte, being a viable option ...
   like how it knows Z Swarm is available ... it doesn't step on the toes of other accounts running
   ... the Agent Hydra client manager should handle all that stuff." CliMayte is a standing option
   for work that needs Claude quality HSwarm cannot give (AgentHydra's MCP instructions say so),
@@ -1593,14 +1593,14 @@ then imported), where someone could go on in them and send turns back. Now:
 - A chat the two-way sync landed is taken back out once (`retire` in `core/desktop-chat-local.ts`): its
   desktop records are archived (never deleted) and every copy of its transcript moves into the viewer.
   It stays where it is if someone on this PC went on in it, and the viewer then downloads its own copy.
-  On MPC-HELL that took out Jacob's 3 chats (4 transcript files: one he had moved between folders had
+  On MPC-HELL that took out the owner's 3 chats (4 transcript files: one they had moved between folders had
   been written under both).
 
 **Hydra Desk's chats too (owner, 2026-10-07):** turning on the cloud in Desk 2's sidebar "should show me
 ... all chats between both of our computers". Only Claude Desktop chats were shared, so a PC whose owner
 works in Hydra Desk shared almost nothing: on 2026-10-07 the other PC's 23 chats that started CliMayte work
 in three days had none in the store, against its 6 desktop chats. `core/desktop-chat-local.ts` now lists
-the chats of Jacob's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
+the chats of the owner's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
 `~/.hydra-desk-2`, never a throwaway Desk's home) beside the desktop records, view only like them. A
 chat's transcript is read from its account's own folder (`account.configDir`, else the default login's config dir `~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)); a
 session a desktop record already lists goes once, as that record; one idle over a week that was never

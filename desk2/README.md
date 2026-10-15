@@ -30,8 +30,8 @@ data in `~/.hydra-desk-2/`, the window host `launcher/HydraDesk2.exe` (WebView2 
 `%LOCALAPPDATA%\HydraDesk2\webview`). The daemon on 7787 no longer shows the old window where this folder
 is beside it: a page asked of it goes on to this window (`server/src/index.ts`, `DESK2_URL`).
 
-It began as Michael's copy of Jacob's Hydra Desk (`desk/`, retired from this repo on 2026-10-07; its history keeps it), made on 2026-10-04 to try new things on
-without touching Jacob's app. Everything below is Hydra Desk's own description, with the ports and
+It began as the other owner's copy of the owner's Hydra Desk (`desk/`, retired from this repo on 2026-10-07; its history keeps it), made on 2026-10-04 to try new things on
+without touching the owner's app. Everything below is Hydra Desk's own description, with the ports and
 folders changed to Desk 2's.
 
 ## What Desk 2 adds
@@ -720,7 +720,7 @@ the Dev servers view off.
 
 <img src="../misc/AgentHydra-icon.png" width="96" alt="AgentHydra icon">
 
-Hydra Desk is Jacob's own Claude Code desktop: a replacement for the Code tab of Claude Desktop. It
+Hydra Desk is the owner's own Claude Code desktop: a replacement for the Code tab of Claude Desktop. It
 runs Claude Code chats itself, through the Claude Agent SDK, and shows at a glance which chats are
 working, which are waiting on you, which finished and which stopped. You can stop any of them from the
 window. It also shows the CliMayte workers AgentHydra is running and the Claude chats running
