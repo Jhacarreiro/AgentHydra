@@ -1,4 +1,4 @@
-import { type AuthConfig } from './auth'
+import type { AuthConfig } from './auth'
 import { type Keyring, keyringFromEnv } from './crypto'
 
 export interface Config {
@@ -15,9 +15,13 @@ export interface Config {
 
 type Env = Record<string, string | undefined>
 
-/** `AGENTHYDRA_API_<NAME>` wins; the deploy env file's `AGENTHYDRA_<NAME>` is the fallback. */
+/** `AGENTHYDRA_API_<NAME>` wins; the deploy env file's `AGENTHYDRA_<NAME>` (or bare `DATABASE_URL`/`PORT`) is the fallback. */
 function pick(env: Env, name: string): string | undefined {
-  return env[`AGENTHYDRA_API_${name}`] ?? env[`AGENTHYDRA_${name}`]
+  return (
+    env[`AGENTHYDRA_API_${name}`] ??
+    env[`AGENTHYDRA_${name}`] ??
+    (name === 'DATABASE_URL' || name === 'PORT' ? env[name] : undefined)
+  )
 }
 
 function need(env: Env, name: string): string {
@@ -28,7 +32,8 @@ function need(env: Env, name: string): string {
 
 export function loadConfig(env: Env = process.env): Config {
   const port = Number(pick(env, 'PORT') ?? 18790)
-  if (!Number.isInteger(port) || port < 1 || port > 65535) throw new Error('bad AGENTHYDRA_API_PORT')
+  if (!Number.isInteger(port) || port < 1 || port > 65535)
+    throw new Error('bad AGENTHYDRA_API_PORT')
   const keys = pick(env, 'MASTER_KEYS')
   const single = pick(env, 'MASTER_KEY')
   const keyring = keyringFromEnv(keys ?? (single ? `1:${single}` : ''))

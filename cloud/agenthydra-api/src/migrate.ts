@@ -1,5 +1,5 @@
 import { createHash } from 'node:crypto'
-import { readdirSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 
 /** Minimal driver surface so Bun.sql in production and PGlite in tests both fit. */
@@ -21,7 +21,11 @@ export function fromBunSql(sql: any): Db {
   return wrap(sql)
 }
 
-export const defaultMigrationsDir = join(import.meta.dir, '..', 'migrations')
+// Source tree: src/../migrations. Release bundle: migrate.js sits beside migrations/.
+const besideBundle = join(import.meta.dir, 'migrations')
+export const defaultMigrationsDir = existsSync(besideBundle)
+  ? besideBundle
+  : join(import.meta.dir, '..', 'migrations')
 
 export function checksum(text: string): string {
   return createHash('sha256').update(text.replace(/\r\n/g, '\n')).digest('hex')
@@ -62,8 +66,8 @@ export async function migrate(db: Db, dir = defaultMigrationsDir): Promise<{ app
 }
 
 if (import.meta.main) {
-  const url = process.env.AGENTHYDRA_OWNER_DATABASE_URL
-  if (!url) throw new Error('AGENTHYDRA_OWNER_DATABASE_URL is not set')
+  const url = process.env.AGENTHYDRA_OWNER_DATABASE_URL ?? process.env.DATABASE_URL
+  if (!url) throw new Error('AGENTHYDRA_OWNER_DATABASE_URL or DATABASE_URL is not set')
   const sql = new Bun.SQL(url)
   const r = await migrate(fromBunSql(sql))
   console.log(r.applied.length ? `applied: ${r.applied.join(', ')}` : 'up to date')
