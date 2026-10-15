@@ -43,6 +43,7 @@ export type SettingsRowId =
   | 'idle'
   | 'collapseMode'
   | 'babysitter'
+  | 'instanceManager'
   | 'orchestrator'
   | 'orchestratorModel'
   | 'routines'
@@ -190,6 +191,16 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Watching chats',
     label: 'Orchestrator model',
     description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
+  },
+  // The instance manager (shared/instance-manager.ts; owner, 2026-10-15: "if it notices a desktop instance close, it
+  // should start the next available desktop instance with room").
+  {
+    id: 'instanceManager',
+    section: 'managers',
+    group: 'Watching apps',
+    label: 'Instance manager',
+    description:
+      'When a Claude Desktop or Codex app goes down with chats working in it, open the same kind of account with the most room, move the chats there and start them again. A clean quit is left alone.'
   },
   // The new core (core/README.md) behind the window: owner, 2026-10-14, "switch it over behind the toggle with the old
   // engine kept for rollback".

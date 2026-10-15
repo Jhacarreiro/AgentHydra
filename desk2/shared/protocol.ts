@@ -683,6 +683,8 @@ export interface DeskSettings {
   pinnedProjects: string[]
   /** The babysitter continues chats a usage limit stopped once the limit resets (shared/babysitter.ts). */
   babysitter: boolean
+  /** The instance manager moves the chats of a Claude Desktop or Codex app that went down to the same-kind account with the most room, and starts them again (shared/instance-manager.ts). On by default. */
+  instanceManager: boolean
   /** The orchestrator, armed: it continues chats an error stopped and its foreman peeks at running ones (shared/orchestrator.ts). Off by default. */
   orchestrator: boolean
   /** The model the orchestrator's judge asks: an alias (opus, sonnet, haiku: the newest of each) or a full model id (shared/orchestrator.ts). */

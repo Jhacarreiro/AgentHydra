@@ -13,6 +13,7 @@ describe('settings search', () => {
     ])
     expect(settingsGroups('managers', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['Watching chats', ['babysitter', 'orchestrator', 'orchestratorModel']],
+      ['Watching apps', ['instanceManager']],
       ['Chat engine', ['coreEngine']],
       ['Routines', ['routines']]
     ])

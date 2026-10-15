@@ -165,7 +165,7 @@ describe('useDesk store', () => {
         projectRoots: [],
         hiddenProjects: [],
         pinnedProjects: [],
-        babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false
+        babysitter: true, instanceManager: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false
       }
     }
 
