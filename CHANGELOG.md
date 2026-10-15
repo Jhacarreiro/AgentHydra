@@ -8,6 +8,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ## [Unreleased]
 
 - **Fan-out chats start without touching your Claude window, on the model you choose.** On an account with native control, the Claude app starts the chat itself, so no window is raised and nothing is clicked. A chat runs on Opus 5.5 at xhigh effort unless the task names another model or effort, and never on Fable unless asked. An account without native control still opens its chat through its window.
+- **The Delegation panel is easier to read.** Each service is its own card: its runs, tasks, tokens and cost as labelled figures, a line saying how its runs ended, then a model table whose headings no longer run into each other.
 - **AgentHydra is now free for noncommercial use.** From this release it is licensed under PolyForm
   Noncommercial 1.0.0; commercial use needs a separate license. Versions released before it stay MIT.
 - **The connector list stops polling fast when nothing changes.** A connector stuck installing or starting is asked about every second; after a minute with the same answer the poll falls back to every 5 seconds. A Desk window at rest asks once every 5 seconds (7 requests in 30 s).
