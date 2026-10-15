@@ -68,6 +68,9 @@ export interface Down {
  *  known, and neither is what it was doing. Such an app only starts being remembered again. */
 export const STALE_MEMORY_MS = 10 * 60_000
 
+/** An app AgentHydra has not listed for this long was removed: what was known of it is dropped, not carried forever. */
+export const FORGET_MS = 24 * 60 * 60_000
+
 /** Up: running, signed in, and its account still works. */
 export const isUp = (i: SeenInstance): boolean => i.running && i.signedIn && i.dead === null
 
@@ -83,7 +86,8 @@ export function detect(
   now: number,
 ): { memory: Memory; down: Down[] } {
   // An app AgentHydra did not list this time keeps what was known of it: a read that drops a row says nothing new.
-  const next: Memory = { ...memory }
+  // One unlisted for FORGET_MS was removed, and is forgotten rather than saved again after every look.
+  const next: Memory = Object.fromEntries(Object.entries(memory).filter(([, m]) => now - m.seenAt <= FORGET_MS))
   const down: Down[] = []
   for (const inst of seen) {
     const before = memory[inst.ref]

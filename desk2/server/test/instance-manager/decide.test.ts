@@ -9,6 +9,7 @@ import {
   deadFromLog,
   detect,
   ERROR_WITH_DOWN_MS,
+  FORGET_MS,
   rankTargets,
   type SeenInstance,
   STALE_MEMORY_MS,
@@ -82,6 +83,8 @@ test('an app that was up with chats open and is down now is noticed once; idle, 
   // An app the read did not list keeps its memory, so it is still noticed when it comes back down in a later read.
   const dropped = detect(first.memory, [b], [], NOW + 20_000)
   expect(detect(dropped.memory, [{ ...a, running: false }], [], NOW + 40_000).down.map((d) => d.instance.num)).toEqual([1])
+  // One unlisted for FORGET_MS was removed: it is forgotten, not carried in every later memory.
+  expect(Object.keys(detect(dropped.memory, [b], [], NOW + FORGET_MS + 1).memory)).toEqual([b.ref])
 })
 
 test('why it went down: a sign-out or a dead account beats a clean quit, start-up noise is not a sign-out, and a log that stops without a quit is a crash', () => {
