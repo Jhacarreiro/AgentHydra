@@ -55,7 +55,9 @@ function holdOf(w: CliMayteWorker, stateSince: number | null): Doing {
 
 function runningOf(w: CliMayteWorker, stateSince: number | null): Doing {
   const stepSince = Math.max(w.stepAt ?? 0, stateSince ?? 0) || null
-  const said = w.saidLine ? sayingOf(w.saidLine) : ''
+  // A line said before this run began (the last message's report, or before a move) is not what it does now.
+  const stale = w.saidAt !== undefined && stateSince !== null && w.saidAt < stateSince
+  const said = w.saidLine && !stale ? sayingOf(w.saidLine) : ''
   const wait = isWaitStep(w.lastActivity)
   if (wait) {
     const base = said || w.lastActivity!

@@ -2250,7 +2250,8 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
     // between a finished task and its follow-up, are not time it ran.
     ranS: ranSeconds(w, now),
     ...doingOf(w),
-    lastStepAt: w.stepAt ?? w.stateAt?.at ?? w.createdAt,
+    // A step from before this run began does not make a worker that just started read as quiet.
+    lastStepAt: Math.max(w.stepAt ?? 0, w.stateAt?.at ?? w.createdAt),
     stepAt: undefined,
     saidLine: undefined,
     saidAt: undefined,

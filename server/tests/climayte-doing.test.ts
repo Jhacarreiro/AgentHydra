@@ -109,6 +109,22 @@ describe('doingOf', () => {
     expect(doingOf(w).doingSince).toBe(4_000)
   })
 
+  test('a narration line said before this run began is not shown', () => {
+    const w = worker({
+      status: 'running',
+      lastActivity: 'Bash bun test ./server/tests',
+      saidLine: 'Committed the change; the report follows',
+      saidAt: 3_000,
+      stepAt: 9_000,
+      stateAt: { key: 'running', at: 4_000 },
+    })
+    expect(doingOf(w)).toEqual({
+      doing: 'Bash bun test ./server/tests',
+      doingSince: 9_000,
+      doingKind: 'step',
+    })
+  })
+
   test('a worker with an open question says so, since the question was asked', () => {
     const w = worker({
       status: 'running',
