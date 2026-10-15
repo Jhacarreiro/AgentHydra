@@ -9,10 +9,12 @@
 // `describe` has each run's output read by one Haiku turn afterwards (routines/describe.ts), kept with the run.
 
 import type { Hono } from 'hono'
+import { appendFileSync, mkdirSync } from 'node:fs'
 import { join, resolve } from 'node:path'
 import type { ServerContext } from '../context'
 import { AsyncFile } from '../async-file'
 import { bridge } from '../bridge'
+import { describeCaller } from '../caller'
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { sdkDescriber } from '../routines/describe'
 import { ROUTINE_ID } from '../routines/manifest'
@@ -79,7 +81,21 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
 
   app.get('/api/routines', async (c) => c.json(await readRoutines(m, c.req.query('fresh') === '1')))
 
-  app.post('/api/routines', (c) => postRoutine(m, c))
+  // Every POST leaves one line in <home>/logs/routines.log: what it asked, who asked (the window, or an agent), and what it
+  // got. Without it an Approve that never reached the server cannot be told from one it refused (2026-10-15: the owner's
+  // two Approves left both proposals waiting, and nothing on disk said whether either click arrived).
+  app.post('/api/routines', async (c) => {
+    const res = await postRoutine(m, c)
+    const asked = JSON.stringify((await c.req.json().catch(() => null)) ?? null)
+    const why = res.ok ? '' : ` ${((await res.clone().json().catch(() => null)) as { error?: string } | null)?.error ?? ''}`
+    try {
+      mkdirSync(join(ctx.home, 'logs'), { recursive: true })
+      appendFileSync(join(ctx.home, 'logs', 'routines.log'), `${new Date().toISOString()} ${asked.slice(0, 200)} -> ${res.status}${why} (${describeCaller(c.req.raw.headers)})\n`)
+    } catch (err) {
+      console.error('[routines] could not write routines.log:', err)
+    }
+    return res
+  })
 
   // The first look waits for the rest of Desk to come up.
   schedule(m, FIRST_LOOK_MS)
