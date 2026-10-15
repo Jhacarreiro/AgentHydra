@@ -13,7 +13,7 @@ import { join } from 'node:path'
 import { type DoingKind, doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
-import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
+import type { CliMayteOrigin } from './climayte-ping'
 import {
   type CliMaytePlacement,
   fitPct,
@@ -221,6 +221,17 @@ export function tooBigOf(report: string | null | undefined): string | null {
     if (line.startsWith('TOO BIG:')) return line.replace(/\s+/g, ' ').slice(0, 400)
   }
   return null
+}
+
+/** A verdict covers the worker's newest work: the last verdict is stamped and no attempt started
+ *  after it. A follow-up or a sent-back fail makes the worker unjudged again. climayte_status's
+ *  `judged` is this and "not live". */
+export function verdictCoversNewestWork(w: {
+  verdicts?: Array<{ at?: number }>
+  attempts: Array<{ startedAt: number }>
+}): boolean {
+  const at = w.verdicts?.at(-1)?.at
+  return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
 }
 
 export interface CliMayteWorker {

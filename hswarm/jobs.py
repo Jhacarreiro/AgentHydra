@@ -632,6 +632,78 @@ def _cached_result(task: Task, row: dict, job_id: str) -> Result:
 CANCEL_REQUEST = "cancel"  # a file in a job's folder: another process asking the one running the job to cancel it
 
 
+def _append_result(job: Job, task: Task, res: Result) -> None:
+    with (job.dir / "results.jsonl").open("a", encoding="utf-8") as f:
+        # `key` is the task's content hash: what a later resume_from_job matches this answer by.
+        f.write(json.dumps({**res.as_dict(), "key": job.task_keys.get(task.id, "")}, ensure_ascii=False) + "\n")
+
+
+def _write_transcript(job: Job, task: Task, transcript: object) -> None:
+    tdir = job.dir / "transcripts"
+    tdir.mkdir(exist_ok=True)
+    # The worker's own record, with anything long (the shared system prompt above all) kept once
+    # per job as a blob: these files were 163 KiB of identical prompt each before this. A routed task's
+    # is {"routes": [{model, transcript}]}, so the packing reaches every depth (blobs._walk).
+    packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
+    (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
+
+
+def _ledger_row(job: Job, task: Task, res: Result) -> dict:
+    return {
+        "id": uuid.uuid4().hex,
+        "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": _ledger_provider(res),
+        "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
+        **_ledger_route(res),
+        **_ledger_selection(task, res),
+        **_ledger_outcome(res),
+        **({} if res.cached_from else billed_fields(res)),
+        **_route_fields(res),
+        **ledger_fields(job.caller),
+    }
+
+
+def _ledger_provider(res: Result) -> str:
+    return "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model)
+
+
+def _ledger_route(res: Result) -> dict:
+    return {
+        "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
+        "failover": ",".join(res.failover) or None,
+        "failover_errors": getattr(res, "failover_errors", None) or None,
+        **error_fields(res),
+        **({"token_basis": "chars/4"} if _via_free(res) else {}),
+    }
+
+
+def _ledger_selection(task: Task, res: Result) -> dict:
+    selected = res.selection.get("selected") or {}
+    return {
+        "selection_profile": res.selection.get("profile"),
+        "benchmark_slug": selected.get("benchmark_slug"),
+        "reasoning_effort": selected.get("reasoning_effort", task.reasoning_effort),
+        # The UNBIASED benchmark cost the pick is judged on, beside the load bias that only ordered it.
+        "benchmark_cost_usd": selected.get("benchmark_cost_usd"),
+        "load_bias": selected.get("load_bias"),
+    }
+
+
+def _ledger_outcome(res: Result) -> dict:
+    return {
+        "stalled": ",".join(getattr(res, "stalled", None) or []) or None,
+        "loop": res.loop, "loop_warnings": res.loop_warnings or None,
+        # How many files the task wrote: the rows ledger_rows later joins a survival score onto.
+        "files_changed": len(res.files_changed) or None,
+        "cached": res.cached_from or None,  # reused from that job's journal: no call made, no spend
+        "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
+        # The leg that gave up: the row's own model is the one that answered, so without this the ledger
+        # could not say which models give up on which profiles (the learning the owner asked for, 2026-10-13).
+        "escalated_from": res.escalation.get("from") if res.escalation else None,
+        "liveness": res.liveness or None,
+        "taint": res.taint or None,
+    }
+
+
 class JobManager:
     def __init__(self, client: DeepSeekClient | None = None):
         self._client = client  # the default provider's (DeepSeek) client; tests inject a fake
@@ -1603,48 +1675,11 @@ class JobManager:
         record_tree_spend(task, res.cost_usd)  # a no-op outside a spawn tree
         try:
             job.dir.mkdir(parents=True, exist_ok=True)
-            with (job.dir / "results.jsonl").open("a", encoding="utf-8") as f:
-                # `key` is the task's content hash: what a later resume_from_job matches this answer by.
-                f.write(json.dumps({**res.as_dict(), "key": job.task_keys.get(task.id, "")}, ensure_ascii=False) + "\n")
+            _append_result(job, task, res)
             job._journaled.add(task.id)  # a checkpoint need not write this answer again (Job.save)
             if transcript is not None:
-                tdir = job.dir / "transcripts"
-                tdir.mkdir(exist_ok=True)
-                # The worker's own record, with anything long (the shared system prompt above all) kept once
-                # per job as a blob: these files were 163 KiB of identical prompt each before this. A routed task's
-                # is {"routes": [{model, transcript}]}, so the packing reaches every depth (blobs._walk).
-                packed = blobs.pack_any(transcript, blobs.blob_dir(job.dir))
-                (tdir / f"{task.id}.json").write_text(json.dumps(packed, indent=1, ensure_ascii=False), encoding="utf-8")
-            row = {
-                "id": uuid.uuid4().hex,
-                "ts": res.finished or now_iso(), "job": job.id, "task": task.id, "backend": res.backend, "model": res.model, "provider": "climayte" if _via_climayte(res) else "free" if _via_free(res) else _provider(res.model),
-                "status": res.status, "calls": res.turns, **res.usage, "cost_usd": res.cost_usd, "seconds": res.seconds, "peak": config.is_peak(),
-                "upstream": ",".join(res.upstream) or None, "api_seconds": res.api_seconds,
-                "failover": ",".join(res.failover) or None,
-                "failover_errors": getattr(res, "failover_errors", None) or None,
-                **error_fields(res),
-                **({"token_basis": "chars/4"} if _via_free(res) else {}),
-                "selection_profile": res.selection.get("profile"),
-                "benchmark_slug": (res.selection.get("selected") or {}).get("benchmark_slug"),
-                "reasoning_effort": (res.selection.get("selected") or {}).get("reasoning_effort", task.reasoning_effort),
-                # The UNBIASED benchmark cost the pick is judged on, beside the load bias that only ordered it.
-                "benchmark_cost_usd": (res.selection.get("selected") or {}).get("benchmark_cost_usd"),
-                "load_bias": (res.selection.get("selected") or {}).get("load_bias"),
-                "stalled": ",".join(getattr(res, "stalled", None) or []) or None,
-                "loop": res.loop, "loop_warnings": res.loop_warnings or None,
-                # How many files the task wrote: the rows ledger_rows later joins a survival score onto.
-                "files_changed": len(res.files_changed) or None,
-                "cached": res.cached_from or None,  # reused from that job's journal: no call made, no spend
-                "escalated": (f"{res.escalation['to']}:{res.escalation['kept']}" if res.escalation else None),
-                # The leg that gave up: the row's own model is the one that answered, so without this the ledger
-                # could not say which models give up on which profiles (the learning the owner asked for, 2026-10-13).
-                "escalated_from": res.escalation.get("from") if res.escalation else None,
-                "liveness": res.liveness or None,
-                "taint": res.taint or None,
-                **({} if res.cached_from else billed_fields(res)),
-                **_route_fields(res),
-                **ledger_fields(job.caller),
-            }
+                _write_transcript(job, task, transcript)
+            row = _ledger_row(job, task, res)
             if getattr(res, "edit_snapshot", None):
                 survival.save(job.id, task.id, res.model, res.finished or now_iso(), res.edit_snapshot)
             ledgerstore.append_line(json.dumps(row) + "\n")

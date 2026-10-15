@@ -609,7 +609,8 @@ defineExpose({ openCreate, refresh: refreshWithUsage, refreshing, hiddenByFilter
   <InstanceRow
     v-for="instance in visibleRows"
     :key="instance.id"
-    :style="orderStyle(instance)"
+    class="order-(--row-order)"
+    :style="{ '--row-order': orderStyle(instance)?.order }"
     :columns="columns"
     :row="rowModels.get(instance.id)!"
   >

@@ -145,7 +145,7 @@ function oauthAccountOf(p: ProfileResponse, now: number): Record<string, unknown
     organizationRateLimitTier: o.rate_limit_tier,
     profileFetchedAt: now,
   }
-  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v !== undefined && v !== null))
+  return Object.fromEntries(Object.entries(fields).filter(([, v]) => v != null))
 }
 
 const sameId = (a: unknown, b: unknown) =>

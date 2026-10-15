@@ -1,6 +1,7 @@
 import { mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { type CatalogEntry, MODES } from './catalog'
+import type { CatalogEntry } from './catalog'
+import { type Ev, foldEvent, type Need, newFold } from './feedback-fold'
 import { readLog } from './log'
 import { coreDir } from './paths'
 
@@ -28,33 +29,9 @@ const DAY = 24 * 60 * 60 * 1000
 export const PRIOR_OFFERS = 10
 /** Knowledge offered this often and never taken is no longer pasted into packs or per-message additions. */
 export const STALE_OFFERS = 50
-const ONE_ID = /^(?:person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
 
 export const feedbackPath = (dir: string) => join(dir, 'catalog', 'feedback.json')
 export const needsPath = (dir: string) => join(dir, 'catalog', 'feedback-needs.md')
-
-type Ev = Record<string, unknown>
-const str = (v: unknown) => (typeof v === 'string' ? v : '')
-
-/** The ids a pick step's answer took from the list it was shown: numbers or ids. */
-function picked(e: Ev): string[] {
-  if (!/pick$/.test(str(e.step)) || !Array.isArray(e.shown)) return []
-  const tokens = str(e.answer)
-    .split(/[\s,]+/)
-    .filter(Boolean)
-  if (!tokens.every((t) => /^\d+$/.test(t) || ONE_ID.test(t))) return []
-  const shown = e.shown as unknown[]
-  return tokens
-    .map((t) => (/^\d+$/.test(t) ? shown[Number(t) - 1] : t))
-    .filter((id): id is string => typeof id === 'string' && ONE_ID.test(id))
-}
-
-interface Need {
-  at: string
-  kind: 'none' | 'missing'
-  text: string
-  need?: string
-}
 
 /** Per entry: offered (a pack or placement pointer, a find result, a run's shown list once), pasted (a pack or
  *  placement that pasted its full text; a line from before `pasted` was logged counts its knowledge and person ids
@@ -64,67 +41,9 @@ export function foldEvents(events: Ev[]): {
   entries: Record<string, EntryFeedback>
   needs: Need[]
 } {
-  const entries: Record<string, EntryFeedback> = {}
-  const of = (id: string) => {
-    entries[id] ??= { offered: 0, pasted: 0, taken: 0, rejected: 0, reported: 0 }
-    return entries[id]
-  }
-  const runOf = new Map<string, number>()
-  const shownIn = new Map<string, Set<string>>()
-  const takenIn = new Map<string, Set<string>>()
-  const needs: Need[] = []
-  const take = (chat: string, run: number | undefined, ids: string[]) => {
-    for (const id of new Set(ids)) {
-      of(id).taken++
-      if (run === undefined) continue
-      const key = `${chat}#${run}`
-      const set = takenIn.get(key) ?? new Set<string>()
-      set.add(id)
-      takenIn.set(key, set)
-    }
-  }
-  for (const e of events) {
-    const chat = str(e.chat)
-    const run = typeof e.run === 'number' ? e.run : undefined
-    if (e.step === 'start' && run !== undefined) runOf.set(chat, run)
-    if ((e.event === 'pack' || e.event === 'placement') && Array.isArray(e.ids)) {
-      const pasted = Array.isArray(e.pasted) ? new Set(e.pasted) : null
-      for (const id of new Set(e.ids))
-        if (typeof id !== 'string') continue
-        else if (pasted ? pasted.has(id) : /^(?:knowledge|person):/.test(id))
-          of(id).pasted = (of(id).pasted ?? 0) + 1
-        else of(id).offered++
-    }
-    if (e.event === 'find' && Array.isArray(e.ids))
-      for (const id of new Set(e.ids)) if (typeof id === 'string') of(id).offered++
-    if (Array.isArray(e.shown)) {
-      const key = `${chat}#${run}`
-      const seen = shownIn.get(key) ?? new Set<string>()
-      shownIn.set(key, seen)
-      for (const id of e.shown)
-        if (typeof id === 'string' && !seen.has(id)) {
-          seen.add(id)
-          of(id).offered++
-        }
-      take(chat, run, picked(e))
-    }
-    if (typeof e.id === 'string' && (MODES as readonly unknown[]).includes(e.mode))
-      take(chat, runOf.get(chat), [e.id])
-    if (e.event === 'miss' && typeof e.id === 'string') {
-      of(e.id).rejected++
-      if (e.why === 'none' && str(e.better).trim())
-        needs.push({ at: str(e.at), kind: 'none', text: str(e.better).trim(), need: str(e.need) })
-    }
-    if (e.event === 'report') {
-      if (typeof e.score === 'number' && run !== undefined)
-        for (const id of takenIn.get(`${chat}#${run}`) ?? []) of(id).reported += e.score - 3
-      for (const id of Array.isArray(e.overruled) ? e.overruled : [])
-        if (typeof id === 'string') of(id).reported--
-      if (str(e.missing).trim())
-        needs.push({ at: str(e.at), kind: 'missing', text: str(e.missing).trim() })
-    }
-  }
-  return { entries, needs }
+  const fold = newFold()
+  for (const e of events) foldEvent(fold, e)
+  return { entries: fold.entries, needs: fold.needs }
 }
 
 function needsText(needs: Need[]): string {

@@ -360,7 +360,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.outcomes') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.outcomesCaption') }}</p>
           <p v-if="source !== 'hswarm' && !climayte" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.climayteMissing') }}</p>
           <p v-else-if="!outcomes.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noRows') }}</p>
@@ -372,7 +372,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
                   <span class="truncate text-muted-foreground" :title="rowName(r)">{{ rowName(r) }}</span>
                 </span>
                 <span class="shrink-0 tabular-nums font-medium">
-                  <ThumbsUp class="mr-0.5 inline size-3 text-success" :aria-label="t('hswarm.v.overview.results.up')" />{{ r.up }}
+                  <ThumbsUp class="me-0.5 inline size-3 text-success" :aria-label="t('hswarm.v.overview.results.up')" />{{ r.up }}
                   <template v-if="r.source === 'climayte'">
                     <Wrench class="mx-0.5 inline size-3 text-warning" :aria-label="t('hswarm.v.overview.results.fixed')" />{{ r.fixed }}
                   </template>
@@ -399,7 +399,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.tokensPerOk') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.tokensCaption') }}</p>
           <p v-if="source === 'climayte'" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.tokensHswarmOnly') }}</p>
           <p v-else-if="!tokenPoints.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noOk') }}</p>
@@ -425,7 +425,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.failedShare') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.failedCaption') }}</p>
           <p v-if="!failedPoints.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noRows') }}</p>
           <template v-else>
@@ -448,7 +448,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.survival') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.survivalCaption') }}</p>
           <p v-if="!survivalRows.length" class="text-xs text-muted-foreground">{{ t('hswarm.v.overview.results.noSurvival') }}</p>
           <BarRows
@@ -466,7 +466,7 @@ const expander = 'text-2xs font-medium text-muted-foreground hover:text-foregrou
         <CardHeader>
           <CardTitle>{{ t('hswarm.v.overview.results.perDay') }}</CardTitle>
         </CardHeader>
-        <CardContent class="space-y-2">
+        <CardContent stack="sm">
           <p class="text-2xs text-muted-foreground">{{ t('hswarm.v.overview.results.perDayCaption') }}</p>
           <div class="flex h-32 items-end gap-0.5">
             <div

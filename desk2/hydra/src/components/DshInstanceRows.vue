@@ -244,7 +244,8 @@ defineExpose({ openCreate, refresh })
     :key="inst.id"
     :columns="columns"
     :row="rowModels.get(inst.id)!"
-    :style="orderStyle(inst)"
+    class="order-(--row-order)"
+    :style="{ '--row-order': orderStyle(inst)?.order }"
   >
     <template #primary>
       <!-- Icon-only (owner, 2026-10-06): the word is the tooltip and the aria-label, and the

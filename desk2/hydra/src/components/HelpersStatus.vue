@@ -124,11 +124,11 @@ function note(h: HelperRow): string | null {
                 <span class="min-w-0 flex-1 truncate text-xs" :title="h.label">{{ h.label }}</span>
                 <span class="h-1 w-12 shrink-0 overflow-hidden rounded-full bg-muted">
                   <span
-                    class="block h-full rounded-full bg-foreground/40"
-                    :style="{ width: `${Math.round(((h.memoryMB ?? 0) / largestMB) * 100)}%` }"
+                    class="block h-full w-(--bar-w) rounded-full bg-foreground/40"
+                    :style="{ '--bar-w': `${Math.round(((h.memoryMB ?? 0) / largestMB) * 100)}%` }"
                   />
                 </span>
-                <span class="w-12 shrink-0 text-right text-2xs tabular-nums text-muted-foreground">
+                <span class="w-12 shrink-0 text-end text-2xs tabular-nums text-muted-foreground">
                   {{ h.memoryMB === null ? '' : memory(h.memoryMB) }}
                 </span>
                 <Button

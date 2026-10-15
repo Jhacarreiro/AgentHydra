@@ -1,10 +1,23 @@
-import { mkdirSync, mkdtempSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { chatPaths } from '../src/hydra-core/paths'
 
+// One scratch root that each scratch() nests its folder under, removed on exit whatever the outcome. It is made when a
+// test first needs it, and again once it is gone: this module is loaded once per run without --isolate, and a root made
+// at import with an afterAll was removed by the first file that loaded it, so every later file's scratch() failed with
+// ENOENT (2026-10-15: 191 hydra-core tests in one plain `bun test`).
+let root: string | null = null
+function scratchRoot(): string {
+  if (root === null || !existsSync(root)) root = mkdtempSync(join(tmpdir(), 'hydra-core-'))
+  return root
+}
+process.on('exit', () => {
+  if (root !== null) rmSync(root, { recursive: true, force: true })
+})
+
 export function scratch(): string {
-  const dir = mkdtempSync(join(tmpdir(), 'hydra-core-'))
+  const dir = mkdtempSync(join(scratchRoot(), 'core-'))
   process.env.AGENTHYDRA_CORE_DIR = dir
   const persona = join(dir, 'persona-iris.md')
   const notes = join(dir, 'brand-notes.md')

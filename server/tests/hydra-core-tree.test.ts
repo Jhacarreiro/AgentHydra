@@ -8,7 +8,7 @@ import { scratch, startChat } from './hydra-core-fixture'
 
 let dir = ''
 const chat = 'chat-example-tree'
-const now = new Date('2026-10-13T10:00:00.000Z')
+const now = new Date('2019-10-22T10:00:00.000Z')
 
 beforeEach(() => {
   dir = scratch()
@@ -45,14 +45,14 @@ test('a full run walks q1 to q9 and writes hydra.md with the lead, the knowledge
   expect(done).toMatchObject({ verdict: 'hydra' })
 
   const md = readFileSync(chatPaths(dir, chat).hydraMd, 'utf8')
-  expect(md).toContain('Updated: 2026-10-13T10:00:00.000Z  Tier: 3  Team: 2')
+  expect(md).toContain('Updated: 2019-10-22T10:00:00.000Z  Tier: 3  Team: 2')
   expect(md).toContain('## Lead (become)\nIris Example - UI designer. Full text: ')
   expect(md).toContain(
     '## Knowledge\n- knowledge:brand-notes - Colours and type rules for the dashboard; ',
   )
   expect(md).toContain('## Plan\nLay out the grid, then test it with two visitors.')
   expect(md).toContain(
-    '- 2026-10-13T10:00:00.000Z "Rebuild the dashboard layout" -> hydra (q1 yes; q3 delegate; q4 tier; q5 team; q6 lead; q6pick picks; q7 none; q8 need; q8pick picks; q9 plan)',
+    '- 2019-10-22T10:00:00.000Z "Rebuild the dashboard layout" -> hydra (q1 yes; q3 delegate; q4 tier; q5 team; q6 lead; q6pick picks; q7 none; q8 need; q8pick picks; q9 plan)',
   )
 })
 

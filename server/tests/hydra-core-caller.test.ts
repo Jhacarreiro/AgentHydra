@@ -51,54 +51,72 @@ function fakeServers(): void {
     const u = new URL(String(url))
     const path = u.pathname
     const method = init?.method ?? 'GET'
-    if (method === 'GET' && path === '/api/corch/workers') {
-      if (u.searchParams.has('ids'))
-        return json([{ id: 'w-new', status: 'done', report: 'Old path' }])
-      const session = u.searchParams.get('session')
-      return json(
-        workers
-          .filter((w) => session && [w.sessionId, ...(w.sessions ?? [])].includes(session))
-          .map((w) => ({
-            id: w.id,
-            group: 'g-example',
-            title: `Example ${w.id}`,
-            role: w.role,
-            ...(w.desk ? { desk: w.desk } : {}),
-          })),
-      )
+    if (method === 'GET') {
+      const reply = fakeGet(u, path)
+      if (reply) return reply
     }
-    if (method === 'GET' && path.startsWith('/api/corch/workers/')) {
-      const id = decodeURIComponent(path.split('/')[4])
-      const w = workers.find((x) => x.id === id)
-      return w ? json({ id, role: w.role }) : json({ error: 'worker not found' }, 404)
-    }
-    if (method === 'GET' && path === '/api/chats') return json([...chats.values()])
-    if (method === 'GET' && path.endsWith('/transcript'))
-      return json(transcripts.get(path.split('/')[3]) ?? [])
     const body = JSON.parse(String(init?.body ?? '{}')) as Record<string, unknown>
     posts.push({ path, body })
-    if (method === 'POST' && path === '/api/corch/workers')
-      return json({ workers: [{ id: 'w-new' }] })
-    if (method === 'POST' && path.endsWith('/send')) return json({ ok: true, message: 'Queued.' })
-    if (method === 'POST' && path === '/api/chats') {
-      const id = `chat-seat-${nextId++}`
-      chats.set(id, {
-        id,
-        title: body.title,
-        cwd: body.cwd,
-        parentId: body.parentId,
-        status: 'idle',
-      })
-      transcripts.set(id, [])
-      if (body.prompt) say(id, String(body.prompt))
-      return json({ id, title: body.title })
-    }
-    if (method === 'POST' && path.endsWith('/messages')) {
-      say(path.split('/')[3], String(body.text))
-      return json({ ok: true })
-    }
-    return json({ error: 'not in the fake' }, 404)
+    return fakePost(method, path, body)
   }) as unknown as typeof fetch
+}
+
+function fakeGet(u: URL, path: string): Response | undefined {
+  if (path === '/api/corch/workers') {
+    if (u.searchParams.has('ids'))
+      return json([{ id: 'w-new', status: 'done', report: 'Old path' }])
+    return listWorkers(u.searchParams.get('session'))
+  }
+  if (path.startsWith('/api/corch/workers/'))
+    return workerById(decodeURIComponent(path.split('/')[4]))
+  if (path === '/api/chats') return json([...chats.values()])
+  if (path.endsWith('/transcript')) return json(transcripts.get(path.split('/')[3]) ?? [])
+  return undefined
+}
+
+function listWorkers(session: string | null): Response {
+  return json(
+    workers
+      .filter((w) => session && [w.sessionId, ...(w.sessions ?? [])].includes(session))
+      .map((w) => ({
+        id: w.id,
+        group: 'g-example',
+        title: `Example ${w.id}`,
+        role: w.role,
+        ...(w.desk ? { desk: w.desk } : {}),
+      })),
+  )
+}
+
+function workerById(id: string): Response {
+  const w = workers.find((x) => x.id === id)
+  return w ? json({ id, role: w.role }) : json({ error: 'worker not found' }, 404)
+}
+
+function fakePost(method: string, path: string, body: Record<string, unknown>): Response {
+  if (method === 'POST' && path === '/api/corch/workers')
+    return json({ workers: [{ id: 'w-new' }] })
+  if (method === 'POST' && path.endsWith('/send')) return json({ ok: true, message: 'Queued.' })
+  if (method === 'POST' && path === '/api/chats') return openSeat(body)
+  if (method === 'POST' && path.endsWith('/messages')) {
+    say(path.split('/')[3], String(body.text))
+    return json({ ok: true })
+  }
+  return json({ error: 'not in the fake' }, 404)
+}
+
+function openSeat(body: Record<string, unknown>): Response {
+  const id = `chat-seat-${nextId++}`
+  chats.set(id, {
+    id,
+    title: body.title,
+    cwd: body.cwd,
+    parentId: body.parentId,
+    status: 'idle',
+  })
+  transcripts.set(id, [])
+  if (body.prompt) say(id, String(body.prompt))
+  return json({ id, title: body.title })
 }
 
 /** The calling session, as the process walk would have traced it (the resolver seam). */

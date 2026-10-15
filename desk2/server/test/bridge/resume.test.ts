@@ -16,7 +16,7 @@ const cli = (num: number, over: Partial<AhCliInstance> = {}): AhCliInstance => (
   name: `n${num}`,
   configDir: join(home, '.claude-cli', `n${num}`),
   loggedIn: true,
-  lastUsageCheck: { account: `acct${num}@example.test`, session: null, weekAll: null, capturedAt: '2026-10-04T00:00:00Z' },
+  lastUsageCheck: { account: `acct${num}@example.test`, session: null, weekAll: null, capturedAt: '2019-10-13T00:00:00Z' },
   ...over
 })
 
@@ -26,7 +26,7 @@ const data: ResumeData = {
     { num: 51, name: 'eek', label: null, dir: join(home, '.claude-instances', 'eek'), uuid: 'u-eek', email: 'eek@example.test' },
     { num: 52, name: 'other', label: 'Other', dir: join(home, '.claude-instances', 'other'), uuid: 'u-other', email: 'acct135@example.test' }
   ],
-  clis: [cli(135), cli(160, { loggedIn: false }), cli(161, { lastUsageCheck: { account: 'x@example.test', session: null, weekAll: null, capturedAt: '', signedOutAt: '2026-10-03' } })]
+  clis: [cli(135), cli(160, { loggedIn: false }), cli(161, { lastUsageCheck: { account: 'x@example.test', session: null, weekAll: null, capturedAt: '', signedOutAt: '2019-10-12' } })]
 }
 
 describe('resumeAccount: the CLI instance whose folder already holds the session', () => {
@@ -82,7 +82,7 @@ test('canResume: idle or stale there and a Claude Code session, whatever account
 })
 
 test('mapExternal derives canResume from the status and source, with or without an owning account', () => {
-  const NOW = Date.parse('2026-10-04T12:00:00Z')
+  const NOW = Date.parse('2019-10-13T12:00:00Z')
   const list = mapExternal(
     {
       agentStatus: [],

@@ -141,37 +141,60 @@ function fileEdits(map: Map<string, FileEdits>, key: string): FileEdits {
   return file
 }
 
+/** One transcript line, as far as the edits need it. */
+type TranscriptLine = { timestamp?: unknown; message?: { content?: unknown } }
+/** One block of a line's message content; only a tool_use block can be an edit. */
+type ContentBlock = { type?: unknown; name?: unknown; input?: unknown }
+
+/** The record a transcript line holds, or null when it does not parse. */
+function parseLine(raw: string): TranscriptLine | null {
+  try {
+    return JSON.parse(raw)
+  } catch {
+    return null // the first line of a cut read, or a half-written last one
+  }
+}
+
+/** The absolute path an edit call's input names, or null when it names none. */
+function editedPath(input: EditInput, cwd: string): string | null {
+  const p = input.file_path ?? input.notebook_path
+  if (typeof p !== 'string' || !p) return null
+  return isAbsolute(p) ? p : resolve(cwd, p)
+}
+
+/** Adds the lines one edit call wrote or replaced, its own and each of its `edits`, to `file`. */
+function addEditItems(file: FileEdits, input: EditInput): void {
+  const items = [input, ...(Array.isArray(input.edits) ? (input.edits as EditInput[]) : [])]
+  for (const item of items) {
+    if (!item || typeof item !== 'object') continue
+    addCapped(file, file.wrote, usableLines(item.new_string))
+    addCapped(file, file.wrote, usableLines(item.content))
+    addCapped(file, file.wrote, usableLines(item.new_source))
+    addCapped(file, file.old, usableLines(item.old_string))
+  }
+}
+
+/** Records one content block of a line sent at `at` (ms, NaN when the line has no timestamp), when it is an edit call. */
+function addEditBlock(out: Map<string, FileEdits>, c: ContentBlock, at: number, cwd: string): void {
+  if (c?.type !== 'tool_use' || !EDIT_TOOLS.has(String(c.name))) return
+  const input = (c.input ?? {}) as EditInput
+  const abs = editedPath(input, cwd)
+  if (!abs) return
+  const file = fileEdits(out, abs)
+  file.at = Math.max(file.at, Number.isNaN(at) ? Number.POSITIVE_INFINITY : at)
+  addEditItems(file, input)
+}
+
 /** Each file the transcript's Edit, Write, MultiEdit and NotebookEdit calls changed, absolute (FileEdits). */
 export function parseEdits(jsonl: string, cwd: string): Map<string, FileEdits> {
   const out = new Map<string, FileEdits>()
   for (const raw of jsonl.split('\n')) {
     if (!raw.includes('"tool_use"')) continue
-    let rec: { timestamp?: unknown; message?: { content?: unknown } }
-    try {
-      rec = JSON.parse(raw)
-    } catch {
-      continue // the first line of a cut read, or a half-written last one
-    }
-    const content = rec.message?.content
-    if (!Array.isArray(content)) continue
+    const rec = parseLine(raw)
+    const content = rec?.message?.content
+    if (!rec || !Array.isArray(content)) continue
     const at = typeof rec.timestamp === 'string' ? Date.parse(rec.timestamp) : Number.NaN
-    for (const c of content as Array<{ type?: unknown; name?: unknown; input?: unknown }>) {
-      if (c?.type !== 'tool_use' || !EDIT_TOOLS.has(String(c.name))) continue
-      const input = (c.input ?? {}) as EditInput
-      const p = input.file_path ?? input.notebook_path
-      if (typeof p !== 'string' || !p) continue
-      const abs = isAbsolute(p) ? p : resolve(cwd, p)
-      const file = fileEdits(out, abs)
-      file.at = Math.max(file.at, Number.isNaN(at) ? Number.POSITIVE_INFINITY : at)
-      const items = [input, ...(Array.isArray(input.edits) ? (input.edits as EditInput[]) : [])]
-      for (const item of items) {
-        if (!item || typeof item !== 'object') continue
-        addCapped(file, file.wrote, usableLines(item.new_string))
-        addCapped(file, file.wrote, usableLines(item.content))
-        addCapped(file, file.wrote, usableLines(item.new_source))
-        addCapped(file, file.old, usableLines(item.old_string))
-      }
-    }
+    for (const c of content as ContentBlock[]) addEditBlock(out, c, at, cwd)
   }
   return out
 }

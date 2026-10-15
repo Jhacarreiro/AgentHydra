@@ -245,6 +245,7 @@ onBeforeUnmount(() => {
 <template>
   <Teleport to="body">
     <Transition enter-from-class="opacity-0" leave-to-class="opacity-0" enter-active-class="transition duration-150" leave-active-class="transition duration-150">
+      <!-- arkitect-ignore-next-line qol-press-feedback/bespoke-pressable-is-flat - the lightbox's own backdrop: a click beside the picture closes it, as Escape does; it is not a control -->
       <div v-if="lightbox && current" ref="dialog" tabindex="-1" class="fixed inset-0 z-40 bg-[rgba(14,14,13,0.92)] outline-none" role="dialog" aria-modal="true" :aria-label="current.alt || 'Picture'" @click="onBackdropClick">
         <Annotator v-if="annotating" ref="annotator" :src="current.src" :name="current.alt" @cancel="annotating = false" @save="onAnnotated" />
         <template v-else>
@@ -272,11 +273,11 @@ onBeforeUnmount(() => {
               @dblclick="onDblClick"
             />
           </div>
-          <div v-else class="absolute inset-x-6 bottom-14 top-14 flex items-center justify-center" data-testid="viewer-body">
+          <div v-else class="absolute inset-x-6 inset-y-14 flex items-center justify-center" data-testid="viewer-body">
             <video v-if="kind === 'video'" :key="current.src" :src="current.src" controls class="max-h-full max-w-full rounded-lg" />
             <iframe v-else-if="kind === 'pdf'" :src="current.src" :title="current.alt" class="size-full rounded-lg bg-white" />
             <iframe v-else-if="kind === 'html'" :src="current.src" :title="current.alt" sandbox="" class="size-full rounded-lg bg-white" />
-            <pre v-else-if="kind === 'text'" class="size-full overflow-auto whitespace-pre-wrap break-words rounded-lg bg-[#161618] p-4 font-mono text-ui-sm leading-relaxed text-text" data-testid="viewer-text">{{ textShown }}</pre>
+            <pre v-else-if="kind === 'text'" class="size-full overflow-auto whitespace-pre-wrap wrap-break-word rounded-lg bg-[#161618] p-4 font-mono text-ui-sm leading-relaxed text-text" data-testid="viewer-text">{{ textShown }}</pre>
             <div v-else class="flex flex-col items-center gap-3 rounded-lg bg-[#202022] px-8 py-6 text-center" data-testid="viewer-file">
               <p class="text-[15px] font-medium text-text">{{ current.alt || 'file' }}</p>
               <p class="text-ui-sm text-text-muted">{{ fileLine }}</p>

@@ -2,7 +2,7 @@ import { describe, expect, test } from 'bun:test'
 import type { MergedTurn } from '../../src/manager-analytics/collect'
 import { buildStats } from '../../src/manager-analytics/stats'
 
-const T0 = Date.parse('2026-10-01T09:00:00.000Z')
+const T0 = Date.parse('2019-10-10T09:00:00.000Z')
 const DAY = 86_400_000
 
 function turn(over: Partial<MergedTurn>): MergedTurn {

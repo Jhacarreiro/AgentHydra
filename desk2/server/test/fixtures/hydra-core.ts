@@ -1,11 +1,24 @@
 // A scratch Hydra Core folder (AGENTHYDRA_CORE_DIR) with an invented catalog: two lead personas, one with a photo in
 // a portraits folder beside its persona files, and one seat persona with none. Every name and path is invented.
-import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 
 /** The first bytes of a PNG: enough for a file served as a photo. */
 export const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
+
+// One scratch root that each fixture nests its folder under, removed on exit whatever the outcome. It is made when a
+// fixture first needs it, and again once it is gone: desk2's preload points TEMP at a folder of each test file's own and
+// removes it after that file, so a root made at import (this module is loaded once for the whole run) was gone for every
+// later file, and 5 core-slot tests failed with ENOENT (2026-10-15).
+let root: string | null = null
+function scratchRoot(): string {
+  if (root === null || !existsSync(root)) root = mkdtempSync(join(tmpdir(), 'desk-core-'))
+  return root
+}
+process.on('exit', () => {
+  if (root !== null) rmSync(root, { recursive: true, force: true })
+})
 
 export interface CoreFixture {
   dir: string
@@ -17,7 +30,7 @@ export interface CoreFixture {
 
 export function coreFixture(opts: { on?: boolean; placement?: 'slot' | 'file' | 'attach' } = {}): CoreFixture {
   const saved = process.env.AGENTHYDRA_CORE_DIR
-  const dir = mkdtempSync(join(tmpdir(), 'desk-core-'))
+  const dir = mkdtempSync(join(scratchRoot(), 'core-'))
   process.env.AGENTHYDRA_CORE_DIR = dir
   const seats = join(dir, 'personas', 'seats')
   const portraits = join(dir, 'personas', 'portraits')

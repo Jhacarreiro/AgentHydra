@@ -77,7 +77,7 @@ The old window (`web/`) was removed in 2.0.0; `orchestrator/web/` is a separate 
 the current compiler compatibility note are in the native-control runbook.
 
 The root suite's preload (`tests/setup.ts`, `tests/real-home-guard.ts`) refuses a test's write into the developer's
-real agent homes (`~/.claude`, `~/.claude-instances`, `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
+real agent homes (`~/.claude` and `~/.claude-instances`, docs/CLAUDE-CONFIG-LAYOUT.md; `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` the shell started with) and a remove of the working folder; point a test at its
 scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
 

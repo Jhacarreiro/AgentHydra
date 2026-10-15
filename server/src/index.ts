@@ -174,7 +174,12 @@ import { openSearchIndex } from './search-index'
 import { warmSessionScanCache } from './sessions'
 import { peerDaemon, setPeerDaemon, sideRunHeader, sideRunHealthFields } from './side-run'
 import { isRelaunchSuccessor, skipSingleInstanceGuard } from './single-instance'
-import { startStallSentinel, stopStallSentinel } from './stall-sentinel'
+import {
+  heapSummary,
+  profileSinceStart,
+  startStallSentinel,
+  stopStallSentinel,
+} from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
 import { forbidSyncIndexBuild } from './transcript'
@@ -368,6 +373,18 @@ app.get('/api/health', (c) =>
     ts: Date.now(),
   }),
 )
+
+// Where the daemon's JS time has gone since its sampler started (stall-sentinel.ts profileSinceStart):
+// `top` rows a list (0: all, so two reads can be subtracted), and `heap=1` adds the JSC heap by object type.
+app.get('/api/health/profile', (c) => {
+  const top = Number(c.req.query('top') ?? 40)
+  const limit = Number.isInteger(top) && top >= 0 ? top : 40
+  return c.json({
+    ...profileSinceStart(limit),
+    memory: process.memoryUsage(),
+    ...(c.req.query('heap') === '1' ? { heap: heapSummary(limit || 200) } : {}),
+  })
+})
 
 // --- MCP over HTTP (added 2026-09-06) ----------------------------------------------------------
 // One shared server for every client, instead of one stdio process per client. The whole rationale

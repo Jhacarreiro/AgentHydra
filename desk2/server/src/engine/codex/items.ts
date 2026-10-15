@@ -96,43 +96,54 @@ function tool(id: string, name: string, input: Record<string, unknown>, status: 
   return item
 }
 
+/** A command as its tool row: PowerShell or Bash, with its output, and "Exit code N" when it failed. */
+function commandTool(item: Extract<CodexItem, { type: 'commandExecution' }>, t: ItemTimes): ToolItem {
+  const shown = shownCommand(item.command)
+  const status = toolStatus(item.status)
+  const out = item.aggregatedOutput ?? ''
+  const failed = status === 'error' || (typeof item.exitCode === 'number' && item.exitCode !== 0)
+  const result = status === 'running' ? undefined : { ...cut(item.exitCode && item.exitCode !== 0 ? `${out}${out ? '\n' : ''}Exit code ${item.exitCode}` : out), isError: failed }
+  return tool(item.id, shown.name, { command: shown.command }, failed && status === 'done' ? 'error' : status, t, result)
+}
+
+/** A file change as one row per file: a new file is a Write, a deleted one a Delete, any other an Edit. */
+function fileChangeTools(item: Extract<CodexItem, { type: 'fileChange' }>, t: ItemTimes): ToolItem[] {
+  const status = toolStatus(item.status)
+  return item.changes.map((c, i) => {
+    const id = item.changes.length === 1 ? item.id : `${item.id}:${i}`
+    const result = status === 'running' ? undefined : { text: status === 'done' ? 'Done.' : status === 'denied' ? 'Declined.' : 'The change did not apply.', isError: status === 'error' }
+    if (c.kind.type === 'add') return tool(id, 'Write', { file_path: c.path, content: editFromDiff(c.diff).after }, status, t, result)
+    if (c.kind.type === 'delete') return tool(id, 'Delete', { file_path: c.path }, status, t, result)
+    const { before, after } = editFromDiff(c.diff)
+    return tool(id, 'Edit', { file_path: c.kind.move_path ?? c.path, old_string: before, new_string: after }, status, t, result)
+  })
+}
+
+/** An MCP call as its server's tool row, with the error message when it failed, else the result's text. */
+function mcpTool(item: Extract<CodexItem, { type: 'mcpToolCall' }>, t: ItemTimes): ToolItem {
+  const status = item.status === 'inProgress' ? 'running' : item.status === 'failed' || item.error ? 'error' : 'done'
+  const input = item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments) ? (item.arguments as Record<string, unknown>) : {}
+  const text = item.error?.message ?? mcpText(item.result)
+  return tool(item.id, `mcp__${item.server}__${item.tool}`, input, status, t, status === 'running' ? undefined : { ...cut(text), isError: status === 'error' })
+}
+
 /** The Desk items one Codex item is (none for the person's own message, which Desk wrote when it was sent). */
 export function codexItems(item: CodexItem, t: ItemTimes): TranscriptItem[] {
   const ts = t.startedAt ?? t.now
   switch (item.type) {
     case 'agentMessage':
+    case 'plan':
       return item.text.trim() ? [{ kind: 'assistant_text', id: item.id, ts, text: item.text }] : []
     case 'reasoning': {
       const text = [...(item.summary ?? []), ...(item.summary?.length ? [] : (item.content ?? []))].join('\n\n').trim()
       return text ? [{ kind: 'thinking', id: item.id, ts, text }] : []
     }
-    case 'plan':
-      return item.text.trim() ? [{ kind: 'assistant_text', id: item.id, ts, text: item.text }] : []
-    case 'commandExecution': {
-      const shown = shownCommand(item.command)
-      const status = toolStatus(item.status)
-      const out = item.aggregatedOutput ?? ''
-      const failed = status === 'error' || (typeof item.exitCode === 'number' && item.exitCode !== 0)
-      const result = status === 'running' ? undefined : { ...cut(item.exitCode && item.exitCode !== 0 ? `${out}${out ? '\n' : ''}Exit code ${item.exitCode}` : out), isError: failed }
-      return [tool(item.id, shown.name, { command: shown.command }, failed && status === 'done' ? 'error' : status, t, result)]
-    }
-    case 'fileChange': {
-      const status = toolStatus(item.status)
-      return item.changes.map((c, i) => {
-        const id = item.changes.length === 1 ? item.id : `${item.id}:${i}`
-        const result = status === 'running' ? undefined : { text: status === 'done' ? 'Done.' : status === 'denied' ? 'Declined.' : 'The change did not apply.', isError: status === 'error' }
-        if (c.kind.type === 'add') return tool(id, 'Write', { file_path: c.path, content: editFromDiff(c.diff).after }, status, t, result)
-        if (c.kind.type === 'delete') return tool(id, 'Delete', { file_path: c.path }, status, t, result)
-        const { before, after } = editFromDiff(c.diff)
-        return tool(id, 'Edit', { file_path: c.kind.move_path ?? c.path, old_string: before, new_string: after }, status, t, result)
-      })
-    }
-    case 'mcpToolCall': {
-      const status = item.status === 'inProgress' ? 'running' : item.status === 'failed' || item.error ? 'error' : 'done'
-      const input = item.arguments && typeof item.arguments === 'object' && !Array.isArray(item.arguments) ? (item.arguments as Record<string, unknown>) : {}
-      const text = item.error?.message ?? mcpText(item.result)
-      return [tool(item.id, `mcp__${item.server}__${item.tool}`, input, status, t, status === 'running' ? undefined : { ...cut(text), isError: status === 'error' })]
-    }
+    case 'commandExecution':
+      return [commandTool(item, t)]
+    case 'fileChange':
+      return fileChangeTools(item, t)
+    case 'mcpToolCall':
+      return [mcpTool(item, t)]
     case 'webSearch':
       return [tool(item.id, 'WebSearch', { query: item.query ?? '' }, 'done', t, { text: '', isError: false })]
     case 'imageView':

@@ -25,10 +25,8 @@ import { mainConfigFile, readAgentHydraMcp, type QueryImpl } from '../engine/cha
 import { claudeCodeBinaryFor } from '../engine/claude-code-binary'
 import { listMcpServers } from '../engine/mcp-servers'
 import { parseQueueAdd, parseQueuePatch, parseQueueReorder, parseQueueSettings, QueueManager } from '../engine/queue'
+import { ChatError, ChatManager, type ManagerBridge } from '../engine/chat-manager'
 import {
-  ChatError,
-  ChatManager,
-  type ManagerBridge,
   parseCreate,
   parseElicitation,
   parseFork,
@@ -43,7 +41,7 @@ import {
   parseSendNow,
   parseSend,
   parseSessionMeta,
-} from '../engine/chat-manager'
+} from '../engine/chat-requests'
 import { diagnosticsRoute, sinceParam } from '../engine/diagnostics'
 import { checkLocalPath, isRemotePath, localFolder, type OpenFile, type OpenFolder, revealFile, revealFolder } from '../engine/reveal'
 import { MEDIA_ROUTE, mediaCache } from '../media/cache'
@@ -248,8 +246,30 @@ function queueRoutes(app: Hono, queue: QueueManager): void {
   app.post('/api/queue/:id/retry', (c) => answer(c, () => queue.retry(c.req.param('id'))))
 }
 
-/** Every chat route: its list, its messages and answers, its items and transcript, and the models and commands. */
-function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void {
+/** One chat's items: the whole record the window opens on, or with `?before=` or `?limit=` one page of it. */
+function itemsRoute(c: Context, manager: ChatManager, id: string): Response {
+  try {
+    // The Desk file answers at once; the worker's live JSONL is read behind it and its new items come over /ws.
+    void manager.syncWorkers(id)
+    const q = c.req.query()
+    if (q.before !== undefined || q.limit !== undefined) {
+      const before = q.before === undefined ? undefined : Number(q.before)
+      const limit = q.limit === undefined ? 200 : Number(q.limit)
+      if ((before !== undefined && !Number.isFinite(before)) || !Number.isFinite(limit) || limit < 1) return c.json({ error: 'before and limit must be numbers (limit at least 1)' }, 400)
+      return c.json(manager.itemsPage(id, before, limit))
+    }
+    const from = Date.now()
+    const { body, count } = manager.itemsBody(id)
+    manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: id, n: count })
+    return c.body(body, 200, { 'content-type': 'application/json; charset=utf-8' })
+  } catch (err) {
+    if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
+    throw err
+  }
+}
+
+/** Every chat route but a turn's own: its list, its items and transcript, its settings, and the models and commands. */
+function chatRoutes(app: Hono, manager: ChatManager): void {
   app.get('/api/chats', (c) => {
     const flag = c.req.query('archived')
     return c.json(manager.list({ archived: flag === '1' || flag === 'true' }))
@@ -262,27 +282,7 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
     answer(c, async () => manager.importDesk(process.env.HYDRA_DESK_IMPORT_FROM || join(homedir(), '.hydra-desk'), parseImportDesk(await body(c)).ids)),
   )
   app.get('/api/chats/:id', (c) => answer(c, () => manager.get(c.req.param('id'))))
-  app.get('/api/chats/:id/items', (c) => {
-    try {
-      // The Desk file answers at once; the worker's live JSONL is read behind it and its new items come over /ws.
-      const id = c.req.param('id')
-      void manager.syncWorkers(id)
-      const q = c.req.query()
-      if (q.before !== undefined || q.limit !== undefined) {
-        const before = q.before === undefined ? undefined : Number(q.before)
-        const limit = q.limit === undefined ? 200 : Number(q.limit)
-        if ((before !== undefined && !Number.isFinite(before)) || !Number.isFinite(limit) || limit < 1) return c.json({ error: 'before and limit must be numbers (limit at least 1)' }, 400)
-        return c.json(manager.itemsPage(id, before, limit))
-      }
-      const from = Date.now()
-      const { body, count } = manager.itemsBody(id)
-      manager.timings.span({ stage: 'chat_open', ms: Date.now() - from, chatId: id, n: count })
-      return c.body(body, 200, { 'content-type': 'application/json; charset=utf-8' })
-    } catch (err) {
-      if (err instanceof ChatError) return c.json({ error: err.message }, err.status)
-      throw err
-    }
-  })
+  app.get('/api/chats/:id/items', (c) => itemsRoute(c, manager, c.req.param('id')))
   app.get('/api/chats/:id/index', (c) => answer(c, () => manager.transcriptIndex(c.req.param('id'))))
   app.get('/api/chats/:id/search', (c) => answer(c, () => manager.search(c.req.param('id'), c.req.query('q') ?? '')))
   app.get('/api/chats/:id/items/:itemId', (c) =>
@@ -298,6 +298,29 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
   app.post('/api/chats/:id/claude-code/retry', (c) => answer(c, () => manager.retryClaudeCode(c.req.param('id'))))
   // The chat's whole record, oldest first, for other programs: JSON items, or one per line with ?format=jsonl.
   app.get('/api/chats/:id/transcript', (c) => transcript(c, manager))
+  app.patch('/api/chats/:id', (c) => answer(c, async () => manager.patch(c.req.param('id'), parsePatch(await body(c)))))
+  app.post('/api/chats/:id/fork', (c) =>
+    answer(c, async () => {
+      const { at } = parseFork(await optionalBody(c))
+      return at ? manager.forkBefore(c.req.param('id'), at) : manager.fork(c.req.param('id'))
+    }),
+  )
+  app.post('/api/chats/:id/rewind', (c) => answer(c, async () => manager.rewind(c.req.param('id'), parseRewind(await body(c)).at)))
+  app.patch('/api/external/sessions/:id/meta', (c) => answer(c, async () => manager.patchSessionMeta(c.req.param('id'), parseSessionMeta(await body(c)))))
+  app.delete('/api/chats/:id', (c) =>
+    answer(c, async () => {
+      await manager.delete(c.req.param('id'))
+      return { ok: true }
+    }),
+  )
+  app.get('/api/chats/:id/commands', (c) => answer(c, () => manager.commands(c.req.param('id'))))
+  app.get('/api/models', (c) => answer(c, () => manager.models()))
+  app.get('/api/pushback', (c) => answer(c, () => manager.pushbackRows()))
+  app.get('/api/chat-services', (c) => answer(c, () => manager.services()))
+}
+
+/** A turn's own routes: the messages and pings that start or queue one, its stops, and the answers to what it asks. */
+function chatTurnRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void {
   app.post('/api/chats/:id/messages', (c) =>
     answer(c, async () => {
       const { text, images } = parseSend(await body(c))
@@ -365,25 +388,6 @@ function chatRoutes(app: Hono, manager: ChatManager, queue: QueueManager): void 
       return { ok: true }
     }),
   )
-  app.patch('/api/chats/:id', (c) => answer(c, async () => manager.patch(c.req.param('id'), parsePatch(await body(c)))))
-  app.post('/api/chats/:id/fork', (c) =>
-    answer(c, async () => {
-      const { at } = parseFork(await optionalBody(c))
-      return at ? manager.forkBefore(c.req.param('id'), at) : manager.fork(c.req.param('id'))
-    }),
-  )
-  app.post('/api/chats/:id/rewind', (c) => answer(c, async () => manager.rewind(c.req.param('id'), parseRewind(await body(c)).at)))
-  app.patch('/api/external/sessions/:id/meta', (c) => answer(c, async () => manager.patchSessionMeta(c.req.param('id'), parseSessionMeta(await body(c)))))
-  app.delete('/api/chats/:id', (c) =>
-    answer(c, async () => {
-      await manager.delete(c.req.param('id'))
-      return { ok: true }
-    }),
-  )
-  app.get('/api/chats/:id/commands', (c) => answer(c, () => manager.commands(c.req.param('id'))))
-  app.get('/api/models', (c) => answer(c, () => manager.models()))
-  app.get('/api/pushback', (c) => answer(c, () => manager.pushbackRows()))
-  app.get('/api/chat-services', (c) => answer(c, () => manager.services()))
 }
 
 /** The project list, its folders, roots, hidden and pinned choices, and each project's icon. */
@@ -627,7 +631,8 @@ export default async function plugin(app: Hono, ctx: ServerContext): Promise<voi
 
   queueRoutes(app, queue)
   failuresRoute(app, manager)
-  chatRoutes(app, manager, queue)
+  chatRoutes(app, manager)
+  chatTurnRoutes(app, manager, queue)
   const folders = new RecentFolders(join(ctx.home, 'folders.json'))
   folderRoutes(app, ctx, manager, folders)
   const projects = projectList(ctx, manager, folders)

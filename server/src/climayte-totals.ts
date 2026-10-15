@@ -425,44 +425,8 @@ export function climayteTotals(
     for (const at of w.attempts) tallyAttempt(tally, w, at)
   }
   const sized = sizedTasks(since)
-  // Tokens, $ and weighted units are the kit's: one query, not a transcript read per attempt.
-  const kit = kitSpend(since, opts.store)
-  if (kit) {
-    tally.tokens = kit.tokens
-    tally.costUsd = kit.costUsd
-    tally.used = kit.weighted
-    // Attempts whose session the kit never saw (its transcript was gone before the kit existed)
-    // keep the figures recorded when they ended: nothing else holds them.
-    const known = kitSessions(
-      [...workers.values()].flatMap((w) =>
-        w.attempts.flatMap((at) => {
-          const sid = at.sessionId === undefined ? w.sessionId : at.sessionId
-          return sid ? [sid] : []
-        }),
-      ),
-      opts.store,
-    )
-    for (const w of workers.values())
-      for (const at of w.attempts) {
-        const sid = at.sessionId === undefined ? w.sessionId : at.sessionId
-        if (!at.tokens || (sid && known.has(sid)) || (at.endedAt ?? Date.now()) < since) continue
-        tally.tokens = addTokens(tally.tokens, at.tokens)
-        tally.costUsd += at.spend?.costUsd ?? 0
-        tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
-      }
-  }
-  let tasksRan = 0
-  let firstAt: number | null = null
-  const tasksByStatus = { done: 0, failed: 0, cancelled: 0, neverRan: 0 }
-  for (const w of workers.values()) {
-    if (firstAt === null || w.createdAt < firstAt) firstAt = w.createdAt
-    const ran = w.attempts.some((a) => a.started || a.pid !== null || !!a.runner?.pid)
-    if (ran) tasksRan++
-    if (!tally.tasksInScope.has(w.id)) continue
-    if (!ran) tasksByStatus.neverRan++
-    else if (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled')
-      tasksByStatus[w.status]++
-  }
+  addKitFigures(tally, since, opts.store)
+  const { tasksRan, firstAt, tasksByStatus } = taskCounts(tally)
   return {
     tasks: tally.tasksInScope.size,
     tasksRan,
@@ -506,4 +470,58 @@ export function climayteTotals(
     managerPct: managerPct(since),
     sizing: sizingOf(sized),
   }
+}
+
+/** The CLI session an attempt ran in: its own, or the task's when the attempt does not name one. */
+function sessionOf(w: CliMayteWorker, at: CliMayteWorker['attempts'][number]) {
+  return at.sessionId === undefined ? w.sessionId : at.sessionId
+}
+
+function addKitFigures(tally: TotalsTally, since: number, store?: KitStore): void {
+  // Tokens, $ and weighted units are the kit's: one query, not a transcript read per attempt.
+  const kit = kitSpend(since, store)
+  if (!kit) return
+  tally.tokens = kit.tokens
+  tally.costUsd = kit.costUsd
+  tally.used = kit.weighted
+  // Attempts whose session the kit never saw (its transcript was gone before the kit existed)
+  // keep the figures recorded when they ended: nothing else holds them.
+  const known = kitSessions(
+    [...workers.values()].flatMap((w) =>
+      w.attempts.flatMap((at) => {
+        const sid = sessionOf(w, at)
+        return sid ? [sid] : []
+      }),
+    ),
+    store,
+  )
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      const sid = sessionOf(w, at)
+      if (!at.tokens || (sid && known.has(sid)) || (at.endedAt ?? Date.now()) < since) continue
+      tally.tokens = addTokens(tally.tokens, at.tokens)
+      tally.costUsd += at.spend?.costUsd ?? 0
+      tally.used += attemptUnits(at.tokens, at.model ?? w.model, at.cacheTtl)
+    }
+}
+
+/** The tasks that launched a CLI, the first task on record, and the tasks in scope by status. */
+function taskCounts(tally: TotalsTally): {
+  tasksRan: number
+  firstAt: number | null
+  tasksByStatus: { done: number; failed: number; cancelled: number; neverRan: number }
+} {
+  let tasksRan = 0
+  let firstAt: number | null = null
+  const tasksByStatus = { done: 0, failed: 0, cancelled: 0, neverRan: 0 }
+  for (const w of workers.values()) {
+    if (firstAt === null || w.createdAt < firstAt) firstAt = w.createdAt
+    const ran = w.attempts.some((a) => a.started || a.pid !== null || !!a.runner?.pid)
+    if (ran) tasksRan++
+    if (!tally.tasksInScope.has(w.id)) continue
+    if (!ran) tasksByStatus.neverRan++
+    else if (w.status === 'done' || w.status === 'failed' || w.status === 'cancelled')
+      tasksByStatus[w.status]++
+  }
+  return { tasksRan, firstAt, tasksByStatus }
 }

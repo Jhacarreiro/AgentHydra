@@ -533,46 +533,81 @@ def _inherit() -> None:
         MODELS[name] = resolved(name, ())
 
 
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(p, str) for p in value)
+
+
 def _apply_settings(doc: dict) -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
-    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    _apply_cap_and_routing(doc)
+    _apply_climayte_settings(doc)
+    _apply_free_settings(doc)
+    _apply_free_lists(doc)
+    _apply_load_roles_panel(doc)
+
+
+def _apply_cap_and_routing(doc: dict) -> None:
+    global PRICE_ROUTING, DAILY_CAP_USD
     cap = doc.get("daily_cap_usd")
-    if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
+    if _is_number(cap) and cap > 0:
         DAILY_CAP_USD = float(cap)
     if isinstance(doc.get("routing"), bool):
         PRICE_ROUTING = doc["routing"]
+
+
+def _apply_climayte_settings(doc: dict) -> None:
+    global ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     if isinstance(doc.get("route_via_climayte"), bool):
         ROUTE_VIA_CLIMAYTE = doc["route_via_climayte"]
     mx, st = doc.get("route_via_climayte_max"), doc.get("route_via_climayte_start_s")
-    if isinstance(mx, int) and not isinstance(mx, bool) and mx >= 0:
+    if _is_int(mx) and mx >= 0:
         ROUTE_VIA_CLIMAYTE_MAX = mx
-    if isinstance(st, (int, float)) and not isinstance(st, bool) and st > 0:
+    if _is_number(st) and st > 0:
         ROUTE_VIA_CLIMAYTE_START_S = float(st)
+
+
+def _apply_free_settings(doc: dict) -> None:
+    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES
     if isinstance(doc.get("route_via_free"), bool):
         ROUTE_VIA_FREE = doc["route_via_free"]
     fmx, fpr = doc.get("route_via_free_max"), doc.get("route_via_free_profiles")
-    if isinstance(fmx, int) and not isinstance(fmx, bool) and fmx >= 0:
+    if _is_int(fmx) and fmx >= 0:
         ROUTE_VIA_FREE_MAX = fmx
-    if isinstance(fpr, list) and all(isinstance(p, str) for p in fpr):
+    if _is_str_list(fpr):
         ROUTE_VIA_FREE_PROFILES = tuple(p.strip().lower() for p in fpr)
+
+
+def _apply_free_lists(doc: dict) -> None:
+    global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
-    if isinstance(ftl, list) and all(isinstance(t, str) for t in ftl):
+    if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
-    if isinstance(ftp, list) and all(isinstance(p, str) for p in ftp):
+    if _is_str_list(ftp):
         ROUTE_VIA_FREE_TOOL_PROFILES = tuple(p.strip().lower() for p in ftp)
     fwp = doc.get("route_via_free_web_profiles")
-    if isinstance(fwp, list) and all(isinstance(p, str) for p in fwp):
+    if _is_str_list(fwp):
         ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
     fcp = doc.get("route_via_free_check_profiles")
-    if isinstance(fcp, list) and all(isinstance(p, str) for p in fcp):
+    if _is_str_list(fcp):
         ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)
     fta = doc.get("route_via_free_tool_asks")
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
                                     if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+
+
+def _apply_load_roles_panel(doc: dict) -> None:
+    global LOAD_BIAS
     bias = doc.get("load_bias")
-    if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
+    if _is_number(bias) and bias >= 0:
         LOAD_BIAS = float(bias)
     ROLES.update({str(k).lower(): (str(v).lower() if v else None) for k, v in (doc.get("roles") or {}).items()})
     if isinstance(doc.get("panel"), list) and len(doc["panel"]) >= 2:

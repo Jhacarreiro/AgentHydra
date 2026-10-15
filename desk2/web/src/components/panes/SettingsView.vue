@@ -626,7 +626,7 @@ onBeforeUnmount(() => {
                       {{ COLLAPSE_MODE_LABELS[m].label }}
                     </button>
                   </div>
-                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-right text-ui-sm leading-4.5 text-text-muted">
+                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-end text-ui-sm leading-4.5 text-text-muted">
                     Close and reopen the AgentHydra window to use this: the window open now is older than collapse mode.
                   </p>
                 </div>

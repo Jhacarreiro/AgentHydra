@@ -14,6 +14,13 @@ interface ArchiveOptions {
 interface HtmlPreview {
   cwd: string
 }
+interface StartSessionOptions {
+  cwd: string
+  model: string
+  effort: string
+  message: string
+  permissionMode?: 'bypassPermissions'
+}
 
 // Tests the generated program's own guards in an inert runtime against stand-in managers;
 // this suite needs no installed app.
@@ -710,7 +717,10 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
   test('ultracode with bypass falls back to Auto when the app will not keep Bypass', async () => {
     const h = harness()
     const modes: string[] = []
-    h.manager.applyFlagSettings = async (id: string, flags: any) => {
+    h.manager.applyFlagSettings = async (
+      id: string,
+      flags: { ultracode: boolean; effortLevel: NativeRequest['effort'] },
+    ) => {
       const s = h.manager.sessions.get(id)
       s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
       s.effort = flags.effortLevel
@@ -845,7 +855,7 @@ describe('native new chat guards (inert runtime, no connection)', () => {
   })
   test('a new chat is refused before dispatch when its folder is not a directory', async () => {
     const h = harness()
-    h.manager.startSession = async (options: any) => {
+    h.manager.startSession = async (options: StartSessionOptions) => {
       h.calls.push({ startSession: options })
       return 'local_new'
     }
@@ -857,7 +867,10 @@ describe('native new chat guards (inert runtime, no connection)', () => {
   })
   test('a new chat starts once on the pinned model and effort and is read back by its CLI id', async () => {
     const h = harness()
-    h.manager.startSession = async (options: any, context: any) => {
+    h.manager.startSession = async (
+      options: StartSessionOptions,
+      context: { userInitiated: boolean },
+    ) => {
       h.calls.push({ startSession: options, context })
       h.manager.sessions.set('local_new', {
         sessionId: 'local_new',
@@ -897,7 +910,7 @@ describe('native new chat guards (inert runtime, no connection)', () => {
   })
   test('a chat the app started on another model or effort is reported, not verified', async () => {
     const h = harness()
-    h.manager.startSession = async (options: any) => {
+    h.manager.startSession = async (options: StartSessionOptions) => {
       h.calls.push({ startSession: options })
       h.manager.sessions.set('local_new', {
         sessionId: 'local_new',
@@ -924,7 +937,7 @@ describe('native new chat guards (inert runtime, no connection)', () => {
   })
   test('a start that returns no id never adopts another new chat', async () => {
     const h = harness()
-    h.manager.startSession = async (options: any) => {
+    h.manager.startSession = async (options: StartSessionOptions) => {
       h.calls.push({ startSession: options })
       // A chat a person opened in the same moment, on the same folder and model.
       h.manager.sessions.set('local_person', {

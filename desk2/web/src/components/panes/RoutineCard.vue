@@ -47,7 +47,7 @@ const scheduleText = computed(() => {
   return 'its own pace'
 })
 const reasonText = computed(() => props.routine.headline ?? plainReason(props.routine.reason, localZone()))
-const totalRows = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => ({ label: counterLabel(k), value: n.toLocaleString('en-US') })))
+const totalRows = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => ({ label: counterLabel(k), value: n.toLocaleString(undefined) })))
 const runsTotal = computed(() => Math.max(props.routine.runsTotal ?? 0, props.routine.runs.length))
 const settingRows = computed(() => Object.entries(props.routine.settings ?? {}))
 /** The session of a prompt run's chat: the one running now, else the last run's. */
@@ -99,11 +99,11 @@ function toggleEdit() {
 </script>
 
 <template>
-  <div class="mt-2 rounded-[var(--radius-6)] bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
+  <div class="mt-2 rounded-(--radius-6) bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
     <div class="flex items-center gap-1 pe-3">
       <button
         type="button"
-        class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-6)] p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
+        class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-(--radius-6) p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
         :aria-expanded="open"
         @click="open = !open"
       >
@@ -135,7 +135,7 @@ function toggleEdit() {
         @update:model-value="(on: boolean) => act(on ? { resume: routine.id } : { pause: routine.id })"
       />
     </div>
-    <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
+    <div v-if="open" class="border-t border-(--border) p-3 pt-2">
       <div class="flex items-start gap-1.5 text-ui-sm leading-4.5 text-text-2">
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span class="wrap-break-word">{{ scheduleText }}<template v-if="routine.until"> · until {{ routine.until }}</template></span>
@@ -143,7 +143,7 @@ function toggleEdit() {
       <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ reasonText }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
       <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
-        <div v-for="t in totalRows" :key="t.label" class="rounded-[var(--radius-6)] bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
+        <div v-for="t in totalRows" :key="t.label" class="rounded-(--radius-6) bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
           <dt class="text-ui-sm leading-4 text-text-muted">{{ t.label }}</dt>
           <dd class="tnum text-ui leading-5 text-text">{{ t.value }}</dd>
         </div>
@@ -179,7 +179,7 @@ function toggleEdit() {
         <li v-for="r in routine.runs.slice(0, 8)" :key="r.startedAt">
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
+            class="flex w-full items-center gap-2 rounded-(--radius-6) px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
             :aria-expanded="openRuns.has(r.startedAt)"
             :disabled="!r.lastLine && r.description?.state !== 'failed'"
             @click="toggleRun(r.startedAt)"

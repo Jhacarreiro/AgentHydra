@@ -35,6 +35,43 @@ function photoResponse(avatar: ManagerAvatar): Response {
   })
 }
 
+function uploadExt(c: Context): AvatarExt | undefined {
+  const type = (c.req.header('content-type') ?? '').split(';')[0].trim().toLowerCase()
+  return (Object.keys(AVATAR_TYPES) as AvatarExt[]).find((e) => AVATAR_TYPES[e] === type)
+}
+
+// The upload's bytes, or the refusal to send back when they are not a photo of the declared type.
+async function readPhoto(c: Context, ext: AvatarExt): Promise<Uint8Array | Response> {
+  if (Number(c.req.header('content-length') ?? 0) > MAX_AVATAR_BYTES) return c.json({ error: TOO_BIG }, 413)
+  const bytes = new Uint8Array(await c.req.arrayBuffer())
+  if (!bytes.length) return c.json({ error: 'That photo is empty.' }, 400)
+  if (bytes.length > MAX_AVATAR_BYTES) return c.json({ error: TOO_BIG }, 413)
+  if (sniff(bytes) !== ext) return c.json({ error: NOT_A_PHOTO }, 415)
+  return bytes
+}
+
+// Saves the photo and clears the other types' old photos; returns the refusal to send back when the save fails.
+function saveAvatar(c: Context, slug: string, ext: AvatarExt, bytes: Uint8Array): Response | null {
+  const dir = managerWriteDir(slug)
+  const file = join(dir, `avatar.${ext}`)
+  const tmp = join(dir, `avatar.${ext}.${process.pid}.${Date.now()}.tmp`)
+  try {
+    writeFlushed(tmp, bytes)
+    renameOver(tmp, file)
+  } catch (err) {
+    rmSync(tmp, { force: true })
+    return c.json({ error: `Could not save the photo: ${err instanceof Error ? err.message : String(err)}` }, 500)
+  }
+  // An old photo another program holds open (Windows) stays behind; the newest is the one shown, so the save stands.
+  for (const other of Object.keys(AVATAR_TYPES)) {
+    if (other === ext) continue
+    try {
+      rmSync(join(dir, `avatar.${other}`), { force: true })
+    } catch {}
+  }
+  return null
+}
+
 export default function plugin(app: Hono, ctx: ServerContext): void {
   app.get('/api/managers/:slug/avatar', (c) => {
     const slug = c.req.param('slug')
@@ -56,32 +93,12 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const slug = c.req.param('slug')
     const refused = refusedSlug(c, slug)
     if (refused) return refused
-    const type = (c.req.header('content-type') ?? '').split(';')[0].trim().toLowerCase()
-    const ext = (Object.keys(AVATAR_TYPES) as AvatarExt[]).find((e) => AVATAR_TYPES[e] === type)
+    const ext = uploadExt(c)
     if (!ext) return c.json({ error: NOT_A_PHOTO }, 415)
-    if (Number(c.req.header('content-length') ?? 0) > MAX_AVATAR_BYTES) return c.json({ error: TOO_BIG }, 413)
-    const bytes = new Uint8Array(await c.req.arrayBuffer())
-    if (!bytes.length) return c.json({ error: 'That photo is empty.' }, 400)
-    if (bytes.length > MAX_AVATAR_BYTES) return c.json({ error: TOO_BIG }, 413)
-    if (sniff(bytes) !== ext) return c.json({ error: NOT_A_PHOTO }, 415)
-
-    const dir = managerWriteDir(slug)
-    const file = join(dir, `avatar.${ext}`)
-    const tmp = join(dir, `avatar.${ext}.${process.pid}.${Date.now()}.tmp`)
-    try {
-      writeFlushed(tmp, bytes)
-      renameOver(tmp, file)
-    } catch (err) {
-      rmSync(tmp, { force: true })
-      return c.json({ error: `Could not save the photo: ${err instanceof Error ? err.message : String(err)}` }, 500)
-    }
-    // An old photo another program holds open (Windows) stays behind; the newest is the one shown, so the save stands.
-    for (const other of Object.keys(AVATAR_TYPES)) {
-      if (other === ext) continue
-      try {
-        rmSync(join(dir, `avatar.${other}`), { force: true })
-      } catch {}
-    }
+    const bytes = await readPhoto(c, ext)
+    if (bytes instanceof Response) return bytes
+    const failed = saveAvatar(c, slug, ext, bytes)
+    if (failed) return failed
 
     const photo = managerAvatar(slug)!.photo
     forgetManager(slug)

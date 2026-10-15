@@ -107,6 +107,40 @@ function expand(value: string, appRoot: string): string {
   return value.replaceAll('{APP_ROOT}', appRoot).replaceAll('{HOME}', homedir())
 }
 
+/** An entry's id, or its place in the list when it has none. */
+function entryId(s: Partial<HelperSpec>, i: number): string {
+  return typeof s?.id === 'string' && s.id ? s.id : `#${i + 1}`
+}
+
+/** An entry's command, when it is a list of strings. */
+function entryCommand(s: Partial<HelperSpec>): string[] | null {
+  return Array.isArray(s?.command) && s.command.every((c) => typeof c === 'string')
+    ? s.command
+    : null
+}
+
+/** The spec a checked entry stands for, with `{APP_ROOT}` and `{HOME}` expanded in its paths and env. */
+function specFromEntry(
+  s: Partial<HelperSpec>,
+  id: string,
+  command: string[],
+  appRoot: string,
+): HelperSpec {
+  return {
+    id,
+    label: typeof s.label === 'string' && s.label ? s.label : id,
+    command: command.map((c) => expand(c, appRoot)),
+    cwd: typeof s.cwd === 'string' ? expand(s.cwd, appRoot) : undefined,
+    env: s.env
+      ? Object.fromEntries(Object.entries(s.env).map(([k, v]) => [k, expand(String(v), appRoot)]))
+      : undefined,
+    port: typeof s.port === 'number' ? s.port : undefined,
+    exe: s.exe,
+    match: s.match,
+    memoryCapMB: typeof s.memoryCapMB === 'number' ? s.memoryCapMB : undefined,
+  }
+}
+
 /** helpers.json, read and checked. A bad entry is reported by id and skipped; the rest still run. */
 export function readHelperSpecs(
   path: string,
@@ -129,30 +163,15 @@ export function readHelperSpecs(
   const seen = new Set<string>()
   for (const [i, e] of list.entries()) {
     const s = e as Partial<HelperSpec>
-    const id = typeof s?.id === 'string' && s.id ? s.id : `#${i + 1}`
-    const command =
-      Array.isArray(s?.command) && s.command.every((c) => typeof c === 'string') ? s.command : null
+    const id = entryId(s, i)
+    const command = entryCommand(s)
     if (!command?.length) problems.push(`${id}: no command`)
     else if (seen.has(id)) problems.push(`${id}: listed twice`)
     else if (!s.port && !(s.exe && s.match))
       problems.push(`${id}: needs a port, or an exe and a match, to be found`)
     else {
       seen.add(id)
-      specs.push({
-        id,
-        label: typeof s.label === 'string' && s.label ? s.label : id,
-        command: command.map((c) => expand(c, appRoot)),
-        cwd: typeof s.cwd === 'string' ? expand(s.cwd, appRoot) : undefined,
-        env: s.env
-          ? Object.fromEntries(
-              Object.entries(s.env).map(([k, v]) => [k, expand(String(v), appRoot)]),
-            )
-          : undefined,
-        port: typeof s.port === 'number' ? s.port : undefined,
-        exe: s.exe,
-        match: s.match,
-        memoryCapMB: typeof s.memoryCapMB === 'number' ? s.memoryCapMB : undefined,
-      })
+      specs.push(specFromEntry(s, id, command, appRoot))
     }
   }
   return { specs, error: problems.length ? `${path}: ${problems.join('; ')}` : null }
@@ -454,6 +473,7 @@ export function startHelpers(): void {
     }
   }
   run()
+  // arkitect-allow: side-effect-teardown - the daemon's one check loop, started once and never stopped: it lives as long as the process, and it is unref'd so it never keeps the process up
   timer = setInterval(() => {
     try {
       run()

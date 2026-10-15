@@ -27,7 +27,7 @@ export const percentText = (rate: number | null): string => (rate === null ? '-'
 export function sinceText(ms: number | null, now = Date.now()): string {
   if (ms === null) return '-'
   const d = new Date(ms)
-  return d.toLocaleDateString('en-US', { month: 'short', day: 'numeric', ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' }) })
+  return d.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(d.getFullYear() === new Date(now).getFullYear() ? {} : { year: 'numeric' }) })
 }
 
 /** The tiles every routine gets, from its whole history. Failed and busy runs are counted apart. */
@@ -51,7 +51,7 @@ export function counterLabel(word: string): string {
 }
 
 const labelled = (prefix: string, rec: Record<string, number> | null): Tile[] =>
-  Object.entries(rec ?? {}).map(([k, n]) => ({ key: `${prefix}:${k}`, label: counterLabel(k), value: n.toLocaleString('en-US') }))
+  Object.entries(rec ?? {}).map(([k, n]) => ({ key: `${prefix}:${k}`, label: counterLabel(k), value: n.toLocaleString(undefined) }))
 
 /** The status totals as tiles (what the routine says it has done now), and the counters summed from the runs' last lines. */
 export const totalTiles = (d: Pick<RoutineDetails, 'totals'>): Tile[] => labelled('total', d.totals)
@@ -105,4 +105,4 @@ export function runCounterText(line: string): string {
 }
 
 /** A run's start for the list: 'Oct 15, 6:23 AM' (its tooltip has the full stamp). */
-export const runStamp = (ms: number): string => new Date(ms).toLocaleString('en-US', { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })
+export const runStamp = (ms: number): string => new Date(ms).toLocaleString(undefined, { month: 'short', day: 'numeric', hour: 'numeric', minute: '2-digit' })

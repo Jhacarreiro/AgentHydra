@@ -18,6 +18,7 @@ const fetchedAt = ref<number | null>(null)
 const folderProject = ref<string | null>(null)
 const projectKeys = ref<string[]>([])
 const error = ref<string | null>(null)
+const loading = ref(false)
 const now = ref(Date.now())
 const menuOpen = ref(false)
 const openTiers = ref(new Set<FourmanTier>())
@@ -41,6 +42,7 @@ const sameBoard = (a: FourmanBoard, b: FourmanBoard): boolean =>
   JSON.stringify({ ...a, fetchedAt: 0 }) === JSON.stringify({ ...b, fetchedAt: 0 })
 
 async function load() {
+  loading.value = true
   try {
     const next = await fourmanBoard(scope.value)
     if (!board.value || !sameBoard(board.value, next)) board.value = next
@@ -49,6 +51,8 @@ async function load() {
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)
+  } finally {
+    loading.value = false
   }
   now.value = Date.now()
 }
@@ -115,7 +119,7 @@ onBeforeUnmount(() => {
           <span aria-hidden="true">·</span>
           <span class="whitespace-nowrap">{{ ago }}</span>
         </template>
-        <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Refresh" @click="load()">
+        <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Refresh" :disabled="loading" :aria-busy="loading" @click="load()">
           <RotateCw :size="12" aria-hidden="true" />
         </button>
         <button type="button" class="rounded-sm p-1 hover:bg-(--bg-popover)" aria-label="Close" @click="emit('close')">

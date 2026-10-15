@@ -24,6 +24,7 @@ import {
 import { appendLog } from './log'
 import { chatPaths } from './paths'
 import { takeLeadOwed } from './sent'
+import { type Parsed, parse, squash } from './tree-parse'
 
 export type Step =
   | 'q1'
@@ -67,15 +68,6 @@ export interface RunState {
   groups: Group[]
   shown: string[]
   retried: boolean
-}
-
-interface Parsed {
-  kw: string
-  text?: string
-  n?: number
-  picks?: string[]
-  label?: string
-  roles?: { label: string; need: string }[]
 }
 
 type Files = ReturnType<typeof chatPaths>
@@ -127,9 +119,6 @@ const FIRST_EXAMPLE_Q1 = '`no 1`, or `yes 3: move the notes into the archive fol
 
 const PEOPLE_AND_TOOLS: Kind[] = ['person', 'instrument', 'worker']
 const KNOWLEDGE: Kind[] = ['knowledge', 'skill']
-const TOKEN = /^(\d+|(?:person|instrument|worker|knowledge|skill):[a-z0-9-]+)$/
-
-const squash = (s: string) => s.replace(/\s+/g, ' ').trim()
 
 /** The ask the end of every run carries: the report is the only outcome signal the log gets. */
 const REPORT_ASK =
@@ -423,207 +412,172 @@ function firstQ1(ctx: Ctx, state: RunState, p: Parsed): Reply {
   return next(ctx, state, null)
 }
 
+type Route = (ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed) => Reply
+
+/** Adds the picks a mid-project answer was given, then ends the run with them. */
+function endMid(ctx: Ctx, state: RunState, doc: HydraDoc | null): Reply {
+  const added: Reply[] = []
+  const hd = doc ?? emptyDoc(ctx.now)
+  for (const pk of state.picks) {
+    const e = ctx.cat.get(pk.id)
+    if (e && addPick(hd, e, pk.mode)) added.push({ id: e.id, how: e.how })
+  }
+  return end(ctx, state, hd, 'go', { added })
+}
+
+function routeQ1(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (!doc) return firstQ1(ctx, state, p)
+  if (p.kw === 'no') return end(ctx, state, doc, 'go', { say: 'Go do it.' })
+  state.groups = [group('need', p.text ?? state.msg)]
+  fill(ctx, state.groups[0])
+  state.step = 'q2'
+  return next(ctx, state, doc)
+}
+
+function routeQ2(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'mid') return endMid(ctx, state, doc)
+  state.step = 'q3'
+  return next(ctx, state, doc)
+}
+
+function routeQ3(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'myself') return end(ctx, state, doc, 'go', { picks: pickHows(ctx, state) }, false)
+  state.step = state.tier ? 'q5' : 'q4'
+  return next(ctx, state, doc)
+}
+
+function routeQ4(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  state.tier = String(p.n)
+  state.step = 'q5'
+  return next(ctx, state, doc)
+}
+
+function routeQ5(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  state.team = String(p.n)
+  state.groups = []
+  state.step = hasLeads(ctx) ? 'q6' : 'q7'
+  return next(ctx, state, doc)
+}
+
+function routeQ6(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  state.groups = [leadGroup(p.text ?? state.msg)]
+  fill(ctx, state.groups[0])
+  state.step = 'q6pick'
+  return next(ctx, state, doc)
+}
+
+/** Sets the lead from a `q6pick` answer, or returns the rejection when the pick cannot lead. */
+function pickLead(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply | null {
+  if (p.kw === 'none') {
+    state.lead = null
+    return null
+  }
+  const { ids } = resolve(p.picks ?? [], state, ctx.cat)
+  const lead = ids.find((id) => ctx.cat.get(id)?.kind === 'person')
+  if (!lead)
+    return reject(ctx, state, doc, 'no person matched: pick a number or an id from the matches')
+  if (!(LEAD_TIERS as readonly string[]).includes(ctx.cat.get(lead)?.tier ?? ''))
+    return reject(
+      ctx,
+      state,
+      doc,
+      'only a manager or an employee can lead: owners are consulted, interns are hired under a lead',
+    )
+  state.lead = lead
+  return null
+}
+
+function routeQ6pick(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'none') for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
+  if (p.kw === 'none' && p.text) {
+    state.groups = [leadGroup(p.text)]
+    fill(ctx, state.groups[0])
+    return next(ctx, state, doc)
+  }
+  if (p.kw === 'more') return pageAnswer(ctx, state, doc)
+  const rejected = pickLead(ctx, state, doc, p)
+  if (rejected) return rejected
+  state.groups = []
+  state.step = 'q7'
+  return next(ctx, state, doc)
+}
+
+function routeQ7(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'none') {
+    state.groups = []
+    state.step = 'q8'
+    return next(ctx, state, doc)
+  }
+  state.groups = (p.roles ?? []).map((r) => group(r.label, r.need, PEOPLE_AND_TOOLS))
+  for (const g of state.groups) fill(ctx, g)
+  state.step = 'q7pick'
+  return next(ctx, state, doc)
+}
+
+/** Keeps the picks a pick answer names, or logs the group's misses when it names none. */
+function settlePicks(ctx: Ctx, state: RunState, p: Parsed, mode?: 'hire'): void {
+  if (p.kw === 'picks') addPicks(state, resolve(p.picks ?? [], state, ctx.cat).ids, mode)
+  else for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
+}
+
+function routeQ7pick(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'more') return pageAnswer(ctx, state, doc, p.label)
+  settlePicks(ctx, state, p, 'hire')
+  state.groups = []
+  state.step = 'q8'
+  return next(ctx, state, doc)
+}
+
+function routeQ8(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'none') {
+    state.groups = []
+    state.step = 'q9'
+    return next(ctx, state, doc)
+  }
+  state.groups = [group('knowledge', p.text ?? state.msg, KNOWLEDGE)]
+  fill(ctx, state.groups[0])
+  state.step = 'q8pick'
+  return next(ctx, state, doc)
+}
+
+function routeQ8pick(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  if (p.kw === 'more') return pageAnswer(ctx, state, doc)
+  settlePicks(ctx, state, p)
+  state.groups = []
+  state.step = 'q9'
+  return next(ctx, state, doc)
+}
+
+function routeQ9(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
+  return finishPlan(ctx, state, doc, p.text ?? state.msg)
+}
+
+/** Pages the group a `more` answer names (the only group when it names none), then asks again. */
+function pageAnswer(ctx: Ctx, state: RunState, doc: HydraDoc | null, label?: string): Reply {
+  const g = findGroup(state, label)
+  if (g) pageGroup(ctx, g)
+  return next(ctx, state, doc)
+}
+
+const ROUTES: Partial<Record<Step, Route>> = {
+  q1: routeQ1,
+  q2: routeQ2,
+  q3: routeQ3,
+  q4: routeQ4,
+  q5: routeQ5,
+  q6: routeQ6,
+  q6pick: routeQ6pick,
+  q7: routeQ7,
+  q7pick: routeQ7pick,
+  q8: routeQ8,
+  q8pick: routeQ8pick,
+  q9: routeQ9,
+}
+
 function route(ctx: Ctx, state: RunState, doc: HydraDoc | null, p: Parsed): Reply {
-  switch (state.step) {
-    case 'q1': {
-      if (!doc) return firstQ1(ctx, state, p)
-      if (p.kw === 'no') return end(ctx, state, doc, 'go', { say: 'Go do it.' })
-      state.groups = [group('need', p.text ?? state.msg)]
-      fill(ctx, state.groups[0])
-      state.step = doc ? 'q2' : 'q3'
-      return next(ctx, state, doc)
-    }
-    case 'q2': {
-      if (p.kw === 'mid') {
-        const added: Reply[] = []
-        const hd = doc ?? emptyDoc(ctx.now)
-        for (const pk of state.picks) {
-          const e = ctx.cat.get(pk.id)
-          if (e && addPick(hd, e, pk.mode)) added.push({ id: e.id, how: e.how })
-        }
-        return end(ctx, state, hd, 'go', { added })
-      }
-      state.step = 'q3'
-      return next(ctx, state, doc)
-    }
-    case 'q3': {
-      if (p.kw === 'myself')
-        return end(ctx, state, doc, 'go', { picks: pickHows(ctx, state) }, false)
-      state.step = state.tier ? 'q5' : 'q4'
-      return next(ctx, state, doc)
-    }
-    case 'q4':
-      state.tier = String(p.n)
-      state.step = 'q5'
-      return next(ctx, state, doc)
-    case 'q5':
-      state.team = String(p.n)
-      state.groups = []
-      state.step = hasLeads(ctx) ? 'q6' : 'q7'
-      return next(ctx, state, doc)
-    case 'q6': {
-      state.groups = [leadGroup(p.text ?? state.msg)]
-      fill(ctx, state.groups[0])
-      state.step = 'q6pick'
-      return next(ctx, state, doc)
-    }
-    case 'q6pick': {
-      if (p.kw === 'none') for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
-      if (p.kw === 'none' && p.text) {
-        state.groups = [leadGroup(p.text)]
-        fill(ctx, state.groups[0])
-        return next(ctx, state, doc)
-      }
-      if (p.kw === 'more') {
-        const g = findGroup(state)
-        if (g) pageGroup(ctx, g)
-        return next(ctx, state, doc)
-      }
-      if (p.kw === 'none') {
-        state.lead = null
-      } else {
-        const { ids } = resolve(p.picks ?? [], state, ctx.cat)
-        const lead = ids.find((id) => ctx.cat.get(id)?.kind === 'person')
-        if (!lead)
-          return reject(
-            ctx,
-            state,
-            doc,
-            'no person matched: pick a number or an id from the matches',
-          )
-        if (!(LEAD_TIERS as readonly string[]).includes(ctx.cat.get(lead)?.tier ?? ''))
-          return reject(
-            ctx,
-            state,
-            doc,
-            'only a manager or an employee can lead: owners are consulted, interns are hired under a lead',
-          )
-        state.lead = lead
-      }
-      state.groups = []
-      state.step = 'q7'
-      return next(ctx, state, doc)
-    }
-    case 'q7': {
-      if (p.kw === 'none') {
-        state.groups = []
-        state.step = 'q8'
-        return next(ctx, state, doc)
-      }
-      state.groups = (p.roles ?? []).map((r) => group(r.label, r.need, PEOPLE_AND_TOOLS))
-      for (const g of state.groups) fill(ctx, g)
-      state.step = 'q7pick'
-      return next(ctx, state, doc)
-    }
-    case 'q7pick': {
-      if (p.kw === 'more') {
-        const g = findGroup(state, p.label)
-        if (g) pageGroup(ctx, g)
-        return next(ctx, state, doc)
-      }
-      if (p.kw === 'picks') addPicks(state, resolve(p.picks ?? [], state, ctx.cat).ids, 'hire')
-      else for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
-      state.groups = []
-      state.step = 'q8'
-      return next(ctx, state, doc)
-    }
-    case 'q8': {
-      if (p.kw === 'none') {
-        state.groups = []
-        state.step = 'q9'
-        return next(ctx, state, doc)
-      }
-      state.groups = [group('knowledge', p.text ?? state.msg, KNOWLEDGE)]
-      fill(ctx, state.groups[0])
-      state.step = 'q8pick'
-      return next(ctx, state, doc)
-    }
-    case 'q8pick': {
-      if (p.kw === 'more') {
-        const g = findGroup(state)
-        if (g) pageGroup(ctx, g)
-        return next(ctx, state, doc)
-      }
-      if (p.kw === 'picks') addPicks(state, resolve(p.picks ?? [], state, ctx.cat).ids)
-      else for (const g of state.groups) missGroup(ctx, g, 'none', p.text)
-      state.groups = []
-      state.step = 'q9'
-      return next(ctx, state, doc)
-    }
-    case 'q9':
-      return finishPlan(ctx, state, doc, p.text ?? state.msg)
-    default:
-      throw new Error('no run for this chat: call core_scope first')
-  }
-}
-
-function pickAnswer(t: string): Parsed | null {
-  if (/^none\b/i.test(t))
-    return { kw: 'none', text: t.replace(/^none\b\s*:?\s*/i, '') || undefined }
-  if (/^more\b/i.test(t)) return { kw: 'more', label: t.replace(/^more\b\s*/i, '') || undefined }
-  const toks = t.split(/[\s,]+/).filter(Boolean)
-  return toks.length && toks.every((x) => TOKEN.test(x)) ? { kw: 'picks', picks: toks } : null
-}
-
-function parseRole(line: string): { label: string; need: string } {
-  const m = line.match(/^[-*]?\s*([^:]{1,60}):\s*(.+)$/)
-  return m ? { label: m[1].trim(), need: m[2].trim() } : { label: line.slice(0, 60), need: line }
-}
-
-function parse(step: Step, raw: string, first = false): Parsed | null {
-  const t = squash(raw)
-  switch (step) {
-    case 'q1': {
-      if (first) {
-        const no = t.match(/^no\b(?:\s+([1-5])\b)?/i)
-        if (no) return { kw: 'no', n: Number(no[1] ?? 1) }
-        const yes = t.match(/^yes\b\s*(?:([1-5])\b)?\s*:?\s*(.+)$/i)
-        return yes
-          ? { kw: 'yes', n: yes[1] ? Number(yes[1]) : undefined, text: yes[2].trim() }
-          : null
-      }
-      if (/^no\b/i.test(t)) return { kw: 'no' }
-      const y = t.match(/^yes\b\s*:?\s*(.+)$/i)
-      return y ? { kw: 'yes', text: y[1].trim() } : null
-    }
-    case 'q2':
-      return /^mid\b/i.test(t) ? { kw: 'mid' } : /^new\b/i.test(t) ? { kw: 'new' } : null
-    case 'q3':
-      return /^myself\b/i.test(t)
-        ? { kw: 'myself' }
-        : /^delegate\b/i.test(t)
-          ? { kw: 'delegate' }
-          : null
-    case 'q4': {
-      const m = t.match(/^([1-5])\b/)
-      return m ? { kw: 'tier', n: Number(m[1]) } : null
-    }
-    case 'q5': {
-      const m = t.match(/^(\d{1,3})\b/)
-      return m && Number(m[1]) >= 1 ? { kw: 'team', n: Number(m[1]) } : null
-    }
-    case 'q6':
-      return t ? { kw: 'lead', text: t } : null
-    case 'q6pick':
-    case 'q7pick':
-    case 'q8pick':
-      return pickAnswer(t)
-    case 'q7': {
-      if (/^none\b/i.test(t)) return { kw: 'none', roles: [] }
-      const roles = raw
-        .split(/\r?\n/)
-        .map((s) => s.trim())
-        .filter(Boolean)
-        .map(parseRole)
-      return roles.length ? { kw: 'roles', roles } : null
-    }
-    case 'q8':
-      return /^none\b/i.test(t) ? { kw: 'none' } : t ? { kw: 'need', text: t } : null
-    case 'q9':
-      return raw.trim() ? { kw: 'plan', text: raw.trim() } : null
-    default:
-      return null
-  }
+  const handle = ROUTES[state.step]
+  if (!handle) throw new Error('no run for this chat: call core_scope first')
+  return handle(ctx, state, doc, p)
 }
 
 function fallback(step: Step, state: RunState): Parsed {

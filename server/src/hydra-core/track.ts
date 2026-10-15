@@ -182,44 +182,69 @@ function textOf(content: unknown): string {
   return content.map((b: Block) => (typeof b?.text === 'string' ? b.text : '')).join('\n')
 }
 
-function parseSession(file: string, project: string): Session {
-  const turns: Turn[] = []
-  const byId = new Map<string, Call>()
-  let id = basename(file, '.jsonl')
-  let cwd = ''
-  let prompt = ''
-  let cur: Turn | null = null
+/** The JSON records of a transcript, in order; blank lines and lines that are not JSON are skipped. */
+function recordsOf(file: string): Rec[] {
+  const recs: Rec[] = []
   for (const line of readFileSync(file, 'utf8').split('\n')) {
     if (!line.trim()) continue
-    let rec: Rec
     try {
-      rec = JSON.parse(line) as Rec
-    } catch {
-      continue
-    }
-    if (typeof rec.sessionId === 'string') id = rec.sessionId
-    if (!cwd && typeof rec.cwd === 'string') cwd = rec.cwd
+      recs.push(JSON.parse(line) as Rec)
+    } catch {}
+  }
+  return recs
+}
+
+/** The state of one transcript while parseSession reads it record by record. */
+interface Parse {
+  id: string
+  cwd: string
+  prompt: string
+  turns: Turn[]
+  byId: Map<string, Call>
+  cur: Turn | null
+}
+
+/** A typed user prompt opens a turn; the first one is the session's prompt. */
+function startTurn(p: Parse, text: string, at: number): void {
+  if (!p.prompt) p.prompt = text
+  p.cur = { at, calls: [] }
+  p.turns.push(p.cur)
+}
+
+/** A tool_use block of the current turn starts a call; a tool_result block fills in the call it answers. */
+function addBlock(p: Parse, b: Block, rec: Rec, at: number): void {
+  if (b.type === 'tool_use' && rec.type === 'assistant' && p.cur && b.id && b.name) {
+    const call: Call = { id: b.id, name: b.name, input: b.input ?? {}, at, result: '' }
+    p.cur.calls.push(call)
+    p.byId.set(b.id, call)
+  } else if (b.type === 'tool_result' && b.tool_use_id) {
+    const call = p.byId.get(b.tool_use_id)
+    if (call) call.result = textOf(b.content)
+  }
+}
+
+function parseSession(file: string, project: string): Session {
+  const p: Parse = {
+    id: basename(file, '.jsonl'),
+    cwd: '',
+    prompt: '',
+    turns: [],
+    byId: new Map<string, Call>(),
+    cur: null,
+  }
+  for (const rec of recordsOf(file)) {
+    if (typeof rec.sessionId === 'string') p.id = rec.sessionId
+    if (!p.cwd && typeof rec.cwd === 'string') p.cwd = rec.cwd
     const at = Date.parse(rec.timestamp ?? '') || 0
     const content = rec.message?.content
     if (rec.type === 'user' && typeof content === 'string' && !rec.isMeta) {
-      if (!prompt) prompt = content
-      cur = { at, calls: [] }
-      turns.push(cur)
+      startTurn(p, content, at)
       continue
     }
     if (!Array.isArray(content)) continue
-    for (const b of content as Block[]) {
-      if (b.type === 'tool_use' && rec.type === 'assistant' && cur && b.id && b.name) {
-        const call: Call = { id: b.id, name: b.name, input: b.input ?? {}, at, result: '' }
-        cur.calls.push(call)
-        byId.set(b.id, call)
-      } else if (b.type === 'tool_result' && b.tool_use_id) {
-        const call = byId.get(b.tool_use_id)
-        if (call) call.result = textOf(b.content)
-      }
-    }
+    for (const b of content as Block[]) addBlock(p, b, rec, at)
   }
-  return { id, project, cwd, prompt, turns }
+  return { id: p.id, project, cwd: p.cwd, prompt: p.prompt, turns: p.turns }
 }
 
 function isWorker(s: Session): boolean {

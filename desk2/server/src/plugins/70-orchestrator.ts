@@ -12,9 +12,8 @@
 // no act. Own page only, and GET /api/orchestrator/model says which model the judge asks.
 // README "What Desk 2 adds", the orchestrator.
 
-import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { dirname, join } from 'node:path'
+import { join } from 'node:path'
 import type { Hono } from 'hono'
 import type { AccountInfo, ChatSummary, CliMayteWorker, ExternalSession, QueueState, TranscriptItem } from '@shared/protocol'
 import { ORCHESTRATOR_FROM, type OrchestratorAct, type OrchestratorArm, type OrchestratorJudgment, type OrchestratorPlan, type OrchestratorRow } from '@shared/orchestrator'
@@ -41,6 +40,8 @@ import {
 import { NOTES_PER_HOUR, PEEK_MS, peek, personRecent, type Peek } from '../orchestrator/foreman'
 import { classify, fromChat, fromExternal, rank, WAIT_MS } from '../orchestrator/plan'
 import { stuckWorkers } from '../orchestrator/stuck'
+import { loadStuckRecord } from '../orchestrator/stuck-record'
+import { factsOf } from '../orchestrator/waiting-facts'
 import { notOwnPage } from '../own-page'
 
 const WHAT = "the orchestrator's plan"
@@ -61,8 +62,6 @@ const ACTS_KEPT = 50
 const HOUR_MS = 3_600_000
 /** The wait before a stuck worker's failed nudge or cancel is tried again: after the first failure, the second, then each later one. */
 const STUCK_BACKOFF_MS = [10 * 60_000, 30 * 60_000, 2 * HOUR_MS]
-/** A job or worker still running this long after a chat began waiting on it is overdue, and its chat is judged anyway. */
-const WAIT_OVERDUE_MS = 6 * HOUR_MS
 /** Judgments kept for the page. */
 const JUDGED_KEPT_MS = 24 * HOUR_MS
 /** A judge error that is the account's login being refused, worth one try on another account. */
@@ -114,18 +113,6 @@ interface Candidate {
   waitingOn?: string[]
 }
 
-/** What the orchestrator found out about one thing a chat waits on, without a model. */
-interface Fact {
-  /** The line for the judge. */
-  text: string
-  /** Still running and not yet overdue: its chat is left alone. */
-  running: boolean
-}
-
-const HSWARM_JOB = /^\d{8}-\d{6}-[0-9a-f]{4}$/
-const WORKER_ID = /^w-[0-9a-f]{8}$/
-const iso = (ms: number): string => new Date(ms).toISOString().replace(/\.\d+Z$/, 'Z')
-
 export default function plugin(app: Hono, ctx: ServerContext): void {
   let stopped = false
   const armed = (): boolean => !stopped && ctx.settings().orchestrator === true
@@ -139,30 +126,8 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const sends = new Map<string, { at: number; kind: 'note' | 'continue' }[]>()
   /** Chat id -> the things it waited on that got their one nudge (a waiting chat's waitingOn, joined). */
   const nudged = new Map<string, Set<string>>()
-  /** "<worker id>|<reason>" -> already acted on (a nudge or a cancel), kept in a file so a restart does not repeat it. */
   const stuckFile = typeof ctx.home === 'string' ? join(ctx.home, 'orchestrator-stuck.json') : null
-  /** "<worker id>|<reason>" -> failed attempts so far and the earliest time of the next one. */
-  const stuckRetry = new Map<string, { fails: number; next: number }>()
-  const stuckDone = new Set<string>()
-  try {
-    const saved = stuckFile ? (JSON.parse(readFileSync(stuckFile, 'utf8')) as { done?: string[]; retry?: Record<string, { fails: number; next: number }> } | string[]) : null
-    if (Array.isArray(saved)) for (const k of saved) stuckDone.add(k)
-    else if (saved) {
-      for (const k of saved.done ?? []) stuckDone.add(k)
-      for (const [k, v] of Object.entries(saved.retry ?? {})) stuckRetry.set(k, v)
-    }
-  } catch {
-    /* no record yet */
-  }
-  const saveStuck = (): void => {
-    try {
-      if (!stuckFile) return
-      mkdirSync(dirname(stuckFile), { recursive: true })
-      writeFileSync(stuckFile, JSON.stringify({ done: [...stuckDone], retry: Object.fromEntries(stuckRetry) }))
-    } catch {
-      /* kept in memory for this run */
-    }
-  }
+  const { done: stuckDone, retry: stuckRetry, save: saveStuck } = loadStuckRecord(stuckFile)
   /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
   let resolved: { setting: string; model: string } | null = null
 
@@ -171,47 +136,6 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
 
   /** HSwarm's folder: the test's own, else ~/.hswarm. */
   const hswarmHome = (): string => (ctx.deps.hswarmHome as string | undefined) ?? process.env.HSWARM_HOME ?? join(homedir(), '.hswarm')
-
-  /** What a job's record says (~/.hswarm/jobs/<id>/job.json): finished when and with what counts, or still running. */
-  function jobFact(id: string, now: number): Fact {
-    let job: { state?: unknown; finished?: unknown; summary?: { created?: unknown; finished?: unknown; counts?: unknown } }
-    try {
-      job = JSON.parse(readFileSync(join(hswarmHome(), 'jobs', id, 'job.json'), 'utf8'))
-    } catch {
-      return { text: `HSwarm job ${id}: no record of it could be read`, running: false }
-    }
-    const finished = typeof job.finished === 'string' && job.finished ? job.finished : typeof job.summary?.finished === 'string' ? job.summary.finished : ''
-    const counts = job.summary?.counts && typeof job.summary.counts === 'object' ? Object.entries(job.summary.counts as Record<string, unknown>).map(([k, n]) => `${String(n)} ${k}`).join(', ') : ''
-    if (finished && Number.isFinite(Date.parse(finished)))
-      return { text: `HSwarm job ${id} finished at ${iso(Date.parse(finished))}${counts ? ` (${counts})` : ''}; its results: hswarm_results('${id}')`, running: false }
-    const created = typeof job.summary?.created === 'string' ? Date.parse(job.summary.created) : NaN
-    const overdue = Number.isFinite(created) && now - created > WAIT_OVERDUE_MS
-    return { text: `HSwarm job ${id} is ${String(job.state ?? 'running')}${overdue ? ' and overdue' : ''}${counts ? ` (${counts})` : ''}`, running: !overdue }
-  }
-
-  function workerFact(id: string, w: CliMayteWorker | undefined, now: number): Fact {
-    if (!w) return { text: `CliMayte worker ${id}: the daemon does not list it`, running: false }
-    if (!w.active) return { text: `CliMayte worker ${id} is ${w.status}${w.endedAt ? ` since ${iso(w.endedAt)}` : ''}`, running: false }
-    const overdue = w.startedAt !== null && now - w.startedAt > WAIT_OVERDUE_MS
-    return { text: `CliMayte worker ${id} is ${w.status}${overdue ? ' and overdue' : ''}`, running: !overdue }
-  }
-
-  /** The facts that can be checked without a model about what a chat waits on: HSwarm job ids and CliMayte worker ids. */
-  async function factsOf(on: readonly string[], now: number): Promise<Fact[]> {
-    const out: Fact[] = []
-    let workers: Map<string, CliMayteWorker> | null | undefined
-    for (const id of on) {
-      if (HSWARM_JOB.test(id)) out.push(jobFact(id, now))
-      else if (WORKER_ID.test(id)) {
-        if (!workers) {
-          const list = await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
-          workers = list && new Map(list.map((w) => [w.id, w]))
-        }
-        out.push(workerFact(id, workers?.get(id), now))
-      }
-    }
-    return out
-  }
 
   async function get<T>(path: string): Promise<T | null> {
     const res = await app.request(path)
@@ -433,7 +357,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       if (nudged.get(r.id)?.has(r.waitingOn.join('|'))) continue
       const last = judgments.get(r.id)?.at
       if (last !== undefined && now - last < PEEK_MS) continue
-      const facts = await factsOf(r.waitingOn, now)
+      const facts = await factsOf(r.waitingOn, now, hswarmHome, get)
       if (facts.some((f) => f.running)) continue
       out.push({
         id: r.id,

@@ -715,7 +715,8 @@ defineExpose({
     <InstanceRow
       v-for="inst in visibleRows"
       :key="inst.id"
-      :style="orderStyle(inst)"
+      class="order-(--row-order)"
+      :style="{ '--row-order': orderStyle(inst)?.order }"
       :columns="columns"
       :row="rowModels.get(inst.id)!"
     >

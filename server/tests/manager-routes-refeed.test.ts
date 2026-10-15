@@ -40,12 +40,12 @@ const base = {
 }
 
 test('a lead writes a row in the router.mjs shape', () => {
-  const at = new Date('2026-10-15T10:00:00Z')
+  const at = new Date('2019-10-24T10:00:00Z')
   expect(logRoute({ ...base, lead: 'person:iris-ui' }, at)).toBe(true)
   expect(rows()).toEqual([
     {
       v: 1,
-      at: '2026-10-15T10:00:00.000Z',
+      at: '2019-10-24T10:00:00.000Z',
       session: 'sess-1',
       manager: 'iris-ui',
       decision: 'stay',

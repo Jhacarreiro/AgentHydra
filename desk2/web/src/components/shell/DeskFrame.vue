@@ -1031,8 +1031,8 @@ function moveSidebar(side: SidebarSide) {
     <!-- Sliding, it lies over the stage at its full width and moves by transform (slideX); at rest it is the grid's first column. -->
     <div
       class="h-full overflow-hidden"
-      :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? [sidebarSide === 'right' ? 'absolute right-0 top-0 z-10' : 'absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
-      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
+      :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? ['absolute top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
+      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)`, [sidebarSide === 'right' ? 'right' : 'left']: '0px' } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
       :inert="!collapsed && !sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
     >

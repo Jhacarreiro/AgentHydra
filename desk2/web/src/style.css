@@ -303,6 +303,19 @@
   --find-match: rgb(250 204 21 / 0.3);
   --find-active: rgb(249 115 22 / 0.8);
   --shadow-soft: 0 4px 20px #00000009;
+
+  /* Attachment tiles and HTML previews. */
+  --border-attachment: rgba(255, 255, 255, 0.06);
+  --bg-attachment: #202022;
+  --shadow-attachment: 0 2px 8px rgba(0, 0, 0, 0.1);
+  --bg-attachment-caption: linear-gradient(to top, rgba(0, 0, 0, 0.85) 0%, rgba(0, 0, 0, 0.5) 40%, transparent 100%);
+  --bg-attachment-caption-hover: linear-gradient(to top, rgba(0, 0, 0, 0.95) 0%, rgba(0, 0, 0, 0.65) 45%, rgba(0, 0, 0, 0.05) 100%);
+  --text-shadow-attachment-name: 0 1px 3px rgba(0, 0, 0, 0.8), 0 1px 1px rgba(0, 0, 0, 0.5);
+  --text-attachment-size: rgba(255, 255, 255, 0.7);
+  --text-shadow-attachment-size: 0 1px 2px rgba(0, 0, 0, 0.5);
+  --bg-attachment-type: rgba(15, 15, 15, 0.55);
+  --shadow-attachment-type: 0 2px 4px rgba(0, 0, 0, 0.2), inset 0 1px 0 rgba(255, 255, 255, 0.05);
+  --shadow-html-preview: 0 0 0 1px var(--border), 0 4px 20px #0000004d;
 }
 
 /* Composer polish: the send glyph while the box shows a suggested next prompt (user/window.webp). */

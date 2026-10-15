@@ -25,25 +25,34 @@ export function stuckWorkers(workers: readonly CliMayteWorker[], now: number): S
   const liveWaves = new Set(workers.filter((t) => t.kind !== 'manage' && t.active).map((t) => t.wave))
   const out: Stuck[] = []
   for (const w of workers) {
-    if (w.pc || (w.active && w.status !== 'waiting')) continue
-    const changed = w.lastActivityAt ?? w.startedAt ?? now
-    if (w.status === 'done' && w.question) {
-      if (now - w.question.at > STUCK_MS) out.push({ worker: w, reason: 'question', since: w.question.at, why: `it asked: ${cut(w.question.text)}` })
-      continue
-    }
-    if (w.status !== 'waiting') continue
-    const wall = w.waitUntil ? Date.parse(w.waitUntil) : NaN
-    if (Number.isFinite(wall)) {
-      if (now - wall > WALL_OVERDUE_MS) out.push({ worker: w, reason: 'wall', since: wall, why: `it waits on a usage wall that ended ${new Date(wall).toISOString().replace(/\.\d+Z$/, 'Z')} and still holds it` })
-      continue
-    }
-    if (now - changed <= STUCK_MS) continue
-    if (w.kind === 'manage' && w.hold === 'wave') {
-      const live = liveWaves.has(w.wave)
-      if (!live) out.push({ worker: w, reason: 'wave', since: changed, why: `wave ${w.wave ?? '?'}: this manager waits on it, but none of its tasks is live` })
-      continue
-    }
-    out.push({ worker: w, reason: 'held', since: changed, why: `it is held: ${cut(w.lastActivity ?? w.error ?? 'no reason given')}` })
+    const stuck = stuckOf(w, now, liveWaves)
+    if (stuck) out.push(stuck)
   }
   return out
+}
+
+/** Why one worker is stuck, or nothing: a worker is judged by its first matching state. */
+function stuckOf(w: CliMayteWorker, now: number, liveWaves: ReadonlySet<CliMayteWorker['wave']>): Stuck | undefined {
+  if (w.pc || (w.active && w.status !== 'waiting')) return undefined
+  if (w.status === 'done' && w.question) return questionStuck(w, w.question, now)
+  if (w.status !== 'waiting') return undefined
+  const wall = w.waitUntil ? Date.parse(w.waitUntil) : NaN
+  if (Number.isFinite(wall)) return wallStuck(w, wall, now)
+  const changed = w.lastActivityAt ?? w.startedAt ?? now
+  if (now - changed <= STUCK_MS) return undefined
+  if (w.kind === 'manage' && w.hold === 'wave') {
+    if (liveWaves.has(w.wave)) return undefined
+    return { worker: w, reason: 'wave', since: changed, why: `wave ${w.wave ?? '?'}: this manager waits on it, but none of its tasks is live` }
+  }
+  return { worker: w, reason: 'held', since: changed, why: `it is held: ${cut(w.lastActivity ?? w.error ?? 'no reason given')}` }
+}
+
+function questionStuck(w: CliMayteWorker, question: NonNullable<CliMayteWorker['question']>, now: number): Stuck | undefined {
+  if (now - question.at <= STUCK_MS) return undefined
+  return { worker: w, reason: 'question', since: question.at, why: `it asked: ${cut(question.text)}` }
+}
+
+function wallStuck(w: CliMayteWorker, wall: number, now: number): Stuck | undefined {
+  if (now - wall <= WALL_OVERDUE_MS) return undefined
+  return { worker: w, reason: 'wall', since: wall, why: `it waits on a usage wall that ended ${new Date(wall).toISOString().replace(/\.\d+Z$/, 'Z')} and still holds it` }
 }

@@ -1688,22 +1688,9 @@ def _sweep_repair(item, sid: str, src: str, fleet: dict) -> bool:
     return not migrate_chat.source_still_visible(sid, src, fleet)
 
 
-def _final_source_sweep(items: list, parsed) -> dict | None:
-    """PHASE SIX: re-list every source account, the way the owner sees it, and grade the batch on
-    THAT rather than on its own per-chat verdicts.
-
-    ⛔ WHY (owner, 2026-10-10: "you missed three ... I logged back in and here they are"). The
-    2026-10-09 #13 -> #187 batch answered ok with four landed while one of them was still
-    unarchived on #13 (phase 'stamped-settle-visible': the settle never ran), and only a
-    manual list_chats afterwards found it. Each phase checked
-    its own step; nothing re-read the account as a whole. This does, once, at the very end:
-      - a LANDED chat still unarchived on its source is re-settled once, then marked not-ok
-        with the reconcile command if it is still there (`leftBehind`);
-      - with --all-unarchived and no --limit, any OTHER unarchived chat on the source is named
-        (`notTaken`) and the batch is not ok: a chat that appeared mid-batch, or one the
-        enumeration missed, is still on the owner's screen either way. Refused chats are not
-        counted again - they are already in `refused` with their reason.
-    """
+def _sweep_sources(items: list, parsed) -> set[str]:
+    """Every account the batch may have moved a chat off: the --from account and the source of
+    each landed chat."""
     sources: set[str] = set(getattr(parsed, "source_labels", None) or set())
     for item in items:
         land = item.landing
@@ -1712,22 +1699,20 @@ def _final_source_sweep(items: list, parsed) -> dict | None:
                       or (getattr(land, "match", None) or {}).get("instance") or "")
             if src:
                 sources.add(src)
-    if not sources:
-        return None
-    try:
-        # One read, like _movable_chats: scoped only when --from named the one account.
-        scope = next(iter(sources)) if parsed.source and len(sources) == 1 else None
-        wanted = {label.lower() for label in sources}
-        rows = [r for r in hydralib.chats(instance=scope)
-                if str(r.get("instance") or "").lower() in wanted]
-    except hydralib.DaemonError as err:
-        return {"checked": False, "why": f"the source accounts could not be re-read "
-                                         f"({str(err)[:120]}) - run list_chats on them before "
-                                         "calling this move done"}
-    shown = {str(r.get("sessionId") or ""): r for r in rows
-             if not r.get("isArchived", r.get("archived")) and r.get("sessionId")}
-    landed_by_sid = {str(i.payload.get("sessionId") or ""): i for i in items
-                     if i.payload.get("landed") and i.payload.get("sessionId")}
+    return sources
+
+
+def _reread_source_rows(parsed, sources: set[str]) -> list[dict]:
+    # One read, like _movable_chats: scoped only when --from named the one account.
+    scope = next(iter(sources)) if parsed.source and len(sources) == 1 else None
+    wanted = {label.lower() for label in sources}
+    return [r for r in hydralib.chats(instance=scope)
+            if str(r.get("instance") or "").lower() in wanted]
+
+
+def _sweep_landed(landed_by_sid: dict[str, _Item], shown: dict, parsed) -> tuple[list, list]:
+    """Re-settle or name each landed chat the sweep still sees on its source. Returns the
+    `leftBehind` rows and the session ids the sweep repaired."""
     left_behind, repaired = [], []
     fleet = None
     for sid, item in landed_by_sid.items():
@@ -1752,10 +1737,47 @@ def _final_source_sweep(items: list, parsed) -> dict | None:
         item.payload["sourceSweep"] = {
             "stillShown": True, "repaired": False,
             "fix": f"migrate_reconcile, then migrate_reconcile --finish <id> for '{shown[sid].get('title')}'"}
+    return left_behind, repaired
+
+
+def _not_taken_rows(shown: dict, named: set[str]) -> list[dict]:
+    return [{"sessionId": sid, "title": r.get("title"), "source": r.get("instance"),
+             "lastActivityAt": r.get("lastActivityAt")}
+            for sid, r in shown.items() if sid not in named]
+
+
+def _final_source_sweep(items: list, parsed) -> dict | None:
+    """PHASE SIX: re-list every source account, the way the owner sees it, and grade the batch on
+    THAT rather than on its own per-chat verdicts.
+
+    ⛔ WHY (owner, 2026-10-10: "you missed three ... I logged back in and here they are"). The
+    2026-10-09 #13 -> #187 batch answered ok with four landed while one of them was still
+    unarchived on #13 (phase 'stamped-settle-visible': the settle never ran), and only a
+    manual list_chats afterwards found it. Each phase checked
+    its own step; nothing re-read the account as a whole. This does, once, at the very end:
+      - a LANDED chat still unarchived on its source is re-settled once, then marked not-ok
+        with the reconcile command if it is still there (`leftBehind`);
+      - with --all-unarchived and no --limit, any OTHER unarchived chat on the source is named
+        (`notTaken`) and the batch is not ok: a chat that appeared mid-batch, or one the
+        enumeration missed, is still on the owner's screen either way. Refused chats are not
+        counted again - they are already in `refused` with their reason.
+    """
+    sources = _sweep_sources(items, parsed)
+    if not sources:
+        return None
+    try:
+        rows = _reread_source_rows(parsed, sources)
+    except hydralib.DaemonError as err:
+        return {"checked": False, "why": f"the source accounts could not be re-read "
+                                         f"({str(err)[:120]}) - run list_chats on them before "
+                                         "calling this move done"}
+    shown = {str(r.get("sessionId") or ""): r for r in rows
+             if not r.get("isArchived", r.get("archived")) and r.get("sessionId")}
+    landed_by_sid = {str(i.payload.get("sessionId") or ""): i for i in items
+                     if i.payload.get("landed") and i.payload.get("sessionId")}
+    left_behind, repaired = _sweep_landed(landed_by_sid, shown, parsed)
     named = _batch_ids(items) | set(landed_by_sid)
-    not_taken = [{"sessionId": sid, "title": r.get("title"), "source": r.get("instance"),
-                  "lastActivityAt": r.get("lastActivityAt")}
-                 for sid, r in shown.items() if sid not in named]
+    not_taken = _not_taken_rows(shown, named)
     return {"checked": True, "sources": sorted(sources), "stillUnarchived": len(shown),
             "repaired": repaired, "leftBehind": left_behind, "notTaken": not_taken,
             "notTakenCounts": bool(parsed.all_unarchived and not parsed.limit)}

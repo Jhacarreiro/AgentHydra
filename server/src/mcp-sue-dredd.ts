@@ -107,11 +107,23 @@ const folder = async (a: Record<string, unknown>) => {
   }
 }
 
+/** A launch that throws leaves no process in its folder, so the folder goes with it: before, a failed spawn left
+ *  one sue-dredd-door-* folder in %TEMP% for every failed call. */
+async function removeOnThrow<T>(dir: string, launch: () => Promise<T>): Promise<T> {
+  try {
+    return await launch()
+  } catch (err) {
+    rmSync(dir, { recursive: true, force: true })
+    throw err
+  }
+}
+
 const LIVE_DEPS: SueDreddDeps = {
   env: process.env,
   appRoot: APP_ROOT,
   launch: launchEngine,
   folder,
+  // arkitect-ignore-next-line scratch-dir-reaped/violation - each door's call removes its folder: on a failed launch (removeOnThrow), and once the engine has answered unless the engine keeps running in it
   tmp: () => mkdtempSync(join(tmpdir(), 'sue-dredd-door-')),
 }
 
@@ -212,6 +224,21 @@ const DREDD_ACTIONS = [
 ]
 const DREDD_LONG = new Set(['convene', 'collect', 'boardroom', 'hearing', 'resolve'])
 const DREDD_NEEDS_DOCKET = new Set(['collect', 'resolve', 'status', 'stop'])
+// Actions that read a docket or the bench rather than judge an ask.
+const DREDD_READS = new Set(['status', 'stop', 'dockets', 'doctor'])
+// The flag each action passes dredd.mjs; boardroom runs its own script and takes none.
+const DREDD_FLAGS: Partial<Record<string, string[]>> = {
+  doctor: ['--doctor'],
+  status: ['--status'],
+  stop: ['--stop'],
+  dockets: ['--dockets'],
+  plan: ['--member', '--json'],
+  convene: ['--convene'],
+  hearing: ['--hearing', '--detach'],
+  resolve: ['--resolve', '--detach'],
+  collect: ['--collect'],
+  docket: ['--json'],
+}
 
 const PARAMS = {
   type: 'object',
@@ -222,6 +249,77 @@ const CWD_ARG = {
   type: 'string',
   description:
     "The folder the run belongs to (the engine's --workspace). Omit it inside a Desk chat.",
+}
+
+/** The docket or the ask a dredd action needs, or the error that says which. */
+function checkDreddInput(action: string, ask: string, docket: string): void {
+  if (DREDD_NEEDS_DOCKET.has(action) && !docket)
+    throw new Error(
+      `dredd '${action}' needs params.docket, the directory a previous convene or hearing returned ('dockets' lists them)`,
+    )
+  if (!DREDD_READS.has(action) && !ask && !docket)
+    throw new Error(`dredd '${action}' needs params.ask (the person's own words) or params.docket`)
+}
+
+/** boardroom.mjs's argv: its rounds and seats are clamped here, and the ask goes last. */
+function boardroomArgv(
+  home: string,
+  p: Record<string, unknown>,
+  ask: string,
+  docket: string,
+  flags: string[],
+): string[] {
+  const argv = [join(home, 'dredd', 'boardroom.mjs'), '--quiet', ...flags]
+  if (docket) argv.push('--docket', docket)
+  if (p.rounds != null)
+    argv.push('--rounds', String(Math.max(1, Math.floor(Number(p.rounds)) || 1)))
+  if (Array.isArray(p.seats) && p.seats.length) argv.push('--seats', p.seats.map(String).join(','))
+  if (ask) argv.push(ask)
+  return argv
+}
+
+/** dredd.mjs's argv: the flags, the action's own flag, then the optional arguments the action takes. */
+function dreddArgv(
+  action: string,
+  home: string,
+  p: Record<string, unknown>,
+  ask: string,
+  docket: string,
+  dir: string,
+  flags: string[],
+): string[] {
+  const argv = [join(home, 'dredd', 'dredd.mjs'), ...flags, ...(DREDD_FLAGS[action] ?? [])]
+  if (docket) argv.push('--docket', docket)
+  if (p.announce === true) argv.push('--announce')
+  const url = str(p.url).trim()
+  if (url) argv.push('--url', url)
+  const runs = Array.isArray(p.run) ? p.run.map(String).join(',') : str(p.run).trim()
+  if (runs) argv.push('--run', runs)
+  if (action === 'status' && Number.isFinite(Number(p.fromLine)) && p.fromLine != null)
+    argv.push('--from-line', String(Math.max(0, Math.floor(Number(p.fromLine)))))
+  if (action === 'dockets' && Number.isFinite(Number(p.limit)) && p.limit != null)
+    argv.push('--limit', String(Math.max(1, Math.floor(Number(p.limit)))))
+  // The ask goes in a file: no shell quoting, and a detached hearing reads it from there.
+  if (ask) {
+    const askFile = join(dir, 'ask.txt')
+    writeFileSync(askFile, ask)
+    argv.push('--ask-file', askFile)
+  }
+  return argv
+}
+
+/** A hearing or a resolve answers with its docket, so the caller can poll it with 'status'. */
+function withDocket(action: string, docket: string, answer: unknown): unknown {
+  if (action !== 'hearing' && action !== 'resolve') return answer
+  if (typeof answer !== 'object' || answer === null) return answer
+  const out = str((answer as { output?: unknown }).output)
+  const dk = docket || /^Docket: (.+)$/m.exec(out)?.[1]?.trim() || null
+  if (!dk) return answer
+  return {
+    ...(answer as object),
+    docket: dk,
+    poll: "dredd { action:'status', params:{ docket } } until verdict.md is in the answer; 'stop' ends it",
+  }
 }
 
 export function sueDreddTools(deps: SueDreddDeps = LIVE_DEPS): HydraTool[] {
@@ -263,16 +361,18 @@ export function sueDreddTools(deps: SueDreddDeps = LIVE_DEPS): HydraTool[] {
           ? ['--workspace', here.cwd]
           : []
     const keep = SUE_STARTS.has(action)
-    const r = await deps.launch(
-      'node',
-      [join(home, 'sue', 'sue.mjs'), action, ...workspace, '--json-file', argsFile],
-      {
-        cwd: here?.cwd || home,
-        env: launchEnv(here?.chatId ?? null),
-        waitMs: WAIT_MS,
-        keep,
-        dir,
-      },
+    const r = await removeOnThrow(dir, () =>
+      deps.launch(
+        'node',
+        [join(home, 'sue', 'sue.mjs'), action, ...workspace, '--json-file', argsFile],
+        {
+          cwd: here?.cwd || home,
+          env: launchEnv(here?.chatId ?? null),
+          waitMs: WAIT_MS,
+          keep,
+          dir,
+        },
+      ),
     )
     if (!r.done) return running('sue', action, r)
     if (!keep) rmSync(dir, { recursive: true, force: true })
@@ -289,83 +389,27 @@ export function sueDreddTools(deps: SueDreddDeps = LIVE_DEPS): HydraTool[] {
       return JSON.parse(readFileSync(join(home, 'dredd', 'bench.json'), 'utf8'))
     const ask = str(p.ask).trim()
     const docket = str(p.docket).trim()
-    if (DREDD_NEEDS_DOCKET.has(action) && !docket)
-      throw new Error(
-        `dredd '${action}' needs params.docket, the directory a previous convene or hearing returned ('dockets' lists them)`,
-      )
-    const reads =
-      action === 'status' || action === 'stop' || action === 'dockets' || action === 'doctor'
-    if (!reads && !ask && !docket)
-      throw new Error(
-        `dredd '${action}' needs params.ask (the person's own words) or params.docket`,
-      )
+    checkDreddInput(action, ask, docket)
     const dir = deps.tmp()
     const root = str(p.root).trim()
     const flags = root ? ['--root', root] : []
-    let cmd = 'node'
-    let argv: string[]
-    if (action === 'boardroom') {
-      cmd = 'bun'
-      argv = [join(home, 'dredd', 'boardroom.mjs'), '--quiet', ...flags]
-      if (docket) argv.push('--docket', docket)
-      if (p.rounds != null)
-        argv.push('--rounds', String(Math.max(1, Math.floor(Number(p.rounds)) || 1)))
-      if (Array.isArray(p.seats) && p.seats.length)
-        argv.push('--seats', p.seats.map(String).join(','))
-      if (ask) argv.push(ask)
-    } else {
-      argv = [join(home, 'dredd', 'dredd.mjs'), ...flags]
-      if (action === 'doctor') argv.push('--doctor')
-      if (action === 'status' || action === 'stop' || action === 'dockets') argv.push(`--${action}`)
-      if (action === 'plan') argv.push('--member')
-      if (action === 'convene') argv.push('--convene')
-      if (action === 'hearing') argv.push('--hearing', '--detach')
-      if (action === 'resolve') argv.push('--resolve', '--detach')
-      if (action === 'collect') argv.push('--collect')
-      if (action === 'docket' || action === 'plan') argv.push('--json')
-      if (docket) argv.push('--docket', docket)
-      if (p.announce === true) argv.push('--announce')
-      const url = str(p.url).trim()
-      if (url) argv.push('--url', url)
-      const runs = Array.isArray(p.run) ? p.run.map(String).join(',') : str(p.run).trim()
-      if (runs) argv.push('--run', runs)
-      if (action === 'status' && Number.isFinite(Number(p.fromLine)) && p.fromLine != null)
-        argv.push('--from-line', String(Math.max(0, Math.floor(Number(p.fromLine)))))
-      if (action === 'dockets' && Number.isFinite(Number(p.limit)) && p.limit != null)
-        argv.push('--limit', String(Math.max(1, Math.floor(Number(p.limit)))))
-      // The ask goes in a file: no shell quoting, and a detached hearing reads it from there.
-      if (ask) {
-        const askFile = join(dir, 'ask.txt')
-        writeFileSync(askFile, ask)
-        argv.push('--ask-file', askFile)
-      }
-    }
+    const boardroom = action === 'boardroom'
+    const argv = boardroom
+      ? boardroomArgv(home, p, ask, docket, flags)
+      : dreddArgv(action, home, p, ask, docket, dir, flags)
     const keep = DREDD_LONG.has(action)
-    const r = await deps.launch(cmd, argv, {
-      cwd: home,
-      env: { DREDD_DOOR: 'mcp' },
-      waitMs: WAIT_MS,
-      keep,
-      dir,
-    })
+    const r = await removeOnThrow(dir, () =>
+      deps.launch(boardroom ? 'bun' : 'node', argv, {
+        cwd: home,
+        env: { DREDD_DOOR: 'mcp' },
+        waitMs: WAIT_MS,
+        keep,
+        dir,
+      }),
+    )
     if (!r.done) return running('dredd', action, r, docket ? { docket } : {})
     if (!keep) rmSync(dir, { recursive: true, force: true })
-    const answer = answerOf('dredd', action, r, true)
-    if (
-      (action === 'hearing' || action === 'resolve') &&
-      typeof answer === 'object' &&
-      answer !== null
-    ) {
-      const out = str((answer as { output?: unknown }).output)
-      const dk = docket || /^Docket: (.+)$/m.exec(out)?.[1]?.trim() || null
-      if (dk)
-        return {
-          ...(answer as object),
-          docket: dk,
-          poll: "dredd { action:'status', params:{ docket } } until verdict.md is in the answer; 'stop' ends it",
-        }
-    }
-    return answer
+    return withDocket(action, docket, answerOf('dredd', action, r, true))
   }
 
   return [

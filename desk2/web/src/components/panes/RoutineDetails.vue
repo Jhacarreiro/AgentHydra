@@ -61,7 +61,7 @@ function toggleRun(at: number) {
 }
 const openable = (r: RoutineRun) => !!r.lastLine || r.description?.state === 'failed'
 
-const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_0_0_1px_var(--border)]'
+const TILE = 'rounded-(--radius-6) bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_0_0_1px_var(--border)]'
 </script>
 
 <template>
@@ -138,7 +138,7 @@ const TILE = 'rounded-[var(--radius-6)] bg-fill-5 px-2.5 py-1.5 shadow-[inset_0_
         <li v-for="r in runs" :key="r.startedAt">
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
+            class="flex w-full items-center gap-2 rounded-(--radius-6) px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
             :aria-expanded="openable(r) ? openRuns.has(r.startedAt) : undefined"
             :disabled="!openable(r)"
             @click="toggleRun(r.startedAt)"

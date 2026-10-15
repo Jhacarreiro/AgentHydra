@@ -104,6 +104,29 @@ export function parseReading(stdout: string): Reading {
 
 const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
 
+/** One trend object as the details page keeps it: its latest number, and previous, best and trend when present; null without a latest number. */
+function trendOf(t: unknown): TrendReading | null {
+  const r = t as Record<string, unknown> | null
+  if (!r || typeof r !== 'object' || !isNum(r.latest)) return null
+  return {
+    latest: r.latest,
+    ...(isNum(r.previous) ? { previous: r.previous } : {}),
+    ...(isNum(r.best) ? { best: r.best } : {}),
+    ...(typeof r.trend === 'string' ? { trend: r.trend.slice(0, 20) } : {}),
+  }
+}
+
+/** One group of trend objects by name: at most 20 of them, names cut to 40 characters. */
+function trendGroupOf(v: Record<string, unknown>): Record<string, TrendReading> {
+  const group: Record<string, TrendReading> = {}
+  for (const [name, t] of Object.entries(v)) {
+    const trend = trendOf(t)
+    if (!trend || Object.keys(group).length >= 20) continue
+    group[name.slice(0, 40)] = trend
+  }
+  return group
+}
+
 /** The status's other top-level numbers and its groups of trend objects, for the routine's details page. */
 function extrasOf(o: Record<string, unknown>): Pick<Reading, 'numbers' | 'trends'> {
   const numbers: Record<string, number> = {}
@@ -113,17 +136,7 @@ function extrasOf(o: Record<string, unknown>): Pick<Reading, 'numbers' | 'trends
     if (isNum(v)) {
       if (Object.keys(numbers).length < 12) numbers[k.slice(0, 40)] = v
     } else if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(trends).length < 6) {
-      const group: Record<string, TrendReading> = {}
-      for (const [name, t] of Object.entries(v as Record<string, unknown>)) {
-        const r = t as Record<string, unknown> | null
-        if (!r || typeof r !== 'object' || !isNum(r.latest) || Object.keys(group).length >= 20) continue
-        group[name.slice(0, 40)] = {
-          latest: r.latest,
-          ...(isNum(r.previous) ? { previous: r.previous } : {}),
-          ...(isNum(r.best) ? { best: r.best } : {}),
-          ...(typeof r.trend === 'string' ? { trend: r.trend.slice(0, 20) } : {}),
-        }
-      }
+      const group = trendGroupOf(v as Record<string, unknown>)
       if (Object.keys(group).length) trends[k.slice(0, 40)] = group
     }
   }

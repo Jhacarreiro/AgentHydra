@@ -27,7 +27,7 @@
 .md hr,
 .md .md-code,
 .md > .md-img {
-  margin: 10.5px 0 0;
+  margin: 11px 0 0;
 }
 .md p {
   padding: 0 56px 0 4px;
@@ -44,12 +44,12 @@
 }
 .md h1,
 .md h2 {
-  font-size: 17.5px;
-  line-height: 22.75px;
+  font-size: 18px;
+  line-height: 23px;
 }
 .md h3 {
-  font-size: 15.75px;
-  line-height: 20.475px;
+  font-size: 16px;
+  line-height: 20px;
 }
 .md h4,
 .md h5,
@@ -88,7 +88,7 @@
 }
 .md li {
   padding-inline-start: 7px;
-  margin-top: 3.5px;
+  margin-top: 4px;
 }
 .md li:first-child {
   margin-top: 0;
@@ -101,7 +101,7 @@
 }
 .md li > ul,
 .md li > ol {
-  margin-top: 3.5px;
+  margin-top: 4px;
   padding-inline-end: 0;
 }
 .md a {
@@ -133,9 +133,9 @@
 
 /* Inline code, measured: 12.6px mono, #ec7e7e on white 5%, 1px white-10% border, r5.04, padding .7875/3.15. */
 .md :not(pre) > code {
-  font-size: 12.6px;
-  padding: 0.7875px 3.15px;
-  border-radius: 5.04px;
+  font-size: 13px;
+  padding: 1px 3px;
+  border-radius: 5px;
   border: 1px solid var(--border);
   background: var(--fill-5);
   color: var(--code-text);
@@ -347,7 +347,7 @@
   border-radius: var(--radius-12);
   overflow: hidden;
   background: var(--bg-popover);
-  box-shadow: 0 0 0 1px var(--border), 0 4px 20px #0000004d;
+  box-shadow: var(--shadow-html-preview);
 }
 .html-preview-bar {
   display: flex;
@@ -357,7 +357,7 @@
   padding: 0 6px 0 12px;
   border-bottom: 1px solid var(--border);
   color: var(--text-muted);
-  font-size: 12.5px;
+  font-size: 13px;
 }
 .html-preview-bar svg {
   flex: none;
@@ -803,6 +803,10 @@ button.tx-file-card:hover {
   color: var(--text);
   background: var(--bg-popover);
   box-shadow: inset 0 0 0 1px var(--border);
+}
+
+.tx-step:focus-visible {
+  transition: background-color 60ms, color 60ms, opacity 120ms;
 }
 
 /* Buttons and inputs inside cards: the real 28px button (r6, 13px) language. */

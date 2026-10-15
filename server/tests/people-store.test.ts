@@ -205,11 +205,14 @@ test('the service on CrAInium: status from the door, setting it syncs, a change 
   await svc.syncNow()
   expect(await remote.get('manager/ada')).not.toBeNull()
   await svc.addLearning('manager/ada', 'Read the brief first')
-  await new Promise((r) => setTimeout(r, 800))
+  // The push runs the door after the 5 ms debounce: waited for, up to 10 s, not a fixed 800 ms (the door's round trip
+  // passed 800 ms on a loaded PC: 1 run in 3 failed alone, 2026-10-15).
+  const until = Date.now() + 10_000
+  while (((await remote.get('manager/ada'))?.learnings.length ?? 0) < 1 && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
   expect((await remote.get('manager/ada'))?.learnings.length).toBe(1)
   expect(await svc.status()).toMatchObject({ home: 'crainium', error: null })
   expect(statSync(join(home, '.agenthydra', 'people-store.json')).isFile()).toBe(true)
-})
+}, 30_000)
 
 test('findDoor reads the settings command (array or quoted string), else the private checkout', () => {
   const dir = join(home, '.agenthydra')

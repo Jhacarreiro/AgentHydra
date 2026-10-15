@@ -103,6 +103,7 @@ const leakMessage = (file: string, changed: string[]) =>
 // run's end. Windows can hold a file a just-stopped child still has open, so each remove retries briefly. Without
 // this, desk-* folders piled up in %TEMP% (2026-10-14: 587, about 200 a day).
 const TEMP_VARS = ['TMPDIR', 'TEMP', 'TMP'] as const
+// arkitect-ignore-next-line scratch-dir-reaped/violation - removed by this preload's afterAll through removeTree, which retries while Windows still holds a just-stopped child's file
 const runTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'desk2-tests-'))
 // Hydra Core mode reads ~/.agenthydra/core unless this is set, and core mode switched on there strips a paragraph from
 // the Desk append, so 7 tests failed on a PC that runs it. A folder that does not exist reads as core mode off.
