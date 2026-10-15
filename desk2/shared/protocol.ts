@@ -542,6 +542,7 @@ export interface CliMayteWorker {
   sessionId: string | null // the worker's current Claude Code session, for its live transcript
   originSessionId: string | null // the session id of the chat that dispatched it, when known
   originWorkerId?: string | null // the worker that dispatched it, when a worker did
+  chat?: boolean // the worker a Desk chat runs as (its own chat's, or another's): never another chat's dispatch
   originTitle?: string | null // the title of the chat that dispatched it, as its own PC knows it (another PC's only)
   sessions?: string[] // every session the worker has had (a handoff gives it a new sessionId and keeps the old ones here)
   folder?: string | null // another PC's only: the last name of the folder it runs in, never the path (its `cwd` stays null)

@@ -209,6 +209,8 @@ export interface AhWorker {
   effort: string | null
   reportedModel?: string | null
   kind?: string | null
+  /** Set on the worker a Desk chat runs as. */
+  chat?: boolean
   result: string | null
   error: string | null
   lastActivity: string | null

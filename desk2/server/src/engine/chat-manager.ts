@@ -55,7 +55,7 @@ import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import { hasRoom } from '../bridge/accounts'
 import type { AhWorker, WorkerSendSetting } from '../bridge/client'
-import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
+import { isActiveWorkerStatus, keptWorkerIds, workerAccountLabel, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
 import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
@@ -2196,14 +2196,18 @@ export class ChatManager {
     return file
   }
 
-  /** Sets climayteActive (its active workers and running seats) and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
+  /** Sets climayteActive (its active workers and running seats), drops the stored workerIds that are another chat's, and adds the workers now matched; true when workerIds changed. */
   private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
     const mine = workersOfChat(workers, chat)
     chat.climayteActive = mine.filter((w) => w.active).length + this.seatsRunning(chat.id)
+    const others = new Set<string>()
+    for (const e of this.chats.values()) if (e.chat.id !== chat.id && e.chat.workerId) others.add(e.chat.workerId)
     const ids = chat.workerIds ?? []
-    const fresh = mine.map((w) => w.id).filter((id) => !ids.includes(id))
-    if (!fresh.length) return false
-    chat.workerIds = [...ids, ...fresh]
+    const kept = keptWorkerIds(workers, chat, others)
+    const keptSet = new Set(kept)
+    const fresh = mine.map((w) => w.id).filter((id) => !keptSet.has(id))
+    if (!fresh.length && kept.length === ids.length) return false
+    chat.workerIds = [...kept, ...fresh]
     return true
   }
 
@@ -2225,10 +2229,10 @@ export class ChatManager {
     if (!e) return
     const parent = e.chat
     const before = parent.climayteActive
-    this.matchWorkers(parent, this.bridge.lastWorkers())
+    const grew = this.matchWorkers(parent, this.bridge.lastWorkers())
     const n = parent.climayteActive
-    if (n === before) return
-    if (n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
+    if (n === before && !grew) return
+    if (n !== before && n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.upsert', chat: this.view(parent) })
     this.settleParent(parent)
@@ -2705,8 +2709,8 @@ export class ChatManager {
       // A closed runtime took its background tasks with it: their items say so, and stop counting.
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
       this.sendWaiting(e)
-      this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
+      this.store.saveChats(this.stored())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
       this.settleParent(e.chat)
       this.turnEnded(e)
