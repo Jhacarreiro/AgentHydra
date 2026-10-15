@@ -187,6 +187,9 @@ function diff(opts) {
   return 0
 }
 
+/** A priced row as the JSON readers (MCP tool, history, next-page picker) take it: named by `page`. */
+const named = (p) => ({ page: p.file, ...p })
+
 function scan(opts) {
   let pages = priceRepo({ root: opts.root }).pages
   const views = loadViews(opts.root)
@@ -198,7 +201,7 @@ function scan(opts) {
   const limit = opts.limit ? Number(opts.limit) : pages.length
   const shown = pages.slice(0, limit)
   if (opts.json) {
-    console.log(JSON.stringify({ root: opts.root, mode: 'static', pages: shown }, null, 2))
+    console.log(JSON.stringify({ root: opts.root, mode: 'static', pages: shown.map(named) }, null, 2))
     return 0
   }
   console.log(`${'rank'.padStart(4)}  ${'points'.padStart(7)}${views ? `  ${'exposure'.padStart(10)}` : ''}  page  top file`)
@@ -214,6 +217,10 @@ function page(opts, file) {
   if (!file) throw new Error('pricecheck: page needs a file')
   const rel = relOf(opts.root, file)
   const p = measurePage(opts.root, rel)
+  if (opts.json) {
+    console.log(JSON.stringify(named(p), null, 2))
+    return 0
+  }
   console.log(`${rel}: ${describe(p, loadConfig(opts.root).list)}`)
   for (const f of topFiles(p, 50)) console.log(`  ${String(f.points).padStart(7)}  ${f.file}`)
   return 0

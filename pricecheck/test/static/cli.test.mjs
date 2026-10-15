@@ -49,6 +49,18 @@ afterAll(() => {
   for (const d of dirs) fs.rmSync(d, { recursive: true, force: true })
 })
 
+group('json rows name their page, as the MCP tool, history and next-page picker read it', () => {
+  test('scan --json rows and page --json both carry page', async () => {
+    const scanned = JSON.parse((await capture(['scan', '--json', '--root', fixture('vue')])).out)
+    expect(scanned.pages.map((p) => p.page)).toEqual(['src/views/SignInPage.vue'])
+    const { code, out } = await capture(['page', 'src/components/SignInFooterBar.vue', '--json', '--root', fixture('vue')])
+    const row = JSON.parse(out)
+    expect(code).toBe(0)
+    expect(row.page).toBe('src/components/SignInFooterBar.vue')
+    expect(row.points).toBeGreaterThan(0)
+  })
+})
+
 group('scan', () => {
   test('--json gives each page its route when router evidence or the pages folder has one', async () => {
     const { code, out } = await capture(['scan', '--json', '--root', fixture('react')])
