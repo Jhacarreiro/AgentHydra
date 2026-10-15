@@ -18,7 +18,7 @@ const OWNER = join(HOME, '.claude')
 const CWD = join(scratch, 'repo')
 const OWNER_RULES = 'Read Connections first: call lane_brief.'
 const CORE_NOTE =
-  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered, and your process ends when your turn ends.'
+  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Your process can end any time after your reply (when its last background command ends, or when the next owner message stops it), and everything it started in the background ends with it. Background sub-agents are refused: run sub-agents in the foreground (several Agent calls in one message run in parallel), and give work that must outlive the reply to climayte_run, which messages this chat when it finishes.'
 const REFUSAL =
   'Core mode: sub-manager chats are off. Use core_use { chat, id, mode: "consult" | "hire" } to ask or hire a hidden copy.'
 

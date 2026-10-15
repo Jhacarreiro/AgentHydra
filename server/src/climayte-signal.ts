@@ -31,6 +31,13 @@ export const SIGNAL_HOOK_TIMEOUT_S = 3
 export const RUN_IF_PRESENT =
   "import os,runpy,sys;p=sys.argv[1];sys.path[0:0]=[os.path.dirname(p)];os.path.isfile(p) and runpy.run_path(p,run_name='__main__')"
 
+export const NO_BG_AGENT_REASON =
+  "Background sub-agents are refused here: this session's CLI can end soon after your reply, and when the owner's next message arrives, and a background sub-agent dies with it. Run the sub-agents in the foreground (several Agent calls in one message run in parallel and this turn waits for all of them), or give work that must outlive the reply to climayte_run, which messages this chat when it finishes."
+
+/** Node source for the Agent|Task PreToolUse hook: exit 2 with the reason on stderr (what the other
+ *  guards do) when tool_input.run_in_background is true; exit 0 for anything else, even bad input. */
+export const NO_BG_AGENT_SCRIPT = `let r='';process.stdin.setEncoding('utf8');process.stdin.on('data',c=>r+=c);process.stdin.on('end',()=>{let i=null;try{i=JSON.parse(r)}catch{}if(i&&i.tool_input&&i.tool_input.run_in_background===true){process.stderr.write(${JSON.stringify(NO_BG_AGENT_REASON)});process.exit(2)}process.exit(0)})`
+
 export type Hook =
   | { type: 'command'; command: string; args?: string[]; timeout?: number }
   | { type: 'http'; url: string; timeout?: number }
@@ -67,6 +74,8 @@ export const STOP_HOOK_TIMEOUT_S = 10
  *    owner's hooks, and a worker running with permissions skipped ran `git clean -fd` in a shared
  *    checkout (2026-10-07). Same exec form and launcher as edit_claims, so a missing script does
  *    nothing and an exit 2 from a guard denies the call.
+ *  - PreToolUse on Agent and Task, when `agentGuard` is set: an inline `node -e` (NO_BG_AGENT_SCRIPT, no python, no file to ship)
+ *    exits 2 on run_in_background true, because a background sub-agent dies with the CLI process.
  *  - UserPromptSubmit, the `promptHooks` given: a chat's Manager Hydra router (ownerRouterHooks), which the
  *    owner's own sessions run from his settings and an account folder's settings never had.
  *  - Stop, when `stopUrl` is given (an ordinary worker, not a chat or a sealed one): an http hook the
@@ -79,6 +88,8 @@ export function workerHooks(opts: {
   signalFile: string
   claims: string | null
   guards?: string[]
+  /** Refuse a background sub-agent (Agent|Task) with NO_BG_AGENT_SCRIPT. */
+  agentGuard?: boolean
   stopUrl?: string | null
   promptHooks?: Array<{ hooks: Hook[] }>
   sessionStartHooks?: Array<{ hooks: Hook[] }>
@@ -117,6 +128,21 @@ export function workerHooks(opts: {
               args: ['-S', '-c', RUN_IF_PRESENT, g],
               timeout: 10,
             })),
+          },
+        ]
+      : []),
+    ...(opts.agentGuard
+      ? [
+          {
+            matcher: 'Agent|Task',
+            hooks: [
+              {
+                type: 'command' as const,
+                command: 'node',
+                args: ['-e', NO_BG_AGENT_SCRIPT],
+                timeout: 10,
+              },
+            ],
           },
         ]
       : []),

@@ -598,6 +598,7 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
         guards,
+        agentGuard: true,
         // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode: Hydra Core's hook).
         promptHooks:
           w.chat && ownerClaudeDir && !w.sealed
@@ -688,10 +689,10 @@ const CHAT_MEDIA =
 const CHAT_NOTE_BASE =
   "You are the manager the owner talks to in this Desk chat: he reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Orchestrate: send the work to your CliMayte workers and HSwarm, your employees, or to sub-agents, check what they report, and report to him; when you run out of context or account you hand off to your successor manager, who continues as this chat's manager." +
   " Manager Hydra names which manager you are on each message (a deep persona such as the Head of Advertising or the Structural Backend Engineer). Act as that manager. When a question crosses into another manager's field, open them as a sub-manager chat below yours with the agenthydra MCP's hydra_run { tool: 'manager_open' } and ask with hydra_run { tool: 'manager_ask' }; your workers are your employees." +
-  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
+  ' Your process can end any time after your reply (when its last background command ends, or when the next owner message stops it), and everything it started in the background ends with it. Background sub-agents are refused: run sub-agents in the foreground (several Agent calls in one message run in parallel), and give work that must outlive the reply to climayte_run, which messages this chat when it finishes.'
 export const CHAT_NOTE = `${CHAT_NOTE_BASE} ${CHAT_MEDIA}`
 const CORE_CHAT_NOTE =
-  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered, and your process ends when your turn ends.'
+  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Your process can end any time after your reply (when its last background command ends, or when the next owner message stops it), and everything it started in the background ends with it. Background sub-agents are refused: run sub-agents in the foreground (several Agent calls in one message run in parallel), and give work that must outlive the reply to climayte_run, which messages this chat when it finishes.'
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
