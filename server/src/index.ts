@@ -92,7 +92,7 @@ import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
-import { matchFor, packFor } from './hydra-core/pack'
+import { packAnswer } from './hydra-core/pack'
 import { coreDir } from './hydra-core/paths'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
 import {
@@ -439,10 +439,8 @@ app.post('/api/core/pack', async (c) => {
   }
   if (!req.chat || !req.session) return c.json({ error: 'chat and session are required' }, 400)
   try {
-    if (b.placement === 'slot' || b.placement === 'file') {
-      return c.json(matchFor(coreDir(), { ...req, placement: b.placement }))
-    }
-    return c.json(packFor(coreDir(), req))
+    // The lead pick is awaited before the build: the daemon keeps serving while the model answers.
+    return c.json(await packAnswer(coreDir(), { ...req, placement: b.placement }))
   } catch (err) {
     return c.json({ error: err instanceof Error ? err.message : String(err) }, 500)
   }

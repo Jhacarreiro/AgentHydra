@@ -3,6 +3,8 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { chatPromptText, leadPickPending } from '../src/climayte-launch'
+import type { CliMayteWorker } from '../src/climayte-lib'
 import { loadCatalog } from '../src/hydra-core/catalog'
 import {
   type Decider,
@@ -13,22 +15,39 @@ import {
   pickLead,
   setDecider,
 } from '../src/hydra-core/lead'
-import { matchFor, packFor } from '../src/hydra-core/pack'
+import {
+  matchFor,
+  type PackRequest,
+  type PlacedRequest,
+  packAnswer,
+  packFor,
+  pickForMatch,
+  pickForPack,
+} from '../src/hydra-core/pack'
 import { chatPaths } from '../src/hydra-core/paths'
-import { placeChat } from '../src/hydra-core/placement'
+import { pickForPlace, placeChat } from '../src/hydra-core/placement'
 import { answer, scope } from '../src/hydra-core/tree'
 import { contentWords } from '../src/mcp-find'
 import { scratch, startChat } from './hydra-core-fixture'
 
 const T = Date.parse('2026-10-14T09:00:00Z')
+
+/** The call sites' shape: the model's pick awaited first, then the synchronous build. */
+const packed = async (d: string, req: PackRequest, now = new Date(T)) =>
+  packFor(d, { ...req, pick: await pickForPack(d, req, now) }, now)
+const matched = async (d: string, req: PlacedRequest, now = new Date(T)) =>
+  matchFor(d, { ...req, pick: await pickForMatch(d, req, now) }, now)
+const placed = async (d: string, req: Parameters<typeof placeChat>[1], now = new Date(T)) =>
+  placeChat(d, { ...req, pick: await pickForPlace(d, req, now) }, now)
 const CWD = 'C:/Users/me/app'
 let dir = ''
 let asked: { q: LeadQuestion; ms: number }[] = []
 
-/** A mock model: answers from `pick(message)`, or fails when it returns null. */
-function mockModel(pick: (message: string) => string | null): void {
-  const d: Decider = (q, ms) => {
+/** A mock model: answers from `pick(message)` after `delayMs`, or fails when it returns null. */
+function mockModel(pick: (message: string) => string | null, delayMs = 0): void {
+  const d: Decider = async (q, ms) => {
     asked.push({ q, ms })
+    if (delayMs) await Bun.sleep(delayMs)
     const a = pick(q.message)
     return a === null ? { answer: null, error: 'mock: no answer' } : { answer: a }
   }
@@ -146,9 +165,9 @@ const logOf = (d: string) =>
 const entriesOf = (d: string) => [...loadCatalog(d).entries.values()]
 
 describe('lead choice (A2-F1)', () => {
-  test("the model picks among the managers' one-liners, none and the coordinator rule", () => {
+  test("the model picks among the managers' one-liners, none and the coordinator rule", async () => {
     mockModel(() => 'sam-backend')
-    const pick = pickLead(entriesOf(dir), 'add a last_seen column to the users table', 5000, {
+    const pick = await pickLead(entriesOf(dir), 'add a last_seen column to the users table', 5000, {
       cache: false,
     })
     expect(pick).toMatchObject({ id: 'person:sam-backend', path: 'model' })
@@ -165,26 +184,26 @@ describe('lead choice (A2-F1)', () => {
     )
     expect(Object.keys(q.options)).not.toContain('retention-expert')
     expect(q.options['ivy-ui']).toContain('Owns how every screen, layout and flow looks and works')
-    expect(q.options.none).toMatch(/chore/)
+    expect(q.options.none).toMatch(/No work in the message/)
     expect(q.question).toContain("A message spanning several fields is Pia's.")
   })
 
-  test('an answer of none gives no lead; a message with no content word is never asked', () => {
+  test('an answer of none gives no lead; a message with no content word is never asked', async () => {
     mockModel(() => 'none')
     expect(
-      pickLead(entriesOf(dir), 'rename notes.txt to todo.txt', 5000, { cache: false }),
+      await pickLead(entriesOf(dir), 'rename notes.txt to todo.txt', 5000, { cache: false }),
     ).toMatchObject({
       id: null,
       path: 'model',
     })
     asked = []
-    expect(pickLead(entriesOf(dir), 'ok keep going', 5000, { cache: false }).id).toBeNull()
+    expect((await pickLead(entriesOf(dir), 'ok keep going', 5000, { cache: false })).id).toBeNull()
     expect(asked).toHaveLength(0)
   })
 
-  test('a first launch waits up to 5 s for the model and a hook pack up to 1 s, and the path is logged', () => {
+  test('a first launch waits up to 5 s for the model and a hook pack up to 1 s, and the path is logged', async () => {
     mockModel(() => 'ivy-ui')
-    const launch = packFor(
+    const launch = await packed(
       dir,
       {
         chat: 'lp-1',
@@ -198,7 +217,7 @@ describe('lead choice (A2-F1)', () => {
     expect(launch.lead).toBe('person:ivy-ui')
     expect(asked.at(-1)?.ms).toBe(LAUNCH_BUDGET_MS)
     expect(LAUNCH_BUDGET_MS).toBeLessThanOrEqual(5000)
-    packFor(
+    await packed(
       dir,
       { chat: 'lp-2', session: 's1', cwd: CWD, prompt: 'the inbox screen layout is cramped' },
       new Date(T),
@@ -212,9 +231,9 @@ describe('lead choice (A2-F1)', () => {
     ])
   })
 
-  test('when the call fails the word ranker picks, and the log names the path and the error', () => {
+  test('when the call fails the word ranker picks, and the log names the path and the error', async () => {
     mockModel(() => null)
-    const pack = packFor(
+    const pack = await packed(
       dir,
       {
         chat: 'lp-3',
@@ -233,25 +252,30 @@ describe('lead choice (A2-F1)', () => {
     })
   })
 
-  test('the real call is held to its budget: a door that never answers is given up on time', async () => {
+  test('the real call is awaited: a timer fires on time while the door is silent, and it gives up at its budget', async () => {
     const tok = join(dir, 'token')
     writeFileSync(tok, 'invented-token')
     process.env.AGENTHYDRA_HSWARM_TOKEN_FILE = tok
-    // This process is blocked while the call runs, so its own server accepts the connection and never answers.
-    const server = Bun.serve({ port: 0, fetch: () => new Response('{}') })
+    const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
     process.env.AGENTHYDRA_DECIDE_URL = `http://127.0.0.1:${server.port}/api/decide`
     const started = performance.now()
-    const got = hswarmDecide({ message: 'm', question: 'q', options: { a: 'a', b: 'b' } }, 600)
+    const tick = new Promise<number>((r) => setTimeout(() => r(performance.now() - started), 50))
+    const [got, tickMs] = await Promise.all([
+      hswarmDecide({ message: 'm', question: 'q', options: { a: 'a', b: 'b' } }, 600),
+      tick,
+    ])
     const ms = performance.now() - started
     server.stop(true)
     expect(got.answer).toBeNull()
-    expect(ms).toBeLessThan(1400)
+    expect(tickMs).toBeLessThan(250)
+    expect(ms).toBeGreaterThanOrEqual(450)
+    expect(ms).toBeLessThan(1100)
   })
 
-  test('clearing a mock under test puts back no model call, so later test files never reach the network', () => {
+  test('clearing a mock under test puts back no model call, so later test files never reach the network', async () => {
     mockModel(() => 'person:sam-backend')
     setDecider(null)
-    pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
+    await pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
       cache: false,
       log: { dir, chat: 'lp-net' },
     })
@@ -265,18 +289,18 @@ describe('lead choice (A2-F1)', () => {
 describe('the word ranker behind the model (A2-F2, A2-F3)', () => {
   beforeEach(() => mockModel(() => null))
 
-  test('filler words and the shared how line pick nobody', () => {
+  test('filler words and the shared how line pick nobody', async () => {
     expect(
       contentWords('what should the chat do with its job, which loads into every view'),
     ).toEqual(['chat', 'job', 'loads', 'view'])
-    const pick = pickLead(entriesOf(dir), 'what loads its job into this chat', 5000, {
+    const pick = await pickLead(entriesOf(dir), 'what loads its job into this chat', 5000, {
       cache: false,
     })
     expect(pick).toMatchObject({ id: null, path: 'words' })
   })
 
-  test('a strong expert hit beats a weak manager hit instead of hiding behind it', () => {
-    const pick = pickLead(
+  test('a strong expert hit beats a weak manager hit instead of hiding behind it', async () => {
+    const pick = await pickLead(
       entriesOf(dir),
       'why do players quit after the first level of the launch',
       5000,
@@ -287,8 +311,8 @@ describe('the word ranker behind the model (A2-F2, A2-F3)', () => {
     expect(pick.id).toBe('person:retention-expert')
   })
 
-  test('three or more fields hit means the coordinator', () => {
-    const pick = pickLead(
+  test('three or more fields hit means the coordinator', async () => {
+    const pick = await pickLead(
       entriesOf(dir),
       'the backend schema, the sidebar screen and the launch campaign',
       5000,
@@ -299,19 +323,25 @@ describe('the word ranker behind the model (A2-F2, A2-F3)', () => {
 })
 
 describe('the lead follows the work (A2-F4, A3 finding 4)', () => {
-  const launch = (chat: string, prompt: string) =>
-    placeChat(
+  const launch = async (chat: string, prompt: string) =>
+    await placed(
       dir,
       { chat, session: 's1', fresh: true, cwd: CWD, prompt, placement: 'slot' },
       new Date(T),
     )
-  const msg = (chat: string, prompt: string, at = 1) =>
-    matchFor(dir, { chat, session: 's1', cwd: CWD, prompt, placement: 'slot' }, new Date(T + at))
+  const msg = async (chat: string, prompt: string, at = 1) =>
+    await matched(
+      dir,
+      { chat, session: 's1', cwd: CWD, prompt, placement: 'slot' },
+      new Date(T + at),
+    )
 
-  test('a backend message in a UI chat gets a lead-change note with the new brief and becomes the next launch lead', () => {
+  test('a backend message in a UI chat gets a lead-change note with the new brief and becomes the next launch lead', async () => {
     mockModel((m) => (/sqlite|server/.test(m) ? 'sam-backend' : 'ivy-ui'))
-    expect(launch('shift', 'make the signup screen layout breathe').text).toContain('Ivy brief')
-    const got = msg('shift', 'now add a small server that stores the signups in sqlite')
+    expect((await launch('shift', 'make the signup screen layout breathe')).text).toContain(
+      'Ivy brief',
+    )
+    const got = await msg('shift', 'now add a small server that stores the signups in sqlite')
     expect(got.text).toContain(
       "Lead change: this message is Sam's field (Structural Backend Engineer), not Ivy's.",
     )
@@ -324,7 +354,7 @@ describe('the lead follows the work (A2-F4, A3 finding 4)', () => {
       from: 'person:ivy-ui',
       to: 'person:sam-backend',
     })
-    const next = placeChat(
+    const next = await placed(
       dir,
       { chat: 'shift', session: 's2', fresh: true, cwd: CWD, prompt: 'x', placement: 'slot' },
       new Date(T + 5),
@@ -332,28 +362,28 @@ describe('the lead follows the work (A2-F4, A3 finding 4)', () => {
     expect(next.text).toContain('Lead for this message: Sam\n\nSam brief: invented text')
   })
 
-  test('keep going, a chore and same-field work never ask the model; a timeout keeps the lead', () => {
+  test('keep going, a chore and same-field work never ask the model; a timeout keeps the lead', async () => {
     mockModel(() => 'ivy-ui')
-    launch('stay', 'make the signup screen layout breathe')
+    await launch('stay', 'make the signup screen layout breathe')
     asked = []
-    expect(msg('stay', 'keep going').text).toBe('')
-    expect(msg('stay', 'ok', 2).text).toBe('')
-    msg('stay', 'the settings screen layout needs more room', 3)
+    expect((await msg('stay', 'keep going')).text).toBe('')
+    expect((await msg('stay', 'ok', 2)).text).toBe('')
+    await msg('stay', 'the settings screen layout needs more room', 3)
     expect(asked).toHaveLength(0)
     mockModel(() => null)
-    const timedOut = msg('stay', 'now store the signups in a new sqlite table', 4)
+    const timedOut = await msg('stay', 'now store the signups in a new sqlite table', 4)
     expect(asked).toHaveLength(1)
     expect(asked[0]?.ms).toBe(MESSAGE_BUDGET_MS)
     expect(timedOut.text).not.toContain('Lead change')
     expect(existsSync(chatPaths(dir, 'stay').hydraMd)).toBe(false)
   })
 
-  test('a brief longer than 9,500 characters goes as its first two sections and the become line', () => {
+  test('a brief longer than 9,500 characters goes as its first two sections and the become line', async () => {
     const long = `# Sam\n\nIntro line.\n\n## One\n\nFirst part.\n\n## Two\n\nSecond part.\n\n## Three\n\n${'y'.repeat(12000)}\n`
     writeFileSync(join(dir, 'sam-backend.md'), long)
     mockModel((m) => (/sqlite/.test(m) ? 'sam-backend' : 'ivy-ui'))
-    launch('long', 'make the signup screen layout breathe')
-    const got = msg('long', 'now store the signups in a new sqlite table')
+    await launch('long', 'make the signup screen layout breathe')
+    const got = await msg('long', 'now store the signups in a new sqlite table')
     expect(got.text).toContain('## Two\n\nSecond part.')
     expect(got.text).not.toContain('## Three')
     expect(got.text).toContain(
@@ -408,26 +438,28 @@ describe('per-message additions (A1-F4, A3 finding 6)', () => {
     ]
     writeFileSync(join(dir, 'catalog', 'hand-b2-adds.json'), JSON.stringify(entries))
   }
-  const launch = (chat: string, prompt = 'hello') =>
-    placeChat(
+  const launch = async (chat: string, prompt = 'hello') =>
+    await placed(
       dir,
       { chat, session: 's1', fresh: true, cwd: CWD, prompt, placement: 'slot' },
       new Date(T),
     )
-  const msg = (chat: string, prompt: string, session = 's1') =>
-    matchFor(dir, { chat, session, cwd: CWD, prompt, placement: 'slot' }, new Date(T + 1))
+  const msg = async (chat: string, prompt: string, session = 's1') =>
+    await matched(dir, { chat, session, cwd: CWD, prompt, placement: 'slot' }, new Date(T + 1))
 
-  test('filler words alone match nothing, and a short message gets nothing', () => {
+  test('filler words alone match nothing, and a short message gets nothing', async () => {
     addEntries()
-    launch('f1')
-    expect(msg('f1', 'did the worker start? what did it find when you start work?').ids).toEqual([])
-    expect(msg('f1', 'widget quota').ids).toEqual([])
+    await launch('f1')
+    expect(
+      (await msg('f1', 'did the worker start? what did it find when you start work?')).ids,
+    ).toEqual([])
+    expect((await msg('f1', 'widget quota')).ids).toEqual([])
   })
 
-  test('an entry of this folder is offered, one tied to another folder never is', () => {
+  test('an entry of this folder is offered, one tied to another folder never is', async () => {
     addEntries()
-    launch('f2')
-    const got = msg('f2', 'export the widget quota report for the invented widget')
+    await launch('f2')
+    const got = await msg('f2', 'export the widget quota report for the invented widget')
     expect(got.ids).toContain('instrument:here-tool')
     expect(got.ids).not.toContain('instrument:there-tool')
     expect(got.ids.length).toBeLessThanOrEqual(3)
@@ -437,21 +469,21 @@ describe('per-message additions (A1-F4, A3 finding 6)', () => {
     expect(Object.keys(line.scores).sort()).toEqual([...got.ids].sort())
   })
 
-  test("an entry already in the chat's slot is never attached again, even in a session the slot did not start", () => {
+  test("an entry already in the chat's slot is never attached again, even in a session the slot did not start", async () => {
     addEntries()
-    launch('f3', 'widget quota limits for the invented widget export')
+    await launch('f3', 'widget quota limits for the invented widget export')
     const placed = JSON.parse(readFileSync(chatPaths(dir, 'f3').placed, 'utf8')) as {
       ids: string[]
     }
     expect(placed.ids).toContain('knowledge:widget-quota')
     writeFileSync(chatPaths(dir, 'f3').sent, JSON.stringify({ other: [] }))
-    expect(msg('f3', 'quota limits for the invented widget export', 'other').ids).not.toContain(
-      'knowledge:widget-quota',
-    )
+    expect(
+      (await msg('f3', 'quota limits for the invented widget export', 'other')).ids,
+    ).not.toContain('knowledge:widget-quota')
   })
 })
 
-test('a lead picked through the question tree logs a become as core_use does (A2-F6)', () => {
+test('a lead picked through the question tree logs a become as core_use does (A2-F6)', async () => {
   const chat = 'chat-example-tree'
   const now = new Date('2026-10-13T10:00:00.000Z')
   startChat(dir, chat, 'Rebuild the dashboard layout')
@@ -482,7 +514,7 @@ test('a lead picked through the question tree logs a become as core_use does (A2
   ])
 })
 
-test("the slot lists the chat's seats so a handoff knows whom it consulted", () => {
+test("the slot lists the chat's seats so a handoff knows whom it consulted", async () => {
   mockModel(() => 'none')
   const files = chatPaths(dir, 'seated')
   mkdirSync(files.root, { recursive: true })
@@ -490,7 +522,7 @@ test("the slot lists the chat's seats so a handoff knows whom it consulted", () 
     files.seats,
     JSON.stringify({ 'person:ivy-ui': { chat: 'desk-chat-1', title: 'Ivy seat' } }),
   )
-  const slot = placeChat(
+  const slot = await placed(
     dir,
     { chat: 'seated', session: 's1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'slot' },
     new Date(T),
@@ -498,4 +530,132 @@ test("the slot lists the chat's seats so a handoff knows whom it consulted", () 
   expect(slot.text).toContain(
     'Seats in this chat: Ivy (person:ivy-ui); resume one with core_use { chat: "seated", id: "<person id>", mode: "consult" }.',
   )
+})
+
+describe('the model call never blocks an event loop (B2 review 1)', () => {
+  test("the daemon's pack answer awaits the pick: another request is served and a timer fires meanwhile", async () => {
+    mockModel(() => 'ivy-ui', 400)
+    const other = Bun.serve({ port: 0, fetch: () => new Response('pong') })
+    const started = performance.now()
+    const pack = packAnswer(
+      dir,
+      { chat: 'loop-1', session: 's1', cwd: CWD, prompt: 'the sidebar is cramped on mobile' },
+      new Date(T),
+    )
+    let packed = 0
+    void pack.then(() => {
+      packed = performance.now() - started
+    })
+    const pong = await (await fetch(`http://127.0.0.1:${other.port}/`)).text()
+    const pongMs = performance.now() - started
+    const tickMs = await new Promise<number>((r) =>
+      setTimeout(() => r(performance.now() - started), 30),
+    )
+    const got = await pack
+    other.stop(true)
+    expect(pong).toBe('pong')
+    expect(pongMs).toBeLessThan(300)
+    expect(tickMs).toBeLessThan(300)
+    expect(packed).toBeGreaterThanOrEqual(390)
+    expect('lead' in got && got.lead).toBe('person:ivy-ui')
+  })
+
+  test("a Prime chat's launch is held while its lead pick runs, then carries the pick", async () => {
+    writeFileSync(join(dir, 'ON'), '')
+    writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
+    mockModel(() => 'ivy-ui', 200)
+    const w = {
+      id: 'w-hold',
+      cwd: CWD,
+      chat: true,
+      prompt: 'make the signup screen layout breathe',
+      attempts: [],
+      desk: { chatId: 'desk-hold', append: '' },
+    } as unknown as CliMayteWorker
+    const started = performance.now()
+    expect(leadPickPending(w)).toBe(true)
+    const tickMs = await new Promise<number>((r) =>
+      setTimeout(() => r(performance.now() - started), 20),
+    )
+    expect(tickMs).toBeLessThan(150)
+    expect(leadPickPending(w)).toBe(true)
+    await Bun.sleep(300)
+    expect(leadPickPending(w)).toBe(false)
+    expect(chatPromptText(w, { id: 'sess-hold', resume: false })).toContain('Ivy brief')
+    expect(asked).toHaveLength(1)
+    // Its lead is kept now: the next launch asks nothing and is not held.
+    expect(leadPickPending({ ...w, id: 'w-hold-2' } as CliMayteWorker)).toBe(false)
+  })
+})
+
+describe('quick asks and named continuations (B2 review 2 and 3)', () => {
+  test("a quick ask is the floor manager's; none is only a message with no work in it", async () => {
+    mockModel(() => 'gil-floor')
+    const pick = await pickLead(entriesOf(dir), 'rename notes.txt to todo.txt', 5000, {
+      cache: false,
+    })
+    expect(pick).toMatchObject({ id: 'person:gil-floor', path: 'model' })
+    const { q } = asked[0] as { q: LeadQuestion }
+    expect(q.question).toContain(
+      "A quick ask (a fact, a status, a one-line edit, a single chore) is Gil's.",
+    )
+    expect(q.question).toContain('Answer none only when the message holds no work')
+    expect(q.question).not.toContain('answer none for those')
+    expect(q.options.none).not.toMatch(/chore|quick|fact|status/)
+  })
+
+  test("a continuation that names its work is asked and gets that work's lead; a bare one is never asked", async () => {
+    mockModel((m) => (/campaign/.test(m) ? 'jay-ads' : 'none'))
+    const named = await packed(
+      dir,
+      {
+        chat: 'cont-1',
+        session: 's1',
+        cwd: CWD,
+        prompt: 'keep going on the spring ad campaign, still need the second banner',
+        dry: true,
+      },
+      new Date(T),
+    )
+    expect(named.lead).toBe('person:jay-ads')
+    expect(asked[0]?.q.question).toContain(
+      `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
+    )
+    expect(asked[0]?.q.question).toContain('the lead is the field where the fix lives')
+    asked = []
+    const bare = await packed(
+      dir,
+      { chat: 'cont-2', session: 's1', cwd: CWD, prompt: 'keep going', dry: true },
+      new Date(T),
+    )
+    expect(bare.lead).toBeNull()
+    expect(asked).toHaveLength(0)
+  })
+
+  test('on a later message a named continuation can move the lead; a bare one keeps it', async () => {
+    mockModel((m) => (/campaign/.test(m) ? 'jay-ads' : 'ivy-ui'))
+    await placed(
+      dir,
+      {
+        chat: 'cont-3',
+        session: 's1',
+        fresh: true,
+        cwd: CWD,
+        prompt: 'make the signup screen layout breathe',
+        placement: 'slot',
+      },
+      new Date(T),
+    )
+    asked = []
+    const msg = (prompt: string, at: number) =>
+      matched(
+        dir,
+        { chat: 'cont-3', session: 's1', cwd: CWD, prompt, placement: 'slot' },
+        new Date(T + at),
+      )
+    expect((await msg('keep going', 1)).text).toBe('')
+    expect(asked).toHaveLength(0)
+    const moved = await msg('keep going on the ad campaign, still need the banner copy', 2)
+    expect(moved.text).toContain("Lead change: this message is Jay's field")
+  })
 })

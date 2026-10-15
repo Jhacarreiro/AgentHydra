@@ -22,7 +22,7 @@ import {
 } from './climayte-core'
 import { cpuShort, recordCpu } from './climayte-cpu'
 import { firstLine } from './climayte-journal'
-import { launch } from './climayte-launch'
+import { launch, leadPickPending } from './climayte-launch'
 import {
   accountInUse,
   accountWeekStopPct,
@@ -626,6 +626,8 @@ function startOn(
     holdForCpu(w, busy)
     return
   }
+  // A Prime chat's lead pick is made off the launch (it may take seconds): due again next tick, no slot taken.
+  if (leadPickPending(w)) return
   // No slot: the task stays as it is, due again next tick (never failed or dropped).
   if (!takeLaunchSlot(s.now)) return
   const expected = cost.pct

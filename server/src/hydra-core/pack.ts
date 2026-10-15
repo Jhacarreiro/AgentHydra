@@ -6,6 +6,7 @@ import { detailOf, rankEntries, terms } from './find'
 import { leadName, parseHydra } from './hydra-md'
 import {
   LAUNCH_BUDGET_MS,
+  type LeadPick,
   leadNote,
   MESSAGE_BUDGET_MS,
   mayHaveMoved,
@@ -44,6 +45,8 @@ export interface PlacedRequest {
   cwd: string
   prompt: string
   placement: 'slot' | 'file'
+  /** The model's pick, made before the build by pickForMatch; absent, the build moves no lead and ranks by words. */
+  pick?: LeadPick
 }
 
 export interface Placed {
@@ -73,6 +76,9 @@ export interface PackRequest {
   /** How long the lead pick may wait for the model; absent, a dry build (a launch) waits LAUNCH_BUDGET_MS, any
    *  other pack MESSAGE_BUDGET_MS, since the hook is waiting for it. */
   leadMs?: number
+  /** The model's pick, made before the build by pickForPack; absent, the word ranker picks. The build itself never
+   *  waits on the network. */
+  pick?: LeadPick
 }
 
 export interface Pack {
@@ -223,20 +229,13 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
 
   const hydra = hydraLead(files.hydraMd)
   const fixed = !hydra && req.lead !== undefined
-  // A first pack asks the model (a launch may wait longer than the hook); a later one keeps to the word ranker.
+  // A first pack takes the model's pick made before it (pickForPack); a later one keeps to the word ranker.
   const personaId =
     hydra || fixed
       ? undefined
-      : mode === 'delta'
-        ? wordLead(entries, req.prompt)?.id
-        : pickLead(
-            entries,
-            req.prompt,
-            req.leadMs ?? (req.dry ? LAUNCH_BUDGET_MS : MESSAGE_BUDGET_MS),
-            {
-              log: { dir, chat: req.chat, at: now },
-            },
-          ).id
+      : mode !== 'delta' && req.pick
+        ? (req.pick.id ?? undefined)
+        : wordLead(entries, req.prompt)?.id
   const persona = personaId ? catalog.get(personaId) : undefined
   const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
   let lead: { id: string; name: string; text: string } | null = null
@@ -340,6 +339,31 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   return { mode, text, ids, bytes, ms, lead: used, owed }
 }
 
+/** Whether a pack ranks its lead on the prompt: no hydra.md lead, no fixed lead, and a first or full pack. */
+export function packNeedsPick(dir: string, req: PackRequest): boolean {
+  const files = chatPaths(dir, req.chat)
+  const first = !(req.session in readSent(files.sent))
+  return !hydraLead(files.hydraMd) && req.lead === undefined && (!!req.full || first)
+}
+
+/**
+ * The model's lead pick a pack needs, made before the synchronous build (a launch may wait LAUNCH_BUDGET_MS, the hook
+ * MESSAGE_BUDGET_MS): undefined when the build ranks no lead (a hydra.md lead, a fixed lead, a later message).
+ */
+export async function pickForPack(
+  dir: string,
+  req: PackRequest,
+  now = new Date(),
+): Promise<LeadPick | undefined> {
+  if (!packNeedsPick(dir, req)) return undefined
+  return pickLead(
+    [...loadCatalog(dir).entries.values()],
+    req.prompt,
+    req.leadMs ?? (req.dry ? LAUNCH_BUDGET_MS : MESSAGE_BUDGET_MS),
+    { log: { dir, chat: req.chat, at: now } },
+  )
+}
+
 export interface Match {
   text: string
   ids: string[]
@@ -356,6 +380,36 @@ function matchText(inline: string[], pointers: string[]): string {
     .join('\n\n')
 }
 
+/** Whether matchFor builds the full pack for this message: the session neither started with it nor was sent it. */
+function packsWhole(dir: string, req: PlacedRequest): boolean {
+  const files = chatPaths(dir, req.chat)
+  const inPrompt = readPlaced(files.placed)?.started.includes(req.session) ?? false
+  return !inPrompt && !(req.session in readSent(files.sent))
+}
+
+/**
+ * The model's pick a per-message match needs, made before the synchronous build within the hook's budget: the full
+ * pack's lead, or whether the work moved to another manager's field (only when the cheap gate in shiftDue opens).
+ */
+export async function pickForMatch(
+  dir: string,
+  req: PlacedRequest,
+  now = new Date(),
+): Promise<LeadPick | undefined> {
+  if (packsWhole(dir, req))
+    return pickForPack(
+      dir,
+      { chat: req.chat, session: req.session, cwd: req.cwd, prompt: req.prompt },
+      now,
+    )
+  const catalog = loadCatalog(dir).entries
+  const entries = [...catalog.values()]
+  if (!shiftDue(dir, req, entries, catalog)) return undefined
+  return pickLead(entries, req.prompt, MESSAGE_BUDGET_MS, {
+    log: { dir, chat: req.chat, at: now },
+  })
+}
+
 /**
  * Per-message matches for a slot or file chat, at most MATCH_CAP characters. A session that started with the
  * pack (placement.json `started`) gets only what the pack did not hold; any other session gets the full pack
@@ -365,11 +419,10 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
   const files = chatPaths(dir, req.chat)
   const sent = readSent(files.sent)
   const placed = readPlaced(files.placed)
-  const inPrompt = placed?.started.includes(req.session) ?? false
-  if (!inPrompt && !(req.session in sent)) {
+  if (packsWhole(dir, req)) {
     const pack = packFor(
       dir,
-      { chat: req.chat, session: req.session, cwd: req.cwd, prompt: req.prompt },
+      { chat: req.chat, session: req.session, cwd: req.cwd, prompt: req.prompt, pick: req.pick },
       now,
     )
     return { text: pack.text, ids: pack.ids, chars: pack.text.length }
@@ -459,6 +512,23 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
   return { text, ids: sentIds, chars: text.length }
 }
 
+/**
+ * The daemon's answer to the hook (/api/core/pack): the model's pick is awaited first, then the synchronous build
+ * runs, so the daemon serves every other route while the pick waits.
+ */
+export async function packAnswer(
+  dir: string,
+  req: Omit<PackRequest, 'pick'> & { placement?: unknown },
+  now = new Date(),
+): Promise<Pack | Match> {
+  const { placement, ...rest } = req
+  if (placement === 'slot' || placement === 'file') {
+    const placed: PlacedRequest = { ...rest, placement }
+    return matchFor(dir, { ...placed, pick: await pickForMatch(dir, placed, now) }, now)
+  }
+  return packFor(dir, { ...rest, pick: await pickForPack(dir, rest, now) }, now)
+}
+
 /** The chat's current lead: its hydra.md lead, else the one its slot was built with. */
 function currentLead(
   files: ReturnType<typeof chatPaths>,
@@ -476,6 +546,19 @@ function currentLead(
  * then the model within the hook's budget (a timeout keeps the current lead). A move becomes the chat's lead in
  * hydra.md, so the next launch's slot carries the new brief, and this message gets a lead-change note.
  */
+/** The cheap gate before a lead-shift call: a substantive owner message the current lead may no longer fit. */
+function shiftDue(
+  dir: string,
+  req: PlacedRequest,
+  entries: CatalogEntry[],
+  catalog: Map<string, CatalogEntry>,
+): boolean {
+  if (!substantive(req.prompt)) return false
+  const files = chatPaths(dir, req.chat)
+  const current = currentLead(files, entries, catalog, readPlaced(files.placed))
+  return mayHaveMoved(entries, current, req.prompt)
+}
+
 function leadShift(
   dir: string,
   req: PlacedRequest,
@@ -483,13 +566,10 @@ function leadShift(
   catalog: Map<string, CatalogEntry>,
   now: Date,
 ): { to: string; note: string } | null {
-  if (!substantive(req.prompt)) return null
+  const pick = req.pick
+  if (!pick || !shiftDue(dir, req, entries, catalog)) return null
   const files = chatPaths(dir, req.chat)
   const current = currentLead(files, entries, catalog, readPlaced(files.placed))
-  if (!mayHaveMoved(entries, current, req.prompt)) return null
-  const pick = pickLead(entries, req.prompt, MESSAGE_BUDGET_MS, {
-    log: { dir, chat: req.chat, at: now },
-  })
   // Only the model moves a lead: the word ranker's guess is too weak to override one already chosen.
   if (pick.path !== 'model' || !pick.id || pick.id === current?.id) return null
   const to = catalog.get(pick.id)

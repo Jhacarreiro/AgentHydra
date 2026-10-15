@@ -1,6 +1,5 @@
 // server/src/hydra-core/lead.ts - who a chat is told to be: one small model call through HSwarm's decide door picks
 // the lead among the five managers (or none), and the word ranker answers when that call fails or runs out of time.
-import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
@@ -36,7 +35,7 @@ export interface Decision {
   error?: string
 }
 
-export type Decider = (q: LeadQuestion, budgetMs: number) => Decision
+export type Decider = (q: LeadQuestion, budgetMs: number) => Promise<Decision>
 
 export interface LeadPick {
   id: string | null
@@ -45,27 +44,23 @@ export interface LeadPick {
   error?: string
 }
 
-/** Asks `o.votes` times at once and answers when a majority agrees, else with the most common answer so far when
- *  every ask is back or the time is up. */
-const CHILD = `let s='';process.stdin.on('data',d=>s+=d).on('end',()=>{const o=JSON.parse(s);let tok;
-try{tok=require('fs').readFileSync(o.tokenFile,'utf8').trim()}catch(e){return done({answer:null,error:'no HSwarm token: '+e.message})}
-const got=[],errs=[];let back=0,over=false;
-function done(v){if(over)return;over=true;process.stdout.write(JSON.stringify(v));process.exit(0)}
-function settle(final){const n={};for(const a of got)n[a]=(n[a]||0)+1;
-const best=got.slice().sort((a,b)=>n[b]-n[a])[0];
-if(best!==undefined&&(n[best]*2>o.votes||final))return done({answer:best,votes:n[best],of:got.length});
-if(final)done({answer:null,error:errs[0]||'no answer'})}
-setTimeout(()=>settle(true),o.ms);
-for(let i=0;i<o.votes;i++)fetch(o.url,{method:'POST',headers:{'content-type':'application/json','x-hswarm-token':tok},body:JSON.stringify(o.body)})
-.then(r=>r.json().then(j=>({r,j}),()=>({r,j:{}}))).then(({r,j})=>{const a=(j.answers||[])[0];
-if(a&&a.answer!=null)got.push(String(a.answer));else errs.push(String((a&&a.error)||j.error||('HTTP '+r.status)).slice(0,200))},
-e=>errs.push(String((e&&e.message)||e).slice(0,200))).then(()=>{back++;settle(back===o.votes)})})`
-
-/** The decide door, called from a child process so the synchronous pack code can hold it to a budget. */
-export function hswarmDecide(q: LeadQuestion, budgetMs: number): Decision {
+/**
+ * The decide door. Asks votesFor(budgetMs) times at once and answers when a majority agrees, else with the most common
+ * answer so far when every ask is back or the time is up. Awaited, never waited on synchronously: the daemon and the
+ * Desk server keep serving while it runs.
+ */
+export async function hswarmDecide(q: LeadQuestion, budgetMs: number): Promise<Decision> {
   const model = process.env.AGENTHYDRA_LEAD_MODEL || DEFAULT_MODEL
   if (model === 'off') return { answer: null, error: 'AGENTHYDRA_LEAD_MODEL=off' }
-  const body = {
+  const tokenFile =
+    process.env.AGENTHYDRA_HSWARM_TOKEN_FILE || join(homedir(), '.hswarm', 'console-token')
+  let token: string
+  try {
+    token = readFileSync(tokenFile, 'utf8').trim()
+  } catch (err) {
+    return { answer: null, error: `no HSwarm token: ${err instanceof Error ? err.message : err}` }
+  }
+  const body = JSON.stringify({
     items: [
       {
         id: 'lead',
@@ -78,35 +73,59 @@ export function hswarmDecide(q: LeadQuestion, budgetMs: number): Decision {
     // Jev answers nothing here, so everything goes to the fallback model at once.
     escalate_below: 1.01,
     fallback_model: model,
-  }
-  const input = JSON.stringify({
-    url: process.env.AGENTHYDRA_DECIDE_URL || DECIDE_URL,
-    tokenFile:
-      process.env.AGENTHYDRA_HSWARM_TOKEN_FILE || join(homedir(), '.hswarm', 'console-token'),
-    ms: Math.max(100, budgetMs - 150),
-    votes: votesFor(budgetMs),
-    body,
   })
-  const r = spawnSync(process.execPath, ['-e', CHILD], {
-    input,
-    timeout: budgetMs,
-    encoding: 'utf8',
-    windowsHide: true,
+  const url = process.env.AGENTHYDRA_DECIDE_URL || DECIDE_URL
+  const votes = votesFor(budgetMs)
+  const abort = new AbortController()
+  const got: string[] = []
+  const errs: string[] = []
+  return await new Promise<Decision>((resolve) => {
+    let back = 0
+    let over = false
+    const done = (d: Decision) => {
+      if (over) return
+      over = true
+      clearTimeout(timer)
+      abort.abort()
+      resolve(d)
+    }
+    const settle = (final: boolean) => {
+      const n = new Map<string, number>()
+      for (const a of got) n.set(a, (n.get(a) ?? 0) + 1)
+      const best = [...n.entries()].sort((a, b) => b[1] - a[1])[0]
+      if (best && (best[1] * 2 > votes || final)) done({ answer: best[0] })
+      else if (final) done({ answer: null, error: errs[0] ?? 'no answer' })
+    }
+    const timer = setTimeout(() => settle(true), Math.max(100, budgetMs - 50))
+    for (let i = 0; i < votes; i++)
+      fetch(url, {
+        method: 'POST',
+        headers: { 'content-type': 'application/json', 'x-hswarm-token': token },
+        body,
+        signal: abort.signal,
+      })
+        .then(async (r) => {
+          const j = (await r.json().catch(() => ({}))) as {
+            answers?: { answer?: unknown; error?: unknown }[]
+            error?: unknown
+          }
+          const a = j.answers?.[0]
+          if (a?.answer != null) got.push(String(a.answer))
+          else errs.push(String(a?.error ?? j.error ?? `HTTP ${r.status}`).slice(0, 200))
+        })
+        .catch((err) => errs.push(String(err instanceof Error ? err.message : err).slice(0, 200)))
+        .finally(() => {
+          back++
+          settle(back === votes)
+        })
   })
-  if (r.error || r.status !== 0)
-    return { answer: null, error: r.error ? `${r.error.message}` : `exit ${r.status}` }
-  try {
-    return JSON.parse(r.stdout) as Decision
-  } catch {
-    return { answer: null, error: 'no answer' }
-  }
 }
 
 const CACHE_MAX = 100
 /** Picks the model made, so a launch that builds its slot twice asks once; a failed call is asked again. */
 const cache = new Map<string, LeadPick>()
 
-const noModel: Decider = () => ({ answer: null, error: 'no model call under test' })
+const noModel: Decider = async () => ({ answer: null, error: 'no model call under test' })
 const defaultDecider = (): Decider => (process.env.NODE_ENV === 'test' ? noModel : hswarmDecide)
 let decider: Decider = defaultDecider()
 
@@ -129,6 +148,11 @@ export function managersOf(entries: Iterable<CatalogEntry>): CatalogEntry[] {
     .sort((a, b) => a.id.localeCompare(b.id))
 }
 
+/** The manager who takes quick one-step asks in any field. */
+export function quickOf(managers: CatalogEntry[]): CatalogEntry | undefined {
+  return managers.find((e) => /quick|floor/i.test(`${e.title ?? ''} ${e.id}`))
+}
+
 /** The manager who takes work spanning several fields. */
 export function coordinatorOf(managers: CatalogEntry[]): CatalogEntry | undefined {
   return managers.find((e) => /coordinat/i.test(`${e.title ?? ''} ${e.id}`))
@@ -138,17 +162,27 @@ const slugOf = (e: CatalogEntry) => e.id.slice(e.id.indexOf(':') + 1)
 
 export function leadQuestion(managers: CatalogEntry[], message: string): LeadQuestion {
   const coord = coordinatorOf(managers)
+  const quick = quickOf(managers)
   const options: Record<string, string> = {
-    none: 'No manager needed: a chore, a quick fact or status, a one-line edit, or a "keep going" / "ok" / "thanks".',
+    none: 'No work in the message: ok, thanks, a greeting, or a bare "keep going" that names no work.',
   }
   for (const m of managers)
     options[slugOf(m)] =
       `${m.name}${m.title ? ` (${m.title})` : ''}: ${m.when}${m === coord ? ' A message spanning several fields is theirs.' : ''}`
   return {
     message,
-    question: `Which manager should lead the work this owner message asks for? A chore, a quick fact or status, a one-line edit or a "keep going" needs no manager: answer none for those, even where a manager's line covers quick asks. Research, a bug or a question inside one field is that field's manager's.${
-      coord ? ` A message spanning several fields is ${coord.name}'s.` : ''
-    }`,
+    question: [
+      'Which manager should lead the work this owner message asks for?',
+      quick
+        ? `A quick ask (a fact, a status, a one-line edit, a single chore) is ${quick.name}'s.`
+        : '',
+      'Answer none only when the message holds no work: ok, thanks, a greeting, a bare "keep going".',
+      `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
+      "Research, a bug or a question inside one field is that field's manager's, and the lead is the field where the fix lives, not where the symptom shows.",
+      coord ? `A message spanning several fields is ${coord.name}'s.` : '',
+    ]
+      .filter(Boolean)
+      .join(' '),
     options,
   }
 }
@@ -177,21 +211,29 @@ export function wordLead(entries: CatalogEntry[], message: string): CatalogEntry
  * The lead for a message: the model's pick among the managers or none, else the word ranker's. A message with no
  * content word ("keep going", "ok") needs no call. `log` appends which path chose.
  */
-export function pickLead(
+export async function pickLead(
   entries: CatalogEntry[],
   message: string,
   budgetMs: number,
   opts: { cache?: boolean; log?: { dir: string; chat: string; at?: Date } } = {},
-): LeadPick {
+): Promise<LeadPick> {
   const key = `${budgetMs}\n${message}`
   const hit = opts.cache === false ? undefined : cache.get(key)
   if (hit) return hit
   const started = performance.now()
   const managers = managersOf(entries)
   let pick: LeadPick
-  if (!contentWords(message).length || !managers.length) pick = { id: null, path: 'words', ms: 0 }
+  if (!contentWords(message).length) pick = { id: null, path: 'words', ms: 0 }
+  // No managers to choose from: the word ranker picks among whoever can be become.
+  else if (!managers.length)
+    pick = { id: wordLead(entries, message)?.id ?? null, path: 'words', ms: 0 }
   else {
-    const d = decider(leadQuestion(managers, message), budgetMs)
+    const d = await decider(leadQuestion(managers, message), budgetMs).catch(
+      (err): Decision => ({
+        answer: null,
+        error: err instanceof Error ? err.message : String(err),
+      }),
+    )
     const ms = Math.round(performance.now() - started)
     const answer = d.answer?.trim().toLowerCase()
     const chosen = managers.find((m) => slugOf(m) === answer)
@@ -229,10 +271,11 @@ export function pickLead(
 const CONTINUE =
   /^(ok(ay)?|yes|yep|sure|go( on| ahead)?|continue|keep going|do it|thanks?|thank you|sounds good|next|proceed)\b/i
 
-/** An owner message worth checking the lead against: three content words or more, not a continuation. */
+/** An owner message worth checking the lead against: three content words or more, or a continuation that names its
+ *  work ("keep going on the ad campaign"); a bare "keep going" or "ok do it" keeps the lead. */
 export function substantive(message: string): boolean {
   const m = message.trim()
-  return contentWords(m).length >= 3 && !(CONTINUE.test(m) && contentWords(m).length < 5)
+  return contentWords(m).length >= (CONTINUE.test(m) ? 2 : 3)
 }
 
 /** The cheap check before a call: the work may have moved when the current lead matches none of the message's

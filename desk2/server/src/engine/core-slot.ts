@@ -3,8 +3,9 @@
 // (server/src/climayte-launch.ts corePromptText) and kept under the Desk chat id, so a new session in the chat (a
 // handoff) keeps its lead. The hook keys the chat's messages by HYDRA_DESK_CHAT_ID, set on its Claude process.
 // placeChat runs in a child (core-place.ts): its imports reach the daemon's config, whose load moves state folders
-// and sets process env, which Desk's own process must not do. About 60ms, once per start.
-import { spawnSync } from 'node:child_process'
+// and sets process env, which Desk's own process must not do. About 60ms, once per start, plus a first launch's lead
+// pick (up to 5 s on the model), awaited so the Desk server never waits on it.
+import { spawn } from 'node:child_process'
 import { join } from 'node:path'
 import { coreDir, coreModeOn, corePlacement } from './hydra-core-mode'
 
@@ -34,11 +35,13 @@ export function coreSlotDue(chat: string, parentId?: string | null): boolean {
   return placement === 'slot' || placement === 'file'
 }
 
-/** The text to append for the chat's pack, or null when it gets none. A pack that cannot be built is logged and left out. */
-export function coreSlot(req: CoreSlotRequest): string | null {
+/** The text to append for the chat's pack, or null when it gets none. A pack that cannot be built is logged and left out.
+ *  Awaited, never a synchronous spawn: a first launch's lead pick may wait seconds on a model, and the Desk server
+ *  serves every other request meanwhile. */
+export async function coreSlot(req: CoreSlotRequest): Promise<string | null> {
   if (!coreSlotDue(req.chat, req.parentId)) return null
   const ask = { ...req, dir: coreDir(), placement: corePlacement() }
-  const r = spawnSync(process.execPath, [PLACE], { input: JSON.stringify(ask), encoding: 'utf8', windowsHide: true, timeout: PLACE_TIMEOUT_MS })
+  const r = await runPlace(JSON.stringify(ask))
   let answer: { text?: unknown; error?: unknown } | null = null
   try {
     answer = JSON.parse(r.stdout.trim().split('\n').at(-1) ?? '')
@@ -46,7 +49,31 @@ export function coreSlot(req: CoreSlotRequest): string | null {
     // floor-ok: an answer that is not JSON is reported below with the child's own error text
   }
   if (typeof answer?.text === 'string') return answer.text
-  const why = typeof answer?.error === 'string' ? answer.error : r.error?.message || r.stderr?.trim().split('\n').at(-1) || `exit ${r.status}`
+  const why = typeof answer?.error === 'string' ? answer.error : r.error || r.stderr.trim().split('\n').at(-1) || `exit ${r.code}`
   console.warn(`[core] chat ${req.chat} starts without its Hydra Core pack: ${why}`)
   return null
+}
+
+/** Runs core-place.ts with `input` on stdin, killed after PLACE_TIMEOUT_MS. Never rejects. */
+function runPlace(input: string): Promise<{ stdout: string; stderr: string; code: number | null; error?: string }> {
+  return new Promise((resolve) => {
+    let stdout = ''
+    let stderr = ''
+    const child = spawn(process.execPath, [PLACE], { windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] })
+    const timer = setTimeout(() => {
+      child.kill()
+      resolve({ stdout, stderr, code: null, error: `no answer in ${PLACE_TIMEOUT_MS} ms` })
+    }, PLACE_TIMEOUT_MS)
+    child.stdout.on('data', (d: Buffer) => { stdout += d })
+    child.stderr.on('data', (d: Buffer) => { stderr += d })
+    child.on('error', (err) => {
+      clearTimeout(timer)
+      resolve({ stdout, stderr, code: null, error: err.message })
+    })
+    child.on('close', (code) => {
+      clearTimeout(timer)
+      resolve({ stdout, stderr, code })
+    })
+    child.stdin.end(input)
+  })
 }

@@ -8,6 +8,7 @@ import { join } from 'node:path'
 import type { Options, Query } from '@anthropic-ai/claude-agent-sdk'
 import type { ChatSummary, DeskSettings } from '@shared/protocol'
 import { ChatRuntime } from '../../../src/engine/chat-runtime'
+import { coreSlot } from '../../../src/engine/core-slot'
 import { ChatStore } from '../../../src/engine/store'
 import { type CoreFixture, coreFixture } from '../../fixtures/hydra-core'
 
@@ -25,11 +26,14 @@ let store: ChatStore
 let core: CoreFixture | null = null
 
 beforeEach(() => {
+  // core-place.ts runs in a child: no lead-pick call leaves this machine under test.
+  process.env.AGENTHYDRA_LEAD_MODEL = 'off'
   home = mkdtempSync(join(tmpdir(), 'desk-core-slot-'))
   store = new ChatStore(home, { debounceMs: 1 })
 })
 
 afterEach(() => {
+  delete process.env.AGENTHYDRA_LEAD_MODEL
   core?.done()
   core = null
   if (home) rmSync(home, { recursive: true, force: true })
@@ -44,8 +48,8 @@ function chat(over: Partial<ChatSummary> = {}): ChatSummary {
   }
 }
 
-/** Sends `text` as the chat's message and returns the options its query was started with. */
-function launch(over: Partial<ChatSummary>, text: string): Options {
+/** Sends `text` as the chat's message and returns the options its query was started with (the slot is placed first, in a child). */
+async function launch(over: Partial<ChatSummary>, text: string): Promise<Options> {
   let seen: Options | undefined
   const rt = new ChatRuntime({
     chat: chat(over),
@@ -60,6 +64,7 @@ function launch(over: Partial<ChatSummary>, text: string): Options {
     agentHydraMcp: null,
   })
   rt.send(text)
+  for (let waited = 0; !seen && waited < 20_000; waited += 10) await Bun.sleep(10)
   if (!seen) throw new Error('the query was not started')
   return seen
 }
@@ -67,9 +72,9 @@ function launch(over: Partial<ChatSummary>, text: string): Options {
 const append = (o: Options) => (o.systemPrompt as { append: string }).append
 const placed = (dir: string) => JSON.parse(readFileSync(join(dir, 'chats', CHAT, 'placement.json'), 'utf8'))
 
-test('a fresh chat under slot gets its slot by Desk chat id, launched with the session placement.json records', () => {
+test('a fresh chat under slot gets its slot by Desk chat id, launched with the session placement.json records', async () => {
   core = coreFixture({ on: true, placement: 'slot' })
-  const o = launch({}, 'sketch the dashboard layout')
+  const o = await launch({}, 'sketch the dashboard layout')
   expect(o.env?.HYDRA_DESK_CHAT_ID).toBe(CHAT)
   expect(append(o)).toContain('Ada Example: invented brief for dashboard layouts.')
   expect(o.sessionId).toMatch(UUID)
@@ -78,10 +83,10 @@ test('a fresh chat under slot gets its slot by Desk chat id, launched with the s
   expect(p.started).toEqual([o.sessionId])
 })
 
-test('a new session in the chat (a handoff) keeps the lead its first message picked', () => {
+test('a new session in the chat (a handoff) keeps the lead its first message picked', async () => {
   core = coreFixture({ on: true, placement: 'slot' })
-  launch({}, 'sketch the dashboard layout')
-  const next = launch({ sessionId: 'b1c2d3e4-0000-4000-8000-000000000001' }, 'now edit the release notes copy')
+  await launch({}, 'sketch the dashboard layout')
+  const next = await launch({ sessionId: 'b1c2d3e4-0000-4000-8000-000000000001' }, 'now edit the release notes copy')
   expect(next.resume).toBe('b1c2d3e4-0000-4000-8000-000000000001')
   expect(next.sessionId).toBeUndefined()
   expect(append(next)).toContain('Ada Example: invented brief for dashboard layouts.')
@@ -89,24 +94,37 @@ test('a new session in the chat (a handoff) keeps the lead its first message pic
   expect(placed(core.dir).started).toContain('b1c2d3e4-0000-4000-8000-000000000001')
 })
 
-test('under file placement the prompt names the pack file', () => {
+test('under file placement the prompt names the pack file', async () => {
   core = coreFixture({ on: true, placement: 'file' })
-  const o = launch({}, 'sketch the dashboard layout')
+  const o = await launch({}, 'sketch the dashboard layout')
   expect(append(o)).toContain(join(core.dir, 'chats', CHAT, 'pack.md'))
   expect(readFileSync(join(core.dir, 'chats', CHAT, 'pack.md'), 'utf8')).toContain('Ada Example')
 })
 
-test('no slot with core mode off, under attach, or for a sub-chat; the chat id still reaches the hook', () => {
+test('no slot with core mode off, under attach, or for a sub-chat; the chat id still reaches the hook', async () => {
   core = coreFixture({ placement: 'slot' })
-  const off = launch({}, 'sketch the dashboard layout')
+  const off = await launch({}, 'sketch the dashboard layout')
   expect(off.env?.HYDRA_DESK_CHAT_ID).toBe(CHAT)
   expect(off.sessionId).toBeUndefined()
   expect(append(off)).not.toContain('Ada Example')
   core.done()
   core = coreFixture({ on: true, placement: 'attach' })
-  expect(append(launch({}, 'sketch the dashboard layout'))).not.toContain('Ada Example')
+  expect(append(await launch({}, 'sketch the dashboard layout'))).not.toContain('Ada Example')
   core.done()
   core = coreFixture({ on: true, placement: 'slot' })
-  expect(append(launch({ parentId: 'a-parent-chat' }, 'sketch the dashboard layout'))).not.toContain('Ada Example')
+  expect(append(await launch({ parentId: 'a-parent-chat' }, 'sketch the dashboard layout'))).not.toContain('Ada Example')
   expect(existsSync(join(core.dir, 'chats', CHAT, 'placement.json'))).toBe(false)
 })
+
+test('the Desk server keeps serving while a chat places its slot: a timer fires before the placement is back', async () => {
+  core = coreFixture({ on: true, placement: 'slot' })
+  const started = performance.now()
+  let placedMs = 0
+  const slot = coreSlot({ chat: CHAT, session: 'c1d2e3f4-0000-4000-8000-000000000002', fresh: true, cwd: 'C:/Users/me/app', prompt: 'sketch the dashboard layout', rest: 0 })
+  void slot.then(() => { placedMs = performance.now() - started })
+  const tickMs = await new Promise<number>((r) => setTimeout(() => r(performance.now() - started), 10))
+  expect(placedMs).toBe(0)
+  expect(tickMs).toBeLessThan(200)
+  expect(await slot).toContain('Ada Example')
+})
+

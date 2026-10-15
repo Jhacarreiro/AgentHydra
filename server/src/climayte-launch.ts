@@ -69,8 +69,15 @@ import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
+import type { LeadPick } from './hydra-core/lead'
 import { chatKeyOk, coreDir } from './hydra-core/paths'
-import { APPEND_MAX, placeChat, placementOf } from './hydra-core/placement'
+import {
+  APPEND_MAX,
+  pickForPlace,
+  placeChat,
+  placementOf,
+  placeNeedsPick,
+} from './hydra-core/placement'
 import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
@@ -694,20 +701,56 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
   return !rel.startsWith('..') && !isAbsolute(rel)
 }
 
+/** Where a Prime chat's pack is placed under core mode's slot or file placement; null when it gets none. */
+function packPlacement(w: CliMayteWorker): 'slot' | 'file' | null {
+  if (!coreModeOn() || roleOf(w) !== 'prime') return null
+  const placement = placementOf(coreDir())
+  return placement === 'slot' || placement === 'file' ? placement : null
+}
+
+/** Lead picks for Prime chats' launches, by worker: made off the launch path, taken by corePromptText. */
+const leadPicks = new Map<string, { prompt: string; pending: boolean; pick?: LeadPick }>()
+
+/**
+ * Whether a Prime chat's launch waits for its lead pick. The scheduler holds the launch (due again next tick) while
+ * the model answers, up to LAUNCH_BUDGET_MS, so launch() stays synchronous and the daemon never waits on the network.
+ * Asked only for a Desk chat whose lead is not kept yet, or a non-Desk chat's first launch (its key is the session
+ * the launch picks).
+ */
+export function leadPickPending(w: CliMayteWorker): boolean {
+  const placement = packPlacement(w)
+  if (!placement) return false
+  const have = leadPicks.get(w.id)
+  if (have && have.prompt === w.prompt) return have.pending
+  const chat = w.desk?.chatId
+  const req = { chat: chat ?? w.id, cwd: w.cwd, prompt: w.prompt, placement }
+  if (chat ? !chatKeyOk(chat) || !placeNeedsPick(coreDir(), req) : w.attempts.length > 0)
+    return false
+  const entry: { prompt: string; pending: boolean; pick?: LeadPick } = {
+    prompt: w.prompt,
+    pending: true,
+  }
+  leadPicks.set(w.id, entry)
+  void pickForPlace(coreDir(), req)
+    .then((pick) => {
+      entry.pick = pick
+    })
+    .catch((err) => console.error(`[climayte] lead pick for ${w.id} failed:`, err))
+    .finally(() => {
+      entry.pending = false
+    })
+  return true
+}
+
 /** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
 function corePromptText(w: CliMayteWorker, cli: CliSession): string {
   const head = [CORE_CHAT_NOTE, w.desk?.append]
   // Keyed as the hook keys it: the Desk chat, else the session being launched (a handoff's new one, not w.sessionId).
   const chat = w.desk?.chatId ?? cli.id
-  const placement = placementOf(coreDir())
-  if (
-    roleOf(w) !== 'prime' ||
-    (placement !== 'slot' && placement !== 'file') ||
-    !chat ||
-    !chatKeyOk(chat)
-  ) {
-    return head.filter(Boolean).join('\n\n')
-  }
+  const placement = packPlacement(w)
+  if (!placement || !chat || !chatKeyOk(chat)) return head.filter(Boolean).join('\n\n')
+  const ready = leadPicks.get(w.id)
+  leadPicks.delete(w.id)
   const placed = placeChat(coreDir(), {
     chat,
     session: cli.id,
@@ -716,6 +759,7 @@ function corePromptText(w: CliMayteWorker, cli: CliSession): string {
     prompt: w.prompt,
     placement,
     room: APPEND_MAX - (head.filter(Boolean).join('\n\n').length + 2),
+    pick: ready?.prompt === w.prompt ? ready.pick : undefined,
   })
   return [...head, placed.text].filter(Boolean).join('\n\n')
 }

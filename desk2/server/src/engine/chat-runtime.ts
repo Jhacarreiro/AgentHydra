@@ -226,6 +226,15 @@ export function mainConfigFile(given: string | null | undefined, agentHydraMcp: 
  * interactive chat would load it as user memory. When the instance's CLAUDE.md is that copy, returns the flag
  * setting that skips it and Jacob's real ~/.claude/CLAUDE.md text to put in the system prompt instead.
  */
+/** The owner's rules as the appended prompt carries them when the account's own CLAUDE.md is swapped out. */
+function rulesText(swap: { real: string } | null): string {
+  return swap ? `
+
+# User instructions (~/.claude/CLAUDE.md)
+
+${swap.real}` : ''
+}
+
 export function workerRulesSwap(configDir: string | null, mainFile: string | null): { excludes: string[]; real: string } | null {
   if (!configDir || !mainFile) return null
   const copy = join(configDir, 'CLAUDE.md')
@@ -286,6 +295,8 @@ export class ChatRuntime {
   private ranCwd: string | null = null
   /** The message a start was made for: a chat's first one is what Hydra Core's slot picks its lead from (core-slot.ts). */
   private launchText: string | null = null
+  /** Hydra Core's slot for this start, placed before the launch by placeSlot, and the session it was placed for. */
+  private slotPlaced: { session: string; text: string | null } | null = null
   /** A turn ended and the folder the session says it is in has not been looked at since. */
   private cwdCheckDue = false
   /** The chat's account changed under a running turn: the runtime ends once the turn is over. */
@@ -426,7 +437,7 @@ export class ChatRuntime {
     if (this.applied.effort) options.effort = this.applied.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
     // A fresh session under Hydra Core's slot starts with an id Desk picks, so placement.json names it as launched with its pack.
-    const session = chat.sessionId ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
+    const session = chat.sessionId ?? this.slotPlaced?.session ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
     if (chat.sessionId) options.resume = chat.sessionId
     else if (session) options.sessionId = session
     if (!chat.sessionId && chat.forkedFrom) {
@@ -441,14 +452,9 @@ export class ChatRuntime {
     const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
     const claudeMdExcludes = [...(swap?.excludes ?? []), ...coreChatExcludes()]
     if (claudeMdExcludes.length || hooks) options.settings = { ...(claudeMdExcludes.length ? { claudeMdExcludes } : {}), ...(hooks ? { hooks } : {}) }
-    const rules = swap ? `
-
-# User instructions (~/.claude/CLAUDE.md)
-
-${swap.real}` : ''
-    const slot = session
-      ? coreSlot({ chat: chat.id, parentId: chat.parentId, session, fresh: !chat.sessionId, cwd: chat.cwd, prompt: this.launchText ?? chat.title ?? '', rest: addOns.append.length + rules.length })
-      : null
+    const rules = rulesText(swap)
+    // Built before the launch (placeSlot), so this synchronous build never waits on Hydra Core's placement.
+    const slot = session && this.slotPlaced?.session === session ? this.slotPlaced.text : null
     if (slot || swap) options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}${slot ? `
 
 ${slot}` : ''}${rules}` }
@@ -474,6 +480,7 @@ ${slot}` : ''}${rules}` }
     this.closeOnIdle = false
     this.ranAs = attach ? { ...attach.hello.account } : { ...this.chat.account }
     this.ranCwd = this.chat.cwd
+    this.slotPlaced = null
     this.sawSessionState = false
     this.liveTasks = null
     this.stopping = false
@@ -512,15 +519,33 @@ ${slot}` : ''}${rules}` }
   }
 
   /**
+   * Places Hydra Core's slot for this start (core-slot.ts runs placeChat in a child, awaited, and its lead pick may
+   * wait seconds on a model), so the Desk server keeps serving meanwhile. Null when the chat gets no slot.
+   */
+  private placeSlot(): Promise<void> | null {
+    this.slotPlaced = null
+    const chat = this.chat
+    if (!coreSlotDue(chat.id, chat.parentId)) return null
+    const session = chat.sessionId ?? randomUUID()
+    const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
+    const rest = addOns.append.length + rulesText(workerRulesSwap(chat.account.configDir, this.mainClaudeJson)).length
+    return coreSlot({ chat: chat.id, parentId: chat.parentId, session, fresh: !chat.sessionId, cwd: chat.cwd, prompt: this.launchText ?? chat.title ?? '', rest })
+      .then((text) => {
+        this.slotPlaced = { session, text }
+      })
+  }
+
+  /**
    * Launches now, or once the connectors' first probe pass has landed (a process started before it would run without
    * their MCP servers); meanwhile the chat stays 'starting' with its sends held, as while the binary downloads.
    */
   private launchSoon(): void {
     const pending = connectorsPending()
-    if (!pending) return this.launch()
+    const slot = this.placeSlot()
+    if (!pending && !slot) return this.launch()
     const wait: { phase: 'waiting' } = { phase: 'waiting' }
     this.binary = wait
-    void pending.then(() => {
+    void Promise.all([pending, slot]).then(() => {
       if (this.binary !== wait) return
       this.binary = null
       this.launch()

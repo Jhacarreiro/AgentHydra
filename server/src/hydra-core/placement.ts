@@ -1,8 +1,9 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import type { LeadPick } from './lead'
 import { appendLog } from './log'
-import { packFor, readPlaced } from './pack'
+import { type PackRequest, packFor, packNeedsPick, pickForPack, readPlaced } from './pack'
 import { chatPaths } from './paths'
 import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 
@@ -39,6 +40,46 @@ export function packLine(file: string): string {
   return `Before you act on any message, read ${file}: it holds this folder's rules and what you need for this chat.`
 }
 
+/** What a launch builds the pack from: the chat's stored lead and first owner message, else this launch's. */
+function placeInput(
+  dir: string,
+  req: { chat: string; cwd: string; prompt: string; placement: 'slot' | 'file' },
+): PackRequest {
+  const old = readPlaced(chatPaths(dir, req.chat).placed)
+  // A placement.json from before the chat kept its inputs: its lead is the person its pack held.
+  const lead =
+    old?.prompt !== undefined ? (old.lead ?? null) : old?.ids.find((id) => id.startsWith('person:'))
+  return {
+    chat: req.chat,
+    session: `placed:${req.placement}:${req.chat}`,
+    cwd: req.cwd,
+    prompt: old?.prompt ?? req.prompt,
+    full: true,
+    lead,
+    dry: true,
+  }
+}
+
+/** Whether a launch of the chat ranks its lead (none kept yet), so pickForPlace would ask the model. */
+export function placeNeedsPick(
+  dir: string,
+  req: { chat: string; cwd: string; prompt: string; placement: 'slot' | 'file' },
+): boolean {
+  return packNeedsPick(dir, placeInput(dir, req))
+}
+
+/**
+ * The model's lead pick a chat's first launch needs (up to LAUNCH_BUDGET_MS), awaited before placeChat so its
+ * synchronous build never waits on the network. Undefined when the chat's lead is already kept.
+ */
+export function pickForPlace(
+  dir: string,
+  req: { chat: string; cwd: string; prompt: string; placement: 'slot' | 'file' },
+  now = new Date(),
+): Promise<LeadPick | undefined> {
+  return pickForPack(dir, placeInput(dir, req), now)
+}
+
 /**
  * Builds a chat's slot.md or pack.md on every launch and returns what the prompt gets. The pack is rebuilt from
  * what the chat keeps in placement.json (its lead and its first owner message), so a pack-code change, an edited
@@ -56,31 +97,17 @@ export function placeChat(
     prompt: string
     placement: 'slot' | 'file'
     room?: number
+    /** The lead the model picked for a first launch, made before by pickForPlace; absent, the word ranker picks. */
+    pick?: LeadPick
   },
   now = new Date(),
 ): PlacedChat {
   const files = chatPaths(dir, req.chat)
   const target = req.placement === 'slot' ? files.slot : files.pack
   const old = readPlaced(files.placed)
-  // A placement.json from before the chat kept its inputs: its lead is the person its pack held.
-  const prompt = old?.prompt ?? req.prompt
-  const lead =
-    old?.prompt !== undefined ? (old.lead ?? null) : old?.ids.find((id) => id.startsWith('person:'))
+  const { prompt } = placeInput(dir, req)
   const build = (cap?: number) =>
-    packFor(
-      dir,
-      {
-        chat: req.chat,
-        session: `placed:${req.placement}:${req.chat}`,
-        cwd: req.cwd,
-        prompt,
-        full: true,
-        lead,
-        cap,
-        dry: true,
-      },
-      now,
-    )
+    packFor(dir, { ...placeInput(dir, req), cap, pick: req.pick }, now)
   let pack = build(req.placement === 'slot' ? SLOT_CAP : undefined)
   if (req.placement === 'slot' && req.room !== undefined && pack.text.length > req.room) {
     const room = Math.max(0, req.room)
