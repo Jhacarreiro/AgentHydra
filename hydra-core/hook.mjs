@@ -18,6 +18,7 @@ import { fileURLToPath } from "node:url";
 export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
 const LEAD_CAP = 20000;
 const TAIL_CHUNK = 1 << 20;
+const NAME_CAP = 60;
 export const PACK_TIMEOUT_MS = 1500;
 const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
 const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
@@ -106,6 +107,15 @@ export function parseHydraMd(text) {
 const NOT_OWNER = /^(<task-notification>|\[[^\]\n]*\] Not from the user\.)/;
 
 const fromOwner = (prompt) => !NOT_OWNER.test(prompt.trimStart());
+
+function promptBlock(key, hydraPath, hydraText) {
+  let state = "none yet";
+  if (hydraText !== null) {
+    const { lead, tier } = parseHydraMd(hydraText);
+    state = `lead ${(lead ?? "none").slice(0, NAME_CAP)}, tier ${tier ?? "?"}`;
+  }
+  return `Hydra Core: before you act on this message, call core_scope { chat: "${key}" } (agenthydra MCP) and answer its questions with core_answer until it says go. hydra.md: ${hydraPath} (${state}).`;
+}
 
 // What AgentHydra wraps around the owner's words before the hook sees them (desk2/server/src/engine/system-text.ts reads
 // the same shapes back out): the Send now and urgent prefaces, a handoff's note and document after the owner's message
@@ -198,19 +208,29 @@ function placementOf(dir) {
   return raw === "slot" || raw === "file" || raw === "attach" ? raw : "off";
 }
 
-// Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had.
+// The `<core>/ASK` setting: absent or anything but "off" means a placed chat is told to scope each owner message.
+function asksOf(dir) {
+  const file = path.join(dir, "ASK");
+  return !existsSync(file) || readFileSync(file, "utf8").trim() !== "off";
+}
+
+// Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had,
+// after the core_scope line when ASK is on (the chat picks its own lead; the owner's ruling 2026-10-15).
 async function placedPrompt(input, env, dir) {
   const prompt = ownerPrompt(input);
   if (!prompt) return null;
-  const { key } = recordPrompt(input, env, dir, prompt);
+  const { key, hydraPath, hydraText } = recordPrompt(input, env, dir, prompt);
+  const scope = asksOf(dir) ? promptBlock(key, hydraPath, hydraText) : null;
+  const join = (text) => (scope && text ? `${scope}\n${text}` : scope || text);
   try {
     const match = await requestPack(
       { chat: key, session: String(input.session_id ?? key), cwd: cwdOf(input), prompt, placement: placementOf(dir) },
       env,
     );
-    return match.text ? output("UserPromptSubmit", match.text) : null;
+    const text = join(match.text);
+    return text ? output("UserPromptSubmit", text) : null;
   } catch (error) {
-    return output("UserPromptSubmit", `Hydra Core pack unavailable: ${error.message}`);
+    return output("UserPromptSubmit", join(`Hydra Core pack unavailable: ${error.message}`));
   }
 }
 

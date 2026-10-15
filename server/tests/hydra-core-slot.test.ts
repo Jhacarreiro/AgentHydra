@@ -72,6 +72,8 @@ const slotReq = (
 beforeEach(() => {
   dir = scratch()
   addRules(dir)
+  // These tests cover ASK off (no core_scope line, a model lead pick and lead shift); a chat asks by default.
+  writeFileSync(join(dir, 'ASK'), 'off')
   savedFetch = globalThis.fetch
 })
 

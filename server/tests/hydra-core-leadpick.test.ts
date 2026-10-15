@@ -30,7 +30,7 @@ import {
   pickForPack,
 } from '../src/hydra-core/pack'
 import { chatPaths } from '../src/hydra-core/paths'
-import { pickForPlace, placeChat } from '../src/hydra-core/placement'
+import { pickForPlace, placeChat, placeNeedsPick } from '../src/hydra-core/placement'
 import { answer, scope } from '../src/hydra-core/tree'
 import { contentWords } from '../src/mcp-find'
 import { scratch, startChat } from './hydra-core-fixture'
@@ -150,6 +150,8 @@ function fiveManagers(dir: string): void {
 beforeEach(() => {
   dir = scratch()
   fiveManagers(dir)
+  // These tests cover ASK off (no core_scope line, a model lead pick and lead shift); a chat asks by default.
+  writeFileSync(join(dir, 'ASK'), 'off')
   asked = []
 })
 afterEach(() => {
@@ -870,5 +872,117 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
     expect(asked).toHaveLength(0)
     const moved = await msg('keep going on the ad campaign, still need the banner copy', 2)
     expect(moved.text).toContain("Lead change: this message is Jay's field")
+  })
+})
+
+describe('ASK on: the chat picks its own lead through core_scope (the owner, 2026-10-15)', () => {
+  const SERVER = 'now add a small server that stores the signups in sqlite'
+  const launch = (chat: string, session: string, prompt = SERVER) =>
+    ({ chat, session, fresh: true, cwd: CWD, prompt, placement: 'slot' }) as const
+  const keepLead = (chat: string, lead: string) => {
+    const files = chatPaths(dir, chat)
+    mkdirSync(files.root, { recursive: true })
+    writeFileSync(
+      files.placed,
+      JSON.stringify({
+        placement: 'slot',
+        hash: 'x',
+        ids: [lead],
+        chars: 1,
+        started: ['old'],
+        lead,
+        prompt: 'make the signup screen layout breathe',
+      }),
+    )
+  }
+
+  beforeEach(() => {
+    rmSync(join(dir, 'ASK'))
+    mockModel(() => 'sam-backend')
+  })
+
+  test("a new chat's launch asks no model and its slot carries no lead", async () => {
+    const req = launch('fresh', 's1')
+    expect(placeNeedsPick(dir, req)).toBe(false)
+    expect(await pickForPlace(dir, req, new Date(T))).toBeUndefined()
+    const slot = await placed(dir, req)
+    expect(slot.text).toContain('Hydra Core attached for this chat and message:')
+    expect(slot.text).not.toContain('Lead for this message')
+    expect(asked).toHaveLength(0)
+    expect(logOf(dir).some((e) => e.event === 'lead-pick')).toBe(false)
+    expect(JSON.parse(readFileSync(chatPaths(dir, 'fresh').placed, 'utf8')).lead).toBeNull()
+  })
+
+  test("the persona the chat picks through core_scope lands in hydra.md and the next launch's slot carries it", async () => {
+    const chat = 'chat-example-tree'
+    const first = await placed(dir, launch(chat, 's1', 'Rebuild the dashboard layout'))
+    expect(first.text).not.toContain('Lead for this message')
+    startChat(dir, chat, 'Rebuild the dashboard layout')
+    scope(dir, chat, new Date(T))
+    for (const a of [
+      'yes: rebuild the dashboard layout',
+      'delegate',
+      '3',
+      '2',
+      'dashboard',
+      '1',
+      'none',
+      'dashboard',
+      '1',
+      'Lay out the grid.',
+    ])
+      answer(dir, chat, { answer: a }, new Date(T))
+    expect(readFileSync(chatPaths(dir, chat).hydraMd, 'utf8')).toContain('Iris Example')
+    const next = await placed(
+      dir,
+      launch(chat, 's2', 'Rebuild the dashboard layout'),
+      new Date(T + 5),
+    )
+    expect(next.text).toContain(
+      'Lead for this message: Iris Example\n\nIris Example: full persona text.',
+    )
+    expect(asked).toHaveLength(0)
+  })
+
+  test('a chat whose placement.json already stores a lead keeps it', async () => {
+    keepLead('kept', 'person:ivy-ui')
+    expect(placeNeedsPick(dir, launch('kept', 's2'))).toBe(false)
+    const slot = await placed(dir, launch('kept', 's2'))
+    expect(slot.text).toContain('Lead for this message: Ivy\n\nIvy brief')
+    expect(asked).toHaveLength(0)
+  })
+
+  test('a per-message match moves no lead and asks no model', async () => {
+    keepLead('stay', 'person:ivy-ui')
+    await placed(dir, launch('stay', 's1', 'make the signup screen layout breathe'))
+    const req = {
+      chat: 'stay',
+      session: 's1',
+      cwd: CWD,
+      prompt: SERVER,
+      placement: 'slot',
+    } as const
+    expect(await pickForMatch(dir, req, new Date(T + 1))).toBeUndefined()
+    const got = await matched(dir, req, new Date(T + 1))
+    expect(got.text).not.toContain('Lead change')
+    expect(got.ids).not.toContain('person:sam-backend')
+    expect(existsSync(chatPaths(dir, 'stay').hydraMd)).toBe(false)
+    expect(logOf(dir).some((e) => e.event === 'lead-shift')).toBe(false)
+    expect(asked).toHaveLength(0)
+  })
+
+  test('a session the slot did not start gets the full pack with no lead ranked', async () => {
+    const req = {
+      chat: 'bare',
+      session: 'other',
+      cwd: CWD,
+      prompt: SERVER,
+      placement: 'slot',
+    } as const
+    expect(await pickForMatch(dir, req, new Date(T))).toBeUndefined()
+    const got = await matched(dir, req)
+    expect(got.text).toContain('Hydra Core attached for this chat and message:')
+    expect(got.text).not.toContain('Lead for this message')
+    expect(asked).toHaveLength(0)
   })
 })

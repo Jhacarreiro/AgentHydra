@@ -4,7 +4,7 @@ import { dirname, resolve } from 'node:path'
 import { logRoute } from '../manager-analytics/route-log'
 import type { LeadPick } from './lead'
 import { appendLog } from './log'
-import { type PackRequest, packFor, packNeedsPick, pickForPack, readPlaced } from './pack'
+import { asksOf, type PackRequest, packFor, packNeedsPick, pickForPack, readPlaced } from './pack'
 import { chatPaths } from './paths'
 import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 
@@ -48,8 +48,10 @@ function placeInput(
 ): PackRequest {
   const old = readPlaced(chatPaths(dir, req.chat).placed)
   // A placement.json from before the chat kept its inputs: its lead is the person its pack held.
-  const lead =
+  const kept =
     old?.prompt !== undefined ? (old.lead ?? null) : old?.ids.find((id) => id.startsWith('person:'))
+  // A new chat that asks ranks no lead at launch: it picks its own through core_scope (the owner's ruling 2026-10-15).
+  const lead = !old && asksOf(dir) ? null : kept
   return {
     chat: req.chat,
     session: `placed:${req.placement}:${req.chat}`,

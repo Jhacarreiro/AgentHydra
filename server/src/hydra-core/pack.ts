@@ -47,6 +47,13 @@ function pointable(fb: Feedback | null, e: CatalogEntry, score: number): boolean
 
 const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
 
+/** The `<core>/ASK` setting: absent or anything but `off` means a slot or file chat picks its own lead through
+ *  core_scope, so no model picks or shifts one (the owner's ruling 2026-10-15). */
+export function asksOf(dir: string): boolean {
+  const file = join(dir, 'ASK')
+  return !existsSync(file) || readFileSync(file, 'utf8').trim() !== 'off'
+}
+
 export type PackMode = 'first' | 'full' | 'delta'
 
 export interface PlacedRequest {
@@ -533,6 +540,8 @@ export async function pickForMatch(
   req: PlacedRequest,
   now = new Date(),
 ): Promise<LeadPick | undefined> {
+  // The chat picks its own lead through core_scope: no model pick or shift.
+  if (asksOf(dir)) return undefined
   if (packsWhole(dir, req))
     return pickForPack(
       dir,
@@ -560,10 +569,20 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
   const files = chatPaths(dir, req.chat)
   const sent = readSent(files.sent)
   const placed = readPlaced(files.placed)
+  const asks = asksOf(dir)
   if (packsWhole(dir, req)) {
+    // Asking, the pack ranks no lead (a hydra.md lead still wins): the chat picks its own through core_scope.
+    const lead = asks ? null : undefined
     const pack = packFor(
       dir,
-      { chat: req.chat, session: req.session, cwd: req.cwd, prompt: req.prompt, pick: req.pick },
+      {
+        chat: req.chat,
+        session: req.session,
+        cwd: req.cwd,
+        prompt: req.prompt,
+        lead,
+        pick: req.pick,
+      },
       now,
     )
     return { text: pack.text, ids: pack.ids, chars: pack.text.length }
@@ -577,7 +596,8 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
   const mainIds = new Set(mainRules(folderAll).map((e) => e.id))
   const foreign = foreignTo(req.cwd)
 
-  const shift = leadShift(dir, req, entries, catalog, now)
+  // Asking, no lead shift runs: the chat's own core_scope pick is its lead.
+  const shift = asks ? null : leadShift(dir, req, entries, catalog, now)
   if (shift) seen.add(shift.to)
   const cap = shift
     ? Math.max(0, Math.min(MATCH_CAP, TOTAL_CAP - shift.note.length - 2))
