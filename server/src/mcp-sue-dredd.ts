@@ -119,17 +119,18 @@ const ENTRY: Record<Engine, string> = {
   dredd: join('dredd', 'dredd.mjs'),
 }
 
-/** The folder holding `engine`: SUE_DREDD_HOME when it has the engine, else the in-repo engines/ folder. */
+/** The folder holding `engine`: SUE_DREDD_HOME when it has the engine, else the in-repo engines/ folder, else a sue-dredd folder beside the checkout. */
 export function resolveCheckout(engine: Engine, env: SueDreddDeps['env'], appRoot: string): string {
   const fromEnv = str(env.SUE_DREDD_HOME).trim()
   const inRepo = join(resolve(appRoot), 'engines')
-  const tried = fromEnv ? [resolve(fromEnv), inRepo] : [inRepo]
+  const beside = join(resolve(appRoot), '..', 'sue-dredd')
+  const tried = fromEnv ? [resolve(fromEnv), inRepo, beside] : [inRepo, beside]
   for (const home of tried) if (existsSync(join(home, ENTRY[engine]))) return home
   const env_ = fromEnv
     ? `SUE_DREDD_HOME (${resolve(fromEnv)}) has no ${ENTRY[engine]}`
     : 'SUE_DREDD_HOME is not set'
   throw new Error(
-    `${engine} runs from the engines/ folder of the AgentHydra checkout, and it was not found: ${env_}, and ${inRepo} has no ${ENTRY[engine]}. ` +
+    `${engine} runs from the engines/ folder of the AgentHydra checkout, and it was not found: ${env_}, and ${inRepo} has no ${ENTRY[engine]}, and sue-dredd has no ${ENTRY[engine]} beside it. ` +
       'Reinstall AgentHydra, or set SUE_DREDD_HOME to a folder holding the engine. Nothing ran.',
   )
 }
