@@ -76,6 +76,31 @@ export function words(text: string): string[] {
     .filter((w) => w.length > 1 && !STOP.has(w))
 }
 
+/** English function words plus the filler of a chat message ("what", "into", "start", "keep going"): words that
+ *  say nothing about which entry or which field a message needs. */
+export const CONTENT_STOP = new Set([
+  ...STOP,
+  ...`about above after again against all almost also am among any anyone anything are aren around as ask asked at
+  away back be because been before being below best better between both but by came cannot could couldn did didn
+  does doesn doing don done down during each else enough etc even ever every everything few first from further
+  get gets getting give go goes going gone good got great had hasn has have haven having he her here hers him his
+  however if into isn its itself just keep kind know last left let lets like ll made make makes making many
+  may maybe might mine more most much must need needs new next no nor not now off ok okay old once one only onto
+  other others our ours out over own please put quite rather re really right said same say see seem seems she
+  should shouldn since so some something soon still such sure take tell than thank thanks that's their theirs them
+  then there these they thing things think those though through thus till too try two under until up upon us use
+  used using ve very via want wants was wasn way we well went were weren what whats when where whether which while
+  who whom whose why will won would wouldn yes yet you your yours yourself start started work working works find
+  found run running stuff continue proceed lot lots time today tomorrow yesterday week day hour long already again`.split(
+    /\s+/,
+  ),
+])
+
+/** The content words of a text: `words` without CONTENT_STOP. */
+export function contentWords(text: string): string[] {
+  return words(text).filter((w) => !CONTENT_STOP.has(w))
+}
+
 /** The first sentence of a description, without the MUTATES: tag, for a one-line summary. */
 function summary(description: string): string {
   const d = description.replace(/^MUTATES:\s*/, '').replace(/^READ-ONLY:\s*/, '')

@@ -268,7 +268,7 @@ describe('matchFor', () => {
     expect(later.text).not.toContain('Hydra Core attached')
   })
 
-  test('an entry with no text is a pointer, never an empty block, and inline matches are capped at five', () => {
+  test('an entry with no text is a pointer, never an empty block, and a message gets at most three matches', () => {
     const quota: unknown[] = []
     for (let i = 0; i < 8; i++) {
       writeFileSync(join(dir, `quota-${i}.md`), `Quota note ${i}: invented widget quota is ${i}.\n`)
@@ -283,15 +283,15 @@ describe('matchFor', () => {
         load: { type: 'file', path: join(dir, `quota-${i}.md`) },
       })
     }
-    for (let i = 0; i < 3; i++)
+    for (let i = 0; i < 1; i++)
       quota.push({
         id: `instrument:empty-${i}`,
         kind: 'instrument',
-        name: `Empty ${i}`,
+        name: `Quota empty ${i}`,
         when: 'Quota notes for the invented widget',
         tags: ['widget'],
         cost: 'free',
-        how: 'no text',
+        how: 'the quota note has no text',
         load: { type: 'none' },
       })
     writeFileSync(join(dir, 'catalog', 'hand-quota-fixture.json'), JSON.stringify(quota))
@@ -312,12 +312,12 @@ describe('matchFor', () => {
       new Date(T + 1),
     )
     const headers = got.text.match(/^--- .*$/gm) ?? []
-    expect(headers.length).toBe(5)
+    expect(headers.length).toBe(2)
     for (const header of headers) expect(header).toMatch(/^--- knowledge:quota-\d /)
     expect(got.text).not.toMatch(/^--- instrument:/m)
     expect(got.text).toMatch(/- instrument:empty-\d - Quota notes/)
     expect(got.text).toContain('Also matching (core_find { need, chat } loads any of them):')
-    expect(got.ids.length).toBe(10)
+    expect(got.ids.length).toBe(3)
     expect(got.chars).toBeLessThanOrEqual(2000)
   })
 

@@ -1,10 +1,22 @@
 import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
-import { type CatalogEntry, LEAD_TIERS, loadCatalog, loadRef, loadText } from './catalog'
-import { rankEntries } from './find'
+import { contentWords } from '../mcp-find'
+import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
+import { detailOf, rankEntries, terms } from './find'
 import { leadName, parseHydra } from './hydra-md'
+import {
+  LAUNCH_BUDGET_MS,
+  leadNote,
+  MESSAGE_BUDGET_MS,
+  mayHaveMoved,
+  pickLead,
+  recordLead,
+  substantive,
+  wordLead,
+} from './lead'
 import { appendLog } from './log'
 import { chatPaths } from './paths'
+import { seatOf } from './seats'
 import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 import { folderKnowledgeOf, mainRules } from './tree'
 
@@ -13,12 +25,15 @@ const INLINE_MATCHES = 3
 const MATCH_MIN = 4
 /** A match is pasted in full only this strong (a name hit or several); weaker ones go as one-line pointers. */
 const INLINE_MIN = 20
-const LEAD_MIN = 4
 /** What a slot or file chat gets per message from the hook: strong matches only, at most this many characters. */
 export const MATCH_CAP = 2000
 /** Per message: at most this many full texts, then at most MATCH_POINTERS one-line pointers. */
-const MATCH_INLINE = 5
-const MATCH_POINTERS = 5
+const MATCH_INLINE = 3
+const MATCH_POINTERS = 3
+/** A per-message match needs a word of the message in its name or title (or this score), two distinct content
+ *  words of the message, and a message of at least MATCH_WORDS content words. */
+const MATCH_STRONG = 10
+const MATCH_WORDS = 3
 const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
 
 export type PackMode = 'first' | 'full' | 'delta'
@@ -55,6 +70,9 @@ export interface PackRequest {
   cap?: number
   /** Build the text only: no sent.json and no log line (the slot writes its own). */
   dry?: boolean
+  /** How long the lead pick may wait for the model; absent, a dry build (a launch) waits LAUNCH_BUDGET_MS, any
+   *  other pack MESSAGE_BUDGET_MS, since the hook is waiting for it. */
+  leadMs?: number
 }
 
 export interface Pack {
@@ -72,8 +90,33 @@ export interface Pack {
 interface Sections {
   folder: string
   lead: string
+  seats: string
   inline: string[]
   pointers: string[]
+}
+
+const norm = (s: string) => s.replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+
+/** An entry filed under folders, none of which holds the chat's folder, belongs to another project; one filed
+ *  nowhere fits every folder. */
+function foreignTo(cwd: string): (e: CatalogEntry) => boolean {
+  const here = norm(cwd)
+  return (e) => {
+    const folders = e.folders ?? []
+    return (
+      folders.length > 0 &&
+      !(here && folders.some((f) => here === norm(f) || here.startsWith(`${norm(f)}/`)))
+    )
+  }
+}
+
+/** The personas seated under this chat, read through the seat roster, so a handoff knows whom it consulted. */
+function seatsLine(dir: string, chat: string, entries: CatalogEntry[]): string {
+  const seated = entries.filter(
+    (e) => e.kind === 'person' && seatOf(dir, { key: chat, aliases: [] }, e),
+  )
+  if (!seated.length) return ''
+  return `Seats in this chat: ${seated.map((e) => `${e.name} (${e.id})`).join(', ')}; resume one with core_use { chat: "${chat}", id: "<person id>", mode: "consult" }.`
 }
 
 function cutHead(body: string, room: number, where: string): { text: string; kept: number } {
@@ -162,9 +205,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const main = mainRules(folderAll)
   const mainIds = new Set(main.map((e) => e.id))
   const folder = main.filter((e) => fresh(e.id))
-  // An entry filed under other folders belongs to another project; one filed nowhere fits every folder.
-  const here = new Set(folderAll.map((e) => e.id))
-  const foreign = (e: CatalogEntry) => (e.folders ?? []).length > 0 && !here.has(e.id)
+  const foreign = foreignTo(req.cwd)
 
   const matches = rankEntries(entries, req.prompt).filter(
     (s) =>
@@ -182,14 +223,21 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
 
   const hydra = hydraLead(files.hydraMd)
   const fixed = !hydra && req.lead !== undefined
-  const persona =
+  // A first pack asks the model (a launch may wait longer than the hook); a later one keeps to the word ranker.
+  const personaId =
     hydra || fixed
       ? undefined
-      : rankEntries(entries, req.prompt, {
-          kinds: ['person'],
-          mode: 'become',
-          tiers: LEAD_TIERS,
-        })[0]
+      : mode === 'delta'
+        ? wordLead(entries, req.prompt)?.id
+        : pickLead(
+            entries,
+            req.prompt,
+            req.leadMs ?? (req.dry ? LAUNCH_BUDGET_MS : MESSAGE_BUDGET_MS),
+            {
+              log: { dir, chat: req.chat, at: now },
+            },
+          ).id
+  const persona = personaId ? catalog.get(personaId) : undefined
   const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
   let lead: { id: string; name: string; text: string } | null = null
   if (hydra) {
@@ -197,12 +245,8 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     if (fresh(id)) lead = { id, name: hydra.name, text: leadFileText(hydra.path) }
   } else if (chosen && fresh(chosen.id))
     lead = { id: chosen.id, name: chosen.name, text: loadText(chosen) }
-  else if (persona && persona.score >= LEAD_MIN && fresh(persona.entry.id))
-    lead = {
-      id: persona.entry.id,
-      name: persona.entry.name,
-      text: loadText(persona.entry),
-    }
+  else if (persona && fresh(persona.id))
+    lead = { id: persona.id, name: persona.name, text: loadText(persona) }
 
   const frame = (parts: string[]) =>
     mode === 'delta'
@@ -215,7 +259,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
           `More is one core_find { need: "<what you need>", chat: "${req.chat}" } away; no other manager call is needed.`,
         ].join('\n\n')
   const parts = (s: Sections) =>
-    [s.folder, ...matchParts(s.inline, s.pointers), s.lead].filter(Boolean)
+    [s.folder, ...matchParts(s.inline, s.pointers), s.lead, s.seats].filter(Boolean)
   const cap = req.cap ?? TOTAL_CAP
   const fits = (s: Sections) => frame(parts(s)).length <= cap
   const leadFull = lead ? `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd() : ''
@@ -226,7 +270,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   // fill it: every manager brief is longer than the attach cap, so rules first left the lead a pointer.
   const reserved = req.cap && lead ? (frame([leadFull]).length <= cap ? leadFull : leadPointer) : ''
 
-  let s: Sections = { folder: '', lead: '', inline: [], pointers: [] }
+  let s: Sections = { folder: '', lead: '', seats: '', inline: [], pointers: [] }
   const ids: string[] = []
 
   if (folder.length) {
@@ -255,6 +299,9 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
       owed = lead.id
     }
   }
+
+  const seats = mode === 'delta' ? '' : seatsLine(dir, req.chat, entries)
+  if (seats && fits({ ...s, seats })) s = { ...s, seats }
 
   const overflow: CatalogEntry[] = []
   const inlineIds: string[] = []
@@ -328,45 +375,70 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
     return { text: pack.text, ids: pack.ids, chars: pack.text.length }
   }
 
-  const entries = [...loadCatalog(dir).entries.values()]
-  const seen = new Set([...(sent[req.session] ?? []), ...(inPrompt ? (placed?.ids ?? []) : [])])
+  const catalog = loadCatalog(dir).entries
+  const entries = [...catalog.values()]
+  // What the chat's slot holds is never sent again, in any session of the chat.
+  const seen = new Set([...(sent[req.session] ?? []), ...(placed?.ids ?? [])])
   const folderAll = folderKnowledgeOf(entries, req.cwd)
   const mainIds = new Set(mainRules(folderAll).map((e) => e.id))
-  const here = new Set(folderAll.map((e) => e.id))
-  const foreign = (e: CatalogEntry) => (e.folders ?? []).length > 0 && !here.has(e.id)
+  const foreign = foreignTo(req.cwd)
 
-  const hits = rankEntries(entries, req.prompt).filter(
-    (s) =>
-      s.score >= MATCH_MIN &&
-      s.entry.kind !== 'person' &&
-      !mainIds.has(s.entry.id) &&
-      !foreign(s.entry) &&
-      !seen.has(s.entry.id),
-  )
+  const shift = leadShift(dir, req, entries, catalog, now)
+  if (shift) seen.add(shift.to)
+  const cap = shift
+    ? Math.max(0, Math.min(MATCH_CAP, TOTAL_CAP - shift.note.length - 2))
+    : MATCH_CAP
+
+  const need = terms(req.prompt, true)
+  const scores: Record<string, number> = {}
+  const hits =
+    contentWords(req.prompt).length < MATCH_WORDS
+      ? []
+      : rankEntries(entries, req.prompt, { content: true }).filter((s) => {
+          if (
+            s.score < MATCH_MIN ||
+            s.entry.kind === 'person' ||
+            mainIds.has(s.entry.id) ||
+            foreign(s.entry) ||
+            seen.has(s.entry.id)
+          )
+            return false
+          const d = detailOf(s.entry, need)
+          return (d.strong || s.score >= MATCH_STRONG) && new Set(d.hits).size >= 2
+        })
   const inline: string[] = []
   const pointers: string[] = []
   const ids: string[] = []
-  for (const { entry } of hits) {
-    if (loadText(entry).trim() && inline.length < MATCH_INLINE) {
+  for (const { entry, score } of hits) {
+    if (ids.length >= MATCH_INLINE) break
+    if (loadText(entry).trim()) {
       const next = matchText([...inline, entryBlock(entry)], pointers)
-      if (next.length <= MATCH_CAP) {
+      if (next.length <= cap) {
         inline.push(entryBlock(entry))
         ids.push(entry.id)
+        scores[entry.id] = Math.round(score * 10) / 10
         continue
       }
     }
     if (pointers.length < MATCH_POINTERS) {
       const line = `- ${entry.id} - ${entry.when} (${loadRef(entry)})`
-      if (matchText(inline, [...pointers, line]).length <= MATCH_CAP) {
+      if (matchText(inline, [...pointers, line]).length <= cap) {
         pointers.push(line)
         ids.push(entry.id)
+        scores[entry.id] = Math.round(score * 10) / 10
       }
     }
   }
-  const text = ids.length ? matchText(inline, pointers) : ''
+  const adds = ids.length ? matchText(inline, pointers) : ''
+  const text = shift
+    ? [shift.note, adds.replace(/^Hydra Core, new for this message:\n\n/, '')]
+        .filter(Boolean)
+        .join('\n\n')
+    : adds
+  const sentIds = [...ids, ...(shift ? [shift.to] : [])]
 
-  if (ids.length) {
-    sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...ids])]
+  if (sentIds.length) {
+    sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...sentIds])]
     writeSent(files.sent, sent)
   }
   appendLog(
@@ -379,8 +451,63 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
       placement: req.placement,
       chars: text.length,
       ids,
+      scores,
+      ...(shift ? { lead: shift.to } : {}),
     },
     now,
   )
-  return { text, ids, chars: text.length }
+  return { text, ids: sentIds, chars: text.length }
+}
+
+/** The chat's current lead: its hydra.md lead, else the one its slot was built with. */
+function currentLead(
+  files: ReturnType<typeof chatPaths>,
+  entries: CatalogEntry[],
+  catalog: Map<string, CatalogEntry>,
+  placed: Placed | null,
+): CatalogEntry | null {
+  const hydra = hydraLead(files.hydraMd)
+  if (hydra) return hydraLeadEntry(entries, hydra.path, hydra.name) ?? null
+  return placed?.lead ? (catalog.get(placed.lead) ?? null) : null
+}
+
+/**
+ * On a substantive owner message, whether the work moved to another manager's field: a cheap word check first,
+ * then the model within the hook's budget (a timeout keeps the current lead). A move becomes the chat's lead in
+ * hydra.md, so the next launch's slot carries the new brief, and this message gets a lead-change note.
+ */
+function leadShift(
+  dir: string,
+  req: PlacedRequest,
+  entries: CatalogEntry[],
+  catalog: Map<string, CatalogEntry>,
+  now: Date,
+): { to: string; note: string } | null {
+  if (!substantive(req.prompt)) return null
+  const files = chatPaths(dir, req.chat)
+  const current = currentLead(files, entries, catalog, readPlaced(files.placed))
+  if (!mayHaveMoved(entries, current, req.prompt)) return null
+  const pick = pickLead(entries, req.prompt, MESSAGE_BUDGET_MS, {
+    log: { dir, chat: req.chat, at: now },
+  })
+  // Only the model moves a lead: the word ranker's guess is too weak to override one already chosen.
+  if (pick.path !== 'model' || !pick.id || pick.id === current?.id) return null
+  const to = catalog.get(pick.id)
+  if (!to) return null
+  const note = leadNote(current, to, req.chat)
+  recordLead(files.hydraMd, to, now)
+  appendLog(
+    dir,
+    {
+      event: 'lead-shift',
+      chat: req.chat,
+      session: req.session,
+      from: current?.id ?? null,
+      to: to.id,
+      ms: pick.ms,
+      chars: note.length,
+    },
+    now,
+  )
+  return { to: to.id, note: `Hydra Core, new for this message:\n\n${note}` }
 }

@@ -1,4 +1,4 @@
-import { SYNONYMS, words } from '../mcp-find'
+import { contentWords, SYNONYMS, words } from '../mcp-find'
 import type { CatalogEntry, Kind } from './catalog'
 
 export interface FindOpts {
@@ -8,6 +8,12 @@ export interface FindOpts {
   tiers?: readonly string[]
   start?: number
   limit?: number
+  /** Drop CONTENT_STOP words from the need (filler such as what, into, every, its). */
+  content?: boolean
+  /** Leave the `how` line out of the score: it is one template shared by every person. */
+  noHow?: boolean
+  /** Keep only matches this strong, then rank by score before tier, so tier order only breaks ties. */
+  min?: number
 }
 
 export interface Match {
@@ -38,9 +44,9 @@ const CORE_SYNONYMS: Record<string, string[]> = {
   pages: ['screen', 'layout', 'ui'],
 }
 
-function terms(need: string): Map<string, number> {
+export function terms(need: string, content = false): Map<string, number> {
   const out = new Map<string, number>()
-  for (const w of words(need)) {
+  for (const w of content ? contentWords(need) : words(need)) {
     out.set(w, 1)
     for (const s of [...(SYNONYMS[w] ?? []), ...(CORE_SYNONYMS[w] ?? [])])
       out.set(s, Math.max(out.get(s) ?? 0, 0.6))
@@ -49,17 +55,34 @@ function terms(need: string): Map<string, number> {
 }
 
 /** A word in the name weighs 5, in the title, tags or when 2, in the how 1; synonyms count at 0.6. */
-export function scoreEntry(e: CatalogEntry, need: Map<string, number>): number {
+export function scoreEntry(e: CatalogEntry, need: Map<string, number>, noHow = false): number {
+  return detailOf(e, need, noHow).score
+}
+
+export interface Detail {
+  score: number
+  /** The need's own words (not synonyms) found in the entry's name, title, tags or when. */
+  hits: string[]
+  /** A word of the need is in the entry's name or title. */
+  strong: boolean
+}
+
+export function detailOf(e: CatalogEntry, need: Map<string, number>, noHow = false): Detail {
   const name = new Set(words(e.name))
+  const title = new Set(words(e.title ?? ''))
   const near = new Set(words([e.title ?? '', e.tags.join(' '), e.when].join(' ')))
-  const how = new Set(words(e.how))
+  const how = new Set(noHow ? [] : words(e.how))
   let score = 0
+  let strong = false
+  const hits: string[] = []
   for (const [w, tw] of need) {
     if (name.has(w)) score += 5 * tw
     if (near.has(w)) score += 2 * tw
     if (how.has(w)) score += tw
+    if (tw === 1 && (name.has(w) || near.has(w))) hits.push(w)
+    if (tw === 1 && (name.has(w) || title.has(w))) strong = true
   }
-  return score
+  return { score, hits, strong }
 }
 
 export interface Scored {
@@ -73,7 +96,7 @@ export function rankEntries(
   need: string,
   opts: FindOpts = {},
 ): Scored[] {
-  const t = terms(need)
+  const t = terms(need, opts.content)
   const scored: { entry: CatalogEntry; rank: number; score: number }[] = []
   if (t.size)
     for (const e of entries) {
@@ -81,11 +104,13 @@ export function rankEntries(
       if (opts.mode && !modesOf(e).includes(opts.mode)) continue
       const rank = opts.tiers ? opts.tiers.indexOf(e.tier ?? '') : 0
       if (rank < 0) continue
-      const score = scoreEntry(e, t)
-      if (score > 0) scored.push({ entry: e, rank, score })
+      const score = scoreEntry(e, t, opts.noHow)
+      if (score > 0 && score >= (opts.min ?? 0)) scored.push({ entry: e, rank, score })
     }
-  scored.sort(
-    (a, b) => a.rank - b.rank || b.score - a.score || a.entry.id.localeCompare(b.entry.id),
+  scored.sort((a, b) =>
+    opts.min !== undefined
+      ? b.score - a.score || a.rank - b.rank || a.entry.id.localeCompare(b.entry.id)
+      : a.rank - b.rank || b.score - a.score || a.entry.id.localeCompare(b.entry.id),
   )
   return scored.map(({ entry, score }) => ({ entry, score }))
 }

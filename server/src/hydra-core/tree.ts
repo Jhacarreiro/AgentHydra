@@ -385,6 +385,13 @@ function finishPlan(ctx: Ctx, state: RunState, prev: HydraDoc | null, plan: stri
     const e = ctx.cat.get(p.id)
     if (e) addPick(doc, e, p.mode)
   }
+  // Logged as core_use become logs, so both ways a lead is chosen are counted alike.
+  if (lead && prev?.lead !== doc.lead)
+    appendLog(
+      ctx.dir,
+      { chat: ctx.chat, event: 'use', mode: 'become', id: lead.id, via: 'tree' },
+      ctx.now,
+    )
   return end(ctx, state, doc, 'hydra', { become: lead ? loadText(lead) : null })
 }
 
