@@ -59,6 +59,35 @@ const NOT_OWNER = /^(<task-notification>|\[[^\]\n]*\] Not from the user\.)/;
 
 const fromOwner = (prompt) => !NOT_OWNER.test(prompt.trimStart());
 
+// What AgentHydra wraps around the owner's words before the hook sees them (desk2/server/src/engine/system-text.ts reads
+// the same shapes back out): the Send now and urgent prefaces, a handoff's note and document after the owner's message
+// (climayte-lib continuationPrompt), and task notifications or reminders queued with the message.
+const SENT_NOW = /^\s*\[Sent now: [^\]\n]*\]\s*\n/;
+const URGENT = /^\s*AgentHydra stopped your previous turn mid-step to deliver this message from the orchestrator\.[^\n]*\n\n/;
+const CONTINUED = /\n\n---\nAn earlier session already worked on this task /;
+const CONTINUED_MESSAGES =
+  /\n\nThe orchestrator also sent these messages, which the earlier session did not get to:\n([\s\S]*?)\n\n--- HANDOFF ---\n/;
+const QUEUED = /<(task-notification|system-reminder)>[\s\S]*?<\/\1>/g;
+
+/** The owner's own words in a prompt: what the per-message additions are scored on and prompt.txt records. */
+export function ownerText(prompt) {
+  let text = prompt.replace(SENT_NOW, "").replace(URGENT, "");
+  const at = text.search(CONTINUED);
+  if (at >= 0) {
+    const list = CONTINUED_MESSAGES.exec(text.slice(at))?.[1]?.trim() ?? "";
+    const later = list ? list.replace(/^- /, "").split("\n- ").map((m) => m.trim()) : [];
+    text = [text.slice(0, at), ...later].filter(Boolean).join("\n\n");
+  }
+  return text.replace(QUEUED, "").trim();
+}
+
+// A prompt the hook acts on, as the owner's words; null for a command, a ping, or nothing left once the wrappers go.
+function ownerPrompt(input) {
+  const prompt = String(input.prompt ?? "");
+  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  return ownerText(prompt) || null;
+}
+
 function sessionText(hydraPath, hydraText) {
   const { leadPath } = parseHydraMd(hydraText);
   let text = `Hydra Core: this chat's hydra.md (${hydraPath}):\n\n${hydraText.trimEnd()}`;
@@ -89,10 +118,24 @@ function recordPrompt(input, env, dir, prompt) {
 }
 
 function userPromptSubmit(input, env, dir) {
-  const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
   recordPrompt(input, env, dir, prompt);
   return null;
+}
+
+// A compaction drops the additions the session was sent (the slot stays: it is in the system prompt), so the session's
+// sent.json list is cleared and they can go again.
+function forgetSent(input, env, dir) {
+  if (input.source !== "compact") return;
+  const file = path.join(dir, "chats", chatKey(input, env), "sent.json");
+  const session = String(input.session_id ?? "");
+  try {
+    const sent = JSON.parse(readFileSync(file, "utf8"));
+    if (!Object.hasOwn(sent, session)) return;
+    delete sent[session];
+    writeFileSync(file, JSON.stringify(sent, null, 2));
+  } catch {}
 }
 
 function injectOn(dir) {
@@ -109,8 +152,8 @@ function placementOf(dir) {
 
 // Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had.
 async function placedPrompt(input, env, dir) {
-  const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
   const { key } = recordPrompt(input, env, dir, prompt);
   try {
     const match = await requestPack(
@@ -157,8 +200,8 @@ async function requestPack(req, env) {
 }
 
 async function injectPrompt(input, env, dir) {
-  const prompt = String(input.prompt ?? "");
-  if (prompt.trimStart().startsWith("/") || !fromOwner(prompt)) return null;
+  const prompt = ownerPrompt(input);
+  if (!prompt) return null;
   const { key } = recordPrompt(input, env, dir, prompt);
   try {
     const pack = await requestPack(
@@ -337,7 +380,9 @@ export async function run(input, env = process.env) {
   }
   const placement = placementOf(dir);
   if (placement === "slot" || placement === "file") {
-    return event === "UserPromptSubmit" ? placedPrompt(input, env, dir) : null;
+    if (event === "UserPromptSubmit") return placedPrompt(input, env, dir);
+    forgetSent(input, env, dir);
+    return null;
   }
   if (injectOn(dir) || placement === "attach") {
     return event === "UserPromptSubmit" ? injectPrompt(input, env, dir) : injectSession(input, env, dir);
