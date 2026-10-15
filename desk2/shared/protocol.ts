@@ -527,6 +527,8 @@ export interface CliMayteWorker {
   endedAt: number | null // when it settled; null while active
   lastActivityAt: number | null
   lastActivity: string | null // its latest event line, short
+  doing?: string | null // what it is doing now: its hold reason while held, else its latest line (null when finished)
+  doingSince?: number | null // when that began (epoch ms)
   usedPct: number | null // % of a Pro 5-hour window it has used
   tokens: number | null // tokens it has spent, when AgentHydra or its transcript says
   verdict: string | null

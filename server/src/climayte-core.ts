@@ -26,6 +26,7 @@ import { basename, join } from 'node:path'
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
 import { type CpuCounters, readCpuCounters } from './climayte-cpu'
+import { stateKey } from './climayte-doing'
 import { type EtaReview, etaFullOfEvent, reviewOfEvent } from './climayte-eta'
 import {
   appendJournal,
@@ -920,6 +921,8 @@ export function notify(w: CliMayteWorker): void {
 
 export function changed(w: CliMayteWorker): void {
   w.updatedAt = Date.now()
+  const key = stateKey(w)
+  if (w.stateAt?.key !== key) w.stateAt = { key, at: w.updatedAt }
   dirty.add(w.id)
   save()
   notify(w)

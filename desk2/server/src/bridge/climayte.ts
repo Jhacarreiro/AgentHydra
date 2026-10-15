@@ -93,6 +93,8 @@ export function mapWorker(w: AhWorker, all: ReadonlyMap<string, AhWorker>, manag
     endedAt: active ? null : (w.updatedAt ?? null),
     lastActivityAt: w.updatedAt ?? null,
     lastActivity: w.lastActivity ?? null,
+    doing: w.doing ?? null,
+    doingSince: w.doingSince ?? null,
     usedPct: w.used?.pct ?? null,
     tokens: tokenTotal(w.tokens),
     verdict: w.verdicts?.at(-1)?.verdict ?? null,

@@ -20,7 +20,7 @@ import { Tip } from '@/components/ui/tooltip'
 import { useClock } from '@/lib/clock'
 import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
-import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { canStop, elapsedOf, etaLeft, etaShort, forText, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 import { useSessionTasks } from './session'
 
 const props = defineProps<{
@@ -312,6 +312,7 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
                     <td class="truncate p-0">
                       <button v-if="a.sessionId" type="button" class="max-w-full truncate text-start hover:underline" @click="openAgent(a)">{{ a.name }}</button>
                       <span v-else>{{ a.name }}</span>
+                      <span v-if="a.doing" class="font-normal text-(--text-muted)"> · {{ a.doing }}<span v-if="a.doingSince != null"> · {{ forText(a.doingSince, now) }}</span></span>
                     </td>
                     <td class="hidden truncate p-0 @sm:table-cell">{{ a.model || '–' }}</td>
                     <td class="p-0 text-end">{{ formatTokens(a.tokens) }}</td>

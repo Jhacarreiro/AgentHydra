@@ -718,7 +718,8 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
-    w.updatedAt = Date.now()
+    w.stepAt = Date.now()
+    w.updatedAt = w.stepAt
   }
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
   // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.

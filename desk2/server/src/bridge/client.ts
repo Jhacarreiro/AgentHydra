@@ -207,6 +207,9 @@ export interface AhWorker {
   result: string | null
   error: string | null
   lastActivity: string | null
+  /** What it is doing now, and the epoch ms that began; null or absent when it is not running or waiting. */
+  doing?: string | null
+  doingSince?: number | null
   /** ISO time a `waiting` worker is expected to start (AgentHydra's waitUntil); absent otherwise. */
   waitUntil?: string | null
   /** Epoch ms a retrying or queued worker is held until; null or absent when it is not. */

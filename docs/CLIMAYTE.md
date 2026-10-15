@@ -939,7 +939,8 @@ sub-agents for estimating time until they can actually estimate time properly."
 - **Where it shows.** `climayte_status` rows carry `etaMin`, `etaLeftMin` (while live; negative is
   over) and `tookMin`; `climayteScorecard().estimates` has `all`, `byKind` and the current `note`.
   Desk 2's running-tasks row says "about N min left" from the latest estimate of a running worker,
-  and its Background tasks panel shows each worker's estimate beside its time.
+  and its Background tasks panel shows each worker's estimate beside its time. The view's `doing` and `doingSince`
+  (`climayte-doing.ts`) say what a worker does now and since when: its hold reason while held, else its newest line.
 - **Not covered.** Sub-agents a Desk 2 chat starts with the Agent tool: Desk 2 does not see their
   text, so they have no estimate.
 

@@ -10,6 +10,7 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
 import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
@@ -253,6 +254,8 @@ export interface CliMayteWorker {
   message?: string
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
+  stepAt?: number // when lastActivity last changed (epoch ms)
+  stateAt?: { key: string; at: number } // when its state (stateKey, climayte-doing.ts) last changed
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the kit
   tokens?: CliMayteTokens // summed the same way; absent on tasks recorded before 2026-09-30
   turns: number // summed `result.num_turns`
@@ -552,6 +555,8 @@ export type CliMayteWorkerView = CliMayteOriginFields &
     verdicts?: Array<Omit<CliMayteVerdict, 'units'> & { pct: number | null }>
     account: string | null // `#<num> <name>`
     ranS: number // seconds its CLI sessions actually ran, summed over every attempt
+    doing: string | null // what it is doing now (doingOf), null when finished
+    doingSince: number | null // when that began (epoch ms)
     /** The model the CLI reported at init on its newest attempt that got that far (`model` and
      *  `effort` are what was asked for). */
     reportedModel: string | null
@@ -2240,6 +2245,9 @@ export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): C
     // Working time, not time since it was created: hours spent waiting for an account, or a day
     // between a finished task and its follow-up, are not time it ran.
     ranS: ranSeconds(w, now),
+    ...doingOf(w),
+    stepAt: undefined,
+    stateAt: undefined,
     reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
     verdicts: w.verdicts?.map(({ units, ...v }) => ({
       ...v,

@@ -10,7 +10,7 @@ import { useShellSource } from '@/components/shell/source'
 import { useDesk } from '@/stores/desk'
 import { useClock } from '@/lib/clock'
 import { cleared, openBackgroundTasks } from './api'
-import { latestEtaEnd, panelLists, runningLabel } from './logic'
+import { doingsOf, doingTitle, latestEtaEnd, panelLists, runningLabel } from './logic'
 import { useSessionTasks } from './session'
 
 const props = defineProps<{ chat: ChatSummary; items: TranscriptItem[] }>()
@@ -24,12 +24,14 @@ const lists = computed(() =>
   panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.chat.sessionId, workerIds: props.chat.workerIds, cleared: cleared.value })
 )
 const etaEndsAt = computed(() => latestEtaEnd(lists.value.running))
+// The longest-held running doing: what it is doing and since when, the one the row names.
+const doings = computed(() => doingsOf(lists.value.running))
 
-// A 15 s clock, only while an estimate is on show: the label counts whole minutes.
+// A 15 s clock, only while an estimate or a doing's start is on show: the label counts whole minutes.
 const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
 let clockScope: EffectScope | null = null
 watch(
-  () => etaEndsAt.value !== null,
+  () => etaEndsAt.value !== null || doings.value.length > 0,
   (on) => {
     if (on && !clockScope) {
       clockScope = effectScope()
@@ -45,9 +47,17 @@ watch(
 )
 onBeforeUnmount(() => clockScope?.stop())
 
-const label = computed(() =>
-  runningLabel(lists.value.running.length, lists.value.finished.length, { endsAt: etaEndsAt.value, now: clock.value?.now.value ?? Date.now() })
-)
+const now = computed(() => clock.value?.now.value ?? Date.now())
+const label = computed(() => {
+  const first = doings.value[0]
+  return runningLabel(
+    lists.value.running.length,
+    lists.value.finished.length,
+    { endsAt: etaEndsAt.value, now: now.value },
+    first ? { text: first.doing, since: first.since, now: now.value } : undefined,
+  )
+})
+const title = computed(() => (doings.value.length ? doingTitle(doings.value, now.value) : undefined))
 </script>
 
 <template>
@@ -56,6 +66,7 @@ const label = computed(() =>
     type="button"
     class="mt-3 flex h-6 items-center rounded-md px-1 text-ui-lg text-(--text-muted) outline-none transition-colors duration-60 hover:text-(--text-2) focus-visible:shadow-(--focus-ring)"
     data-running-tasks
+    :title="title"
     @click="openBackgroundTasks()"
   >
     {{ label }}

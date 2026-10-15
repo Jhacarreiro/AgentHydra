@@ -23,6 +23,9 @@ export interface TaskAgent {
   sessionId: string | null
   /** The minutes it said its current message would take (its `ETA:` line), null when it gave none. */
   etaMin: number | null
+  /** What a worker is doing now (its hold reason while held), and since when (epoch ms). */
+  doing?: string | null
+  doingSince?: number | null
 }
 
 export interface TaskPhase {
@@ -98,7 +101,9 @@ function toAgent(w: CliMayteWorker): TaskAgent {
     endedAt: w.active ? null : (w.endedAt ?? w.lastActivityAt),
     state: agentState(w),
     sessionId: w.sessionId,
-    etaMin: w.eta?.minutes ?? null
+    etaMin: w.eta?.minutes ?? null,
+    doing: w.doing ?? null,
+    doingSince: w.doingSince ?? null,
   }
 }
 
@@ -334,12 +339,39 @@ export function etaShort(minutes: number): string {
  * tasks', '' when none; with `eta` (the running workers' latest estimate end, and the time now) it says
  * how long is left after the running count: '3 running tasks · about 5 min left · 50+ finished'.
  */
-export function runningLabel(n: number, finished = 0, eta?: { endsAt: number | null; now: number }): string {
+export function runningLabel(
+  n: number,
+  finished = 0,
+  eta?: { endsAt: number | null; now: number },
+  doing?: { text: string; since: number | null; now: number },
+): string {
   const done = finished > 0 ? `${finished}${finished >= FINISHED_CAP ? '+' : ''} finished` : ''
   if (n <= 0) return done ? `${done} ${finished === 1 ? 'task' : 'tasks'}` : ''
   const running = `${n} running ${n === 1 ? 'task' : 'tasks'}`
   const left = eta && eta.endsAt !== null ? etaLeft(eta.endsAt, eta.now) : ''
-  return [running, left, done].filter(Boolean).join(' · ')
+  const held = doing ? [doing.text, forText(doing.since, doing.now)] : []
+  return [running, ...held, left, done].filter(Boolean).join(' · ')
+}
+
+/** 'for 40 s', 'for 6 min', 'for 1 h 20 min'; '' when the start is not known. */
+export function forText(since: number | null, now: number): string {
+  if (since === null) return ''
+  const ms = now - since
+  return ms < 60_000 ? `for ${Math.max(0, Math.floor(ms / 1000))} s` : `for ${minutesText(Math.floor(ms / 60_000))}`
+}
+
+/** The running and waiting agents' current doings, the longest-held first: the muted row names the first. */
+export function doingsOf(units: TaskUnit[]): Array<{ name: string; doing: string; since: number | null }> {
+  return units
+    .flatMap((u) => u.phases.flatMap((p) => p.agents))
+    .filter((a): a is TaskAgent & { doing: string } => !!a.doing && (a.state === 'running' || a.state === 'waiting'))
+    .map((a) => ({ name: a.name, doing: a.doing, since: a.doingSince ?? null }))
+    .sort((a, b) => (a.since ?? Number.MAX_SAFE_INTEGER) - (b.since ?? Number.MAX_SAFE_INTEGER))
+}
+
+/** The row's hover text: one line per doing, 'Name · what it is doing · for 6 min'. */
+export function doingTitle(doings: ReturnType<typeof doingsOf>, now: number): string {
+  return doings.map((d) => [d.name, d.doing, forText(d.since, now)].filter(Boolean).join(' · ')).join('\n')
 }
 
 /** '11m 06s', '45s', '1h 02m'. */

@@ -7,6 +7,9 @@ import {
   etaShort,
   formatElapsed,
   formatTokens,
+  forText,
+  doingsOf,
+  doingTitle,
   latestEtaEnd,
   openPhase,
   panelLists,
@@ -232,6 +235,23 @@ test('labels and formats', () => {
   expect(runningLabel(3, 50, { endsAt: 300_000, now: 0 })).toBe('3 running tasks · about 5 min left · 50+ finished')
   expect(runningLabel(1, 0, { endsAt: null, now: 0 })).toBe('1 running task')
   expect(runningLabel(0, 2, { endsAt: 300_000, now: 0 })).toBe('2 finished tasks')
+  expect(runningLabel(1, 5, { endsAt: 1_020_000, now: 360_000 }, { text: 'Waiting for CPU: 99% busy over the last 30 s', since: 0, now: 360_000 })).toBe(
+    '1 running task · Waiting for CPU: 99% busy over the last 30 s · for 6 min · about 11 min left · 5 finished',
+  )
+  expect(runningLabel(2, 0, undefined, { text: 'Bash bun test ./server/tests', since: 300_000, now: 330_000 })).toBe(
+    '2 running tasks · Bash bun test ./server/tests · for 30 s',
+  )
+  expect(runningLabel(1, 0, undefined, { text: 'Waiting for memory: 2 GB free', since: 0, now: 3_900_000 })).toBe(
+    '1 running task · Waiting for memory: 2 GB free · for 1 h 5 min',
+  )
+  expect(forText(null, 1_000)).toBe('')
+  expect(doingTitle([{ name: 'Fix', doing: 'Waiting for CPU', since: 0 }], 120_000)).toBe('Fix · Waiting for CPU · for 2 min')
+  const agent = (name: string, state: 'running' | 'waiting' | 'done', doingSince: number | null) => ({
+    id: name, name, model: '', tokens: null, startedAt: null, endedAt: null, state, sessionId: null, etaMin: null,
+    doing: state === 'done' ? null : `${name} doing`, doingSince,
+  })
+  const units = [{ phases: [{ agents: [agent('late', 'running', 900), agent('early', 'waiting', 100), agent('gone', 'done', 50)] }] }]
+  expect(doingsOf(units as unknown as Parameters<typeof doingsOf>[0]).map((d) => d.name)).toEqual(['early', 'late'])
   expect(formatElapsed(666_000)).toBe('11m 06s')
   expect(formatElapsed(45_000)).toBe('45s')
   expect(formatElapsed(3_720_000)).toBe('1h 02m')
