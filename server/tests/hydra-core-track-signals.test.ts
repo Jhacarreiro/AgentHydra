@@ -70,6 +70,7 @@ test('A5-F5: a core_use of a person counts as used, and unused is offered-not-ta
       chat: 'alpha',
       session: 'sx',
       ids: ['person:iris-ui', 'knowledge:brand-notes'],
+      pasted: [],
     },
     {
       at: iso(T + 2000),

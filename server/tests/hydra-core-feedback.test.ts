@@ -533,6 +533,24 @@ test('B4b-6: a rotation whose rename fails (log.jsonl held on Windows) never thr
   expect(readLog(dir).events.map((e) => e.event)).toEqual(['first', 'second', 'third'])
 })
 
+test('C5 NEW-1: a windowed read still finds a line filed under the month before the window', () => {
+  appendLog(dir, { event: 'first' }, new Date('2026-09-30T00:00:00Z'))
+  const spy = spyOn(fs, 'renameSync').mockImplementation(() => {
+    throw Object.assign(new Error('EBUSY: resource busy or locked'), { code: 'EBUSY' })
+  })
+  try {
+    appendLog(dir, { event: 'blocked' }, new Date('2026-10-02T00:00:00Z'))
+  } finally {
+    spy.mockRestore()
+  }
+  appendLog(dir, { event: 'later' }, new Date('2026-10-02T00:01:00Z'))
+  // The rotation finally runs: the October line 'blocked' now sits in log-2026-09.jsonl.
+  appendLog(dir, { event: 'after' }, new Date('2026-11-02T00:00:00Z'))
+  expect(existsSync(join(dir, 'log-2026-09.jsonl'))).toBe(true)
+  const since = new Date('2026-10-01T00:00:00Z')
+  expect(readLog(dir, since).events.map((e) => e.event)).toEqual(['blocked', 'later', 'after'])
+})
+
 test('B4b-6: sent.json keeps a session seen in the last week even when its list did not change', () => {
   const file = chatPaths(dir, 'seen').sent
   const t0 = new Date('2026-10-01T00:00:00Z')

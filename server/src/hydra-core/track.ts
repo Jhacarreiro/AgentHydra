@@ -293,6 +293,16 @@ function reportOf(chat: string, run: number, events: Json[]): Reported | null {
   }
 }
 
+/** The ids a pack or placement line pasted in full (reading them is the use, no offer), as the feedback fold counts them;
+ *  a line from before `pasted` was logged counts its knowledge and person ids as pasted. */
+function pastedIn(e: Json): Set<string> {
+  if (Array.isArray(e.pasted)) return new Set(e.pasted.map(str))
+  const legacy = Array.isArray(e.ids)
+    ? e.ids.map(str).filter((id) => /^(?:knowledge|person):/.test(id))
+    : []
+  return new Set(legacy)
+}
+
 // A turn is served when the core delivered something for it: a pack, or a per-message answer (even an empty one).
 function deliveriesOf(s: Session, turn: Turn, events: Json[]): Json[] {
   return events.filter(
@@ -328,7 +338,12 @@ function turnRow(
     for (const e of events)
       if (str(e.chat) === sc.chat && e.run === sc.run && Array.isArray(e.shown))
         for (const id of e.shown) offered.add(str(id))
-  for (const p of deliveries) if (Array.isArray(p.ids)) for (const id of p.ids) offered.add(str(id))
+  const pasted = new Set<string>()
+  for (const p of deliveries) {
+    const inFull = pastedIn(p)
+    if (Array.isArray(p.ids))
+      for (const id of p.ids) (inFull.has(str(id)) ? pasted : offered).add(str(id))
+  }
   const byScope = scopes.length > 0
   const byPack = deliveries.length > 0
   const method: Method = byScope && byPack ? 'both' : byScope ? 'scope' : byPack ? 'pack' : 'none'
@@ -358,7 +373,7 @@ function turnRow(
     offered: offeredList,
     picks,
     notTaken: offeredList.filter((o) => !used.includes(o)),
-    usedNotOffered: used.filter((u) => !offered.has(u)),
+    usedNotOffered: used.filter((u) => !offered.has(u) && !pasted.has(u)),
     reports,
   }
 }
@@ -447,7 +462,7 @@ function entrySummary(events: Json[]): Summary['entries'] {
       (e.event === 'pack' || e.event === 'placement' || e.event === 'find') &&
       Array.isArray(e.ids)
     )
-      add(offered, e.ids)
+      add(offered, e.event === 'find' ? e.ids : e.ids.filter((id) => !pastedIn(e).has(str(id))))
     if (Array.isArray(e.shown)) {
       add(offered, e.shown)
       const tokens = str(e.answer)

@@ -51,7 +51,14 @@ export function appendLog(dir: string, event: Record<string, unknown>, now = new
   appendFileSync(logPath(dir), `${JSON.stringify({ at: now.toISOString(), ...event })}\n`)
 }
 
-/** The log's events, oldest first; with `since`, only the months from it on and the lines at or after it. */
+/** The month before an ISO timestamp's month: a rotation that was blocked files a new month's first lines under it. */
+function monthBefore(iso: string): string {
+  const d = new Date(`${iso.slice(0, 7)}-01T00:00:00Z`)
+  d.setUTCMonth(d.getUTCMonth() - 1)
+  return d.toISOString().slice(0, 7)
+}
+
+/** The log's events, oldest first; with `since`, the files from the month before it on and the lines at or after it. */
 export function readLog(
   dir: string,
   since?: Date,
@@ -66,7 +73,7 @@ export function readLog(
           return { name, month: m?.[1], n: Number(m?.[2] ?? 1) }
         })
         .filter((f): f is { name: string; month: string; n: number } => Boolean(f.month))
-        .filter((f) => !from || f.month >= from.slice(0, 7))
+        .filter((f) => !from || f.month >= monthBefore(from))
         .sort((a, b) => a.month.localeCompare(b.month) || a.n - b.n)
         .map((f) => join(dir, f.name))
     : []

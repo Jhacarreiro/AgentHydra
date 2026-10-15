@@ -286,6 +286,49 @@ test('trackSummary reuses a summary younger than ten minutes and rebuilds an old
   expect(later.builtAt).toBe(new Date(base + 11 * 60_000).toISOString())
 })
 
+test('C5 NEW-2: text a pack pasted in full is not offered, so it is never reported as never taken', () => {
+  const own = scratch()
+  try {
+    mkdirSync(join(own, 'projects', 'proj-p'), { recursive: true })
+    mkdirSync(join(own, 'handoffs'), { recursive: true })
+    writeFileSync(
+      join(own, 'projects', 'proj-p', 'pp.jsonl'),
+      user('pp', 'C:/Users/me/app', T, 'hello'),
+    )
+    appendFileSync(
+      join(own, 'log.jsonl'),
+      logRow({
+        at: iso(T + 500),
+        event: 'pack',
+        chat: 'p',
+        session: 'pp',
+        mode: 'full',
+        ids: ['knowledge:pinned-rule', 'skill:brand-notes'],
+        pasted: ['knowledge:pinned-rule'],
+      }) +
+        logRow({
+          at: iso(T + 600),
+          event: 'pack',
+          chat: 'p',
+          session: 'pp',
+          mode: 'full',
+          ids: ['knowledge:old-rule'],
+        }) +
+        logRow({ at: iso(T + 700), event: 'find', chat: 'p', ids: ['knowledge:found'] }),
+    )
+    const opts = { roots: [join(own, 'projects')], handoffsDir: join(own, 'handoffs'), now: T }
+    const { rows, summary } = buildTrack(own, opts)
+    const row = rows.find((r) => r.session === 'pp')
+    expect(row?.offered).toEqual(['skill:brand-notes'])
+    expect(summary.entries.notTaken.map((n) => n.id).sort()).toEqual([
+      'knowledge:found',
+      'skill:brand-notes',
+    ])
+  } finally {
+    rmSync(own, { recursive: true, force: true })
+  }
+})
+
 test('reportRun writes a score and missing note and rejects a score outside 1-5', () => {
   expect(() => reportRun(dir, { chat: 'alpha', outcome: 'done', note: '', score: 6 })).toThrow()
   reportRun(
@@ -329,6 +372,7 @@ test('a turn served only by a per-message placement answer counts as served, eve
           placement: 'slot',
           chars: 40,
           ids: ['knowledge:x'],
+          pasted: [],
         }),
     )
     const { rows } = buildTrack(own, {
