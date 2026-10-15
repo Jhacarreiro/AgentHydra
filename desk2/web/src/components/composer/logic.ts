@@ -2,6 +2,7 @@
 // No Vue and no DOM here, so web/test/composer can test it with plain bun.
 
 import type { ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
+import { modelName } from '@/components/shell/logic'
 
 // Slash commands
 
@@ -286,7 +287,7 @@ export function shownSuggestion(suggestion: string | null | undefined, s: { empt
  * Claude Code's default on a subscription (the real new-session screen of a Max account shows it).
  */
 export function modelTriggerLabel(model: string | null, models: { value: string; label: string }[]): string {
-  if (model) return models.find((m) => m.value === model)?.label ?? model
+  if (model) return models.find((m) => m.value === model)?.label ?? modelName(model)
   const named = models.find((m) => m.value === 'default')?.label.match(/\(([^)]*\d[^)]*)\)/)?.[1]
   if (named) return named.trim()
   return models.find((m) => /sonnet/i.test(m.value))?.label ?? models.find((m) => m.value !== 'default')?.label ?? 'Sonnet'

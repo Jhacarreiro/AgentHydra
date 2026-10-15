@@ -16,6 +16,7 @@ import {
   filterSlashCommands,
   folderName,
   loadDraft,
+  modelTriggerLabel,
   prAsk,
   saveDraft,
   slashQuery,
@@ -163,6 +164,19 @@ describe('labels', () => {
       expect(ask).toContain('another GitHub tool you have if gh is not installed')
       expect(ask.includes('draft pull request')).toBe(draft)
     }
+  })
+
+  it('the model trigger names a full Claude id that is not in the menu by its friendly name', () => {
+    const menu = [{ value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }]
+    expect(modelTriggerLabel('claude-opus-5-5', menu)).toBe('Opus 5.5')
+    expect(modelTriggerLabel('claude-haiku-5-5', menu)).toBe('Haiku 5.5')
+    expect(modelTriggerLabel('claude-fable-5-1', menu)).toBe('Fable 5.1')
+    expect(modelTriggerLabel('claude-sonnet-5-5', menu)).toBe('Sonnet 5.5')
+  })
+
+  it('the model trigger shows an id it cannot name as given, and a menu value with its menu label', () => {
+    expect(modelTriggerLabel('some-custom-model', [])).toBe('some-custom-model')
+    expect(modelTriggerLabel('claude-opus-5-5', [{ value: 'claude-opus-5-5', label: 'Opus 5.5 (1M)' }])).toBe('Opus 5.5 (1M)')
   })
 })
 
