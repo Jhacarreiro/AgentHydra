@@ -1108,6 +1108,9 @@ function bulkAct(rows: Row[], item: RowMenuItem) {
   } else if (item.action === 'copySessionId') {
     const ids = rows.flatMap((row) => stateOf(row).sessionId ?? [])
     if (ids.length) attempt('Copy', navigator.clipboard.writeText(ids.join('\n')))
+  } else if (item.action === 'stop') {
+    // Offered while any picked row runs a turn: only those are stopped.
+    for (const row of rows) if (stateOf(row).stoppable) act(row, item)
   } else for (const row of rows) act(row, item)
 }
 

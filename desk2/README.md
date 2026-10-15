@@ -281,6 +281,20 @@ sidebar on the left stays put, and only the pane on the right changes.
   30 minutes counts as ended. Opening a session from a search while the
   session rail is shut shows the rail for two seconds, lying over the chat, then shuts it again; the pointer on it
   keeps it out (`peekHeader` in `session-header/state.ts`).
+- **Several rows at once** (owner, 2026-10-14: "click on one and then I hold Shift or Control ... multi-select so I
+  can right-click and transfer or do potentially more relevant actions with the right-click menu"). In the desk list,
+  Ctrl (Cmd) and a click adds or takes away one row, the open row joining on the first; Shift and a click picks the
+  run from the last row clicked, and Ctrl+Shift adds that run. Picked rows draw as selected. With two or more picked,
+  a right-click or the ⋯ on any of them opens one menu for all, under "N selected": Stop (while any runs), Pin or
+  Unpin, Mark as read or unread, Copy session IDs (one per line), Move to group ›, Move to account › and Duplicate to
+  account › (only when every row goes to the same kind of account; the account is ticked only when all are on it),
+  Archive or Unarchive, and Delete (only when no row runs outside; one dialog for all). Pin, Mark as read and Archive
+  go the way that changes a row. Account moves run one at a time, the line under the list saying "Moving 2 of 5 to
+  …", then how many went and why any did not; a row already on that account is left out. A plain click, Escape, or a
+  right-click on a row not picked leaves the picks, and a row a filter, search, fold or archive takes off the list
+  leaves them too. A row added for running work and another PC's row the cloud added are never picked
+  (`sidebar/picked.ts`, `bulkMenu` in `sidebar/logic.ts`, `bulkAct` in `Sidebar.vue`). The cloud list keeps its own
+  Select multiple sessions.
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
   the blinking dot, in the Working row under a turn and on the line over a Claude Desktop chat's composer,
   which has more room around it now (owner, 2026-10-08: "replace the blinking dot with a fun, like, orange

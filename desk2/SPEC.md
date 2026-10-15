@@ -636,7 +636,9 @@ Pin P / Unpin, Mark as unread U / Mark as read, Rename R, Fork F, Move to group 
 group, a check on the current one, New group…, Remove from group), Archive A / Unarchive, Delete D (red,
 confirmed in a dialog). The letter runs its item while the menu is open. A chat moved to a group is listed
 under it instead of its folder (a group named like a folder joins that folder's group). Outside sessions
-get the same menu without Delete; their marks are Hydra Desk's session meta. The Filter menu shows Active (default, not archived), Archived (only archived chats) or All
+get the same menu without Delete; their marks are Hydra Desk's session meta. Ctrl or Shift and a click picks
+several rows; two or more picked share one menu, under "N selected", of the items that fit many (README "Several
+rows at once"). The Filter menu shows Active (default, not archived), Archived (only archived chats) or All
 (an "Archived" group at the bottom). Collapsed, the sidebar slides in over the content while the pointer
 is on the show-sidebar toggle or the window's left edge. Footer: "Auto account" or the
 pinned account, with the accounts popover (each account's 5-hour and weekly bars) and a gear (Settings).
