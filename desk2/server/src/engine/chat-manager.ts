@@ -1530,6 +1530,11 @@ export class ChatManager {
     chat.updatedAt = this.now()
     this.changed(chat)
     this.accountNote(id, resolved?.note ?? null)
+    // Its sub-chats (seats, sub-managers it opened) are archived and brought back with it; one already there is
+    // skipped, which also ends a parent chain that loops back on itself.
+    if (p.archived !== undefined) {
+      for (const c of [...this.chats.values()]) if (c.chat.parentId === id && c.chat.archived !== p.archived) await this.patch(c.chat.id, { archived: p.archived })
+    }
     return { ...chat }
   }
 

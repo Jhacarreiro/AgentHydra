@@ -71,6 +71,19 @@ test('a chat opened under a Desk chat keeps its parent and manager, and runs wit
   expect(q.last().options.env).toMatchObject({ AGENTHYDRA_MANAGER: 'example-manager' })
 })
 
+test('archiving a chat archives its sub-chats and theirs, and unarchiving brings them back; other chats stay', async () => {
+  const { home, m } = setup()
+  const parent = await m.create({ cwd: home, delegateToCliMayte: false })
+  const child = await m.create({ cwd: home, parentId: parent.id, delegateToCliMayte: false })
+  const grandchild = await m.create({ cwd: home, parentId: child.id, delegateToCliMayte: false })
+  const other = await m.create({ cwd: home, delegateToCliMayte: false })
+  const archived = () => [parent, child, grandchild, other].map((c) => m.get(c.id).archived)
+  await m.patch(parent.id, { archived: true })
+  expect(archived()).toEqual([true, true, true, false])
+  await m.patch(parent.id, { archived: false })
+  expect(archived()).toEqual([false, false, false, false])
+})
+
 test('a chat with no manager runs without the pin', async () => {
   const { home, m, q } = setup()
   const chat = await m.create({ cwd: home, prompt: 'hi', delegateToCliMayte: false })
