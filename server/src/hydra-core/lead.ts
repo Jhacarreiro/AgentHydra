@@ -178,6 +178,10 @@ export function coordinatorOf(managers: CatalogEntry[]): CatalogEntry | undefine
 
 const slugOf = (e: CatalogEntry) => e.id.slice(e.id.indexOf(':') + 1)
 
+/** A task a chat needs no manager for. */
+const SMALL =
+  'small task a chat finishes alone in a few minutes (a fact, a status, a rename, a typo, a git or npm command, a fix of a few lines, a quick question)'
+
 export function leadQuestion(
   managers: CatalogEntry[],
   message: string,
@@ -187,7 +191,7 @@ export function leadQuestion(
   const quick = quickOf(managers)
   const now = current && managers.includes(current) ? current : null
   const options: Record<string, string> = {
-    none: 'No work in the message: ok, thanks, a greeting, or a bare "keep going" that names no work.',
+    none: `No manager needed: a message with no work (ok, thanks, a greeting, a bare "keep going"), or a ${SMALL}.`,
   }
   for (const m of managers)
     options[slugOf(m)] =
@@ -196,15 +200,12 @@ export function leadQuestion(
     message,
     question: [
       'Which manager should lead the work this owner message asks for?',
-      quick
-        ? `A quick ask needing no field judgment (a fact, a status, a rename, a typo, a git or npm command) is ${quick.name}'s.`
-        : '',
-      quick
-        ? "A quick ask that changes something a field's manager owns stays that manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's, a screen's design the UI manager's."
-        : '',
-      'Answer none only when the message holds no work: ok, thanks, a greeting, a bare "keep going".',
+      // The owner's size check (fce1778b asked the chat for difficulty 1-5; a 1 loaded nothing): a manager's brief
+      // is a long read, so a chat that needs no help gets none (owner, 2026-10-15).
+      `Judge its size first. A ${SMALL} needs no manager: answer none${quick ? `, not ${quick.name}` : ''}, even when it sits in a field a manager owns. A bug whose fix is a few lines is small, and a message that calls itself quick, small or a two-second fix is small unless its work is plainly bigger.`,
+      "Only a small change that spends money or changes a database schema, a migration or customers' data stays its field's manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's.",
       `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
-      "Research, a bug or a question inside one field is that field's manager's, and the lead is the field where the fix lives, not where the symptom shows.",
+      "Research, a bug or a question bigger than that, inside one field, is that field's manager's, and the lead is the field where the fix lives, not where the symptom shows.",
       coord ? `A message spanning several fields is ${coord.name}'s.` : '',
       // Without this a message about the chat's own tooling moved a backend chat to the coordinator (C3 N3).
       now

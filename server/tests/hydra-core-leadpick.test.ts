@@ -189,7 +189,7 @@ describe('lead choice (A2-F1)', () => {
     )
     expect(Object.keys(q.options)).not.toContain('retention-expert')
     expect(q.options['ivy-ui']).toContain('Owns how every screen, layout and flow looks and works')
-    expect(q.options.none).toMatch(/No work in the message/)
+    expect(q.options.none).toMatch(/No manager needed/)
     expect(q.question).toContain("A message spanning several fields is Pia's.")
   })
 
@@ -771,22 +771,35 @@ describe('the model call never blocks an event loop (B2 review 1)', () => {
 })
 
 describe('quick asks and named continuations (B2 review 2 and 3)', () => {
-  test("a quick ask is the floor manager's; none is only a message with no work in it", async () => {
-    mockModel(() => 'gil-floor')
-    const pick = await pickLead(entriesOf(dir), 'rename notes.txt to todo.txt', 5000, {
-      cache: false,
-    })
-    expect(pick).toMatchObject({ id: 'person:gil-floor', path: 'model' })
+  test('size is judged first: a small task gets no lead, not the floor manager, even in a field; bigger work gets one', async () => {
+    mockModel((m) => (/two-second/.test(m) ? 'none' : 'sam-backend'))
+    const small = await pickLead(
+      entriesOf(dir),
+      'archiving a chat leaves its sub-chats behind, a two-second fix',
+      5000,
+      { cache: false },
+    )
+    expect(small).toMatchObject({ id: null, path: 'model' })
     const { q } = asked[0] as { q: LeadQuestion }
     expect(q.question).toContain(
-      "A quick ask needing no field judgment (a fact, a status, a rename, a typo, a git or npm command) is Gil's.",
+      'Judge its size first. A small task a chat finishes alone in a few minutes (a fact, a status, a rename, a typo, a git or npm command, a fix of a few lines, a quick question) needs no manager: answer none, not Gil, even when it sits in a field a manager owns.',
     )
-    expect(q.question).toContain('Answer none only when the message holds no work')
-    expect(q.question).not.toContain('answer none for those')
-    expect(q.options.none).not.toMatch(/chore|quick|fact|status/)
+    expect(q.question).toContain('calls itself quick, small or a two-second fix is small')
+    expect(q.question).not.toContain("is Gil's")
+    expect(q.question).not.toContain('Answer none only when the message holds no work')
+    expect(q.options.none).toContain('a fix of a few lines')
+    const big = await pickLead(
+      entriesOf(dir),
+      'move the billing tables into their own plane',
+      5000,
+      {
+        cache: false,
+      },
+    )
+    expect(big).toMatchObject({ id: 'person:sam-backend', path: 'model' })
   })
 
-  test("B4b-7: a quick ask that changes what a field manager owns stays that manager's", async () => {
+  test("B4b-7: a small change that spends money or changes stored data stays that field's manager's", async () => {
     mockModel((m) =>
       /ad spend/.test(m) ? 'jay-ads' : /column/.test(m) ? 'sam-backend' : 'gil-floor',
     )
@@ -800,10 +813,7 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
     expect(col).toMatchObject({ id: 'person:sam-backend', path: 'model' })
     const { q } = asked[0] as { q: LeadQuestion }
     expect(q.question).toContain(
-      "A quick ask that changes something a field's manager owns stays that manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's, a screen's design the UI manager's.",
-    )
-    expect(q.question).toMatch(
-      /no field judgment \(a fact, a status, a rename, a typo, a git or npm command\) is Gil's\./,
+      "Only a small change that spends money or changes stored data stays its field's manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's.",
     )
   })
 
