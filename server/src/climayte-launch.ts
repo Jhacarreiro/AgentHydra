@@ -69,7 +69,7 @@ import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
-import type { LeadPick } from './hydra-core/lead'
+import { type LeadPick, modelOn } from './hydra-core/lead'
 import { chatKeyOk, coreDir } from './hydra-core/paths'
 import {
   APPEND_MAX,
@@ -715,9 +715,10 @@ const leadPicks = new Map<string, { prompt: string; pending: boolean; pick?: Lea
  * Whether a Prime chat's launch waits for its lead pick. The scheduler holds the launch (due again next tick) while
  * the model answers, up to LAUNCH_BUDGET_MS, so launch() stays synchronous and the daemon never waits on the network.
  * Asked only for a Desk chat whose lead is not kept yet, or a non-Desk chat's first launch (its key is the session
- * the launch picks).
+ * the launch picks), and only while a model can be asked: without one the launch's own word ranker picks, unheld.
  */
 export function leadPickPending(w: CliMayteWorker): boolean {
+  if (!modelOn()) return false
   const placement = packPlacement(w)
   if (!placement) return false
   const have = leadPicks.get(w.id)

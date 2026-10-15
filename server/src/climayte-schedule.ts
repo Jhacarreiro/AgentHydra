@@ -601,6 +601,9 @@ export function scheduleDue(s: TickState, due: CliMayteWorker[]): void {
   }
 }
 
+/** Prime chats holding the launch slot they took while their lead pick runs (startOn). */
+const pickSlots = new Set<string>()
+
 /** Start the task on the picked account, and count it there for the rest of this tick; first its
  *  usage is read again if that is due (holdForReading), and the machine must have the memory for it
  *  (holdForMemory). */
@@ -626,10 +629,16 @@ function startOn(
     holdForCpu(w, busy)
     return
   }
-  // A Prime chat's lead pick is made off the launch (it may take seconds): due again next tick, no slot taken.
-  if (leadPickPending(w)) return
+  // A Prime chat's lead pick is made off the launch (it may take seconds): due again next tick. It keeps the launch
+  // slot it took while it waits, so work ranked after it never starts in its place, and launches without another.
+  const picking = leadPickPending(w)
   // No slot: the task stays as it is, due again next tick (never failed or dropped).
-  if (!takeLaunchSlot(s.now)) return
+  if (!pickSlots.has(w.id) && !takeLaunchSlot(s.now)) return
+  if (picking) {
+    pickSlots.add(w.id)
+    return
+  }
+  pickSlots.delete(w.id)
   const expected = cost.pct
   // The row's size says what this start was placed on, not the estimate at dispatch.
   if (w.size)

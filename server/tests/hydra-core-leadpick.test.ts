@@ -3,8 +3,11 @@
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { workers } from '../src/climayte-core'
 import { chatPromptText, leadPickPending } from '../src/climayte-launch'
-import type { CliMayteWorker } from '../src/climayte-lib'
+import type { CliMayteAccount, CliMayteWorker } from '../src/climayte-lib'
+import { LAUNCH_BURST, setLaunchPacing } from '../src/climayte-pacing'
+import { scheduleDue, setLauncher, tickState } from '../src/climayte-schedule'
 import { loadCatalog } from '../src/hydra-core/catalog'
 import {
   type Decider,
@@ -585,6 +588,84 @@ describe('the model call never blocks an event loop (B2 review 1)', () => {
     expect(asked).toHaveLength(1)
     // Its lead is kept now: the next launch asks nothing and is not held.
     expect(leadPickPending({ ...w, id: 'w-hold-2' } as CliMayteWorker)).toBe(false)
+  })
+
+  test('with no model to ask, a Prime launch is not held and logs no pick', () => {
+    writeFileSync(join(dir, 'ON'), '')
+    writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
+    setDecider(null)
+    const w = {
+      id: 'w-nomodel',
+      cwd: CWD,
+      chat: true,
+      prompt: 'make the signup screen layout breathe',
+      attempts: [],
+    } as unknown as CliMayteWorker
+    expect(leadPickPending(w)).toBe(false)
+    const log = join(dir, 'log.jsonl')
+    expect(existsSync(log) ? readFileSync(log, 'utf8') : '').not.toContain('lead-pick')
+  })
+
+  test("a person's chat waiting on its lead pick keeps its launch slot: background resumes do not start in its place", async () => {
+    writeFileSync(join(dir, 'ON'), '')
+    writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
+    mockModel(() => 'ivy-ui', 100)
+    const t0 = 1_800_000_000_000
+    const accts: CliMayteAccount[] = Array.from({ length: 7 }, (_, i) => ({
+      id: `acct-hold-${i}`,
+      num: 900 + i,
+      name: `hold${i}@example.com`,
+      configDir: join(dir, `acct-hold-${i}`),
+      sessionPct: 5,
+      weekPct: 5,
+    }))
+    const mine: string[] = []
+    const mk = (id: string, over: Partial<CliMayteWorker>) => {
+      const w = {
+        ...{ id, group: `g-${id}`, title: id, cwd: CWD, prompt: 'p', pending: [], model: null },
+        ...{ effort: null, accounts: null, status: 'queued', accountId: null, attempts: [] },
+        ...{ result: null, error: null, lastActivity: null, costUsd: 0, turns: 0, moves: 0 },
+        ...{ retries: 0, notBefore: null, createdAt: t0, updatedAt: t0 },
+        ...over,
+      } as unknown as CliMayteWorker
+      workers.set(id, w)
+      mine.push(id)
+    }
+    const interrupted = {
+      account: accts[0],
+      startedAt: t0 - 1,
+      endedAt: t0,
+      outcome: 'interrupted',
+    }
+    for (let i = 0; i < LAUNCH_BURST; i++)
+      mk(`bg-hold-${i}`, { attempts: [interrupted] as any, createdAt: t0 - 100 + i })
+    mk('person-hold', { chat: true, prompt: 'make the signup screen layout breathe' })
+    const started: string[] = []
+    setLaunchPacing(true)
+    setLauncher((w) => {
+      w.status = 'running'
+      started.push(w.id)
+    })
+    const tickAt = (now: number) =>
+      scheduleDue(
+        tickState(accts, now),
+        mine.map((id) => workers.get(id) as CliMayteWorker).filter((w) => w.status === 'queued'),
+      )
+    try {
+      tickAt(t0)
+      // Held for its pick, it took the first slot: one background resume fewer starts.
+      expect(started).toEqual(['bg-hold-0', 'bg-hold-1'])
+      await Bun.sleep(250)
+      // Same launch window, no slot left for anyone else: the person's chat goes on the one it kept.
+      tickAt(t0 + 1_000)
+      expect(started).toEqual(['bg-hold-0', 'bg-hold-1', 'person-hold'])
+      expect(workers.get(`bg-hold-${LAUNCH_BURST - 1}`)?.status).toBe('queued')
+      expect(asked).toHaveLength(1)
+    } finally {
+      setLaunchPacing(false)
+      setLauncher(null)
+      for (const id of mine) workers.delete(id)
+    }
   })
 })
 

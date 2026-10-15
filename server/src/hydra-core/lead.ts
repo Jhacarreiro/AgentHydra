@@ -135,6 +135,12 @@ export function setDecider(d: Decider | null): void {
   cache.clear()
 }
 
+/** Whether a pick can ask a model at all: not under test's default, not with AGENTHYDRA_LEAD_MODEL=off. */
+export function modelOn(): boolean {
+  if (decider === noModel) return false
+  return decider !== hswarmDecide || process.env.AGENTHYDRA_LEAD_MODEL !== 'off'
+}
+
 /** The managers a lead is picked from: the people of the manager family that can be become. */
 export function managersOf(entries: Iterable<CatalogEntry>): CatalogEntry[] {
   return [...entries]
