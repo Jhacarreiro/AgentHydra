@@ -88,6 +88,12 @@ group.skipIf(!hasBrowser)('live measure: noise is not text', () => {
     const [desktop] = await measureUrl(fixture('noise.html'), { root: FIXTURES, viewports: [VIEWPORTS[0]] })
     expect(total(desktop, 'word')).toBe(3)
   }, 60000)
+
+  test('an icon font glyph name is one media, not words', async () => {
+    const [desktop] = await measureUrl(fixture('icon-font.html'), { root: FIXTURES, viewports: [VIEWPORTS[0]] })
+    expect(total(desktop, 'word')).toBe(2)
+    expect(total(desktop, 'media')).toBe(2)
+  }, 60000)
 })
 
 group.skipIf(!hasBrowser)('live measure: a page that shows translations of one message', () => {

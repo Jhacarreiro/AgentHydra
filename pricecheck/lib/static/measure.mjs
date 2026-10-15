@@ -14,6 +14,7 @@ const MAX_DEPTH = 25
 const MEDIA = new Set(['img', 'picture', 'video', 'canvas', 'iframe', 'svg', 'object', 'embed'])
 const CONTROL_ROLES = new Set(['button', 'tab', 'switch', 'checkbox', 'menuitem', 'link', 'radio'])
 const LINKS = new Set(['a', 'router-link', 'routerlink', 'nuxt-link', 'nuxtlink', 'link'])
+const RENDERS_CONTROL = /(^|['"`])(button|a|router-link|RouterLink|NuxtLink)(['"`]|$)|\b(RouterLink|NuxtLink)\b/
 const BUTTON_INPUTS = new Set(['button', 'submit', 'reset', 'image'])
 const ICON_CLASS = /(^|\s)(icon|material-icons|fa-[\w-]+|bi-[\w-]+)(\s|$)/
 const CARD_CLASS = /(^|\s)(card|tile)(\s|$)/
@@ -55,10 +56,22 @@ function pickBranch(ctx, branches) {
   return best
 }
 
+// An expression named like an icon (`icon`, `item.leadingIcon`) prints an icon font's glyph name: media, not a word.
+const ICON_EXPR = /(^|\.)\w*icon$/i
+
 function textItems(ctx, sc, node) {
-  const s = node.text.replace(/\u0001(\d+)\u0002/g, (_, n) => ctx.i18n.text(sc.exprs[+n]) ?? ' x ')
+  let icons = 0
+  const s = node.text.replace(/\u0001(\d+)\u0002/g, (_, n) => {
+    if (ICON_EXPR.test(String(sc.exprs[+n] ?? '').trim())) {
+      icons++
+      return ' '
+    }
+    return ctx.i18n.text(sc.exprs[+n]) ?? ' x '
+  })
   const count = wordsIn(s)
-  return count ? [{ unit: 'word', count, file: sc.file, line: node.line }] : []
+  const items = count ? [{ unit: 'word', count, file: sc.file, line: node.line }] : []
+  if (icons) items.push({ unit: 'media', count: icons, file: sc.file, line: node.line, note: 'icon glyph' })
+  return items
 }
 
 function countOptions(el) {
@@ -108,6 +121,7 @@ function classify(ctx, sc, el, cond) {
     } else own.push(at('field', `<input type=${type || 'text'}>`))
     descend = false
   } else if (tag === 'button') own.push(at('control', '<button>'))
+  else if (tag === 'component' && RENDERS_CONTROL.test(String(a[':is'] ?? a.is ?? ''))) own.push(at('control', '<component :is>'))
   else if (LINKS.has(tag) && (href || a.onclick || a['@click'])) {
     const origin = ctx.cfg.productOrigins.find((o) => href.startsWith(o))
     own.push(origin ? at('product', `link to ${origin}`) : at('control', `<${tag}>`))
@@ -167,12 +181,17 @@ function renderChild(ctx, sc, child, el, cond) {
   if (sc.depth >= MAX_DEPTH || sc.stack.includes(child)) return slotted
   const t = parsed(ctx, child)
   if (!t) return slotted
-  const filled = el.children.some((k) => k.type === 'el' || wordsIn(k.text) > 0)
-  // A component's own markup prices the same wherever it is used: priced once per session, not once per use.
-  const key = `${child}\u0000${filled}\u0000${cond}`
+  const slots = new Set()
+  for (const k of el.children) {
+    const name = k.type === 'el' && k.tag === 'template' ? slotName(k) : null
+    if (name) slots.add(name)
+    else if (k.type === 'el' || wordsIn(k.text) > 0) slots.add('default')
+  }
+  // A component's own markup prices the same wherever it is used with the same slots: priced once per session.
+  const key = `${child}\u0000${[...slots].sort().join(',')}\u0000${cond}`
   let own = ctx.owned.get(key)
   if (!own) {
-    const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child], filled }
+    const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child], slots }
     own = collectChildren(ctx, next, t.root.children, cond)
     ctx.owned.set(key, own)
   }
@@ -184,13 +203,36 @@ function measureElement(ctx, sc, el, cond) {
   if (el.tag.startsWith('pc-') || tag === 'script' || tag === 'style') return []
   if ('hidden' in el.attrs || el.attrs['aria-hidden'] === 'true') return []
   if (tag === 'i18n-t' || tag === 'formattedmessage') return i18nItems(ctx, sc, el)
-  if (tag === 'slot') return sc.filled ? [] : collectChildren(ctx, sc, el.children, cond)
+  if (tag === 'slot') {
+    const name = el.attrs.name ?? (el.attrs[':name'] ? null : 'default')
+    const filled = name === null ? sc.slots?.size > 0 : sc.slots?.has(String(name))
+    return filled ? [] : collectChildren(ctx, sc, el.children, cond)
+  }
   const overlay = overlayKind(el.tag)
   if (overlay && !openOnArrival(el.attrs)) return collectChildren(ctx, sc, triggerContent(el, overlay), cond)
   const child = /[-A-Z]/.test(el.tag) ? ctx.graph.resolveTag(sc.file, el.tag) : null
   if (child) return renderChild(ctx, sc, child, el, cond)
   const { own, descend } = classify(ctx, sc, el, cond)
   return [...own, ...(descend ? collectChildren(ctx, sc, el.children, cond) : [])]
+}
+
+/** `$slots.x`, `!$slots.x`, `slots['x']` against the slots the caller fills: true or false, or null when it is not such a test. */
+function slotTest(expr, slots) {
+  const m = /^\s*(!*)\s*\$?slots(?:\.([\w-]+)|\[\s*['"]([\w-]+)['"]\s*\])\s*$/.exec(String(expr))
+  if (!m || !slots) return null
+  const has = slots.has(m[2] ?? m[3])
+  return m[1].length % 2 ? !has : has
+}
+
+/** The branch of a v-if chain the caller's slots decide (null: none shows), or undefined when the chain tests anything else. */
+function slotBranch(sc, branches) {
+  for (const b of branches) {
+    if ('v-else' in b.attrs) return b
+    const shows = slotTest(b.attrs['v-if'] ?? b.attrs['v-else-if'], sc.slots)
+    if (shows === null) return undefined
+    if (shows) return b
+  }
+  return null
 }
 
 function collectChildren(ctx, sc, children, cond) {
@@ -231,7 +273,9 @@ function collectChildren(ctx, sc, children, cond) {
         break
       }
       i = j - 1
-      items.push(...pickBranch(ctx, branches.map((b) => measureElement(ctx, sc, b, true))))
+      const known = slotBranch(sc, branches)
+      if (known !== undefined) items.push(...(known ? measureElement(ctx, sc, known, true) : []))
+      else items.push(...pickBranch(ctx, branches.map((b) => measureElement(ctx, sc, b, true))))
       continue
     }
     items.push(...measureElement(ctx, sc, node, cond))

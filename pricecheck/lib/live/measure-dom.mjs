@@ -138,8 +138,13 @@ export function measureInPage(options = {}) {
     if (!words || parent.getClientRects().length === 0 || parent.checkVisibility?.({ visibilityProperty: true, opacityProperty: true }) === false) continue
     if (!shown(parent)) continue
     const file = fileOf(parent)
-    wordsByFile.set(file, (wordsByFile.get(file) ?? 0) + words)
     const cs = getComputedStyle(parent)
+    // An icon font draws its glyph from a name ("arrow_forward"): one icon on screen, not words to read.
+    if (/material (symbols|icons)|font ?awesome|bootstrap-icons|ionicons|remixicon|tabler-icons|phosphor/i.test(cs.fontFamily)) {
+      add('media', file)
+      continue
+    }
+    wordsByFile.set(file, (wordsByFile.get(file) ?? 0) + words)
     colors.add(cs.color)
     sizes.add(cs.fontSize)
   }

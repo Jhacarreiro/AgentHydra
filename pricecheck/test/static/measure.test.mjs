@@ -81,6 +81,29 @@ group('vue', () => {
     expect(p.byFile['src/views/Home.vue'].units).toEqual({ control: 1, word: 4 })
   })
 
+  test('a <component :is> that renders a button or link is a control, and an icon name it prints is media, not a word', () => {
+    const dir = repo({
+      'src/components/IconButton.vue': `<template><component :is="href ? 'a' : 'button'" :href="href"><span :class="iconClass">{{ icon }}</span></component></template>`,
+      'src/views/Home.vue': '<template><IconButton icon="close" /><span>{{ item.leadingIcon }}</span></template>',
+    })
+    expect(price(dir, 'src/views/Home.vue').units).toEqual({ control: 1, media: 2 })
+  })
+
+  test('a v-if on $slots follows the slots the caller actually fills, and a named slot fallback shows only when that slot is empty', () => {
+    const dir = repo({
+      'src/components/IconButton.vue': [
+        '<template><button>',
+        '<span v-if="$slots.default"><slot /></span><span v-else>{{ icon }}</span>',
+        '<span v-if="!$slots.badge">No badge here</span><slot name="badge">Fallback badge words</slot>',
+        '</button></template>',
+      ].join(''),
+      'src/views/Home.vue': '<template><IconButton><img src="a.png"><template #badge>New</template></IconButton><IconButton icon="close" /></template>',
+    })
+    const p = price(dir, 'src/views/Home.vue')
+    expect(p.byFile['src/views/Home.vue'].units).toEqual({ media: 1, word: 1 })
+    expect(p.byFile['src/components/IconButton.vue'].units).toEqual({ control: 2, media: 1, word: 6 })
+  })
+
   test('a component used without an import is found by its name', () => {
     const dir = repo({
       'src/components/Badge.vue': '<template><span class="badge">New</span></template>',
