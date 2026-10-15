@@ -134,7 +134,9 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   Unknown message types are ignored, never thrown on.
 - **Store** (`store.ts`): `~/.hydra-desk-2/chats.json` (ChatSummary[] without volatile fields) and
   `~/.hydra-desk-2/chats/<chatId>.jsonl` (one TranscriptItem per line, append-only; loading keeps the last
-  line per id). Streaming deltas are not written per delta: the finished item is written once.
+  line per id). Streaming deltas are not written per delta: the finished item is written once. A chat's
+  `lastActionAt` is its newest item's time (the manager stamps it from every item it sends out); a chat saved
+  before that field existed takes its `.jsonl` file's last write when loaded.
   `~/.hydra-desk-2/queue.json` holds the Send queue (below), written immediately and atomically on every change.
 - **Session meta** (`session-meta.ts`): `~/.hydra-desk-2/session-meta.json`, Hydra Desk's own marks on
   outside sessions keyed by session id (`SessionMeta`: pinned, archived, unread, title, group), written
@@ -628,7 +630,8 @@ Details in `docs/fidelity/shell.md` "Status dots".
 
 Hover tooltip: status in words, activity, elapsed, account. A chat with active CliMayte workers shows a
 small count chip. Row menu (right-click, the row's "...", and the title bar's chat menu: one list, the
-real app's): Open in > (File Explorer, Copy resume command, Copy session ID), Stop (only while working),
+real app's), under a line naming the row (its id and account) and a Last action line (how long ago it last
+did something, README "Which chat, on which account"): Open in > (File Explorer, Copy resume command, Copy session ID), Stop (only while working),
 Pin P / Unpin, Mark as unread U / Mark as read, Rename R, Fork F, Move to group > (every folder and moved-to
 group, a check on the current one, New group…, Remove from group), Archive A / Unarchive, Delete D (red,
 confirmed in a dialog). The letter runs its item while the menu is open. A chat moved to a group is listed

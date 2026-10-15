@@ -235,7 +235,11 @@ sidebar on the left stays put, and only the pane on the right changes.
   (`web/src/components/sidebar/folded.ts`, `foldChildren` in `sidebar/logic.ts`).
 - **Which chat, on which account.** Every row's menu (right-click or ⋯, in either list) opens with a line
   naming the row: its id's first 8 characters and, muted beside it, its account (`#72 example`); a click
-  copies the whole id (owner, 2026-10-08: "I need to be able to see what this thread ID is"). A Claude
+  copies the whole id (owner, 2026-10-08: "I need to be able to see what this thread ID is"). Under it,
+  **Last action** says how long ago the row last did something, "just now" up to "2 years ago", with the exact
+  time in its tooltip (owner, 2026-10-14: "how long ago the last message was sent or The Last Action was
+  performed"): an outside session's and a cloud row's `lastActivityAt`, a Desk chat's `lastActionAt`, which
+  moves with its transcript and never with a mark (`timeAgo` and `lastActionLine` in `sidebar/logic.ts`). A Claude
   session of another app on this PC (Claude Desktop, a CLI) also has Move to account ›: every desktop
   account, those whose app runs first, the one it is on now ticked and off. It is the session header's
   Migrate (AgentHydra's `POST /api/sessions/:id/migrate`, one move at a time; a line under the list says
