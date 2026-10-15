@@ -16,13 +16,12 @@ import {
 import { rankEntries } from '../src/hydra-core/find'
 import { appendLog, readLog } from '../src/hydra-core/log'
 import { matchFor, packFor } from '../src/hydra-core/pack'
-import { chatPaths, coreDir } from '../src/hydra-core/paths'
+import { chatPaths } from '../src/hydra-core/paths'
 import { readSent, writeSent } from '../src/hydra-core/sent'
 import { findTool } from '../src/hydra-core/tree'
 import { CORE_TOOLS } from '../src/mcp-core'
 import { scratch } from './hydra-core-fixture'
 
-const preloadCore = process.env.AGENTHYDRA_CORE_DIR ?? ''
 let dir = ''
 const now = new Date('2026-10-14T12:00:00.000Z')
 const at = (daysAgo: number) => new Date(now.getTime() - daysAgo * 24 * 60 * 60 * 1000)
@@ -372,11 +371,27 @@ test('B4b-6: a per-message match with nothing new still marks its session seen',
   expect(readSent(file).s1).toEqual(['knowledge:brand-notes'])
 })
 
+// Run in a fresh process: earlier test files in the same run repoint AGENTHYDRA_HOME and AGENTHYDRA_CORE_DIR.
 test('B4b-8: the test preload points AGENTHYDRA_CORE_DIR at its scratch folder, never the live core', () => {
-  const home = process.env.AGENTHYDRA_HOME ?? ''
-  const preset = preloadCore
+  const env = { ...process.env }
+  delete env.AGENTHYDRA_HOME
+  delete env.AGENTHYDRA_CORE_DIR
+  const body =
+    'console.log(JSON.stringify([process.env.AGENTHYDRA_HOME ?? "", process.env.AGENTHYDRA_CORE_DIR ?? ""]))'
+  const proc = Bun.spawnSync(
+    [
+      process.execPath,
+      '--preload',
+      join(import.meta.dir, '..', '..', 'tests', 'setup.ts'),
+      '-e',
+      body,
+    ],
+    { env },
+  )
+  const [home, preset] = JSON.parse(
+    proc.stdout.toString().trim().split('\n').pop() ?? '[]',
+  ) as string[]
   expect(home).not.toBe('')
-  expect(preset.startsWith(home)).toBe(true)
+  expect(preset).toBe(join(home, 'core'))
   expect(preset).not.toContain(join('.agenthydra', 'core'))
-  expect(coreDir()).toBe(dir)
 })
