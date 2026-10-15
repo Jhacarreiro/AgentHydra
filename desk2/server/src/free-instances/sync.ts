@@ -275,6 +275,7 @@ export class FreeSync {
     if (row && !row.meta?.deleted && !(await this.put(c, id, row.version, seal(c.key, { id, num, provider, name, auth: '', deleted: true }), { deleted: true }, { auth: null, exp: null }))) return
     this.host.settled(id)
     delete this.agreed[id]
+    this.replaced.delete(id)
   }
 
   /** Each instance here against its row: removed when another PC deleted it, else its login synced. */
@@ -291,6 +292,7 @@ export class FreeSync {
     if (!row?.meta?.deleted) return this.one(c, instance, row)
     await this.host.remove(instance.id)
     delete this.agreed[instance.id]
+    this.replaced.delete(instance.id)
   }
 
   /** Rows with no instance here that are live and not deleted here become instances. */

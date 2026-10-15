@@ -89,12 +89,18 @@ export function detect(
   // One unlisted for FORGET_MS was removed, and is forgotten rather than saved again after every look.
   const next: Memory = Object.fromEntries(Object.entries(memory).filter(([, m]) => now - m.seenAt <= FORGET_MS))
   const down: Down[] = []
+  const openByRef = new Map<string, OpenChat[]>()
+  for (const c of open) {
+    const list = openByRef.get(c.ref)
+    if (list) list.push(c)
+    else openByRef.set(c.ref, [c])
+  }
   for (const inst of seen) {
     const before = memory[inst.ref]
     const fresh = before !== undefined && now - before.seenAt <= STALE_MEMORY_MS
     const email = inst.email ?? before?.email ?? null
     if (isUp(inst)) {
-      const mine = open.filter((c) => c.ref === inst.ref)
+      const mine = openByRef.get(inst.ref) ?? []
       const chats = Object.fromEntries(mine.map((c) => [c.id, { title: c.title, busy: c.busy, startedAt: c.startedAt }]))
       next[inst.ref] = { up: true, lastUpAt: now, email, chats, seenAt: now }
       continue

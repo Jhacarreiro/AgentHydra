@@ -22,6 +22,7 @@ export interface Stuck {
 const cut = (s: string, n = 300): string => (s.replace(/\s+/g, ' ').trim().length > n ? `${s.replace(/\s+/g, ' ').trim().slice(0, n)}...` : s.replace(/\s+/g, ' ').trim())
 
 export function stuckWorkers(workers: readonly CliMayteWorker[], now: number): Stuck[] {
+  const liveWaves = new Set(workers.filter((t) => t.kind !== 'manage' && t.active).map((t) => t.wave))
   const out: Stuck[] = []
   for (const w of workers) {
     if (w.pc || (w.active && w.status !== 'waiting')) continue
@@ -38,7 +39,7 @@ export function stuckWorkers(workers: readonly CliMayteWorker[], now: number): S
     }
     if (now - changed <= STUCK_MS) continue
     if (w.kind === 'manage' && w.hold === 'wave') {
-      const live = workers.some((t) => t.id !== w.id && t.wave === w.wave && t.kind !== 'manage' && t.active)
+      const live = liveWaves.has(w.wave)
       if (!live) out.push({ worker: w, reason: 'wave', since: changed, why: `wave ${w.wave ?? '?'}: this manager waits on it, but none of its tasks is live` })
       continue
     }

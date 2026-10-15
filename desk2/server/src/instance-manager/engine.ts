@@ -299,9 +299,11 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
   function settleMove(r: Tracked, results: MoveResult[]): void {
     const to = r.toInstance
     if (!to) return
+    const byId = new Map<string, MoveResult>()
+    for (const x of results) if (!byId.has(x.id)) byId.set(x.id, x)
     for (const c of r.chats) {
       if (c.state !== 'pending') continue
-      const m = results.find((x) => x.id === c.id)
+      const m = byId.get(c.id)
       if (!m) setChat(r, c.id, 'failed', 'the move did not report on it')
       else if (!m.landed) setChat(r, c.id, 'failed', m.detail || 'it did not land')
       else {
@@ -515,6 +517,8 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
   }
 
   function status(enabled: boolean, nextCheckAt: number | null): InstanceManagerStatus {
+    const working = new Map<string, number>()
+    for (const c of open) if (c.busy) working.set(c.ref, (working.get(c.ref) ?? 0) + 1)
     const rows: ManagedInstance[] = seen
       .map((i) => ({
         ref: i.ref,
@@ -525,7 +529,7 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
         running: i.running,
         signedIn: i.signedIn,
         dead: i.dead,
-        working: open.filter((c) => c.ref === i.ref && c.busy).length,
+        working: working.get(i.ref) ?? 0,
         lastUpAt: memory[i.ref]?.lastUpAt ?? null,
       }))
       .sort((a, b) => (a.kind === b.kind ? a.num - b.num : a.kind === 'desktop' ? -1 : 1))

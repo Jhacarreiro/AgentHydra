@@ -47,7 +47,12 @@ export function peek(items: readonly TranscriptItem[], now: number, desk: boolea
     return { kind: 'hung', key: last.id, detail: `its ${last.name} call has run for ${minutes(now - last.startedAt)} min` }
   const recent = tools.slice(-RECENT_TOOLS)
   const fails = new Map<string, ToolUse[]>()
-  for (const t of recent.filter(failed)) fails.set(callKey(t), [...(fails.get(callKey(t)) ?? []), t])
+  for (const t of recent.filter(failed)) {
+    const key = callKey(t)
+    const list = fails.get(key)
+    if (list) list.push(t)
+    else fails.set(key, [t])
+  }
   const same = [...fails.values()].find((ts) => ts.length >= SAME_FAILS)
   if (same) return { kind: 'spinning', key: same.at(-1)!.id, detail: `the same ${same[0].name} call failed ${same.length} times` }
   const tail = tools.slice(-ALL_FAILED)

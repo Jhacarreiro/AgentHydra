@@ -247,5 +247,3 @@ export function createPoller(o: PollerOptions) {
     },
   }
 }
-
-export type Poller = ReturnType<typeof createPoller>

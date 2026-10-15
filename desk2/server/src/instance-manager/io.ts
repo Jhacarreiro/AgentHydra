@@ -402,9 +402,11 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
     if (!plan || plan.status !== 200) return { error: plan ? errorOf(plan.body, `answered ${plan.status}`) : 'AgentHydra did not answer' }
     const p = obj(plan.body)
     const chats = Array.isArray(p.chats) ? p.chats.map(obj) : []
+    const byId = new Map<unknown, (typeof chats)[number]>()
+    for (const c of chats) if (!byId.has(c.id)) byId.set(c.id, c)
     const results: MoveResult[] = []
     for (const id of ids) {
-      const chat = chats.find((c) => c.id === id)
+      const chat = byId.get(id)
       if (!chat) {
         results.push({ id, landed: false, resumed: false, detail: 'it is not among the Codex account’s open chats' })
         continue

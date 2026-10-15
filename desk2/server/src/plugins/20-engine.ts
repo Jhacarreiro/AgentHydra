@@ -487,16 +487,25 @@ function folderRoutes(app: Hono, ctx: ServerContext, manager: ChatManager, folde
   )
 }
 
-/** The project list: Project Hydra's projects, the chats and outside sessions filed into them, and the folder choices. */
-function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFolders): ProjectList {
+/** Where the project pages read Project Hydra from: the one AgentHydra's session list, and where its folder is found and read. */
+function hydraSource(ctx: ServerContext) {
   const deps = ctx.deps
   const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
   const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
   const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
-  const sessions = (deps.bridge as ManagerBridge | undefined) ?? bridge()
-  return new ProjectList({
+  return {
+    sessions: (deps.bridge as ManagerBridge | undefined) ?? bridge(),
     findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
-    readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
+    readHydra: (at: HydraLocation) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
+  }
+}
+
+/** The project list: Project Hydra's projects, the chats and outside sessions filed into them, and the folder choices. */
+function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFolders): ProjectList {
+  const { sessions, findHydra, readHydra } = hydraSource(ctx)
+  return new ProjectList({
+    findHydra,
+    readHydra,
     recent: () => recentFolders(folders, manager),
     chats: () =>
       manager
@@ -517,14 +526,10 @@ function projectList(ctx: ServerContext, manager: ChatManager, folders: RecentFo
 
 /** The project group header's menu (plugins/31-project-menu.ts): its stats, and the chats a scratch folder's proposal reads. */
 function projectMenu(ctx: ServerContext, manager: ChatManager, projects: ProjectList): ProjectMenu {
-  const deps = ctx.deps
-  const mainFile = mainConfigFile(deps.mainClaudeJson as string | null | undefined, deps.agentHydraMcp)
-  const projectEnv = (deps.env as Record<string, string | undefined> | undefined) ?? process.env
-  const hydraOverride = deps.projectHydra as { location: HydraLocation | null; read: HydraRead } | undefined
-  const sessions = (deps.bridge as ManagerBridge | undefined) ?? bridge()
+  const { sessions, findHydra, readHydra } = hydraSource(ctx)
   return new ProjectMenu({
-    findHydra: () => (hydraOverride ? hydraOverride.location : findHydra(projectEnv, mainFile)),
-    readHydra: (at) => (hydraOverride ? Promise.resolve(hydraOverride.read) : readHydra(at, projectEnv)),
+    findHydra,
+    readHydra,
     chats: async () => [
       ...manager.list({ archived: true }).map((c) => ({ kind: 'desk' as const, id: c.id, sessionId: c.sessionId ?? null, cwd: c.cwd, title: c.title, group: c.group, archived: c.archived })),
       ...(await sessions.externalSessions())

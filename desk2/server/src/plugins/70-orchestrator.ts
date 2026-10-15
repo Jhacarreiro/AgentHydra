@@ -199,12 +199,15 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   /** The facts that can be checked without a model about what a chat waits on: HSwarm job ids and CliMayte worker ids. */
   async function factsOf(on: readonly string[], now: number): Promise<Fact[]> {
     const out: Fact[] = []
-    let workers: CliMayteWorker[] | null | undefined
+    let workers: Map<string, CliMayteWorker> | null | undefined
     for (const id of on) {
       if (HSWARM_JOB.test(id)) out.push(jobFact(id, now))
       else if (WORKER_ID.test(id)) {
-        workers ??= await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
-        out.push(workerFact(id, workers?.find((w) => w.id === id), now))
+        if (!workers) {
+          const list = await get<CliMayteWorker[]>('/api/climayte/workers?all=1')
+          workers = list && new Map(list.map((w) => [w.id, w]))
+        }
+        out.push(workerFact(id, workers?.get(id), now))
       }
     }
     return out
@@ -545,7 +548,8 @@ CliMayte worker ${w.id} (${w.title}) has sat stuck for ${how}: ${s.why}. Answer 
         const waiting = new Set(queue.items.flatMap((i) => (i.kind === 'message' && i.state !== 'failed' ? [i.chatId] : [])))
         const skip = new Set([...look.unread, ...waiting])
         const candidates = limitCandidates(now, look, skip)
-        candidates.push(...(await runningCandidates(now, skip)), ...(await waitingCandidates(now, look, skip)))
+        const [running, waitingChats] = await Promise.all([runningCandidates(now, skip), waitingCandidates(now, look, skip)])
+        candidates.push(...running, ...waitingChats)
         await pool(candidates, JUDGE_WIDTH, async (c) => {
           if (armed()) await judgeOne(c)
         })

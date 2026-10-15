@@ -5,6 +5,7 @@
 import type { ToolCaller } from './contract'
 import { ToolInputError } from './errors'
 import { type Link, connect, knownPage } from './navigate'
+import { pageValue } from './script'
 
 export type SecretOp = 'where' | 'type' | 'capture'
 
@@ -101,13 +102,8 @@ function validate(req: SecretRequest): void {
   throw new ToolInputError(`unknown op ${String(req.op)}: use where, type or capture`)
 }
 
-async function evaluate(link: Link, expression: string): Promise<unknown> {
-  const res = (await link.send('Runtime.evaluate', { expression, returnByValue: true })) as { result?: { value?: unknown } }
-  return res.result?.value
-}
-
 async function pageUrl(link: Link): Promise<string> {
-  const url = await evaluate(link, 'location.href')
+  const url = await pageValue(link, 'location.href')
   return typeof url === 'string' ? url : ''
 }
 
@@ -122,7 +118,7 @@ async function typeSecret(link: Link, req: SecretRequest): Promise<SecretReply> 
   const selector = req.selector ?? ''
   const before = hostCheck(await pageUrl(link), hosts)
   if (!before.ok) return { ok: false, error: before.error, detail: before.detail }
-  const focused = await evaluate(
+  const focused = await pageValue(
     link,
     `(()=>{try{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return 'missing';if(el.tagName!=='INPUT'&&el.tagName!=='TEXTAREA')return 'not_input';el.focus();try{el.select&&el.select();}catch{}return 'ok';}catch{return 'missing';}})()`,
   )
@@ -146,7 +142,7 @@ async function capture(link: Link, req: SecretRequest): Promise<SecretReply> {
     const read = attr
       ? `el.getAttribute(${JSON.stringify(attr)})`
       : `('value' in el ? el.value : el.textContent)`
-    const got = (await evaluate(
+    const got = (await pageValue(
       link,
       `(()=>{try{const el=document.querySelector(${JSON.stringify(selector)});if(!el)return null;const raw=${read};return {v:raw==null?'':String(raw)};}catch{return null;}})()`,
     )) as { v: string } | null

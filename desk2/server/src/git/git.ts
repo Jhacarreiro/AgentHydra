@@ -197,27 +197,6 @@ export function parsePorcelainV2Z(out: string): PorcelainV2 {
   return parsed
 }
 
-/** Parses `git status --porcelain=v1 -z`: `XY path\0`, and for renames/copies `XY to\0from\0`. */
-export function parsePorcelainZ(out: string): PorcelainEntry[] {
-  const parts = out.split('\0')
-  const entries: PorcelainEntry[] = []
-  for (let i = 0; i < parts.length; i++) {
-    const rec = parts[i]
-    if (rec.length < 4) continue
-    const x = rec[0]
-    const y = rec[1]
-    const path = rec.slice(3)
-    if (x === 'R' || x === 'C' || y === 'R' || y === 'C') i++ // the next part is the rename source
-    let status: string
-    if (x === '?' && y === '?') status = '??'
-    else if (x === '!' && y === '!') continue
-    else if (x === 'U' || y === 'U' || (x === 'A' && y === 'A') || (x === 'D' && y === 'D')) status = 'U'
-    else status = x !== ' ' ? x : y
-    entries.push({ path, status })
-  }
-  return entries
-}
-
 /** Parses `git diff --numstat -z`: `a\tr\tpath\0`, renames `a\tr\t\0from\0to\0`, binary `-\t-\t...`. */
 export function parseNumstatZ(out: string): Map<string, { added: number; removed: number }> {
   const parts = out.split('\0')

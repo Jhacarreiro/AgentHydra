@@ -176,6 +176,8 @@ export const INTERRUPT_GRACE_MS = 1500
 const STDERR_TAIL_LINES = 20
 /** Images larger than this (base64 chars) are kept out of the stored transcript. */
 const MAX_STORED_IMAGE_CHARS = 200_000
+/** The running tool ids remembered as written; past it the oldest is forgotten. */
+const MAX_STORED_RUNNING = 1000
 
 /** The account's login is broken (AgentHydra climayte-lib.ts AUTH_RE): no turn on it can work until it is signed in again. */
 const SIGN_IN_TEXT =
@@ -711,7 +713,7 @@ ${slot}` : ''}${rules}` }
     for (const item of replayed.values()) {
       const prev = stored.get(item.id)
       if (prev && sameItem(prev, item)) {
-        if (item.kind === 'tool_use' && item.status === 'running') this.storedRunning.add(item.id)
+        if (item.kind === 'tool_use' && item.status === 'running') this.rememberRunning(item.id)
       } else this.upsert(item)
     }
   }
@@ -1408,12 +1410,18 @@ ${slot}` : ''}${rules}` }
     if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return
-      this.storedRunning.add(item.id)
+      this.rememberRunning(item.id)
     }
     // A request re-opened after a restart is on disk as it was.
     const prev = this.reopened?.stored.get(item.id)
     if (prev && sameItem(prev, item)) return
     this.store.appendItem(this.chat.id, forStore(item))
+  }
+
+  /** Notes a running tool as written; a Set keeps insertion order, so the first id is the oldest. */
+  private rememberRunning(id: string): void {
+    this.storedRunning.add(id)
+    if (this.storedRunning.size > MAX_STORED_RUNNING) this.storedRunning.delete(this.storedRunning.values().next().value as string)
   }
 
   private notify(reason: Extract<ServerEvent, { type: 'notify' }>['reason'], body: string): void {

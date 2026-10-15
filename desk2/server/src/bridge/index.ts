@@ -502,7 +502,8 @@ export function createBridge(opts: BridgeOptions = {}) {
       const at = c.lastActivityAt ? Date.parse(c.lastActivityAt) : Number.NaN
       return Number.isFinite(at) && now() - at <= STALE_AFTER_MS
     })
-    for (const id of turnKept.keys()) if (!recent.some((c) => c.threadId === id)) turnKept.delete(id)
+    const recentIds = new Set(recent.map((c) => c.threadId))
+    for (const id of turnKept.keys()) if (!recentIds.has(id)) turnKept.delete(id)
     await Promise.all(
       recent.map(async (c) => {
         const path = await codexRollout(c.threadId).catch(() => null)
@@ -533,7 +534,8 @@ export function createBridge(opts: BridgeOptions = {}) {
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
     // An Unassigned one too: its account's app archived it, so /api/chats no longer lists it.
     const pinned = pinnedIds()
-    for (const old of pinnedRows.keys()) if (!pinned.includes(old)) pinnedRows.delete(old)
+    const pinnedSet = new Set(pinned)
+    for (const old of pinnedRows.keys()) if (!pinnedSet.has(old)) pinnedRows.delete(old)
     const known = new Set(inp.sessions.map((s) => s.session_id))
     const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => pinnedRow(id)))).filter(
       (r): r is NonNullable<typeof r> => r !== null,
@@ -717,11 +719,13 @@ export function createBridge(opts: BridgeOptions = {}) {
   })
   /** A thread's rollout once found; a miss is asked again after ROLLOUT_MISS_MS (a session with neither file is looked for again). */
   const rollouts = new Map<string, { path: string | null; at: number }>()
+  const ROLLOUTS_KEPT = 500
   async function codexRollout(threadId: string): Promise<string | null> {
     const kept = rollouts.get(threadId)
     if (kept && (kept.path || now() - kept.at < ROLLOUT_MISS_MS)) return kept.path
     const path = await findCodexRollout(threadId, await codexHomes())
     rollouts.set(threadId, { path, at: now() })
+    if (rollouts.size > ROLLOUTS_KEPT) rollouts.delete(rollouts.keys().next().value as string)
     return path
   }
 

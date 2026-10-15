@@ -192,32 +192,6 @@ export interface RoutinesRequest {
   edit?: { id: string; set: Record<string, unknown> }
 }
 
-const WEEKDAYS = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat']
-const pad2 = (n: number): string => String(n).padStart(2, '0')
-/** One cron field's values as a list, when it is plain numbers or a list of them; null for ranges, steps and `*`. */
-const plainList = (f: string): number[] | null => (/^\d+(,\d+)*$/.test(f) ? f.split(',').map(Number) : null)
-
-/**
- * A schedule's cron expression in short English: "08:57 and 12:57, Mon to Fri". A form it does not read plainly comes back
- * as the expression itself, so the page never guesses. Local time, as the server reads it.
- */
-export function scheduleInWords(expr: string): string {
-  const [minute, hour, dom, month, dow] = expr.trim().split(/\s+/)
-  if (!minute || !hour || !dom || !month || !dow || expr.trim().split(/\s+/).length !== 5) return expr
-  const hours = plainList(hour)
-  const minutes = plainList(minute)
-  if (!hours || !minutes || month !== '*') return `cron ${expr}`
-  const times = hours.flatMap((h) => minutes.map((m) => `${pad2(h)}:${pad2(m)}`))
-  const at = times.length > 3 ? `${times.length} times a day` : times.join(' and ')
-  let day = 'every day'
-  if (dom === '*' && dow === '1-5') day = 'Mon to Fri'
-  else if (dom === '*' && dow === '0,6') day = 'weekends'
-  else if (dom === '*' && /^[0-6](,[0-6])*$/.test(dow)) day = dow.split(',').map((d) => WEEKDAYS[Number(d)]).join(', ')
-  else if (/^\d+$/.test(dom) && dow === '*') day = `on day ${dom} of the month`
-  else if (dom !== '*' || dow !== '*') return `cron ${expr}`
-  return `${at}, ${day}`
-}
-
 /** The whole-history numbers of GET /api/routines/:id/details. Times in ms; rates 0 to 1, null when nothing counts. */
 export interface RoutineDetailsStats {
   total: number
