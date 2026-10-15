@@ -549,7 +549,7 @@ describe('row menu', () => {
 
   it('an outside session has the same menu without Delete, with Move to account and Duplicate to account, and Archive says why', () => {
     const entries = rowMenu(externalRow(ext()))
-    expect(show(entries)).toEqual(['sess-1', 'Last action', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', '-', 'Move to group >', 'Move to account >', 'Duplicate to account >', '-', 'Archive A'])
+    expect(show(entries)).toEqual(['sess-1', 'Last action', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', 'Duplicate to account >', '-', 'Move to group >', 'Move to account >', '-', 'Archive A'])
     expect(entries[1]).toMatchObject({ since: 1 }) // the session's lastActivityAt
     const archive = entries.find((e) => e !== 'separator' && !('items' in e) && e.action === 'archive') as RowMenuItem
     expect(archive.title).toMatch(/never deleted here/)

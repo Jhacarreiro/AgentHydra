@@ -119,6 +119,9 @@ export async function unassignSession(sessionId: string, instanceRef: string | n
   return archiveVerdict(status, body)
 }
 
+/** A duplicate's title, so it is told apart from the chat it copies: "<title> (copy)". */
+export const copyTitle = (title: string | null | undefined) => (title?.trim() ? `${title.trim().slice(0, 200)} (copy)` : 'Copy')
+
 /**
  * Duplicate to account: AgentHydra copies the whole chat under a new id, then lands the copy on the account like a move
  * does. The original is not touched. A copy that could not land is on no account: `copyId` names it.
@@ -126,7 +129,7 @@ export async function unassignSession(sessionId: string, instanceRef: string | n
 export async function duplicateSession(sessionId: string, instanceRef: string): Promise<{ ok: boolean; error?: string; copyId?: string; title?: string }> {
   const row = await ah.session(sessionId, 'claude')
   const made = await ah.copy(row)
-  const title = row.title?.trim() ? `${row.title.trim().slice(0, 200)} (copy)` : 'Copy'
+  const title = copyTitle(row.title)
   try {
     const x = await land(made.session_id, instanceRef, { title })
     return x.ok ? { ok: true, copyId: made.session_id, title } : { ok: false, error: x.error ?? 'AgentHydra did not say why', copyId: made.session_id }

@@ -1081,16 +1081,16 @@ export function rowMenu(
   out.push({ action: 'rename', label: 'Rename', shortcut: 'R' })
   out.push({ action: 'note', label: row.note ? 'Edit note…' : 'Add note…', shortcut: 'N' })
   out.push({ action: 'fork', label: 'Fork', shortcut: 'F', disabled: !row.forkable })
-  if (row.service) out.push(serviceMenu(row.service, row.serviceLabel ?? null, services))
-  out.push('separator', { label: 'Move to group', items: moveTo })
   // An Unassigned chat is on no account: none is ticked, and Unassigned is. A Codex one still has the account it left
   // (archived there), which its copy cannot go to.
   const home = accountNum(row.account, accounts)
   const onAccount = row.unassigned ? null : home
-  if (row.movable) {
-    out.push(accountMenu(onAccount, accounts, row.movable, !!row.unassigned))
-    out.push(duplicateMenu(row.movable === 'codex' ? home : onAccount, accounts, row.movable))
-  }
+  // Duplicate to account sits with Fork, the other copy, never beside Move to account: both open the same account list,
+  // and a pointer that slid one row down from Move landed a copy (owner, 2026-10-14: a move "seems to duplicate it").
+  if (row.movable) out.push(duplicateMenu(row.movable === 'codex' ? home : onAccount, accounts, row.movable))
+  if (row.service) out.push(serviceMenu(row.service, row.serviceLabel ?? null, services))
+  out.push('separator', { label: 'Move to group', items: moveTo })
+  if (row.movable) out.push(accountMenu(onAccount, accounts, row.movable, !!row.unassigned))
   out.push('separator')
   out.push(
     row.archived
@@ -1120,6 +1120,15 @@ export function bulkMenu(
   out.push(rows.some((r) => r.unread) ? { action: 'markRead', label: 'Mark as read', shortcut: 'U' } : { action: 'markUnread', label: 'Mark as unread', shortcut: 'U' })
   out.push({ action: 'copySessionId', label: 'Copy session IDs', disabled: !rows.some((r) => r.sessionId) })
 
+  const kinds = new Set(rows.map((r) => r.movable))
+  const kind = kinds.size === 1 ? [...kinds][0] : null
+  const accounts = kind === 'codex' ? codexAccounts : desktopAccounts
+  const homes = new Set(rows.map((r) => accountNum(r.account, accounts)))
+  const home = homes.size === 1 ? [...homes][0] : null
+  const onAccount = rows.some((r) => r.unassigned) ? null : home
+  // Away from Move to account, as on one row's menu (rowMenu).
+  if (kind) out.push(duplicateMenu(kind === 'codex' ? home : onAccount, accounts, kind))
+
   const places = new Set(rows.map((r) => (r.group ?? folderLabel(r.cwd)).toLowerCase()))
   const shared = places.size === 1 ? [...places][0] : null
   const moveTo: (RowMenuItem | 'separator')[] = groups.map((g) => ({ action: 'moveTo', label: g, checked: g.toLowerCase() === shared }))
@@ -1127,18 +1136,7 @@ export function bulkMenu(
   moveTo.push({ action: 'newGroup', label: 'New group…' })
   if (rows.some((r) => r.group)) moveTo.push({ action: 'removeFromGroup', label: 'Remove from group' })
   out.push('separator', { label: 'Move to group', items: moveTo })
-
-  const kinds = new Set(rows.map((r) => r.movable))
-  const kind = kinds.size === 1 ? [...kinds][0] : null
-  if (kind) {
-    const accounts = kind === 'codex' ? codexAccounts : desktopAccounts
-    const unassigned = rows.every((r) => r.unassigned)
-    const homes = new Set(rows.map((r) => accountNum(r.account, accounts)))
-    const home = homes.size === 1 ? [...homes][0] : null
-    const onAccount = rows.some((r) => r.unassigned) ? null : home
-    out.push(accountMenu(onAccount, accounts, kind, unassigned))
-    out.push(duplicateMenu(kind === 'codex' ? home : onAccount, accounts, kind))
-  }
+  if (kind) out.push(accountMenu(onAccount, accounts, kind, rows.every((r) => r.unassigned)))
   out.push('separator')
   out.push(rows.some((r) => !r.archived) ? { action: 'archive', label: 'Archive', shortcut: 'A' } : { action: 'unarchive', label: 'Unarchive', shortcut: 'A' })
   if (rows.every((r) => !r.outside)) out.push({ action: 'delete', label: 'Delete', shortcut: 'D', danger: true })

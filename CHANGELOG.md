@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Moving a chat no longer turns into a copy by a slip of the mouse.** In a chat's menu, Duplicate to account now
+  sits beside Fork instead of right under Move to account, whose account list looks the same. A Codex copy is named
+  "<title> (copy)" in the sidebar, as a desktop copy already was, so it never looks like the move went wrong.
 - **A chat you move to an open account keeps its settings.** Move to account now puts the chat on Bypass
   permissions at the effort it had before, in the app that is already running, instead of leaving it on that
   app's defaults until it restarts. If that app does not take them, the move's note says so.

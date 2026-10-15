@@ -85,10 +85,10 @@ describe('the menu of picked rows', () => {
       'Pin',
       'Mark as unread',
       'Copy session IDs',
+      'Duplicate to account >',
       '-',
       'Move to group >',
       'Move to account >',
-      'Duplicate to account >',
       '-',
       'Archive'
     ])

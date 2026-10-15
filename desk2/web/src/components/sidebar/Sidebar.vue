@@ -17,7 +17,7 @@ import { ahSource, appShown, deskOnPcs, hitsOnThisPc, remoteSessions } from '@/c
 import { activeOnly } from './active'
 const HydraSidebar = lazyPanel(() => import('@/components/hydra/HydraSidebar.vue'))
 import { actionError } from '@/lib/action-error'
-import { duplicateSession, moveCodexSession, moveSession, settingsMissed, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
+import { copyTitle, duplicateSession, moveCodexSession, moveSession, settingsMissed, unassignCodexSession, unassignSession } from '@/components/session-header/ah'
 import { accountChoices, codexAccountChoices, refreshAhInstances } from '@/components/session-header/instances'
 import { peekHeader } from '@/components/session-header/state'
 import { lazyPanel } from '@/lib/lazy-panel'
@@ -841,9 +841,16 @@ async function duplicateOne(sessionId: string, ref: string, label: string): Prom
   if (codex && s && codexBusy(s)) return { ok: false, error: 'it is still working in Codex. Let the turn finish, then duplicate it.' }
   try {
     if (codex) {
-      // AgentHydra's Codex move with the original kept: the copy is a new chat on that account, under the same name.
+      // AgentHydra's Codex move with the original kept: the copy is a new chat on that account. Codex gives it the
+      // original's name, so the list names it "<title> (copy)", as a desktop copy is named: two rows of one name read as
+      // a move that went wrong (owner, 2026-10-14: "two of the same named chat ... for no reason").
       const x = await moveCodexSession(sessionId, ref, { keepSource: true, unassigned: !!s?.unassigned })
-      return x.ok ? { ok: true, note: `Duplicated to ${label}. It is in that Codex app now.`, forMs: 8000 } : { ok: false, error: x.error ?? 'AgentHydra did not say why' }
+      if (!x.ok) return { ok: false, error: x.error ?? 'AgentHydra did not say why' }
+      const title = copyTitle(s?.title)
+      const named = x.destinationThreadId ? await src.updateSessionMeta(x.destinationThreadId, { title }).then(() => true, () => false) : false
+      return named
+        ? { ok: true, note: `Duplicated to ${label} as “${title}”. It is in that Codex app now.`, forMs: 8000 }
+        : { ok: true, note: `Duplicated to ${label} under the original’s name. It is in that Codex app now.`, forMs: 15000 }
     }
     const x = await duplicateSession(sessionId, ref)
     if (x.ok) return { ok: true, note: `Duplicated to ${label} as “${x.title}”.`, forMs: 8000 }

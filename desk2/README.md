@@ -261,7 +261,10 @@ sidebar on the left stays put, and only the pane on the right changes.
   in Unassigned (`duplicateSession` in `session-header/ah.ts`). A Codex chat has both too, through AgentHydra's Codex
   mover: Unassigned archives it on its Codex account (`POST /api/codex-instances/:id/archive-chat`, through its app
   when open), a move out of Unassigned restores it there first (and archives it again if the move does not finish),
-  and Duplicate is the move with the original kept (`keepSource`), to any other Codex account. Every row also has **Add note… N**: a note of up to
+  and Duplicate is the move with the original kept (`keepSource`), to any other Codex account; Codex names the copy
+  as the original, so the sidebar names it "<title> (copy)" (a Desk title mark). Duplicate sits beside Fork, never
+  under Move to account: both open the same account list, and a pointer that slid one row down from Move made a copy
+  that looked like a failed move (owner, 2026-10-14: two chats of one name "for no reason"). Every row also has **Add note… N**: a note of up to
   2,000 characters on the chat (Desk's own chats keep it on the chat, an outside session in Desk's marks), drawn as
   a note mark beside the title, its text in the row's tooltip. **Pin service ›** (Claude, Codex, ChatGPT) runs a
   chat's turns on another service: pinned to Codex, each message is a turn of a Codex thread on the emptiest signed-in
