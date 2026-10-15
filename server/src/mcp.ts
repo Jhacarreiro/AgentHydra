@@ -64,6 +64,7 @@ import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
 import { MANAGER_TOOLS } from './mcp-managers'
 import { withOutputShaping } from './mcp-output'
+import { PRICECHECK_TOOLS } from './mcp-pricecheck'
 import { ROUTINES_TOOLS } from './mcp-routines'
 import {
   CALLER_AWARE_TOOLS,
@@ -1994,6 +1995,7 @@ export const TOOLS: HydraTool[] = [
     () => LISTED_TOOLS,
   ),
   ...DASHBOARD_TOOLS,
+  ...PRICECHECK_TOOLS,
   ...MANAGER_TOOLS,
   ...CORE_TOOLS,
   {

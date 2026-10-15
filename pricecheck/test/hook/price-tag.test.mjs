@@ -1,4 +1,4 @@
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, setDefaultTimeout, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
 import { existsSync, mkdirSync, mkdtempSync, readFileSync, realpathSync, rmSync, writeFileSync } from 'node:fs'
 import os from 'node:os'
@@ -6,6 +6,9 @@ import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 const HOOK = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'hook', 'price-tag.mjs')
+
+// Every test spawns the hook as a real node process (and git), which can pass 5 s on a busy box.
+setDefaultTimeout(20_000)
 
 let scratch
 let repo
