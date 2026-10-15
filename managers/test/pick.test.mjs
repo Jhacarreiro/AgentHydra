@@ -107,16 +107,16 @@ test("a folder without a valid persona.json is ignored, an invalid one is named 
   }
 });
 
-function twoHomes(build) {
+// The people folder and the legacy managers folder under one scratch root: `build` fills them, `check` reads them, and the
+// root goes whatever the outcome.
+function withTwoHomes(build, check) {
   const root = mkdtempSync(path.join(os.tmpdir(), "managers-homes-"));
-  const people = path.join(root, "people", "manager");
-  const legacy = path.join(root, "managers");
   try {
-    build({ people, legacy });
-    return { people, legacy };
-  } catch (error) {
+    const homes = { people: path.join(root, "people", "manager"), legacy: path.join(root, "managers") };
+    build(homes);
+    check(homes);
+  } finally {
     rmSync(root, { recursive: true, force: true });
-    throw error;
   }
 }
 
@@ -127,32 +127,32 @@ function writeManager(home, slug, name) {
 }
 
 test("a manager in both homes loads once, from the people folder", () => {
-  const { people, legacy } = twoHomes(({ people, legacy }) => {
-    writeManager(people, "both", "People Copy");
-    writeManager(legacy, "both", "Legacy Copy");
-  });
-  try {
-    const loaded = loadPersonas([people, legacy]);
-    assert.deepEqual(loaded.personas.map((p) => p.name), ["People Copy"]);
-    assert.equal(loaded.personas[0].dir, path.join(people, "both"));
-    assert.equal(loaded.personas[0].briefPath, path.join(people, "both", "brief.md"));
-    assert.deepEqual(loaded.skipped, []);
-  } finally {
-    rmSync(path.dirname(path.dirname(people)), { recursive: true, force: true });
-  }
+  withTwoHomes(
+    ({ people, legacy }) => {
+      writeManager(people, "both", "People Copy");
+      writeManager(legacy, "both", "Legacy Copy");
+    },
+    ({ people, legacy }) => {
+      const loaded = loadPersonas([people, legacy]);
+      assert.deepEqual(loaded.personas.map((p) => p.name), ["People Copy"]);
+      assert.equal(loaded.personas[0].dir, path.join(people, "both"));
+      assert.equal(loaded.personas[0].briefPath, path.join(people, "both", "brief.md"));
+      assert.deepEqual(loaded.skipped, []);
+    },
+  );
 });
 
 test("a manager only in the legacy folder still loads from it", () => {
-  const { people, legacy } = twoHomes(({ people, legacy }) => {
-    mkdirSync(people, { recursive: true });
-    writeManager(legacy, "old-one", "Legacy Only");
-  });
-  try {
-    const loaded = loadPersonas([people, legacy]);
-    assert.deepEqual(loaded.personas.map((p) => [p.slug, p.dir]), [["old-one", path.join(legacy, "old-one")]]);
-  } finally {
-    rmSync(path.dirname(path.dirname(people)), { recursive: true, force: true });
-  }
+  withTwoHomes(
+    ({ people, legacy }) => {
+      mkdirSync(people, { recursive: true });
+      writeManager(legacy, "old-one", "Legacy Only");
+    },
+    ({ people, legacy }) => {
+      const loaded = loadPersonas([people, legacy]);
+      assert.deepEqual(loaded.personas.map((p) => [p.slug, p.dir]), [["old-one", path.join(legacy, "old-one")]]);
+    },
+  );
 });
 
 test("managerRoots reads AGENTHYDRA_PEOPLE_DIR and AGENTHYDRA_MANAGERS_DIR", () => {

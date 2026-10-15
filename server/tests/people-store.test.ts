@@ -59,8 +59,8 @@ const person = (
 test('This PC home: put, get, list, delete keep the docs/PEOPLE.md folders', async () => {
   const pc = createThisPcHome({ home })
   await pc.put(
-    person('ada', '2026-01-01T00:00:00.000Z', {
-      learnings: [{ id: 'l1', text: 'Ask first', at: '2026-01-01T00:00:00.000Z' }],
+    person('ada', '2020-01-01T00:00:00.000Z', {
+      learnings: [{ id: 'l1', text: 'Ask first', at: '2020-01-01T00:00:00.000Z' }],
     }),
   )
   expect(existsSync(join(home, '.agenthydra', 'people', 'manager', 'ada', 'persona.json'))).toBe(
@@ -69,7 +69,7 @@ test('This PC home: put, get, list, delete keep the docs/PEOPLE.md folders', asy
   const got = await pc.get('manager/ada')
   expect(got?.brief).toBe('Brief of ada')
   expect(got?.learnings[0]?.text).toBe('Ask first')
-  expect(got?.updatedAt).toBe('2026-01-01T00:00:00.000Z')
+  expect(got?.updatedAt).toBe('2020-01-01T00:00:00.000Z')
   expect((await pc.list()).map((p) => p.name)).toEqual(['Example ada'])
   await pc.delete('manager/ada')
   expect(await pc.get('manager/ada')).toBeNull()
@@ -79,15 +79,15 @@ test('This PC home refuses an id that could leave the people folder', async () =
   const pc = createThisPcHome({ home })
   expect(await pc.get('manager/../x')).toBeNull()
   await expect(
-    pc.put({ ...person('ok', '2026-01-01T00:00:00.000Z'), id: 'manager/../evil' }),
+    pc.put({ ...person('ok', '2020-01-01T00:00:00.000Z'), id: 'manager/../evil' }),
   ).rejects.toThrow()
 })
 
 test('sync both ways through the door, and a pull rebuilds the catalog', async () => {
   const pc = createThisPcHome({ home })
   const remote = remoteHome()
-  await pc.put(person('mine', '2026-01-01T00:00:00.000Z'))
-  await remote.put(person('theirs', '2026-01-02T00:00:00.000Z'))
+  await pc.put(person('mine', '2020-01-01T00:00:00.000Z'))
+  await remote.put(person('theirs', '2020-01-02T00:00:00.000Z'))
   let rebuilt = 0
   const r = await syncPeople({
     local: pc,
@@ -104,8 +104,8 @@ test('sync both ways through the door, and a pull rebuilds the catalog', async (
 test('sync conflict: newer wins and the losing copy is kept in the backup folder', async () => {
   const pc = createThisPcHome({ home })
   const remote = remoteHome()
-  await pc.put(person('ada', '2026-01-01T00:00:00.000Z', { brief: 'old pc brief' }))
-  await remote.put(person('ada', '2026-02-01T00:00:00.000Z', { brief: 'newer remote brief' }))
+  await pc.put(person('ada', '2020-01-01T00:00:00.000Z', { brief: 'old pc brief' }))
+  await remote.put(person('ada', '2020-02-01T00:00:00.000Z', { brief: 'newer remote brief' }))
   const r = await syncPeople({ local: pc, remote, backupDir: backupDir(home) })
   expect(r.backedUp).toBe(1)
   expect((await pc.get('manager/ada'))?.brief).toBe('newer remote brief')
@@ -121,7 +121,7 @@ test('sync conflict: newer wins and the losing copy is kept in the backup folder
     backedUp: 0,
   })
   // The other way: a newer PC copy goes up and the old CrAInium copy is backed up as crainium--.
-  await pc.put(person('ada', '2026-03-01T00:00:00.000Z', { brief: 'newest pc brief' }))
+  await pc.put(person('ada', '2020-03-01T00:00:00.000Z', { brief: 'newest pc brief' }))
   const up = await syncPeople({ local: pc, remote, backupDir: backupDir(home) })
   expect(up).toMatchObject({ pushed: 1, backedUp: 1 })
   expect((await remote.get('manager/ada'))?.brief).toBe('newest pc brief')
@@ -134,14 +134,14 @@ test('playbook and avatar files round-trip byte-exact through the door and This 
   const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0, 255, 128, 1, 2, 3, 250])
   const avatar = { path: 'avatar.png', base64: png.toString('base64') }
   const playbook = { path: 'playbook/rules.md', text: 'Line one\r\nLine two\n\n  tail  ' }
-  await remoteHome().put(person('ada', '2026-01-01T00:00:00.000Z', { files: [avatar, playbook] }))
+  await remoteHome().put(person('ada', '2020-01-01T00:00:00.000Z', { files: [avatar, playbook] }))
   await syncPeople({ local: pc, remote: remoteHome(), backupDir: backupDir(home) })
   const dir = join(home, '.agenthydra', 'people', 'manager', 'ada')
   expect(readFileSync(join(dir, 'avatar.png')).equals(png)).toBe(true)
   expect(readFileSync(join(dir, 'playbook', 'rules.md'), 'utf8')).toBe(playbook.text)
   const got = await pc.get('manager/ada')
   expect(got?.files).toEqual([playbook, avatar])
-  expect(got?.updatedAt).toBe('2026-01-01T00:00:00.000Z')
+  expect(got?.updatedAt).toBe('2020-01-01T00:00:00.000Z')
   // A pulled record with no files removes nothing on disk, and a file nobody knows is never read or sent.
   writeFileSync(join(dir, 'notes.txt'), 'mine')
   await pc.put({ ...(got as PersonRecord), files: [] })
@@ -155,7 +155,7 @@ test('playbook and avatar files round-trip byte-exact through the door and This 
 
 test('an unreachable door raises HomeUnavailable and deletes nothing local', async () => {
   const pc = createThisPcHome({ home })
-  await pc.put(person('ada', '2026-01-01T00:00:00.000Z'))
+  await pc.put(person('ada', '2020-01-01T00:00:00.000Z'))
   writeFileSync(`${db}.down`, '')
   await expect(remoteHome().list()).rejects.toBeInstanceOf(HomeUnavailable)
   const r = await syncPeople({ local: pc, remote: remoteHome(), backupDir: backupDir(home) })
@@ -167,7 +167,7 @@ test('an unreachable door raises HomeUnavailable and deletes nothing local', asy
 
 test('delete never reaches the door', async () => {
   const remote = remoteHome()
-  await remote.put(person('ada', '2026-01-01T00:00:00.000Z'))
+  await remote.put(person('ada', '2020-01-01T00:00:00.000Z'))
   await remote.delete('manager/ada')
   expect(verbs()).not.toContain('delete')
   expect(await remote.get('manager/ada')).not.toBeNull()
@@ -175,8 +175,8 @@ test('delete never reaches the door', async () => {
 
 test('a stale put is nothing to push, not a failure', async () => {
   const remote = remoteHome()
-  await remote.put(person('ada', '2026-02-01T00:00:00.000Z', { brief: 'kept' }))
-  await remote.put(person('ada', '2026-01-01T00:00:00.000Z', { brief: 'older' }))
+  await remote.put(person('ada', '2020-02-01T00:00:00.000Z', { brief: 'kept' }))
+  await remote.put(person('ada', '2020-01-01T00:00:00.000Z', { brief: 'older' }))
   expect((await remote.get('manager/ada'))?.brief).toBe('kept')
 })
 
@@ -192,7 +192,7 @@ test('a saved connections home reads as This PC, and CrAInium is refused without
   expect(st).toMatchObject({ home: 'pc', crainium: { available: false } })
   expect(st.crainium.reason).toBeTruthy()
   await expect(svc.setHome('crainium')).rejects.toThrow('not set up')
-  await svc.put(person('ada', '2026-01-01T00:00:00.000Z'))
+  await svc.put(person('ada', '2020-01-01T00:00:00.000Z'))
   expect((await svc.list()).length).toBe(1)
 })
 
@@ -200,7 +200,7 @@ test('the service on CrAInium: status from the door, setting it syncs, a change 
   const remote = remoteHome()
   const svc = createPeopleService({ home, door: door(), rebuild: async () => {}, debounceMs: 5 })
   expect((await svc.status()).crainium).toMatchObject({ available: true, owner: 'example' })
-  await svc.local.put(person('ada', '2026-01-01T00:00:00.000Z'))
+  await svc.local.put(person('ada', '2020-01-01T00:00:00.000Z'))
   await svc.setHome('crainium')
   await svc.syncNow()
   expect(await remote.get('manager/ada')).not.toBeNull()
@@ -208,7 +208,8 @@ test('the service on CrAInium: status from the door, setting it syncs, a change 
   // The push runs the door after the 5 ms debounce: waited for, up to 10 s, not a fixed 800 ms (the door's round trip
   // passed 800 ms on a loaded PC: 1 run in 3 failed alone, 2026-10-15).
   const until = Date.now() + 10_000
-  while (((await remote.get('manager/ada'))?.learnings.length ?? 0) < 1 && Date.now() < until) await new Promise((r) => setTimeout(r, 50))
+  while (((await remote.get('manager/ada'))?.learnings.length ?? 0) < 1 && Date.now() < until)
+    await new Promise((r) => setTimeout(r, 50))
   expect((await remote.get('manager/ada'))?.learnings.length).toBe(1)
   expect(await svc.status()).toMatchObject({ home: 'crainium', error: null })
   expect(statSync(join(home, '.agenthydra', 'people-store.json')).isFile()).toBe(true)

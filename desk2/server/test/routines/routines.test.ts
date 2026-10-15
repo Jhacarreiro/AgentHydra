@@ -128,13 +128,24 @@ describe('the definition (routines/manifest.ts)', () => {
     expect(() => checkDefinition('example-m', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], timeoutMinutes: 4 })).toThrow(/timeoutMinutes/)
     expect(() => checkDefinition('example-m', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], timeoutMinutes: 361 })).toThrow(/timeoutMinutes/)
   })
+
+  test('modes are 2 to 5 different names and a command, on a status routine only: its status says which is in force', () => {
+    const paced = { name: 'E', askedBy, status: ['node', 'status.js'], run: ['node', 'tick.js'] }
+    const set = ['node', 'mode.js']
+    expect(checkDefinition('example-o', { ...paced, modes: { options: ['idle', 'adaptive', 'aggressive'], set } }).modes).toEqual({ options: ['idle', 'adaptive', 'aggressive'], set })
+    expect(() => checkDefinition('example-o', { name: 'E', askedBy, schedule: '0 9 * * *', run: ['x'], modes: { options: ['a', 'b'], set } })).toThrow(/only a status routine/)
+    for (const options of [['idle'], ['a', 'b', 'c', 'd', 'e', 'f'], ['idle', 'idle'], ['Idle', 'busy'], ['idle', '']])
+      expect(() => checkDefinition('example-o', { ...paced, modes: { options, set } })).toThrow(/"modes" must be/)
+    expect(() => checkDefinition('example-o', { ...paced, modes: { options: ['a', 'b'], set: [] } })).toThrow(/"modes.set"/)
+    expect(() => checkDefinition('example-o', { ...paced, modes: { options: ['a', 'b'], set, default: 'a' } })).toThrow(/"modes" must be/)
+  })
 })
 
 // ---------- judging one look ----------
 
 const NOW = at(2026, 10, 12, 9, 30)
 const entryOf = (id: string, body: Record<string, unknown>): Entry => ({ id, def: checkDefinition(id, { name: 'Example', askedBy, ...body }), broken: null })
-const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, numbers: null, trends: null, ...over })
+const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, mode: null, numbers: null, trends: null, ...over })
 const seenOf = (entry: Entry, over: Partial<Seen> = {}): Seen => ({ entry, reading: null, readError: null, task: null, ...over })
 const memWith = (over: Partial<Memory> = {}): Memory => ({ ...emptyMemory(), ...over })
 
@@ -281,10 +292,22 @@ afterEach(async () => {
 })
 
 // The fake command: `tick` counts a line in its file and exits 0, `wait` exits 0 once <file>.go exists (or a minute passes),
-// `busy` says so and exits 75.
+// `mode-status` prints a status whose mode is <file>.mode (adaptive while there is none), `set-mode <value>` writes it there
+// (and refuses idle with exit 3), `busy` says so and exits 75.
 const COMMAND = `const fs = require('node:fs')
-const [mode, file] = process.argv.slice(2)
-if (mode === 'tick') {
+const [mode, file, value] = process.argv.slice(2)
+if (mode === 'mode-status') {
+  const picked = fs.existsSync(file + '.mode') ? fs.readFileSync(file + '.mode', 'utf8') : 'adaptive'
+  console.log(JSON.stringify({ next_tick_at: '2099-01-01T00:00:00Z', headline: 'paced', mode: picked }))
+  process.exit(0)
+} else if (mode === 'set-mode') {
+  if (value === 'idle') {
+    console.error('idle refused: the example says no')
+    process.exit(3)
+  }
+  fs.writeFileSync(file + '.mode', value)
+  process.exit(0)
+} else if (mode === 'tick') {
   fs.appendFileSync(file, 'tick\\n')
   console.log('first line of the run')
   console.log('done: 3 items checked')
@@ -722,6 +745,26 @@ describe('the plugin', () => {
     expect(((await refused.json()) as { error: string }).error).toStartWith('"example-edit" was not saved: ')
     expect(readFileSync(file, 'utf8')).toBe(before)
   })
+
+  // Owner, 2026-10-15: "Maybe the Archangel should have three toggles".
+  test("a mode pick runs the routine's own set command with it and the card reads the mode its status then says; an agent cannot pick, an option it does not have is refused, and a refusal leaves the mode as it was", async () => {
+    const d = desk()
+    const modes = { options: ['idle', 'adaptive', 'aggressive'], set: d.argv('set-mode') }
+    d.routine('example-modes', { name: 'Example modes', askedBy, status: d.argv('mode-status'), run: d.argv('tick'), modes })
+    expect((await get(d.app, true)).routines[0]).toMatchObject({ state: 'idle', modes: modes.options, mode: 'adaptive' })
+
+    const res = await post(d.app, { mode: { id: 'example-modes', value: 'aggressive' } }, OWNER)
+    expect(res.status).toBe(200)
+    expect(((await res.json()) as RoutinesStatus).routines[0].mode).toBe('aggressive')
+    expect(readFileSync(`${d.count}.mode`, 'utf8')).toBe('aggressive')
+
+    expect((await post(d.app, { mode: { id: 'example-modes', value: 'adaptive' } })).status).toBe(403)
+    expect((await post(d.app, { mode: { id: 'example-modes', value: 'turbo' } }, OWNER)).status).toBe(400)
+    const refused = await post(d.app, { mode: { id: 'example-modes', value: 'idle' } }, OWNER)
+    expect(refused.status).toBe(500)
+    expect(((await refused.json()) as { error: string }).error).toContain('idle refused: the example says no')
+    expect((await get(d.app, true)).routines[0].mode).toBe('aggressive')
+  }, 30_000)
 
   // Regression (2026-10-13): a Desk that did not know a new key read Archangel's file as broken and listed it by its file
   // name, "michaiel".

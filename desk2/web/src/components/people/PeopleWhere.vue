@@ -59,7 +59,7 @@ const OFF = 'text-text-2 hover:bg-fill-hover'
     <template v-if="status && view">
       <div class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b border-border py-3.5">
         <div class="min-w-50 flex-1 text-ui leading-5 text-text">Home</div>
-        <div role="radiogroup" aria-label="Where your people live" class="flex shrink-0 items-center gap-1 rounded-[var(--radius-6)] bg-fill-5 p-0.5">
+        <div role="radiogroup" aria-label="Where your people live" class="flex shrink-0 items-center gap-1 rounded-(--radius-6) bg-fill-5 p-0.5">
           <button type="button" role="radio" :aria-checked="status.home === 'pc'" :class="[SEG, status.home === 'pc' ? ON : OFF]" :disabled="busy !== null" @click="pick('pc')">
             <Monitor class="size-3.5" aria-hidden="true" /> This PC
           </button>
@@ -76,7 +76,7 @@ const OFF = 'text-text-2 hover:bg-fill-hover'
           <span :title="when">{{ syncLine(status, now) }}</span>
         </div>
         <button type="button" :class="BUTTON" :disabled="busy !== null || status.syncing" :aria-busy="busy === 'sync' || status.syncing" @click="run('sync', syncNow)">
-          <RefreshCw class="mr-1.5 size-3.5" :class="busy === 'sync' || status.syncing ? 'animate-spin' : ''" aria-hidden="true" /> Sync now
+          <RefreshCw class="me-1.5 size-3.5" :class="busy === 'sync' || status.syncing ? 'animate-spin' : ''" aria-hidden="true" /> Sync now
         </button>
       </div>
     </template>

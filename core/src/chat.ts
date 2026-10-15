@@ -404,12 +404,7 @@ export class Chats {
     const service = running.service
     const backend = this.backend.get(service)
     if (!backend) return { ok: false, error: `No ${LABEL[service]} backend in this core` }
-    const carried = service === 'claude' && e.carry === true
-    e.carry = undefined
-    let lead = carried
-      ? this.handoff(e, 0, sentId, { why: 'the owner moved it to another account' })
-      : this.leadFor(e, service, sentId)
-    e.chat.serviceRanOn = service === 'claude' ? undefined : service
+    let lead = this.openingLead(e, service, sentId)
     let thread = this.boundThread(e, service)
     const avoid = new Set<string>()
     /** Logins that throttled this message: tried again once the rest are spent, for up to THROTTLE_WAIT_MS. */
@@ -423,36 +418,71 @@ export class Chats {
         return after
       }
       if (e.interrupted) return { ok: false }
-      if (thread && picked.id !== thread.accountId) {
+      if (this.leavesThread(thread, picked)) {
         // The thread's login cannot take it now (signed out, or held by a limit): a new thread here reads the chat first.
         thread = undefined
         lead = this.handoff(e, 0, sentId, { why: 'the account it ran on is not available' })
       }
       const turn = await this.startTurn(e, running, backend, picked, {
         thread,
-        text: lead ? `${lead}${ANSWER_NOW}${text}` : text,
+        text: this.leadText(lead, text),
         images: imgs,
       })
       if (!turn) return { ok: false }
       const end = await turn.done
-      if (!this.alive(e) || e.interrupted || (end.limitedUntil === undefined && !end.throttled))
-        return end
+      if (this.endsHere(e, end)) return end
       const after = await this.afterLimit(e, service, picked, end, {
         thread,
         started,
         throttled,
         avoid,
       })
-      if (after === 'retry') continue
-      if (after !== 'next') return after
+      switch (after) {
+        case 'retry':
+          continue
+        case 'next':
+          break
+        default:
+          return after
+      }
       // The next account starts a new thread, which knows nothing yet: it reads the whole chat first, the moved turn's
       // own words included (2026-10-14, round 6: read from this turn's start only, a throttle move dropped the catch-up
       // from Claude, and Codex answered 'Unknown' for the code word).
       thread = undefined
-      lead = this.handoff(e, 0, sentId, {
-        why: end.throttled ? 'the provider throttled the account' : 'usage limit',
-      })
+      lead = this.handoff(e, 0, sentId, { why: this.moveWhy(end) })
     }
+  }
+
+  /** The lead for the first account: a chat the owner moved reads the whole chat; the rest read what their service missed. */
+  private openingLead(e: Entry, service: Service, sentId: string): string | null {
+    const carried = service === 'claude' && e.carry === true
+    e.carry = undefined
+    const lead = carried
+      ? this.handoff(e, 0, sentId, { why: 'the owner moved it to another account' })
+      : this.leadFor(e, service, sentId)
+    e.chat.serviceRanOn = service === 'claude' ? undefined : service
+    return lead
+  }
+
+  /** True when the thread's login is not the one that takes the message: a new thread there reads the chat first. */
+  private leavesThread(thread: ServiceThread | undefined, picked: { id: string }): boolean {
+    return !!thread && picked.id !== thread.accountId
+  }
+
+  /** The message text, with the catch-up lead in front of it when there is one. */
+  private leadText(lead: string | null, text: string): string {
+    return lead ? `${lead}${ANSWER_NOW}${text}` : text
+  }
+
+  /** Whether the turn ends here: the chat is gone, the owner interrupted it, or no limit or throttle moved it. */
+  private endsHere(e: Entry, end: TurnEnd): boolean {
+    if (!this.alive(e) || e.interrupted) return true
+    return end.limitedUntil === undefined && !end.throttled
+  }
+
+  /** Why a message moves to the next account: a provider throttle, or a usage limit. */
+  private moveWhy(end: TurnEnd): string {
+    return end.throttled ? 'the provider throttled the account' : 'usage limit'
   }
 
   /** No login can take the message now: a limit ends the turn, and throttled logins wait for the chance to try again. */

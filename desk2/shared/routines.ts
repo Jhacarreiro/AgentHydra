@@ -38,6 +38,14 @@
 // that printed something ends (a prompt run: its chat's last answer), an AI reads it and writes what the run did in two or
 // three plain sentences, kept with the run (owner, 2026-10-13: "every time they finish, to have a, like, AI description of
 // what they did ... have a toggle"). A busy run is not described. The card's Describe runs switch sets it.
+// "modes" is optional, for "status" routines only: how hard the routine works, which the owner picks on its card's Mode row
+// (owner, 2026-10-15: "Maybe the Archangel should have three toggles": Idle for little impact, Adaptive, proactive but
+// not too active and the default, and Aggressive). It is
+//   { "options": ["idle", "adaptive", "aggressive"], "set": ["python", "C:/Users/me/tools/example.py", "mode"] }
+// 2 to 5 options, each 1 to 20 of a-z, 0-9 and -, starting with a letter; the card shows each with its first letter
+// capitalised. `set` is an argv: the manager runs it hidden with the picked option appended (in `cwd`, at most 60 seconds),
+// and exit 0 means the routine took it. The status says which mode is in force with a top-level "mode": one of the options.
+// The routine keeps its mode itself; the manager never stores one.
 // The owner edits a routine's file in its card (owner, 2026-10-13: "I need to be able to, like, edit them ... rename them"):
 // POST `edit` changes the keys it names (null removes one), and the file must still check out.
 //
@@ -101,6 +109,13 @@ export interface RoutineRunning {
   sessionId: string | null
 }
 
+/** A status routine's modes: the options the owner picks from, and the command that takes a pick (its argv, the option
+ *  appended). */
+export interface RoutineModes {
+  options: string[]
+  set: string[]
+}
+
 /** The definition as the file holds it, checked. A proposal is one of these plus `why`. */
 export interface RoutineDefinition {
   id: string
@@ -115,6 +130,7 @@ export interface RoutineDefinition {
   timeoutMinutes: number
   until?: string
   describe?: boolean
+  modes?: RoutineModes
 }
 
 /** A proposal an AI wrote: the definition, plus why it should be a routine rather than a background task it runs itself. */
@@ -145,6 +161,10 @@ export interface Routine {
   paused: boolean
   /** Whether an AI describes each of its runs (its file's `describe`). */
   describe: boolean
+  /** Its file's mode options (a status routine with `modes`), else null. */
+  modes: string[] | null
+  /** The mode its status says is in force: one of `modes`, else null (none said, or not one of them). */
+  mode: string | null
   /** From its status (status kind): one line, cut to 160 characters. */
   headline: string | null
   totals: Record<string, number> | null
@@ -179,7 +199,8 @@ export interface RoutinesStatus {
  * POST /api/routines. One action per call besides `enabled`. The window (X-Desk-Caller: window) may do every action; an
  * agent may do `run`, `pause` and `propose` only, and gets 403 for the rest. `edit` sets the keys of a routine's file that
  * `set` names (null removes one: `until`, say), every other key as it was; 409 with the reason when the result does not
- * check out, and the file is left alone.
+ * check out, and the file is left alone. `mode` runs the routine's `modes.set` with `value` appended (400 when `value` is
+ * not one of its options, 500 with the command's last line when it fails) and reads its status again.
  */
 export interface RoutinesRequest {
   enabled?: boolean
@@ -190,6 +211,7 @@ export interface RoutinesRequest {
   discard?: string
   propose?: RoutineProposal
   edit?: { id: string; set: Record<string, unknown> }
+  mode?: { id: string; value: string }
 }
 
 /** The whole-history numbers of GET /api/routines/:id/details. Times in ms; rates 0 to 1, null when nothing counts. */

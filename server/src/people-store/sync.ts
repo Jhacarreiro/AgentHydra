@@ -38,6 +38,46 @@ export interface SyncOptions {
   afterPull?: () => Promise<void> | void
 }
 
+// The newer copy wins; the losing copy is backed up before it is overwritten.
+async function resolveConflict(
+  o: SyncOptions,
+  a: PersonRecord,
+  b: PersonRecord,
+  res: SyncResult,
+): Promise<void> {
+  if (time(a) > time(b)) {
+    backUp(o.backupDir, 'crainium', b)
+    await o.remote.put(a)
+    res.pushed++
+  } else {
+    backUp(o.backupDir, 'pc', a)
+    await o.local.put(b)
+    res.pulled++
+  }
+}
+
+async function syncOne(o: SyncOptions, id: string, res: SyncResult): Promise<void> {
+  const [a, b] = await Promise.all([o.local.get(id), o.remote.get(id)])
+  if (a && !b) {
+    await o.remote.put(a)
+    res.pushed++
+  } else if (b && !a) {
+    await o.local.put(b)
+    res.pulled++
+  } else if (a && b && time(a) !== time(b)) {
+    await resolveConflict(o, a, b, res)
+    res.backedUp++
+  }
+}
+
+async function rebuildCatalog(o: SyncOptions, res: SyncResult): Promise<void> {
+  try {
+    await o.afterPull?.()
+  } catch (e) {
+    res.error = `Pulled ${res.pulled}, but the catalog did not rebuild: ${e instanceof Error ? e.message : String(e)}`
+  }
+}
+
 export async function syncPeople(o: SyncOptions): Promise<SyncResult> {
   const res: SyncResult = {
     at: new Date().toISOString(),
@@ -50,33 +90,9 @@ export async function syncPeople(o: SyncOptions): Promise<SyncResult> {
     const [mine, theirs] = await Promise.all([o.local.list(), o.remote.list()])
     const ids = new Set([...mine.map((p) => p.id), ...theirs.map((p) => p.id)])
     for (const id of [...ids].sort()) {
-      const [a, b] = await Promise.all([o.local.get(id), o.remote.get(id)])
-      if (a && !b) {
-        await o.remote.put(a)
-        res.pushed++
-      } else if (b && !a) {
-        await o.local.put(b)
-        res.pulled++
-      } else if (a && b && time(a) !== time(b)) {
-        if (time(a) > time(b)) {
-          backUp(o.backupDir, 'crainium', b)
-          await o.remote.put(a)
-          res.pushed++
-        } else {
-          backUp(o.backupDir, 'pc', a)
-          await o.local.put(b)
-          res.pulled++
-        }
-        res.backedUp++
-      }
+      await syncOne(o, id, res)
     }
-    if (res.pulled > 0) {
-      try {
-        await o.afterPull?.()
-      } catch (e) {
-        res.error = `Pulled ${res.pulled}, but the catalog did not rebuild: ${e instanceof Error ? e.message : String(e)}`
-      }
-    }
+    if (res.pulled > 0) await rebuildCatalog(o, res)
   } catch (e) {
     res.error = e instanceof Error ? e.message : String(e)
   }

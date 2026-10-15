@@ -1,14 +1,15 @@
 <script setup lang="ts">
-// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, what the last run did when
-// it is described, and its own on/off switch) that opens into its schedule in words, its Describe runs switch, its history
-// with each run's description, and its actions: Run now, Open chat for a prompt run's chat, and Edit (its Edit form).
+// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, its mode, what the last run
+// did when it is described, and its own on/off switch) that opens into its schedule in words, its Mode row (a routine with
+// modes), its Describe runs switch, its history with each run's description, and its actions: Run now, Open chat for a prompt
+// run's chat, and Edit (its Edit form).
 import { computed, ref } from 'vue'
-import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
+import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, Gauge, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
 import { usePaneApi } from './api'
-import { BUTTON } from './settings-styles'
+import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS } from './settings-styles'
 import PaneSwitch from './PaneSwitch.vue'
 import RoutineEditForm from './RoutineEditForm.vue'
 import RoutineStatusChip from './RoutineStatusChip.vue'
@@ -87,6 +88,26 @@ async function act(body: Parameters<typeof api.routinesAct>[0]): Promise<boolean
   }
 }
 
+/** A mode option as the card shows it: "aggressive" is Aggressive, "low-power" is Low power. */
+const modeLabel = (option: string) => option.charAt(0).toUpperCase() + option.slice(1).replace(/-/g, ' ')
+/** The mode its status says is in force, and the one being set now (its radio spins until the status says it). */
+const modeIndex = computed(() => props.routine.modes?.indexOf(props.routine.mode ?? '') ?? -1)
+const pendingMode = ref<string | null>(null)
+
+/** The owner's pick on the Mode row (owner, 2026-10-15: "Maybe the Archangel should have three toggles"): the routine's own
+ *  command takes it, and the card shows the mode its status then says. */
+async function pickMode(value: string) {
+  if (busy.value || value === props.routine.mode) return
+  pendingMode.value = value
+  await act({ mode: { id: props.routine.id, value } })
+  pendingMode.value = null
+}
+
+function onModeKey(e: KeyboardEvent) {
+  const modes = props.routine.modes ?? []
+  if (modes.length) onSegmentKey(e, Math.max(0, modeIndex.value), modes.length, (i) => void pickMode(modes[i]!))
+}
+
 /** Saves the Edit form's changes; it closes once the server has them. */
 async function saveEdit(set: Record<string, unknown>) {
   if (await act({ edit: { id: props.routine.id, set } })) editing.value = false
@@ -123,6 +144,10 @@ function toggleEdit() {
             <Clock class="size-3.5" aria-hidden="true" />
             Next {{ nextShort }}
           </span>
+          <span v-if="routine.mode" class="inline-flex items-center gap-1" title="Mode">
+            <Gauge class="size-3.5" aria-hidden="true" />
+            {{ modeLabel(routine.mode) }}
+          </span>
         </span>
         <span v-if="routine.describe && lastDescription" class="line-clamp-2 basis-full ps-12 text-ui-sm leading-4.5 text-text-2" :title="lastDescription">{{ lastDescription }}</span>
       </button>
@@ -155,6 +180,27 @@ function toggleEdit() {
           <dd class="tnum truncate text-text-2">{{ String(v) }}</dd>
         </div>
       </dl>
+      <!-- Its file's `modes`: how hard it works, the one in force as its status says it. -->
+      <div v-if="routine.modes" class="mt-2 flex items-center gap-2 text-ui-sm leading-4.5">
+        <Gauge class="size-3.5 shrink-0 text-text-2" aria-hidden="true" />
+        <span class="min-w-0 flex-1 text-text-2">Mode</span>
+        <div role="radiogroup" :aria-label="`How hard ${routine.name} works`" :class="SEGMENTS" @keydown="onModeKey">
+          <button
+            v-for="(option, i) in routine.modes"
+            :key="option"
+            type="button"
+            role="radio"
+            :aria-checked="option === routine.mode"
+            :tabindex="(modeIndex < 0 ? i === 0 : i === modeIndex) ? 0 : -1"
+            :class="[SEGMENT, 'gap-1.5 disabled:opacity-50']"
+            :disabled="busy"
+            @click="pickMode(option)"
+          >
+            <LoaderCircle v-if="pendingMode === option" class="size-3.5 animate-spin" aria-label="Setting the mode" />
+            {{ modeLabel(option) }}
+          </button>
+        </div>
+      </div>
       <!-- Its file's `describe` (owner, 2026-10-13: "have a toggle that says... run description"): on, an AI writes what each
            run did once it ends. -->
       <div v-if="describable" class="mt-2 flex items-center gap-2 text-ui-sm leading-4.5">

@@ -1224,8 +1224,12 @@ const pointerReassertTimer = setInterval(() => {
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 
+// Set when the Manager Hydra turn collector starts (the primary install, while the people code lives here).
+let stopManagerAnalytics: (() => void) | null = null
+
 /** Clear the interval timers started at boot, so none ticks while the daemon is going away. */
 function stopBackgroundTimers(): void {
+  stopManagerAnalytics?.()
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
@@ -1728,7 +1732,7 @@ if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
 
 // Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
 if (IS_PRIMARY_INSTALL && inRepoPeople()) {
-  startManagerAnalytics((worker) =>
+  stopManagerAnalytics = startManagerAnalytics((worker) =>
     storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
   )
   startManagerJudge()
