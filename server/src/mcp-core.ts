@@ -1,4 +1,5 @@
 import { callerAndChat } from './hydra-core/caller'
+import { movers, readFeedback } from './hydra-core/feedback'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
 import { OUTCOMES, reportRun } from './hydra-core/report-row'
@@ -154,11 +155,15 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_stats',
     listed: false,
     description:
-      'Hydra Core log stats over the last `days` (default 31): misses per entry (and the `none` rejections), overruled counts, reports and the report rate, per-question asked and defaulted counts, pushback by chat, and finds.',
+      'Hydra Core log stats over the last `days` (default 31): misses per entry (and the `none` rejections), overruled counts, reports and the report rate, per-question asked and defaulted counts, pushback by chat, finds, and `learned`: the entries the last feedback fold moves most, up and down.',
     inputSchema: S({ days: { type: 'integer', minimum: 1 } }),
     run: async (a: Record<string, unknown>) => {
       const days = typeof a.days === 'number' && a.days >= 1 ? a.days : 31
-      return statsOf(coreDir(), new Date(Date.now() - days * 24 * 60 * 60 * 1000))
+      const dir = coreDir()
+      return {
+        ...statsOf(dir, new Date(Date.now() - days * 24 * 60 * 60 * 1000)),
+        learned: movers(readFeedback(dir)),
+      }
     },
   },
 ]

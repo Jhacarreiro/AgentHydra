@@ -92,6 +92,7 @@ import { startHelpers } from './helpers'
 import { startHSwarm, stopHSwarm } from './hswarm'
 import { startShortfallWatch } from './hswarm-shortfall'
 import { app } from './http-app'
+import { startFeedbackFold, stopFeedbackFold } from './hydra-core/feedback'
 import { packAnswer } from './hydra-core/pack'
 import { coreDir } from './hydra-core/paths'
 import { familyWriteBarred, writeSelfManifest } from './hydra-family'
@@ -1209,6 +1210,7 @@ function stopBackgroundTimers(): void {
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
+  stopFeedbackFold()
   stopIdleSweep()
   stopClaudeNativePrewarm()
   stopExtraUsageGuard()
@@ -1621,6 +1623,9 @@ startKeepAwake()
 startUsageRefresh()
 // Daily safe limit-reset check per signed-in CLI account (core/cli-reset-sweep.ts).
 startCliResetSweep()
+// Hydra Core's learning fold (hydra-core/feedback.ts): log.jsonl into catalog/feedback.json shortly after boot, then
+// whenever it passes a day old. Off every request path; packs and finds only read the small file.
+startFeedbackFold()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
 startDesktopCliFeed()

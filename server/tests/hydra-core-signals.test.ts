@@ -235,12 +235,17 @@ test('A5-F12: hydra.md keeps the last 20 scope-log lines', () => {
 test('A5-F12: sent.json drops sessions not seen in 7 days and keeps the lead owed', () => {
   const file = chatPaths(dir, 'f12').sent
   const t0 = new Date('2026-10-01T00:00:00Z')
-  writeSent(file, { old: ['person:iris-ui'], '(lead owed)': ['person:ops-lead'] }, t0)
+  writeSent(file, { old: ['person:iris-ui'], '(lead owed)': ['person:ops-lead'] }, 'old', t0)
   const later = new Date('2026-10-09T00:00:00Z')
-  writeSent(file, { ...readSent(file), fresh: ['knowledge:brand-notes'] }, later)
+  writeSent(file, { ...readSent(file), fresh: ['knowledge:brand-notes'] }, 'fresh', later)
   const sent = readSent(file)
   expect(Object.keys(sent).sort()).toEqual(['(lead owed)', 'fresh'])
-  writeSent(file, { ...readSent(file), fresh: ['knowledge:brand-notes', 'person:iris-ui'] }, later)
+  writeSent(
+    file,
+    { ...readSent(file), fresh: ['knowledge:brand-notes', 'person:iris-ui'] },
+    'fresh',
+    later,
+  )
   expect(readSent(file).fresh).toHaveLength(2)
 })
 

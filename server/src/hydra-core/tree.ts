@@ -9,6 +9,7 @@ import {
   loadRef,
   loadText,
 } from './catalog'
+import { readFeedback } from './feedback'
 import { findPage, matchOf, PAGE } from './find'
 import {
   addPick,
@@ -258,6 +259,7 @@ function fill(ctx: Ctx, g: Group): void {
     mode: g.mode,
     tiers: g.tiers,
     start: g.start,
+    feedback: readFeedback(ctx.dir),
   }).ids
   if (!g.ids.length)
     appendLog(ctx.dir, { chat: ctx.chat, event: 'find', need: g.need, empty: true }, ctx.now)
@@ -719,6 +721,7 @@ export function findTool(
   if (args.kind && !(KINDS as readonly string[]).includes(args.kind))
     throw new Error(`kind must be one of ${KINDS.join(', ')}`)
   const kinds = args.kind ? [args.kind as Kind] : undefined
+  const feedback = readFeedback(dir)
   // A call with no chat keeps no page: two chat-less callers would otherwise page each other's list.
   const key = args.chat ? [args.chat, need, args.kind ?? ''].join('\u0000') : null
   let start = 0
@@ -726,13 +729,13 @@ export function findTool(
     // No page in memory (a restart, an evicted key, no chat): the previous page is the first one.
     const prev = (key && pages.get(key)) || {
       start: 0,
-      ids: findPage(cat.values(), need, { kinds, start: 0 }).ids,
+      ids: findPage(cat.values(), need, { kinds, start: 0, feedback }).ids,
     }
     for (const id of prev.ids)
       appendLog(dir, { chat: args.chat, event: 'miss', id, need, why: 'more' }, now)
     start = prev.start + PAGE
   }
-  const r = findPage(cat.values(), need, { kinds, start })
+  const r = findPage(cat.values(), need, { kinds, start, feedback })
   if (key) keepPage(key, { start, ids: r.ids })
   appendLog(
     dir,

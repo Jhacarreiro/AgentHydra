@@ -18,7 +18,7 @@ export function readSent(file: string): Sent {
 
 const WEEK = 7 * 24 * 60 * 60 * 1000
 
-/** When each session's list last changed, beside sent.json; a session unchanged for a week is dropped. */
+/** When each session was last seen, beside sent.json; a session not seen for a week is dropped. */
 function seenFile(file: string): string {
   return join(dirname(file), 'sent-seen.json')
 }
@@ -31,9 +31,14 @@ function readSeen(file: string): Record<string, string> {
   }
 }
 
-export function writeSent(file: string, sent: Sent, now = new Date()): void {
+/** Writes sent.json; `session` is the one this message came from (seen now), null when none is. */
+export function writeSent(
+  file: string,
+  sent: Sent,
+  session: string | null,
+  now = new Date(),
+): void {
   mkdirSync(dirname(file), { recursive: true })
-  const before = readSent(file)
   const seen = readSeen(file)
   const at = now.toISOString()
   const kept: Sent = {}
@@ -43,8 +48,7 @@ export function writeSent(file: string, sent: Sent, now = new Date()): void {
       kept[key] = ids
       continue
     }
-    const changed = JSON.stringify(before[key]) !== JSON.stringify(ids)
-    const last = changed || !seen[key] ? at : seen[key]
+    const last = key === session || !seen[key] ? at : seen[key]
     if (now.getTime() - Date.parse(last) > WEEK) continue
     kept[key] = ids
     keptSeen[key] = last
@@ -70,7 +74,7 @@ export function takeLeadOwed(
   const id = sent[OWED]?.[0]
   if (!id) return null
   clearLeadOwed(sent)
-  writeSent(file, sent)
+  writeSent(file, sent, null)
   const e = cat.get(id)
   return e ? { id: e.id, name: e.name, text: loadText(e) } : null
 }

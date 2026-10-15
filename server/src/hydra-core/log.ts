@@ -43,7 +43,11 @@ function rotate(dir: string, now: Date): void {
 
 export function appendLog(dir: string, event: Record<string, unknown>, now = new Date()): void {
   mkdirSync(dir, { recursive: true })
-  rotate(dir, now)
+  try {
+    rotate(dir, now)
+  } catch {
+    // Another process holds log.jsonl (Windows refuses the rename): the next append tries again.
+  }
   appendFileSync(logPath(dir), `${JSON.stringify({ at: now.toISOString(), ...event })}\n`)
 }
 

@@ -2,6 +2,7 @@ import { existsSync, readFileSync } from 'node:fs'
 import { isAbsolute } from 'node:path'
 import { contentWords } from '../mcp-find'
 import { type CatalogEntry, loadCatalog, loadRef, loadText } from './catalog'
+import { doubted, type Feedback, readFeedback, stale } from './feedback'
 import { detailOf, rankEntries, terms } from './find'
 import { leadName, parseHydra } from './hydra-md'
 import {
@@ -34,6 +35,13 @@ const MATCH_POINTERS = 3
  *  words of the message, and a message of at least MATCH_WORDS content words. */
 const MATCH_STRONG = 10
 const MATCH_WORDS = 3
+/** What an entry needs to be attached: MATCH_MIN, one more when it was rejected more often than taken; knowledge
+ *  offered STALE_OFFERS times and never taken is not attached at all. */
+function attachable(fb: Feedback | null, e: CatalogEntry, score: number): boolean {
+  if (e.kind === 'knowledge' && stale(fb, e.id)) return false
+  return score >= (doubted(fb, e.id) ? MATCH_MIN + 1 : MATCH_MIN)
+}
+
 const ALSO_MATCHING = 'Also matching (core_find { need, chat } loads any of them):'
 
 export type PackMode = 'first' | 'full' | 'delta'
@@ -225,9 +233,10 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const folder = main.filter((e) => fresh(e.id))
   const foreign = foreignTo(req.cwd)
 
-  const matches = rankEntries(entries, req.prompt).filter(
+  const feedback = readFeedback(dir)
+  const matches = rankEntries(entries, req.prompt, { feedback }).filter(
     (s) =>
-      s.score >= MATCH_MIN &&
+      attachable(feedback, s.entry, s.score) &&
       s.entry.kind !== 'person' &&
       !mainIds.has(s.entry.id) &&
       !foreign(s.entry) &&
@@ -247,7 +256,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
       ? undefined
       : mode !== 'delta' && req.pick
         ? (req.pick.id ?? undefined)
-        : wordLead(entries, req.prompt)?.id
+        : wordLead(entries, req.prompt, feedback)?.id
   const persona = personaId ? catalog.get(personaId) : undefined
   const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
   let lead: { id: string; name: string; text: string } | null = null
@@ -346,7 +355,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   else if (owed) setLeadOwed(sent, owed)
   const record = mode === 'delta' ? [...seen, ...ids] : ids
   sent[req.session] = [...new Set(record)]
-  writeSent(files.sent, sent)
+  writeSent(files.sent, sent, req.session, now)
   appendLog(dir, { event: 'pack', chat: req.chat, session: req.session, mode, ids, bytes, ms }, now)
   return { mode, text, ids, bytes, ms, lead: used, owed }
 }
@@ -456,12 +465,13 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
 
   const need = terms(req.prompt, true)
   const scores: Record<string, number> = {}
+  const feedback = readFeedback(dir)
   const hits =
     contentWords(req.prompt).length < MATCH_WORDS
       ? []
-      : rankEntries(entries, req.prompt, { content: true }).filter((s) => {
+      : rankEntries(entries, req.prompt, { content: true, feedback }).filter((s) => {
           if (
-            s.score < MATCH_MIN ||
+            !attachable(feedback, s.entry, s.score) ||
             s.entry.kind === 'person' ||
             mainIds.has(s.entry.id) ||
             foreign(s.entry) ||
@@ -502,9 +512,9 @@ export function matchFor(dir: string, req: PlacedRequest, now = new Date()): Mat
     : adds
   const sentIds = [...ids, ...(shift ? [shift.to] : [])]
 
-  if (sentIds.length) {
+  if (sentIds.length || req.session in sent) {
     sent[req.session] = [...new Set([...(sent[req.session] ?? []), ...sentIds])]
-    writeSent(files.sent, sent)
+    writeSent(files.sent, sent, req.session, now)
   }
   appendLog(
     dir,

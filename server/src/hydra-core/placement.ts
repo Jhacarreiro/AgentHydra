@@ -142,7 +142,7 @@ export function placeChat(
       const sent = readSent(files.sent)
       if (pack.owed) setLeadOwed(sent, pack.owed)
       else clearLeadOwed(sent)
-      writeSent(files.sent, sent)
+      writeSent(files.sent, sent, req.session, now)
     }
   }
   // Every launch, fresh or resumed, puts the pack in the session's prompt.

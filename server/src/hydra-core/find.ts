@@ -1,5 +1,6 @@
 import { contentWords, SYNONYMS, words } from '../mcp-find'
 import type { CatalogEntry, Kind } from './catalog'
+import { type Feedback, priorOf } from './feedback'
 
 export interface FindOpts {
   kinds?: readonly Kind[]
@@ -14,6 +15,8 @@ export interface FindOpts {
   noHow?: boolean
   /** Keep only matches this strong, then rank by score before tier, so tier order only breaks ties. */
   min?: number
+  /** The last feedback fold: each score is multiplied by the entry's prior (priorOf). */
+  feedback?: Feedback | null
 }
 
 export interface Match {
@@ -90,7 +93,7 @@ export interface Scored {
   score: number
 }
 
-/** Every entry that matches the need, best first (tier rank, then score, then id). */
+/** Every entry that matches the need, best first (tier rank, then score, then id); with feedback, scores carry the prior. */
 export function rankEntries(
   entries: Iterable<CatalogEntry>,
   need: string,
@@ -104,7 +107,7 @@ export function rankEntries(
       if (opts.mode && !modesOf(e).includes(opts.mode)) continue
       const rank = opts.tiers ? opts.tiers.indexOf(e.tier ?? '') : 0
       if (rank < 0) continue
-      const score = scoreEntry(e, t, opts.noHow)
+      const score = scoreEntry(e, t, opts.noHow) * priorOf(opts.feedback ?? null, e.id)
       if (score > 0 && score >= (opts.min ?? 0)) scored.push({ entry: e, rank, score })
     }
   scored.sort((a, b) =>

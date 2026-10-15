@@ -5,9 +5,11 @@ import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { contentWords } from '../mcp-find'
 import { type CatalogEntry, LEAD_TIERS, loadRef, loadText } from './catalog'
+import { type Feedback, readFeedback } from './feedback'
 import { detailOf, rankEntries, terms } from './find'
 import { emptyDoc, leadLine, parseHydra, renderHydra } from './hydra-md'
 import { appendLog } from './log'
+import { coreDir } from './paths'
 
 /** A chat's first launch may wait this long for the model's pick. */
 export const LAUNCH_BUDGET_MS = 5000
@@ -180,7 +182,10 @@ export function leadQuestion(managers: CatalogEntry[], message: string): LeadQue
     question: [
       'Which manager should lead the work this owner message asks for?',
       quick
-        ? `A quick ask (a fact, a status, a one-line edit, a single chore) is ${quick.name}'s.`
+        ? `A quick ask needing no field judgment (a fact, a status, a rename, a typo, a git or npm command) is ${quick.name}'s.`
+        : '',
+      quick
+        ? "A quick ask that changes something a field's manager owns stays that manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's, a screen's design the UI manager's."
         : '',
       'Answer none only when the message holds no work: ok, thanks, a greeting, a bare "keep going".',
       `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
@@ -195,7 +200,11 @@ export function leadQuestion(managers: CatalogEntry[], message: string): LeadQue
 
 /** The word ranker: content words only, no `how` text, nothing under LEAD_MIN, and score before tier. Three or
  *  more managers hit means work across fields, so the coordinator. */
-export function wordLead(entries: CatalogEntry[], message: string): CatalogEntry | null {
+export function wordLead(
+  entries: CatalogEntry[],
+  message: string,
+  feedback: Feedback | null = readFeedback(coreDir()),
+): CatalogEntry | null {
   if (!contentWords(message).length) return null
   const managers = managersOf(entries)
   const need = terms(message, true)
@@ -209,6 +218,7 @@ export function wordLead(entries: CatalogEntry[], message: string): CatalogEntry
     content: true,
     noHow: true,
     min: LEAD_MIN,
+    feedback,
   })
   return ranked[0]?.entry ?? null
 }

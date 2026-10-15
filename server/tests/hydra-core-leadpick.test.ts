@@ -678,11 +678,32 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
     expect(pick).toMatchObject({ id: 'person:gil-floor', path: 'model' })
     const { q } = asked[0] as { q: LeadQuestion }
     expect(q.question).toContain(
-      "A quick ask (a fact, a status, a one-line edit, a single chore) is Gil's.",
+      "A quick ask needing no field judgment (a fact, a status, a rename, a typo, a git or npm command) is Gil's.",
     )
     expect(q.question).toContain('Answer none only when the message holds no work')
     expect(q.question).not.toContain('answer none for those')
     expect(q.options.none).not.toMatch(/chore|quick|fact|status/)
+  })
+
+  test("B4b-7: a quick ask that changes what a field manager owns stays that manager's", async () => {
+    mockModel((m) =>
+      /ad spend/.test(m) ? 'jay-ads' : /column/.test(m) ? 'sam-backend' : 'gil-floor',
+    )
+    const ads = await pickLead(entriesOf(dir), 'bump the ad spend to 40 a day', 5000, {
+      cache: false,
+    })
+    expect(ads).toMatchObject({ id: 'person:jay-ads', path: 'model' })
+    const col = await pickLead(entriesOf(dir), 'add a nullable column for the coupon code', 5000, {
+      cache: false,
+    })
+    expect(col).toMatchObject({ id: 'person:sam-backend', path: 'model' })
+    const { q } = asked[0] as { q: LeadQuestion }
+    expect(q.question).toContain(
+      "A quick ask that changes something a field's manager owns stays that manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's, a screen's design the UI manager's.",
+    )
+    expect(q.question).toMatch(
+      /no field judgment \(a fact, a status, a rename, a typo, a git or npm command\) is Gil's\./,
+    )
   })
 
   test("a continuation that names its work is asked and gets that work's lead; a bare one is never asked", async () => {
