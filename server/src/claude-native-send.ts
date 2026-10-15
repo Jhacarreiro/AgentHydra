@@ -271,3 +271,46 @@ export async function tryNativeStopChat(cliSessionId: string): Promise<NativeSto
     return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
   return tryNativeStop(profileDir, cliSessionId)
 }
+
+export interface NativeSettingOutcome extends NativeStopOutcome {
+  /** What the app shows after the call: the model and effort it kept. */
+  model?: string | null
+  effort?: string | null
+}
+
+/** The app's own setModel / setEffort for one chat in a profile's RUNNING app (native-program.ts nativeSetting), the
+ *  calls its pickers make. One call: a change the app did not keep is reported with what it kept, never sent again. */
+export async function tryNativeSetting(
+  profileDir: string,
+  cliSessionId: string,
+  setting: { model?: string; effort?: string },
+): Promise<NativeSettingOutcome> {
+  const profile = normalizeClaudeNativeProfile(profileDir)
+  const connected = await withAppClient(profileDir, ({ pid, evaluate }) =>
+    evaluate(
+      nativeProgram({ action: 'setting', pid, profileDir: profile, cliSessionId, ...setting }),
+    ),
+  )
+  if (!connected.ok) return { ok: false, unavailable: true, reason: connected.reason }
+  try {
+    const result = connected.value
+    const kept = { model: result?.after?.model ?? null, effort: result?.after?.effort ?? null }
+    if (result?.ok === true && result.verified === true)
+      return { ok: true, unavailable: false, verified: true, ...kept }
+    return {
+      ok: false,
+      unavailable: result?.dispatch === 'not-sent',
+      verified: false,
+      ...(result?.refused === true ? { refused: true } : {}),
+      reason: String(result?.reason ?? 'the app did not show the change'),
+      ...kept,
+    }
+  } catch (error) {
+    // The call may have been made: nothing else is tried, and the caller is told it is unknown.
+    return {
+      ok: false,
+      unavailable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
+}

@@ -31,12 +31,11 @@ function actuatorTurn<T>(run: () => Promise<T>): Promise<T> {
 // live writer, this fires the app's OWN `claude://resume` import targeted at the instance -
 // the app re-renders the chat at the top of its sidebar - then retries the type once. A live
 // unrendered session is refused honestly (resume-importing over a live writer is forbidden).
-// POST /api/sessions/:id/stop: Claude Desktop's own Stop for a working chat, inside its RUNNING app
-// (claude-native-send.ts tryNativeStop). The instance resolves as the message route resolves it. Nothing
-// is retried or typed: unavailable answers 503 with the reason, a refusal 409, an unconfirmed stop 502.
-app.post('/api/sessions/:id/stop', async (c) => {
-  const sessionId = c.req.param('id')
-  const body = await jsonBody(c)
+/** The RUNNING instance whose app holds a desktop chat (as the message route resolves it), or the answer to give. */
+async function runningDesktopChat(
+  sessionId: string,
+  body: Record<string, unknown>,
+): Promise<{ dir: string } | { error: string; status: 404 | 409 }> {
   const { findDesktopChat, desktopChatOn } = await import('../instance-sessions')
   const { listInstances } = await import('../core/instances')
   const namedRef = typeof body.instance === 'string' ? body.instance.trim() : ''
@@ -46,22 +45,61 @@ app.post('/api/sessions/:id/stop', async (c) => {
       )
     : undefined
   const meta = named ? desktopChatOn(named.dir, sessionId) : findDesktopChat(sessionId)
-  if (namedRef && (!named || !meta))
-    return c.json({ ok: false, error: 'not on the named instance' }, 409)
+  if (namedRef && (!named || !meta)) return { error: 'not on the named instance', status: 409 }
   const home = named ? named.dir : await desktopHomeFor(sessionId).catch(() => null)
-  if (!meta || !home) return c.json({ ok: false, error: 'no desktop chat holds this session' }, 404)
+  if (!meta || !home) return { error: 'no desktop chat holds this session', status: 404 }
   const inst = named ?? (await listInstances()).find((i) => samePathKey(i.dir, home))
-  if (!inst) return c.json({ ok: false, error: `no instance owns ${home}` }, 404)
+  if (!inst) return { error: `no instance owns ${home}`, status: 404 }
   if (!inst.isRunning)
-    return c.json(
-      { ok: false, error: `instance '${inst.name}' is not running - open it first` },
-      409,
-    )
+    return { error: `instance '${inst.name}' is not running - open it first`, status: 409 }
+  return { dir: inst.dir }
+}
+
+// POST /api/sessions/:id/stop: Claude Desktop's own Stop for a working chat, inside its RUNNING app
+// (claude-native-send.ts tryNativeStop). The instance resolves as the message route resolves it. Nothing
+// is retried or typed: unavailable answers 503 with the reason, a refusal 409, an unconfirmed stop 502.
+app.post('/api/sessions/:id/stop', async (c) => {
+  const sessionId = c.req.param('id')
+  const found = await runningDesktopChat(sessionId, await jsonBody(c))
+  if ('error' in found) return c.json({ ok: false, error: found.error }, found.status)
   const { tryNativeStop } = await import('../claude-native-send')
-  const stopped = await tryNativeStop(inst.dir, sessionId)
+  const stopped = await tryNativeStop(found.dir, sessionId)
   if (stopped.ok) return c.json({ ok: true, route: 'native', verified: true })
   const status = stopped.refused ? 409 : stopped.unavailable ? 503 : 502
   return c.json({ ok: false, error: stopped.reason ?? 'the app did not stop the chat' }, status)
+})
+
+// POST /api/sessions/:id/setting { model?, effort? }: a desktop chat's model and effort, set inside its RUNNING app
+// through the app's own setModel / setEffort (claude-native-send.ts tryNativeSetting), the calls its pickers make, so a
+// turn running now keeps going and the next one runs on them. Answers what the app kept; nothing is retried.
+app.post('/api/sessions/:id/setting', async (c) => {
+  const sessionId = c.req.param('id')
+  const body = await jsonBody(c)
+  const model = typeof body.model === 'string' && body.model.trim() ? body.model.trim() : undefined
+  const effort = typeof body.effort === 'string' && body.effort ? body.effort : undefined
+  if (!model && !effort) return c.json({ ok: false, error: 'model or effort required' }, 400)
+  const { NATIVE_EFFORTS } = await import('../core/claude-native/native-program')
+  if (effort && !NATIVE_EFFORTS.includes(effort))
+    return c.json({ ok: false, error: `effort must be one of ${NATIVE_EFFORTS.join(', ')}` }, 400)
+  if (model && !/^[A-Za-z0-9._:[\]-]{1,100}$/.test(model))
+    return c.json({ ok: false, error: 'model must be a model id' }, 400)
+  const found = await runningDesktopChat(sessionId, body)
+  if ('error' in found) return c.json({ ok: false, error: found.error }, found.status)
+  const { tryNativeSetting } = await import('../claude-native-send')
+  const set = await tryNativeSetting(found.dir, sessionId, {
+    ...(model ? { model } : {}),
+    ...(effort ? { effort } : {}),
+  })
+  if (set.ok)
+    return c.json({
+      ok: true,
+      route: 'native',
+      verified: true,
+      model: set.model,
+      effort: set.effort,
+    })
+  const status = set.refused ? 409 : set.unavailable ? 503 : 502
+  return c.json({ ok: false, error: set.reason ?? 'the app did not take the change' }, status)
 })
 
 app.post('/api/sessions/:id/message', async (c) => {

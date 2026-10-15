@@ -15,7 +15,16 @@ export const NATIVE_PROGRAM_PIN = Object.freeze({
 })
 
 export interface NativeProgramRequest {
-  action: 'inspect' | 'archive' | 'ultracode' | 'idle' | 'pause' | 'import' | 'send' | 'stop'
+  action:
+    | 'inspect'
+    | 'archive'
+    | 'ultracode'
+    | 'idle'
+    | 'pause'
+    | 'import'
+    | 'send'
+    | 'stop'
+    | 'setting'
   /** send only: the message, sent into the chat named by cliSessionId as a message from another
    *  session (never as the person). */
   text?: string
@@ -28,8 +37,10 @@ export interface NativeProgramRequest {
   pauseIds?: string[]
   /** pause only: how long to wait for an engine that is still starting before pausing it. */
   waitMs?: number
-  /** ultracode only: the effort to land (low..max; ultracode on needs xhigh or max). */
+  /** ultracode and setting: the effort to land (low..max; ultracode on needs xhigh or max). */
   effort?: string
+  /** setting only: the model to land, as the app's model picker names it (e.g. claude-opus-5-5). */
+  model?: string
   /** ultracode only: the ultracode flag to land. Default true; false lands a source that ran
    *  without it, so a moved chat keeps the level it had (owner, 2026-09-26). */
   ultracode?: boolean
@@ -1260,6 +1271,56 @@ async function nativeStop(env: any, found: any, request: any, settled: any, stat
   }
 }
 
+/**
+ * One chat's model and effort, through the app's own manager.setModel and setEffort: the calls its model and effort
+ * pickers make, so memory, the saved record and a running engine all get them (owner, 2026-10-15, of a chat Claude
+ * Desktop runs: "I want to ... change it inside Agent Hydra"). The app may resolve or clamp what it is given, so the
+ * read-back is what counts: a model or effort the app did not keep is reported with what it kept.
+ */
+async function nativeSetting(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (request.model !== undefined && typeof manager.setModel !== 'function')
+    nativeRefuse('native method unavailable: setModel')
+  if (request.effort !== undefined && typeof manager.setEffort !== 'function')
+    nativeRefuse('native method unavailable: setEffort')
+  const matches = [...manager.sessions.values()].filter(
+    (s: any) => s?.cliSessionId === request.cliSessionId && !s.prewarmHidden,
+  )
+  if (matches.length > 1) nativeRefuse('more than one chat holds this CLI session')
+  const session = matches[0]
+  if (!session) nativeRefuse('no chat in this app holds this CLI session')
+  if (session.isArchived === true) nativeRefuse('the chat is archived')
+  const pick = (s: any) => ({ model: s.model ?? null, effort: s.effort ?? null })
+  // The app keeps a context suffix on a model id (claude-opus-5-5[1m]): the same model either way.
+  const bare = (m: any) =>
+    String(m ?? '')
+      .replace(/\[[^\]]*\]$/, '')
+      .toLowerCase()
+  const before = pick(session)
+  state.dispatch = 'sent'
+  if (request.model !== undefined) await manager.setModel(session.sessionId, request.model)
+  if (request.effort !== undefined) await manager.setEffort(session.sessionId, request.effort)
+  nativeCheckIdentity(env, found, request, settled)
+  const after = pick(manager.sessions.get(session.sessionId) ?? session)
+  const verified =
+    (request.model === undefined || bare(after.model) === bare(request.model)) &&
+    (request.effort === undefined || after.effort === request.effort)
+  return {
+    ok: verified,
+    verified,
+    dispatch: state.dispatch,
+    action: 'setting',
+    sessionId: session.sessionId,
+    before,
+    after,
+    reason: verified
+      ? undefined
+      : `the app kept ${after.model ?? 'its default model'} at ${after.effort ?? 'its default effort'}`,
+    identity: nativeIdentity(env, found, null),
+    evidence: "the app's own session state after its setModel / setEffort",
+  }
+}
+
 async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   const env = nativeOpenEnv(request)
   const found = nativeFindManager(env, pin)
@@ -1277,6 +1338,7 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   if (request.action === 'import') return await nativeImport(env, found, request, settled, state)
   if (request.action === 'send') return await nativeSend(env, found, request, settled, state)
   if (request.action === 'stop') return await nativeStop(env, found, request, settled, state)
+  if (request.action === 'setting') return await nativeSetting(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -1364,6 +1426,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeImport,
     nativeSend,
     nativeStop,
+    nativeSetting,
     nativeRun,
     nativeRuntime,
   ]
@@ -1373,19 +1436,30 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
 
 export function nativeProgram(request: NativeProgramRequest): string {
   if (
-    !['inspect', 'archive', 'ultracode', 'idle', 'pause', 'import', 'send', 'stop'].includes(
-      request.action,
-    )
+    ![
+      'inspect',
+      'archive',
+      'ultracode',
+      'idle',
+      'pause',
+      'import',
+      'send',
+      'stop',
+      'setting',
+    ].includes(request.action)
   )
     throw Error('Unsupported native action')
   if (
-    (request.action === 'import' || request.action === 'send' || request.action === 'stop') &&
+    (request.action === 'import' ||
+      request.action === 'send' ||
+      request.action === 'stop' ||
+      request.action === 'setting') &&
     !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
       String(request.cliSessionId),
     )
   )
     throw Error(
-      `${{ send: 'Send', stop: 'Stop' }[request.action as string] ?? 'Import'} requires the CLI session id (a UUID)`,
+      `${{ send: 'Send', stop: 'Stop', setting: 'Setting' }[request.action as string] ?? 'Import'} requires the CLI session id (a UUID)`,
     )
   if (
     request.action === 'send' &&
@@ -1403,6 +1477,7 @@ export function nativeProgram(request: NativeProgramRequest): string {
   if (!Number.isSafeInteger(request.pid) || request.pid <= 0) throw Error('Expected positive PID')
   if (!request.profileDir?.trim()) throw Error('Expected exact profile directory')
   checkArchiveAndUltracode(request)
+  checkSetting(request)
   checkOptionalFields(request)
   return nativeRuntimeExpression(request)
 }
@@ -1450,6 +1525,16 @@ function checkArchiveAndUltracode(request: NativeProgramRequest): void {
     if (request.ultracode !== false && !['xhigh', 'max'].includes(String(request.effort)))
       throw Error('Ultracode on requires an effort of xhigh or max')
   }
+}
+
+function checkSetting(request: NativeProgramRequest): void {
+  if (request.action !== 'setting') return
+  if (request.model === undefined && request.effort === undefined)
+    throw Error('Setting requires a model or an effort')
+  if (request.model !== undefined && !/^[A-Za-z0-9._:[\]-]{1,100}$/.test(String(request.model)))
+    throw Error('Setting requires a model id (letters, digits and . _ : - [ ])')
+  if (request.effort !== undefined && !NATIVE_EFFORTS.includes(String(request.effort)))
+    throw Error(`Setting requires an effort of ${NATIVE_EFFORTS.join('/')}`)
 }
 
 function checkOptionalFields(request: NativeProgramRequest): void {

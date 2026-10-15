@@ -1,24 +1,17 @@
-import { SUS_LEVELS, type SusLevel, type SusPick } from '@shared/protocol'
+import type { SusLevel, SusPick } from '@shared/protocol'
 import { modelTriggerLabel } from './logic'
 
 /** The turns a setting needs before 'sus' routes to it; below that 'sus' runs on the normal model (server SUS_MIN_TURNS). */
 export const SUS_LEARNING_TURNS = 20
 
-export const SUS_LABEL: Record<SusLevel, string> = { fine: 'Fine', sus: 'Sus', bad: 'Bad' }
+// Said as Chill, Sus and Sketch (owner, 2026-10-15: "change this to chill/sus/sketch"); the stored levels keep their ids.
+export const SUS_LABEL: Record<SusLevel, string> = { fine: 'Chill', sus: 'Sus', bad: 'Sketch' }
 
 /** What each level does, on hover (owner, 2026-10-15: "when I hover over those, they explain what each one does"). */
 export const SUS_TIP: Record<SusLevel, string> = {
-  fine: 'Fine: the chat runs on the model you pick beside this.',
+  fine: 'Chill: the chat runs on the model you pick beside this.',
   sus: `Sus: the chat runs on whichever model and effort has pushed back least on your work (refusals, "are you sure", lectures). Until one has ${SUS_LEARNING_TURNS} counted turns, it uses the model you picked.`,
-  bad: "Bad: Codex answers the chat's next turns instead of Claude.",
-}
-
-/** The level an arrow key moves a radio group to, or null for any other key. */
-export function nextSusLevel(current: SusLevel, key: string): SusLevel | null {
-  const i = SUS_LEVELS.indexOf(current)
-  if (key === 'ArrowRight' || key === 'ArrowDown') return SUS_LEVELS[(i + 1) % SUS_LEVELS.length]
-  if (key === 'ArrowLeft' || key === 'ArrowUp') return SUS_LEVELS[(i + SUS_LEVELS.length - 1) % SUS_LEVELS.length]
-  return null
+  bad: "Sketch: Codex answers the chat's next turns instead of Claude.",
 }
 
 export interface SusStatus {

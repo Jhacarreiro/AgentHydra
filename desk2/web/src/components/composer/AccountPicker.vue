@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, onMounted, ref, shallowRef, watch } from 'vue'
 import type { AccountInfo, AccountRef } from '@shared/protocol'
-import { accountTitle } from '@/components/accounts/format'
+import { accountShownName } from './logic'
 import { Tip } from '@/components/ui/tooltip'
 import type { ComposerApi } from './api'
 
@@ -16,11 +16,11 @@ const list = computed(() => (props.accounts.length ? props.accounts : fetched.va
 const current = computed(() => list.value.find((a) => a.id === props.modelValue) ?? null)
 const label = computed(() => {
   if (props.modelValue === 'auto') return 'Auto'
-  return current.value ? current.value.desktop || accountTitle(current.value) : accountTitle({ id: props.modelValue, label: '' })
+  return accountShownName(current.value ?? { id: props.modelValue, label: '' })
 })
 const hint = computed(() => {
   const pick = autoPick.value ? list.value.find((a) => a.id === autoPick.value!.id) ?? autoPick.value : null
-  const now = props.modelValue === 'auto' && pick ? `Auto would pick ${accountTitle(pick)} now. ` : ''
+  const now = props.modelValue === 'auto' && pick ? `Auto would pick ${accountShownName(pick)} now. ` : ''
   return `${now}Change it from the circle under the box, on the right.`
 })
 

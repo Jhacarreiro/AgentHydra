@@ -5,7 +5,7 @@
 import { hostname } from 'node:os'
 import type { Context, Hono } from 'hono'
 import type { ContentfulStatusCode } from 'hono/utils/http-status'
-import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopStopResult, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER, OLDER_END_HEADER } from '@shared/protocol'
+import { type CloudList, type DesktopMessageRequest, type DesktopMessageResult, type DesktopSettingRequest, type DesktopSettingResult, type DesktopStopResult, type Effort, type ExternalBranchRequest, type ExternalBranchResult, OLDER_BEFORE_HEADER, OLDER_END_HEADER } from '@shared/protocol'
 import type { ServerContext } from '../context'
 import { type Bridge, BridgeError, bridge, configureBridge } from '../bridge'
 import { type AhCloudRow, CLOUD_TIMEOUT_MS, cloudQuery, toCloudInstance, toCloudSession } from '../bridge/cloud'
@@ -66,13 +66,41 @@ async function desktopStop(c: Context, b: Bridge): Promise<Response> {
     if (!r.ok || r.verified !== true) return c.json({ error: `AgentHydra did not stop ${id}` }, 422)
     return c.json({ ok: true } satisfies DesktopStopResult)
   } catch (err) {
-    // The daemon's plain reason, not the wrapped message fail() keeps for the other routes.
-    if (err instanceof BridgeError && err.kind === 'http' && err.reason) {
-      const status = err.status && err.status >= 400 && err.status < 500 ? err.status : 502
-      return c.json({ error: err.reason }, status as ContentfulStatusCode)
-    }
-    return fail(c, b, err)
+    return daemonFail(c, b, err)
   }
+}
+
+const EFFORTS: readonly Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
+
+// A working Claude Desktop chat's model and effort, set in the app as its own pickers set them (the daemon's native
+// setting). Only a change the app shows answers 200; otherwise the error says what it kept.
+async function desktopSetting(c: Context, b: Bridge): Promise<Response> {
+  let req: Partial<DesktopSettingRequest> | null
+  try {
+    req = (await c.req.json()) as Partial<DesktopSettingRequest> | null
+  } catch {
+    return c.json({ error: 'the body must be JSON: { "model"?: "...", "effort"?: "..." }' }, 400)
+  }
+  const model = typeof req?.model === 'string' && req.model.trim() ? req.model.trim() : undefined
+  const effort = EFFORTS.find((e) => e === req?.effort)
+  if (!model && !effort) return c.json({ error: 'model or effort is required' }, 400)
+  const id = c.req.param('id') ?? ''
+  try {
+    const r = await b.client.setDesktopChatSetting(id, { ...(model ? { model } : {}), ...(effort ? { effort } : {}) })
+    if (!r.ok || r.verified !== true) return c.json({ error: `Claude Desktop kept ${r.model ?? 'its model'} at ${r.effort ?? 'its effort'}` }, 422)
+    return c.json({ ok: true } satisfies DesktopSettingResult)
+  } catch (err) {
+    return daemonFail(c, b, err)
+  }
+}
+
+/** The daemon's plain reason, not the wrapped message fail() keeps for the other routes. */
+function daemonFail(c: Context, b: Bridge, err: unknown): Response {
+  if (err instanceof BridgeError && err.kind === 'http' && err.reason) {
+    const status = err.status && err.status >= 400 && err.status < 500 ? err.status : 502
+    return c.json({ error: err.reason }, status as ContentfulStatusCode)
+  }
+  return fail(c, b, err)
 }
 
 // "Copy up to here into a new chat" on a Claude Code session's reply: AgentHydra writes the copy beside it.
@@ -216,6 +244,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   )
   app.post('/api/external/sessions/:id/message', (c) => desktopMessage(c, b))
   app.post('/api/external/sessions/:id/stop', (c) => desktopStop(c, b))
+  app.post('/api/external/sessions/:id/setting', (c) => desktopSetting(c, b))
   app.post('/api/external/sessions/:id/branch', (c) => branchSession(c, b))
   app.get('/api/search', (c) => search(c, b))
   app.get('/api/climayte/workers', (c) => {

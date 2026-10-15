@@ -16,6 +16,7 @@ import {
   filterSlashCommands,
   folderName,
   loadDraft,
+  accountShownName,
   menuAccounts,
   modelTriggerLabel,
   prAsk,
@@ -188,13 +189,14 @@ describe('labels', () => {
     expect(modelTriggerLabel('opus', [])).toBe('Opus')
   })
 
-  // Owner, 2026-10-15: "only show desktop instances"; the chat's own account stays visible when it is not one.
-  it('the account menu lists the logins linked to a Desktop instance by name, then the current one if it is not', () => {
-    const acct = (id: string, desktop: string | null) => ({ id, label: `#1 ${id}`, configDir: null, email: null, plan: null, signedIn: true, fiveHourPct: null, weeklyPct: null, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false, desktop })
-    const all = [acct('a', null), acct('b', 'zeta'), acct('c', 'Alpha'), acct('d', null)]
-    expect(menuAccounts(all, null).map((a) => a.id)).toEqual(['c', 'b'])
-    expect(menuAccounts(all, 'd').map((a) => a.id)).toEqual(['c', 'b', 'd'])
-    expect(menuAccounts(all, 'b').map((a) => a.id)).toEqual(['c', 'b'])
+  // Owner, 2026-10-15: "only show desktop instances"; the chat's own account stays visible when it is not one. Each goes
+  // by the name on the account, never its Desktop folder's ("the account folder name is useless").
+  it('the account menu lists the logins linked to a Desktop instance by account name, then the current one if it is not', () => {
+    const acct = (id: string, desktop: string | null, name: string | null) => ({ id, label: `#${id.length} x@example.com (Max 5x)`, configDir: null, email: null, plan: 'Max 5x', signedIn: true, fiveHourPct: null, weeklyPct: null, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false, desktop, name })
+    const all = [acct('a', null, 'Ann'), acct('b', 'zeta', 'Alpha'), acct('cc', 'Alpha', 'zed'), acct('ddd', null, null)]
+    expect(menuAccounts(all, null).map(accountShownName)).toEqual(['Alpha', 'zed'])
+    expect(menuAccounts(all, 'ddd').map(accountShownName)).toEqual(['Alpha', 'zed', '#3'])
+    expect(menuAccounts(all, 'b').map((a) => a.id)).toEqual(['b', 'cc'])
   })
 })
 

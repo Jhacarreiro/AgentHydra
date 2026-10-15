@@ -428,6 +428,17 @@ export interface DesktopStopResult {
   reason?: string
 }
 
+/** POST /api/external/sessions/:id/setting: the model and effort of a chat Claude Desktop runs, set in that app as its
+ *  own pickers set them (owner, 2026-10-15: "I want to ... change it inside Agent Hydra"). 200 { ok: true } once the
+ *  app shows them; otherwise a non-2xx answer with { error } saying what the app kept. */
+export interface DesktopSettingRequest {
+  model?: string
+  effort?: Effort
+}
+export interface DesktopSettingResult {
+  ok: boolean
+}
+
 /**
  * POST /api/external/sessions/:id/branch: "Copy up to here into a new chat". AgentHydra writes a new Claude Code
  * session beside this one holding it up to the reply `uuid` (its session-branch), titled "<title> (branch)";
@@ -636,7 +647,11 @@ export interface AccountInfo extends AccountRef {
   /** The owner's caps (1-84): this account's line in place of the fleet's 85%. Absent or null: the fleet's. */
   maxFiveHourPct?: number | null
   maxWeeklyPct?: number | null
-  /** The Claude Desktop instance this login is linked to (its name, e.g. 'moarz'); absent or null when it has none. */
+  /** The name on the account (its profile name, e.g. 'kai'); null when AgentHydra has read none. The one name an
+   *  account goes by on screen, never a folder's (owner, 2026-10-15: "the account folder name is useless"). */
+  name?: string | null
+  /** The Claude Desktop instance this login is linked to (that instance's folder label, never shown); absent or null
+   *  when it has none. */
   desktop?: string | null
 }
 

@@ -4,8 +4,7 @@ import { Cloud, StickyNote } from '@lucide/vue'
 import { isAddedRow, isTaskRow } from './tasks'
 import type { ExternalSession } from '@shared/protocol'
 import { shellGlyphs, shellIcons } from '@/lib/icons'
-import { ahSource, appLead, fromPcLabel } from '@/components/cloud/logic'
-import { appMark } from '@/components/cloud/appMarks'
+import { ahSource, fromPcLabel } from '@/components/cloud/logic'
 import { ContextMenu, ContextMenuContent, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
@@ -81,8 +80,6 @@ const tooltip = computed(() =>
     .filter(Boolean)
     .join('\n')
 )
-// A chat of another app on this PC the Apps scope shows has that app's muted mark beside its dot, as in the cloud list; an added row never does.
-const app = computed(() => (props.session.fromPc || isAddedRow(props.session.id) ? null : appLead(ahSource(props.session.source))))
 const dotClass = computed(() => glyphDotClass(glyph.value))
 // The account number (an instance named "#38") and the age since its last activity, as the cloud list draws them;
 // Clean sidebar (clean.ts) hides both (owner, 2026-10-07).
@@ -151,8 +148,6 @@ function onMenuClosed(e: Event) {
           </span>
           <!-- Its own slot after the dot, so the working / needs-you dot keeps its column and its look (owner, 2026-10-04: "the cloud chats don't have a cloud icon"). -->
           <Cloud v-if="fromPc" role="img" :aria-label="fromPc" class="size-3.5 shrink-0 text-text-muted" />
-          <!-- A chat of another app on this PC: its muted mark beside the dot, never in its place, so working and needs-you still show. -->
-          <component :is="appMark(app.app)" v-else-if="app?.kind === 'app'" role="img" :aria-label="app.label" class="size-3.5 shrink-0 text-text-muted" />
           <!-- A CliMayte task drawn as a row of its own (nothing says which chat started it): the CliMayte toggle's mark, so it never reads as a chat (owner, 2026-10-07). -->
           <component :is="shellIcons.climayte" v-if="isTaskRow(session.id)" role="img" aria-label="CliMayte task" class="size-3.5 shrink-0 text-text-muted" />
           <input

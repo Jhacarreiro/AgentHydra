@@ -1,25 +1,7 @@
 import { describe, expect, it } from 'bun:test'
-import { nextSusLevel, susStatus } from '@/components/composer/sus'
+import { susStatus } from '@/components/composer/sus'
 
 const MODELS = [{ value: 'claude-haiku-4-5-20251001', label: 'Haiku 4.5' }]
-
-describe('nextSusLevel', () => {
-  it('moves right and down through Fine, Sus, Bad, and wraps', () => {
-    expect(nextSusLevel('fine', 'ArrowRight')).toBe('sus')
-    expect(nextSusLevel('sus', 'ArrowDown')).toBe('bad')
-    expect(nextSusLevel('bad', 'ArrowRight')).toBe('fine')
-  })
-
-  it('moves left and up, and wraps', () => {
-    expect(nextSusLevel('fine', 'ArrowLeft')).toBe('bad')
-    expect(nextSusLevel('bad', 'ArrowUp')).toBe('sus')
-  })
-
-  it('ignores every other key', () => {
-    expect(nextSusLevel('sus', 'Enter')).toBeNull()
-    expect(nextSusLevel('sus', 'a')).toBeNull()
-  })
-})
 
 describe('susStatus', () => {
   it('fine shows the model the chat runs on, muted, with no tip', () => {

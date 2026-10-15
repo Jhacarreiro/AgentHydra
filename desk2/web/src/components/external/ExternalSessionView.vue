@@ -1,6 +1,6 @@
 <script setup lang="ts">
 import { computed, ref, shallowRef, watch, onUnmounted } from 'vue'
-import type { ChatSummary, DesktopMessageRequest, DesktopMessageResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
+import type { ChatSummary, DesktopMessageRequest, DesktopMessageResult, DesktopSettingRequest, DesktopSettingResult, DesktopStopResult, TranscriptItem } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { usePaneApi } from '@/components/panes/api'
 import { externalGlyph, glyphDotClass, sourceLabel } from '@/components/sidebar/logic'
@@ -76,7 +76,9 @@ const workingChat = computed(() => {
 const INTO_WHY = 'Text only: a message into a working Claude Desktop chat has no pictures or voice.'
 const HOLD_WHY = 'Text only: a message for a chat at work elsewhere is sent when its turn ends, with no pictures or voice.'
 const into = computed(() =>
-  holdsHere.value ? { send: (text: string) => desk.holdFor(props.sessionId, text), why: HOLD_WHY } : { send: sendInto, why: INTO_WHY, stop: stopInto }
+  holdsHere.value
+    ? { send: (text: string) => desk.holdFor(props.sessionId, text), why: HOLD_WHY }
+    : { send: sendInto, why: INTO_WHY, stop: stopInto, setting: settingInto }
 )
 const queuedLines = computed(() => (holdsHere.value ? desk.heldFor(props.sessionId) : queued.value))
 const heldError = computed(() => desk.heldError(props.sessionId))
@@ -117,6 +119,17 @@ async function sendInto(text: string): Promise<void> {
 async function stopInto(): Promise<void> {
   const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/stop`, { method: 'POST' })
   const body = (await res.json().catch(() => null)) as (Partial<DesktopStopResult> & { error?: string }) | null
+  if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
+}
+// Its model and effort, set in Claude Desktop as the app's own pickers set them (owner, 2026-10-15: "I want to ... change
+// it inside Agent Hydra"); a running turn keeps going and the next one runs on them.
+async function settingInto(s: DesktopSettingRequest): Promise<void> {
+  const res = await fetch(`/api/external/sessions/${encodeURIComponent(props.sessionId)}/setting`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(s)
+  })
+  const body = (await res.json().catch(() => null)) as (Partial<DesktopSettingResult> & { error?: string }) | null
   if (!res.ok || !body?.ok) throw new Error(body?.error ?? `${res.status} ${res.statusText}`)
 }
 // A queued message is shown as queued until the transcript shows it (once per matching message).

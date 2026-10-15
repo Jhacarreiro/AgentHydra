@@ -66,9 +66,9 @@ import { isExternalChatId } from '@/components/external/logic'
 import { draftImages, draftImagesReady, PUT_BACK_EVENT, saveDraftImages, type DraftImage, type PutBack } from './draft-images'
 import { BOX_ICON, HEADER, ITEM, MENU, MENU_GLYPH, SEPARATOR, SHORTCUT, SUB_TRIGGER, TOOL_ICON } from './menu'
 import SendSplit from './SendSplit.vue'
-import SusSwitch from './SusSwitch.vue'
+import SusMenu from './SusMenu.vue'
 import { susStatus } from './sus'
-import { DEFAULT_MODEL, type SusLevel } from '@shared/protocol'
+import { DEFAULT_MODEL, type DesktopSettingRequest, type SusLevel } from '@shared/protocol'
 import QueueTray from './QueueTray.vue'
 import QueueChip from './QueueChip.vue'
 import { aheadInLine, queuedForChat, sendOrEnqueue, sendWords, type QueuedMessage } from './queue'
@@ -82,7 +82,6 @@ import { repoYeti, repoYetiAction, watchRepoYeti } from '@/components/connectors
 import ChangeProjectMenu from './ChangeProjectMenu.vue'
 import { joinDrafts, putBackDraft } from './change-project'
 import { Tip } from '@/components/ui/tooltip'
-import { Info } from '@lucide/vue'
 import { ANNOTATED_EVENT, openViewerAt, tileKey, viewerKindOf, type Annotated, type ViewerPicture } from '@/components/transcript/lib/media'
 import { provideTranscript } from '@/components/transcript/context'
 import { useShellSource } from '@/components/shell/source'
@@ -118,9 +117,15 @@ const props = defineProps<{
   chat: ChatSummary | null
   /** A chat working in Claude Desktop: a send goes into it as text (`send`), pictures and voice are off (`why` says so), and
    *  `stop` stops its turn there, so the box offers Stop as it does for a chat of its own. */
-  into?: { send: (text: string) => Promise<void>; why: string; stop?: () => Promise<void> }
-  /** A sentence about where a send goes (an outside chat continues as a copy): an info mark in the toolbar row says it on
-   *  hover or focus, not a line over the box (owner, 2026-10-08: "Should this just be a small info hover icon"). */
+  into?: {
+    send: (text: string) => Promise<void>
+    why: string
+    stop?: () => Promise<void>
+    /** Sets the chat's model or effort where it runs (Claude Desktop's own pickers' call), so the model menu works on it. */
+    setting?: (s: DesktopSettingRequest) => Promise<void>
+  }
+  /** A sentence about where a send goes (an outside chat continues as a copy, on which account): the account circle's
+   *  hover text says it (owner, 2026-10-15, of the info mark that said it: "you can remove that little info icon"). */
   note?: string
   /** Gallery only: start in a given state without a server. */
   demo?: {
@@ -271,7 +276,14 @@ function resetNewSession() {
   newSus.value = 'fine'
 }
 
-const model = computed(() => (props.chat ? props.chat.model : newModel.value))
+// A chat Claude Desktop runs takes its model and effort in that app (into.setting): the chip shows a pick at once, the
+// chat's own record takes over as soon as it changes, and a pick the app refused goes back.
+const intoPick = ref<DesktopSettingRequest>({})
+watch(
+  () => [props.chat?.id, props.chat?.model, props.chat?.effort],
+  () => (intoPick.value = {})
+)
+const model = computed(() => intoPick.value.model ?? (props.chat ? props.chat.model : newModel.value))
 const cwd = computed(() => props.chat?.cwd ?? newCwd.value)
 
 async function patch(p: { model?: string | null; effort?: Effort | null; permissionMode?: PermissionMode; sus?: SusLevel }) {
@@ -296,7 +308,7 @@ const models = shallowRef<ModelChoice[]>([])
 const modelSplit = computed(() => splitModels(models.value.filter((m) => m.value !== 'default')))
 const shownModel = computed(() => model.value ?? DEFAULT_MODEL)
 const modelText = computed(() => modelTriggerLabel(model.value, models.value))
-const effort = computed(() => runEffort(props.chat ? props.chat.effort : newEffort.value))
+const effort = computed(() => runEffort(intoPick.value.effort ?? (props.chat ? props.chat.effort : newEffort.value)))
 const settingText = computed(() => `${modelText.value} · ${effortLabel(effort.value)}`)
 // A chat pinned to Codex or ChatGPT runs its turns there: its word stands in for the Claude model, which does not apply.
 const pinnedWord = computed(() => (props.chat?.service ? SERVICE_WORDS[props.chat.service] : null))
@@ -308,21 +320,36 @@ const SUS_TONE = {
 }
 const susLevel = computed<SusLevel>(() => (props.chat ? (props.chat.sus ?? 'fine') : newSus.value))
 const susChip = computed(() => susStatus(susLevel.value, settingText.value, props.chat?.susPick, models.value, pinnedWord.value))
-// A chat at work in Claude Desktop runs that app's model, which Desk cannot set; one pinned to Codex or ChatGPT has none.
-const modelEditable = computed(() => !pinnedWord.value && !props.into)
-const modelLockedWhy = computed(() => (props.into && !pinnedWord.value ? 'Claude Desktop is running this chat: change its model there.' : ''))
+// A chat at work in Claude Desktop changes model there, from here (owner, 2026-10-15: "I want to ... change it inside
+// Agent Hydra"); one at work in another app takes a new one when its turn ends; one pinned to Codex or ChatGPT has none.
+const modelEditable = computed(() => !pinnedWord.value && (!props.into || !!props.into.setting))
+const modelLockedWhy = computed(() => (props.into && !props.into.setting && !pinnedWord.value ? 'Its model can change when this turn ends.' : ''))
 const MODEL_TRIGGER =
   'cursor-pointer transition-colors duration-[60ms] hover:bg-(--fill-secondary) hover:text-(--text) data-[state=open]:bg-(--fill-secondary) data-[state=open]:text-(--text) focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-(--accent-text)'
 function pickSus(level: SusLevel) {
   if (level !== susLevel.value) void patch({ sus: level })
 }
 function pickModel(value: string | null) {
-  patch({ model: value })
   openMenu.value = null
+  const set = props.into?.setting
+  if (set) void setInto(set, { model: value ?? DEFAULT_MODEL })
+  else void patch({ model: value })
 }
 function pickEffort(value: Effort) {
-  patch({ effort: value })
   openMenu.value = null
+  const set = props.into?.setting
+  if (set) void setInto(set, { effort: value })
+  else void patch({ effort: value })
+}
+async function setInto(set: (s: DesktopSettingRequest) => Promise<void>, s: DesktopSettingRequest) {
+  const was = intoPick.value
+  intoPick.value = { ...was, ...s }
+  try {
+    await set(s)
+  } catch (e) {
+    intoPick.value = was
+    showNotice(`Claude Desktop did not take it: ${errText(e)}`)
+  }
 }
 
 // The account menu (the ring's button): a chat's account changes at its next turn; a new session's goes with it.
@@ -333,7 +360,7 @@ const accountNow = computed(() => {
 })
 const accountPinned = computed(() => (props.chat ? !!props.chat.accountPinned : newPinned.value))
 const accountLocked = computed(() => {
-  if (props.into) return 'Claude Desktop runs this chat, on the account signed in there.'
+  if (props.into) return 'Claude Desktop runs this chat on its own account.'
   if (pinnedWord.value) return `${pinnedWord.value} runs this chat's turns, not a Claude account.`
   if (props.chat && props.chat.workerId !== undefined) return 'CliMayte places this chat. A chat you start now can be put on an account.'
   return ''
@@ -1518,16 +1545,10 @@ onBeforeUnmount(() => {
 
       <!-- Toolbar row below the box: h20, 12px #c3c2b7, padding 0 10 0 7 -->
       <div class="flex h-5 items-center ps-1.75 pe-2.5">
-        <Tip v-if="note" :label="note" side="top">
-          <button type="button" :class="TOOL_ICON" :aria-label="note" data-composer-note>
-            <Info class="size-3.5" />
-          </button>
-        </Tip>
-
         <div class="flex-1" />
 
         <div class="flex items-center gap-1">
-          <SusSwitch :level="susLevel" @pick="pickSus" />
+          <SusMenu :level="susLevel" :non-modal="nonModal" @pick="pickSus" />
           <!-- The model's name is the model menu's button (owner, 2026-10-15: "get rid of the triple dot ... when you click the
                model name, it opens the fly-out"). It says what the next turn runs on (susStatus), so Sus and Bad still show
                their routing; a chat pinned elsewhere or at work in another app shows it without a menu. -->
@@ -1615,6 +1636,7 @@ onBeforeUnmount(() => {
             :pinned="accountPinned"
             :context-pct="chat?.contextPct ?? null"
             :locked="accountLocked"
+            :hint="note"
             :non-modal="nonModal"
             @pick="pickAccount"
             @auto="setAccountAuto"

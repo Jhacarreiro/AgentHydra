@@ -2,7 +2,7 @@
 // No Vue and no DOM here, so web/test/composer can test it with plain bun.
 
 import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
-import type { AccountInfo, ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, AccountRef, ChatStatus, Effort, PermissionMode, SlashCommandInfo, TranscriptItem } from '@shared/protocol'
 import { modelName } from '@/components/shell/logic'
 
 // Slash commands
@@ -309,10 +309,21 @@ export function accountUsedPct(a: Pick<AccountInfo, 'fiveHourPct' | 'weeklyPct'>
   return read.length ? Math.round(Math.max(...read)) : null
 }
 
+/** What an account is called on screen: the name on the account (its profile name), else its number; never a folder's
+ *  name (owner, 2026-10-15: "the account folder name is useless ... I only ever want to see ... the name on the account"). */
+export function accountShownName(a: { id: string; label: string; number?: number; name?: string | null }): string {
+  const name = a.name?.trim()
+  if (name) return name
+  if (a.id === 'default') return 'Default login'
+  const num = a.number ?? /^#(\d+)/.exec(a.label)?.[1]
+  return num == null ? 'Account' : `#${num}`
+}
+
 /** The account menu's rows (owner, 2026-10-15: "only show desktop instances"): each login linked to a Claude Desktop
- *  instance, by that instance's name, then the chat's own account when it is not one of them. */
+ *  instance, by the name on the account, then the chat's own account when it is not one of them. */
 export function menuAccounts(accounts: AccountInfo[], currentId: string | null): AccountInfo[] {
-  const desktop = accounts.filter((a) => a.desktop).sort((a, b) => a.desktop!.localeCompare(b.desktop!, undefined, { sensitivity: 'base' }))
+  const byName = (a: AccountInfo, b: AccountInfo) => accountShownName(a).localeCompare(accountShownName(b), undefined, { sensitivity: 'base' })
+  const desktop = accounts.filter((a) => a.desktop).sort(byName)
   const own = accounts.find((a) => a.id === currentId && !a.desktop)
   return own ? [...desktop, own] : desktop
 }
