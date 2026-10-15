@@ -333,9 +333,14 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # half its time (2026-10-13). About a third of its threads fail at once (generation_error) and take their API route.
 # Code read work (reviews, investigations with read tools only) goes there too: 7 to 5 over 12 real code read tasks,
 # mean 5.9 vs 5.0, 16 judged errors to the API's 53, where GPT-5.6 mini with the claim check drew 7 to 7, mean 4.4 vs 4.9.
+# With no ChatGPT account to take them (2026-10-15: every ChatGPT send failed 404 for a day, and the daemon now rests a
+# failing provider), critical and code read work asks Sonnet 5.5 on a Claude account next, not its API route at once:
+# that route is a flash model (glm-5-3-flash took 235 such tasks that day), and Sonnet beat the API answers 10 to 0 on
+# decision read above. Not yet measured on these two profiles; free_ab can.
 _ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",),
                                                                  "research": ("sonnet@claude", "@chatgpt"),
-                                                                 "critical": ("luna-thinking",), "code": ("luna-thinking",)}
+                                                                 "critical": ("luna-thinking", "sonnet@claude"),
+                                                                 "code": ("luna-thinking", "sonnet@claude")}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 # `route_via_free_check_profiles`: the profiles whose tool tasks on a ChatGPT thread are asked once, before they finish
 # on fewer than free_client.CHECK_READS tool results, to check their claims with their tools (free_client.CHECK). A

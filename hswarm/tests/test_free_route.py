@@ -496,12 +496,18 @@ def test_ask_provider_is_chatgpt_for_any_name_but_the_claude_families(ask, expec
     ("5h 95%, week 3%", "decision", None),
     ("5h 40%, week 3%", "critical", {"model": "luna-thinking", "provider": "chatgpt"}),
     ("5h 40%, week 3%", "code", {"model": "luna-thinking", "provider": "chatgpt"}),
+    # ChatGPT resting (a provider the daemon found failing): critical and code read work goes to Sonnet on Claude.
+    ("5h 40%, week 3%", "critical-chatgpt-down", {"model": "sonnet", "provider": "claude"}),
+    ("5h 40%, week 3%", "code-chatgpt-down", {"model": "sonnet", "provider": "claude"}),
+    ("5h 95%, week 3%", "code-chatgpt-down", None),
 ])
 def test_each_tool_profile_goes_to_the_free_model_that_held_level_with_the_api(fake, claude_usage, profile, sent):
     # By default: Sonnet on a Claude account with room for both; with none, research goes to a ChatGPT account (mini,
     # which checks its claims, 8 to 4 against the API), and decision is a shortfall (it lost there even when checked).
     # Critical and code read work go to Luna Thinking whatever Claude has left (13-15-1 and 7-5 against the API).
-    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text"}
+    profile, down = profile.removesuffix("-chatgpt-down"), profile.endswith("-chatgpt-down")
+    chatgpt = {"account": "a2", "num": 2, "provider": "chatgpt", "signedIn": True, "busy": False, "usage": "unlimited everyday text",
+               **({"resting": "until later after chatgpt down: not_found (x1)"} if down else {})}
     f = fake(accounts=[{**ACCOUNTS[0], "usage": claude_usage}, chatgpt], reply="I could not finish.")
     task = _task(tools="web" if profile == "research" else "read", cwd=".")
     task.profile = profile

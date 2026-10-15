@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Critical and code read work goes to Claude Free when ChatGPT cannot take it.** It still asks a ChatGPT thinking
+  model first. With none available, it now asks Sonnet 5.5 on a Claude Free account before falling back to a paid
+  flash model, which took 235 such tasks on a day ChatGPT Free was down.
 - **Free work stops going to a provider that is failing every send.** After five failed sends in a row, its accounts
   take no new work for 10 minutes (doubling up to 2 hours), and HSwarm sees them as resting. When the rest ends, one
   send tests the provider. Before, ChatGPT Free failed 421 of 421 sends in a day while Claude Free accounts sat idle.
