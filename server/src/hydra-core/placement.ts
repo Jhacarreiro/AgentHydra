@@ -1,6 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
+import { logRoute } from '../manager-analytics/route-log'
 import type { LeadPick } from './lead'
 import { appendLog } from './log'
 import { type PackRequest, packFor, packNeedsPick, pickForPack, readPlaced } from './pack'
@@ -166,6 +167,22 @@ export function placeChat(
       2,
     ),
   )
+
+  // Feeds manager RSI one row per message; skipped under bun test unless a test points the analytics folder at its own.
+  if (process.env.NODE_ENV !== 'test' || process.env.AGENTHYDRA_MANAGERS_DIR)
+    logRoute(
+      {
+        session: req.session,
+        deskChat: req.chat !== req.session ? req.chat : null,
+        lead: pack.lead,
+        prev: old?.lead,
+        source: req.pick?.path ?? 'words',
+        message: started.length,
+        cwd: req.cwd,
+        promptChars: req.prompt.length,
+      },
+      now,
+    )
 
   const text = req.placement === 'slot' ? body : packLine(resolve(target))
   appendLog(
