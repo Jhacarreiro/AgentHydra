@@ -382,15 +382,15 @@ export interface NotesResult {
 
 const notesCache = new Map<string, { at: number; load: Promise<NotesResult>; last?: NotesResult }>()
 
-/** The checklist, read again once a minute. An expired one is answered at once while the next read runs: that read
- *  (a headers helper and an MCP round trip) took 5 to 7 s, so every minute one window request waited on it (measured
- *  2026-10-15: /api/fourman at 5-7.7 s in 8 of 37 samples, 7 ms otherwise). */
+/** The checklist, read again once a minute. Once one has been read, every call is answered with the last one while the
+ *  next read runs: that read (a headers helper and an MCP round trip) took 5 to 7 s, so every minute window requests
+ *  waited on it (measured 2026-10-15: /api/fourman at 5-7.7 s in 8 of 37 samples, 7 ms otherwise). */
 export async function readNotes(deps: FourmanDeps = currentDeps()): Promise<NotesResult> {
   const local = localMcp(deps.home)
   if (!local) return { available: false, why: NO_LOCAL_MCP, todos: [] }
   const key = `${local.url}\0${local.headersHelper ?? ''}`
   const hit = notesCache.get(key)
-  if (hit && Date.now() - hit.at < NOTES_CACHE_MS) return hit.load
+  if (hit && Date.now() - hit.at < NOTES_CACHE_MS) return hit.last ?? hit.load
   const load = loadNotes(local)
   const entry: { at: number; load: Promise<NotesResult>; last?: NotesResult } = {
     at: Date.now(),

@@ -410,20 +410,25 @@ describe('notes through the Connections local MCP', () => {
     hold = new Promise((resolve) => {
       release = resolve
     })
+    const before = requests
     setSystemTime(new Date(Date.now() + NOTES_CACHE_MS + 1000))
-    try {
+    const answered = async (who: string) => {
       const answer = await Promise.race([
         fourmanBoard({ all: true }),
         Bun.sleep(2000).then(() => 'waited for the read' as const),
       ])
-      if (answer === 'waited for the read')
-        throw new Error('the expired checklist waited for the next read')
+      if (answer === 'waited for the read') throw new Error(`${who} waited for the next read`)
       expect(answer.notes).toHaveLength(3)
+    }
+    try {
+      await answered('the call that starts the read')
+      await answered('a call while the read runs')
     } finally {
       release()
       hold = null
       setSystemTime()
-      await fourmanStatus() // the read it started, so it lands before the next test counts requests
+      // The read the expired call started lands here, not in the next test's count.
+      for (let i = 0; i < 250 && requests === before; i++) await Bun.sleep(20)
     }
   })
 
