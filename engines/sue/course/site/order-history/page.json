@@ -1,0 +1,12 @@
+{
+  "slug": "order-history",
+  "title": "Order History",
+  "surface": "A spinner that never ends looks like a slow connection, not a broken feature, so a patient visitor waits and a polite one blames herself.",
+  "task": "Open your account's orders and find what you ordered last time.",
+  "success": { "text": null },
+  "plantedBug": {
+    "what": "The Orders tab is stuck on 'Loading your orders...' forever while Overview and Settings work: a broken feature inside a working app.",
+    "keywords": ["loading", "never loads", "never loaded", "won't load", "doesn't load", "does not load", "didn't load", "did not load", "stuck", "spinner", "forever", "keeps loading", "still loading", "can't see my orders", "cannot see my orders", "no orders showed"]
+  },
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/OrderHistory.tsx (Apache-2.0, Copyright TesterArmy)"
+}

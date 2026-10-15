@@ -1,0 +1,142 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Async States</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #111;
+      }
+      main {
+        max-width: 420px;
+        margin: 0 auto;
+        padding: 24px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .skeleton {
+        height: 48px;
+        background: #e5e5e5;
+        border-radius: 8px;
+      }
+      .hint {
+        font-size: 13px;
+        color: #666;
+        text-align: center;
+        margin: 0;
+      }
+      input {
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        padding: 10px 12px;
+        font-size: 16px;
+      }
+      button {
+        background: #111;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      button:disabled {
+        background: #999;
+        cursor: not-allowed;
+      }
+      .toast {
+        position: fixed;
+        bottom: 24px;
+        left: 50%;
+        transform: translateX(-50%);
+        background: #111;
+        color: #fff;
+        border-radius: 8px;
+        padding: 12px 20px;
+        font-size: 15px;
+        font-weight: 600;
+      }
+      .error {
+        color: #c00;
+        font-size: 14px;
+        margin: 0;
+      }
+      .success {
+        font-size: 20px;
+        font-weight: 600;
+        color: #0a0;
+        text-align: center;
+        margin: 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="loading-view" style="display: contents">
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+        <div class="skeleton"></div>
+      </section>
+      <section id="form-view" style="display: contents" hidden>
+        <p class="hint">Send the code, read it from the toast before it disappears, then verify.</p>
+        <button type="button" id="send">Send code</button>
+        <input id="code" placeholder="Verification code" inputmode="numeric" />
+        <p id="error" class="error" hidden></p>
+        <button type="button" id="verify" disabled>Verify</button>
+      </section>
+      <p id="success" class="success" hidden>Code verified successfully</p>
+    </main>
+    <div id="toast" class="toast" hidden></div>
+    <script>
+      // The page is a skeleton for two seconds, the verification code exists
+      // only inside a toast that clears itself after 2.5 seconds, and Verify
+      // stays disabled until a code was sent. The visitor has to wait out the
+      // load, catch the toast, and submit in time.
+      const INITIAL_LOAD_MS = 2000;
+      const TOAST_MS = 2500;
+      const CODE = "4407";
+      const toast = document.getElementById("toast");
+      const error = document.getElementById("error");
+      const verify = document.getElementById("verify");
+      let toastTimer = null;
+
+      setTimeout(() => {
+        document.getElementById("loading-view").hidden = true;
+        document.getElementById("form-view").hidden = false;
+      }, INITIAL_LOAD_MS);
+
+      // A resend restarts the toast's window.
+      document.getElementById("send").addEventListener("click", () => {
+        verify.disabled = false;
+        toast.textContent = "Your code is " + CODE;
+        toast.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => {
+          toast.hidden = true;
+          toast.textContent = "";
+        }, TOAST_MS);
+      });
+
+      verify.addEventListener("click", () => {
+        if (document.getElementById("code").value.trim() !== CODE) {
+          error.textContent = "Wrong code - send it again and retry";
+          error.hidden = false;
+          return;
+        }
+        error.hidden = true;
+        clearTimeout(toastTimer);
+        toast.hidden = true;
+        document.getElementById("form-view").hidden = true;
+        document.getElementById("success").hidden = false;
+      });
+    </script>
+  </body>
+</html>

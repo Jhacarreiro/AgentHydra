@@ -1,0 +1,81 @@
+{
+  "id": "lgap",
+  "device": "phone",
+  "url": "http://t/lift/student/x#/play/ai-what-is-ai-c",
+  "title": "t",
+  "depth": 1,
+  "steps": [],
+  "pathKey": "phone > card > Start > Pear",
+  "parent": "lplay",
+  "inventory": {
+    "url": "http://t/lift/student/x#/play/ai-what-is-ai-c",
+    "title": "t",
+    "lang": "en",
+    "viewport": { "w": 390, "h": 844 },
+    "scroll": { "y": 0, "max": 0 },
+    "blocks": [
+      {
+        "id": "sue-1",
+        "order": 1,
+        "kind": "heading",
+        "level": 1,
+        "text": "Pick a snack",
+        "fontPx": 24,
+        "aboveFold": true,
+        "wordCount": 3,
+        "bottom": 60
+      },
+      { "id": "sue-2", "order": 2, "kind": "paragraph", "text": "2/6", "fontPx": 16, "aboveFold": true, "wordCount": 1, "bottom": 80 },
+      {
+        "id": "sue-2",
+        "order": 2,
+        "kind": "heading",
+        "text": "What is a guess?",
+        "fontPx": 16,
+        "aboveFold": true,
+        "wordCount": 4,
+        "bottom": 120,
+        "level": 2
+      },
+      {
+        "id": "sue-4",
+        "order": 4,
+        "kind": "paragraph",
+        "text": "Right! A guess is a try you make before you know.",
+        "fontPx": 18,
+        "aboveFold": true,
+        "wordCount": 11,
+        "bottom": 150
+      }
+    ],
+    "elements": [
+      {
+        "id": "sue-12",
+        "order": 12,
+        "role": "button",
+        "name": "Next",
+        "hasVisibleText": true,
+        "iconOnly": false,
+        "fontPx": 16,
+        "rect": { "x": 20, "y": 400, "w": 300, "h": 48 },
+        "aboveFold": true,
+        "hidden": false,
+        "disabled": false
+      }
+    ],
+    "overlays": []
+  },
+  "controls": [
+    {
+      "key": "button:Next@",
+      "sueId": "sue-12",
+      "role": "button",
+      "name": "Next",
+      "rect": { "x": 20, "y": 400, "w": 300, "h": 48 },
+      "form": -1,
+      "required": false,
+      "kind": "tap"
+    }
+  ],
+  "settle": { "virtualMs": 100, "timedOut": false, "stillMoving": false, "midAnimation": false }
+}

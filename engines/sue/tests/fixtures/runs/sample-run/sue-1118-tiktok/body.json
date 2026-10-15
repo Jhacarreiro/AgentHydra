@@ -1,0 +1,8 @@
+{
+  "outcome": "gave-up",
+  "finalUrl": "http://localhost:4173/",
+  "otpRequestedAt": null,
+  "otpEmailLatencyMs": null,
+  "firstInboxCheckAt": null,
+  "clock": { "elapsedSeconds": 15 }
+}

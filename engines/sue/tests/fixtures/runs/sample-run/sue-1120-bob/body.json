@@ -1,0 +1,8 @@
+{
+  "outcome": "done",
+  "finalUrl": "http://localhost:4173/settings",
+  "otpRequestedAt": "2026-09-20T18:00:40.000Z",
+  "otpEmailLatencyMs": 41000,
+  "firstInboxCheckAt": "2026-09-20T18:00:45.000Z",
+  "clock": { "elapsedSeconds": 160 }
+}

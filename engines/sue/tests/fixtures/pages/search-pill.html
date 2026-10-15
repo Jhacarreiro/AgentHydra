@@ -1,0 +1,82 @@
+<!doctype html>
+<!--
+  The shape that told every phone Sue on the signed-in site "the rest of the page is behind something
+  in front of the page - deal with that first" when nothing covered the page (run 20260922-115216-aa5f,
+  sue-3409-shop-owner, and run 20260922-133522-bbfb, sue-3844-shop-owner, who went hunting for an
+  "invisible" overlay and filed the menu as broken).
+
+  The phone header's search pill is one <label>: a magnifier button in an absolutely placed leading
+  slot, then the text box, which is positioned and comes later, so it paints over the magnifier. A tap
+  on the magnifier lands in the box, exactly as the page means it to. The whole app sits in a fixed
+  full-screen shell (the page never scrolls, its panes do), which is not an overlay either.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Search pill fixture</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+      }
+      .shell {
+        position: fixed;
+        inset: 0;
+        overflow: auto;
+      }
+      header {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        padding: 8px;
+      }
+      .field {
+        position: relative;
+        display: block;
+        width: 260px;
+        height: 48px;
+      }
+      .leading {
+        position: absolute;
+        left: 8px;
+        top: 8px;
+      }
+      .magnifier {
+        width: 32px;
+        height: 32px;
+        padding: 0;
+      }
+      .field input {
+        position: relative;
+        box-sizing: border-box;
+        width: 100%;
+        height: 48px;
+        padding-left: 48px;
+        background: transparent;
+        border: 1px solid #888;
+        border-radius: 24px;
+      }
+      main {
+        padding: 16px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="shell">
+      <header>
+        <button type="button">Menu</button>
+        <label class="field" for="search-box">
+          <span class="leading"><button type="button" class="magnifier">search</button></span>
+          <input id="search-box" placeholder="Search or ask" aria-label="Search or ask" />
+        </label>
+      </header>
+      <main>
+        <h1>Your card</h1>
+        <p>Share it with anyone.</p>
+        <button type="button">Copy link</button>
+      </main>
+    </div>
+  </body>
+</html>

@@ -1,0 +1,16 @@
+{
+  "whatIsThisSite": "A place to find events happening near you.",
+  "whatDoTheySell": "You can host your own gatherings and meet people.",
+  "oneSentenceToAFriend": "It shows you events near you, and you can host one yourself and meet people there.",
+  "confidence": 4,
+  "madeAccount": true,
+  "whyStopped": "I finished what I came to do.",
+  "mostConfusing": "Where the code in my email was supposed to go.",
+  "emailCodeExperience": { "waitedSeconds": 22, "wasClear": true, "notes": "It came fairly quickly." },
+  "endedUpWhereExpected": { "yes": true, "where": "The list of things to do." },
+  "easyToUnderstand": 8,
+  "trust": 7,
+  "wouldComeBack": 7,
+  "isThisTrash": { "yes": false, "why": "It did what it said." },
+  "threeWords": "friendly, clear, local"
+}

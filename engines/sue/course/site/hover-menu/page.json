@@ -1,0 +1,9 @@
+{
+  "slug": "hover-menu",
+  "title": "Hover Menu",
+  "surface": "A nested dropdown that opens on hover only and closes 200 ms after the pointer leaves; clicks on the top-level items do nothing and decoy leaves refuse.",
+  "task": "Find Redeem voucher under the Account menu and use it.",
+  "success": { "text": "Voucher redeemed" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/HoverMenu.tsx (Apache-2.0, Copyright TesterArmy)"
+}

@@ -1,0 +1,9 @@
+{
+  "slug": "control-inventory",
+  "title": "Control Inventory",
+  "surface": "One exercise per agent verb: a checkbox and radios (one radio group replaced by its summary once picked), a long press and a double click told apart from a tap, a context menu that opens on right-click only, a file input, the browser Back button, and a footnote that must be scrolled into view.",
+  "task": "Agree to the terms, pick Medium size and Express delivery, long-press Hold me, double-click Double-click me, rename report.pdf to summary.pdf from its right-click menu, attach a file, open the details and go back with the browser, and scroll the footnote into view.",
+  "success": { "text": "All exercises done" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/ControlInventory.tsx (Apache-2.0, Copyright TesterArmy)"
+}

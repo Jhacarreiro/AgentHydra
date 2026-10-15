@@ -1,0 +1,12 @@
+{
+  "slug": "product-reviews",
+  "title": "Product Reviews",
+  "surface": "Five-star reviews under a good product page read as reassurance; only reading what they say shows they are about something else.",
+  "task": "Decide whether these trail running shoes are worth buying by reading what customers say about them.",
+  "success": { "text": null },
+  "plantedBug": {
+    "what": "Every review on the running-shoe page is clearly about a coffee grinder: the wrong product's reviews are wired to the page.",
+    "keywords": ["coffee", "grinder", "grind", "espresso", "beans", "burr", "hopper", "pour over", "wrong product", "not about the shoes", "nothing to do with shoes", "different product"]
+  },
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/ProductReviews.tsx (Apache-2.0, Copyright TesterArmy)"
+}

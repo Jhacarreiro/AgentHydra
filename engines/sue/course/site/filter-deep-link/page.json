@@ -1,0 +1,9 @@
+{
+  "slug": "filter-deep-link",
+  "title": "Filter Deep Link",
+  "surface": "The filter must end up in the page URL as ?q=mug; only the address bar proves the view is shareable.",
+  "task": "Filter the product list down to the mug so the page URL carries the filter.",
+  "success": { "text": "Shareable link: ?q=mug" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/FilterDeepLink.tsx (Apache-2.0, Copyright TesterArmy)"
+}

@@ -1,0 +1,66 @@
+[
+  {
+    "device": "phone",
+    "from": "c0702b061f439bd5",
+    "move": "link:Moments@http://127.0.0.1:63735/",
+    "control": "link:Moments@http://127.0.0.1:63735/",
+    "to": "c0702b061f439bd5"
+  },
+  {
+    "device": "phone",
+    "from": "c0702b061f439bd5",
+    "move": "button:☰",
+    "control": "button:☰",
+    "to": "c0702b061f439bd5"
+  },
+  {
+    "device": "phone",
+    "from": "c0702b061f439bd5",
+    "move": "link:Get started@http://127.0.0.1:63735/signup.html",
+    "control": "link:Get started@http://127.0.0.1:63735/signup.html",
+    "to": "e0980c69962eab77"
+  },
+  {
+    "device": "phone",
+    "from": "e0980c69962eab77",
+    "move": "link:Moments@http://127.0.0.1:63735/",
+    "control": "link:Moments@http://127.0.0.1:63735/",
+    "to": "c0702b061f439bd5"
+  },
+  {
+    "device": "phone",
+    "from": "e0980c69962eab77",
+    "move": "button:☰",
+    "control": "button:☰",
+    "to": "e0980c69962eab77"
+  },
+  {
+    "device": "phone",
+    "from": "e0980c69962eab77",
+    "move": "button:Send me a code",
+    "control": "button:Send me a code",
+    "typed": [
+      {
+        "key": "input:firstName",
+        "value": "Sam"
+      },
+      {
+        "key": "input:lastName",
+        "value": "Sam"
+      },
+      {
+        "key": "input:email",
+        "value": "tape@sue.test"
+      },
+      {
+        "key": "input:phone",
+        "value": "+12065550100"
+      },
+      {
+        "key": "input:birthday",
+        "value": "1990-01-01"
+      }
+    ],
+    "to": "42c9e3e7b8f59969"
+  }
+]

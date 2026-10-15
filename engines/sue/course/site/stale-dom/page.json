@@ -1,0 +1,9 @@
+{
+  "slug": "stale-dom",
+  "title": "Stale DOM",
+  "surface": "Every second the list is torn down, rebuilt from fresh nodes and rotated one slot, so a remembered element is stale and the target keeps moving under decoys.",
+  "task": "Click the Tap me button three times.",
+  "success": { "text": "Target clicked 3 times" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/StaleDom.tsx (Apache-2.0, Copyright TesterArmy)"
+}

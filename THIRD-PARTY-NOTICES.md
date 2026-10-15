@@ -151,3 +151,32 @@ LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
 OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
 SOFTWARE
 ```
+
+## tester-army/e2e (Apache-2.0)
+
+Source: <https://github.com/tester-army/e2e> (Apache License 2.0, Copyright TesterArmy). Used by the
+engines in `engines/`:
+
+- `engines/sue/course/site/**`: the teaching pages were adapted from the scenarios in the upstream
+  `apps/web-benchmark` (each page's `page.json` names the file it was adapted from; the task, trap and
+  planted bug are kept, the code is rewritten). They carry that credit and were changed from the originals.
+- `engines/sue/repro.mjs`, `engines/sue/report.mjs`, `engines/sue/lib/circles.mjs`: the claim-to-bug rule,
+  the reject buckets and the loop guards follow the upstream bug-bash reference and `loop-guards.ts`; they
+  were written fresh, not copied.
+
+The licence text is at <https://www.apache.org/licenses/LICENSE-2.0>. Changes from the originals are stated above.
+
+## browser-use (MIT)
+
+Source: <https://github.com/browser-use/browser-use> (MIT, Copyright (c) 2024 Gregor Zunic).
+`engines/sue/lib/circles.mjs` adapts the action-loop detector idea from `browser_use/agent/views.py`
+(`ActionLoopDetector`); the code is rewritten for Sue's moves. The MIT permission notice of that
+project applies to the adapted idea: permission is granted, free of charge, to use, copy, modify and
+distribute it provided the copyright and permission notice are kept.
+
+## Other ideas credited in the engine docs
+
+`engines/dredd/**` and `engines/sue/**` credit mattpocock's code-review skill (MIT), addyosmani/agent-skills
+(MIT), anthropics/skills (Apache-2.0), github/spec-kit (MIT), mui/material-ui's review skill (MIT),
+dair-ai/Prompt-Engineering-Guide (MIT) and PyTorch's target determination (BSD-3-Clause) in their READMEs
+and file headers. Only ideas were taken; no source from those projects is in the repository.

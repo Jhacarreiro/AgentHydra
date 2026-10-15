@@ -1,0 +1,9 @@
+{
+  "slug": "native-dialogs",
+  "title": "Native Dialogs",
+  "surface": "Checkout runs through a chain of native confirm, prompt and alert dialogs that live outside the DOM and must be answered at the browser level.",
+  "task": "Place the order using the gift code the page gives you.",
+  "success": { "text": "Order placed with code GIFT-7" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/NativeDialogs.tsx (Apache-2.0, Copyright TesterArmy)"
+}

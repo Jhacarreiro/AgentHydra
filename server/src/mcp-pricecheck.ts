@@ -22,7 +22,7 @@ const postDashboard = (body: unknown) =>
 const LIVE_HOST: PriceCheckHost = { folderOf, postDashboard, callBudgetMs: MCP_CALL_BUDGET_MS }
 
 export function priceCheckDir(): string {
-  return process.env.PRICECHECK_DIR || join(APP_ROOT, '..', 'sue-dredd', 'pricecheck')
+  return process.env.PRICECHECK_DIR || join(APP_ROOT, 'engines', 'pricecheck')
 }
 
 export async function loadPriceCheckTools(

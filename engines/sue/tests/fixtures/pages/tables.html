@@ -1,0 +1,24 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Tables and code</title>
+    <style>
+      body { font-family: sans-serif; font-size: 16px; }
+    </style>
+  </head>
+  <body>
+    <h1>Webhooks</h1>
+    <table>
+      <caption>Events we send</caption>
+      <thead>
+        <tr><th>Event</th><th>Sent when</th></tr>
+      </thead>
+      <tbody>
+        <tr><td>create</td><td>A ticket opens</td></tr>
+        <tr><td>close</td><td><p>A ticket closes</p></td></tr>
+      </tbody>
+    </table>
+    <pre><code>{ "event": "rename", "guildId": "123" }</code></pre>
+  </body>
+</html>

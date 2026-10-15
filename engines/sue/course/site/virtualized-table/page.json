@@ -1,0 +1,9 @@
+{
+  "slug": "virtualized-table",
+  "title": "Virtualized Table",
+  "surface": "A 5000-row windowed table that mounts only the rows near the scroll position; the Golden Row (row 4322) does not exist in the DOM until the table itself is scrolled down to it.",
+  "task": "Scroll the windowed table until the Golden Row (row 4322) is shown, then claim it.",
+  "success": { "text": "Golden Row claimed" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/VirtualizedTable.tsx (Apache-2.0, Copyright TesterArmy)"
+}

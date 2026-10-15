@@ -1,0 +1,79 @@
+{
+  "id": "result",
+  "device": "phone",
+  "url": "http://t/",
+  "title": "t",
+  "depth": 1,
+  "steps": [],
+  "pathKey": "phone > button:Apple",
+  "parent": "clean",
+  "inventory": {
+    "url": "http://t/",
+    "title": "t",
+    "lang": "en",
+    "viewport": { "w": 390, "h": 844 },
+    "scroll": { "y": 0, "max": 0 },
+    "blocks": [
+      {
+        "id": "sue-1",
+        "order": 1,
+        "kind": "heading",
+        "level": 1,
+        "text": "Pick a snack",
+        "fontPx": 24,
+        "aboveFold": true,
+        "wordCount": 3,
+        "bottom": 60
+      },
+      {
+        "id": "sue-2",
+        "order": 2,
+        "kind": "paragraph",
+        "text": "Tap the one you like best.",
+        "fontPx": 16,
+        "aboveFold": true,
+        "wordCount": 6,
+        "bottom": 100
+      },
+      {
+        "id": "sue-3",
+        "order": 3,
+        "kind": "paragraph",
+        "text": "Right! Apples are crunchy.",
+        "fontPx": 16,
+        "aboveFold": false,
+        "wordCount": 4,
+        "bottom": 1200
+      }
+    ],
+    "elements": [
+      {
+        "id": "sue-10",
+        "order": 10,
+        "role": "button",
+        "name": "Next",
+        "hasVisibleText": true,
+        "iconOnly": false,
+        "fontPx": 16,
+        "rect": { "x": 20, "y": 100, "w": 300, "h": 48 },
+        "aboveFold": true,
+        "hidden": false,
+        "disabled": false
+      }
+    ],
+    "overlays": []
+  },
+  "controls": [
+    {
+      "key": "button:Next@",
+      "sueId": "sue-10",
+      "role": "button",
+      "name": "Next",
+      "rect": { "x": 20, "y": 100, "w": 300, "h": 48 },
+      "form": -1,
+      "required": false,
+      "kind": "tap"
+    }
+  ],
+  "settle": { "virtualMs": 100, "timedOut": false, "stillMoving": false, "midAnimation": false }
+}

@@ -1,0 +1,9 @@
+{
+  "slug": "lying-labels",
+  "title": "Lying Labels",
+  "surface": "The accessibility tree lies: every button's aria-label belongs to a different button, hidden screen-reader text warns against the right one, and the two inputs carry each other's aria-label and placeholder; only the visible text is true.",
+  "task": "Pay the amount the page asks for, typing it into the field visibly labeled Amount.",
+  "success": { "text": "Payment sent" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/LyingLabels.tsx (Apache-2.0, Copyright TesterArmy)"
+}

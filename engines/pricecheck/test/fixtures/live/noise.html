@@ -1,0 +1,29 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Title words that are never on screen</title>
+<style>
+/* lorem ipsum dolor sit amet consectetur adipiscing elit sed do eiusmod tempor incididunt ut labore */
+.a::before { content: "css words here"; }
+.b { color: #123456; margin: 0 auto; padding: 4px 8px; border: 1px solid #abcdef; }
+.c { font-family: Georgia, serif; line-height: 1.5; letter-spacing: 0.02em; text-transform: none; }
+.d { background: linear-gradient(to right, #fff, #eee); box-shadow: 0 1px 2px rgba(0, 0, 0, 0.1); }
+.e { display: grid; grid-template-columns: 1fr 2fr; gap: 12px; align-items: center; }
+.f:hover { outline: 2px dashed #f00; transform: translateY(-1px); }
+</style>
+<script>
+const copy = ['alpha beta gamma delta', 'epsilon zeta eta theta']
+</script>
+</head>
+<body>
+<noscript><p>enable javascript to read these hidden words</p></noscript>
+<template><p>template words stay out</p></template>
+<p>Visible words here</p>
+<div aria-hidden="true"><p>aria hidden words</p></div>
+<script>
+const more = 'script string words stay out'
+</script>
+</body>
+</html>

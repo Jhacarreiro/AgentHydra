@@ -1,0 +1,9 @@
+{
+  "slug": "new-tab-flow",
+  "title": "New Tab Flow",
+  "surface": "The verification code exists only in a second tab the page opens; the visitor must switch tabs, read it, and return to the first tab to enter it.",
+  "task": "Verify your account with the code from the verification tab.",
+  "success": { "text": "Verified successfully" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/NewTabFlow.tsx (Apache-2.0, Copyright TesterArmy)"
+}

@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Price Sorting</title>
+<style>
+  body { font-family: system-ui, sans-serif; color: #111; margin: 0; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px; }
+  header a { font-size: 13px; color: #666; }
+  h1 { font-size: 20px; font-weight: 700; margin: 8px 0 0; }
+  .container { display: flex; flex-direction: column; gap: 16px; padding: 24px 0; }
+  label { display: flex; align-items: center; gap: 8px; font-size: 14px; color: #333; }
+  select { border: 1px solid #ccc; border-radius: 8px; padding: 8px 10px; font-size: 14px; }
+  ul { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; }
+  li { display: flex; justify-content: space-between; align-items: center; padding: 12px 4px; border-bottom: 1px solid #e5e5e5; font-size: 15px; }
+  .price { display: flex; align-items: center; gap: 8px; }
+  s { color: #999; font-size: 13px; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a href="/">&larr; All pages</a>
+    <h1>Price Sorting</h1>
+  </header>
+  <div class="container">
+    <label>
+      Sort by
+      <select id="sort" data-testid="sort-select">
+        <option value="featured">Featured</option>
+        <option value="price-asc">Price: Low to High</option>
+        <option value="price-desc">Price: High to Low</option>
+      </select>
+    </label>
+    <ul id="products" data-testid="product-list"></ul>
+  </div>
+</main>
+<script>
+  const PRODUCTS = [
+    { id: "backpack", name: "Trail Backpack 24L", originalPrice: 120, salePrice: 49 },
+    { id: "bottle", name: "Steel Water Bottle", originalPrice: 25, salePrice: null },
+    { id: "socks", name: "Merino Hiking Socks", originalPrice: 18, salePrice: null },
+    { id: "lantern", name: "Camp Lantern", originalPrice: 60, salePrice: 54 },
+    { id: "mug", name: "Titanium Mug", originalPrice: 35, salePrice: 12 },
+  ];
+
+  /** The price a customer actually pays: the sale price when one exists. */
+  const effectivePrice = (product) => (product.salePrice ?? product.originalPrice);
+
+  /**
+   * The catalog in the requested order.
+   * PLANTED BUG (do not fix): price sorting compares originalPrice instead of
+   * the effective sale price, so discounted products land in the wrong spot.
+   */
+  function sortProducts(order) {
+    if (order === "featured") return PRODUCTS;
+    const sorted = [...PRODUCTS].sort((left, right) => left.originalPrice - right.originalPrice);
+    return order === "price-asc" ? sorted : sorted.reverse();
+  }
+
+  const list = document.getElementById("products");
+  const select = document.getElementById("sort");
+
+  function render() {
+    list.replaceChildren(
+      ...sortProducts(select.value).map((product) => {
+        const row = document.createElement("li");
+        row.dataset.testid = `product-${product.id}`;
+        const name = document.createElement("span");
+        name.textContent = product.name;
+        const price = document.createElement("span");
+        price.className = "price";
+        if (product.salePrice !== null) {
+          const was = document.createElement("s");
+          was.textContent = `$${product.originalPrice.toFixed(2)}`;
+          price.append(was);
+        }
+        const paid = document.createElement("strong");
+        paid.textContent = `$${effectivePrice(product).toFixed(2)}`;
+        price.append(paid);
+        row.append(name, price);
+        return row;
+      }),
+    );
+  }
+
+  select.addEventListener("change", render);
+  render();
+</script>
+</body>
+</html>

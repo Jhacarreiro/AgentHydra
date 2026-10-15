@@ -44,6 +44,12 @@ Optional, outside the repo. Every key is optional; a missing key turns that sour
 `boardroomDir` (paths, `~` allowed), `ownerName`, `companyId`, `seats` (`[{ slug, name, personaId }]`) and
 `minimums` (`{ managers, employees, instruments, skills, knowledge }`, the floors `--check` enforces; none by default).
 
+## The engines read the same folders
+
+The Sue, Dredd and price check engines in `engines/` read their people from this store, never from the repo: a Sue is
+`expert/sue-<id>` (the Sue document under `sue` in `persona.json`, her mind in `brief.md`), a Dredd seat is a
+`dredd-seat` person. See `engines/README.md`. `AGENTHYDRA_PEOPLE_HOME` points the engines at another people folder.
+
 ## Commands
 
 - `node hydra-core/catalog/build.mjs` rewrites `<core>/catalog/generated-*.json` and `skips.json`.

@@ -1,0 +1,9 @@
+{
+  "slug": "file-round-trip",
+  "title": "File Round Trip",
+  "surface": "The page generates a file the visitor must download and then upload back unchanged; an agent has to handle a real browser download and feed that same file into a file input, and any other file is rejected.",
+  "task": "Download the voucher file, then upload the same file back to verify it.",
+  "success": { "text": "Voucher verified" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/FileRoundTrip.tsx (Apache-2.0, Copyright TesterArmy)"
+}

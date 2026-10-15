@@ -1,0 +1,92 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Tape quiz</title>
+    <!--
+      The tape selftest's own target (sue/tape/selftest.mjs): a one-page lesson with the things a recorder
+      must get right. Each new screen slides up into place over 1 s (a read mid-slide is a different screen; it slides vertically
+      because a sideways slide past the edge widens a phone's layout viewport for good, a Chrome quirk, not a screen); a wrong answer
+      shows its "Try again" only after an 800 ms timer; taps inside 250 ms of a screen change are ignored, as a
+      quiz app guards a double tap. The start screen has no delayed reveal, so a live body's first look reads it
+      whole.
+    -->
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 0;
+        padding: 24px;
+        font-size: 20px;
+        line-height: 1.4;
+      }
+      main {
+        max-width: 640px;
+        margin: 0 auto;
+      }
+      .in {
+        animation: slide 1s ease-out both;
+      }
+      @keyframes slide {
+        from {
+          transform: translateY(24px);
+          opacity: 0;
+        }
+        to {
+          transform: none;
+          opacity: 1;
+        }
+      }
+      button {
+        display: block;
+        width: 100%;
+        min-height: 56px;
+        margin: 12px 0;
+        font-size: 20px;
+        border-radius: 12px;
+        border: 2px solid #335;
+        background: #eef;
+      }
+      .feedback {
+        font-weight: 600;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main id="app"></main>
+    <script>
+      const app = document.getElementById("app");
+      let shownAt = 0;
+      const screens = {
+        start: () => `<h1>Counting lesson</h1><p>Two short questions about adding small numbers. Tap Start when you are ready.</p>
+          <button data-go="q1">Start</button>`,
+        q1: () => `<h1>Question 1</h1><p>What is two plus three?</p>
+          <button data-go="q2">Five</button><button data-go="wrong1">Six</button><button data-go="wrong1">Four</button>`,
+        wrong1: () => `<h1>Question 1</h1><p class="feedback">Not quite. Count two, then three more.</p>
+          <button id="again" data-go="q1" hidden>Try again</button>`,
+        q2: () => `<h1>Question 2</h1><p>What is one plus one?</p>
+          <button data-go="wrong2">Three</button><button data-go="done">Two</button>`,
+        wrong2: () => `<h1>Question 2</h1><p class="feedback">Not quite. One and one more.</p>
+          <button id="again" data-go="q2" hidden>Try again</button>`,
+        done: () => `<h1>Well done</h1><p>You answered both questions.</p><a href="#" data-go="start">Back to the start</a>`,
+      };
+      function show(name) {
+        app.innerHTML = `<section class="in">${screens[name]()}</section>`;
+        shownAt = Date.now();
+        const again = document.getElementById("again");
+        if (again) setTimeout(() => (again.hidden = false), 800);
+      }
+      app.addEventListener("click", (event) => {
+        const go = event.target.closest("[data-go]");
+        if (!go) return;
+        event.preventDefault();
+        if (Date.now() - shownAt < 250) return;
+        show(go.dataset.go);
+      });
+      show("start");
+    </script>
+  </body>
+</html>

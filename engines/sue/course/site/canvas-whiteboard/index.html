@@ -1,0 +1,168 @@
+<!doctype html>
+<!-- Adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/CanvasWhiteboard.tsx (Apache-2.0, Copyright TesterArmy); re-implemented as plain HTML for the SUE course. -->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Canvas Whiteboard</title>
+    <style>
+      body {
+        font-family: system-ui, sans-serif;
+        margin: 24px;
+      }
+      canvas {
+        width: 640px;
+        max-width: 100%;
+        border: 1px solid #ccc;
+        border-radius: 8px;
+        touch-action: none;
+      }
+    </style>
+  </head>
+  <body>
+    <canvas id="board" width="640" height="440" aria-hidden="true" role="presentation"></canvas>
+    <script>
+      (() => {
+        const W = 640,
+          H = 440,
+          BAR = 56;
+        const SAVE = { x: 516, y: 12, w: 108, h: 32 };
+        const RW = 90,
+          RH = 70,
+          R = 40;
+        const RHOME = { x: 60, y: 130 },
+          RSLOT = { x: 430, y: 130 };
+        const CHOME = { x: 105, y: 320 },
+          CSLOT = { x: 475, y: 320 };
+        const NOTES = {
+          wrong: "Wrong slot - shape returned to the shelf",
+          missed: "Missed the slot - shape returned to the shelf",
+          early: "Place both shapes before saving",
+        };
+        const cv = document.getElementById("board");
+        const ctx = cv.getContext("2d");
+        const s = { rect: { ...RHOME }, circ: { ...CHOME }, rectIn: false, circIn: false, saved: false, note: null };
+        let drag = null;
+
+        const inRectSlot = (p) => p.x >= RSLOT.x && p.x <= RSLOT.x + RW && p.y >= RSLOT.y && p.y <= RSLOT.y + RH;
+        const inCircSlot = (p) => Math.hypot(p.x - CSLOT.x, p.y - CSLOT.y) <= R;
+        const at = (e) => {
+          const b = cv.getBoundingClientRect();
+          return { x: ((e.clientX - b.left) * W) / b.width, y: ((e.clientY - b.top) * H) / b.height };
+        };
+
+        function paint() {
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1;
+          ctx.fillStyle = "#fff";
+          ctx.fillRect(0, 0, W, H);
+          ctx.fillStyle = "#f4f4f4";
+          ctx.fillRect(0, 0, W, BAR);
+          ctx.strokeStyle = "#ddd";
+          ctx.beginPath();
+          ctx.moveTo(0, BAR);
+          ctx.lineTo(W, BAR);
+          ctx.stroke();
+          ctx.fillStyle = "#111";
+          ctx.font = "700 18px sans-serif";
+          ctx.textAlign = "left";
+          ctx.fillText("TA Whiteboard", 16, 35);
+          const n = (s.rectIn ? 1 : 0) + (s.circIn ? 1 : 0);
+          const live = n === 2 && !s.saved;
+          ctx.fillStyle = live ? "#2563eb" : "#ddd";
+          ctx.fillRect(SAVE.x, SAVE.y, SAVE.w, SAVE.h);
+          ctx.fillStyle = live ? "#fff" : "#888";
+          ctx.font = "600 14px sans-serif";
+          ctx.textAlign = "center";
+          ctx.fillText(s.saved ? "Saved" : "Save (" + n + "/2)", SAVE.x + SAVE.w / 2, SAVE.y + 21);
+          ctx.fillStyle = "#111";
+          ctx.font = "600 15px sans-serif";
+          ctx.fillText("Drag each shape into its matching dashed slot, then press Save", W / 2, 88);
+          ctx.setLineDash([6, 4]);
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = s.rectIn ? "#0a0" : "#888";
+          ctx.strokeRect(RSLOT.x, RSLOT.y, RW, RH);
+          ctx.strokeStyle = s.circIn ? "#0a0" : "#888";
+          ctx.beginPath();
+          ctx.arc(CSLOT.x, CSLOT.y, R, 0, Math.PI * 2);
+          ctx.stroke();
+          ctx.setLineDash([]);
+          ctx.lineWidth = 1;
+          ctx.fillStyle = "#2563eb";
+          ctx.fillRect(s.rect.x, s.rect.y, RW, RH);
+          ctx.fillStyle = "#ea580c";
+          ctx.beginPath();
+          ctx.arc(s.circ.x, s.circ.y, R, 0, Math.PI * 2);
+          ctx.fill();
+          if (s.saved) {
+            ctx.fillStyle = "#0a0";
+            ctx.font = "600 22px sans-serif";
+            ctx.fillText("Design saved", W / 2, 424);
+          } else if (s.note) {
+            ctx.fillStyle = "#c00";
+            ctx.font = "600 15px sans-serif";
+            ctx.fillText(NOTES[s.note], W / 2, 424);
+          }
+        }
+
+        cv.addEventListener("pointerdown", (e) => {
+          if (s.saved) return;
+          const p = at(e);
+          if (!s.circIn && Math.hypot(p.x - s.circ.x, p.y - s.circ.y) <= R) {
+            drag = { which: "circ", dx: p.x - s.circ.x, dy: p.y - s.circ.y };
+          } else if (!s.rectIn && p.x >= s.rect.x && p.x <= s.rect.x + RW && p.y >= s.rect.y && p.y <= s.rect.y + RH) {
+            drag = { which: "rect", dx: p.x - s.rect.x, dy: p.y - s.rect.y };
+          } else return;
+          cv.setPointerCapture(e.pointerId);
+          s.note = null;
+          paint();
+        });
+
+        cv.addEventListener("pointermove", (e) => {
+          if (!drag) return;
+          const p = at(e);
+          s[drag.which] = { x: p.x - drag.dx, y: p.y - drag.dy };
+          paint();
+        });
+
+        cv.addEventListener("pointerup", (e) => {
+          const p = at(e);
+          const d = drag;
+          drag = null;
+          if (!d) {
+            if (s.saved) return;
+            if (p.x < SAVE.x || p.x > SAVE.x + SAVE.w || p.y < SAVE.y || p.y > SAVE.y + SAVE.h) return;
+            if (s.rectIn && s.circIn) s.saved = true;
+            else s.note = "early";
+            paint();
+            return;
+          }
+          if (d.which === "rect") {
+            const c = { x: s.rect.x + RW / 2, y: s.rect.y + RH / 2 };
+            if (inRectSlot(c)) {
+              s.rect = { ...RSLOT };
+              s.rectIn = true;
+            } else if (s.rect.x !== RHOME.x || s.rect.y !== RHOME.y) {
+              s.rect = { ...RHOME };
+              s.note = inCircSlot(c) ? "wrong" : "missed";
+            }
+          } else {
+            const c = s.circ;
+            if (inCircSlot(c)) {
+              s.circ = { ...CSLOT };
+              s.circIn = true;
+            } else if (c.x !== CHOME.x || c.y !== CHOME.y) {
+              s.circ = { ...CHOME };
+              s.note = inRectSlot(c) ? "wrong" : "missed";
+            }
+          }
+          paint();
+        });
+
+        cv.addEventListener("pointercancel", () => {
+          drag = null;
+        });
+        paint();
+      })();
+    </script>
+  </body>
+</html>

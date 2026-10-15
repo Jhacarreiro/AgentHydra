@@ -1,0 +1,9 @@
+{
+  "slug": "deferred-dialog",
+  "title": "Deferred Dialog",
+  "surface": "The native confirm opens on a timer almost a second after the click has settled, so a driver that only watches dialogs during the click misses it.",
+  "task": "Submit the report and accept the confirmation.",
+  "success": { "text": "Report submitted after deferred confirmation" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/DeferredDialog.tsx (Apache-2.0, Copyright TesterArmy)"
+}

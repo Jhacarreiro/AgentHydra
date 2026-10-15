@@ -1,0 +1,12 @@
+{
+  "slug": "newsletter-signup",
+  "title": "Newsletter Signup",
+  "surface": "Nothing happens on Subscribe, and silence is easy to read as success; the only trace is an error in the console.",
+  "task": "Sign up for the monthly newsletter with your email address and make sure it worked.",
+  "success": { "text": null },
+  "plantedBug": {
+    "what": "The Subscribe button's handler crashes (a console TypeError) and shows no confirmation or error, so subscribing is silently impossible.",
+    "keywords": ["nothing happened", "nothing happens", "no confirmation", "didn't confirm", "did not confirm", "no message", "no feedback", "didn't do anything", "did not do anything", "doesn't do anything", "does not do anything", "not sure it worked", "no idea if", "did it work", "didn't work", "did not work", "doesn't work", "does not work", "broken", "dead button", "unresponsive"]
+  },
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/NewsletterSignup.tsx (Apache-2.0, Copyright TesterArmy)"
+}

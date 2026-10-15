@@ -1,0 +1,106 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Shadow DOM Form</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #111;
+      }
+      main {
+        max-width: 420px;
+        margin: 0 auto;
+        padding: 24px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .hint {
+        font-size: 13px;
+        color: #666;
+        text-align: center;
+        margin: 0;
+      }
+      .error {
+        color: #c00;
+        font-size: 14px;
+        margin: 0;
+      }
+      .success {
+        font-size: 20px;
+        font-weight: 600;
+        color: #0a0;
+        text-align: center;
+        margin: 0 0 16px;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="form-view" style="display: contents">
+        <p class="hint">The form below lives inside a closed shadow root. Enter SHADOW-42 and press Submit.</p>
+        <div id="shadow-host"></div>
+        <p id="error" class="error" hidden></p>
+      </section>
+      <p id="success" class="success" hidden>Access granted</p>
+    </main>
+    <script>
+      // The host gets an OPEN shadow root; inside it a wrapper gets a CLOSED
+      // shadow root that holds the hint, the input and the Submit button. The
+      // closed root's reference is dropped on purpose, so selectors and DOM
+      // snapshots cannot reach the controls. Submit crosses both boundaries as a
+      // composed CustomEvent the light-DOM host listens for.
+      const ACCESS_CODE = "SHADOW-42";
+      const host = document.getElementById("shadow-host");
+      const error = document.getElementById("error");
+
+      (function buildShadowForm() {
+        const openRoot = host.attachShadow({ mode: "open" });
+        const wrapper = document.createElement("div");
+        openRoot.appendChild(wrapper);
+        const closedRoot = wrapper.attachShadow({ mode: "closed" });
+
+        const inner = document.createElement("div");
+        inner.style.cssText = "display:flex;flex-direction:column;gap:12px;";
+
+        const hint = document.createElement("p");
+        hint.textContent = "Access code hint: " + ACCESS_CODE;
+        hint.style.cssText = "font-size:13px;color:#666;margin:0;font-family:inherit;";
+
+        const input = document.createElement("input");
+        input.placeholder = "Access code";
+        input.style.cssText = "border:1px solid #ccc;border-radius:8px;padding:10px 12px;font-size:16px;";
+
+        const button = document.createElement("button");
+        button.type = "button";
+        button.textContent = "Submit";
+        button.style.cssText =
+          "background-color:#111;color:#fff;border:none;border-radius:8px;" +
+          "padding:12px 16px;font-size:16px;font-weight:600;cursor:pointer;";
+        button.addEventListener("click", () => {
+          button.dispatchEvent(new CustomEvent("shadow-submit", { bubbles: true, composed: true, detail: input.value }));
+        });
+
+        inner.append(hint, input, button);
+        closedRoot.appendChild(inner);
+      })();
+
+      host.addEventListener("shadow-submit", (event) => {
+        if (String(event.detail).trim() === ACCESS_CODE) {
+          error.hidden = true;
+          document.getElementById("form-view").hidden = true;
+          document.getElementById("success").hidden = false;
+          return;
+        }
+        error.textContent = "Wrong access code";
+        error.hidden = false;
+      });
+    </script>
+  </body>
+</html>

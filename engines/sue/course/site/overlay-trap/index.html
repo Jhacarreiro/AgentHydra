@@ -1,0 +1,156 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Overlay Trap</title>
+    <style>
+      body {
+        margin: 0;
+        font-family: -apple-system, "Segoe UI", sans-serif;
+        color: #111;
+      }
+      main {
+        max-width: 420px;
+        margin: 0 auto;
+        padding: 24px 16px;
+        display: flex;
+        flex-direction: column;
+        gap: 12px;
+      }
+      .hint {
+        font-size: 13px;
+        color: #666;
+        text-align: center;
+        margin: 0;
+      }
+      .blocked {
+        font-size: 14px;
+        color: #333;
+        text-align: center;
+        margin: 0;
+      }
+      .btn {
+        background: #111;
+        color: #fff;
+        border: none;
+        border-radius: 8px;
+        padding: 12px 16px;
+        font-size: 16px;
+        font-weight: 600;
+        cursor: pointer;
+      }
+      .btn.dim {
+        opacity: 0.6;
+      }
+      .overlay {
+        position: fixed;
+        inset: 0;
+        background: transparent;
+        z-index: 20;
+      }
+      .chip {
+        position: absolute;
+        top: 12px;
+        right: 12px;
+        z-index: 21;
+        background: #fff;
+        color: #333;
+        border: 1px solid #ccc;
+        border-radius: 999px;
+        padding: 4px 10px;
+        font-size: 13px;
+        cursor: pointer;
+      }
+      .cookie-banner {
+        position: fixed;
+        bottom: 0;
+        left: 0;
+        right: 0;
+        z-index: 30;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        gap: 12px;
+        padding: 12px 16px;
+        background: #f4f4f4;
+        border-top: 1px solid #e5e5e5;
+      }
+      .cookie-text {
+        font-size: 14px;
+        color: #333;
+      }
+      .success {
+        font-size: 20px;
+        font-weight: 600;
+        color: #0a0;
+        text-align: center;
+        margin: 0;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <main>
+      <section id="flow-view" style="display: contents">
+        <p class="hint">Accept cookies, close whatever is blocking clicks, then press Continue.</p>
+        <p id="blocked" class="blocked">Blocked clicks: 0</p>
+        <button type="button" id="continue" class="btn dim">Continue</button>
+      </section>
+      <p id="success" class="success" hidden>You made it past the overlay</p>
+    </main>
+    <div id="overlay" class="overlay" hidden>
+      <button type="button" id="close-overlay" class="chip">× close overlay</button>
+    </div>
+    <div id="cookie-banner" class="cookie-banner">
+      <span class="cookie-text">We use cookies to run this benchmark.</span>
+      <button type="button" id="accept-cookies" class="btn">Accept cookies</button>
+    </div>
+    <script>
+      // A cookie banner gates the flow, then half a second after load a
+      // transparent full-viewport overlay lands above the page and swallows every
+      // click, so Continue looks clickable but never fires. Only the small chip
+      // in the overlay's top-right corner closes it; blocked clicks count up on
+      // screen. The cookie banner sits above the overlay and stays clickable.
+      const OVERLAY_DELAY_MS = 500;
+      const overlay = document.getElementById("overlay");
+      const blocked = document.getElementById("blocked");
+      const continueButton = document.getElementById("continue");
+      let cookiesAccepted = false;
+      let overlayDismissed = false;
+      let blockedClicks = 0;
+
+      setTimeout(() => {
+        if (!overlayDismissed) overlay.hidden = false;
+      }, OVERLAY_DELAY_MS);
+
+      overlay.addEventListener("click", () => {
+        blockedClicks += 1;
+        blocked.textContent = "Blocked clicks: " + blockedClicks;
+      });
+
+      document.getElementById("close-overlay").addEventListener("click", (event) => {
+        event.stopPropagation();
+        overlayDismissed = true;
+        overlay.hidden = true;
+      });
+
+      document.getElementById("accept-cookies").addEventListener("click", () => {
+        cookiesAccepted = true;
+        document.getElementById("cookie-banner").hidden = true;
+        continueButton.classList.remove("dim");
+      });
+
+      // Fires only once the banner is accepted AND the overlay was closed. The
+      // state check also shuts the other routes (a click before the overlay
+      // lands, a keyboard press), so being fast is no way past the trap.
+      continueButton.addEventListener("click", () => {
+        if (!cookiesAccepted || !overlayDismissed) return;
+        document.getElementById("flow-view").hidden = true;
+        document.getElementById("success").hidden = false;
+      });
+    </script>
+  </body>
+</html>

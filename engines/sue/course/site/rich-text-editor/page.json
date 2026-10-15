@@ -1,0 +1,9 @@
+{
+  "slug": "rich-text-editor",
+  "title": "Rich Text Editor",
+  "surface": "A contenteditable editor with a lone B button; the check reads the live DOM and passes only when bold covers every letter of \"approved\" and none of \"release\", so a sloppy selection or typing into a bold run fails.",
+  "task": "Type \"release approved\" into the editor, make exactly the word approved bold, and check the document.",
+  "success": { "text": "Document approved" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/RichTextEditor.tsx (Apache-2.0, Copyright TesterArmy)"
+}

@@ -1,0 +1,12 @@
+{
+  "slug": "cart-totals",
+  "title": "Cart Totals",
+  "surface": "The line you changed updates, so the page looks alive; only adding up the summary shows it never moved.",
+  "task": "Buy two of the cotton tee instead of one and check what the whole order will cost.",
+  "success": { "text": null },
+  "plantedBug": {
+    "what": "The order summary is computed once from the initial quantities and never updates: changing a quantity updates the line total, but the subtotal and order total stay stale.",
+    "keywords": ["subtotal", "order total", "total didn't", "total did not", "total doesn't", "total does not", "total stayed", "total is wrong", "doesn't add up", "does not add up", "didn't update", "did not update", "doesn't update", "does not update", "not updating", "still says $54", "still $54", "$49.00"]
+  },
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/CartTotals.tsx (Apache-2.0, Copyright TesterArmy)"
+}

@@ -1,0 +1,16 @@
+{
+  "whatIsThisSite": "It's a chat app where you talk to people.",
+  "whatDoTheySell": "Events maybe?",
+  "oneSentenceToAFriend": "It's a chat app for talking to your friends about events.",
+  "confidence": 3,
+  "madeAccount": true,
+  "whyStopped": "I got in.",
+  "mostConfusing": "Where the chat was.",
+  "emailCodeExperience": { "waitedSeconds": 35, "wasClear": true, "notes": "I checked before it came." },
+  "endedUpWhereExpected": { "yes": true, "where": "A page with lots of pictures." },
+  "easyToUnderstand": 6,
+  "trust": 6,
+  "wouldComeBack": 5,
+  "isThisTrash": { "yes": false, "why": "It was fine." },
+  "threeWords": "colorful, busy, fun"
+}

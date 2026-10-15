@@ -1,0 +1,8 @@
+{
+  "outcome": "done",
+  "finalUrl": "http://localhost:4173/events",
+  "otpRequestedAt": "2026-09-20T18:01:00.000Z",
+  "otpEmailLatencyMs": 22000,
+  "firstInboxCheckAt": "2026-09-20T18:01:10.000Z",
+  "clock": { "elapsedSeconds": 120 }
+}

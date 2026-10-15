@@ -1,0 +1,58 @@
+<!doctype html>
+<!--
+  The FALSE-POSITIVE half of the cover test, and the reason it samples nine points instead of one.
+
+  A sticky header overlaps the top of a button. A person clicks the part that is not covered, and so
+  the button must stay numbered. A centre-only hit test retires it, which would be a far worse bug
+  than the one the cover test fixes: a Sue silently losing controls that work.
+-->
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Sticky overlap fixture</title>
+    <style>
+      body {
+        margin: 0;
+        font:
+          16px/1.4 system-ui,
+          sans-serif;
+      }
+      .sticky-header {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        height: 40px;
+        background: #fff;
+        z-index: 5;
+      }
+      /* Top ~20px under the header, bottom ~40px clear of it. */
+      .half-covered {
+        position: absolute;
+        top: 20px;
+        left: 240px;
+        height: 60px;
+      }
+      /* Entirely under the header: unreachable, and it must be reported as such. */
+      .fully-covered {
+        position: absolute;
+        top: 8px;
+        left: 480px;
+        height: 24px;
+      }
+    </style>
+  </head>
+  <body>
+    <div class="sticky-header">
+      <button type="button">Menu</button>
+    </div>
+
+    <button type="button" class="half-covered">Half covered</button>
+    <button type="button" class="fully-covered">Fully covered</button>
+
+    <div style="padding: 120px 40px">
+      <h1>Nothing is modal here</h1>
+      <button type="button">Clear button</button>
+    </div>
+  </body>
+</html>

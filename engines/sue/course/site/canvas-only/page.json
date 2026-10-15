@@ -1,0 +1,9 @@
+{
+  "slug": "canvas-only",
+  "title": "Canvas Only",
+  "surface": "The whole flow is painted on one aria-hidden canvas: no DOM controls, no text, no roles; only vision and pixel coordinates work.",
+  "task": "Click the square, then the circle, then the diamond, in that order.",
+  "success": { "text": "Sequence complete" },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/CanvasOnly.tsx (Apache-2.0, Copyright TesterArmy)"
+}

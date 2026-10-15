@@ -53,11 +53,11 @@ const writeTools = (source: string) => {
 }
 
 describe('priceCheckDir', () => {
-  test('defaults to the sibling sue-dredd checkout when PRICECHECK_DIR is unset', () => {
+  test('defaults to the in-repo engines/pricecheck when PRICECHECK_DIR is unset', () => {
     const saved = process.env.PRICECHECK_DIR
     delete process.env.PRICECHECK_DIR
     try {
-      expect(priceCheckDir()).toBe(join(APP_ROOT, '..', 'sue-dredd', 'pricecheck'))
+      expect(priceCheckDir()).toBe(join(APP_ROOT, 'engines', 'pricecheck'))
     } finally {
       if (saved !== undefined) process.env.PRICECHECK_DIR = saved
     }

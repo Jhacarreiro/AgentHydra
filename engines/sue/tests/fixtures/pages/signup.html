@@ -1,0 +1,82 @@
+<!--
+  signup.html - account-creation fixture for tests/perception.spec.mjs.
+  First/last name, email, phone; one honeypot input (tabindex -1, off-screen CSS - the classic
+  bot trap the body's `type` tool must refuse per SPEC.md's rails); a card-number field with
+  autocomplete "cc-number" (the body's `type` tool must also refuse this one); an icon-only
+  submit button.
+-->
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Create your account</title>
+    <style>
+      body {
+        font-family: sans-serif;
+        padding: 20px;
+      }
+      .visually-hidden {
+        position: absolute;
+        left: -9999px;
+        top: -9999px;
+        width: 1px;
+        height: 1px;
+        overflow: hidden;
+      }
+      button.icon-only {
+        width: 36px;
+        height: 36px;
+      }
+    </style>
+  </head>
+  <body>
+    <h1>Create your account</h1>
+    <form>
+      <label for="first-name">First name</label>
+      <input id="first-name" name="firstName" type="text" placeholder="Jane" />
+
+      <label for="last-name">Last name</label>
+      <input id="last-name" name="lastName" type="text" placeholder="Doe" />
+
+      <label for="email">Email</label>
+      <input id="email" name="email" type="email" placeholder="you@example.com" />
+
+      <label for="phone">Phone</label>
+      <input id="phone" name="phone" type="tel" placeholder="(555) 555-0100" />
+
+      <input
+        class="visually-hidden"
+        id="website"
+        name="website"
+        type="text"
+        tabindex="-1"
+        autocomplete="off"
+      />
+
+      <label for="card-number">Card number</label>
+      <input
+        id="card-number"
+        name="cardNumber"
+        type="text"
+        autocomplete="cc-number"
+        placeholder="1234 1234 1234 1234"
+      />
+
+      <span id="month-label">Month</span>
+      <button type="button" role="combobox" aria-haspopup="listbox" aria-expanded="false" aria-labelledby="month-label">Pick a month</button>
+
+      <label for="dob-month">Birth month</label>
+      <button id="dob-month" type="button" role="combobox" aria-haspopup="listbox"><span style="font-family: &quot;Material Symbols Outlined&quot;">expand_more</span></button>
+
+      <p>What kind of book is it?</p>
+      <label for="kind-memoir" style="display: inline-block; position: relative; padding: 8px; border: 1px solid #999">
+        <input id="kind-memoir" type="radio" name="kind" value="memoir" style="position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0, 0, 0, 0)" />
+        <span>Memoir</span>
+      </label>
+
+      <button class="icon-only" type="submit" aria-label="submit">
+        <svg viewBox="0 0 24 24"><path d="M5 12h14M13 6l6 6-6 6"></path></svg>
+      </button>
+    </form>
+  </body>
+</html>

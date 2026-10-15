@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Order History</title>
+<style>
+  body { font-family: system-ui, sans-serif; color: #111; margin: 0; }
+  main { max-width: 640px; margin: 0 auto; padding: 24px; }
+  header a { font-size: 13px; color: #666; }
+  h1 { font-size: 20px; font-weight: 700; margin: 8px 0 0; }
+  .container { display: flex; flex-direction: column; gap: 16px; padding: 24px 0; }
+  nav { display: flex; gap: 8px; }
+  nav button { border: 1px solid #ccc; background: #fff; border-radius: 8px; padding: 8px 14px; font-size: 14px; cursor: pointer; }
+  nav button.active { background: #111; color: #fff; border-color: #111; }
+  .panel { border: 1px solid #e5e5e5; border-radius: 8px; padding: 16px; display: flex; flex-direction: column; gap: 10px; }
+  .title { font-size: 16px; font-weight: 600; margin: 0; }
+  .text { font-size: 14px; color: #333; margin: 0; }
+  .skeleton { height: 16px; border-radius: 4px; background: #eee; }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <header>
+    <a href="/">&larr; All pages</a>
+    <h1>Order History</h1>
+  </header>
+  <div class="container">
+    <nav>
+      <button type="button" data-tab="overview" data-testid="tab-overview" class="active">Overview</button>
+      <button type="button" data-tab="orders" data-testid="tab-orders">Orders</button>
+      <button type="button" data-tab="settings" data-testid="tab-settings">Settings</button>
+    </nav>
+    <div class="panel" data-panel="overview" data-testid="overview-panel">
+      <p class="title">Welcome back, Alex</p>
+      <p class="text">You have 3 orders and 1 active subscription.</p>
+    </div>
+    <!-- PLANTED BUG (do not fix): the orders panel is stuck loading forever.
+         The skeleton never resolves even though the rest of the account
+         area works, so order history is unreachable. -->
+    <div class="panel" data-panel="orders" data-testid="orders-panel" hidden>
+      <p class="text">Loading your orders...</p>
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+      <div class="skeleton"></div>
+    </div>
+    <div class="panel" data-panel="settings" data-testid="settings-panel" hidden>
+      <p class="title">Settings</p>
+      <p class="text">Email: alex@example.com</p>
+      <p class="text">Plan: Pro (renews monthly)</p>
+    </div>
+  </div>
+</main>
+<script>
+  for (const button of document.querySelectorAll("nav button")) {
+    button.addEventListener("click", () => {
+      for (const other of document.querySelectorAll("nav button")) other.classList.toggle("active", other === button);
+      for (const panel of document.querySelectorAll("[data-panel]")) panel.hidden = panel.dataset.panel !== button.dataset.tab;
+    });
+  }
+</script>
+</body>
+</html>

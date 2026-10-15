@@ -1,0 +1,23 @@
+{
+  "root": "$CWD",
+  "localMcpLoader": "",
+  "localMcpImpl": "",
+  "agentLaneTools": "",
+  "designCriticWave": "",
+  "phoneRender": "",
+  "firstScreen": "",
+  "toolCommandHook": "",
+  "askedHook": "",
+  "machinePromptHook": "",
+  "pagePulseRunner": "",
+  "grannyPageEngine": "",
+  "arkitectCli": "",
+  "codeGateRunner": "",
+  "planeSourceDirs": "",
+  "operatorMarker": "",
+  "favicon": "",
+  "sueStore": "~/.agenthydra/sue",
+  "sueAddressTarget": "",
+  "skillsDir": ".claude/skills",
+  "personaPhotoDir": ""
+}

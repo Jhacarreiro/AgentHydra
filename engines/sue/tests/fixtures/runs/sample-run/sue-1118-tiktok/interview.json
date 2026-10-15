@@ -1,0 +1,16 @@
+{
+  "whatIsThisSite": "idk, some website",
+  "whatDoTheySell": "not sure",
+  "oneSentenceToAFriend": "Skip it, nothing grabbed me.",
+  "confidence": 1,
+  "madeAccount": false,
+  "whyStopped": "Boring. Nothing grabbed me.",
+  "mostConfusing": "What it even is.",
+  "emailCodeExperience": { "waitedSeconds": null, "wasClear": null, "notes": "Never got that far." },
+  "endedUpWhereExpected": { "yes": false, "where": "The front page." },
+  "easyToUnderstand": 3,
+  "trust": 4,
+  "wouldComeBack": 1,
+  "isThisTrash": { "yes": true, "why": "Too much reading." },
+  "threeWords": "slow, long, boring"
+}

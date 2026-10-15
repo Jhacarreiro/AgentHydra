@@ -1,0 +1,9 @@
+{
+  "slug": "playbook-cleanup",
+  "title": "Playbook Cleanup",
+  "surface": "Delete hides behind a per-card overflow menu and a confirm dialog, and the only proof of success is an empty exact-name search afterwards.",
+  "task": "Delete the playbook named \"Launch Approval Draft\", confirm the removal, then search for its exact name to verify it is gone.",
+  "success": { "text": "No playbooks match \"Launch Approval Draft\"." },
+  "plantedBug": null,
+  "credit": "adapted from tester-army/e2e apps/web-benchmark/app/src/Examples/PlaybookCleanup.tsx (Apache-2.0, Copyright TesterArmy)"
+}
