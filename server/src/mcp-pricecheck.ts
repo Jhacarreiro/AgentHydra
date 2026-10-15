@@ -1,7 +1,7 @@
 // Loads the owners' private page price checker when its checkout is present; without it, AgentHydra has no price check tools.
 import { existsSync } from 'node:fs'
 import { join } from 'node:path'
-import { pathToFileURL } from 'node:url'
+import { callAddon } from './addon-loader'
 import { APP_ROOT } from './config'
 import { api, type HydraTool, JSON_HEADERS, MCP_CALL_BUDGET_MS } from './mcp-client'
 import { folderOf } from './mcp-dashboards'
@@ -33,26 +33,15 @@ export async function loadPriceCheckTools(
   dir: string,
   host: PriceCheckHost = LIVE_HOST,
 ): Promise<HydraTool[]> {
-  const file = join(dir, 'mcp', 'tools.mjs')
-  if (!existsSync(file)) return []
-  try {
-    const mod = await import(pathToFileURL(file).href)
-    if (typeof mod.priceCheckTools !== 'function')
-      throw new Error('mcp/tools.mjs exports no priceCheckTools')
-    return (mod.priceCheckTools(host) as HydraTool[]).map(
-      ({ name, description, inputSchema, listed, callerChat, run }) => ({
-        name,
-        description,
-        inputSchema,
-        listed,
-        callerChat,
-        run,
-      }),
-    )
-  } catch (err) {
-    console.error(`[agenthydra] price check tools not loaded from ${dir}: ${String(err)}`)
-    return []
-  }
+  const tools = await callAddon<HydraTool[]>(join(dir, 'mcp', 'tools.mjs'), 'priceCheckTools', host)
+  return (tools ?? []).map(({ name, description, inputSchema, listed, callerChat, run }) => ({
+    name,
+    description,
+    inputSchema,
+    listed,
+    callerChat,
+    run,
+  }))
 }
 
 export const PRICECHECK_TOOLS: HydraTool[] = await loadPriceCheckTools(priceCheckDir())

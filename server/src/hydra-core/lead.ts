@@ -4,6 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { contentWords } from '../mcp-find'
+import { inRepoPeople, peopleAddon } from '../people-host'
 import { type CatalogEntry, LEAD_TIERS, loadRef, loadText } from './catalog'
 import { type Feedback, readFeedback } from './feedback'
 import { detailOf, rankEntries, terms } from './find'
@@ -301,15 +302,20 @@ ${message}`
       )
   }
   let pick: LeadPick
+  const addon = peopleAddon()
+  const modelAsks = addon ? !!addon.lead : inRepoPeople()
   if (!contentWords(message).length) pick = { id: null, path: 'words', ms: 0 }
-  // No managers to choose from: the word ranker picks among whoever can be become.
-  else if (!managers.length)
+  // No managers to choose from, or no one to ask: the word ranker picks among whoever can be become.
+  else if (!managers.length || !modelAsks)
     pick = { id: wordLead(entries, message)?.id ?? null, path: 'words', ms: 0 }
   else {
-    const asked = decider(
-      leadQuestion(managers, message, opts.current ?? null),
-      opts.late ? LATE_BUDGET_MS : budgetMs,
-    ).catch(
+    const budget = opts.late ? LATE_BUDGET_MS : budgetMs
+    const answer: Promise<Decision> = addon?.lead
+      ? addon
+          .lead({ message, entries, current: opts.current?.id ?? null, budgetMs: budget })
+          .then((r) => ({ answer: r?.slug ?? 'none' }))
+      : decider(leadQuestion(managers, message, opts.current ?? null), budget)
+    const asked = answer.catch(
       (err): Decision => ({
         answer: null,
         error: err instanceof Error ? err.message : String(err),

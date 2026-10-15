@@ -156,7 +156,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
-import { peopleAddonPresent } from './people-addon'
+import { getPeopleAddon, inRepoPeople, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -1702,9 +1702,15 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only, and only
-// with the people add-on (server/src/people-addon.ts).
-if (IS_PRIMARY_INSTALL && peopleAddonPresent()) {
+// The people add-on (server/src/people-host.ts) starts its own timers; the in-repo ones run only while the people code
+// lives here and the add-on module is absent.
+registerPeopleVerdicts((worker) =>
+  storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
+)
+if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
+
+// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
+if (IS_PRIMARY_INSTALL && inRepoPeople()) {
   startManagerAnalytics((worker) =>
     storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
   )

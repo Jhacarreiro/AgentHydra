@@ -1,6 +1,7 @@
 // server/src/mcp-managers.ts - manager_open, manager_ask and manager_read: a Manager Hydra manager opens sub-manager chats
 // under the Desk chat it runs in, and talks to them through the Desk window's own routes.
 import { readFileSync } from 'node:fs'
+import { deskChats, deskPost, replyWhenDone, transcriptItems } from './desk-client'
 import { coreModeOn } from './hydra-core-mode'
 import { loadMerged, openTurnsOf, readDeskIndex, titlesOf } from './manager-analytics/collect'
 import {
@@ -13,29 +14,15 @@ import {
 import { buildStats } from './manager-analytics/stats'
 import { readState } from './manager-analytics/store'
 import { MANAGER_SLUG, managerFile } from './manager-folders'
-import { completionsApi, type HydraTool, JSON_HEADERS, S, str } from './mcp-client'
-import { deskBase, pickDeskChat } from './mcp-find'
-import { type AddonOpts, peopleAddonPresent } from './people-addon'
+import { completionsApi, type HydraTool, S, str } from './mcp-client'
+import { pickDeskChat } from './mcp-find'
+import { inRepoPeople, type PeopleOpts } from './people-host'
 
 const CORE_MODE_REFUSAL =
   'Core mode: sub-manager chats are off. Use core_use { chat, id, mode: "consult" | "hire" } to ask or hire a hidden copy.'
 
 const DEFAULT_WAIT = 30
 const MAX_WAIT = 35
-
-export interface DeskChat {
-  id: string
-  sessionId?: string | null
-  title?: string
-  cwd?: string
-  status?: string
-  lastError?: string | null
-}
-
-interface TranscriptItem {
-  kind?: string
-  text?: string
-}
 
 /** A manager's display name from its persona.json (people store first, then the legacy managers folder). */
 export function managerName(slug: string): string {
@@ -55,65 +42,9 @@ export function managerName(slug: string): string {
   return name.trim()
 }
 
-const UNREACHABLE = (base: string) =>
-  `the Desk window does not answer at ${base}; is AgentHydra 2.0 open?`
-
-export async function deskChats(): Promise<DeskChat[]> {
-  const base = deskBase()
-  const res = await fetch(`${base}/api/chats`).catch(() => null)
-  if (!res?.ok) throw new Error(UNREACHABLE(base))
-  const chats: unknown = await res.json().catch(() => null)
-  if (!Array.isArray(chats))
-    throw new Error(`unexpected answer from ${base}/api/chats (not a list of chats)`)
-  return chats as DeskChat[]
-}
-
-export async function deskPost(path: string, body: unknown): Promise<Record<string, unknown>> {
-  const base = deskBase()
-  const res = await fetch(`${base}${path}`, {
-    method: 'POST',
-    headers: JSON_HEADERS,
-    body: JSON.stringify(body),
-  }).catch(() => null)
-  if (!res) throw new Error(UNREACHABLE(base))
-  const answer = (await res.json().catch(() => ({}))) as Record<string, unknown>
-  if (!res.ok) throw new Error(`Desk refused: ${String(answer.error ?? res.status)}`)
-  return answer
-}
-
-export async function transcriptItems(chatId: string): Promise<TranscriptItem[]> {
-  const base = deskBase()
-  const res = await fetch(`${base}/api/chats/${encodeURIComponent(chatId)}/transcript`).catch(
-    () => null,
-  )
-  if (!res?.ok) throw new Error(UNREACHABLE(base))
-  const items: unknown = await res.json().catch(() => null)
-  if (!Array.isArray(items))
-    throw new Error(`unexpected transcript from ${base} (not a list of items)`)
-  return items as TranscriptItem[]
-}
-
 function waitSeconds(a: Record<string, unknown>): number {
   const n = Number(a.wait_seconds)
   return Math.min(MAX_WAIT, Math.max(0, Number.isFinite(n) ? n : DEFAULT_WAIT))
-}
-
-/** Whether a chat's turn has ended and answered what was sent after `sentAfter` (null for a read). A sent message is
- *  answered only once the assistant spoke after it (or the chat errored): Desk flips a new or idle chat to working a
- *  beat after the prompt lands in the transcript. */
-export function turnAnswered(
-  chat: Pick<DeskChat, 'status' | 'lastError'> | undefined,
-  items: { kind?: string }[],
-  sentAfter: number | null,
-): boolean {
-  const working = chat?.status === 'working' || chat?.status === 'starting'
-  const fresh = sentAfter === null ? items : items.slice(sentAfter)
-  const lastUser = fresh.map((i) => i.kind).lastIndexOf('user')
-  const answered =
-    sentAfter === null ||
-    (lastUser >= 0 &&
-      (fresh.slice(lastUser).some((i) => i.kind === 'assistant_text') || !!chat?.lastError))
-  return !working && answered
 }
 
 /** The completion registry the manager tools register with (tests replace its methods). */
@@ -137,27 +68,6 @@ async function tellWhenChatDone(
   } catch (err) {
     const why = err instanceof Error ? err.message : String(err)
     process.stderr.write(`manager chat ${chat.id}: no completion wait registered (${why})\n`)
-  }
-}
-
-/** Waits for the chat's turn to end and answers its final reply. `sentAfter` is the transcript length before a message
- *  this call sent (null for a read): only items after it count, and the turn must have taken that message. */
-export async function replyWhenDone(
-  chat: DeskChat,
-  sentAfter: number | null,
-  seconds: number,
-): Promise<{ chat: string; title?: string; status: 'done' | 'working'; reply?: string }> {
-  const deadline = Date.now() + seconds * 1000
-  for (;;) {
-    const current = (await deskChats()).find((c) => c.id === chat.id)
-    const items = await transcriptItems(chat.id)
-    if (turnAnswered(current, items, sentAfter)) {
-      const fresh = sentAfter === null ? items : items.slice(sentAfter)
-      const reply = fresh.filter((i) => i.kind === 'assistant_text').at(-1)?.text ?? ''
-      return { chat: chat.id, title: chat.title, status: 'done', reply }
-    }
-    if (Date.now() >= deadline) return { chat: chat.id, title: chat.title, status: 'working' }
-    await new Promise((r) => setTimeout(r, 1000))
   }
 }
 
@@ -330,7 +240,7 @@ export const MANAGER_TOOLS: HydraTool[] = [
   },
 ]
 
-/** The manager_* tools, listed only with the people add-on on this PC (server/src/people-addon.ts). */
-export function managerTools(opts?: AddonOpts): HydraTool[] {
-  return peopleAddonPresent(opts) ? MANAGER_TOOLS : []
+/** The in-repo manager_* tools: listed only while the people code lives here and the add-on module is absent. */
+export function managerTools(opts?: PeopleOpts): HydraTool[] {
+  return inRepoPeople(opts) ? MANAGER_TOOLS : []
 }

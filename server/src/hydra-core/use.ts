@@ -2,8 +2,8 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, join } from 'node:path'
 import { setTimeout as sleep } from 'node:timers/promises'
 import type { CliMayteRole } from '../climayte-lib'
+import { deskChats, replyWhenDone } from '../desk-client'
 import { completionsApi } from '../mcp-client'
-import { deskChats, replyWhenDone } from '../mcp-managers'
 import {
   type Caller,
   type ChatOfCaller,

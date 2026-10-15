@@ -81,6 +81,7 @@ import { SESSION_TOOLS } from './mcp-session-tools'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 import { runMcpStdio } from './mcp-stdio.mjs'
 import { SUE_DREDD_TOOLS } from './mcp-sue-dredd'
+import { getPeopleAddon } from './people-host'
 import type { UsageSnapshot } from './types'
 
 // Tests, index.ts and main.ts import these from here, where they have always lived.
@@ -315,6 +316,9 @@ async function climayteStatusPings(
  *  starts with the call and keeps its own CALLER_ORIGIN_BUDGET_MS: a slower one stamps after the answer has gone.
  *  A 3 s budget for the trace itself missed on the first read after a daemon restart (2026-10-13, at 99% CPU). */
 const SEEN_WAIT_MS = 3_000
+
+/** The people add-on's own tools (server/src/people-host.ts); none without it. */
+const PEOPLE_ADDON_TOOLS: HydraTool[] = (await getPeopleAddon())?.tools ?? []
 
 /** Wait for `p` at most `ms`; it goes on either way. */
 async function within(p: Promise<unknown>, ms: number): Promise<void> {
@@ -1998,6 +2002,7 @@ export const TOOLS: HydraTool[] = [
   ...DASHBOARD_TOOLS,
   ...PRICECHECK_TOOLS,
   ...SUE_DREDD_TOOLS,
+  ...PEOPLE_ADDON_TOOLS,
   ...managerTools(),
   ...CORE_TOOLS,
   {
