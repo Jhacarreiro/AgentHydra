@@ -1168,6 +1168,34 @@ function transcriptArchivedFlag(
   return false
 }
 
+/** How recently an archived chat nobody read must have worked to still count as not archived. */
+const UNREAD_ARCHIVED_WINDOW_MS = 7 * 86_400_000
+
+/**
+ * Whether `f` was put away before anyone read it: the Desktop record its row shows is archived and still
+ * unread, nothing marks it done, and it worked in the last week. The "Not archived" list keeps these
+ * (owner, 2026-10-14: a chat was archived 25 s after its account hit a usage limit, unread and
+ * unfinished, and no default filter showed it). Its row still says archived, so the list marks it as
+ * such. The week bounds it: hundreds of archived chats on one store were unread, most long dead.
+ */
+function transcriptArchivedUnread(
+  f: TranscriptFile,
+  idsOf: (f: TranscriptFile) => string[],
+  mmap: Map<string, SessionMeta>,
+  dmap: Map<string, boolean>,
+  now: number,
+): boolean {
+  if (f.remote || f.mtime_ms < now - UNREAD_ARCHIVED_WINDOW_MS) return false
+  const meta = idsOf(f)
+    .map((id) => mmap.get(id))
+    .find(Boolean)
+  if (!meta?.archived || !meta.unread) return false
+  const done =
+    dmap.get(sessionMarkKey(f.source, f.session_id, f)) ??
+    dmap.get(legacyMarkKey(f.source, f.session_id, f.tool))
+  return !done
+}
+
 /** Whether `f` (or a transcript it absorbed) has a queue row. */
 function transcriptDispatchedFlag(
   f: TranscriptFile,
@@ -1401,9 +1429,15 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
         instances.some((i) => transcriptMatchesInstance(f, i, idsOf, mmap, byOrigin)),
     )
   }
+  const dmap = doneMarkMap()
   if (archivedStates.size === 1) {
     const want = archivedStates.has('archived')
-    files = files.filter((f) => transcriptArchivedFlag(f, idsOf, mmap) === want)
+    const now = Date.now()
+    files = files.filter(
+      (f) =>
+        transcriptArchivedFlag(f, idsOf, mmap) === want ||
+        (!want && transcriptArchivedUnread(f, idsOf, mmap, dmap, now)),
+    )
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
   // No re-check after the parse, unlike sinceMs below: mtime is an UPPER bound on real activity
@@ -1445,7 +1479,6 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     )
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
-  const dmap = doneMarkMap()
   await climayteEffortReady()
   const lookups = rowLookups()
 
