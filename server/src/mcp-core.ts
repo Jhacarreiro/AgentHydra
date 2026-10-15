@@ -153,8 +153,12 @@ export const CORE_TOOLS: HydraTool[] = [
   {
     name: 'core_stats',
     listed: false,
-    description: 'Hydra Core log stats: misses per entry, overruled counts, report count.',
-    inputSchema: S({}),
-    run: async () => statsOf(coreDir()),
+    description:
+      'Hydra Core log stats over the last `days` (default 31): misses per entry (and the `none` rejections), overruled counts, reports and the report rate, per-question asked and defaulted counts, pushback by chat, and finds.',
+    inputSchema: S({ days: { type: 'integer', minimum: 1 } }),
+    run: async (a: Record<string, unknown>) => {
+      const days = typeof a.days === 'number' && a.days >= 1 ? a.days : 31
+      return statsOf(coreDir(), new Date(Date.now() - days * 24 * 60 * 60 * 1000))
+    },
   },
 ]

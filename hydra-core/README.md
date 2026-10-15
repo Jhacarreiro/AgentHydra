@@ -59,6 +59,15 @@ Other hooks are left alone. A Manager Hydra router entry (any command ending in 
 
 Set it with `placement <slot|attach|file|off>` in the core's `switch.mjs`.
 
+## What the log records
+
+- `miss`: each id on a page the chat passed over (`more`, `why: "more"`) or rejected (`none`, `why: "none"`, with the `better` text it gave). A `more` with no page in memory, after a restart, counts the first page.
+- `find`: every `core_find` call, with its `ids` and `total`.
+- Each step answer carries `kw` and `defaulted` (the answer was the step's default). Every finished run's reply asks once for `core_report`; a report needs an outcome of `done`, `partial` or `failed`, and one with no open run is stored with a warning.
+- A bad catalog entry is logged as `skip` once per file, id and reason until its file changes.
+- `log.jsonl` moves to `log-YYYY-MM.jsonl` when a new month starts or it passes 20 MB. `core_stats` (last 31 days, or `days`) and `track` (last 30 days) read only the months they need.
+- hydra.md keeps its last 20 scope-log lines; `sent.json` drops a session whose list has not changed in 7 days, and keeps `(lead owed)`.
+
 ## Failures
 
 A hook error is written into the injected context as `Hydra Core hook error: ...`. An unknown event or unreadable stdin exits 1 with the message on stderr.

@@ -116,6 +116,21 @@ beforeEach(() => {
   )
   mkdirSync(chatPaths(dir, 'alpha').root, { recursive: true })
   writeFileSync(chatPaths(dir, 'alpha').hydraMd, 'kept\n')
+  writeFileSync(
+    join(dir, 'catalog', 'hand-skills.json'),
+    JSON.stringify([
+      {
+        id: 'skill:brand-notes',
+        kind: 'skill',
+        name: 'Brand notes',
+        when: 'Brand rules',
+        tags: ['brand'],
+        cost: 'free',
+        how: 'run the skill',
+        load: { type: 'skill', name: 'brand-notes' },
+      },
+    ]),
+  )
 })
 
 afterEach(() => {
@@ -131,12 +146,13 @@ test('ledger rows follow each turn: scope, compliance, picks and offered capabil
   expect(compliant?.method).toBe('scope')
   expect(compliant?.scopes).toEqual([{ chat: 'alpha', run: 1, verdict: 'go' }])
   expect(compliant?.offered).toContain('person:iris-ui')
-  expect(compliant?.unusedPicks).toEqual(['person:ops-lead'])
+  expect(compliant?.used).toEqual(['person:ops-lead'])
+  expect(compliant?.notTaken).toEqual(['person:iris-ui'])
   expect(compliant?.reports.map((r) => r.score)).toEqual([4])
   expect(skipped?.compliant).toBe(false)
   expect(skipped?.method).toBe('none')
-  expect(skipped?.used).toEqual(['brand-notes'])
-  expect(skipped?.usedNotOffered).toEqual(['brand-notes'])
+  expect(skipped?.used).toEqual(['skill:brand-notes'])
+  expect(skipped?.usedNotOffered).toEqual(['skill:brand-notes'])
 })
 
 test('summary counts compliance, verdicts, reports, handoffs and skipped workers', () => {
@@ -144,9 +160,16 @@ test('summary counts compliance, verdicts, reports, handoffs and skipped workers
   expect(summary.sessions).toEqual({ transcripts: 4, workers: 1, noCore: 1, eligible: 2 })
   expect(summary.turns).toEqual({ total: 3, compliant: 2, compliancePct: 66.7 })
   expect(summary.scopes).toEqual({ total: 2, go: 1, hydra: 1, none: 0 })
-  expect(summary.reports).toEqual({ runs: 2, reported: 1, rate: 0.5, scored: 1, meanScore: 4 })
-  expect(summary.picks).toEqual({ total: 1, unused: 1 })
-  expect(summary.usedNotOffered).toBe(1)
+  expect(summary.reports).toEqual({
+    runs: 2,
+    reported: 1,
+    rate: 0.5,
+    noRun: 0,
+    scored: 1,
+    meanScore: 4,
+  })
+  expect(summary.picks).toEqual({ total: 1 })
+  expect(summary.usedNotOffered).toBe(2)
   expect(summary.missing).toEqual([{ chat: 'alpha', run: 1, text: 'no ops data' }])
   expect(summary.handoffs).toEqual({ chats: 1, handoffs: 1, kept: 1, lost: 0, linkedFiles: 0 })
 })

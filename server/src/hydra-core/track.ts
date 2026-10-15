@@ -1,6 +1,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { basename, join } from 'node:path'
+import { type CatalogEntry, loadCatalog, MODES } from './catalog'
 import { readLog } from './log'
 import { chatPaths, coreDir } from './paths'
 
@@ -75,7 +76,7 @@ export interface Row {
   used: string[]
   offered: string[]
   picks: string[]
-  unusedPicks: string[]
+  notTaken: string[]
   usedNotOffered: string[]
   reports: Reported[]
 }
@@ -108,10 +109,18 @@ export interface Summary {
     runs: number
     reported: number
     rate: number
+    noRun: number
     scored: number
     meanScore: number | null
   }
-  picks: { total: number; unused: number }
+  deliveries: { total: number; matched: number; noTurn: number }
+  picks: { total: number }
+  entries: {
+    offered: number
+    taken: number
+    neverTaken: number
+    notTaken: { id: string; offered: number }[]
+  }
   usedNotOffered: number
   missing: { chat: string; run: number; text: string }[]
   handoffs: { chats: number; handoffs: number; kept: number; lost: number; linkedFiles: number }
@@ -125,19 +134,15 @@ export interface TrackOptions {
 
 const TEN_MINUTES = 10 * 60 * 1000
 const CORE_PREFIX = 'mcp__agenthydra__core_'
-const ID_RE = /\b[a-z]+:[a-z0-9][a-z0-9_-]*/g
+const ID_RE = /\b(?:person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*/g
+const ONE_ID = /^(?:person|instrument|worker|knowledge|skill):[a-z0-9][a-z0-9-]*$/
+const MONTH = 30 * 24 * 60 * 60 * 1000
+const NOT_TAKEN_SHOWN = 10
 const CHAT_RE = /^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/
 
 const str = (v: unknown): string => (typeof v === 'string' ? v : '')
 const num = (v: unknown): number => (typeof v === 'number' ? v : 0)
 const slug = (s: string): string => s.toLowerCase().replace(/[^a-z0-9]/g, '')
-
-function same(a: string, b: string): boolean {
-  const x = slug(a)
-  const y = slug(b)
-  const [short, long] = x.length <= y.length ? [x, y] : [y, x]
-  return short.length >= 4 && long.includes(short)
-}
 
 function list(dir: string): string[] {
   try {
@@ -225,10 +230,38 @@ function isWorker(s: Session): boolean {
   )
 }
 
-function usedOf(c: Call): string[] {
-  if (c.name === 'Skill') return [str(c.input.skill)].filter(Boolean)
-  if (c.name === 'Agent') return [str(c.input.subagent_type) || 'agent']
-  if (c.name.startsWith('mcp__') && !c.name.startsWith(CORE_PREFIX)) return [c.name]
+const tail = (id: string): string => slug(id.slice(id.indexOf(':') + 1))
+const bare = (name: string): string => slug(name.replace(/^.*:/, ''))
+
+/** The catalog entries a call uses: a core_use names one; a Skill, Agent or MCP call maps by name, or to none. */
+function usedOf(c: Call, cat: CatalogEntry[]): string[] {
+  const hit = (pick: (e: CatalogEntry) => boolean) => cat.filter(pick).map((e) => e.id)
+  if (c.name === `${CORE_PREFIX}use`) return [str(c.input.id)].filter(Boolean)
+  if (c.name === 'Skill') {
+    const name = bare(str(c.input.skill))
+    return name
+      ? hit(
+          (e) =>
+            (e.kind === 'skill' && tail(e.id) === name) ||
+            (e.load.type === 'skill' && bare(e.load.name) === name),
+        )
+      : []
+  }
+  if (c.name === 'Agent') {
+    const name = slug(str(c.input.subagent_type))
+    return name
+      ? hit((e) => (e.kind === 'worker' || e.kind === 'person') && tail(e.id) === name)
+      : []
+  }
+  if (c.name.startsWith('mcp__') && !c.name.startsWith(CORE_PREFIX)) {
+    const server = c.name.split('__')[1] ?? ''
+    return hit(
+      (e) =>
+        e.kind === 'instrument' &&
+        (tail(e.id) === slug(server) ||
+          (e.load.type === 'tool' && e.load.call.startsWith(`mcp__${server}__`))),
+    )
+  }
   return []
 }
 
@@ -275,11 +308,19 @@ function placementOf(s: Session, events: Json[]): string | null {
   return last ? str(last.placement) : null
 }
 
-function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
+function turnRow(
+  s: Session,
+  turn: Turn,
+  index: number,
+  events: Json[],
+  cat: CatalogEntry[],
+  delivered: Set<Json>,
+): Row {
   const scopes = turn.calls
     .filter((c) => c.name === `${CORE_PREFIX}scope`)
     .map((c) => scopeOf(str(c.input.chat), c.at, events))
   const deliveries = deliveriesOf(s, turn, events)
+  for (const d of deliveries) delivered.add(d)
   const core = turn.calls.filter((c) => c.name.startsWith(CORE_PREFIX))
   const offered = new Set<string>()
   for (const c of core) for (const m of c.result.matchAll(ID_RE)) offered.add(m[0])
@@ -291,7 +332,7 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
   const byScope = scopes.length > 0
   const byPack = deliveries.length > 0
   const method: Method = byScope && byPack ? 'both' : byScope ? 'scope' : byPack ? 'pack' : 'none'
-  const used = turn.calls.flatMap(usedOf)
+  const used = [...new Set(turn.calls.flatMap((c) => usedOf(c, cat)))]
   const picks = core
     .filter((c) => c.name === `${CORE_PREFIX}use`)
     .map((c) => str(c.input.id))
@@ -316,8 +357,8 @@ function turnRow(s: Session, turn: Turn, index: number, events: Json[]): Row {
     used,
     offered: offeredList,
     picks,
-    unusedPicks: picks.filter((p) => !used.some((u) => same(u, p))),
-    usedNotOffered: used.filter((u) => !offeredList.some((o) => same(u, o))),
+    notTaken: offeredList.filter((o) => !used.includes(o)),
+    usedNotOffered: used.filter((u) => !offered.has(u)),
     reports,
   }
 }
@@ -391,6 +432,49 @@ function packSummary(events: Json[]): Summary['packs'] {
   }
 }
 
+const isDelivery = (e: Json): boolean =>
+  e.event === 'pack' || (e.event === 'placement' && e.phase === 'message')
+
+/** Per entry, how often it was offered (pack, placement, shown, find) and taken (a pick answer, a core_use). */
+function entrySummary(events: Json[]): Summary['entries'] {
+  const offered = new Map<string, number>()
+  const taken = new Map<string, number>()
+  const add = (m: Map<string, number>, ids: Iterable<unknown>) => {
+    for (const id of new Set(ids)) if (typeof id === 'string') m.set(id, (m.get(id) ?? 0) + 1)
+  }
+  for (const e of events) {
+    if (
+      (e.event === 'pack' || e.event === 'placement' || e.event === 'find') &&
+      Array.isArray(e.ids)
+    )
+      add(offered, e.ids)
+    if (Array.isArray(e.shown)) {
+      add(offered, e.shown)
+      const tokens = str(e.answer)
+        .split(/[\s,]+/)
+        .filter(Boolean)
+      if (/pick$/.test(str(e.step)) && tokens.every((t) => /^\d+$/.test(t) || ONE_ID.test(t))) {
+        const shown = e.shown as unknown[]
+        add(
+          taken,
+          tokens
+            .map((t) => (/^\d+$/.test(t) ? shown[Number(t) - 1] : t))
+            .filter((id) => typeof id === 'string' && ONE_ID.test(id)),
+        )
+      }
+    }
+    if (typeof e.id === 'string' && (MODES as readonly unknown[]).includes(e.mode))
+      add(taken, [e.id])
+  }
+  const never = [...offered].filter(([id]) => !taken.has(id)).sort((a, b) => b[1] - a[1])
+  return {
+    offered: offered.size,
+    taken: taken.size,
+    neverTaken: never.length,
+    notTaken: never.slice(0, NOT_TAKEN_SHOWN).map(([id, n]) => ({ id, offered: n })),
+  }
+}
+
 function summarize(
   rows: Row[],
   sessions: Summary['sessions'],
@@ -398,16 +482,34 @@ function summarize(
   onAt: number | null,
   now: number,
   events: Json[],
+  delivered: Set<Json>,
 ): Summary {
   const methodCount = (m: Method): number => rows.filter((r) => r.method === m).length
-  const scopes = rows.flatMap((r) => r.scopes)
   const runs = new Map<string, Scope>()
-  for (const sc of scopes) if (sc.run !== null) runs.set(`${sc.chat}#${sc.run}`, sc)
+  for (const e of events)
+    if (e.step === 'start' && typeof e.run === 'number')
+      runs.set(`${str(e.chat)}#${e.run}`, { chat: str(e.chat), run: e.run, verdict: null })
+  for (const e of events)
+    if (e.step === 'end') {
+      const sc = runs.get(`${str(e.chat)}#${e.run}`)
+      if (sc) sc.verdict = str(e.verdict) || null
+    }
+  const scopes = [...runs.values()]
   const reported = new Map<string, Reported>()
-  for (const r of rows.flatMap((x) => x.reports)) reported.set(`${r.chat}#${r.run}`, r)
+  let noRun = 0
+  for (const e of events) {
+    if (e.event !== 'report') continue
+    if (typeof e.run !== 'number') {
+      noRun++
+      continue
+    }
+    const r = reportOf(str(e.chat), e.run, [e])
+    if (r) reported.set(`${r.chat}#${r.run}`, r)
+  }
+  const joined = [...runs.keys()].filter((k) => reported.has(k)).length
   const scores = [...reported.values()].map((r) => r.score).filter((x): x is number => x !== null)
   const picks = rows.flatMap((r) => r.picks)
-  const unused = rows.flatMap((r) => r.unusedPicks)
+  const deliveries = events.filter(isDelivery).length
   const compliant = rows.filter((r) => r.compliant).length
   return {
     builtAt: new Date(now).toISOString(),
@@ -434,14 +536,21 @@ function summarize(
     placements: placementSummary(events),
     reports: {
       runs: runs.size,
-      reported: [...runs.keys()].filter((k) => reported.has(k)).length,
-      rate: runs.size ? Math.round((reported.size / runs.size) * 1000) / 1000 : 0,
+      reported: joined,
+      rate: runs.size ? Math.round((joined / runs.size) * 1000) / 1000 : 0,
+      noRun,
       scored: scores.length,
       meanScore: scores.length
         ? Math.round((scores.reduce((a, b) => a + b, 0) / scores.length) * 100) / 100
         : null,
     },
-    picks: { total: picks.length, unused: unused.length },
+    deliveries: {
+      total: deliveries,
+      matched: delivered.size,
+      noTurn: deliveries - delivered.size,
+    },
+    picks: { total: picks.length },
+    entries: entrySummary(events),
     usedNotOffered: rows.reduce((n, r) => n + r.usedNotOffered.length, 0),
     missing: [...reported.values()]
       .filter((r) => r.missing)
@@ -456,8 +565,12 @@ export function buildTrack(
 ): { rows: Row[]; summary: Summary } {
   const now = opts.now ?? Date.now()
   const onAt = mtimeOf(join(dir, 'ON'))
-  const events = readLog(dir).events as Json[]
-  const files = transcripts(opts.roots ?? defaultRoots(), onAt ?? 0)
+  // The last 30 days at most: the log rotates by month, and older months are not read.
+  const since = Math.max(onAt ?? 0, now - MONTH)
+  const events = readLog(dir, new Date(since)).events as Json[]
+  const cat = [...loadCatalog(dir).entries.values()]
+  const delivered = new Set<Json>()
+  const files = transcripts(opts.roots ?? defaultRoots(), since)
   const sessions = { transcripts: files.length, workers: 0, noCore: 0, eligible: 0 }
   const rows: Row[] = []
   const chatSessions = new Map<string, Set<string>>()
@@ -475,7 +588,8 @@ export function buildTrack(
       continue
     }
     sessions.eligible++
-    for (const [i, turn] of s.turns.entries()) rows.push(turnRow(s, turn, i, events))
+    for (const [i, turn] of s.turns.entries())
+      rows.push(turnRow(s, turn, i, events, cat, delivered))
     for (const turn of s.turns)
       for (const c of turn.calls) {
         const chat = str(c.input.chat)
@@ -492,7 +606,7 @@ export function buildTrack(
     chatSessions,
     opts.handoffsDir ?? join(homedir(), '.agenthydra', 'corch', 'handoffs'),
   )
-  return { rows, summary: summarize(rows, sessions, handoffs, onAt, now, events) }
+  return { rows, summary: summarize(rows, sessions, handoffs, onAt, now, events, delivered) }
 }
 
 export function writeTrack(dir: string, opts: TrackOptions = {}): Summary {
