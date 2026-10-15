@@ -432,8 +432,18 @@ app.post('/api/sessions/:id/desktop-archive', async (c) => {
           () => false,
         )
       : false
-  let noEngineHere = closed
-  if (wantArchived && nativeProfile && !closed) {
+  // A record filed under a PREVIOUS login of a running profile is one that app never loaded, so its
+  // native manager cannot find it ("Expected one exact native session match, found 0") and nothing
+  // it does can save over the flag: the flag is the whole job, as for a closed app. Same rule as a
+  // move's source settle (move-source-settle.ts). Hit live 2026-10-15: Desk's Unassign on a
+  // staleLogin chat refused every time.
+  const staleLogin =
+    wantArchived && nativeProfile && !closed
+      ? findVisibleChatMetaPath(nativeProfile, sessionId) === null &&
+        findChatMetaPath(nativeProfile, sessionId) !== null
+      : false
+  let noEngineHere = closed || staleLogin
+  if (wantArchived && nativeProfile && !closed && !staleLogin) {
     const native = await tryNativeArchiveChat(nativeProfile, sessionId)
     // Signed out: the app holds no chats in memory, the same as a closed app, so the flag below
     // is safe and is the only route that reaches the record (2026-09-28, #37 signed out).
