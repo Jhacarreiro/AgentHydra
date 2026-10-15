@@ -3,16 +3,19 @@ import { join } from 'node:path'
 import { describe, priceList, rollup, topFiles } from '../model.mjs'
 import { measureUrl } from './cdp.mjs'
 
-const USAGE = 'usage: pricecheck live <url> [--cdp <endpoint>] [--json]'
+const USAGE = 'usage: pricecheck live <url> [--root <folder>] [--cdp <endpoint>] [--json]'
 
 export function parseArgs(argv) {
-  const opts = { url: null, cdp: null, json: false }
+  const opts = { url: null, cdp: null, json: false, root: process.cwd() }
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') opts.json = true
     else if (a === '--cdp') {
       opts.cdp = argv[++i]
       if (!opts.cdp) throw new Error('--cdp needs an endpoint (http://host:port or ws://...)')
+    } else if (a === '--root') {
+      opts.root = argv[++i]
+      if (!opts.root) throw new Error('--root needs a folder (the project the page is built from)')
     } else if (a.startsWith('--')) throw new Error(`unknown option ${a}`)
     else if (opts.url) throw new Error(`one URL at a time (got ${opts.url} and ${a})`)
     else opts.url = a
@@ -71,8 +74,8 @@ export async function run(argv) {
     return 2
   }
   try {
-    const list = await readPriceList(process.cwd())
-    const results = await measureUrl(opts.url, { cdp: opts.cdp, root: process.cwd() })
+    const list = await readPriceList(opts.root)
+    const results = await measureUrl(opts.url, { cdp: opts.cdp, root: opts.root })
     const report = priceReport(opts.url, results, list)
     console.log(opts.json ? JSON.stringify(report, null, 2) : formatHuman(report, list))
     return 0

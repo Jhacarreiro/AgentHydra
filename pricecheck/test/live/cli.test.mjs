@@ -7,7 +7,12 @@ import { formatHuman, parseArgs, priceReport, readPriceList } from '../../lib/li
 
 group('live cli: arguments', () => {
   test('a URL alone prices with the default output', () => {
-    expect(parseArgs(['https://example.test/pricing'])).toEqual({ url: 'https://example.test/pricing', cdp: null, json: false })
+    expect(parseArgs(['https://example.test/pricing'])).toEqual({
+      url: 'https://example.test/pricing',
+      cdp: null,
+      json: false,
+      root: process.cwd(),
+    })
   })
 
   test('--json and --cdp are read in any position', () => {
@@ -15,7 +20,14 @@ group('live cli: arguments', () => {
       url: 'https://example.test/',
       cdp: 'http://127.0.0.1:9222',
       json: true,
+      root: process.cwd(),
     })
+  })
+
+  test('--root names the project the components and price list come from (the MCP tool passes it)', () => {
+    expect(parseArgs(['https://example.test', '--root', '/app']).root).toBe('/app')
+    expect(parseArgs(['https://example.test']).root).toBe(process.cwd())
+    expect(() => parseArgs(['https://example.test', '--root'])).toThrow('--root needs a folder')
   })
 
   test('a missing URL, a second URL, a non-http URL and an unknown flag are refused', () => {
