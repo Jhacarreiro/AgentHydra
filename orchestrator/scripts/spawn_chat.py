@@ -23,7 +23,11 @@ so this pre-trusts the workspace (trust_workspace.py) before it spawns. Refusing
 into an untrusted folder would just be the old stall with extra steps.
 
 Usage: python spawn_chat.py --folder <path> --prompt "<text>" [--instance <name>] [--force] [--json]
+                            [--model claude-opus-5-5] [--effort xhigh]
        (--instance defaults to the account with the most fill-room, per the usage bands)
+       (a profile with native control starts the chat through the app's own start call - no
+       window, no deeplink - on the --model and --effort given; the deeplink path is the fallback
+       only for a profile without native control, and cannot pin a model)
 Exit:  0 spawned and its first turn confirmed running - 4 spawned, but the first turn is NOT
        confirmed (`submitted` / `started` say why; check the app) - 5 REFUSED: a visible chat
        already carries this exact task (--force insists) - 2 the instance is not open / not
@@ -33,6 +37,8 @@ Exit:  0 spawned and its first turn confirmed running - 4 spawned, but the first
 from __future__ import annotations
 
 import json
+import os
+import re
 import subprocess
 import sys
 import time
@@ -91,6 +97,11 @@ TRUST_ACTUATOR = Path(__file__).resolve().parent / "actuator" / "trust_dialog.ps
 SUBMIT_ACTUATOR = Path(__file__).resolve().parent / "actuator" / "submit_composer.ps1"
 # How long to wait for a spawned chat to register before giving up on auto-starting it.
 START_WAIT_SECS = 90
+# The model and effort a spawned chat gets when the task names none (owner: never Fable unless named).
+DEFAULT_MODEL = "claude-opus-5-5"
+DEFAULT_EFFORT = "xhigh"
+EFFORTS = ("low", "medium", "high", "xhigh", "max")
+MODEL_RE = re.compile(r"^claude-[a-z0-9.-]{3,60}$")
 
 
 def _binary() -> str | None:
@@ -423,7 +434,87 @@ def _start_first_turn(session_id: str, inst: dict, prompt: str, submitted: str,
     return started, mode_set, True
 
 
-def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -> dict:
+def native_configured(inst: dict) -> bool:
+    """True when the profile's app starts its debugger automatically (Settings -> Instances ->
+    Desktop, launchDebugger), so the native start can reach the running app without its window.
+    An unreadable settings route raises DaemonError: that is not proof of no native control, so
+    the spawn is refused rather than sent down the window path."""
+    settings = hydralib.api_get("/api/claude-native/settings")
+    if not isinstance(settings, dict):
+        return False
+    want = os.path.normcase(os.path.normpath(str(inst.get("dir") or "")))
+    for key, cfg in settings.items():
+        if isinstance(cfg, dict) and os.path.normcase(os.path.normpath(str(key))) == want:
+            return cfg.get("launchDebugger") is True
+    return False
+
+
+def check_model_effort(model: str, effort: str) -> str | None:
+    """A refusal reason when the model id or effort is not one the app accepts, else None."""
+    if not MODEL_RE.match(model):
+        return f"model {model!r} is not a claude-... model id"
+    if effort not in EFFORTS:
+        return f"effort {effort!r} is not one of {', '.join(EFFORTS)}"
+    return None
+
+
+def _spawn_native(inst: dict, folder: str, prompt: str, model: str, effort: str) -> dict:
+    """Start the chat through the app's own start call (native-program.ts `new`): the chat opens
+    in the folder on the pinned model, with the prompt as its first message. No window is raised,
+    no deeplink is fired and nothing is clicked. Once the request is sent the app may already have
+    begun the chat, so a refusal or a lost reply is never retried and never sent down the deeplink
+    path: the caller gets the answer and checks the app."""
+    spec = {"cwd": folder, "prompt": prompt, "model": model, "effort": effort, "bypass": True}
+    route = f"/api/instances/{urllib.parse.quote(str(inst.get('dir') or ''), safe='')}/native-new"
+    try:
+        # The daemon's call waits up to 60 s inside the app (claude-native-new.ts).
+        got = hydralib.api_post(route, spec, timeout=90)
+    except hydralib.DaemonError as err:
+        return {"ok": False, "why": ("native start failed; if the app began the chat, check the app "
+                                     f"before retrying ({(err.detail or str(err))[:160]})")}
+    if not isinstance(got, dict):
+        return {"ok": False, "why": "native start: no result from the daemon; check the app "
+                                    "before retrying"}
+    reason = str(got.get("reason") or "no result")[:160]
+    if got.get("unavailable") is True:
+        return {"ok": False, "why": f"native start refused, nothing started: {reason}"}
+    # The CLI session id is the one transcripts, receipts, fan_out_status and fan_out_delete use;
+    # the app's own local_... id is kept beside it.
+    session_id = str(got.get("cliSessionId") or "")
+    if not session_id:
+        desktop = got.get("desktopSessionId")
+        return {"ok": False, "why": ("native start was sent but no CLI session was read back"
+                                     f"{f' (app chat {desktop})' if desktop else ''}; check the "
+                                     f"app before retrying ({reason})")}
+    if got.get("ok") is True:
+        started = "running (native first message)"
+    else:
+        # The chat exists and is running its first turn, so the member keeps its id (fan_out_delete
+        # can still reach it) but reads as spawned-unconfirmed, with the model the app kept.
+        started = (f"not-pinned: the app started it on {got.get('model') or 'its default model'} "
+                   f"at {got.get('effort') or 'its default effort'}, not {model} at {effort}")
+    mode_set = ("bypassPermissions (set at start)" if got.get("permissionMode") == "bypassPermissions"
+                else f"not-confirmed (the app kept {got.get('permissionMode') or 'its default'})")
+    from lib import ledgerlib, stamplib
+    ledgerlib.note("spawned", session_id, note=f"spawn_chat native: {folder}; model: {model}; "
+                                               f"effort: {effort}")
+    stamplib.mark_automation(session_id, "spawn_chat")
+    return {"ok": True, "landedIn": folder, "dialog": "not-applicable (native start)",
+            "sessionId": session_id, "unboundSessionId": None, "skippedForeign": [],
+            "submitted": "native", "submitNote": "", "started": started, "modeSet": mode_set,
+            "window": "not-touched (native start)", "url": "",
+            "desktopSessionId": got.get("desktopSessionId"), "modelKept": got.get("model"),
+            "effortKept": got.get("effort")}
+
+
+def spawn(folder: str, prompt: str, instance: str | None, force: bool = False,
+          model: str | None = None, effort: str | None = None) -> dict:
+    model = model or DEFAULT_MODEL
+    effort = effort or DEFAULT_EFFORT
+    problem = check_model_effort(model, effort)
+    if problem is not None:
+        return {"ok": False, "why": problem}
+
     refusal = _refuse_if_duplicate(prompt, force)
     if refusal is not None:
         return refusal
@@ -432,14 +523,34 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
     if error is not None:
         return error
 
-    binary = _binary()
-    if not binary:
+    # A profile with native control starts without the window: no deeplink, no UI actuator, so
+    # the binary is needed only on the deeplink path.
+    native = native_configured(inst)
+    binary = None if native else _binary()
+    if not native and not binary:
         return {"ok": False, "why": "no desktop binary found to send the deeplink to"}
 
     # TRUST FIRST (docstring): a chat in an untrusted folder stalls on a human dialog.
     import trust_workspace
 
     trust = trust_workspace.apply_trust([folder], act=True)
+
+    if native:
+        run = _spawn_native(inst, folder, prompt, model, effort)
+        if not run["ok"]:
+            return run
+        return {"ok": True, "instance": inst.get("name"), "folder": folder,
+                "route": "native", "model": model, "effort": effort,
+                "landedIn": run["landedIn"],
+                "trusted": trust["trusted"], "trustDialog": run["dialog"],
+                "sessionId": run["sessionId"], "unboundSessionId": run["unboundSessionId"],
+                "skippedForeign": run["skippedForeign"],
+                "submitted": run["submitted"], "submitNote": run["submitNote"],
+                "composerCleared": None,
+                "started": run["started"], "modeSet": run["modeSet"],
+                "window": run["window"], "retried": None, "url": run["url"],
+                "desktopSessionId": run["desktopSessionId"], "modelKept": run["modelKept"],
+                "effortKept": run["effortKept"]}
 
     run = _spawn_once(inst, folder, prompt, binary)
     if not run["ok"]:
@@ -463,6 +574,7 @@ def spawn(folder: str, prompt: str, instance: str | None, force: bool = False) -
             retried["retryRefused"] = again.get("why")
 
     return {"ok": True, "instance": inst.get("name"), "folder": folder,
+            "route": "deeplink", "model": None, "effort": None,
             "landedIn": run["landedIn"],
             "trusted": trust["trusted"], "trustDialog": run["dialog"],
             "sessionId": run["sessionId"], "unboundSessionId": run["unboundSessionId"],
@@ -522,7 +634,7 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
-    folder = prompt = instance = None
+    folder = prompt = instance = model = effort = None
     i = 0
     while i < len(argv):
         a = argv[i]
@@ -532,6 +644,10 @@ def main(argv: list[str]) -> int:
             prompt = argv[i + 1]; i += 2; continue
         if a == "--instance" and i + 1 < len(argv):
             instance = argv[i + 1]; i += 2; continue
+        if a == "--model" and i + 1 < len(argv):
+            model = argv[i + 1]; i += 2; continue
+        if a == "--effort" and i + 1 < len(argv):
+            effort = argv[i + 1]; i += 2; continue
         i += 1
     if not folder or not prompt:
         print(__doc__.strip(), file=sys.stderr)
@@ -542,7 +658,8 @@ def main(argv: list[str]) -> int:
         return 3
 
     try:
-        result = spawn(folder, prompt, instance, force="--force" in argv)
+        result = spawn(folder, prompt, instance, force="--force" in argv,
+                       model=model, effort=effort)
     except hydralib.DaemonError as err:
         print(f"spawn FAILED: {err}", file=sys.stderr)
         return 1

@@ -43,7 +43,7 @@ export interface NativeSendOutcome {
 const SEND_CALL_TIMEOUT_MS = 60_000
 
 /** Runs one inspector expression against the profile's running app; `unavailable` says nothing ran. */
-async function withAppClient<T>(
+export async function withAppClient<T>(
   profileDir: string,
   run: (app: {
     pid: number

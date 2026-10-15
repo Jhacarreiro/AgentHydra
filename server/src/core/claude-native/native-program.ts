@@ -25,6 +25,11 @@ export interface NativeProgramRequest {
     | 'send'
     | 'stop'
     | 'setting'
+    | 'new'
+  /** new only: the absolute folder the chat starts in. */
+  cwd?: string
+  /** new only: the first message; it is the start's own message, so the chat's first turn is it. */
+  prompt?: string
   /** send only: the message, sent into the chat named by cliSessionId as a message from another
    *  session (never as the person). */
   text?: string
@@ -37,9 +42,10 @@ export interface NativeProgramRequest {
   pauseIds?: string[]
   /** pause only: how long to wait for an engine that is still starting before pausing it. */
   waitMs?: number
-  /** ultracode and setting: the effort to land (low..max; ultracode on needs xhigh or max). */
+  /** ultracode, setting and new: the effort to land (low..max; ultracode on needs xhigh or max). */
   effort?: string
-  /** setting only: the model to land, as the app's model picker names it (e.g. claude-opus-5-5). */
+  /** setting: the model to land, as the app's model picker names it (e.g. claude-opus-5-5).
+   *  new: the model the chat is pinned to from its first turn. */
   model?: string
   /** ultracode only: the ultracode flag to land. Default true; false lands a source that ran
    *  without it, so a moved chat keeps the level it had (owner, 2026-09-26). */
@@ -67,6 +73,9 @@ export interface NativeProgramRequest {
   /** Required current CLI ID for archive; rotation deliberately requires another inspection. */
   cliSessionId?: string
   expectedTitle?: string
+  /** inspect only: also list the session manager's method names and the source head of the ones
+   *  that could start a chat (read-only; reads no session and calls nothing). */
+  methodProbe?: boolean
 }
 export type NativeRequest = NativeProgramRequest
 
@@ -753,7 +762,31 @@ function nativeInspectResult(env: any, found: any, request: any, list: any, stat
     sessions: sessions
       .filter((session: any) => !session.prewarmHidden)
       .map((session: any) => nativeSnapshot(manager, session)),
+    ...(request.methodProbe === true ? { managerMethods: nativeManagerMethods(manager) } : {}),
     evidence: 'native manager state; not screenshot proof',
+  }
+}
+
+/**
+ * Read-only: the session manager's own method names (its prototype chain, data properties only,
+ * no getter is run), and for those that could start a chat, their arity and the head of their
+ * source. This is how a build's new-chat call is found before anything depends on its signature.
+ */
+function nativeManagerMethods(manager: any): any {
+  const fns = new Map<string, any>()
+  for (let obj = manager; obj && obj !== Object.prototype; obj = Object.getPrototypeOf(obj)) {
+    for (const name of Object.getOwnPropertyNames(obj)) {
+      const descriptor = Object.getOwnPropertyDescriptor(obj, name)
+      if (name !== 'constructor' && !fns.has(name) && typeof descriptor?.value === 'function')
+        fns.set(name, descriptor.value)
+    }
+  }
+  return {
+    names: [...fns.keys()].sort(),
+    candidates: [...fns]
+      .filter(([name]) => /session|chat|new|creat|start|launch|submit|compose/i.test(name))
+      .sort(([a], [b]) => a.localeCompare(b))
+      .map(([name, fn]) => ({ name, arity: fn.length, source: nativeSourceOf(fn).slice(0, 6000) })),
   }
 }
 
@@ -1291,11 +1324,6 @@ async function nativeSetting(env: any, found: any, request: any, settled: any, s
   if (!session) nativeRefuse('no chat in this app holds this CLI session')
   if (session.isArchived === true) nativeRefuse('the chat is archived')
   const pick = (s: any) => ({ model: s.model ?? null, effort: s.effort ?? null })
-  // The app keeps a context suffix on a model id (claude-opus-5-5[1m]): the same model either way.
-  const bare = (m: any) =>
-    String(m ?? '')
-      .replace(/\[[^\]]*\]$/, '')
-      .toLowerCase()
   const before = pick(session)
   state.dispatch = 'sent'
   if (request.model !== undefined) await manager.setModel(session.sessionId, request.model)
@@ -1303,7 +1331,8 @@ async function nativeSetting(env: any, found: any, request: any, settled: any, s
   nativeCheckIdentity(env, found, request, settled)
   const after = pick(manager.sessions.get(session.sessionId) ?? session)
   const verified =
-    (request.model === undefined || bare(after.model) === bare(request.model)) &&
+    (request.model === undefined ||
+      nativeBareModel(after.model) === nativeBareModel(request.model)) &&
     (request.effort === undefined || after.effort === request.effort)
   return {
     ok: verified,
@@ -1318,6 +1347,89 @@ async function nativeSetting(env: any, found: any, request: any, settled: any, s
       : `the app kept ${after.model ?? 'its default model'} at ${after.effort ?? 'its default effort'}`,
     identity: nativeIdentity(env, found, null),
     evidence: "the app's own session state after its setModel / setEffort",
+  }
+}
+
+/** The app keeps a context suffix on a model id (claude-opus-5-5[1m]): the same model either way. */
+function nativeBareModel(model: any): string {
+  return String(model ?? '')
+    .replace(/\[[^\]]*\]$/, '')
+    .toLowerCase()
+}
+
+/**
+ * Starts a new chat the way the app's own New chat does: its session manager's startSession, with
+ * the folder, the pinned model and effort, the first message as the start's own message (so the
+ * first turn is that message) and, when asked, Bypass permissions in the start options. Nothing is
+ * typed and no window is touched. Refused before the call when the folder or the app is not
+ * ready. Once startSession is called, a throw is reported as sent: the app may already have begun
+ * the chat, so the caller never retries. The result is read back from the manager, not assumed,
+ * and it is verified only when the chat runs on the model and effort asked for.
+ */
+async function nativeNew(env: any, found: any, request: any, settled: any, state: any) {
+  const manager = found.manager
+  if (typeof manager.startSession !== 'function')
+    nativeRefuse('native method unavailable: startSession')
+  let isDirectory = false
+  try {
+    isDirectory = env.fs.statSync(request.cwd).isDirectory()
+  } catch {
+    isDirectory = false
+  }
+  if (!isDirectory) nativeRefuse('the folder is not an existing directory')
+  state.dispatch = 'sent'
+  // With a message, startSession returns the new chat's id (local_...) once that first message is
+  // delivered (measured on the app's own source, 2026-10-15).
+  const returned = await manager.startSession(
+    {
+      cwd: request.cwd,
+      model: request.model,
+      effort: request.effort,
+      message: request.prompt,
+      ...(request.bypass === true ? { permissionMode: 'bypassPermissions' } : {}),
+    },
+    { userInitiated: true },
+  )
+  // Only the id the start returned is this chat. Any other new chat may be one a person opened in
+  // the meantime, and spawn_chat never adopts one of those (its first_turn_owner, 2026-09-23).
+  const sessionId = typeof returned === 'string' ? returned : undefined
+  // The CLI session id arrives once the engine has registered, a few seconds after the start.
+  const deadline = Date.now() + 25_000
+  let session: any = sessionId ? manager.sessions.get(sessionId) : undefined
+  while (sessionId && !session?.cliSessionId && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 250))
+    session = manager.sessions.get(sessionId)
+  }
+  nativeCheckIdentity(env, found, request, settled)
+  const started =
+    !!session && typeof session.cliSessionId === 'string' && session.isArchived !== true
+  const modelPinned = started && nativeBareModel(session.model) === nativeBareModel(request.model)
+  const effortPinned = started && session.effort === request.effort
+  const verified = started && modelPinned && effortPinned
+  return {
+    ok: verified,
+    verified,
+    dispatch: state.dispatch,
+    action: 'new',
+    sessionId: sessionId ?? null,
+    cliSessionId: session?.cliSessionId ?? null,
+    started,
+    modelPinned,
+    effortPinned,
+    isRunning: session?.isRunning === true,
+    cwd: session?.cwd ?? null,
+    model: session?.model ?? null,
+    effort: session?.effort ?? null,
+    permissionMode: session?.permissionMode ?? null,
+    reason: verified
+      ? undefined
+      : !sessionId
+        ? `the app's startSession returned no chat id (${typeof returned})`
+        : !started
+          ? 'the app did not report a CLI session for the new chat within 25 seconds'
+          : `the app started the chat on ${session.model ?? 'its default model'} at ${session.effort ?? 'its default effort'}`,
+    identity: nativeIdentity(env, found, null),
+    evidence: "native manager state read back after the app's own startSession",
   }
 }
 
@@ -1339,6 +1451,7 @@ async function nativeRun(request: any, pin: any, state: any): Promise<any> {
   if (request.action === 'send') return await nativeSend(env, found, request, settled, state)
   if (request.action === 'stop') return await nativeStop(env, found, request, settled, state)
   if (request.action === 'setting') return await nativeSetting(env, found, request, settled, state)
+  if (request.action === 'new') return await nativeNew(env, found, request, settled, state)
   // getSessionList is the app's list contract, but its folder checks await. Identity is checked
   // again and the selected object is read afresh after those awaits before any mutation.
   if (request.action === 'inspect') {
@@ -1415,6 +1528,7 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeArchiveAlreadyResult,
     nativeArchiveResult,
     nativeInspectResult,
+    nativeManagerMethods,
     nativeArchive,
     nativeUltracode,
     nativeIdleLifecycle,
@@ -1427,6 +1541,8 @@ function nativeRuntimeExpression(request: NativeProgramRequest): string {
     nativeSend,
     nativeStop,
     nativeSetting,
+    nativeBareModel,
+    nativeNew,
     nativeRun,
     nativeRuntime,
   ]
@@ -1446,9 +1562,11 @@ export function nativeProgram(request: NativeProgramRequest): string {
       'send',
       'stop',
       'setting',
+      'new',
     ].includes(request.action)
   )
     throw Error('Unsupported native action')
+  checkNew(request)
   if (
     (request.action === 'import' ||
       request.action === 'send' ||
@@ -1535,6 +1653,31 @@ function checkSetting(request: NativeProgramRequest): void {
     throw Error('Setting requires a model id (letters, digits and . _ : - [ ])')
   if (request.effort !== undefined && !NATIVE_EFFORTS.includes(String(request.effort)))
     throw Error(`Setting requires an effort of ${NATIVE_EFFORTS.join('/')}`)
+}
+
+/** The shape a new chat must have before anything is sent: a Windows absolute folder, a non-empty
+ *  first message, a pinned model id and one of the effort levels. Refused here, never sent. */
+function checkNew(request: NativeProgramRequest): void {
+  if (request.action !== 'new') return
+  const cwd = String(request.cwd ?? '')
+  if (
+    !/^([A-Za-z]:[\\/]|\\\\)/.test(cwd) ||
+    cwd.length > 1000 ||
+    [...cwd].some((ch) => ch.charCodeAt(0) < 32)
+  )
+    throw Error('New chat requires an absolute folder')
+  if (
+    typeof request.prompt !== 'string' ||
+    !request.prompt.trim() ||
+    request.prompt.length > 20_000
+  )
+    throw Error('New chat requires a prompt (at most 20000 characters)')
+  if (!/^claude-[a-z0-9.-]{3,60}$/.test(String(request.model)))
+    throw Error('New chat requires a model id such as claude-opus-5-5')
+  if (!NATIVE_EFFORTS.includes(String(request.effort)))
+    throw Error(`New chat requires an effort of ${NATIVE_EFFORTS.join('/')}`)
+  if (request.bypass !== undefined && typeof request.bypass !== 'boolean')
+    throw Error('bypass must be a boolean')
 }
 
 function checkOptionalFields(request: NativeProgramRequest): void {
