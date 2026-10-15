@@ -292,6 +292,7 @@ class ChatGPTHttp:
         if 200 <= response.status_code < 300:
             return response
         status = response.status_code
+        detail = _refusal_detail(response)
         response.close()
         if status == 403:
             code, message = (
@@ -318,7 +319,10 @@ class ChatGPTHttp:
                 "http_rejected",
                 "ChatGPT rejected the HTTP request. No retry or browser fallback was made.",
             )
-        raise ClaudeError(message, code=code, status=status)
+        # Name the call that was refused and ChatGPT's own words for it (2026-10-15: a bare 404 "Model not found"
+        # from /f/conversation read as a chat that could not be read).
+        said = f" ChatGPT said: {detail}." if detail else ""
+        raise ClaudeError(f"{message} Failed call: {method} {path.split('?')[0]}.{said}", code=code, status=status)
 
     def _json(self, method, path, **kwargs):
         response = self._request(method, path, **kwargs)
@@ -445,6 +449,18 @@ class ChatGPTHttp:
                 code="response_pending",
             )
         return body, messages, fresh[-1], complete
+
+
+def _refusal_detail(response):
+    """ChatGPT's `detail` from a refused call's JSON body (a string, or an object's message), trimmed; None if absent."""
+    try:
+        body = response.json()
+    except ValueError:
+        return None
+    detail = body.get("detail") if isinstance(body, dict) else None
+    if isinstance(detail, dict):
+        detail = detail.get("message") or detail.get("code")
+    return detail[:200] if isinstance(detail, str) and detail else None
 
 
 def _plans(accounts):

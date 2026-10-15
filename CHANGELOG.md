@@ -7,6 +7,11 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A fresh ChatGPT Free sign-in is no longer undone by Login sync.** Since 2026-10-14 ChatGPT answers sends only
+  from a login a browser sign-in made, and sync used to keep whichever copy expired later, often an older one from
+  the other PC. A freshly signed-in login now wins and reaches the other PCs. A refused ChatGPT call also names the
+  call and ChatGPT's own reason ("Model not found").
+- **The accounts list opens faster, and pushes that change nothing no longer redraw the sidebar's lists.** Reset times in the accounts list cost 13 ms a redraw and now cost 3 ms; a CliMayte or HSwarm push that changed only the other PCs' rows, or a connector poll that came back the same, keeps the lists it left alone.
 - **Critical and code read work goes to Claude Free when ChatGPT cannot take it.** It still asks a ChatGPT thinking
   model first. With none available, it now asks Sonnet 5.5 on a Claude Free account before falling back to a paid
   flash model, which took 235 such tasks on a day ChatGPT Free was down.

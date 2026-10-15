@@ -37,6 +37,11 @@ const SIGN_IN: Record<FreeProvider, (name: string) => boolean> = {
   claude: name => name === 'sessionKey',
   chatgpt: name => /^__Secure-next-auth\.session-token(?:\.\d+)?$/.test(name)
 }
+// Cookies only a browser sign-in sets. Since 2026-10-14 ~18:00 UTC chatgpt.com answers a send from a login without
+// them 404 "Model not found": on 2026-10-15 49 of 50 ChatGPT logins lacked them and failed every send, and the one
+// signed in fresh that morning had them and sent. A login with them beats one without, whatever its expiry says, so a
+// fresh sign-in is never undone by an older copy from another PC, and it lands on the other PCs.
+const SIGNED_IN_FRESH: Record<FreeProvider, readonly string[]> = { claude: [], chatgpt: ['_uasid', '_umsid'] }
 const FIRST_PASS_MS = 15_000
 const EVERY_MS = 120_000
 const HIDDEN_EVERY_MS = 10 * 60_000
@@ -45,7 +50,13 @@ const CREDS_KEEP_MS = 10 * 60_000
 
 interface Cookie { name: string; value: string; expires?: number }
 /** One login as the sync compares it: its sign-in's identity (a hash) and when that sign-in expires. */
-export interface FreeLogin { cookies: Cookie[]; auth: string; exp: number }
+export interface FreeLogin {
+  cookies: Cookie[]
+  auth: string
+  exp: number
+  /** It carries the cookies only a browser sign-in sets (SIGNED_IN_FRESH); absent for a provider with none. */
+  fresh?: boolean
+}
 export interface StoreCreds { url: string; token: string; key: Buffer }
 interface Shared { id: string; num: number; provider: FreeProvider; name: string; auth: string; cookies?: Cookie[]; signedOut?: true; deleted?: true }
 interface Row { id: string; version: number; meta?: { signedOut?: boolean; deleted?: boolean } }
@@ -78,10 +89,12 @@ const sha = (text: string) => createHash('sha256').update(text).digest('hex')
 function describe(provider: FreeProvider, cookies: Cookie[]): FreeLogin | null {
   const signIn = cookies.filter(c => SIGN_IN[provider](c.name))
   if (!signIn.length) return null
+  const marks = SIGNED_IN_FRESH[provider]
   return {
     cookies,
     auth: sha(signIn.map(c => `${c.name}=${c.value}`).sort().join('\n')),
-    exp: Math.max(...signIn.map(c => Number(c.expires) || 0))
+    exp: Math.max(...signIn.map(c => Number(c.expires) || 0)),
+    ...(marks.length ? { fresh: marks.every(m => cookies.some(c => c.name === m && c.value)) } : {})
   }
 }
 
@@ -396,6 +409,7 @@ export class FreeSync {
 
 /** Of two different sign-ins, the one that expires later; the same expiry is settled by the sign-in's
  *  hash, so every PC picks the same one and none sends its own back up. */
-function newer(a: FreeLogin, b: FreeLogin): boolean {
+export function newer(a: FreeLogin, b: FreeLogin): boolean {
+  if (!!a.fresh !== !!b.fresh) return !!a.fresh
   return a.exp !== b.exp ? a.exp > b.exp : a.auth > b.auth
 }

@@ -12,7 +12,7 @@ import { createServer, type DeskServer } from '../src/index'
 import type { FreeRunner, RunOutput } from '../src/free-instances/runner'
 import type { FreeRuntime } from '../src/free-instances/runtime'
 import { FreeInstances } from '../src/free-instances/service'
-import { FreeSync, readLogin, writeLogin } from '../src/free-instances/sync'
+import { FreeSync, newer, readLogin, writeLogin } from '../src/free-instances/sync'
 
 const dirs: string[] = []
 const services: FreeInstances[] = []
@@ -197,5 +197,31 @@ test('a Desk on a home that is not the real one never asks for the Login sync an
   } finally {
     await desk?.stop()
     daemon.stop(true)
+  }
+})
+
+test.skipIf(process.platform !== 'win32')('a ChatGPT login a browser sign-in made beats an older one whose sign-in cookie expires later', () => {
+  // 2026-10-15: chatgpt.com refused every send from a login without _uasid and _umsid; a later-expiring copy from
+  // another PC must not undo a fresh sign-in.
+  const dir = mkdtempSync(join(tmpdir(), 'free-sync-fresh-'))
+  try {
+    const jar = (value: string, expires: number, fresh: boolean) => [
+      { name: '__Secure-next-auth.session-token', value, domain: '.chatgpt.com', path: '/', expires },
+      ...(fresh ? [{ name: '_uasid', value: 'u', domain: '.chatgpt.com', path: '/', expires }, { name: '_umsid', value: 'm', domain: '.chatgpt.com', path: '/', expires }] : [])
+    ]
+    const freshFile = join(dir, 'fresh.dpapi')
+    const staleFile = join(dir, 'stale.dpapi')
+    expect(writeLogin(freshFile, 'chatgpt', jar('signed-in-now', 1_900_000_000, true))).toBe(true)
+    expect(writeLogin(staleFile, 'chatgpt', jar('refreshed-elsewhere', 1_900_900_000, false))).toBe(true)
+    const fresh = readLogin(freshFile, 'chatgpt')!
+    const stale = readLogin(staleFile, 'chatgpt')!
+    expect([fresh.fresh, stale.fresh]).toEqual([true, false])
+    expect(newer(fresh, stale)).toBe(true)
+    expect(newer(stale, fresh)).toBe(false)
+    // Two logins alike in that, and Claude's, still go by expiry.
+    expect(newer({ ...stale, exp: 2 }, { ...stale, auth: 'b', exp: 1 })).toBe(true)
+    expect(readLogin(freshFile, 'chatgpt')!.fresh).toBe(true)
+  } finally {
+    rmSync(dir, { recursive: true, force: true })
   }
 })
