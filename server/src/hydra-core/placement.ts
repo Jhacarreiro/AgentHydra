@@ -1,11 +1,15 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { loadCatalog, loadText } from './catalog'
 import { appendLog } from './log'
 import { packFor, readPlaced } from './pack'
 import { chatPaths } from './paths'
-import { folderKnowledgeOf, mainRules } from './tree'
+import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
+
+/** The slot's own cap: it sits in the system prompt, so it is not held to Claude Code's 10,000-character hook limit. */
+export const SLOT_CAP = 24_000
+/** The most a launch's whole appended prompt (Desk's own text plus the slot) may hold. */
+export const APPEND_MAX = 32_000
 
 export type Placement = 'slot' | 'attach' | 'file' | 'off'
 
@@ -25,22 +29,23 @@ export interface PlacedChat {
   reused: boolean
 }
 
-function inputsHash(dir: string, cwd: string, hydraMd: string): string {
-  const entries = [...loadCatalog(dir).entries.values()]
-  const folder = mainRules(folderKnowledgeOf(entries, cwd)).map((e) => ({
-    id: e.id,
-    text: loadText(e),
-  }))
-  const lead = existsSync(hydraMd) ? readFileSync(hydraMd, 'utf8') : ''
-  return createHash('sha256').update(JSON.stringify({ folder, lead })).digest('hex')
-}
+/** How many sessions placement.json remembers as launched with the pack in their prompt. */
+const STARTED_MAX = 50
+
+const textHash = (text: string) => createHash('sha256').update(text).digest('hex')
 
 /** The prompt line a file chat is given: where its pack is. */
 export function packLine(file: string): string {
   return `Before you act on any message, read ${file}: it holds this folder's rules and what you need for this chat.`
 }
 
-/** Writes a chat's slot.md or pack.md (reusing it while the folder rules and the hydra.md lead are unchanged) and returns what the prompt gets. */
+/**
+ * Builds a chat's slot.md or pack.md on every launch and returns what the prompt gets. The pack is rebuilt from
+ * what the chat keeps in placement.json (its lead and its first owner message), so a pack-code change, an edited
+ * rule or brief, or a rebuilt catalog reaches the chat on its next launch, a new session in the chat (a handoff)
+ * keeps its lead, and hydra.md's scope log does not touch it. The file is rewritten only when the text differs.
+ * `room` is what the whole appended prompt leaves the slot; a slot longer than it is built again to fit.
+ */
 export function placeChat(
   dir: string,
   req: {
@@ -50,43 +55,89 @@ export function placeChat(
     cwd: string
     prompt: string
     placement: 'slot' | 'file'
+    room?: number
   },
   now = new Date(),
 ): PlacedChat {
   const files = chatPaths(dir, req.chat)
   const target = req.placement === 'slot' ? files.slot : files.pack
-  const hash = inputsHash(dir, req.cwd, files.hydraMd)
   const old = readPlaced(files.placed)
-  const sameInputs = !!old && old.placement === req.placement && old.hash === hash
-  const reused = sameInputs && existsSync(target)
-  const started = sameInputs && old ? [...old.started] : []
-  if (req.fresh && !started.includes(req.session)) started.push(req.session)
-
-  let body: string
-  let ids: string[]
-  if (reused) {
-    body = readFileSync(target, 'utf8')
-    ids = old ? old.ids : []
-  } else {
-    const pack = packFor(
+  // A placement.json from before the chat kept its inputs: its lead is the person its pack held.
+  const prompt = old?.prompt ?? req.prompt
+  const lead =
+    old?.prompt !== undefined ? (old.lead ?? null) : old?.ids.find((id) => id.startsWith('person:'))
+  const build = (cap?: number) =>
+    packFor(
       dir,
       {
         chat: req.chat,
         session: `placed:${req.placement}:${req.chat}`,
         cwd: req.cwd,
-        prompt: req.prompt,
+        prompt,
         full: true,
+        lead,
+        cap,
+        dry: true,
       },
       now,
     )
-    body = pack.text
-    ids = pack.ids
+  let pack = build(req.placement === 'slot' ? SLOT_CAP : undefined)
+  if (req.placement === 'slot' && req.room !== undefined && pack.text.length > req.room) {
+    const room = Math.max(0, req.room)
+    const from = pack.text.length
+    pack = build(room)
+    appendLog(
+      dir,
+      {
+        event: 'placement',
+        phase: 'cut',
+        chat: req.chat,
+        session: req.session,
+        room,
+        from,
+        chars: pack.text.length,
+      },
+      now,
+    )
+  }
+
+  const body = pack.text
+  const hash = textHash(body)
+  const reused =
+    !!old &&
+    old.placement === req.placement &&
+    existsSync(target) &&
+    readFileSync(target, 'utf8') === body
+  if (!reused) {
     mkdirSync(dirname(target), { recursive: true })
     writeFileSync(target, body)
+    if (pack.owed !== undefined) {
+      const sent = readSent(files.sent)
+      if (pack.owed) setLeadOwed(sent, pack.owed)
+      else clearLeadOwed(sent)
+      writeSent(files.sent, sent)
+    }
   }
+  // Every launch, fresh or resumed, puts the pack in the session's prompt.
+  const started = (old?.placement === req.placement ? old.started : []).filter(
+    (s) => s !== req.session,
+  )
+  started.push(req.session)
   writeFileSync(
     files.placed,
-    JSON.stringify({ placement: req.placement, hash, ids, chars: body.length, started }, null, 2),
+    JSON.stringify(
+      {
+        placement: req.placement,
+        hash,
+        ids: pack.ids,
+        chars: body.length,
+        started: started.slice(-STARTED_MAX),
+        lead: pack.lead,
+        prompt,
+      },
+      null,
+      2,
+    ),
   )
 
   const text = req.placement === 'slot' ? body : packLine(resolve(target))
@@ -99,12 +150,12 @@ export function placeChat(
       session: req.session,
       placement: req.placement,
       chars: text.length,
-      ids,
+      ids: pack.ids,
       hash,
       reused,
       fresh: req.fresh,
     },
     now,
   )
-  return { text, ids, chars: text.length, hash, reused }
+  return { text, ids: pack.ids, chars: text.length, hash, reused }
 }

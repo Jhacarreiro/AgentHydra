@@ -129,10 +129,16 @@ describe('placeChat slot', () => {
     }
     const first = placeChat(dir, req, new Date(T))
     mkdirSync(chatPaths(dir, 'lead').root, { recursive: true })
-    writeFileSync(chatPaths(dir, 'lead').hydraMd, 'Lead: a new lead line for the test.\n')
+    const brief = join(dir, 'persona-lead.md')
+    writeFileSync(brief, 'Lead brief: an invented lead for the test.\n')
+    writeFileSync(
+      chatPaths(dir, 'lead').hydraMd,
+      `## Lead\nLead Example - a new lead. Full text: ${brief}\n`,
+    )
     const after = placeChat(dir, req, new Date(T + 1))
     expect(after.reused).toBe(false)
     expect(after.hash).not.toBe(first.hash)
+    expect(after.text).toContain('Lead brief: an invented lead for the test.')
   })
 })
 
@@ -203,7 +209,7 @@ describe('matchFor', () => {
     expect(next.text).toBe('')
   })
 
-  test('a resumed session that did not start with the pack gets the full pack once, then only new matches', () => {
+  test('a session launched without the pack gets the full pack once, then only new matches', () => {
     writeFileSync(join(dir, 'shipping.md'), 'Shipping notes: invented couriers take 2 days.\n')
     writeFileSync(
       join(dir, 'catalog', 'hand-shipping-fixture.json'),
@@ -224,7 +230,7 @@ describe('matchFor', () => {
       dir,
       {
         chat: 'resumed',
-        session: 'r1',
+        session: 'r0',
         fresh: false,
         cwd: CWD,
         prompt: 'hello',

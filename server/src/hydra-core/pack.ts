@@ -37,6 +37,10 @@ export interface Placed {
   ids: string[]
   chars: number
   started: string[]
+  /** The chat's lead (a catalog id, or null for none), kept from its first launch. */
+  lead?: string | null
+  /** The chat's first owner message, kept from its first launch: what its pack's matches are ranked on. */
+  prompt?: string
 }
 
 export interface PackRequest {
@@ -45,6 +49,12 @@ export interface PackRequest {
   cwd: string
   prompt: string
   full?: boolean
+  /** The chat's lead, fixed: a catalog id, or null for none. Absent, the lead is ranked on the prompt (a hydra.md lead wins either way). */
+  lead?: string | null
+  /** A slot's cap (the system prompt): the lead's brief is placed before the folder rules fill it. Absent, TOTAL_CAP. */
+  cap?: number
+  /** Build the text only: no sent.json and no log line (the slot writes its own). */
+  dry?: boolean
 }
 
 export interface Pack {
@@ -53,6 +63,10 @@ export interface Pack {
   ids: string[]
   bytes: number
   ms: number
+  /** The lead the pack used: its catalog id (`lead:<name>` for a hydra.md lead not in the catalog), else null. */
+  lead: string | null
+  /** What the pack did to the lead brief the chat owes: set it (the id, sent as a pointer), clear it (null), or neither. */
+  owed?: string | null
 }
 
 interface Sections {
@@ -119,6 +133,8 @@ export function readPlaced(file: string): Placed | null {
       started: Array.isArray(data.started)
         ? data.started.filter((id) => typeof id === 'string')
         : [],
+      ...(typeof data.lead === 'string' || data.lead === null ? { lead: data.lead } : {}),
+      ...(typeof data.prompt === 'string' ? { prompt: data.prompt } : {}),
     }
   } catch {
     return null
@@ -127,13 +143,15 @@ export function readPlaced(file: string): Placed | null {
 
 /**
  * What Agent Hydra attaches to a chat message: the folder's rules and the matching knowledge, the lead, and a
- * closing line the first time. The text stays within TOTAL_CAP so Claude Code does not save it to a file.
+ * closing line the first time. The text stays within TOTAL_CAP so Claude Code does not save it to a file (a slot,
+ * in the system prompt, passes its own cap and gets the lead brief before the folder rules fill it).
  * Later messages get only what this session has not been sent yet.
  */
 export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const started = performance.now()
   const files = chatPaths(dir, req.chat)
-  const entries = [...loadCatalog(dir).entries.values()]
+  const catalog = loadCatalog(dir).entries
+  const entries = [...catalog.values()]
   const sent = readSent(files.sent)
   const first = !(req.session in sent)
   const mode: PackMode = req.full ? 'full' : first ? 'first' : 'delta'
@@ -163,14 +181,23 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
   const rest = matches.map((s) => s.entry).filter((e) => !inline.includes(e))
 
   const hydra = hydraLead(files.hydraMd)
-  const persona = hydra
-    ? undefined
-    : rankEntries(entries, req.prompt, { kinds: ['person'], mode: 'become', tiers: LEAD_TIERS })[0]
+  const fixed = !hydra && req.lead !== undefined
+  const persona =
+    hydra || fixed
+      ? undefined
+      : rankEntries(entries, req.prompt, {
+          kinds: ['person'],
+          mode: 'become',
+          tiers: LEAD_TIERS,
+        })[0]
+  const chosen = fixed && req.lead ? catalog.get(req.lead) : undefined
   let lead: { id: string; name: string; text: string } | null = null
   if (hydra) {
     const id = hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`
     if (fresh(id)) lead = { id, name: hydra.name, text: leadFileText(hydra.path) }
-  } else if (persona && persona.score >= LEAD_MIN && fresh(persona.entry.id))
+  } else if (chosen && fresh(chosen.id))
+    lead = { id: chosen.id, name: chosen.name, text: loadText(chosen) }
+  else if (persona && persona.score >= LEAD_MIN && fresh(persona.entry.id))
     lead = {
       id: persona.entry.id,
       name: persona.entry.name,
@@ -189,7 +216,15 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
         ].join('\n\n')
   const parts = (s: Sections) =>
     [s.folder, ...matchParts(s.inline, s.pointers), s.lead].filter(Boolean)
-  const fits = (s: Sections) => frame(parts(s)).length <= TOTAL_CAP
+  const cap = req.cap ?? TOTAL_CAP
+  const fits = (s: Sections) => frame(parts(s)).length <= cap
+  const leadFull = lead ? `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd() : ''
+  const leadPointer = lead
+    ? `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
+    : ''
+  // A slot keeps room for the lead's brief (its pointer when the brief alone is too long) before the folder rules
+  // fill it: every manager brief is longer than the attach cap, so rules first left the lead a pointer.
+  const reserved = req.cap && lead ? (frame([leadFull]).length <= cap ? leadFull : leadPointer) : ''
 
   let s: Sections = { folder: '', lead: '', inline: [], pointers: [] }
   const ids: string[] = []
@@ -199,7 +234,7 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     const blocks = folder.map(entryBlock)
     const cut = cutHead(
       blocks.join('\n\n'),
-      TOTAL_CAP - frame([prefix]).length,
+      cap - frame(reserved ? [prefix, reserved] : [prefix]).length,
       folder.map(loadRef).join(', '),
     )
     if (cut.kept > 0) {
@@ -210,15 +245,14 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
     }
   }
 
+  let owed: string | null | undefined
   if (lead) {
-    const full = `Lead for this message: ${lead.name}\n\n${lead.text}`.trimEnd()
-    const pointer = `Lead for this message: ${lead.name}. Load the brief with core_use { chat: "${req.chat}", id: "${lead.id}", mode: "become" }.`
-    if (fits({ ...s, lead: full })) {
-      s = { ...s, lead: full }
-      clearLeadOwed(sent)
-    } else if (fits({ ...s, lead: pointer })) {
-      s = { ...s, lead: pointer }
-      setLeadOwed(sent, lead.id)
+    if (fits({ ...s, lead: leadFull })) {
+      s = { ...s, lead: leadFull }
+      owed = null
+    } else if (fits({ ...s, lead: leadPointer })) {
+      s = { ...s, lead: leadPointer }
+      owed = lead.id
     }
   }
 
@@ -243,14 +277,20 @@ export function packFor(dir: string, req: PackRequest, now = new Date()): Pack {
 
   const text = frame(parts(s))
   ids.push(...inlineIds, ...pointerIds, ...(s.lead && lead ? [lead.id] : []))
+  const bytes = Buffer.byteLength(text, 'utf8')
+  const ms = Math.round(performance.now() - started)
+  const used = hydra
+    ? (hydraLeadEntry(entries, hydra.path, hydra.name)?.id ?? `lead:${hydra.name}`)
+    : (lead?.id ?? (fixed ? (req.lead ?? null) : null))
+  if (req.dry) return { mode, text, ids, bytes, ms, lead: used, owed }
+
+  if (owed === null) clearLeadOwed(sent)
+  else if (owed) setLeadOwed(sent, owed)
   const record = mode === 'delta' ? [...seen, ...ids] : ids
   sent[req.session] = [...new Set(record)]
   writeSent(files.sent, sent)
-
-  const bytes = Buffer.byteLength(text, 'utf8')
-  const ms = Math.round(performance.now() - started)
   appendLog(dir, { event: 'pack', chat: req.chat, session: req.session, mode, ids, bytes, ms }, now)
-  return { mode, text, ids, bytes, ms }
+  return { mode, text, ids, bytes, ms, lead: used, owed }
 }
 
 export interface Match {

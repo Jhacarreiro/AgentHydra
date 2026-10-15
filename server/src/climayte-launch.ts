@@ -70,7 +70,7 @@ import { readWave, waveStateText } from './climayte-wave'
 import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
 import { chatKeyOk, coreDir } from './hydra-core/paths'
-import { placeChat, placementOf } from './hydra-core/placement'
+import { APPEND_MAX, placeChat, placementOf } from './hydra-core/placement'
 import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
@@ -697,7 +697,8 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
 /** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
 function corePromptText(w: CliMayteWorker, cli: CliSession): string {
   const head = [CORE_CHAT_NOTE, w.desk?.append]
-  const chat = w.desk?.chatId ?? w.sessionId
+  // Keyed as the hook keys it: the Desk chat, else the session being launched (a handoff's new one, not w.sessionId).
+  const chat = w.desk?.chatId ?? cli.id
   const placement = placementOf(coreDir())
   if (
     roleOf(w) !== 'prime' ||
@@ -714,6 +715,7 @@ function corePromptText(w: CliMayteWorker, cli: CliSession): string {
     cwd: w.cwd,
     prompt: w.prompt,
     placement,
+    room: APPEND_MAX - (head.filter(Boolean).join('\n\n').length + 2),
   })
   return [...head, placed.text].filter(Boolean).join('\n\n')
 }
