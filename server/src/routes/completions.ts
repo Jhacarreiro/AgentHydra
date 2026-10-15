@@ -16,6 +16,7 @@ const registry: Completions = createCompletions({
   file: join(POINTER_DIR, 'completions', 'completions.json'),
   resolve: (origin) => originFor(origin) ?? origin,
   emit: (origin, events) => climaytePing()?.emit(origin, events) ?? false,
+  ready: () => climaytePing() !== null,
   off: () => climaytePingState().on === false,
   now: Date.now,
 })

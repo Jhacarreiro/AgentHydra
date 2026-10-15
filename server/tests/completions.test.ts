@@ -19,6 +19,7 @@ function harness(start = 1_000) {
       sent.push({ origin, events })
       return true
     },
+    ready: () => true,
     off: () => false,
     now: () => clock.t,
     resolve: (o: CliMayteOrigin) => o,
@@ -106,6 +107,34 @@ describe('completion registry', () => {
     off = false
     h.c.sweep()
     expect(h.sent).toHaveLength(1)
+  })
+
+  test('an outbox that is not running keeps the wait and the finish, then delivers once it runs', () => {
+    const h = harness()
+    let running = false
+    h.deps.ready = () => running
+    h.c.waitFor(wait())
+    h.c.finished({ ticket: 'desk-chat:c1', outcome: 'done', at: 2_000 })
+    expect(h.sent).toHaveLength(0)
+    running = true
+    h.c.sweep()
+    expect(h.sent).toHaveLength(1)
+    h.c.sweep()
+    expect(h.sent).toHaveLength(1)
+  })
+
+  test('a duplicate the outbox refuses is dropped, not retried', () => {
+    const h = harness()
+    const refused: CliMayteOrigin[] = []
+    h.deps.emit = (origin) => {
+      refused.push(origin)
+      return false
+    }
+    h.c.waitFor(wait())
+    h.c.finished({ ticket: 'desk-chat:c1', outcome: 'done', at: 2_000 })
+    expect(refused).toHaveLength(1)
+    h.c.sweep()
+    expect(refused).toHaveLength(1)
   })
 
   test('a wait expires after 24 hours', () => {

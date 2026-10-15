@@ -5,8 +5,8 @@
  *
  * A ticket is `<kind>:<id>`: `desk-chat:<chat id>` now; `hswarm-job:<id>` and `climayte-worker:<id>` are reserved.
  * A finish nobody waits on is kept 10 minutes, so a wait that lands just after the work ended still matches. A wait
- * expires after 24 h. Both persist in the daemon's state folder, so a restart keeps open waits. While the outbox's
- * `ping-off` file exists nothing is sent and the wait stays for the next settle.
+ * expires after 24 h. Both persist in the daemon's state folder, so a restart keeps open waits. While the outbox is
+ * not running or `ping-off` exists, waits and finishes are kept for the next sweep.
  *
  * The deps are injected (routes/completions.ts wires the real outbox): tests pass a fake emit and a fake clock.
  */
@@ -37,10 +37,12 @@ export interface FinishInput {
 export interface CompletionDeps {
   /** The state file, e.g. `<state>/completions/completions.json`. */
   file: string
-  /** The CliMayte outbox's emit: false when it did not queue the event (stopped, or the key is recorded). */
   /** The origin as the outbox delivers it: a chat that runs as a CliMayte worker is reached as that worker. */
   resolve(origin: CliMayteOrigin): CliMayteOrigin
+  /** The CliMayte outbox's emit: false when it did not queue the event (the key is already recorded). */
   emit(origin: CliMayteOrigin, events: PingEvent[]): boolean
+  /** Whether the CliMayte outbox is running. */
+  ready(): boolean
   /** Whether pings are switched off (`ping-off`). */
   off(): boolean
   now(): number
@@ -129,7 +131,7 @@ export function createCompletions(deps: CompletionDeps): Completions {
     const t = deps.now()
     state.waits = state.waits.filter((w) => t - w.since <= WAIT_TTL_MS)
     prune(t)
-    if (!deps.off()) {
+    if (deps.ready() && !deps.off()) {
       for (const f of [...state.finishes]) {
         const hit = state.waits.filter((w) => matches(w, f))
         if (!hit.length) continue
