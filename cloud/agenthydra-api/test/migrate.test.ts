@@ -128,8 +128,10 @@ describe('migrate', () => {
   test('training_eligible hides opted-out and deleted users', async () => {
     await migrate(ctx.db)
     await ctx.pg.exec(`
-      INSERT INTO people_users (sub, training_use) VALUES ('in', true), ('out', false);
-      INSERT INTO people_users (sub, deleted_at) VALUES ('gone', now());`)
+      INSERT INTO people_users (sub, training_use, terms_version, terms_accepted_at)
+        VALUES ('in', true, 'v1', now()), ('out', false, 'v1', now());
+      INSERT INTO people_users (sub, deleted_at, terms_version, terms_accepted_at)
+        VALUES ('gone', now(), 'v1', now());`)
     for (const s of ['in', 'out', 'gone']) await ctx.pg.query(ins, [`user:${s}`])
     await ctx.pg.exec('SET ROLE agenthydra_export')
     const rows = (await ctx.pg.query('SELECT user_ref FROM training_eligible')).rows as {
