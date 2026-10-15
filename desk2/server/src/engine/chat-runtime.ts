@@ -40,6 +40,7 @@ import type {
 } from '@shared/protocol'
 import { contextPct } from './describe'
 import { connectorsPending } from '../connectors/registry'
+import { coreSlot, coreSlotDue } from './core-slot'
 import { chatAddOns } from './desk-prompt'
 import { coreChatExcludes } from './hydra-core-mode'
 import { pinHaikuModel, withoutOldHaiku } from './haiku-pin'
@@ -283,6 +284,8 @@ export class ChatRuntime {
   private ranAs: AccountRef | null = null
   /** The folder the process was started in: a chat whose cwd changed ends it at the next quiet point, and the next start runs in the new folder. */
   private ranCwd: string | null = null
+  /** The message a start was made for: a chat's first one is what Hydra Core's slot picks its lead from (core-slot.ts). */
+  private launchText: string | null = null
   /** A turn ended and the folder the session says it is in has not been looked at since. */
   private cwdCheckDue = false
   /** The chat's account changed under a running turn: the runtime ends once the turn is over. */
@@ -393,6 +396,8 @@ export class ChatRuntime {
     else delete env.CLAUDE_CONFIG_DIR
     if (chat.managerSlug) env.AGENTHYDRA_MANAGER = chat.managerSlug
     else delete env.AGENTHYDRA_MANAGER
+    // The hook keys this chat's messages by it (hydra-core/hook.mjs), as it does a CliMayte chat's.
+    env.HYDRA_DESK_CHAT_ID = chat.id
     pinHaikuModel(env)
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
     const sus = this.susTurn?.() ?? null
@@ -420,8 +425,11 @@ export class ChatRuntime {
     if (this.applied.model) options.model = withoutOldHaiku(this.applied.model) ?? undefined
     if (this.applied.effort) options.effort = this.applied.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
+    // A fresh session under Hydra Core's slot starts with an id Desk picks, so placement.json names it as launched with its pack.
+    const session = chat.sessionId ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
     if (chat.sessionId) options.resume = chat.sessionId
-    else if (chat.forkedFrom) {
+    else if (session) options.sessionId = session
+    if (!chat.sessionId && chat.forkedFrom) {
       // A fork's first start: the SDK copies the session under a new id (system/init brings it).
       options.resume = chat.forkedFrom
       options.forkSession = true
@@ -433,13 +441,17 @@ export class ChatRuntime {
     const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
     const claudeMdExcludes = [...(swap?.excludes ?? []), ...coreChatExcludes()]
     if (claudeMdExcludes.length || hooks) options.settings = { ...(claudeMdExcludes.length ? { claudeMdExcludes } : {}), ...(hooks ? { hooks } : {}) }
-    if (swap) {
-      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}
+    const rules = swap ? `
 
 # User instructions (~/.claude/CLAUDE.md)
 
-${swap.real}` }
-    }
+${swap.real}` : ''
+    const slot = session
+      ? coreSlot({ chat: chat.id, parentId: chat.parentId, session, fresh: !chat.sessionId, cwd: chat.cwd, prompt: this.launchText ?? chat.title ?? '', rest: addOns.append.length + rules.length })
+      : null
+    if (slot || swap) options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}${slot ? `
+
+${slot}` : ''}${rules}` }
     const mcp = this.agentHydraMcp === undefined ? readAgentHydraMcp() : this.agentHydraMcp
     // What plain `claude` gets in this folder under the main config, on whatever account the chat runs; Hydra Desk's own agenthydra wins.
     // A running connector's servers sit under the person's own config of the same name.
@@ -736,7 +748,10 @@ ${swap.real}` }
    */
   send(text: string, images?: ImageRef[], messageId?: string, shown?: string): { queued: boolean } {
     this.clearIdleTimer()
-    if (!this.q) this.start()
+    if (!this.q) {
+      this.launchText = text
+      this.start()
+    }
     const before = this.chat
     const busy = before.status === 'working' || before.status === 'needs_you' || (before.status === 'starting' && before.turnStartedAt !== null)
     if (!busy) void this.applySetting()
@@ -773,7 +788,10 @@ ${swap.real}` }
   /** Sends them again on a fresh start (the chat moved to another account); the transcript already has them. */
   replay(sends: QueuedInput[]): void {
     this.clearIdleTimer()
-    if (!this.q) this.start()
+    if (!this.q) {
+      this.launchText = sends[0]?.text ?? null
+      this.start()
+    }
     this.limitAnnounced = false
     for (const s of sends) {
       const msg = this.input!.push(s)
