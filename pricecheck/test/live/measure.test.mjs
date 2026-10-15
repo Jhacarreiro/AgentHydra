@@ -22,6 +22,15 @@ const fileTotal = (result, unit, file) =>
 //   features 2 (the section and the card, siblings)   media 2 (svg and the visible img)
 //   screen 1 (short page)   color 4 (black, red, blue text; white fill)   type 3 (32, 16, 12 px)
 //   points 45 = 16 + 10 + 9 + 2 + 6 + 2, with every allowance covering the rest
+// motion.html: a looping spinner and an 8 s ticker move on their own; a 2 s entrance slide is part of the page
+// opening (its wait), not motion; a hidden spinner is not seen.
+group.skipIf(!hasBrowser)('live measure: motion', () => {
+  test('only looping or long animations count as motion, not an entrance slide', async () => {
+    const [desktop] = await measureUrl(fixture('motion.html'), { root: FIXTURES, viewports: [{ name: 'desktop', width: 1280, height: 800, mobile: false }] })
+    expect(total(desktop, 'motion')).toBe(2)
+  }, 60000)
+})
+
 group.skipIf(!hasBrowser)('live measure: known counts', () => {
   let results
   beforeAll(async () => {

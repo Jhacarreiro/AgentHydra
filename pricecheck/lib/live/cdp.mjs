@@ -167,6 +167,18 @@ function connect(url) {
   return { ready, send, once, close: () => ws.close() }
 }
 
+// After load, a single-page app is often still rendering: wait until the page has not changed for 500 ms
+// (5 s at most), so two runs of the same page count the same things.
+const SETTLE = `new Promise((done) => {
+  let quiet
+  const settle = () => { clearTimeout(quiet); quiet = setTimeout(finish, 500) }
+  const observer = new MutationObserver(settle)
+  const cap = setTimeout(finish, 5000)
+  function finish() { observer.disconnect(); clearTimeout(quiet); clearTimeout(cap); done() }
+  observer.observe(document, { subtree: true, childList: true, attributes: true, characterData: true })
+  settle()
+})`
+
 async function measureViewport(client, url, viewport, root) {
   const { targetId } = await client.send('Target.createTarget', { url: 'about:blank' })
   try {
@@ -181,6 +193,7 @@ async function measureViewport(client, url, viewport, root) {
     const nav = await client.send('Page.navigate', { url }, sessionId)
     if (nav.errorText) throw new Error(`pricecheck live: could not open ${url} (${nav.errorText})`)
     await loaded
+    await client.send('Runtime.evaluate', { expression: SETTLE, awaitPromise: true }, sessionId)
     const expression = `(${measureInPage.toString()})(${JSON.stringify({ root })})`
     const { result, exceptionDetails } = await client.send(
       'Runtime.evaluate',

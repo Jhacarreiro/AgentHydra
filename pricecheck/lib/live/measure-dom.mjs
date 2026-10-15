@@ -110,10 +110,14 @@ export function measureInPage(options = {}) {
     if (!nested) add('interruption', fileOf(el))
   }
 
+  // Motion is what keeps moving on its own: a loop, or an animation of 3 s or more. A shorter one is the page
+  // arriving (an entrance slide or fade), which the wait already prices.
   const movers = new Set()
   for (const anim of document.getAnimations()) {
     const target = anim.effect?.target
-    if (anim.playState === 'running' && target && shown(target)) movers.add(target)
+    const timing = anim.effect?.getComputedTiming()
+    const lasting = timing && (timing.iterations === Number.POSITIVE_INFINITY || timing.endTime >= 3000)
+    if (anim.playState === 'running' && lasting && target && shown(target)) movers.add(target)
   }
   for (const el of movers) add('motion', fileOf(el))
 
