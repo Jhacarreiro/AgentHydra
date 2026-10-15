@@ -593,12 +593,22 @@ onBeforeUnmount(() => {
 // were estimated taller than they render the browser stops short; the rows that replace them at the bottom are already
 // measured, so no offset changes and nothing else would take it the rest of the way (a chat whose history loaded again
 // under it sat 185px above its bottom, 2026-10-14).
+function onListChange() {
+  if (pinned.value) return void nextTick(follow)
+  trimSlack()
+  if (scroller.value) fromBottom.value = distanceOf(scroller.value)
+}
+watch([offsets, showWorking, () => props.items[props.items.length - 1]], onListChange, { flush: 'post' })
+// Once a frame: rows not measured yet land each jump on another window, and following every one of those without a
+// frame between never lets them be measured (the lazy parity scene's page hung there, 2026-10-14).
+let windowFollowed = false
 watch(
-  [offsets, showWorking, () => props.items[props.items.length - 1], () => range.value.start],
+  () => range.value.start,
   () => {
-    if (pinned.value) return void nextTick(follow)
-    trimSlack()
-    if (scroller.value) fromBottom.value = distanceOf(scroller.value)
+    if (windowFollowed) return
+    windowFollowed = true
+    requestAnimationFrame(() => (windowFollowed = false))
+    onListChange()
   },
   { flush: 'post' },
 )
