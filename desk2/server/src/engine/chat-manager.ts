@@ -2142,15 +2142,42 @@ export class ChatManager {
     return file
   }
 
-  /** Sets climayteActive and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
+  /** Sets climayteActive (its active workers and running seats) and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
   private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
     const mine = workersOfChat(workers, chat)
-    chat.climayteActive = mine.filter((w) => w.active).length
+    chat.climayteActive = mine.filter((w) => w.active).length + this.seatsRunning(chat.id)
     const ids = chat.workerIds ?? []
     const fresh = mine.map((w) => w.id).filter((id) => !ids.includes(id))
     if (!fresh.length) return false
     chat.workerIds = [...ids, ...fresh]
     return true
+  }
+
+  /** The chat's sub-chats (seats, sub-managers) still at work, counted as its drones are (A4-F8): one that is
+   *  working, asking or starting, or whose own drones or seats still run. Seat workers carry no origin session, so
+   *  workersOfChat never finds them. */
+  private seatsRunning(id: string): number {
+    let n = 0
+    for (const e of this.chats.values()) {
+      const c = e.chat
+      if (c.parentId === id && (c.status === 'working' || c.status === 'needs_you' || c.status === 'starting' || c.climayteActive > 0)) n++
+    }
+    return n
+  }
+
+  /** A sub-chat changed: its parent counts it again, and a parent that replied turns unread when its last one finishes. */
+  private settleParent(child: ChatSummary): void {
+    const e = child.parentId ? this.chats.get(child.parentId) : undefined
+    if (!e) return
+    const parent = e.chat
+    const before = parent.climayteActive
+    this.matchWorkers(parent, this.bridge.lastWorkers())
+    const n = parent.climayteActive
+    if (n === before) return
+    if (n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
+    this.store.saveChats(this.stored())
+    this.emitEvent({ type: 'chat.upsert', chat: this.view(parent) })
+    this.settleParent(parent)
   }
 
   /** Every worker id any chat has matched: the bridge keeps these listed after AgentHydra's recent window drops them. */
@@ -2626,6 +2653,7 @@ export class ChatManager {
       this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
+      this.settleParent(e.chat)
       return
     }
     if ((event.type === 'item.upsert' || event.type === 'item.delta' || event.type === 'notify') && !this.chats.has(event.chatId)) return
@@ -2699,6 +2727,7 @@ export class ChatManager {
     this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
     // A CliMayte worker's status arrives here, not as a runtime event.
     this.sendWaiting(this.chats.get(chat.id))
+    this.settleParent(chat)
   }
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */
