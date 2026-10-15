@@ -8,9 +8,12 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
 import type { ServerContext } from '../../src/context'
+import { ChatManager } from '../../src/engine/chat-manager'
 import { chatFace, forgetCoreFaces } from '../../src/engine/core-lead'
+import { DEFAULT_SETTINGS } from '../../src/settings'
 import avatars from '../../src/plugins/37-manager-avatars'
 import { type CoreFixture, coreFixture, PNG, writeChatFile } from '../fixtures/hydra-core'
+import { fakeBridge, fakeQueries } from './manager/fakes'
 
 const PRIME = '7f0c1d2e-0000-4000-8000-00000000000a'
 const SEAT = '7f0c1d2e-0000-4000-8000-00000000000b'
@@ -101,4 +104,20 @@ test("GET /api/personas/:slug/avatar serves a persona's portrait, and 404s one w
   expect((await hono.request('/api/personas/bo-copy/avatar')).status).toBe(404)
   expect((await hono.request('/api/personas/no-such-one/avatar')).status).toBe(404)
   expect((await hono.request('/api/personas/Bad_Slug/avatar')).status).toBe(400)
+})
+
+test("a Desk chat's summary carries its lead from its own chat folder, and loses it with none", async () => {
+  const c = setup()
+  const home = mkdtempSync(join(tmpdir(), 'desk-core-lead-home-'))
+  const m = new ChatManager({ home, claudeHome: home, emit: () => {}, settings: () => DEFAULT_SETTINGS, bridge: fakeBridge().bridge, queryImpl: fakeQueries().queryImpl, agentHydraMcp: null, env: { PATH: '/bin' }, storeDebounceMs: 1, newChats: 'sdk' })
+  try {
+    const chat = await m.create({ cwd: home, delegateToCliMayte: false })
+    expect(m.get(chat.id).manager).toBeNull()
+    writeChatFile(c.dir, chat.id, 'placement.json', placement('person:ada-layout'))
+    forgetCoreFaces()
+    expect(m.get(chat.id).manager).toMatchObject({ slug: 'ada-layout', name: 'Ada Example', role: 'lead', persona: true })
+  } finally {
+    await m.closeAll()
+    rmSync(home, { recursive: true, force: true })
+  }
 })
