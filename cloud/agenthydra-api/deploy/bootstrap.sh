@@ -16,19 +16,18 @@ gen() { openssl rand -base64 48 | tr -d '\n=+/' | cut -c1-40; }
 umask 077
 if [ ! -f /etc/agenthydra/pg.env ]; then
   {
-    echo "POSTGRES_USER=agenthydra_owner"
+    echo "POSTGRES_USER=agenthydra_admin"
     echo "POSTGRES_PASSWORD=$(gen)"
     echo "POSTGRES_DB=agenthydra"
   } > /etc/agenthydra/pg.env
 fi
 
 if [ ! -f /etc/agenthydra/api.env ]; then
-  owner_pw=$(grep '^POSTGRES_PASSWORD=' /etc/agenthydra/pg.env | cut -d= -f2-)
   app_pw=$(gen)
   backup_pw=$(gen)
   {
     echo "PORT=18790"
-    echo "AGENTHYDRA_DB_OWNER_PASSWORD=${owner_pw}"
+    echo "AGENTHYDRA_DB_OWNER_PASSWORD=$(gen)"
     echo "AGENTHYDRA_DB_APP_PASSWORD=${app_pw}"
     echo "AGENTHYDRA_DB_BACKUP_PASSWORD=${backup_pw}"
     echo "DATABASE_URL=postgres://agenthydra_app:${app_pw}@127.0.0.1:5433/agenthydra"
