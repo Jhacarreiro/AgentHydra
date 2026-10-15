@@ -12,8 +12,10 @@ import { loadCatalog } from '../src/hydra-core/catalog'
 import {
   type Decider,
   hswarmDecide,
+  LATE_BUDGET_MS,
   LAUNCH_BUDGET_MS,
   type LeadQuestion,
+  latePicks,
   MESSAGE_BUDGET_MS,
   pickLead,
   setDecider,
@@ -376,7 +378,8 @@ describe('the lead follows the work (A2-F4, A3 finding 4)', () => {
     mockModel(() => null)
     const timedOut = await msg('stay', 'now store the signups in a new sqlite table', 4)
     expect(asked).toHaveLength(1)
-    expect(asked[0]?.ms).toBe(MESSAGE_BUDGET_MS)
+    // The hook waits MESSAGE_BUDGET_MS; the call itself may run on to LATE_BUDGET_MS.
+    expect(asked[0]?.ms).toBe(LATE_BUDGET_MS)
     expect(timedOut.text).not.toContain('Lead change')
     expect(existsSync(chatPaths(dir, 'stay').hydraMd)).toBe(false)
   })
@@ -393,6 +396,103 @@ describe('the lead follows the work (A2-F4, A3 finding 4)', () => {
       'The whole brief: core_use { chat: "long", id: "person:sam-backend", mode: "become" }',
     )
     expect(got.chars).toBeLessThanOrEqual(9500)
+  })
+})
+
+describe('a lead pick that misses the hook budget (C2 NEW-1, C3 N1, C2 NEW-2, C3 N3)', () => {
+  const launch = async (chat: string, prompt: string) =>
+    await placed(
+      dir,
+      { chat, session: 's1', fresh: true, cwd: CWD, prompt, placement: 'slot' },
+      new Date(T),
+    )
+  const msg = async (chat: string, prompt: string, at = 1) =>
+    await matched(
+      dir,
+      { chat, session: 's1', cwd: CWD, prompt, placement: 'slot' },
+      new Date(T + at),
+    )
+  const slow = (pick: (m: string) => string) => {
+    const d: Decider = async (q, ms) => {
+      asked.push({ q, ms })
+      await Bun.sleep(MESSAGE_BUDGET_MS + 300)
+      return { answer: pick(q.message) }
+    }
+    setDecider(d)
+  }
+
+  test('the hook answers in its budget, the late pick moves the lead in hydra.md, and the next message gets the note once', async () => {
+    mockModel(() => 'ivy-ui')
+    await launch('late', 'make the signup screen layout breathe')
+    slow((m) => (/sqlite/.test(m) ? 'sam-backend' : 'ivy-ui'))
+    const started = performance.now()
+    const first = await msg('late', 'now store the signups in a new sqlite table')
+    expect(performance.now() - started).toBeLessThan(MESSAGE_BUDGET_MS + 150)
+    expect(first.text).not.toContain('Lead change')
+    expect(asked.at(-1)?.ms).toBe(LATE_BUDGET_MS)
+    await latePicks()
+    expect(readFileSync(chatPaths(dir, 'late').hydraMd, 'utf8')).toContain(
+      'Sam - Structural Backend Engineer',
+    )
+    expect(logOf(dir).find((e) => e.event === 'lead-shift')).toMatchObject({
+      from: 'person:ivy-ui',
+      to: 'person:sam-backend',
+      late: true,
+    })
+    mockModel(() => 'sam-backend')
+    const next = await msg('late', 'keep going', 2)
+    expect(next.text).toContain("Lead change: the owner's last message was Sam's field")
+    expect(next.text).toContain('Sam brief: invented text for Structural Backend Engineer.')
+    expect(next.ids).toContain('person:sam-backend')
+    expect((await msg('late', 'keep going', 3)).text).not.toContain('Lead change')
+  })
+
+  test('a late pick that agrees with the current lead changes nothing', async () => {
+    mockModel(() => 'ivy-ui')
+    await launch('agree', 'make the signup screen layout breathe')
+    slow(() => 'ivy-ui')
+    await msg('agree', 'now store the signups in a new sqlite table')
+    await latePicks()
+    expect(existsSync(chatPaths(dir, 'agree').hydraMd)).toBe(false)
+    expect(logOf(dir).some((e) => e.event === 'lead-shift')).toBe(false)
+    expect((await msg('agree', 'keep going', 2)).text).not.toContain('Lead change')
+  })
+
+  test("a late pick is dropped when the chat's lead changed while it ran", async () => {
+    mockModel(() => 'ivy-ui')
+    await launch('stale', 'make the signup screen layout breathe')
+    slow(() => 'sam-backend')
+    await msg('stale', 'now store the signups in a new sqlite table')
+    mockModel(() => 'jay-ads')
+    const moved = await msg('stale', 'bump the ad campaign budget for the launch', 2)
+    expect(moved.text).toContain("Lead change: this message is Jay's field")
+    await latePicks()
+    expect(readFileSync(chatPaths(dir, 'stale').hydraMd, 'utf8')).toContain(
+      'Jay - Head of Advertising',
+    )
+    expect((await msg('stale', 'keep going', 3)).text).not.toContain('Lead change')
+  })
+
+  test("a new chat's first message does not ask the model again for the text its launch picked on", async () => {
+    mockModel(() => 'ivy-ui')
+    await launch('once', 'give the signup a fresh modern feel')
+    expect(asked).toHaveLength(1)
+    const first = await msg('once', 'give the signup a fresh modern feel')
+    expect(asked).toHaveLength(1)
+    expect(first.text).not.toContain('Lead change')
+  })
+
+  test('the shift check tells the model who leads now and that a message about running tools keeps them', async () => {
+    mockModel(() => 'ivy-ui')
+    await launch('meta', 'make the signup screen layout breathe')
+    asked = []
+    mockModel(() => 'ivy-ui')
+    await msg('meta', 'test the consult tool: call core_use three times and paste each raw reply')
+    expect(asked).toHaveLength(1)
+    const q = asked[0]?.q.question ?? ''
+    expect(q).toContain('Ivy leads this chat now')
+    expect(q).toContain('answer ivy-ui')
+    expect(asked[0]?.q.options['ivy-ui']).toBeDefined()
   })
 })
 

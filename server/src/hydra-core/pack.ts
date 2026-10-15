@@ -13,7 +13,9 @@ import {
   mayHaveMoved,
   pickLead,
   recordLead,
+  setLateLead,
   substantive,
+  takeLateLead,
   wordLead,
 } from './lead'
 import { appendLog } from './log'
@@ -436,8 +438,12 @@ export async function pickForMatch(
   const catalog = loadCatalog(dir).entries
   const entries = [...catalog.values()]
   if (!shiftDue(dir, req, entries, catalog)) return undefined
+  const files = chatPaths(dir, req.chat)
+  const current = currentLead(files, entries, catalog, readPlaced(files.placed))
   return pickLead(entries, req.prompt, MESSAGE_BUDGET_MS, {
+    current,
     log: { dir, chat: req.chat, at: now },
+    late: (pick) => lateShift(dir, req, current?.id ?? null, pick, catalog),
   })
 }
 
@@ -576,12 +582,8 @@ function currentLead(
   return placed?.lead ? (catalog.get(placed.lead) ?? null) : null
 }
 
-/**
- * On a substantive owner message, whether the work moved to another manager's field: a cheap word check first,
- * then the model within the hook's budget (a timeout keeps the current lead). A move becomes the chat's lead in
- * hydra.md, so the next launch's slot carries the new brief, and this message gets a lead-change note.
- */
-/** The cheap gate before a lead-shift call: a substantive owner message the current lead may no longer fit. */
+/** The cheap gate before a lead-shift call: a substantive owner message the current lead may no longer fit. A
+ *  slot's own lead on the very text its launch picked it on is not asked again. */
 function shiftDue(
   dir: string,
   req: PlacedRequest,
@@ -590,10 +592,53 @@ function shiftDue(
 ): boolean {
   if (!substantive(req.prompt)) return false
   const files = chatPaths(dir, req.chat)
-  const current = currentLead(files, entries, catalog, readPlaced(files.placed))
-  return mayHaveMoved(entries, current, req.prompt)
+  const placed = readPlaced(files.placed)
+  if (!hydraLead(files.hydraMd) && placed?.prompt?.trim() === req.prompt.trim()) return false
+  return mayHaveMoved(entries, currentLead(files, entries, catalog, placed), req.prompt)
 }
 
+/**
+ * A shift check's model answer that came back after the hook's budget: a move off the lead the check started from
+ * becomes the chat's lead in hydra.md, and its note is owed to the next message. A pick that agrees with the
+ * current lead, or lands after the lead changed meanwhile, changes nothing.
+ */
+function lateShift(
+  dir: string,
+  req: PlacedRequest,
+  from: string | null,
+  pick: LeadPick,
+  catalog: Map<string, CatalogEntry>,
+): void {
+  if (pick.path !== 'model' || !pick.id || pick.id === from) return
+  const to = catalog.get(pick.id)
+  if (!to) return
+  const files = chatPaths(dir, req.chat)
+  const current = currentLead(files, [...catalog.values()], catalog, readPlaced(files.placed))
+  if ((current?.id ?? null) !== from) return
+  const now = new Date()
+  recordLead(files.hydraMd, to, now)
+  setLateLead(files.root, { from, to: to.id })
+  appendLog(
+    dir,
+    {
+      event: 'lead-shift',
+      chat: req.chat,
+      session: req.session,
+      from,
+      to: to.id,
+      ms: pick.ms,
+      late: true,
+    },
+    now,
+  )
+}
+
+/**
+ * On a substantive owner message, whether the work moved to another manager's field: a cheap word check first,
+ * then the model within the hook's budget (an answer after it moves the lead for the next message: lateShift). A
+ * move becomes the chat's lead in hydra.md, so the next launch's slot carries the new brief, and the message that
+ * learns of it gets a lead-change note.
+ */
 function leadShift(
   dir: string,
   req: PlacedRequest,
@@ -601,28 +646,46 @@ function leadShift(
   catalog: Map<string, CatalogEntry>,
   now: Date,
 ): { to: string; note: string } | null {
-  const pick = req.pick
-  if (!pick || !shiftDue(dir, req, entries, catalog)) return null
   const files = chatPaths(dir, req.chat)
-  const current = currentLead(files, entries, catalog, readPlaced(files.placed))
+  const owed = takeLateLead(files.root)
+  const placed = readPlaced(files.placed)
+  const current = currentLead(files, entries, catalog, placed)
+  // The chat never saw a late move, so a note names the lead it last knew.
+  const known =
+    owed && owed.to === current?.id
+      ? owed.from
+        ? (catalog.get(owed.from) ?? null)
+        : null
+      : current
+  const pick = req.pick
   // Only the model moves a lead: the word ranker's guess is too weak to override one already chosen.
-  if (pick.path !== 'model' || !pick.id || pick.id === current?.id) return null
-  const to = catalog.get(pick.id)
-  if (!to) return null
-  const note = leadNote(current, to, req.chat)
-  recordLead(files.hydraMd, to, now)
-  appendLog(
-    dir,
-    {
-      event: 'lead-shift',
-      chat: req.chat,
-      session: req.session,
-      from: current?.id ?? null,
-      to: to.id,
-      ms: pick.ms,
-      chars: note.length,
-    },
-    now,
-  )
-  return { to: to.id, note: `Hydra Core, new for this message:\n\n${note}` }
+  const to =
+    pick?.path === 'model' &&
+    pick.id &&
+    pick.id !== current?.id &&
+    shiftDue(dir, req, entries, catalog)
+      ? catalog.get(pick.id)
+      : undefined
+  if (to) {
+    const note = leadNote(known, to, req.chat)
+    recordLead(files.hydraMd, to, now)
+    appendLog(
+      dir,
+      {
+        event: 'lead-shift',
+        chat: req.chat,
+        session: req.session,
+        from: current?.id ?? null,
+        to: to.id,
+        ms: pick?.ms,
+        chars: note.length,
+      },
+      now,
+    )
+    return { to: to.id, note: `Hydra Core, new for this message:\n\n${note}` }
+  }
+  // Owed while the late move still stands and no launch has rebuilt the slot around it.
+  if (!owed || !current || owed.to !== current.id || placed?.lead === current.id) return null
+  const note = leadNote(known, current, req.chat, true)
+  return { to: current.id, note: `Hydra Core, new for this message:\n\n${note}` }
 }

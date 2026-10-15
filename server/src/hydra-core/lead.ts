@@ -1,6 +1,6 @@
 // server/src/hydra-core/lead.ts - who a chat is told to be: one small model call through HSwarm's decide door picks
 // the lead among the five managers (or none), and the word ranker answers when that call fails or runs out of time.
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { contentWords } from '../mcp-find'
@@ -15,6 +15,9 @@ import { coreDir } from './paths'
 export const LAUNCH_BUDGET_MS = 5000
 /** The hook gives the whole per-message request 1.5 s (hook.mjs PACK_TIMEOUT_MS); the call gets this much of it. */
 export const MESSAGE_BUDGET_MS = 1000
+/** A per-message shift check that misses MESSAGE_BUDGET_MS keeps asking this long in the background; under 3000 so
+ *  it stays one ask. Live picks that missed 1 s came back in 1.0-1.6 s. */
+export const LATE_BUDGET_MS = 2500
 export const LEAD_MIN = 4
 /** A lead-change note carries the new lead's brief whole up to this many characters. */
 export const NOTE_CAP = 9500
@@ -127,6 +130,13 @@ const CACHE_MAX = 100
 /** Picks the model made, so a launch that builds its slot twice asks once; a failed call is asked again. */
 const cache = new Map<string, LeadPick>()
 
+const late = new Set<Promise<void>>()
+
+/** Resolves once every late pick started so far has landed. */
+export async function latePicks(): Promise<void> {
+  while (late.size) await Promise.all([...late])
+}
+
 const noModel: Decider = async () => ({ answer: null, error: 'no model call under test' })
 const defaultDecider = (): Decider => (process.env.NODE_ENV === 'test' ? noModel : hswarmDecide)
 let decider: Decider = defaultDecider()
@@ -168,9 +178,14 @@ export function coordinatorOf(managers: CatalogEntry[]): CatalogEntry | undefine
 
 const slugOf = (e: CatalogEntry) => e.id.slice(e.id.indexOf(':') + 1)
 
-export function leadQuestion(managers: CatalogEntry[], message: string): LeadQuestion {
+export function leadQuestion(
+  managers: CatalogEntry[],
+  message: string,
+  current: CatalogEntry | null = null,
+): LeadQuestion {
   const coord = coordinatorOf(managers)
   const quick = quickOf(managers)
+  const now = current && managers.includes(current) ? current : null
   const options: Record<string, string> = {
     none: 'No work in the message: ok, thanks, a greeting, or a bare "keep going" that names no work.',
   }
@@ -191,6 +206,10 @@ export function leadQuestion(managers: CatalogEntry[], message: string): LeadQue
       `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
       "Research, a bug or a question inside one field is that field's manager's, and the lead is the field where the fix lives, not where the symptom shows.",
       coord ? `A message spanning several fields is ${coord.name}'s.` : '',
+      // Without this a message about the chat's own tooling moved a backend chat to the coordinator (C3 N3).
+      now
+        ? `${now.name} leads this chat now: answer ${slugOf(now)} unless the work this message asks for clearly sits in another manager's field. A message that only says how to run a tool, or tests the chat's own tools, keeps ${now.name}.`
+        : '',
     ]
       .filter(Boolean)
       .join(' '),
@@ -225,61 +244,109 @@ export function wordLead(
 
 /**
  * The lead for a message: the model's pick among the managers or none, else the word ranker's. A message with no
- * content word ("keep going", "ok") needs no call. `log` appends which path chose.
+ * content word ("keep going", "ok") needs no call. `log` appends which path chose. `current` is the chat's lead now,
+ * named in the question. With `late`, the call may run LATE_BUDGET_MS: the pick still answers by `budgetMs` (the word
+ * ranker's when the model is not back), and the model's answer, when it comes, goes to `late` and the log.
  */
 export async function pickLead(
   entries: CatalogEntry[],
   message: string,
   budgetMs: number,
-  opts: { cache?: boolean; log?: { dir: string; chat: string; at?: Date } } = {},
+  opts: {
+    cache?: boolean
+    log?: { dir: string; chat: string; at?: Date }
+    current?: CatalogEntry | null
+    late?: (pick: LeadPick) => void
+  } = {},
 ): Promise<LeadPick> {
-  const key = `${budgetMs}\n${message}`
+  const key = `${budgetMs}
+${opts.current?.id ?? ''}
+${message}`
   const hit = opts.cache === false ? undefined : cache.get(key)
   if (hit) return hit
   const started = performance.now()
   const managers = managersOf(entries)
+  const toPick = (d: Decision): LeadPick => {
+    const ms = Math.round(performance.now() - started)
+    const answer = d.answer?.trim().toLowerCase()
+    const chosen = managers.find((m) => slugOf(m) === answer)
+    if (answer === 'none') return { id: null, path: 'model', ms }
+    if (chosen) return { id: chosen.id, path: 'model', ms }
+    return {
+      id: wordLead(entries, message)?.id ?? null,
+      path: 'words',
+      ms,
+      error: d.error ?? `not an option: ${d.answer}`,
+    }
+  }
+  const keep = (pick: LeadPick, extra: Record<string, unknown> = {}, at = opts.log?.at) => {
+    if (opts.cache !== false && !pick.error) {
+      cache.set(key, pick)
+      if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string)
+    }
+    if (opts.log)
+      appendLog(
+        opts.log.dir,
+        {
+          event: 'lead-pick',
+          chat: opts.log.chat,
+          id: pick.id,
+          path: pick.path,
+          ms: pick.ms,
+          ...(pick.error ? { error: pick.error } : {}),
+          ...extra,
+        },
+        at,
+      )
+  }
   let pick: LeadPick
   if (!contentWords(message).length) pick = { id: null, path: 'words', ms: 0 }
   // No managers to choose from: the word ranker picks among whoever can be become.
   else if (!managers.length)
     pick = { id: wordLead(entries, message)?.id ?? null, path: 'words', ms: 0 }
   else {
-    const d = await decider(leadQuestion(managers, message), budgetMs).catch(
+    const asked = decider(
+      leadQuestion(managers, message, opts.current ?? null),
+      opts.late ? LATE_BUDGET_MS : budgetMs,
+    ).catch(
       (err): Decision => ({
         answer: null,
         error: err instanceof Error ? err.message : String(err),
       }),
     )
-    const ms = Math.round(performance.now() - started)
-    const answer = d.answer?.trim().toLowerCase()
-    const chosen = managers.find((m) => slugOf(m) === answer)
-    if (answer === 'none') pick = { id: null, path: 'model', ms }
-    else if (chosen) pick = { id: chosen.id, path: 'model', ms }
-    else
-      pick = {
-        id: wordLead(entries, message)?.id ?? null,
-        path: 'words',
-        ms,
-        error: d.error ?? `not an option: ${d.answer}`,
+    const then = opts.late
+    if (!then) pick = toPick(await asked)
+    else {
+      let timer: ReturnType<typeof setTimeout> | undefined
+      const out = new Promise<null>((r) => {
+        timer = setTimeout(() => r(null), Math.max(100, budgetMs - 50))
+      })
+      const d = await Promise.race([asked, out])
+      clearTimeout(timer)
+      if (d) pick = toPick(d)
+      else {
+        pick = toPick({ answer: null, error: 'no answer in time; asking on' })
+        const landing: Promise<void> = asked
+          .then((ld) => {
+            const lp = toPick(ld)
+            keep(lp, { late: true }, new Date())
+            then(lp)
+          })
+          .catch((err) => {
+            if (opts.log)
+              appendLog(opts.log.dir, {
+                event: 'lead-pick',
+                chat: opts.log.chat,
+                late: true,
+                error: String(err instanceof Error ? err.message : err).slice(0, 200),
+              })
+          })
+          .finally(() => late.delete(landing))
+        late.add(landing)
       }
+    }
   }
-  if (opts.cache !== false && !pick.error) {
-    cache.set(key, pick)
-    if (cache.size > CACHE_MAX) cache.delete(cache.keys().next().value as string)
-  }
-  if (opts.log)
-    appendLog(
-      opts.log.dir,
-      {
-        event: 'lead-pick',
-        chat: opts.log.chat,
-        id: pick.id,
-        path: pick.path,
-        ms: pick.ms,
-        ...(pick.error ? { error: pick.error } : {}),
-      },
-      opts.log.at,
-    )
+  keep(pick)
   return pick
 }
 
@@ -318,9 +385,15 @@ export function briefFor(e: CatalogEntry, chat: string): string {
   return `${head.length <= room ? head : head.slice(0, room)}\n\n${become}`
 }
 
-export function leadNote(from: CatalogEntry | null, to: CatalogEntry, chat: string): string {
+/** `late`: the pick came back after the message it was made for, so the note rides the next one. */
+export function leadNote(
+  from: CatalogEntry | null,
+  to: CatalogEntry,
+  chat: string,
+  late = false,
+): string {
   return [
-    `Lead change: this message is ${to.name}'s field${to.title ? ` (${to.title})` : ''}${
+    `Lead change: ${late ? "the owner's last message was" : 'this message is'} ${to.name}'s field${to.title ? ` (${to.title})` : ''}${
       from ? `, not ${from.name}'s` : ''
     }. From here on you are ${to.name}. ${to.name}'s brief:`,
     briefFor(to, chat),
@@ -335,4 +408,29 @@ export function recordLead(hydraMd: string, e: CatalogEntry, now: Date): void {
   doc.updated = now.toISOString()
   mkdirSync(dirname(hydraMd), { recursive: true })
   writeFileSync(hydraMd, renderHydra(doc))
+}
+
+export interface LateLead {
+  from: string | null
+  to: string
+}
+
+const lateFile = (chatRoot: string) => join(chatRoot, 'lead-late.json')
+
+/** A late pick's move whose lead-change note the chat's next message still owes, beside its hydra.md. */
+export function setLateLead(chatRoot: string, move: LateLead): void {
+  mkdirSync(chatRoot, { recursive: true })
+  writeFileSync(lateFile(chatRoot), JSON.stringify(move))
+}
+
+/** The owed move, taken once: it is removed as it is read. */
+export function takeLateLead(chatRoot: string): LateLead | null {
+  const file = lateFile(chatRoot)
+  if (!existsSync(file)) return null
+  let move: LateLead | null = null
+  try {
+    move = JSON.parse(readFileSync(file, 'utf8')) as LateLead
+  } catch {}
+  rmSync(file, { force: true })
+  return move?.to ? move : null
 }
