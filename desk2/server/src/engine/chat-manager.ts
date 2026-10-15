@@ -384,7 +384,11 @@ export class ChatManager {
     this.failures = new FailureLedger(o.home, o.now)
     this.timings = Timings.for(o.home, o.now)
     this.sessionMeta = new SessionMetaStore(o.home, o.now)
-    this.emitEvent = o.emit
+    // Every transcript item that goes out is the chat's last action when it is newer (the row menu's Last action line).
+    this.emitEvent = (event) => {
+      if (event.type === 'item.upsert') this.noteAction(event.chatId, event.item.ts)
+      o.emit(event)
+    }
     this.settingsOf = o.settings
     this.bridge = o.bridge
     this.onChatEnd = o.onChatEnd
@@ -2681,6 +2685,12 @@ export class ChatManager {
       if (err instanceof ElicitationAnswerError || err instanceof QuestionPictureError) throw new ChatError(400, err.message)
       throw new ChatError(404, err instanceof Error ? err.message : String(err))
     }
+  }
+
+  /** An item went out: it is the chat's last action when it is newer. No upsert of its own, as items stream: the chat's next one carries it. */
+  private noteAction(chatId: string, at: number): void {
+    const chat = this.chats.get(chatId)?.chat
+    if (chat && Number.isFinite(at) && at > (chat.lastActionAt ?? 0)) chat.lastActionAt = at
   }
 
   private changed(chat: ChatSummary): void {

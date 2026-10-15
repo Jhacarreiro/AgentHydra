@@ -108,6 +108,7 @@ import {
   resumeCommand,
   revealChat,
   rowIdentity,
+  lastActionLine,
   rowPatch,
   runningSessionIds,
   deskGlyphs,
@@ -891,6 +892,7 @@ function cloudMenu(r: CloudSession): RowMenuEntry[] {
     const accounts = r.source === 'codex' ? codexAccountChoices.value : accountChoices.value
     const out: RowMenuEntry[] = [
       rowIdentity(r.id, account, accounts),
+      lastActionLine(r.lastActivityAt),
       'separator',
       { action: 'open', label: 'Open' },
       'separator',

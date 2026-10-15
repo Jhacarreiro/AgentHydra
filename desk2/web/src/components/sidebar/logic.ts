@@ -721,6 +721,24 @@ export function elapsedLabel(startedAt: number | null, now: number = Date.now())
   return m % 60 ? `${h}h ${m % 60}m` : `${h}h`
 }
 
+const AGO_UNITS: [ms: number, unit: string][] = [
+  [365 * 86_400_000, 'year'],
+  [30.4375 * 86_400_000, 'month'],
+  [7 * 86_400_000, 'week'],
+  [86_400_000, 'day'],
+  [3_600_000, 'hour'],
+  [60_000, 'minute']
+]
+/** How long ago, in its largest whole unit: "just now", "5 minutes ago", "1 hour ago", "3 weeks ago", "4 months ago", "2 years ago". */
+export function timeAgo(at: number, now: number = Date.now()): string {
+  const ms = Math.max(0, now - at)
+  for (const [size, unit] of AGO_UNITS) {
+    const n = Math.floor(ms / size)
+    if (n >= 1) return `${n} ${unit}${n === 1 ? '' : 's'} ago`
+  }
+  return 'just now'
+}
+
 /** "14:05" (today) or "Mon 14:05", for a limited chat's reset time. */
 export function resetClock(at: number | null, now: number = Date.now()): string {
   if (at == null) return ''
@@ -776,6 +794,8 @@ export interface RowState {
   service?: ChatServiceKind
   /** The account the pinned service runs the chat on, as the window names it; null when not known yet. */
   serviceLabel?: string | null
+  /** When it last did something (a message sent, a reply, a tool call), epoch ms; null or left out when not known. */
+  lastActionAt?: number | null
 }
 export interface RowAccount {
   num: number | null
@@ -809,7 +829,8 @@ export function chatRow(chat: ChatSummary): RowState {
     movable: null,
     note: chat.note ?? null,
     service: chat.service ?? 'claude',
-    serviceLabel: chat.service ? (chat.serviceThreads?.[chat.service]?.label ?? null) : null
+    serviceLabel: chat.service ? (chat.serviceThreads?.[chat.service]?.label ?? null) : null,
+    lastActionAt: chat.lastActionAt ?? null
   }
 }
 
@@ -832,7 +853,8 @@ export function externalRow(s: ExternalSession): RowState {
     // A chat the chat sync brought from the other PC lives in that PC's apps: this PC's AgentHydra cannot move it.
     movable: s.fromPc ? null : claude ? 'desktop' : s.source === 'codex' ? 'codex' : null,
     note: s.note ?? null,
-    unassigned: s.unassigned === true
+    unassigned: s.unassigned === true,
+    lastActionAt: s.lastActivityAt
   }
 }
 
@@ -852,6 +874,7 @@ export type RowAction =
   | 'copyResume'
   | 'copySessionId'
   | 'copyId'
+  | 'lastAction'
   | 'moveToAccount'
   | 'unassign'
   | 'duplicateToAccount'
@@ -886,6 +909,8 @@ export interface RowMenuItem {
   hint?: string
   /** The menu's first line, drawn as an id rather than a command. */
   identity?: boolean
+  /** The line under it: when the row last did something (epoch ms), drawn as how long ago, never a command. */
+  since?: number
 }
 export type RowMenuEntry = RowMenuItem | 'separator' | { label: string; items: (RowMenuItem | 'separator')[] }
 
@@ -913,6 +938,11 @@ function accountText(account: RowAccount | null, accounts: readonly AccountChoic
 export function rowIdentity(id: string, account: RowAccount | null, accounts: readonly AccountChoice[] | null = null): RowMenuItem {
   const hint = accountText(account, accounts)
   return { action: 'copyId', label: id.slice(0, 8), value: id, identity: true, ...(hint ? { hint } : {}), title: `${id}\nClick to copy the whole ID` }
+}
+
+/** The line under the first: how long ago the row last did something (owner, 2026-10-14: "show how long ago ... The Last Action was performed"). */
+export function lastActionLine(at: number): RowMenuItem {
+  return { action: 'lastAction', label: 'Last action', since: at }
 }
 
 /** The accounts of a Move to or Duplicate to submenu: those whose app runs first, then a rule, then the closed ones, each by number. */
@@ -1031,6 +1061,7 @@ export function rowMenu(
   const identity = rowIdentity(row.id, row.account, accounts)
   const out: RowMenuEntry[] = [
     row.unassigned ? { ...identity, hint: 'Unassigned' } : identity,
+    ...(row.lastActionAt != null ? [lastActionLine(row.lastActionAt)] : []),
     'separator',
     {
       label: 'Open in',

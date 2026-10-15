@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from 'bun:test'
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
@@ -73,6 +73,19 @@ describe('ChatStore chats.json', () => {
     const { accountAuto: _a, ...old } = chat('a')
     writeFileSync(join(h, 'chats.json'), JSON.stringify([old]))
     expect(new ChatStore(h).loadChats()[0]).toMatchObject({ id: 'a', accountAuto: false })
+  })
+
+  test('a chat saved before lastActionAt existed takes its transcript file\'s last write; one with no transcript has none', () => {
+    const h = home()
+    const store = new ChatStore(h)
+    writeFileSync(join(h, 'chats.json'), JSON.stringify([chat('a'), chat('b'), chat('c', { lastActionAt: 42 })]))
+    writeFileSync(store.itemsFile('a'), '{}\n')
+    const written = new Date('2026-09-01T12:00:00Z')
+    utimesSync(store.itemsFile('a'), written, written)
+    const [a, b, c] = new ChatStore(h).loadChats()
+    expect(a!.lastActionAt).toBe(written.getTime())
+    expect(b!.lastActionAt).toBeUndefined()
+    expect(c!.lastActionAt).toBe(42)
   })
 
   test('debounce writes the latest list once', async () => {

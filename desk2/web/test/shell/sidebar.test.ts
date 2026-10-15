@@ -4,6 +4,7 @@ import {
   accountFace,
   chatRow,
   elapsedLabel,
+  timeAgo,
   childrenByRow,
   entryKey,
   entryRunning,
@@ -401,6 +402,44 @@ describe('status glyph language', () => {
     expect(elapsedLabel(0, 65 * 60_000)).toBe('1h 5m')
     expect(elapsedLabel(null)).toBe('')
   })
+
+  it('says how long ago in its largest whole unit, minutes to years', () => {
+    const now = Date.UTC(2026, 9, 14)
+    const ago = (ms: number) => timeAgo(now - ms, now)
+    const MIN = 60_000
+    const DAY = 1440 * MIN
+    expect([
+      ago(59_000),
+      ago(MIN),
+      ago(59 * MIN),
+      ago(60 * MIN),
+      ago(23 * 60 * MIN),
+      ago(DAY),
+      ago(6 * DAY),
+      ago(7 * DAY),
+      ago(29 * DAY),
+      ago(31 * DAY),
+      ago(364 * DAY),
+      ago(365 * DAY),
+      ago(800 * DAY)
+    ]).toEqual([
+      'just now',
+      '1 minute ago',
+      '59 minutes ago',
+      '1 hour ago',
+      '23 hours ago',
+      '1 day ago',
+      '6 days ago',
+      '1 week ago',
+      '4 weeks ago',
+      '1 month ago',
+      '11 months ago',
+      '1 year ago',
+      '2 years ago'
+    ])
+    // a clock a little behind the stamp is "just now", never a negative age
+    expect(timeAgo(now + 5000, now)).toBe('just now')
+  })
 })
 
 describe('row menu', () => {
@@ -474,6 +513,10 @@ describe('row menu', () => {
     expect(sub(rowMenu(chatRow(chat('a', { sessionId: 's1' }))), 'Open in')).toEqual(['File Explorer', 'Copy resume command', 'Copy session ID'])
     // a chat with a note offers to edit it
     expect(show(rowMenu(chatRow(chat('a', { sessionId: 's1', note: 'Ask about the release' }))))).toContain('Edit note… N')
+    // one that has done something says when under its first line
+    const acted = rowMenu(chatRow(chat('a', { sessionId: 's1', lastActionAt: 1234 })))
+    expect(show(acted).slice(0, 3)).toEqual(['s1', 'Last action', '-'])
+    expect(acted[1]).toMatchObject({ action: 'lastAction', since: 1234 })
   })
 
   it('follows the state: Stop above Pin while working, Unpin, Mark as read, Unarchive', () => {
@@ -506,7 +549,8 @@ describe('row menu', () => {
 
   it('an outside session has the same menu without Delete, with Move to account and Duplicate to account, and Archive says why', () => {
     const entries = rowMenu(externalRow(ext()))
-    expect(show(entries)).toEqual(['sess-1', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', '-', 'Move to group >', 'Move to account >', 'Duplicate to account >', '-', 'Archive A'])
+    expect(show(entries)).toEqual(['sess-1', 'Last action', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', '-', 'Move to group >', 'Move to account >', 'Duplicate to account >', '-', 'Archive A'])
+    expect(entries[1]).toMatchObject({ since: 1 }) // the session's lastActivityAt
     const archive = entries.find((e) => e !== 'separator' && !('items' in e) && e.action === 'archive') as RowMenuItem
     expect(archive.title).toMatch(/never deleted here/)
     expect(sub(entries, 'Open in')).toEqual(['File Explorer', 'Copy resume command', 'Copy session ID'])

@@ -108,6 +108,9 @@ export interface ChatSummary {
   forkedFrom: string | null // the session it was forked from: until it has its own, its next message resumes a fork of that one
   createdAt: number
   updatedAt: number // last activity of any kind
+  /** When its newest transcript item happened (a message sent, a reply, a tool call), epoch ms: opening, renaming or
+   *  pinning the chat leaves it alone, unlike updatedAt. Absent until it has one. */
+  lastActionAt?: number
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
   pendingCount: number // open permission / question / plan requests
