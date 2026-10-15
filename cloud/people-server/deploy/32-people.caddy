@@ -1,0 +1,10 @@
+people.example.com {
+	request_body {
+		max_size 600KB
+	}
+	# No access log for this site, so the Authorization header is never written.
+	log {
+		output discard
+	}
+	reverse_proxy 127.0.0.1:18790
+}

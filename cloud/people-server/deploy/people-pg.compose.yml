@@ -1,0 +1,18 @@
+# Postgres 17 for the people server. Loopback only; the password comes from the env file.
+services:
+  people-pg:
+    image: postgres:17
+    container_name: people-pg
+    restart: unless-stopped
+    # POSTGRES_USER, POSTGRES_PASSWORD, POSTGRES_DB, written by bootstrap.sh
+    env_file: /etc/people/pg.env
+    environment:
+      POSTGRES_INITDB_ARGS: "--auth-host=scram-sha-256 --auth-local=scram-sha-256"
+    command: ["postgres", "-c", "password_encryption=scram-sha-256"]
+    ports:
+      - "127.0.0.1:5433:5432"
+    volumes:
+      - people-pg-data:/var/lib/postgresql/data
+volumes:
+  people-pg-data:
+    name: people-pg-data

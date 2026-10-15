@@ -1,0 +1,11 @@
+[Unit]
+Description=People server nightly encrypted backup
+After=docker.service
+OnFailure=people-notify@%n.service
+
+[Service]
+Type=oneshot
+ExecStart=/opt/people/current/deploy/backup.sh
+NoNewPrivileges=yes
+PrivateTmp=yes
+ProtectHome=yes
