@@ -294,7 +294,9 @@ sidebar on the left stays put, and only the pane on the right changes.
   right-click on a row not picked leaves the picks, and a row a filter, search, fold or archive takes off the list
   leaves them too. A row added for running work and another PC's row the cloud added are never picked
   (`sidebar/picked.ts`, `bulkMenu` in `sidebar/logic.ts`, `bulkAct` in `Sidebar.vue`). The cloud list keeps its own
-  Select multiple sessions.
+  Select multiple sessions. `bun run e2e:multi-select` (after `bun run build`) drives it in headless Edge on a
+  throwaway Desk that only reads from AgentHydra: Ctrl, Shift and Ctrl+Shift picking, the shared menu, a bulk Pin,
+  and what leaves the picks.
 - **An orange working mark, and rows that slide.** A chat at work shows an orange mark (#D97757) in place of
   the blinking dot, in the Working row under a turn and on the line over a Claude Desktop chat's composer,
   which has more room around it now (owner, 2026-10-08: "replace the blinking dot with a fun, like, orange
