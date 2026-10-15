@@ -45,6 +45,13 @@ export function repoYetiView(c: ConnectorView | null): RepoYetiView {
 /** How long to wait before asking again: quickly while Desk is doing something, slowly otherwise. */
 export const pollDelay = (c: ConnectorView | null): number => (c && (c.state === 'installing' || c.state === 'starting') ? 1000 : 5000)
 
+/** The slow pace the fast poll falls back to, and how long the list may stay the same before it does. */
+export const SLOW_LIST_POLL_MS = 5000
+export const FAST_LIST_POLL_FOR_MS = 60_000
+/** A fast poll (a connector installing or starting) that has seen the same answer for a minute is a connector that is stuck: ask at the slow pace. */
+export const cappedDelay = (asked: number, unchangedForMs: number): number =>
+  asked < SLOW_LIST_POLL_MS && unchangedForMs >= FAST_LIST_POLL_FOR_MS ? SLOW_LIST_POLL_MS : asked
+
 /** Ask Desk to add `cwd` to RepoYeti only while the frame is up, and once per folder (`done` holds the ones asked). */
 export const shouldRegister = (view: RepoYetiView, cwd: string | null | undefined, done: ReadonlySet<string>): boolean =>
   view.kind === 'frame' && !!cwd && !done.has(cwd)

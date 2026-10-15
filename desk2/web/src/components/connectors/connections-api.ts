@@ -16,11 +16,13 @@ import {
   type ConnectorsResponse,
   type ConnectorView
 } from '@shared/connectors'
+import { cappedDelay } from './logic'
 
 export const connectorList = ref<ConnectorView[] | null>(null)
 
 let lastText = ''
 let lastList: ConnectorView[] | null = null
+let changedAt = Date.now()
 
 export async function refreshConnectorList(): Promise<void> {
   try {
@@ -30,6 +32,7 @@ export async function refreshConnectorList(): Promise<void> {
       const text = await res.text()
       if (text === lastText && connectorList.value && connectorList.value === lastList) return
       lastText = text
+      changedAt = Date.now()
       connectorList.value = (JSON.parse(text) as ConnectorsResponse).connectors
       lastList = connectorList.value
     }
@@ -46,7 +49,7 @@ let timer: ReturnType<typeof setTimeout> | null = null
 async function tick(): Promise<void> {
   timer = null
   if (!watchers.size) return
-  timer = setTimeout(tick, Math.min(...[...watchers].map((d) => d())))
+  timer = setTimeout(tick, cappedDelay(Math.min(...[...watchers].map((d) => d())), Date.now() - changedAt))
   if (!document.hidden) await refreshConnectorList()
 }
 
