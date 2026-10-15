@@ -175,15 +175,16 @@ test('a Claude app that crashes: its working chat and its quiet one mid-tool-cal
   await m.look(true)
   expect(m.status(true, null).recoveries.map((r) => [r.state, r.chats.map((c) => c.id)])).toEqual([['waiting', ['s1', 's2']]])
 
-  // Past the grace: the quiet one is gated with its engine's start, the working one is not; #2 is up and takes both.
+  // Past the grace: each chat is gated with its engine's start, one at a time; #2 is up and takes both.
   clock += GRACE_MS
   await m.look(true)
   expect(hydra.runs.map((r) => [r.script, r.async])).toEqual([
     ['gate_chat', false],
+    ['gate_chat', false],
     ['migrate_batch', true],
   ])
-  expect(hydra.runs[0]?.args).toEqual(['s2', '--json', '--background', '--engine-started', String(s2Started)])
-  const move = hydra.runs[1] as Run
+  expect(hydra.runs[1]?.args).toEqual(['s2', '--json', '--background', '--engine-started', String(s2Started)])
+  const move = hydra.runs[2] as Run
   const at = move.args.indexOf('--resume')
   expect(move.args.slice(0, at)).toEqual(['--from', '1', '--to', '2', '--stop-idle', '--now', '--idle-wait', '0', '--json', '--chat', 's1', '--chat', 's2'])
   expect(move.args[at + 1]).toContain('the app crashed')

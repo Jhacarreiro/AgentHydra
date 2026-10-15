@@ -106,14 +106,15 @@ export function moveResultOf(row: unknown): MoveResult | null {
 export function turnOf(v: Json): TurnState | null {
   const state = str(v.state)
   if (!state) return null
-  const outstanding = obj(v.background).outstanding
+  // background_work answers scanned: false (and no jobs) when it could not read the transcript: unknown, not none.
+  const bg = obj(v.background)
   return {
     state,
     kind: str(obj(v.crashed).kind),
     idle: v.idle !== null && typeof v.idle === 'object',
     lane: str(obj(v.finished).lane),
     quietSecs: num(v.quiet_secs),
-    outstanding: Array.isArray(outstanding) ? outstanding.length : 0,
+    outstanding: bg.scanned === true && Array.isArray(bg.outstanding) ? bg.outstanding.length : null,
     cause: str(v.cause) ?? '',
   }
 }
@@ -241,13 +242,9 @@ export function daemonIO(o: IoOptions): InstanceManagerIO {
           { method: 'POST', body: JSON.stringify({ script: 'gate_chat', args, timeoutMs: GATE_TIMEOUT_MS }) },
           GATE_TIMEOUT_MS + 15_000,
         )
+        // Anything but a verdict is no verdict, exit 3 too: a chat AgentHydra's index lost for a moment answers it as
+        // well as one with no transcript, and the engine asks again until its reread window ends.
         const b = obj(r?.body)
-        if (r?.status === 200 && b.exitCode === 3) {
-          // gate_chat's own answer that no verdict exists (no transcript): asking again would say the same.
-          const why = (str(b.stderr) ?? '').trim().split(/\r?\n/)[0] || 'AgentHydra’s gate cannot read its transcript'
-          out.set(c.id, { state: 'ungateable', kind: null, idle: false, lane: null, quietSecs: null, outstanding: 0, cause: why })
-          continue
-        }
         const report = r?.status === 200 && b.exitCode === 0 ? scriptReport(str(b.stdout) ?? '') : null
         out.set(c.id, report ? turnOf(report) : null)
       }

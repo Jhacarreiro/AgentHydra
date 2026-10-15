@@ -166,8 +166,14 @@ test("an app's own log marks its account dead while it stays open, until a turn 
   expect(deadFromLog(log([t, done], [t + 1_000, orgOff]))).toContain('organization has disabled')
   expect(deadFromLog(log([t, orgOff], [t + 1_000, done]))).toBeNull()
   expect(deadFromLog(log([t, orgOff], [t + 1_000, signIn]))).toBeNull()
-  // A usage limit resets by itself: not a dead account.
+  expect(deadFromLog(log([t, '[CCD CycleHealth] local_x api_error (success): Your organization has disabled Claude subscription access']))).toContain(
+    'organization has disabled',
+  )
+  // A usage limit resets by itself: not a dead account. Nor is a line that only mentions a plan or a payment, or an
+  // account-dead phrase outside a chat's failed turn: a match takes a running app's chats off it.
   expect(deadFromLog(log([t, "Session local_x query error: Claude Code returned an error result: You've hit your session limit"]))).toBeNull()
+  expect(deadFromLog(log([t, 'Session local_x query error: payment required for this model; the plan has ended']))).toBeNull()
+  expect(deadFromLog(log([t, '[settings] Banner: your organization has been disabled? learn more']))).toBeNull()
   expect(deadFromLog(null)).toBeNull()
 })
 
@@ -184,7 +190,9 @@ test('which open chats a going-down cut off: one seen working, one mid-turn, an 
     ...fields,
   })
   const cases: [string, boolean, TurnState | null, boolean | null][] = [
-    ['seen working, whatever the gate says', true, v('finished', { lane: 'archive-candidate' }), true],
+    ['seen working, with no verdict', true, null, true],
+    ['seen working, a finished turn that does not claim done', true, v('finished', { lane: 'needs-input-review' }), true],
+    ['seen working, its turn ended on a done recap', true, v('finished', { lane: 'archive-candidate' }), false],
     ['an engine alive mid-turn', false, v('running'), true],
     ['an engine alive and idle', false, v('running', { idle: true }), false],
     ['died mid-turn', false, v('crashed', { kind: 'mid-turn' }), true],
@@ -194,7 +202,8 @@ test('which open chats a going-down cut off: one seen working, one mid-turn, an 
     ['finished, waiting on background jobs', false, v('finished', { lane: 'needs-input-review', outstanding: 1 }), true],
     ['stopped by a person, jobs or not', false, v('finished', { lane: 'human', outstanding: 1 }), false],
     ['finished', false, v('finished', { lane: 'archive-candidate' }), false],
-    ['no transcript to gate', false, v('ungateable'), false],
+    ['finished, its jobs not scanned', false, v('finished', { lane: 'needs-input-review', outstanding: null }), null],
+    ['a state it does not know', false, v('something-new'), false],
     ['no verdict read', false, null, null],
   ]
   expect(cases.map(([name, busy, t]) => [name, cutOff(busy, t, lastUp, NOW)?.cut ?? null])).toEqual(cases.map(([name, , , want]) => [name, want]))

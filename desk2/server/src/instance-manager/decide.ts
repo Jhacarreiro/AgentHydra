@@ -119,6 +119,10 @@ const LOGGED_IN = /Login-state transition \(loggedOut: true\b/i
 // chat's turn (two profiles' logs, 2026-09-24 and 2026-10-14) while the app stays open, signed in, for minutes to hours.
 const ACCOUNT_DEAD =
   /\b(organization (has been |has |is |was )?(disabled|suspended|deactivated)|account (has been |is |was )?(disabled|suspended|banned|deactivated)|subscription (has |is )?(expired|ended|lapsed|cancell?ed)|plan (has |is )?(expired|ended)|payment (failed|required)|billing (issue|problem))\b/i
+/** A chat's failed turn that says its account is dead, as both logs above write it ("Session local_x query error: ...",
+ *  "[CCD CycleHealth] local_x api_error (success): ..."). Narrower than ACCOUNT_DEAD on purpose: every look reads a
+ *  running app's log with it, and a match takes that app's chats off it with their engines stopped. */
+const ACCOUNT_DEAD_NOW = /\b(query error|api_error)\b.*\b(organization|account) (has been |has |is |was )?(disabled|suspended|banned|deactivated)\b/i
 /** A chat's turn that ran to its end: with the account dead, none does (in both logs above, none between the errors). */
 const TURN_DONE = /\[Stop hook\] Query completed for session\b/
 
@@ -159,7 +163,7 @@ export function causeFromLog(log: string | null, since: number): { cause: DownCa
 export function deadFromLog(log: string | null): string | null {
   if (log === null) return null
   const lines = log.split(/\r?\n/)
-  const dead = lines.findLastIndex((l) => LOG_LINE.test(l) && ACCOUNT_DEAD.test(l))
+  const dead = lines.findLastIndex((l) => LOG_LINE.test(l) && ACCOUNT_DEAD_NOW.test(l))
   if (dead < 0) return null
   const since = Math.max(
     lines.findLastIndex((l) => TURN_DONE.test(l)),
@@ -221,8 +225,9 @@ export interface TurnState {
   lane: string | null
   /** Seconds since its transcript was last written. */
   quietSecs: number | null
-  /** Background jobs it launched (since its last engine started) that never reported back. */
-  outstanding: number
+  /** Background jobs it launched (since its last engine started) that never reported back; null when its transcript
+   *  could not be scanned for them. */
+  outstanding: number | null
   cause: string
 }
 
@@ -230,14 +235,19 @@ export interface TurnState {
 export const ERROR_WITH_DOWN_MS = 2 * 60_000
 
 /**
- * Whether the app's going down cut this chat off mid-work, so it is moved and started again. A chat seen working at
- * the last look was; otherwise the gate says: an engine still alive mid-turn, one that died mid-turn (a tool call
- * whose result never landed, an unanswered message), a turn that ended on an error as the app went down, or a
- * finished turn still waiting on background jobs it launched. A turn that ran to its end, or that a person stopped,
- * lost nothing. null when there is no verdict to read.
+ * Whether the app's going down cut this chat off mid-work, so it is moved and started again. The gate says: an engine
+ * still alive mid-turn, one that died mid-turn (a tool call whose result never landed, an unanswered message), a turn
+ * that ended on an error as the app went down, or a finished turn still waiting on background jobs it launched. A
+ * turn that ran to its end, or that a person stopped, lost nothing. A chat seen working at the last look is moved
+ * unless its turn ended on a recap that claims its work done: a transcript cannot tell a finished turn from one cut
+ * between a text block and the tool call after it, and a chat started again for nothing costs one short turn while
+ * one left behind loses its work. null when there is no verdict to read.
  */
 export function cutOff(busy: boolean, t: TurnState | null, lastUpAt: number, now: number): { cut: boolean; why: string } | null {
-  if (busy) return { cut: true, why: 'was working when the app went down' }
+  if (busy)
+    return t?.state === 'finished' && t.lane === 'archive-candidate' && t.outstanding === 0
+      ? { cut: false, why: 'its turn had ended with its work done' }
+      : { cut: true, why: 'was working when the app went down' }
   if (!t) return null
   if (t.state === 'running')
     return t.idle ? { cut: false, why: 'its turn had ended' } : { cut: true, why: 'its engine was mid-turn' }
@@ -249,6 +259,7 @@ export function cutOff(busy: boolean, t: TurnState | null, lastUpAt: number, now
   }
   if (t.state === 'finished') {
     if (t.lane === 'human') return { cut: false, why: 'a person had stopped it' }
+    if (t.outstanding === null) return null
     if (t.outstanding > 0)
       return { cut: true, why: `it was waiting on ${t.outstanding} background job${t.outstanding === 1 ? '' : 's'} it launched` }
     return { cut: false, why: 'its turn had ended' }

@@ -373,7 +373,8 @@ export function createInstanceManager(io: InstanceManagerIO, initial: Saved): In
     const pending = r.chats.filter((c) => c.state === 'pending')
     // A recovery saved before chats were sorted this way remembers only chats that were working.
     const as = (id: string) => r.seenAs?.[id] ?? { busy: true, startedAt: null }
-    const ask = r.kind === 'desktop' ? pending.filter((c) => !as(c.id).busy) : []
+    // Codex chats are only ever remembered mid-turn, and the gate reads Claude transcripts alone.
+    const ask = r.kind === 'desktop' ? pending : []
     const turns = ask.length ? await io.turns(ask.map((c) => ({ id: c.id, startedAt: as(c.id).startedAt }))) : new Map<string, TurnState | null>()
     const lastUp = lastUpOf(r)
     const verdicts = pending.map((c) => ({ c, v: cutOff(as(c.id).busy, turns.get(c.id) ?? null, lastUp, now) }))
