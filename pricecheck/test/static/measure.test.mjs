@@ -3,7 +3,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
-import { discoverFor, priceRepo, reachingPages, session } from '../../lib/static/measure.mjs'
+import { discoverFor, priceFile, priceRepo, reachingPages, session } from '../../lib/static/measure.mjs'
 
 const fixture = (name) => fileURLToPath(new URL(`../fixtures/${name}`, import.meta.url))
 const price = (root, file) => priceRepo({ root, pages: [file] }).pages[0]
@@ -146,5 +146,105 @@ group('reverse reach', () => {
     expect(reachingPages(ctx, pages, new Set(['src/components/SignInFooterBar.vue']))).toEqual(['src/views/SignInPage.vue'])
     expect(reachingPages(ctx, pages, new Set(['src/views/SignInPage.vue']))).toEqual(['src/views/SignInPage.vue'])
     expect(reachingPages(ctx, pages, new Set(['src/unrelated.vue']))).toEqual([])
+  })
+})
+
+group('render tree', () => {
+  test('a traced page names each component it renders, its points and the branch a v-if chain priced', () => {
+    const dir = repo({
+      'src/components/Panel.vue': '<template><section><h2>Three word title</h2><button>Go</button></section></template>',
+      'src/components/Small.vue': '<template><p>One</p></template>',
+      'src/views/Home.vue': [
+        '<template>',
+        '<Panel v-if="tab === \'a\'" />',
+        '<Small v-else />',
+        '<Small />',
+        '</template>',
+      ].join('\n'),
+    })
+    const ctx = session(dir, undefined, { trace: true })
+    const p = priceFile(ctx, 'src/views/Home.vue')
+    expect(p.tree.points).toBe(p.points)
+    const [branch, small] = p.tree.children
+    expect(branch).toMatchObject({ kind: 'branch', of: 2, picked: 1, points: 9, line: 2 })
+    expect(branch.children).toEqual([expect.objectContaining({ file: 'src/components/Panel.vue', tag: 'Panel', points: 9, when: "v-if tab === 'a'" })])
+    expect(small).toMatchObject({ file: 'src/components/Small.vue', tag: 'Small', points: 1, line: 4 })
+  })
+
+  test('without trace no tree is built', () => {
+    const dir = repo({ 'src/views/Home.vue': '<template><p>Hi</p></template>' })
+    expect(price(dir, 'src/views/Home.vue').tree).toBeUndefined()
+  })
+})
+
+group('conditions known at the call site', () => {
+  const props = (decl) => `\n<script setup lang="ts">\ndefineProps<{ ${decl} }>()\n</script>\n`
+
+  test('desktop-only and phone-only parts never add up: the page is its dearer viewport, and says both', () => {
+    const dir = repo({
+      'src/components/Wide.vue': '<template><section><p>Many words for the wide desktop layout here</p><button>A</button><button>B</button></section></template>',
+      'src/components/Narrow.vue': '<template><p>Phone words</p></template>',
+      'src/views/Home.vue': '<template><Wide v-if="!state.isMobileViewport" /><p>Shared</p><Narrow v-if="state.isMobileViewport" /></template>',
+    })
+    const p = price(dir, 'src/views/Home.vue')
+    expect(p.byViewport).toEqual({ desktop: 18, phone: 3 })
+    expect(p.points).toBe(18)
+    expect(p.viewport).toBe('desktop')
+    expect(p.byFile['src/components/Narrow.vue']).toBeUndefined()
+  })
+
+  test('a prop the caller leaves out is undefined, a literal it passes is known, an unknown one keeps the worst case', () => {
+    const dir = repo({
+      'src/components/Card.vue':
+        '<template><div><h2 v-if="title">{{ title }}</h2><span v-if="icon" class="icon"></span><p v-if="variant === \'long\'">Five words of long copy</p><p v-else>Short</p></div></template>' +
+        props("title?: string; icon?: string; variant?: 'long' | 'short'"),
+      'src/views/Home.vue': '<template><Card title="Hello" variant="short" /><Card :title="t" /></template>',
+    })
+    const p = price(dir, 'src/views/Home.vue')
+    // first card: title (1 word), no icon, short (1 word); second: title unknown (1 word), no icon, variant undefined -> v-else (1 word)
+    expect(p.units).toEqual({ word: 4 })
+  })
+
+  test('a literal bound prop, a bare boolean attribute and a forwarded prop all switch the child', () => {
+    const dir = repo({
+      'src/components/Inner.vue': '<template><p v-if="!compact">Six words only when not compact</p><b>Inner</b></template>' + props('compact?: boolean'),
+      'src/components/Outer.vue': '<template><Inner :compact="compact" /><div v-if="!overlay"><button>List</button></div></template>' + props('compact?: boolean; overlay?: boolean'),
+      'src/views/Home.vue': '<template><Outer compact :overlay="true" /></template>',
+    })
+    expect(price(dir, 'src/views/Home.vue').units).toEqual({ word: 1 })
+  })
+
+  test('sibling v-ifs on one value never show together, and v-show false hides', () => {
+    const dir = repo({
+      'src/views/Home.vue': [
+        '<template>',
+        '<div v-if="tab === \'a\'"><p>One two three four five six</p></div>',
+        '<div v-if="tab === \'b\'"><p>One two</p></div>',
+        '<p v-show="false">Never shown words</p>',
+        '<p v-if="ready">Ready</p>',
+        '<p v-if="!ready">Not ready yet</p>',
+        '</template>',
+      ].join('\n'),
+    })
+    expect(price(dir, 'src/views/Home.vue').units).toEqual({ word: 9 })
+  })
+})
+
+group('names a component derives from its props', () => {
+  test('a computed over props, a props alias and toRefs read through to what the caller passed', () => {
+    const dir = repo({
+      'src/components/Console.vue': [
+        '<template><div v-if="!isOverlay"><p>Seven words of list only copy here</p></div><p v-if="dense">Dense</p><p v-if="label">Label words</p></template>',
+        '<script setup lang="ts">',
+        "const props = defineProps<{ surface?: string; compact?: boolean; title?: string }>()",
+        "const isOverlay = computed(() => props.surface === 'overlay')",
+        'const dense = toRef(props, "compact")',
+        'const { title: label } = toRefs(props)',
+        '</script>',
+      ].join('\n'),
+      'src/views/Home.vue': '<template><Console surface="overlay" /><Console compact title="Hi" /></template>',
+    })
+    // first: overlay hides the list, not dense, no label; second: list (7), dense (1), label (2)
+    expect(price(dir, 'src/views/Home.vue').units).toEqual({ word: 10 })
   })
 })

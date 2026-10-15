@@ -10,7 +10,9 @@ import { isPageFile, TEMPLATE_EXT } from './discover.mjs'
 
 const USAGE = `usage: pricecheck <scan|page|diff|check|freeze> [--root <repo>] [options]
   scan [--json] [--limit N]        every page, most expensive first (by daily exposure when views exist)
-  page <file>                      one page and the file each point comes from
+  page <file> [--tree] [--depth N] [--min P]
+                                   one page and the file each point comes from; --tree adds what each
+                                   rendered component costs (dearest first, components under P points left out)
   diff [--against <ref|baseline>] [--files a,b] [--json]
                                    pages whose price changed: vs the baseline (default), or vs a git ref
   check                            exit 1 on an unreasoned rise, an unfrozen page, a stale entry or an over-budget page
@@ -22,6 +24,7 @@ function parse(argv) {
   for (let i = 0; i < argv.length; i++) {
     const a = argv[i]
     if (a === '--json') opts.json = true
+    else if (a === '--tree') opts.tree = true
     else if (a === '--verbose') opts.verbose = true
     else if (a.startsWith('--')) {
       const key = a.slice(2)
@@ -213,15 +216,42 @@ function scan(opts) {
   return 0
 }
 
+const TREE_WIDTH = 12
+
+function treeLabel(n) {
+  if (n.kind === 'branch') return `branch ${n.picked} of ${n.of} at ${n.at}:${n.line}`
+  return `<${n.tag}> ${n.file}${n.when ? ` (${n.when})` : ''}`
+}
+
+/** The render tree as lines, dearest first: at most TREE_WIDTH children a level, the rest summed on one line. */
+function treeLines(node, { min, depth }, indent = 0, out = []) {
+  const kids = node.children.filter((k) => k.points > 0).sort((a, b) => b.points - a.points)
+  const shown = kids.filter((k) => k.points >= min).slice(0, TREE_WIDTH)
+  const pad = '  '.repeat(indent)
+  for (const k of shown) {
+    out.push(`${String(k.points).padStart(7)}  ${pad}${treeLabel(k)}`)
+    if (indent + 1 < depth) treeLines(k, { min, depth }, indent + 1, out)
+  }
+  const rest = kids.filter((k) => !shown.includes(k))
+  if (rest.length) out.push(`${String(round(rest.reduce((s, k) => s + k.points, 0))).padStart(7)}  ${pad}... ${rest.length} more`)
+  return out
+}
+
 function page(opts, file) {
   if (!file) throw new Error('pricecheck: page needs a file')
   const rel = relOf(opts.root, file)
-  const p = measurePage(opts.root, rel)
+  const p = measurePage(opts.root, rel, undefined, { trace: opts.tree })
   if (opts.json) {
     console.log(JSON.stringify(named(p), null, 2))
     return 0
   }
   console.log(`${rel}: ${describe(p, loadConfig(opts.root).list)}`)
+  if (opts.tree) {
+    const min = opts.min ? Number(opts.min) : Math.max(1, p.points / 100)
+    console.log('render tree (each line counts everything inside it):')
+    for (const line of treeLines(p.tree, { min, depth: opts.depth ? Number(opts.depth) : 8 })) console.log(line)
+    return 0
+  }
   for (const f of topFiles(p, 50)) console.log(`  ${String(f.points).padStart(7)}  ${f.file}`)
   return 0
 }

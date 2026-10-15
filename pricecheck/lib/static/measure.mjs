@@ -9,6 +9,7 @@ import { discoverPages } from './discover.mjs'
 import { readTemplate } from './templates.mjs'
 import { makeI18n } from './i18n.mjs'
 import { makeGraph } from './graph.mjs'
+import { UNKNOWN, declaredProps, derivedNames, evaluate, literal, propsOf, viewportFlag } from './conditions.mjs'
 
 const MAX_DEPTH = 25
 const MEDIA = new Set(['img', 'picture', 'video', 'canvas', 'iframe', 'svg', 'object', 'embed'])
@@ -21,7 +22,8 @@ const CARD_CLASS = /(^|\s)(card|tile)(\s|$)/
 
 export const wordsIn = (s) => s.split(/\s+/).filter((t) => /[\p{L}\p{N}]/u.test(t)).length
 
-export function session(root, readFile) {
+/** One pricing pass over a repo. `trace: true` also builds each page's render tree (priceFile's `tree`). */
+export function session(root, readFile, { trace = false } = {}) {
   const cfg = loadConfig(root)
   const read =
     readFile ??
@@ -32,7 +34,23 @@ export function session(root, readFile) {
         return null
       }
     })
-  return { root, cfg, list: cfg.list, i18n: makeI18n(root), graph: makeGraph(root, cfg), read, templates: new Map(), children: new Map(), owned: new Map() }
+  return {
+    root,
+    cfg,
+    list: cfg.list,
+    i18n: makeI18n(root),
+    graph: makeGraph(root, cfg),
+    read,
+    trace,
+    templates: new Map(),
+    children: new Map(),
+    owned: new Map(),
+    props: new Map(),
+    derived: new Map(),
+    names: new Map(),
+    viewport: null,
+    sawViewport: false,
+  }
 }
 
 function parsed(ctx, file) {
@@ -43,17 +61,181 @@ function parsed(ctx, file) {
   return t
 }
 
-function pickBranch(ctx, branches) {
-  let best = []
+const weigh = (ctx, items) => items.reduce((s, it) => s + it.count * (ctx.list[it.unit]?.weight ?? 0), 0)
+const round = (n) => Math.round(n * 10) / 10
+const whenOf = (attrs) => {
+  if ('v-if' in attrs) return `v-if ${attrs['v-if']}`
+  if ('v-else-if' in attrs) return `v-else-if ${attrs['v-else-if']}`
+  return 'v-else' in attrs ? 'v-else' : undefined
+}
+
+/**
+ * Of alternatives that never show together, the dearest: each run(sc) prices one branch. The traced tree keeps only
+ * the priced branch's components, under a node saying which of how many it was.
+ */
+function priceBranches(ctx, sc, runs, line, of = runs.length, ids = runs.map((_, k) => k + 1)) {
+  let best = { items: [], tree: [] }
   let bestW = -1
-  for (const b of branches) {
-    const w = b.reduce((s, it) => s + it.count * (ctx.list[it.unit]?.weight ?? 0), 0)
+  let picked = 0
+  runs.forEach((run, k) => {
+    const tree = ctx.trace ? [] : null
+    const items = run(tree ? { ...sc, tree } : sc)
+    const w = weigh(ctx, items)
     if (w > bestW) {
-      best = b
+      best = { items, tree }
       bestW = w
+      picked = ids[k]
+    }
+  })
+  if (ctx.trace && best.tree) {
+    if (of > 1) sc.tree.push({ kind: 'branch', at: sc.file, line, of, picked, points: round(Math.max(0, bestW)), children: best.tree })
+    else sc.tree.push(...best.tree)
+  }
+  return best.items
+}
+
+/**
+ * What a name in this component's conditions holds: the viewport being priced for a layout flag, a slot the caller
+ * fills, a prop the caller passed (or its declared default when it passed none), else UNKNOWN.
+ */
+function lookIn(ctx, sc) {
+  const layout = (p) => {
+    const flag = ctx.viewport && viewportFlag(p)
+    if (!flag) return UNKNOWN
+    ctx.sawViewport = true
+    return ctx.viewport === flag
+  }
+  let depth = 0
+  const look = (raw) => {
+    const p = raw.replace(/\?\./g, '.').replace(/^(props|\$props|this)\./, '').replace(/\.value$/, '')
+    const [root, ...rest] = p.split('.')
+    if ((root === '$slots' || root === 'slots') && sc.slots && rest.length === 1) return sc.slots.has(rest[0])
+    const env = sc.env
+    if (env && Object.hasOwn(env, root)) return rest.length ? UNKNOWN : env[root]
+    if (env && !env['...'] && sc.declared?.has(root)) return rest.length ? UNKNOWN : sc.declared.get(root)
+    if (sc.derived?.has(root) && !rest.length && depth < 8) {
+      depth++
+      try {
+        return valueOf(sc.derived.get(root), look)
+      } finally {
+        depth--
+      }
+    }
+    return layout(p)
+  }
+  return look
+}
+
+/** What an expression holds: a literal, a name's value, else its truth (UNKNOWN when that is unknown too). */
+function valueOf(expr, look) {
+  const s = expr.trim()
+  const lit = literal(s)
+  if (lit !== UNKNOWN) return lit
+  if (/^[A-Za-z_$][\w$]*(?:\??\.[A-Za-z_$][\w$]*)*$/.test(s)) return look(s)
+  const v = evaluate(s, look)
+  return v === null ? UNKNOWN : v
+}
+
+/** A condition's truth for this component instance: true, false or null (unknown, priced as possibly shown). */
+function truthOf(ctx, sc, expr) {
+  const slot = slotTest(expr, sc.slots)
+  return slot !== null ? slot : evaluate(expr, lookIn(ctx, sc))
+}
+
+/** Of a chain's conditions in order (null = else), the indexes that may show: a false one never, nothing past a true one. */
+function liveBranches(ctx, sc, conds) {
+  const live = []
+  for (let k = 0; k < conds.length; k++) {
+    const v = conds[k] == null ? true : truthOf(ctx, sc, conds[k])
+    if (v === false) continue
+    live.push(k)
+    if (v === true) break
+  }
+  return live
+}
+
+const EQ_TEST = /^\s*([A-Za-z_$][\w$.]*)\s*===?\s*(['"`][^'"`]*['"`]|-?\d+)\s*$|^\s*(['"`][^'"`]*['"`]|-?\d+)\s*===?\s*([A-Za-z_$][\w$.]*)\s*$/
+const bare = (expr) => String(expr).replace(/\s+/g, '')
+
+/**
+ * Whether a v-if chain that follows another can never show at the same time as it: both test one name against
+ * different literals (`tab === 'a'` then `tab === 'b'`), or one is the other's negation (`ready` then `!ready`).
+ */
+function exclusive(chain, next) {
+  if ([...chain, ...next].some((b) => 'v-else' in b.attrs)) return false
+  const conds = (bs) => bs.map((b) => b.attrs['v-if'] ?? b.attrs['v-else-if'])
+  const a = conds(chain)
+  const b = conds(next)
+  if (a.includes(undefined) || b.includes(undefined)) return false
+  if (a.length === 1 && b.length === 1) {
+    const [x, y] = [bare(a[0]), bare(b[0])]
+    if (x === `!${y}` || y === `!${x}` || x === `!(${y})` || y === `!(${x})`) return true
+  }
+  const eq = (c) => {
+    const m = EQ_TEST.exec(c)
+    return m ? { name: m[1] ?? m[4], lit: m[2] ?? m[3] } : null
+  }
+  const all = [...a, ...b].map(eq)
+  if (all.includes(null)) return false
+  return all.every((t) => t.name === all[0].name) && new Set(all.map((t) => t.lit)).size === all.length
+}
+
+const IDENT = /[A-Za-z_$][\w$]*/g
+
+/** The names a component's conditions and bound attributes read: what its price can depend on from the caller. */
+function namesRead(ctx, file, root) {
+  if (ctx.names.has(file)) return ctx.names.get(file)
+  const names = new Set()
+  const add = (expr) => {
+    for (const m of String(expr).replace(/(['"`])(?:(?!\1)[^\\]|\\.)*\1/g, '').matchAll(IDENT)) names.add(m[0])
+  }
+  const visit = (kids) => {
+    for (const k of kids) {
+      if (k.type !== 'el') continue
+      for (const [a, v] of Object.entries(k.attrs)) {
+        if (a === 'v-if' || a === 'v-else-if' || a === 'v-show' || a.startsWith(':') || a.startsWith('v-bind') || (typeof v === 'string' && v.startsWith('{'))) add(v)
+      }
+      if (Array.isArray(k.attrs.when)) k.attrs.when.forEach(add)
+      visit(k.children)
     }
   }
-  return best
+  visit(root.children)
+  // A name the script derives from props (`isOverlay = computed(() => props.surface === ...)`) reads those props.
+  declaredOf(ctx, file)
+  const derived = ctx.derived.get(file)
+  const seen = new Set()
+  for (let grew = true; grew; ) {
+    grew = false
+    for (const n of [...names]) {
+      if (derived.has(n) && !seen.has(n)) {
+        seen.add(n)
+        add(derived.get(n))
+        grew = true
+      }
+    }
+  }
+  ctx.names.set(file, names)
+  return names
+}
+
+function declaredOf(ctx, file) {
+  if (!ctx.props.has(file)) {
+    const src = ctx.read(file)
+    ctx.props.set(file, declaredProps(src, file))
+    ctx.derived.set(file, derivedNames(src))
+  }
+  return ctx.props.get(file)
+}
+
+/** The part of a child's props its price can depend on, as a memo key. */
+function envKey(env, names) {
+  const parts = []
+  for (const k of Object.keys(env).sort()) {
+    if (k !== '...' && !names.has(k)) continue
+    const v = env[k]
+    parts.push(`${k}=${v === UNKNOWN ? '?' : JSON.stringify(v) ?? 'u'}`)
+  }
+  return parts.join('&')
 }
 
 // An expression named like an icon (`icon`, `item.leadingIcon`) prints an icon font's glyph name: media, not a word.
@@ -177,31 +359,56 @@ const triggerContent = (el, kind) =>
 
 /** A component tag: its own markup in its file, plus what the caller passes into it (its slots), priced on the caller. */
 function renderChild(ctx, sc, child, el, cond) {
-  const slotted = collectChildren(ctx, sc, el.children, cond)
-  if (sc.depth >= MAX_DEPTH || sc.stack.includes(child)) return slotted
+  const node = ctx.trace ? { file: child, tag: el.tag, line: el.line, at: sc.file, when: whenOf(el.attrs), points: 0, children: [] } : null
+  const done = (items) => {
+    if (node) {
+      node.points = round(weigh(ctx, items))
+      if (node.when === undefined) delete node.when
+      sc.tree.push(node)
+    }
+    return items
+  }
+  const slotTree = node ? [] : null
+  const slotted = collectChildren(ctx, node ? { ...sc, tree: slotTree } : sc, el.children, cond)
+  if (sc.depth >= MAX_DEPTH || sc.stack.includes(child)) return done(slotted)
   const t = parsed(ctx, child)
-  if (!t) return slotted
+  if (!t) return done(slotted)
   const slots = new Set()
   for (const k of el.children) {
     const name = k.type === 'el' && k.tag === 'template' ? slotName(k) : null
     if (name) slots.add(name)
     else if (k.type === 'el' || wordsIn(k.text) > 0) slots.add('default')
   }
-  // A component's own markup prices the same wherever it is used with the same slots: priced once per session.
-  const key = `${child}\u0000${[...slots].sort().join(',')}\u0000${cond}`
-  let own = ctx.owned.get(key)
-  if (!own) {
-    const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child], slots }
-    own = collectChildren(ctx, next, t.root.children, cond)
-    ctx.owned.set(key, own)
+  const look = lookIn(ctx, sc)
+  const env = propsOf(el.attrs, (expr) => {
+    const v = look(expr)
+    return v === undefined && !/^[\w$]+$/.test(expr) ? UNKNOWN : v
+  })
+  // A component's own markup prices the same wherever it is used with the same slots and the same props its
+  // conditions read: priced once per session (per viewport, when it reads a layout flag).
+  const base = `${child}|${[...slots].sort().join(',')}|${cond}|${envKey(env, namesRead(ctx, child, t.root))}`
+  let own = ctx.owned.get(base) ?? ctx.owned.get(`${base}|${ctx.viewport}`)
+  if (own) {
+    if (own.sawViewport) ctx.sawViewport = true
+  } else {
+    const outer = ctx.sawViewport
+    ctx.sawViewport = false
+    const tree = ctx.trace ? [] : undefined
+    const declared = declaredOf(ctx, child)
+    const next = { ...sc, file: child, exprs: t.exprs, depth: sc.depth + 1, stack: [...sc.stack, child], slots, tree, env, declared, derived: ctx.derived.get(child) }
+    own = { items: collectChildren(ctx, next, t.root.children, cond), tree, sawViewport: ctx.sawViewport }
+    ctx.owned.set(own.sawViewport ? `${base}|${ctx.viewport}` : base, own)
+    ctx.sawViewport = outer || own.sawViewport
   }
-  return [...own, ...slotted]
+  if (node) node.children.push(...own.tree, ...slotTree)
+  return done([...own.items, ...slotted])
 }
 
 function measureElement(ctx, sc, el, cond) {
   const tag = el.tag.toLowerCase()
   if (el.tag.startsWith('pc-') || tag === 'script' || tag === 'style') return []
   if ('hidden' in el.attrs || el.attrs['aria-hidden'] === 'true') return []
+  if ('v-show' in el.attrs && truthOf(ctx, sc, el.attrs['v-show']) === false) return []
   if (tag === 'i18n-t' || tag === 'formattedmessage') return i18nItems(ctx, sc, el)
   if (tag === 'slot') {
     const name = el.attrs.name ?? (el.attrs[':name'] ? null : 'default')
@@ -224,17 +431,6 @@ function slotTest(expr, slots) {
   return m[1].length % 2 ? !has : has
 }
 
-/** The branch of a v-if chain the caller's slots decide (null: none shows), or undefined when the chain tests anything else. */
-function slotBranch(sc, branches) {
-  for (const b of branches) {
-    if ('v-else' in b.attrs) return b
-    const shows = slotTest(b.attrs['v-if'] ?? b.attrs['v-else-if'], sc.slots)
-    if (shows === null) return undefined
-    if (shows) return b
-  }
-  return null
-}
-
 function collectChildren(ctx, sc, children, cond) {
   const items = []
   for (let i = 0; i < children.length; i++) {
@@ -249,7 +445,11 @@ function collectChildren(ctx, sc, children, cond) {
         if (c.tag === 'pc-else') segments.push([])
         else segments[segments.length - 1].push(c)
       }
-      items.push(...pickBranch(ctx, segments.map((seg) => collectChildren(ctx, sc, seg, true))))
+      // A JSX conditional carries each branch's condition (`when`); a Svelte block carries none and stays unknown.
+      const when = Array.isArray(node.attrs.when) ? node.attrs.when : null
+      const live = when ? liveBranches(ctx, sc, segments.map((_, k) => when[k] ?? null)) : segments.map((_, k) => k)
+      const runs = live.map((k) => (bsc) => collectChildren(ctx, bsc, segments[k], true))
+      items.push(...priceBranches(ctx, sc, runs, node.line, segments.length, live.map((k) => k + 1)))
       continue
     }
     if (node.tag === 'pc-each') {
@@ -257,25 +457,39 @@ function collectChildren(ctx, sc, children, cond) {
       continue
     }
     if (node.type === 'el' && 'v-if' in node.attrs) {
-      const branches = [node]
-      let j = i + 1
-      while (j < children.length) {
-        const s = children[j]
-        if (s.type === 'text' && !s.text.trim()) {
-          j++
-          continue
+      const chainAt = (start) => {
+        const chain = [children[start]]
+        let j = start + 1
+        while (j < children.length) {
+          const s = children[j]
+          if (s.type === 'text' && !s.text.trim()) {
+            j++
+            continue
+          }
+          if (s.type === 'el' && ('v-else-if' in s.attrs || 'v-else' in s.attrs)) {
+            chain.push(s)
+            j++
+            continue
+          }
+          break
         }
-        if (s.type === 'el' && ('v-else-if' in s.attrs || 'v-else' in s.attrs)) {
-          branches.push(s)
-          j++
-          continue
-        }
-        break
+        return { chain, end: j }
       }
-      i = j - 1
-      const known = slotBranch(sc, branches)
-      if (known !== undefined) items.push(...(known ? measureElement(ctx, sc, known, true) : []))
-      else items.push(...pickBranch(ctx, branches.map((b) => measureElement(ctx, sc, b, true))))
+      let { chain: branches, end } = chainAt(i)
+      // A following v-if that can never show together with this chain joins it as one more alternative.
+      for (;;) {
+        let k = end
+        while (k < children.length && children[k].type === 'text' && !children[k].text.trim()) k++
+        if (!(k < children.length && children[k].type === 'el' && 'v-if' in children[k].attrs)) break
+        const next = chainAt(k)
+        if (!exclusive(branches, next.chain)) break
+        branches = [...branches, ...next.chain]
+        end = next.end
+      }
+      i = end - 1
+      const live = liveBranches(ctx, sc, branches.map((b) => b.attrs['v-if'] ?? b.attrs['v-else-if'] ?? null))
+      const runs = live.map((k) => (bsc) => measureElement(ctx, bsc, branches[k], true))
+      items.push(...priceBranches(ctx, sc, runs, node.line, branches.length, live.map((k) => k + 1)))
       continue
     }
     items.push(...measureElement(ctx, sc, node, cond))
@@ -283,13 +497,28 @@ function collectChildren(ctx, sc, children, cond) {
   return items
 }
 
-/** One page or component file priced: { file, points, units, byFile }. */
+/**
+ * One page or component file priced: { file, points, units, byFile }. A page whose markup tests a phone or desktop
+ * layout flag is priced at both and costs its dearer one: { viewport, byViewport: { desktop, phone } } say which.
+ */
 export function priceFile(ctx, file) {
   const t = parsed(ctx, file)
   if (!t) return { file, points: 0, units: {}, byFile: {}, missing: true }
-  const sc = { file, exprs: t.exprs, depth: 0, stack: [file], state: { radios: new Set() } }
-  const items = collectChildren(ctx, sc, t.root.children, false)
-  return { file, ...rollup(items, ctx.list) }
+  const pass = (viewport) => {
+    ctx.viewport = viewport
+    ctx.sawViewport = false
+    const tree = ctx.trace ? [] : undefined
+    const sc = { file, exprs: t.exprs, depth: 0, stack: [file], state: { radios: new Set() }, tree, env: null, declared: null }
+    const items = collectChildren(ctx, sc, t.root.children, false)
+    const priced = { file, ...rollup(items, ctx.list) }
+    if (tree) priced.tree = { file, tag: '#page', points: round(weigh(ctx, items)), children: tree }
+    return { priced, saw: ctx.sawViewport }
+  }
+  const desktop = pass('desktop')
+  if (!desktop.saw) return desktop.priced
+  const phone = pass('phone').priced
+  const dearer = phone.points > desktop.priced.points ? phone : desktop.priced
+  return { ...dearer, viewport: dearer === phone ? 'phone' : 'desktop', byViewport: { desktop: desktop.priced.points, phone: phone.points } }
 }
 
 /** The files a page's markup renders, one level down: resolved component tags, memoised per session. */
@@ -351,13 +580,13 @@ export function pricePages(ctx, pages) {
 }
 
 export function discoverFor(ctx) {
-  return discoverPages(ctx.root, ctx.cfg, ctx.graph.resolveFile)
+  return discoverPages(ctx.root, ctx.cfg, ctx.graph.resolveFile, ctx.graph)
 }
 
-/** The price of every page in a repo (or of the given pages), most expensive first. */
-export function priceRepo({ root, readFile, pages } = {}) {
-  const ctx = session(root, readFile)
+/** The price of every page in a repo (or of the given pages), most expensive first; `trace` adds each page's render tree. */
+export function priceRepo({ root, readFile, pages, trace } = {}) {
+  const ctx = session(root, readFile, { trace })
   return { root, mode: 'static', pages: pricePages(ctx, pages ? pages.map((file) => ({ file })) : discoverFor(ctx)) }
 }
 
-export const measurePage = (root, file, readFile) => priceRepo({ root, readFile, pages: [file] }).pages[0]
+export const measurePage = (root, file, readFile, { trace } = {}) => priceRepo({ root, readFile, pages: [file], trace }).pages[0]

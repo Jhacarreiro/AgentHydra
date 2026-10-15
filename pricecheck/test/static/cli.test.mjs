@@ -143,3 +143,29 @@ group('diff against a git ref', () => {
     })
   })
 })
+
+group('page --tree', () => {
+  test('prints what each rendered component costs, dearest first, under the v-if chain branch it was priced from', async () => {
+    const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'pc-cli-'))
+    dirs.push(dir)
+    const files = {
+      'src/components/Panel.vue': '<template><section><h2>Three word title</h2><button>Go</button></section></template>',
+      'src/components/Small.vue': '<template><p>One</p></template>',
+      'src/views/Home.vue': "<template>\n<Small />\n<Panel v-if=\"tab === 'a'\" />\n<Small v-else />\n</template>\n",
+    }
+    for (const [rel, text] of Object.entries(files)) {
+      fs.mkdirSync(path.dirname(path.join(dir, rel)), { recursive: true })
+      fs.writeFileSync(path.join(dir, rel), text)
+    }
+    const { code, out } = await capture(['page', 'src/views/Home.vue', '--tree', '--root', dir])
+    expect(code).toBe(0)
+    expect(out.split('\n').slice(1)).toEqual([
+      'render tree (each line counts everything inside it):',
+      "      9  branch 1 of 2 at src/views/Home.vue:3",
+      "      9    <Panel> src/components/Panel.vue (v-if tab === 'a')",
+      '      1  <Small> src/components/Small.vue',
+    ])
+    const json = JSON.parse((await capture(['page', 'src/views/Home.vue', '--tree', '--json', '--root', dir])).out)
+    expect(json.tree.children.map((n) => n.points)).toEqual([1, 9])
+  })
+})
