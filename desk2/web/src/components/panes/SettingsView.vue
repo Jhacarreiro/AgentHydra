@@ -9,6 +9,7 @@ import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModel
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
 import RoutineCard from './RoutineCard.vue'
+import RoutineDetails from './RoutineDetails.vue'
 import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
@@ -69,6 +70,8 @@ const home = ref<string | null>(null)
 const bridge = ref<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
+/** The routine whose details replace the list (its Details button), or null. */
+const detailsOf = ref<string | null>(null)
 const routineCount = computed(() => routineCountLine(routines.value?.routines ?? []))
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
@@ -687,6 +690,13 @@ onBeforeUnmount(() => {
                 <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
                   No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                 </div>
+                <RoutineDetails
+                  v-if="detailsOf && routines.routines.some((x) => x.id === detailsOf)"
+                  :id="detailsOf"
+                  :name="routines.routines.find((x) => x.id === detailsOf)!.name"
+                  @back="detailsOf = null"
+                />
+                <template v-else>
                 <template v-if="routines.proposals.length">
                   <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
                   <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
@@ -695,7 +705,8 @@ onBeforeUnmount(() => {
                   <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0">
                     <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
                   </h4>
-                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
+                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" @details="detailsOf = x.id" />
+                </template>
                 </template>
               </div>
             </div>

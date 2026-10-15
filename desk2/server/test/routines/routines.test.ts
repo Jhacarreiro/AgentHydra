@@ -134,7 +134,7 @@ describe('the definition (routines/manifest.ts)', () => {
 
 const NOW = at(2026, 10, 12, 9, 30)
 const entryOf = (id: string, body: Record<string, unknown>): Entry => ({ id, def: checkDefinition(id, { name: 'Example', askedBy, ...body }), broken: null })
-const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, ...over })
+const reading = (over: Partial<Reading> = {}): Reading => ({ nextTickAt: null, lastTickAt: null, off: false, headline: null, totals: null, settings: null, numbers: null, trends: null, ...over })
 const seenOf = (entry: Entry, over: Partial<Seen> = {}): Seen => ({ entry, reading: null, readError: null, task: null, ...over })
 const memWith = (over: Partial<Memory> = {}): Memory => ({ ...emptyMemory(), ...over })
 
@@ -826,4 +826,26 @@ describe('settings (a stale key from the manager\'s old name)', () => {
     await get(d.app, true)
     expect(sent.map((c) => c[0])).toEqual(['record', 'record'])
   }, 60_000)
+})
+
+describe('GET /api/routines/:id/details', () => {
+  test('answers the whole history in pages with stats and the status extras, and 404s an unknown routine', async () => {
+    const d = desk()
+    d.routine('example-every-minute', { name: 'Example every minute', askedBy, schedule: '* * * * *', run: d.argv('tick'), timeoutMinutes: 5 })
+    const runs = [3, 2, 1].map((n) => ({ startedAt: n * 1000, endedAt: n * 1000 + 500, outcome: 'ok', exitCode: 0, lastLine: `tick ${n}: landed ${n}`, workerId: null, sessionId: null }))
+    writeFileSync(join(d.home, 'routines.json'), JSON.stringify({ routines: { 'example-every-minute': { ...emptyMemory(null), runs } } }))
+    await d.stop()
+    const again = desk({}, d.home)
+    await get(again.app, true)
+    const res = await again.app.request('/api/routines/example-every-minute/details?limit=2')
+    const body = (await res.json()) as { runs: { startedAt: number }[]; nextBefore: number; stats: { total: number }; counters: Record<string, number> }
+    expect(body.runs.map((r) => r.startedAt)).toEqual([3000, 2000])
+    expect(body.nextBefore).toBe(2000)
+    expect(body.stats.total).toBe(3)
+    expect(body.counters).toEqual({ landed: 6 })
+    const rest = (await (await again.app.request(`/api/routines/example-every-minute/details?before=${body.nextBefore}`)).json()) as { runs: unknown[]; nextBefore: number | null }
+    expect(rest.runs).toHaveLength(1)
+    expect(rest.nextBefore).toBeNull()
+    expect((await again.app.request('/api/routines/nope/details')).status).toBe(404)
+  })
 })

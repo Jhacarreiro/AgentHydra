@@ -14,6 +14,7 @@ import type { Hono } from 'hono'
 import {
   ROUTINES_EVERY_MS,
   type Routine,
+  type RoutineDetails,
   type RoutineDefinition,
   type RoutineOutcome,
   type RoutineProposal,
@@ -35,6 +36,7 @@ import { emptyMemory, judge, lastEndOf, parseReading, slotsOf, type Memory, type
 import { sdkDescriber, type Describer } from '../routines/describe'
 import { checkDefinition, kindOf, parseProposalText, parseRoutineText, checkProposal, readEntries, ROUTINE_ID, TIMEOUT_DEFAULT, type Entry } from '../routines/manifest'
 import { routineBrokenMessage, routineIncidentAction } from '../routines/incident'
+import { descriptionRow, appendRows, pageOf, readHistory, statsOf, sumCounters, syncHistory } from '../routines/history'
 import { lastLineOf, LINE_CHARS, message, runArgv } from '../routines/proc'
 import { readJson, RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunResult, type RunSpec } from '../routines/runner'
 import { readTasks, runTaskNow, setTaskEnabled, TASK_NEVER_RAN, TASK_RUNNING, type TaskReading } from '../routines/wintask'
@@ -201,6 +203,8 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const logsDir = join(routinesDir, 'logs')
   const runsDir = join(routinesDir, 'runs')
   const file = join(ctx.home, 'routines.json')
+  const historyDir = join(routinesDir, 'history')
+  const historyFile = (id: string): string => join(historyDir, `${id}.jsonl`)
   const writer = new AsyncFile(file)
   const timeoutScale = opts.timeoutScale ?? 1
   const clock = opts.now ?? Date.now
@@ -227,6 +231,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const enabled = (): boolean => ctx.settings().routines && !stopping
   /** A routine's memory. The first time it is seen, a schedule starts from its newest slot: a slot already past never runs. */
   const memOf = (entry: Entry, t: number): Memory => {
+    if (!runCounts.has(entry.id) && memory[entry.id]) keepHistory(entry.id, memory[entry.id])
     memory[entry.id] ??= emptyMemory(entry.def?.schedule !== undefined ? (slotsOf(entry, t)?.newest ?? t) : null)
     return memory[entry.id]
   }
@@ -250,6 +255,16 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     }
   }
 
+  /** Writes what the memory holds that the routine's full history does not (a new run; the first time, all of them). Best effort. */
+  const runCounts = new Map<string, number>()
+  function keepHistory(id: string, mem: Memory): void {
+    try {
+      syncHistory(historyFile(id), mem.runs)
+      runCounts.set(id, readHistory(historyFile(id)).length)
+    } catch (err) {
+      console.error('[routines] history did not save:', message(err))
+    }
+  }
   /** Records a run and keeps the newest RUNS_KEPT of them. When its routine describes its runs, a run that printed
    *  something (`output`) and was not busy is described in the background. */
   function finishRun(id: string, mem: Memory, r: RoutineRun, output = ''): void {
@@ -260,6 +275,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     mem.runs.splice(RUNS_KEPT)
     mem.running = null
     save()
+    keepHistory(id, mem)
     reportIncident(id, def?.name ?? id, r)
     if (described) void describeRun(id, def, r, output)
   }
@@ -313,6 +329,11 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     if (!kept || stopping) return
     kept.description = description
     save()
+    try {
+      appendRows(historyFile(id), [descriptionRow(r.startedAt, description)])
+    } catch (err) {
+      console.error('[routines] history did not save:', message(err))
+    }
   }
 
   /** Starts a command run: its runner (routines/runner.ts), hidden and outside Desk's process tree, runs it, writes its log
@@ -556,6 +577,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     mem.runs.unshift({ startedAt: task.lastRunAt, endedAt: task.lastRunAt, outcome: code === 0 ? 'ok' : 'failed', exitCode: code, lastLine: `Windows task result ${code}`, workerId: null, sessionId: null })
     mem.runs.splice(RUNS_KEPT)
     save()
+    keepHistory(s.entry.id, mem)
   }
 
   /** Reads each routine's file, status and Windows task. A windowsTask routine off Windows is broken; the tasks are read in one call. */
@@ -670,6 +692,7 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
       nextRunAt: j.nextRunAt,
       running: mem.running ? { ...mem.running } : null,
       runs: [...mem.runs],
+      runsTotal: Math.max(mem.runs.length, runCounts.get(entry.id) ?? 0),
     }
   }
 
@@ -686,6 +709,34 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
     writer.flushSync()
     // A write already under way finishes, so it leaves no temp file behind.
     await writer.quiet()
+  })
+
+  app.get('/api/routines/:id/details', (c) => {
+    const id = c.req.param('id')
+    if (!ROUTINE_ID.test(id)) return c.json({ error: 'no such routine' }, 404)
+    const s = seen.find((x) => x.entry.id === id)
+    if (!s && !memory[id]) return c.json({ error: 'no such routine' }, 404)
+    const mem = memory[id]
+    if (mem) keepHistory(id, mem)
+    const all = readHistory(historyFile(id))
+    const beforeQ = Number(c.req.query('before'))
+    const limitQ = Number(c.req.query('limit'))
+    const limit = Number.isFinite(limitQ) && limitQ >= 1 ? Math.min(Math.floor(limitQ), 500) : 50
+    const page = pageOf(all, Number.isFinite(beforeQ) && c.req.query('before') ? beforeQ : null, limit)
+    const r = s?.reading
+    const details: RoutineDetails = {
+      id,
+      name: s?.entry.def?.name ?? (s && s.entry.def === null ? s.entry.name : undefined) ?? id,
+      runs: page.runs,
+      nextBefore: page.nextBefore,
+      stats: statsOf(all, clock()),
+      counters: sumCounters(all),
+      totals: r?.totals ?? null,
+      headline: r?.headline ?? null,
+      numbers: r?.numbers ?? null,
+      trends: r?.trends ?? null,
+    }
+    return c.json(details)
   })
 
   app.get('/api/routines', async (c) => {

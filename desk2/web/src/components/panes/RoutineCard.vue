@@ -3,7 +3,7 @@
 // it is described, and its own on/off switch) that opens into its schedule in words, its Describe runs switch, its history
 // with each run's description, and its actions: Run now, Open chat for a prompt run's chat, and Edit (its Edit form).
 import { computed, ref } from 'vue'
-import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
+import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
@@ -12,6 +12,7 @@ import { BUTTON } from './settings-styles'
 import PaneSwitch from './PaneSwitch.vue'
 import RoutineEditForm from './RoutineEditForm.vue'
 import RoutineStatusChip from './RoutineStatusChip.vue'
+import { counterLabel } from './routine-details'
 import { lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
 
 const props = defineProps<{
@@ -21,7 +22,7 @@ const props = defineProps<{
   enabled: boolean
 }>()
 /** A request was answered (run, paused, resumed, or refused): the parent re-reads the status. */
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{ changed: []; details: [] }>()
 
 const api = usePaneApi()
 const src = useShellSource()
@@ -45,7 +46,8 @@ const scheduleText = computed(() => {
   if (r.windowsTask !== null) return `Windows: ${r.windowsTask.replace(/^\\/, '')}`
   return 'its own pace'
 })
-const totalsText = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => `${k} ${n}`).join(' · '))
+const totalRows = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => ({ label: counterLabel(k), value: n.toLocaleString('en-US') })))
+const runsTotal = computed(() => Math.max(props.routine.runsTotal ?? 0, props.routine.runs.length))
 const settingRows = computed(() => Object.entries(props.routine.settings ?? {}))
 /** The session of a prompt run's chat: the one running now, else the last run's. */
 const chatSession = computed(() => props.routine.running?.sessionId ?? last.value?.sessionId ?? null)
@@ -139,7 +141,12 @@ function toggleEdit() {
       </div>
       <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
-      <div v-if="totalsText" class="mt-0.5 tnum ps-5 text-ui-sm leading-4.5 text-text-muted">{{ totalsText }}</div>
+      <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
+        <div v-for="t in totalRows" :key="t.label" class="rounded-[var(--radius-6)] bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
+          <dt class="text-ui-sm leading-4 text-text-muted">{{ t.label }}</dt>
+          <dd class="tnum text-ui leading-5 text-text">{{ t.value }}</dd>
+        </div>
+      </dl>
       <div v-if="routine.what === 'prompt' && routine.cwd" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">An AI prompt in {{ routine.cwd }}</div>
       <dl v-if="settingRows.length" class="mt-2 grid gap-1">
         <div v-for="[k, v] in settingRows" :key="k" class="flex items-baseline justify-between gap-4 text-ui-sm leading-4.5">
@@ -160,7 +167,12 @@ function toggleEdit() {
           @update:model-value="(on: boolean) => act({ edit: { id: routine.id, set: { describe: on } } })"
         />
       </div>
-      <div class="mt-3 text-ui-sm leading-4.5 text-text-2">Recent runs</div>
+      <div class="mt-3 flex items-center gap-2 text-ui-sm leading-4.5 text-text-2">
+        <span class="tnum">{{ runsTotal > 8 ? `Latest 8 of ${runsTotal} runs` : runsTotal === 1 ? '1 run' : `${runsTotal} runs` }}</span>
+        <button v-if="runsTotal" type="button" :class="[BUTTON, 'ms-auto gap-1.5']" @click="emit('details')">
+          <ChartColumn class="size-3.5" aria-hidden="true" />All runs &amp; stats
+        </button>
+      </div>
       <div v-if="!routine.runs.length" class="text-ui-sm leading-4.5 text-text-muted">No runs yet.</div>
       <ul v-else class="mt-1 grid gap-0.5">
         <li v-for="r in routine.runs.slice(0, 8)" :key="r.startedAt">

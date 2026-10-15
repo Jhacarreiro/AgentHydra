@@ -13,7 +13,7 @@ import {
   type TranscriptItem
 } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
-import type { RoutinesRequest, RoutinesStatus } from '@shared/routines'
+import type { RoutineDetails, RoutinesRequest, RoutinesStatus } from '@shared/routines'
 import type { OrchestratorModelStatus } from '@shared/orchestrator'
 import type { FreeSettings } from '@shared/free-instances'
 
@@ -29,6 +29,8 @@ export interface PaneApi {
   routines(): Promise<RoutinesStatus>
   /** POST /api/routines: one action (run, pause, resume, approve, discard, describe) or the switch; answers the whole status, or why not (409, 404, 403). */
   routinesAct(body: RoutinesRequest): Promise<RoutinesStatus>
+  /** GET /api/routines/:id/details: its stats and one page of its full run history, newest first (before = the last page's nextBefore). */
+  routineDetails(id: string, before?: number | null, limit?: number): Promise<RoutineDetails>
   /** GET /api/orchestrator/model: the model the orchestrator's judge asks, and what the SDK reported it resolves to. */
   orchestratorModel(): Promise<OrchestratorModelStatus>
   getSettings(): Promise<DeskSettings>
@@ -80,6 +82,8 @@ export const httpPaneApi: PaneApi = {
   bridgeStatus: () => json('/bridge/status'),
   babysitter: () => json('/babysitter'),
   routines: () => json('/routines'),
+  routineDetails: (id, before = null, limit = 50) =>
+    json(`/routines/${encodeURIComponent(id)}/details?limit=${limit}${before === null ? '' : `&before=${before}`}`),
   // The window's mark: resume, approve, discard and the switch are the owner's, and the server knows the window by it.
   routinesAct: (body) =>
     json('/routines', {

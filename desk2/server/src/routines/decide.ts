@@ -20,6 +20,17 @@ export interface Reading {
   headline: string | null
   totals: Record<string, number> | null
   settings: Record<string, string | number | boolean> | null
+  /** Other top-level numbers the status printed (ticks, budget): at most 12. */
+  numbers: Record<string, number> | null
+  /** Groups of trend objects ({ latest, previous, best, trend }) the status printed, by group name (rsi). */
+  trends: Record<string, Record<string, TrendReading>> | null
+}
+
+export interface TrendReading {
+  latest: number
+  previous?: number
+  best?: number
+  trend?: string
 }
 
 /** One routine as the last look saw it: its entry, what its status read (or why it did not), and its Windows task. */
@@ -87,7 +98,36 @@ export function parseReading(stdout: string): Reading {
     headline: headline || null,
     totals: o.totals ? Object.fromEntries(totals) : null,
     settings: settingsOf(o.settings),
+    ...extrasOf(o),
   }
+}
+
+const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+
+/** The status's other top-level numbers and its groups of trend objects, for the routine's details page. */
+function extrasOf(o: Record<string, unknown>): Pick<Reading, 'numbers' | 'trends'> {
+  const numbers: Record<string, number> = {}
+  const trends: Record<string, Record<string, TrendReading>> = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k === 'totals' || k === 'settings') continue
+    if (isNum(v)) {
+      if (Object.keys(numbers).length < 12) numbers[k.slice(0, 40)] = v
+    } else if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(trends).length < 6) {
+      const group: Record<string, TrendReading> = {}
+      for (const [name, t] of Object.entries(v as Record<string, unknown>)) {
+        const r = t as Record<string, unknown> | null
+        if (!r || typeof r !== 'object' || !isNum(r.latest) || Object.keys(group).length >= 20) continue
+        group[name.slice(0, 40)] = {
+          latest: r.latest,
+          ...(isNum(r.previous) ? { previous: r.previous } : {}),
+          ...(isNum(r.best) ? { best: r.best } : {}),
+          ...(typeof r.trend === 'string' ? { trend: r.trend.slice(0, 20) } : {}),
+        }
+      }
+      if (Object.keys(group).length) trends[k.slice(0, 40)] = group
+    }
+  }
+  return { numbers: Object.keys(numbers).length ? numbers : null, trends: Object.keys(trends).length ? trends : null }
 }
 
 /** The status's `settings`: scalar values only, at most 12 entries, names cut to 40 and strings to 120. Null when not an object. */

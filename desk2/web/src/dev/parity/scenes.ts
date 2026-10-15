@@ -320,6 +320,7 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
     routines: async () => routinesFixtures,
     routinesAct: async () => routinesFixtures,
+    routineDetails: async () => { throw new Error('no history in the gallery') },
     orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),

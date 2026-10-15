@@ -157,6 +157,8 @@ export interface Routine {
   running: RoutineRunning | null
   /** Its last runs, newest first (at most 30). */
   runs: RoutineRun[]
+  /** How many runs it has ever had (its full history; the card shows the newest 30). */
+  runsTotal?: number
 }
 
 /** GET /api/routines. */
@@ -214,4 +216,45 @@ export function scheduleInWords(expr: string): string {
   else if (/^\d+$/.test(dom) && dow === '*') day = `on day ${dom} of the month`
   else if (dom !== '*' || dow !== '*') return `cron ${expr}`
   return `${at}, ${day}`
+}
+
+/** The whole-history numbers of GET /api/routines/:id/details. Times in ms; rates 0 to 1, null when nothing counts. */
+export interface RoutineDetailsStats {
+  total: number
+  ok: number
+  /** failed, timed-out and interrupted */
+  failed: number
+  busy: number
+  /** ok / (ok + failed) */
+  successRate: number | null
+  avgMs: number | null
+  longestMs: number | null
+  firstRunAt: number | null
+  last24h: number
+  last7d: number
+}
+
+/** A status command's trend object (Archangel's rsi.keep_rate, say). */
+export interface RoutineTrend {
+  latest: number
+  previous?: number
+  best?: number
+  trend?: string
+}
+
+/** GET /api/routines/:id/details?before=<ms>&limit=<n>. */
+export interface RoutineDetails {
+  id: string
+  name: string
+  /** One page of the full history, newest first; ask again with before=nextBefore for the next. */
+  runs: RoutineRun[]
+  nextBefore: number | null
+  stats: RoutineDetailsStats
+  /** `word N` pairs of the runs' last lines, summed over the whole history. */
+  counters: Record<string, number>
+  /** The latest status: its totals, headline, other numbers and groups of trend objects. */
+  totals: Record<string, number> | null
+  headline: string | null
+  numbers: Record<string, number> | null
+  trends: Record<string, Record<string, RoutineTrend>> | null
 }
