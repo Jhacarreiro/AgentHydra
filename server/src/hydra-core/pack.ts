@@ -17,7 +17,6 @@ import {
 } from './lead'
 import { appendLog } from './log'
 import { chatPaths } from './paths'
-import { seatOf } from './seats'
 import { clearLeadOwed, readSent, setLeadOwed, writeSent } from './sent'
 import { folderKnowledgeOf, mainRules } from './tree'
 
@@ -114,6 +113,19 @@ function foreignTo(cwd: string): (e: CatalogEntry) => boolean {
       !(here && folders.some((f) => here === norm(f) || here.startsWith(`${norm(f)}/`)))
     )
   }
+}
+
+type SeatReader = (
+  dir: string,
+  chat: { key: string; aliases: string[] },
+  e: CatalogEntry,
+) => unknown
+let seatReader: SeatReader | undefined
+/** seats.ts's roster reader, required on first use rather than imported: seats.ts brings the Desk client
+ *  (mcp-managers) and the server core behind it, which the Desk server's typecheck of this pack code does not take. */
+function seatOf(dir: string, chat: { key: string; aliases: string[] }, e: CatalogEntry): unknown {
+  seatReader ??= (require('./seats') as { seatOf: SeatReader }).seatOf
+  return seatReader(dir, chat, e)
 }
 
 /** The personas seated under this chat, read through the seat roster, so a handoff knows whom it consulted. */
