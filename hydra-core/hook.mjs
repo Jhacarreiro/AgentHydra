@@ -214,6 +214,34 @@ function asksOf(dir) {
   return !existsSync(file) || readFileSync(file, "utf8").trim() !== "off";
 }
 
+// The `<core>/DOORBELL` setting: `crainium` means the flowchart lives in the CrAInium, one per workspace behind
+// connections_core, so the hook only tells the chat to walk it and keeps nothing on this PC (the owner's ruling
+// 2026-10-15). Absent, the local tree below runs as before; each PC switches when its owner says.
+function doorbellOf(dir) {
+  const file = path.join(dir, "DOORBELL");
+  return existsSync(file) && readFileSync(file, "utf8").trim() === "crainium";
+}
+
+const CORE_VIA = '(Connections MCP; when it is not in your tool list, connections_execute { tool_name: "connections_core", params })';
+
+function doorbellPrompt(input, env) {
+  if (!ownerPrompt(input)) return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  return output(
+    "UserPromptSubmit",
+    `Hydra Core: before you act on this message, walk the workspace flowchart: connections_core { action: "run", ${at}, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with answers: { <ask.id>: <one of ask.answers> } added to the answers so far. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+  );
+}
+
+function doorbellSession(input, env) {
+  if (input.source !== "compact") return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  return output(
+    "SessionStart",
+    `Hydra Core: this chat was compacted. If the flowchart handed this work on, connections_core { action: "brief", ${at} } ${CORE_VIA} gives its last brief back.`,
+  );
+}
+
 // Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had,
 // after the core_scope line when ASK is on (the chat picks its own lead; the owner's ruling 2026-10-15).
 async function placedPrompt(input, env, dir) {
@@ -446,6 +474,10 @@ export async function run(input, env = process.env) {
   if (skip) {
     if (event !== "Stop") logSkip(input, env, dir, skip);
     return null;
+  }
+  if (doorbellOf(dir)) {
+    if (event === "UserPromptSubmit") return doorbellPrompt(input, env);
+    return event === "SessionStart" ? doorbellSession(input, env) : null;
   }
   if (event === "Stop") {
     logPackRead(input, env, dir);
