@@ -1,0 +1,7 @@
+{
+  // invented fixture: the alias the measurer should follow
+  "compilerOptions": {
+    "baseUrl": ".",
+    "paths": { "@/*": ["./src/*"] },
+  },
+}
