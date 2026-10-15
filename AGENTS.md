@@ -58,7 +58,9 @@ right-click menus, pop-ups or developer-menu toggles.
   transcript bytes, title/model/effort/permissions and bystander state checks.
 
 Production native coverage is **archive and migration-source cleanup**, plus the
-**native send** that delivers a `peer_only` message into a chat (see the runbook). General
+**native send** that delivers a `peer_only` message into a chat (see the runbook), and
+the moved chat's effort and Bypass on a move into a running app
+(`server/src/move-settings-in-app.ts`, one verified `tryNativeUltracode` call). General
 destination import/settings restoration, unarchive, new-chat/start/stop/resume
 have not all been converted. Use their existing guarded workflows; do not claim
 an entire migration is native or substitute a one-off POC for production tooling.
