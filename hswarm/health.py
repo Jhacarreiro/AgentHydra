@@ -72,8 +72,10 @@ async def doctor(m: JobManager, verbose: bool = False) -> dict:
     # Legs this process saw failing at the host, tried last until a probe finds them back (breaker.py).
     out["breakers_open"] = breaker.report()
     # The code this process runs, and whether a source file changed on disk since it loaded (shared.behind).
-    out["code"] = {**shared.code_stamp(), **({"behind": behind} if (behind := shared.behind()) else {})}
-    out["maintain"] = maintain_status()
+    # Off the loop: behind() asks git for the clone's HEAD (0.1-0.9 s), and maintain_status lists the jobs folder.
+    behind = await asyncio.to_thread(shared.behind)
+    out["code"] = {**shared.code_stamp(), **({"behind": behind} if behind else {})}
+    out["maintain"] = await asyncio.to_thread(maintain_status)
     # An armed fault spec (faults.py) fails real calls on purpose: one left in the environment must show here.
     try:
         if armed := faults.armed():
