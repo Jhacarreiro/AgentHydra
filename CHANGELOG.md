@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Unchanged Free history stops downloading and redrawing itself.** The page reuses its current history when the server confirms nothing changed. New results and edits still appear on the next reading.
+- **CliMayte reuses unchanged placement estimates.** Its scheduling passes keep the same finished-work snapshot until that history changes. ChatGPT's reply polling also refreshes cookies without creating extra HTTP sessions or duplicating cookie objects.
 - **Free work spends less CPU on bookkeeping and keeps fewer large buffers.** Unchanged status polls reuse thread counts, completed operations save their final metadata once, and finished file writes release their JSON buffers. ChatGPT's reply checks skip display formatting until a completed answer is ready.
 - **CliMayte's compact lists keep old reports compressed.** Listing history no longer unpacks text the list immediately hides, and ceiling statistics use an index instead of rescanning account history for each event. Full reports remain available on request.
 - **ChatGPT's background helper stays out of the Windows desktop.** Its detached Python helper uses the matching windowless interpreter, preventing the virtual-environment launcher from opening a console.

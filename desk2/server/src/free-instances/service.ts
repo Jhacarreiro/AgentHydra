@@ -85,6 +85,9 @@ export class FreeInstances {
   /** Thread counts change only on insertion, removal or a status transition, not on every poll. */
   private threadRevision = 0
   private threadSummary?: { threads: FreeThread[]; length: number; revision: number; running: number; counts: Record<string, number> }
+  /** A restart must not validate a browser's history from the previous process. No account data is in this tag. */
+  private historyEpoch = randomUUID()
+  private historyRevision = 0
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   /** An account moved between free and paid (notePlan); the plugin tells the window. */
@@ -170,6 +173,7 @@ export class FreeInstances {
         await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000))
       } catch { /* deleted regardless */ }
       for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
+      this.historyRevision++
       this.store.remove(id, opts.tombstone ?? true)
       this.threadSummary = undefined
       this.refreshed.delete(id)
@@ -244,6 +248,8 @@ export class FreeInstances {
     }
   }
   threads(): FreeThread[] { return this.store.data.threads }
+  /** Full history validators are cheap; only actual thread writes invalidate them. */
+  threadsETag(): string { return `"free-threads-${this.historyEpoch}-${this.historyRevision}"` }
   /** Removes one thread from Desk's list (a private chat: it is not in the site's history either). Its tokens stay in the
    *  account's ledger, so the totals do not drop. Refused while its message is still running. Its id is remembered: the
    *  harness still lists the private chats it made, and the next read of them (refresh.ts, hourly) would add it back. */
@@ -252,6 +258,7 @@ export class FreeInstances {
     if (!thread) throw new FreeError('Thread not found.', 404)
     if (thread.status === 'running') throw new FreeError('This chat has a message running. Wait for it to finish or cancel it first.', 409)
     this.store.data.threads = this.store.data.threads.filter(t => t !== thread)
+    this.historyRevision++
     this.threadSummary = undefined
     this.store.data.forgotten = [...(this.store.data.forgotten ?? []).filter(f => f !== id), id].slice(-5000)
     this.store.save()
@@ -369,6 +376,7 @@ export class FreeInstances {
       this.threadRevision++
     }
     else if (thread.status !== status) this.threadRevision++
+    this.historyRevision++
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
   }

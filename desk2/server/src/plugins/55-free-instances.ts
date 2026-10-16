@@ -8,6 +8,15 @@ import { FreeError, FreeInstances } from '../free-instances/service'
 import { daemonCreds, FreeSync } from '../free-instances/sync'
 import { isRealHome } from '../real-home'
 
+/** Opaque validators can contain commas: a split would mistake an embedded * for a wildcard. */
+function unchangedHistory(value: string | undefined, tag: string): boolean {
+  if (!value) return false
+  const list = value.trim()
+  if (list === '*') return true
+  if (!/^(?:W\/)?"[^"]*"(?:\s*,\s*(?:W\/)?"[^"]*")*$/.test(list)) return false
+  return list.match(/(?:W\/)?"[^"]*"/g)?.some(validator => validator === tag || validator === `W/${tag}`) ?? false
+}
+
 /** Root /api, independent of the upstream AgentHydra daemon and its CLI/Desktop accounts. */
 export default function plugin(app: Hono, ctx: ServerContext): void {
   const service = (ctx.deps.freeInstances as FreeInstances | undefined) ?? new FreeInstances(ctx.home)
@@ -64,7 +73,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   // server/src/mcp-free.ts), not all ~22,000 (8 MB).
   router.get('/threads', c => {
     const since = Number(c.req.query('since'))
-    return c.json(since > 0 ? service.threads().filter(t => t.createdAt >= since) : service.threads())
+    // Filtered callers keep their existing 200 response. Only a full-list reader can
+    // validate the full history; no rows are read or serialized when it is unchanged.
+    if (since > 0) return c.json(service.threads().filter(t => t.createdAt >= since))
+    const tag = service.threadsETag()
+    c.header('ETag', tag)
+    if (unchangedHistory(c.req.header('if-none-match'), tag)) return c.body(null, 304)
+    return c.json(service.threads())
   })
   // A thread's id is `<instance>/<chat>`: the slash may arrive encoded or not.
   router.delete('/threads/:id{.+}', c => c.json(service.forgetThread(c.req.param('id'))))

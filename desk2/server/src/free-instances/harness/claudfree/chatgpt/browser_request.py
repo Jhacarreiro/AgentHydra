@@ -16,11 +16,12 @@ import time
 from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
+from requests.cookies import RequestsCookieJar
 
 from ..errors import ClaudeError
 from .. import signin
 from ..registry import chat_lock
-from .http import BASE, ChatGPTHttp, bounded_confirmed_conversation, visible_messages
+from .http import BASE, bounded_confirmed_conversation, load_chatgpt_cookies, visible_messages
 
 
 def markers_missing(cookies, now=None):
@@ -115,12 +116,8 @@ def prepare(http, prompt, existing=None, *, directory, model, temporary=True, on
 
 
 def adopt_cookies(http, cookies):
-    replacement = ChatGPTHttp({'cookies': cookies, 'origins': []}, timeout=http.timeout)
-    try:
-        http.session.cookies = replacement.session.cookies.copy()
-        http.original['cookies'] = cookies
-    finally:
-        replacement.close()
+    http.session.cookies = load_chatgpt_cookies(RequestsCookieJar(), cookies)
+    http.original['cookies'] = cookies
 
 
 def _refuse_unready_proof(http, proof):

@@ -150,6 +150,87 @@ describe('Free instance boundary', () => {
 })
 
 describe('Free jobs and routes', () => {
+  test('conditional history reads skip all 36000 rows and preserve raw and filtered callers', async () => {
+    const { service, app, instance } = fixture()
+    const store = (service as unknown as { store: FreeStorage }).store
+    store.data.threads = Array.from({ length: 36_000 }, (_, n) => ({
+      id: `${instance.id}/${n}`, instanceId: instance.id, provider: 'claude' as const,
+      chatId: String(n), title: 'Synthetic history', status: 'done' as const,
+      createdAt: n, updatedAt: n, error: null,
+    }))
+    let reads = 0
+    const original = service.threads.bind(service)
+    service.threads = () => { reads++; return original() }
+    const first = await app.request('/api/free/threads')
+    expect(first.status).toBe(200)
+    expect((await first.json()).length).toBe(36_000)
+    const tag = first.headers.get('ETag')!
+    expect(tag).toMatch(/^"free-threads-[a-f0-9-]+-0"$/)
+    reads = 0
+    for (const validator of [tag, `"another", W/${tag}`, '*']) {
+      const unchanged = await app.request('/api/free/threads', { headers: { 'If-None-Match': validator } })
+      expect(unchanged.status).toBe(304)
+      expect(unchanged.headers.get('ETag')).toBe(tag)
+      expect(unchanged.headers.get('Cache-Control')).toBe('no-store')
+      expect(await unchanged.text()).toBe('')
+    }
+    expect(reads).toBe(0)
+    const opaque = await app.request('/api/free/threads', { headers: { 'If-None-Match': '"opaque,*,comma"' } })
+    expect(opaque.status).toBe(200)
+    const raw = await app.request('/api/free/threads')
+    expect(raw.status).toBe(200)
+    expect((await raw.json()).length).toBe(36_000)
+    const filtered = await app.request('/api/free/threads?since=35999', { headers: { 'If-None-Match': tag } })
+    expect(filtered.status).toBe(200)
+    expect((await filtered.json()).map((t: { chatId: string }) => t.chatId)).toEqual(['35999'])
+    expect(filtered.headers.get('ETag')).toBeNull()
+  })
+
+  test('history validators change for thread state, title, context, forgetting and account removal', async () => {
+    let release: ((value: RunOutput) => void) | undefined
+    const { service, app, op, instance } = fixture(async (_config, request) => {
+      if (request.command === 'resume') return new Promise(resolve => { release = resolve })
+      return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })
+    })
+    const finish = async (job: ReturnType<FreeInstances['start']>) => {
+      while (job.state !== 'done') await tick()
+    }
+    let tag = service.threadsETag()
+    const changed = async () => {
+      const response = await app.request('/api/free/threads', { headers: { 'If-None-Match': tag } })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('ETag')).not.toBe(tag)
+      tag = response.headers.get('ETag')!
+      return response.json()
+    }
+    await finish(service.start(op({ command: 'chat', prompt: 'Synthetic prompt' })))
+    expect((await changed())[0].status).toBe('done')
+    const resumed = service.start(op({ command: 'resume', chatId: CHAT, prompt: 'Synthetic followup' }))
+    expect((await changed())[0].status).toBe('running')
+    await tick()
+    release!(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic followup reply' }))
+    await finish(resumed)
+    expect((await changed())[0].status).toBe('done')
+    await finish(service.start(op({ command: 'track', chatId: CHAT, name: 'Renamed synthetic thread' })))
+    expect((await changed())[0].title).toBe('Renamed synthetic thread')
+    await finish(service.start(op({ command: 'read', chatId: CHAT })))
+    expect((await changed())[0].contextChars).toBe('Synthetic reply'.length)
+    service.forgetThread(`${instance.id}/${CHAT}`)
+    expect(await changed()).toEqual([])
+    await finish(service.start(op({ command: 'chat', prompt: 'Another synthetic prompt' })))
+    await changed()
+    await service.remove(instance.id)
+    expect(await changed()).toEqual([])
+  })
+
+  test('a restarted service cannot validate history from the previous process', async () => {
+    const { service, home, runtime } = fixture()
+    await service.settled()
+    const restarted = new FreeInstances(home, async () => output({ ok: true }), runtime)
+    services.push(restarted)
+    expect(restarted.threadsETag()).not.toBe(service.threadsETag())
+  })
+
   test('unchanged status polls do not walk 36000 historical threads again or expose mutable cached counts', () => {
     const { service, instance } = fixture()
     const store = (service as unknown as { store: FreeStorage }).store

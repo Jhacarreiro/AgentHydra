@@ -89,6 +89,32 @@ def prune_per_chat_cookies(cookies):
     return kept
 
 
+def load_chatgpt_cookies(jar, cookies, *, headers=None):
+    """Restore only applicable cookies into a jar without creating an HTTP session."""
+    for cookie in prune_per_chat_cookies(cookies):
+        # A cookie from auth.openai.com must never be sent to chatgpt.com.
+        expiry = cookie.get("expires", -1)
+        if cookie.get("domain", "").lstrip(".").lower() != "chatgpt.com" or (
+            expiry > 0 and expiry <= time.time()
+        ):
+            continue
+        jar.set(
+            cookie["name"],
+            cookie["value"],
+            domain=cookie["domain"],
+            path=cookie.get("path", "/"),
+            secure=cookie.get("secure", True),
+            expires=int(expiry) if expiry > 0 else None,
+            rest={
+                "HttpOnly": cookie.get("httpOnly", False),
+                "SameSite": cookie.get("sameSite", "Lax"),
+            },
+        )
+        if headers is not None and cookie["name"] == "oai-did":
+            headers["OAI-Device-ID"] = cookie["value"]
+    return jar
+
+
 def visible_messages(conversation, *, rich=True):
     """Follow the selected branch; proof reads skip display-only extraction."""
     result = []
@@ -254,27 +280,7 @@ class ChatGPTHttp:
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/"}
         )
-        for cookie in prune_per_chat_cookies(saved.get("cookies", [])):
-            # A cookie from auth.openai.com must never be sent to chatgpt.com.
-            expiry = cookie.get("expires", -1)
-            if cookie.get("domain", "").lstrip(".").lower() != "chatgpt.com" or (
-                expiry > 0 and expiry <= time.time()
-            ):
-                continue
-            self.session.cookies.set(
-                cookie["name"],
-                cookie["value"],
-                domain=cookie["domain"],
-                path=cookie.get("path", "/"),
-                secure=cookie.get("secure", True),
-                expires=int(expiry) if expiry > 0 else None,
-                rest={
-                    "HttpOnly": cookie.get("httpOnly", False),
-                    "SameSite": cookie.get("sameSite", "Lax"),
-                },
-            )
-            if cookie["name"] == "oai-did":
-                self.session.headers["OAI-Device-ID"] = cookie["value"]
+        load_chatgpt_cookies(self.session.cookies, saved.get("cookies", []), headers=self.session.headers)
 
     def close(self):
         self.session.close()

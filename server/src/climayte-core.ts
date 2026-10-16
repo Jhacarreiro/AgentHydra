@@ -988,8 +988,12 @@ export function voidSpec(log: string): boolean {
   return true
 }
 
-/** A done task's placement entries, kept per worker while finishedFingerprint is unchanged. */
+/** A done task's or manager's placement entries, kept while finishedFingerprint is unchanged. */
 const finishedMemo = new WeakMap<CliMayteWorker, { fp: unknown[]; entries: FinishedCost[] }>()
+
+/** The last ordered placement history. Its entries are immutable scalar snapshots, so an unchanged
+ *  pass can reuse the grouped index, scaled sums and estimates keyed by this exact array. */
+let finishedHistory: FinishedCost[] = []
 
 /** Every field finishedEntries reads, in a fixed order. Tokens and reread are replaced whole, never
  *  edited in place (climayte-core's spend writes and climayte-stops' model writes); updatedAt is not
@@ -1061,23 +1065,29 @@ export function placementState(): {
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
 } {
-  const finished: FinishedCost[] = []
+  const previous = finishedHistory
+  let next: FinishedCost[] | null = null
+  let count = 0
   for (const w of workers.values()) {
-    // A done task's entries depend only on what finishedFingerprint lists, so they are kept per worker.
-    if (w.kind === 'manage') {
-      for (const e of finishedEntries(w)) finished.push(e)
-      continue
-    }
-    // Any other task adds only once done (finishedEntries): a failed or open one is skipped unread.
-    if (w.status !== 'done') continue
+    // Managers contribute each wake while still open; other tasks contribute only once done.
+    // Both depend only on the complete finishedFingerprint, not on the pass's clock.
+    if (w.kind !== 'manage' && w.status !== 'done') continue
     const kept = finishedMemo.get(w)
     let entries = kept?.entries
     if (!kept || !fingerprintHolds(kept.fp, w)) {
       entries = finishedEntries(w)
       finishedMemo.set(w, { fp: finishedFingerprint(w), entries })
     }
-    for (const e of entries!) finished.push(e)
+    for (const e of entries!) {
+      if (next) next.push(e)
+      else if (previous[count] !== e) next = [...previous.slice(0, count), e]
+      count++
+    }
   }
+  // No array allocation or re-indexing while history is unchanged. Once it changes, preserve the
+  // exact new order in a new array: costOf closures from an earlier pass must keep their snapshot.
+  const finished = next ?? (count === previous.length ? previous : previous.slice(0, count))
+  finishedHistory = finished
   // A chat is the owner's conversation, not a sized task: it has no estimate, so nothing holds it
   // for room and no overrun cap applies (notConverging).
   const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort' | 'chat'>): CostEstimate =>

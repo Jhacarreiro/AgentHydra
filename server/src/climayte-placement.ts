@@ -115,7 +115,7 @@ export const PRIOR_WEIGHT = 2
  *  add in the same order as a filter per lookup. One placement pass asks it once per queued worker
  *  against one list: 461 stalls and 175 s of the tick's modelFamily calls (2026-10-11) were that
  *  filter, re-run per worker. A list must not change once it has been asked about (placementState
- *  builds a new one per pass). */
+ *  reuses it across passes only while every ordered entry is unchanged). */
 interface FinishedIndex {
   byFamily: Map<string, FinishedCost[]>
   byKind: Map<string, FinishedCost[]>

@@ -14,6 +14,7 @@ const running = ref(0)
 let threadReaders = 0
 let threadsRead = false
 let readingThreads: Promise<void> | null = null
+let threadsVersion: string | null = null
 /** Each account's token estimate by its id (server/src/free-instances/tokens.ts). */
 const tokens = shallowRef<Record<string, FreeTokens>>({})
 /** Each account's last hour of messages by its id (server/src/free-instances/health.ts). */
@@ -47,8 +48,11 @@ function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
 
 /** The thread list, read again; a read already running is shared. */
 function readThreads(): Promise<void> {
-  readingThreads ??= freeApi.threads()
-    .then((list) => { threads.value = keepUnchanged(threads.value, list); threadsRead = true })
+  readingThreads ??= freeApi.changedThreads(threadsVersion)
+    .then(({ threads: list, version }) => {
+      if (list) { threads.value = keepUnchanged(threads.value, list); threadsRead = true }
+      threadsVersion = version
+    })
     .finally(() => { readingThreads = null })
   return readingThreads
 }

@@ -1022,6 +1022,10 @@ Unchanged status polls reuse only thread counts; insertions, removals and status
 them immediately. Usage, health and jobs remain live readings. Completed operations serialize their final
 thread metadata, tokens and statistics together, and settled file writers release the serialized buffer
 while retaining pending or failed writes for retry.
+Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
+304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
+304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered
+`since` reads keep their existing array responses.
 The job's `phase` distinguishes automatic setup from the operation. `DELETE /api/free/jobs/{requestId}`
 cancels its owned process, including a login window. Requests from another browser origin are refused.
 Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.

@@ -403,6 +403,12 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   Starts and ends remain inclusive, open attempts retain their existing upper bound, and each new
   call rebuilds from current attempts. History outside `since` still participates in overlap counts.
 
+Placement keeps the same ordered immutable finished-work snapshot while its entries are unchanged,
+including a manager's completed wakes. Grouped history indexes, scaled sums and model estimates can
+then be reused across scheduling passes. A changed entry, insertion, removal or reordered history
+creates a new snapshot; an earlier pass keeps its original snapshot. Running loads and recent spend
+continue to be read live.
+
 Compact worker lists (`GET /api/corch/workers?lean=1`) use the same derived row fields as full lists,
 but read a packed worker's cached prompt preview and report character count. Its long text stays
 compressed. The count includes the earlier recap retained by `statusTurns`; reading or changing a
