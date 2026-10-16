@@ -12,6 +12,12 @@ export function coreModeOn(): boolean {
   return existsSync(join(coreDir(), 'ON'))
 }
 
+/** The CrAInium flowchart, on while the file <core dir>/CRANIUM exists (hydra-core/hook.mjs): the hook tells a chat
+ *  to walk its workspace's flowchart through connections_core. It changes nothing else here; only ON does. */
+export function craniumOn(): boolean {
+  return existsSync(join(coreDir(), 'CRANIUM'))
+}
+
 /** The CLAUDE.md layers a chat skips in core mode: the paths and globs listed in <core dir>/excludes.json. */
 export function coreChatExcludes(): string[] {
   if (!coreModeOn()) return []

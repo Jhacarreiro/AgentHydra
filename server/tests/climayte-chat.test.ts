@@ -331,6 +331,32 @@ describe('chat workers', () => {
     rmSync(join(CORE, 'ON'))
   })
 
+  // 2026-10-15: a PC on the CrAInium flowchart has a CRANIUM file and no ON (ON is the local core mode: no owner
+  // CLAUDE.md, manager tools refused). Its terminal sessions walked the flowchart through the owner's own hooks; its
+  // chats got the Hydra Core hook only while ON was there, so they never did.
+  test('with a CRANIUM file and no ON, a chat runs the Hydra Core hook and keeps the owner instructions', () => {
+    writeFileSync(join(CORE, 'CRANIUM'), '')
+    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
+    const hooks = (file: string) =>
+      JSON.parse(readFileSync(file, 'utf8')).hooks as Record<
+        string,
+        Array<{ hooks: Array<{ command?: string }> }> | undefined
+      >
+    const isCore = (g: { hooks: Array<{ command?: string }> }) =>
+      g.hooks.some((h) => h.command?.endsWith('hydra-core/hook.mjs"'))
+    const chat = dispatch({ title: 'a cranium chat', chat: true })
+    const chatHooks = hooks(writeWorkerSettings(chat, acct))
+    expect(chatHooks.UserPromptSubmit?.some(isCore)).toBe(true)
+    expect(chatHooks.SessionStart?.some(isCore)).toBe(true)
+    const argv = cliArgv(chat, 'sid', false, 'hooks.json', null)
+    const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
+    expect(prompt).toContain(OWNER_RULES)
+    const worker = hooks(writeWorkerSettings(dispatch({ title: 'a cranium worker task' }), acct))
+    expect(worker.UserPromptSubmit).toBeUndefined()
+    expect(worker.SessionStart).toBeUndefined()
+    rmSync(join(CORE, 'CRANIUM'))
+  })
+
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light
   // worker runs nothing, and starts none of the owner's MCP servers (each a process per worker).
   test("a light worker launches with no shell and no MCP server but CliMayte's own", () => {

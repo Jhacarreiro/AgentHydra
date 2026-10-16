@@ -78,7 +78,7 @@ import {
   placementOf,
   placeNeedsPick,
 } from './hydra-core/placement'
-import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
+import { coreChatExcludes, coreModeOn, craniumOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
   deskBrowserMcpUrl,
@@ -599,16 +599,20 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
         claims: claims && existsSync(claims) ? slashed(claims) : null,
         guards,
         agentGuard: true,
-        // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode: Hydra Core's hook).
+        // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode or the
+        // CrAInium flowchart: Hydra Core's hook).
         promptHooks:
           w.chat && ownerClaudeDir && !w.sealed
-            ? coreModeOn()
+            ? coreModeOn() || craniumOn()
               ? coreHookGroups()
               : ownerRouterHooks(ownerClaudeDir)
             : [],
         sessionStartHooks:
-          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
-        // Its president rule: a chat about to ask the owner something asks the owner tier first.
+          w.chat && ownerClaudeDir && !w.sealed && (coreModeOn() || craniumOn())
+            ? coreHookGroups()
+            : undefined,
+        // Its president rule: a chat about to ask the owner something asks the owner tier first. Core mode only:
+        // with the CrAInium flowchart the hook does nothing at Stop.
         stopHooks:
           w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
@@ -667,7 +671,7 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md')), ...coreChatExcludes()] }
 }
 
-/** Core mode's chat hook: Hydra Core's hook.mjs, given for the prompt, the session start and the stop, in place of the router. */
+/** Hydra Core's chat hook, hook.mjs, in place of the router: for the prompt, the session start and (core mode) the stop. */
 export function coreHookGroups(): Array<{ hooks: Array<{ type: 'command'; command: string }> }> {
   return [
     {
