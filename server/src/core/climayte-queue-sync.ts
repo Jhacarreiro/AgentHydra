@@ -248,7 +248,7 @@ export async function warmSwarmJobs(fetchJobs: SwarmJobsFetch = hswarmJobsFetch)
 }
 
 function reduce(w: CliMayteWorker, now: number): RemoteWorker {
-  const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
+  const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account
   const v = w.verdicts?.at(-1)?.verdict
   return {
     id: w.id,

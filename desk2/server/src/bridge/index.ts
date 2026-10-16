@@ -504,22 +504,21 @@ export function createBridge(opts: BridgeOptions = {}) {
     })
     const recentIds = new Set(recent.map((c) => c.threadId))
     for (const id of turnKept.keys()) if (!recentIds.has(id)) turnKept.delete(id)
-    await Promise.all(
-      recent.map(async (c) => {
-        const path = await codexRollout(c.threadId).catch(() => null)
-        if (!path) return
-        try {
-          const st = await stat(path)
-          const key = `${path}|${st.size}|${st.mtimeMs}`
-          const kept = turnKept.get(c.threadId)
-          const open = kept?.key === key ? kept.open : codexTurnOpen(path)
-          turnKept.set(c.threadId, { key, open })
-          out.set(c.threadId, open)
-        } catch {
-          // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
-        }
-      }),
-    )
+    // One thread at a time: Bun starts an I/O thread for every fs call in flight and keeps it for the server's life.
+    for (const c of recent) {
+      const path = await codexRollout(c.threadId).catch(() => null)
+      if (!path) continue
+      try {
+        const st = await stat(path)
+        const key = `${path}|${st.size}|${st.mtimeMs}`
+        const kept = turnKept.get(c.threadId)
+        const open = kept?.key === key ? kept.open : codexTurnOpen(path)
+        turnKept.set(c.threadId, { key, open })
+        out.set(c.threadId, open)
+      } catch {
+        // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
+      }
+    }
     return out
   }
 

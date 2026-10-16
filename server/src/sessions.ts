@@ -544,7 +544,7 @@ function applyMetaMessage(acc: MetaAccumulator, tf: TranscriptFile, ev: any): vo
   if (!acc.firstUser && visibleRole === 'user') {
     acc.firstUser = real.find((e) => e.kind === 'text')?.text ?? ''
   }
-  const textEv = [...tes].reverse().find((e) => e.kind === 'text')
+  const textEv = tes.findLast((e) => e.kind === 'text')
   if (textEv) {
     acc.lastRole = textEv.role
     acc.lastPreview = oneLine(textEv.text)

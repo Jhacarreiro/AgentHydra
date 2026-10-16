@@ -1004,7 +1004,7 @@ function journalLaunch(
   activeOnAccount: number,
 ): void {
   if (p.fromId) {
-    const left = [...w.attempts].reverse().find((a) => a.account.id === p.fromId)?.account
+    const left = w.attempts.findLast((a) => a.account.id === p.fromId)?.account
     journal(w, 'moved', {
       from: left ? acctLabel(left) : p.fromId,
       account: acctLabel(acct),

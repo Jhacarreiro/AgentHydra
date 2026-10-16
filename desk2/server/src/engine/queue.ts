@@ -638,7 +638,9 @@ export class QueueManager {
       if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
       return hit
     })
-    return Promise.all(images.map(async (img, i) => ({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })))
+    const out: ImageRef[] = []
+    for (const [i, img] of images.entries()) out.push({ ...img, dataBase64: (await readFile(hits[i]!.path)).toString('base64') })
+    return out
   }
 
   // queue.json

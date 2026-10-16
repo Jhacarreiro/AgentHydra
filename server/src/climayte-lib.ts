@@ -1492,8 +1492,10 @@ export const RECAP_HEADER = '## What I did'
 export function statusTurns(w: Pick<CliMayteWorker, 'result' | 'results' | 'reports'>): string[] {
   const now = w.results?.length ? w.results : w.result ? [w.result] : []
   if (now.some((t) => t.includes(RECAP_HEADER))) return now
-  for (const r of [...(w.reports ?? [])].reverse()) {
-    const turn = [...r.results].reverse().find((t) => t.includes(RECAP_HEADER))
+  const reports = w.reports ?? []
+  for (let i = reports.length - 1; i >= 0; i--) {
+    const r = reports[i]!
+    const turn = r.results.findLast((t) => t.includes(RECAP_HEADER))
     if (turn)
       return [
         `[Earlier report, for: ${r.message}]
