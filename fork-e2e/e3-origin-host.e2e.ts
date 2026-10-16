@@ -132,10 +132,29 @@ test('E3: the daemon answers its own origin, both spellings, and a client with n
   expect(got).toEqual(all(own, 200))
 }, 60_000)
 
+/** The guard's answer: 403 with its own `forbidden: <reason>`, not a handler's 403. */
+const refused = (res: { status: number; body?: any }) =>
+  res.status === 403 && String(res.body?.error).startsWith('forbidden:')
+
 test('E3: every mounted /api route, and its /ah/api mirror, refuses every hostile request with 403', async () => {
   const routes = mountedRoutes().filter((r) => !HSWARM_ROUTES.test(r.path))
   // A floor, so a source layout change that empties the scan fails here instead of passing on nothing.
   expect(routes.length).toBeGreaterThan(200)
+  // With the guard down the sweep would run every handler, POST /api/update/apply (a git pull and a
+  // reinstall of this checkout) and /api/shutdown among them. So the guard is first seen refusing
+  // every case, both verbs and both prefixes, on /api/health, which changes nothing.
+  const down: string[] = []
+  for (const prefix of ['', '/ah'])
+    for (const method of ['GET', 'POST'])
+      for (const h of hostile(daemon.port)) {
+        const res = await call(`${daemon.url}${prefix}/api/health`, {
+          method,
+          headers: h.headers,
+          body: method === 'GET' ? undefined : '{}',
+        })
+        if (!refused(res)) down.push(`${method} ${prefix}/api/health (${h.name}): ${res.status}`)
+      }
+  expect(down).toEqual([])
   const through: string[] = []
   const jobs: Array<() => Promise<void>> = []
   for (const r of routes)
@@ -148,8 +167,8 @@ test('E3: every mounted /api route, and its /ah/api mirror, refuses every hostil
             body: r.method === 'GET' ? undefined : '{}',
             signal: AbortSignal.timeout(10_000),
           }).catch((e) => ({ status: 0, body: String(e) }))
-          const refused = res.status === 403 && String(res.body?.error).startsWith('forbidden:')
-          if (!refused) through.push(`${r.method} ${prefix}${r.path} (${h.name}): ${res.status}`)
+          if (!refused(res))
+            through.push(`${r.method} ${prefix}${r.path} (${h.name}): ${res.status}`)
         })
   for (let i = 0; i < jobs.length; i += 16) await Promise.all(jobs.slice(i, i + 16).map((j) => j()))
   expect(through.sort()).toEqual([])

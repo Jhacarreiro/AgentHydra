@@ -6,8 +6,8 @@
 // Isolation follows scripts/smoke-release.ts (HOME, USERPROFILE, LOCALAPPDATA, APPDATA,
 // AGENTHYDRA_HOME, HYDRA_DESK_HOME, CLAUDE_CONFIG_DIR, both download bases refusing) plus the roots
 // tests/setup.ts redirects for the root suite. The child env is built from scratch rather than
-// copied from this process, so nothing of the developer's shell (a CLAUDE_CONFIG_DIR, a proxy, a
-// CliMayte worker id) reaches the daemon.
+// copied from this process, so of the developer's shell only PATH reaches the daemon: no
+// CLAUDE_CONFIG_DIR, no proxy, no CliMayte worker id.
 import { afterAll, expect, test } from 'bun:test'
 import { createHash } from 'node:crypto'
 import {
@@ -220,10 +220,19 @@ function killProcessesOf(dir: string): void {
 const spawned = new Set<Subprocess>()
 process.on('exit', () => {
   for (const p of spawned) p.kill('SIGKILL')
-  for (const h of homes) killProcessesOf(h.dir)
+  for (const h of homes) {
+    killProcessesOf(h.dir)
+    // A home its scenario already disposed of is gone; this is for a run stopped part way.
+    try {
+      if (!KEEP) rmSync(h.dir, { recursive: true, force: true })
+    } catch {
+      // a process that was still dying wrote into it: the folder stays behind
+    }
+  }
 })
-// A run stopped from outside (Ctrl-C, a cancelled job, a kill) still ends what it started, through
-// the exit hook above: a daemon left running would keep serving from a home nobody removes.
+// A run stopped from outside (Ctrl-C, a cancelled job, a kill) still ends what it started and
+// removes its homes, through the exit hook above: a daemon left running would keep serving from a
+// home nobody removes.
 process.once('SIGINT', () => process.exit(130))
 process.once('SIGTERM', () => process.exit(143))
 

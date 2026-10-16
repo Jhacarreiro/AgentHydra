@@ -6,8 +6,10 @@
 // (server/src/price-catalog.ts, raw.githubusercontent.com, when its cache is missing or a day old)
 // and hydra_find's embedding model (server/src/tool-intent.ts, huggingface.co, once into
 // DATA_DIR/models; AGENTHYDRA_TOOL_INTENT=0 turns it off). Those are the only destinations a boot
-// may reach. After boot nothing may: no update check (auto-update is on by default and its loop
-// asks GitHub), no download, nothing a newly synced upstream change starts in the background.
+// may reach. After boot nothing may: no update check, no download, nothing a newly synced upstream
+// change starts in the background. Only what starts within the idle window is seen: a timer that
+// first fires later is not, the update loop's among them (its first tick is hours out, and the
+// harness switches auto-update off at boot).
 import { expect, test } from 'bun:test'
 import { readdirSync, readFileSync, readlinkSync } from 'node:fs'
 import { type Daemon, hitHost, scenario, waitFor } from './harness'
