@@ -8,11 +8,18 @@ export const RECENT_TASKS = 20
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'stopped'])
 
-const firstLine = (s: string): string =>
-  s
-    .split('\n')
-    .map((l) => l.trim())
-    .find(Boolean) ?? ''
+const firstLine = (s: string): string => {
+  let start = 0
+  for (;;) {
+    const end = s.indexOf('\n', start)
+    const line = s.slice(start, end < 0 ? s.length : end).trim()
+    // A short first line can retain a whole old pasted prompt. Copy its exact UTF-16 units only
+    // when most of the source is discarded; single-line and mostly-kept text need no extra copy.
+    if (line) return s.length > 2 * line.length ? line.split('').join('') : line
+    if (end < 0) return ''
+    start = end + 1
+  }
+}
 
 /** How often each tool was called and how many of those calls failed, the most called first (then by name). */
 export function tallyTools(items: readonly TranscriptItem[]): ToolTally[] {
