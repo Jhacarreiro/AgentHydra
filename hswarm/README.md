@@ -198,6 +198,28 @@ The AgentHydra daemon starts HydraSwarm by default (`python -m hswarm mcp --http
 - `AGENTHYDRA_HSWARM_DIR` names the folder holding `hswarm/` when it is not beside the app (a wrong folder is reported in the tab, not replaced).
 - `AGENTHYDRA_PYTHON` names the interpreter (default `python`, `python3` off Windows).
 
+## One event loop for every chat
+
+The shared server answers every chat's calls and its own `GET /health` on one asyncio event loop, so work that takes
+a noticeable time does not run on it. Measured 2026-10-16 under `hswarm_doctor` + `hswarm_select` load, `/health` went
+from a 0.86 s max (p99 572 ms) to 0.31 s (p99 127 ms):
+
+- **Blocking reads run on a thread** (`asyncio.to_thread`): the key report (`hswarm_doctor`, `hswarm_keys list`), the
+  routing verdict, `GET /api/state`'s snapshot, whether the server is behind its clone (`shared.behind`, three git
+  calls), the bash probe and the jobs-folder scan. The ones that read the provider tables hold `config.RELOAD_LOCK`,
+  which `config.reload()` holds while it empties and refills them in place.
+- **One TLS context per process** (`client.tls()`, built on a start-up thread): every `httpx` client hswarm makes passes
+  `verify=tls()`. Loading the CA bundle per client cost 60-365 ms each.
+- **Key state is read and written in bulk.** A balance probe writes all of its readings in one transaction
+  (`KeyPool.note_balances`), and every pool reads through the process's one copy of the table (`keystate.read_changes`).
+- **A key pool is kept only while it has a write queued** (`client._QUEUED_POOLS`); one nobody holds is freed. The old
+  list of every pool built grew the server to 1.25 GB.
+- **A session the account cache does not know** reads AgentHydra's tables again at most once a minute
+  (`utilization.SESSION_RECHECK_S`), not on every ledger line.
+
+A new call that does file, git, SQLite or network work synchronously belongs on a thread as well. When `/health` is
+slow, `py-spy dump --nonblocking --pid <server pid>` shows what holds the loop.
+
 ## Free accounts first
 
 A tool-free task (`tools: none`, no images, no `zdr`, `model` auto, profile `routine`, `general`, `research` or
