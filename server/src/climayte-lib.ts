@@ -88,7 +88,7 @@ export interface CliMayteAttempt {
    *  live CLI's stdin mid-turn (climayteSend). `deliveries` lists them in order; `accepted` is set once
    *  the runner answered 200. Whether the CLI read one is told by its echo on the stdout log. */
   deliver?: { token: string; portFile: string; delivered: string }
-  deliveries?: { requestId: string; text: string; accepted: boolean }[]
+  deliveries?: { requestId: string; text: string; accepted: boolean; read?: true }[]
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
    *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading

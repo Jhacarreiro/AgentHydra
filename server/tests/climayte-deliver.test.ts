@@ -8,6 +8,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { climayteSend, requeueUnread } from '../src/climayte'
 import { workers } from '../src/climayte-core'
+import { createDeliveryEchoObserver } from '../src/climayte-delivery-echo'
 import type { CliMayteWorker } from '../src/climayte-lib'
 import { HELD_MESSAGE } from '../src/climayte-steer'
 
@@ -101,7 +102,11 @@ describe('a message for a running worker reaches its live CLI in the turn', () =
     expect(r.delivered).toBe('in-turn')
     await settle()
     expect(got.length).toBe(1)
-    expect(w.attempts[0]?.deliveries).toEqual([])
+    expect(w.pending).toEqual([])
+    const at = w.attempts[0]!
+    at.endedAt = Date.now()
+    requeueUnread(w, at)
+    expect(at.deliveries).toEqual([])
     expect(w.pending).toEqual(['Look at the logs too.'])
     answer = 200
   })
@@ -126,7 +131,10 @@ describe('a message for a running worker reaches its live CLI in the turn', () =
       { type: 'user', message: { role: 'user', content: [{ type: 'text', text: 'first' }] } },
       { type: 'user', message: { role: 'user', content: [{ type: 'tool_result', content: 'x' }] } },
     ]
-    requeueUnread(w, at, events)
+    const observe = createDeliveryEchoObserver(at)
+    for (const event of events) observe(event)
+    at.endedAt = Date.now()
+    requeueUnread(w, at)
     expect(w.pending).toEqual(['second'])
     expect(at.deliveries).toEqual([])
   })

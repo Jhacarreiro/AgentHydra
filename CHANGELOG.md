@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte avoids replaying messages its running worker already read.** Delivery receipts follow the complete log stream instead of its short display tail, including acknowledgements that arrive after a turn finishes.
+- **CliMayte skips unnecessary checks of finished workers.** Quiet history avoids runner payload reads and check polling, while pending cleanup still receives the full safety checks.
 - **CliMayte reads less transcript data to find an attempt's first request.** Spend calculation stops once it finds the matching usage record, using the same token parser and time window. Long records decode in chunks without assembling an extra full byte buffer.
 - **Desk's freeze profiler uses less background CPU.** After a freeze starts diagnostics, it samples at the same measured interval as the main daemon. Freeze thresholds and named-function reports remain unchanged.
 - **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.

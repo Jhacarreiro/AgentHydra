@@ -40,6 +40,7 @@ import {
   readFileSync,
   renameSync,
   rmSync,
+  statSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -87,6 +88,7 @@ import {
   walls,
   workers,
 } from './climayte-core'
+import { beginDeliveryPost, endDeliveryPost, hasDeliveryPosts } from './climayte-delivery-echo'
 import {
   assertKnownAccounts,
   deskProblem,
@@ -119,7 +121,6 @@ import {
   climaytePriority,
   contextTokens,
   DRONE_REFUSAL,
-  plainUserText,
   RUNNER_NEVER_STARTED_NOTICE,
   roleOf,
   tooBigOf,
@@ -176,6 +177,7 @@ import {
   killAttempts,
   killLateStarts,
   killsLanded,
+  lastRead,
   noteReading,
   readLog,
   recheckCredentialWall,
@@ -405,6 +407,7 @@ function pollChecks(): void {
     // One worker's bad record (a hand edit, a half-written store) is that worker's problem: a throw
     // here ended the whole tick, so no task anywhere moved on (found by a test, 2026-10-02).
     try {
+      if (w.status !== 'checking' && !w.checkRunner && !w.staleChecks?.length) continue
       stopStaleChecks(w)
       pollCheck(w)
     } catch (err) {
@@ -665,7 +668,7 @@ async function tick(): Promise<void> {
       lastSettle = now
       settleSpends(now)
     }
-    killLateStarts()
+    killLateStarts(settleStoppedDeliveries)
     saveLive()
     pollChecks()
     recheckSignedOut(accounts)
@@ -986,13 +989,14 @@ function recordAttemptEnd(
   v: EndRead['v'],
   events: unknown[],
   now: number,
+  deliveryLogComplete: boolean,
 ): number {
   if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
   at.context = contextTokens(events)
-  requeueUnread(w, at, events)
+  if (deliveryLogComplete) requeueUnread(w, at)
   // A chat's handoff, written in a turn that ended on its own, is the note its next message starts
   // from (a fresh session answering that message, not an immediate continuation).
   if (w.chat === true && v.outcome === 'done' && at.windDown && handoffWritten(at.windDown))
@@ -1046,9 +1050,10 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
       : end.v
   rmSync(signalPath(w.id), { force: true })
   removeWorkerFiles(w.id)
+  const deliveryLogComplete = !at.deliveries?.length || !lastRead(at).partial.trim()
   forgetRead(at.log)
   const now = Date.now()
-  const spent = recordAttemptEnd(w, at, v, events, now)
+  const spent = recordAttemptEnd(w, at, v, events, now, deliveryLogComplete)
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -1403,16 +1408,10 @@ const DELIVER_TIMEOUT_MS = 3_000
 const DELIVERED_MESSAGE =
   "Delivered into the worker's running turn: it reads the message at its next step."
 
-/** Hands a message to a running worker's live CLI through its native runner (/deliver). The message
- *  is recorded on the attempt before the POST and kept only once the runner answers 200; a refused or
- *  failed POST puts it back among the held messages. False when the attempt has no live input yet
- *  (no port file), so the caller holds the message as before. */
-function deliverInTurn(
-  w: CliMayteWorker,
-  text: string,
-  setting: SendSetting,
-  requestId: string | undefined,
-): boolean {
+/** Hands a message to a running worker's live CLI through its native runner (/deliver). Every
+ *  receipt stays until the turn ends and its POSTs settle: even a failed response can be followed
+ *  by a CLI echo. False with no live input yet, so the caller holds the message as before. */
+function deliverInTurn(w: CliMayteWorker, text: string, requestId: string | undefined): boolean {
   const at = w.attempts[w.attempts.length - 1]
   if (!at?.deliver || at.endedAt !== null) return false
   let port = NaN
@@ -1422,26 +1421,41 @@ function deliverInTurn(
     return false
   }
   if (!Number.isInteger(port) || port <= 0) return false
-  const entry = { requestId: requestId ?? randomUUID(), text, accepted: false }
+  const entry: NonNullable<CliMayteAttempt['deliveries']>[number] = {
+    requestId: requestId ?? randomUUID(),
+    text,
+    accepted: false,
+  }
   at.deliveries = [...(at.deliveries ?? []), entry]
-  void postDelivery(port, at.deliver.token, entry).then((ok) => {
-    if (ok) {
-      entry.accepted = true
-      journal(w, 'message-delivered', { pending: w.pending.length })
+  beginDeliveryPost(entry)
+  void postDelivery(port, at.deliver.token, entry)
+    .then(async (ok) => {
+      endDeliveryPost(entry)
+      if (workers.get(w.id) !== w) return
+      entry.accepted = ok
+      // Keep refusals and unknown HTTP outcomes too: the CLI can echo a message after a
+      // failed response. Replaying before the turn ends would risk sending it twice.
+      if (ok || entry.read) journal(w, 'message-delivered', { pending: w.pending.length })
+      if (at.endedAt !== null) {
+        if (at.outcome === 'cancelled') {
+          // A stop stamps endedAt before its asynchronous kill lands. Its final echo can
+          // still arrive meanwhile; an unconfirmed/still-starting runner stays unresolved.
+          await killsLanded()
+          if (workers.get(w.id) !== w) return
+          settleStoppedDeliveries(w, at)
+        } else if (!hasDeliveryPosts(at)) {
+          try {
+            if (readDeliveryLog(at) && reviveAfterDelivery(w, at, requeueUnread(w, at))) schedule(0)
+          } finally {
+            forgetRead(at.log)
+          }
+        }
+      }
       changed(w)
-      return
-    }
-    at.deliveries = (at.deliveries ?? []).filter((d) => d !== entry)
-    queueFollowUp(w, text, setting)
-    if (!isActive(w)) {
-      w.status = 'queued'
-      w.retries = 0
-      w.error = null
-      w.revived = true
-      schedule(0)
-    }
-    changed(w)
-  })
+    })
+    .catch((err) =>
+      console.error(`[climayte] ${w.id}: delivery receipt could not be settled:`, err),
+    )
   return true
 }
 
@@ -1464,29 +1478,89 @@ async function postDelivery(
   }
 }
 
-/** A message accepted into the CLI's stdin that the CLI never echoed back went unread (its turn ended
- *  first): it goes back among the held messages. The CLI echoes each user line it reads in order, and
- *  its first echo is the prompt itself, so the accepted messages it read are the echoed prefix. */
-export function requeueUnread(w: CliMayteWorker, at: CliMayteAttempt, events: unknown[]): void {
-  const accepted = (at.deliveries ?? []).filter((d) => d.accepted)
+/** The complete log stream marks read receipts before its tail evicts their echoes. Once the
+ *  attempt ends and every live POST settles, unread text/count goes back among held messages once. */
+export function requeueUnread(w: CliMayteWorker, at: CliMayteAttempt): number {
+  if (at.endedAt === null || hasDeliveryPosts(at)) return 0
+  const deliveries = at.deliveries ?? []
+  // All receipts stay until this point. For identical texts it does not matter which
+  // request's echo was attributed to which receipt: the unread text/count is exact.
+  const unread = deliveries.filter((d) => !d.read)
   at.deliveries = []
-  if (accepted.length === 0) return
-  const echoed: string[] = []
-  let first = true
-  for (const e of events) {
-    const line = e as { type?: unknown; message?: { content?: unknown } } | null
-    if (line?.type !== 'user') continue
-    if (first) {
-      first = false
-      continue
-    }
-    const said = plainUserText(line.message?.content)
-    if (said !== null) echoed.push(said)
+  for (const d of unread) w.pending.push(d.text)
+  return unread.length
+}
+
+function readDeliveryLog(at: CliMayteAttempt): boolean {
+  const r = readLog(at)
+  if (r.partial.trim()) return false
+  if (r.offset > 0) return true
+  try {
+    const st = statSync(at.log)
+    return st.isFile() && st.size === 0
+  } catch {
+    return false
   }
-  let read = 0
-  while (read < accepted.length && echoed[read] === accepted[read].text) read++
-  for (const d of accepted.slice(read)) w.pending.push(d.text)
-  if (read < accepted.length) changed(w)
+}
+
+/** Called after a stop's kill has landed, including when every POST already settled before
+ *  the stop. Never dispatches: unread messages remain held on a cancelled/failed worker. */
+export function settleStoppedDeliveries(w: CliMayteWorker, at: CliMayteAttempt): number {
+  if (
+    workers.get(w.id) !== w ||
+    at.endedAt === null ||
+    !at.deliveries?.length ||
+    hasDeliveryPosts(at) ||
+    !attemptExited(w, at)
+  )
+    return 0
+  try {
+    if (!readDeliveryLog(at)) return 0
+    const count = requeueUnread(w, at)
+    changed(w)
+    return count
+  } catch (err) {
+    // One unreadable log must not interrupt another worker's stop cleanup.
+    console.error(`[climayte] ${w.id}: stopped delivery receipts could not be recovered:`, err)
+    return 0
+  } finally {
+    forgetRead(at.log)
+  }
+}
+
+function reviveAfterDelivery(w: CliMayteWorker, at: CliMayteAttempt, queued: number): boolean {
+  if (!queued || at.outcome === 'cancelled' || w.status !== 'done' || w.attempts.at(-1) !== at)
+    return false
+  w.status = 'queued'
+  w.retries = 0
+  w.error = null
+  w.revived = true
+  return true
+}
+
+/** A prior daemon can end a turn before its delivery POST callbacks settle. Recover just those
+ *  receipts from the full log, once at boot, before dispatch. A missing/unreadable log leaves the
+ *  receipt for review instead of guessing that the message was unread and replaying it. */
+export function recoverDeliveryReceipts(): number {
+  let queued = 0
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      if (at.endedAt === null || !at.deliver || !at.deliveries?.length || hasDeliveryPosts(at))
+        continue
+      try {
+        if (at.outcome === 'cancelled' && !attemptExited(w, at)) continue
+        if (!readDeliveryLog(at)) continue
+        const count = requeueUnread(w, at)
+        queued += count
+        reviveAfterDelivery(w, at, count)
+        changed(w)
+      } catch (err) {
+        console.error(`[climayte] ${w.id}: delivery receipts could not be recovered:`, err)
+      } finally {
+        forgetRead(at.log)
+      }
+    }
+  return queued
 }
 
 export function climayteSend(
@@ -1546,11 +1620,7 @@ export function climayteSend(
     const sent = sendUrgent(w, text, setting)
     if (sent) return sent
     // It finished on its own a moment ago: the message leads its next turn like any other.
-  } else if (
-    w.status === 'running' &&
-    !opts.ping &&
-    deliverInTurn(w, text, setting, opts.requestId)
-  ) {
+  } else if (w.status === 'running' && !opts.ping && deliverInTurn(w, text, opts.requestId)) {
     changed(w)
     return {
       ok: true,
@@ -2043,7 +2113,10 @@ function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
   if (!pollBeforeStop(w)) return false
   const at = runningAttempt(w)
   if (at) {
-    killAttempts([at], () => removeStopFiles(w))
+    killAttempts([at], () => {
+      removeStopFiles(w)
+      settleStoppedDeliveries(w, at)
+    })
     recordStop(w, at, notice)
   }
   return true
@@ -2071,7 +2144,10 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   killAttempts(
     killing.map((s) => s.at as Attempt),
     () => {
-      for (const { w } of killing) removeStopFiles(w)
+      for (const { w, at } of killing) {
+        removeStopFiles(w)
+        if (at) settleStoppedDeliveries(w, at)
+      }
     },
   )
   for (const { w, at: running } of stopping) {
@@ -2207,6 +2283,7 @@ export function startCliMayte(): void {
     .catch((err) => console.error('[climayte] preloading finished workers failed:', err))
     .then(() => {
       load()
+      recoverDeliveryReceipts()
       sweepWorkerFiles()
       startPing()
       schedule(0)

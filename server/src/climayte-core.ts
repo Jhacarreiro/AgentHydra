@@ -361,6 +361,8 @@ export const storeLoaded = (): boolean => loaded
 export interface LogRead {
   offset: number
   partial: string
+  /** An owned attempt's receipt bookkeeping, fed before the bounded event tail evicts anything. */
+  onEvent?: (ev: unknown) => void
   events: unknown[]
   recent: string[]
   sawInit: boolean
@@ -1174,9 +1176,10 @@ export function placementState(): {
   return { costOf, running, finishedSince }
 }
 
-export const freshRead = (): LogRead => ({
+export const freshRead = (onEvent?: (ev: unknown) => void): LogRead => ({
   offset: 0,
   partial: '',
+  ...(onEvent ? { onEvent } : {}),
   events: [],
   recent: [],
   sawInit: false,
@@ -1299,6 +1302,7 @@ function applyLogEvent(ev: unknown, r: LogRead, replayAt: number | null): void {
     if (found) r.eta = { ...found, at: eventTime(ev) ?? replayAt ?? Date.now() }
   }
   r.review ??= reviewOfEvent(ev)
+  r.onEvent?.(ev)
   r.events.push(ev)
   if (r.events.length > 400) r.events.splice(0, r.events.length - 400)
   const s = summarizeEvent(ev)
