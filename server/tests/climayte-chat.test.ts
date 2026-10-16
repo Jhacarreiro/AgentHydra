@@ -241,8 +241,30 @@ describe('chat workers', () => {
   })
 
   // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
-  // account folder has settings of its own, and the launch carried only the guards.
-  test("a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
+  // account folder has settings of its own, and the launch carried only the guards. Since 2026-10-15 the router rides
+  // only with the CrAInium people add-on (people-addon.ts), so the home is pointed at one whose settings name a door, as
+  // the add-on's own tests do: on a PC without the add-on the chat had no router and this failed.
+  test("with the people add-on, a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
+    const saved = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME }
+    mkdirSync(join(HOME, '.agenthydra'), { recursive: true })
+    writeFileSync(
+      join(HOME, '.agenthydra', 'people-store.json'),
+      JSON.stringify({ crainium: { command: ['node', 'fake-people-door.mjs'] } }),
+    )
+    process.env.USERPROFILE = HOME
+    process.env.HOME = HOME
+    try {
+      routedChatCarriesTheRouter()
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(join(HOME, '.agenthydra'), { recursive: true, force: true })
+    }
+  })
+
+  function routedChatCarriesTheRouter(): void {
     // As managers/install.mjs writes it on Windows.
     const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
     writeFileSync(
@@ -266,7 +288,7 @@ describe('chat workers', () => {
     rmSync(join(OWNER, 'settings.json'))
     const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
     expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
-  })
+  }
 
   // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a
   // worker (no AgentHydra MCP, no chat key) cannot make; its settings leave both files out.
