@@ -694,24 +694,31 @@ function claudeSessionId(rel: string, store: ClaudeStore): string {
  * row rather than a sibling of itself.
  */
 export function claudeParentId(rel: string, store: ClaudeStore): string | null {
+  if (!store.sessionFile) {
+    // Ordinary layouts need only the directory below the project. Avoid splitting all of a
+    // nested subagent's components on every history sweep; two separators decide its owner.
+    const projectEnd = nextPathSeparator(rel, 0)
+    const sessionEnd = projectEnd < 0 ? -1 : nextPathSeparator(rel, projectEnd + 1)
+    return sessionEnd < 0 ? null : rel.slice(projectEnd + 1, sessionEnd)
+  }
   const parts = rel.split(/[\\/]/)
   const name = parts[parts.length - 1] ?? ''
 
   // A store that NAMES its session file (Cowork) decides by name, not by depth: its runs sit at
   // several depths, and each run directory also contains a whole Claude Code home of its own —
   // the CLI's transcript and that session's subagents/ tree, which are the same run's spend.
-  if (store.sessionFile) {
-    const owner = lastIndexStartingWith(parts, store.idPrefix)
-    if (owner < 0) return null
-    // The session file, directly inside the run's own directory, IS the session.
-    if (name === store.sessionFile && owner === parts.length - 2) return null
-    const raw = parts[owner] as string
-    return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
-  }
+  const owner = lastIndexStartingWith(parts, store.idPrefix)
+  if (owner < 0) return null
+  // The session file, directly inside the run's own directory, IS the session.
+  if (name === store.sessionFile && owner === parts.length - 2) return null
+  const raw = parts[owner] as string
+  return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
+}
 
-  // `<project>/<session>.jsonl` is a session; anything deeper is a subagent of parts[1].
-  if (parts.length <= 2) return null
-  return parts[1] ?? null
+function nextPathSeparator(path: string, start: number): number {
+  const slash = path.indexOf('/', start)
+  const backslash = path.indexOf('\\', start)
+  return slash < 0 ? backslash : backslash < 0 ? slash : Math.min(slash, backslash)
 }
 
 /** Index of the last path segment beginning with `prefix`, or -1. An empty prefix matches nothing,

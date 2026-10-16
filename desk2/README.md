@@ -1032,6 +1032,10 @@ Completed jobs in the shared page cache retain metadata rather than whole result
 Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
 uncertain-operation locks remain intact. Successful account removal clears its cache only if no
 newer operation appeared while deletion was awaiting acknowledgement. Server job retention is unchanged.
+ChatGPT continuation model and previous-message-ID checks use the existing proof projection,
+avoiding historical code/citation extraction before dispatch. Branch visibility and identity
+validation remain shared with rich reads; completed replies still receive full display fields,
+and a lost or incomplete result never triggers another POST.
 Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
 304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
 304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered

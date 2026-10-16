@@ -423,6 +423,10 @@ routes keep their shapes, and brief/report reads take precedence. Packed history
 Finished workers skip running-attempt access, and spend settlement collects only open attempts
 instead of allocating intermediate arrays for every historical worker.
 
+Default Claude parent lookups find only the first two slash/backslash positions rather than
+splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain
+their previous ownership results; named-session stores keep their prefixed-ancestor rules.
+
 Origin-title warming excludes non-chat origins and cached titles before ranking the remaining
 workers. Active-first/newest priority, stable duplicate selection, lookup caps and null-miss retry
 times are unchanged. Completed or failed lookups release their deadline timers immediately.

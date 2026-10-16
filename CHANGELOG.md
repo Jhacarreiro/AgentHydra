@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free continuations skip historical display formatting before sending.** Model selection and message identity checks read the same validated branch without rebuilding code blocks or citations. Completed replies still include their full display data.
+- **Transcript parent lookups create fewer temporary objects.** Ordinary Claude paths identify their owning session without splitting every nested path component. Named-session layouts keep their existing rules.
 - **Completed Free operations release their cached reply data.** Open chats keep their returned messages, while account rows retain only operation metadata and recovery IDs. Successful account deletion also clears its unused page state.
 - **Nested subagent lists reuse their shared ancestry.** Deep chains avoid repeatedly walking the same parents, with unchanged ownership, ordering and orphan handling.
 - **Source updates no longer race their own update checks.** Checks and applies take turns through the complete operation, preventing a background fetch from interfering with an update's Git pull.
