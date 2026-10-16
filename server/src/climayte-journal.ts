@@ -156,7 +156,7 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
   // 30, not 100: one wake reads what is new (`since`), and 100 lines was more than any wake used.
   const limit = Math.min(5_000, Math.max(1, Math.floor(filter.limit ?? 30)))
   const after = sinceMs(filter.since)
-  const pick = (file: string): CliMayteJournalEntry[] => {
+  const pick = (file: string, take: number): CliMayteJournalEntry[] => {
     let text = ''
     try {
       text = readFileSync(file, 'utf8')
@@ -164,7 +164,13 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
       return []
     }
     const out: CliMayteJournalEntry[] = []
-    for (const line of text.split('\n')) {
+    // Read toward the start until enough matching rows have been found. A newest-30 read of
+    // a full journal otherwise parsed thousands of rows it immediately discarded. `since`
+    // remains a filter, never a stopping point: file order need not be timestamp order.
+    for (let end = text.length; end > 0 && out.length < take; ) {
+      const start = text.lastIndexOf('\n', end - 1)
+      const line = text.slice(start + 1, end)
+      end = Math.max(0, start)
       // A cheap text check before the parse: a filtered read of a 5 MB file parses only its lines.
       if (!line || (filter.id && !line.includes(filter.id))) continue
       if (filter.group && !line.includes(filter.group)) continue
@@ -179,10 +185,12 @@ export function readJournal(path: string, filter: JournalFilter = {}): CliMayteJ
       if (after !== null && !(Date.parse(e.ts) > after)) continue
       out.push(e)
     }
-    return out
+    return out.reverse()
   }
-  let entries = pick(path)
-  if (entries.length < limit) entries = [...pick(previousJournal(path)), ...entries]
+  // slice(-NaN) historically kept every current-file row and did not read the previous file.
+  let entries = pick(path, Number.isNaN(limit) ? Number.POSITIVE_INFINITY : limit)
+  if (entries.length < limit)
+    entries = [...pick(previousJournal(path), limit - entries.length), ...entries]
   const out = entries.slice(-limit)
   const named = new Set<string>()
   for (const e of out) {
