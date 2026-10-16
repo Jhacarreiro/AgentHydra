@@ -2316,7 +2316,60 @@ export function toView(
   lookup?: OriginLookup,
   text?: CliMayteLeanText,
 ): CliMayteWorkerView {
-  const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
+  return projectWorkerView(w, now, FULL_VIEW_PROJECTION, lookup, text)
+}
+
+/** A list chooses its final attempt/verdict rows before they are built. Common fields stay on the
+ *  same fresh view, including older or unknown worker fields copied from the record. */
+export interface WorkerViewProjection<A, V> {
+  attempts(w: CliMayteWorker): A[]
+  verdicts(w: CliMayteWorker): V[] | undefined
+}
+
+type ProjectedWorkerView<A, V> = Omit<CliMayteWorkerView, 'attempts' | 'verdicts'> & {
+  attempts: A[]
+  verdicts?: V[]
+}
+
+const FULL_VIEW_PROJECTION: WorkerViewProjection<
+  CliMayteWorkerView['attempts'][number],
+  NonNullable<CliMayteWorkerView['verdicts']>[number]
+> = {
+  verdicts: (w) =>
+    w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+    })),
+  attempts: (w) =>
+    w.attempts.map((a, i) => {
+      const because = attemptCause(w, i)
+      return {
+        account: { id: a.account.id, num: a.account.num, name: a.account.name },
+        outcome: a.outcome,
+        notice: a.notice,
+        requested: a.requested,
+        model: a.model,
+        ...(a.ceiling ? { ceiling: true } : {}),
+        tokens: a.tokens,
+        costUsd: a.spend ? a.spend.costUsd : null,
+        turns: a.spend ? a.spend.turns : null,
+        pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
+        rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
+        ...(because ? { because } : {}),
+        ...(a.left?.length ? { left: a.left } : {}),
+        ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
+      }
+    }),
+}
+
+export function projectWorkerView<A, V>(
+  w: CliMayteWorker,
+  now: number,
+  projection: WorkerViewProjection<A, V>,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): ProjectedWorkerView<A, V> {
+  const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
     ...(text ? withoutWorkerText(w, text) : w),
@@ -2338,27 +2391,9 @@ export function toView(
     saidLine: undefined,
     saidAt: undefined,
     stateAt: undefined,
-    reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
-    verdicts: w.verdicts?.map(({ units, ...v }) => ({
-      ...v,
-      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
-    })),
-    attempts: w.attempts.map((a, i) => ({
-      account: { id: a.account.id, num: a.account.num, name: a.account.name },
-      outcome: a.outcome,
-      notice: a.notice,
-      requested: a.requested,
-      model: a.model,
-      ...(a.ceiling ? { ceiling: true } : {}),
-      tokens: a.tokens,
-      costUsd: a.spend ? a.spend.costUsd : null,
-      turns: a.spend ? a.spend.turns : null,
-      pct: a.tokens ? pctOf(attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl)) : null,
-      rereadPct: a.spend ? pctOf(rereadUnits(a, w.model)) : null,
-      ...(attemptCause(w, i) ? { because: attemptCause(w, i) } : {}),
-      ...(a.left?.length ? { left: a.left } : {}),
-      ...(a.peakProcesses ? { peakProcesses: a.peakProcesses } : {}),
-    })),
+    reportedModel: w.attempts.findLast((a) => a.model)?.model ?? null,
+    verdicts: projection.verdicts(w),
+    attempts: projection.attempts(w),
     used: (() => {
       const all = w.attempts.reduce(
         (s, a) => s + attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl),

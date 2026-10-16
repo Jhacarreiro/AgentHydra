@@ -130,7 +130,17 @@ def thread_model(conversation):
     """The model a continued chat is sent on: the one its latest reply came from, when it is one AgentHydra sends, else
     Luna Instant. Before 2026-10-13 every continued message went to Luna Instant, so a thread started on GPT-6 answered
     only its first message there: a Free tool task, whose every tool result is a continued message, ran on Luna mini."""
-    for message in reversed(visible_messages(conversation, rich=False)):
+    return _model_from_messages(visible_messages(conversation, rich=False))
+
+
+def continuation_summary(conversation):
+    """Select the model and prior IDs once, retaining no projected messages or transcript."""
+    messages = visible_messages(conversation, rich=False)
+    return _model_from_messages(messages), [message['id'] for message in messages]
+
+
+def _model_from_messages(messages):
+    for message in reversed(messages):
         if message["role"] == "assistant" and message.get("model"):
             sent = message["model"]
             return sent if isinstance(sent, str) and SLUG.fullmatch(sent) else TEXT_MODEL

@@ -6,7 +6,7 @@ from ..errors import ClaudeError
 from ..http import valid_uuid
 from ..results import brief_result
 from .api import ChatGPTClient
-from .http import ChatGPTHttp, thread_model, visible_messages
+from .http import ChatGPTHttp, continuation_summary
 
 
 AUTH_HEADERS = frozenset({'authorization', 'user-agent', 'oai-language', 'oai-did', 'chatgpt-account-id'})
@@ -114,12 +114,12 @@ def preflight(saved_state, *, server_id=None, prefer=None, timeout=120, http_fac
     def read(client):
         client.authenticate()
         body = client.read(server_id) if server_id is not None else None
-        model = client.model_for(prefer) if body is None else thread_model(body)
         previous = []
         branch = None
-        if body is not None:
-            messages = visible_messages(body, rich=False)
-            identities = [message['id'] for message in messages]
+        if body is None:
+            model = client.model_for(prefer)
+        else:
+            model, identities = continuation_summary(body)
             if any(not isinstance(identity, str) or not identity for identity in identities):
                 raise ClaudeError('The selected branch has invalid message identities. No message was sent.',
                     code='invalid_response')

@@ -41,11 +41,13 @@ import {
   type CliMayteWorkerBrief,
   type CliMayteWorkerReport,
   type CliMayteWorkerView,
+  projectWorkerView,
   recentWorkers,
   toBrief,
   toReport,
   toView,
   verdictCoversNewestWork,
+  type WorkerViewProjection,
 } from './climayte-lib'
 import { GROWTH_REUSE_MS, memoryShort } from './climayte-memory'
 import type { OriginLookup } from './climayte-origin'
@@ -281,7 +283,10 @@ export function climayteList(
   if (filter.lean && !filter.brief)
     return keep.map((w) => {
       const text = leanTextOf(w)
-      return leanWorkerView(toView(w, now, originLookup, text), text.resultChars)
+      return Object.assign(projectWorkerView(w, now, LEAN_VIEW_PROJECTION, originLookup, text), {
+        result: null,
+        resultChars: text.resultChars,
+      })
     })
   return keep.map((w) => toView(w, now, originLookup))
 }
@@ -400,6 +405,25 @@ export type CliMayteWorkerLean = Omit<
     Omit<NonNullable<CliMayteWorkerView['verdicts']>[number], 'note'> & { note: string | null }
   >
   resultChars: number
+}
+
+const LEAN_VIEW_PROJECTION: WorkerViewProjection<
+  CliMayteWorkerLean['attempts'][number],
+  NonNullable<CliMayteWorkerLean['verdicts']>[number]
+> = {
+  attempts: (w) =>
+    w.attempts.map((a) => ({
+      account: { id: a.account.id, num: a.account.num, name: a.account.name },
+      outcome: a.outcome,
+      tokens: a.tokens,
+      ...(a.ceiling ? { ceiling: true as const } : {}),
+    })),
+  verdicts: (w) =>
+    w.verdicts?.map(({ units, ...v }) => ({
+      ...v,
+      pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
+      note: v.note ? (v.note.split('\n', 1)[0] ?? '').slice(0, 200) : null,
+    })),
 }
 
 export function climayteLeanWorker(v: CliMayteWorkerView): CliMayteWorkerLean {
