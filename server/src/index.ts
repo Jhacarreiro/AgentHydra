@@ -124,6 +124,7 @@ import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
+  TOOLS as MCP_TOOLS,
   UNLISTED_TOOLS as MCP_UNLISTED_TOOLS,
   toolsForCaller as mcpToolsForCaller,
   useOwnDaemon as mcpUseOwnDaemon,
@@ -181,6 +182,7 @@ import {
 } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
+import { warmToolIntentInBackground } from './tool-intent'
 import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -1821,6 +1823,9 @@ warmSessionMetaIndex()
   // is what the user is waiting for; racing them would slow the visible thing to speed up a tab
   // nobody has opened yet. Fire-and-forget by design (see warmAnalyticsInBackground).
   .finally(() => warmAnalyticsInBackground())
+// hydra_find's intent index: loads the embedding model and embeds every tool, so the first search ranks by meaning
+// instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
+warmToolIntentInBackground(MCP_TOOLS)
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`
