@@ -33,6 +33,7 @@ import { registerAskMcpRoute, registerStopHookRoute } from './climayte-ask-mcp'
 import { workers as climayteWorkers, preloadDone, storeLoaded } from './climayte-core'
 import { registerManagerMcpRoute } from './climayte-manager-mcp'
 import { flushCliMayteStore } from './climayte-store-writer'
+import { startCommandPacks } from './command-packs'
 import {
   APP_ROOT,
   appEnv,
@@ -962,6 +963,7 @@ await import('./routes/helpers')
 await import('./routes/routing')
 await import('./routes/dashboards')
 await import('./routes/fourman')
+await import('./routes/command-packs')
 
 // --- full-shutdown sentinel (web-UI "Shut down") -----------------------------
 // A marker file the PowerShell tray host polls (misc/Tray-Host.ps1 watch timer) so a user "Shut
@@ -1696,6 +1698,10 @@ startDesktopCliFeed()
 // The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
 // analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.
 startKitSweep()
+
+// Command packs: a team's slash commands and skills, pulled from git into every account every ten minutes
+// (server/src/command-packs.ts, docs/COMMAND-PACKS.md).
+startCommandPacks()
 
 // Paid extra usage is never billed unless Settings allows it: on an account that has it switched
 // on, every Claude session is stopped as the account reaches its limit (server/src/extra-usage.ts).

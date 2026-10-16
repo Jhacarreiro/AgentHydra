@@ -14,6 +14,7 @@ import RoutineDetails from './RoutineDetails.vue'
 import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
+import CommandPacksSettings from './CommandPacksSettings.vue'
 import PeopleSetup from '@/components/people/PeopleSetup.vue'
 import PeopleWhere from '@/components/people/PeopleWhere.vue'
 import { loadStatus as loadPeopleStore } from '@/components/people/where-api'
@@ -527,6 +528,8 @@ onBeforeUnmount(() => {
       <DiagnosticsView v-else-if="section === 'diagnostics' && !searching" />
 
       <ConnectorsSettings v-else-if="section === 'connectors' && !searching" />
+
+      <CommandPacksSettings v-else-if="section === 'packs' && !searching" />
 
       <PeopleSetup v-else-if="section === 'people' && !searching && peopleOn" />
 

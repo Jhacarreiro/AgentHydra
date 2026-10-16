@@ -16,7 +16,9 @@ their usual `~` form; this page says what each one is and who owns it.
 | `<config>/sessions/<pid>.json` | Claude Code | The CLI's live registry of running sessions, keyed by engine pid. `whoami` and the history tools match the caller against it. |
 | `<config>/skills/<name>/SKILL.md` | the user | User-level skills. The Hydra Core catalog builder (`hydra-core/catalog/build.mjs`) reads each one as a catalog entry; it never writes here. |
 | `<config>/agents/<name>.md` | the user | User-level sub-agent definitions. The same catalog builder reads them as catalog entries, read-only. |
-| `<config>/commands/` | the user | User-level slash commands. The canonical `/orchestrate` command lives in this repo at [`.claude/commands/orchestrate.md`](../.claude/commands/orchestrate.md) and is copied here. |
+| `<config>/commands/` | the user | User-level slash commands. The canonical `/orchestrate` command lives in this repo at [`.claude/commands/orchestrate.md`](../.claude/commands/orchestrate.md) and is copied here. A command pack's commands are copied here too ([COMMAND-PACKS.md](COMMAND-PACKS.md)). |
+| `<config>/skills/<name>/` | the user | User-level skills. A command pack's skills are copied here; in a CLI instance's config dir, CliMayte links the owner's own skills here ([CLIMAYTE.md](CLIMAYTE.md)). |
+| `<config>/.agenthydra-command-packs.json` | AgentHydra | The record of every file a command pack wrote here and its SHA-256, so an edited copy or a file of the user's own is never replaced ([COMMAND-PACKS.md](COMMAND-PACKS.md)). The same file sits in each Codex home, whose pack commands go to `prompts/`. |
 | `<home>/.claude/scheduled-tasks/<taskId>/SKILL.md` | Claude Desktop | Where the desktop app looks for a scheduled task's prompt; the path is hardcoded in the app, and the task row's own `filePath` is ignored. |
 
 The default login belongs to no managed instance and no dispatch account. When a session sets no
