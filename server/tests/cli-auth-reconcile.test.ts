@@ -114,6 +114,41 @@ test('the exact current grant is verified read-only before a signed-out wall is 
   expect(JSON.stringify(result)).not.toContain(TOKEN)
 })
 
+test('supported Claude Code session grants verify while profile-only grants remain blocked', async () => {
+  const f = fixture()
+  writeFileSync(
+    f.file,
+    credentials(TOKEN, { scopes: ['user:profile', 'user:sessions:claude_code'] }),
+  )
+  let requests = 0
+  const result = await f.check(async () => {
+    requests++
+    return profile()
+  })
+  expect(result).toMatchObject({
+    ok: true,
+    loggedIn: true,
+    wallCleared: true,
+    reason: 'verified',
+    email: EMAIL,
+    accountUuid: UUID,
+  })
+  expect(requests).toBe(1)
+  expect(f.state.cleared).toBe(1)
+
+  const profileOnly = fixture()
+  writeFileSync(profileOnly.file, credentials(TOKEN, { scopes: ['user:profile'] }))
+  const refused = await profileOnly.check(async () => {
+    requests++
+    return profile()
+  })
+  expect(refused.reason).toBe('credentials_invalid')
+  expect(refused.ok).toBe(false)
+  expect(profileOnly.state.cleared).toBe(0)
+  expect(profileOnly.state.wall?.reason).toBe('signed out')
+  expect(requests).toBe(1)
+})
+
 test('rejections, mismatched identities and malformed profiles keep the authentication wall', async () => {
   const cases: Array<[Response, CliAuthCheckResult['reason']]> = [
     [new Response(`error echoes ${TOKEN}`, { status: 401 }), 'profile_rejected'],

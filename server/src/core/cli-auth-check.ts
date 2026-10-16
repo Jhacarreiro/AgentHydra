@@ -99,7 +99,8 @@ function credential(configDir: string): { token: string; identity: string } | nu
       !Number.isFinite(oauth.expiresAt) ||
       oauth.expiresAt <= Date.now() ||
       !Array.isArray(oauth.scopes) ||
-      !oauth.scopes.includes('user:inference') ||
+      (!oauth.scopes.includes('user:inference') &&
+        !oauth.scopes.includes('user:sessions:claude_code')) ||
       !oauth.scopes.includes('user:profile')
     )
       return null
