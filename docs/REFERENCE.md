@@ -717,7 +717,11 @@ that leaves nothing behind. `server/src/stall-sentinel.ts` writes down what the 
 
 The profile comes from a sampler that runs from boot: `on top` is where the samples were,
 `innermost daemon frame` the daemon function closest to them and `outermost daemon frame` the timer or
-route that started it. That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
+route that started it. Sampling requests an 8 ms interval rather than the runtime's 1 ms default,
+reducing native sampler CPU while still naming long blocks. The 250 ms heartbeat, two-second
+sample drains and existing warning thresholds remain unchanged. Counts measure sampled activity;
+compare profiles from the same running process and sampling configuration.
+That is how the 2026-10-07 and 2026-10-08 freezes were found (a `spawnSync` in message
 delivery, a synchronous chat list and process queries, CliMayte's boot reading every finished worker), and the
 3,510 s the daemon spent blocked in the 24 h to 2026-10-11 (the spend report's cold read, CliMayte's check and
 wave judges running git, the account map reading every profile's past logins, the Sessions list re-checking

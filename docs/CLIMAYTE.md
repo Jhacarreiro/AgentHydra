@@ -415,6 +415,10 @@ compressed. The count includes the earlier recap retained by `statusTurns`; read
 packed text field discards the summary and restores ordinary fields. Full detail and report requests
 continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
 
+Brief lists use the same cached text projection, including explicit history and waiting reads.
+They retain the exact recap-aware `resultChars` count without decompressing prompts or reports
+that the brief contract omits; detail and report reads still restore the original text.
+
 Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
 projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
 chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
