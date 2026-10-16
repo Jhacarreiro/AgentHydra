@@ -218,6 +218,18 @@ The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`f
 each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
 a routine rather than add one, and to prefer a temporary background task it manages itself.
 
+Asking the owner for help. A routine whose run ends `failed` or `timed-out` opens an incident (scope `routine`, key = the
+routine id, the routine's name and the run's last line as its text), and so does a routine that turns `broken` (once while it
+stays broken; that memory is in-process, so a Desk restart reports a still-broken routine again). An `ok` run resolves it,
+and so does the file checking out again unless a failed last run keeps it open; `busy` and `interrupted` do nothing.
+Incidents page the owner over the OS and email channels, and a repeat while one is open adds a count, not a new ping. A
+script or agent stuck on something only the owner can fix asks the same way: the daemon's `POST /api/incidents` with
+`{ key, message, scope? }` (scope defaults to `routine`) answers `{ id, notified }`, the MCP tool `ask_owner_help` (MUTATES,
+through `hydra_run`) takes the same arguments, and `POST /api/incidents/resolve-by-key` with `{ scope, key }` resolves every
+open incident for that key. A prompt routine's brief should name what the job fixes by itself and ask for help only for the
+rest. The hooks: `desk2/server/src/plugins/73-routines.ts` (`reportIncident`, `reportBroken`) and
+`desk2/server/src/routines/incident.ts`; the daemon side is `server/src/routes/incidents.ts` and `server/src/mcp-session-tools.ts`.
+
 `list_sessions`, `get_session`, and `tail_session` accept a `source` of `claude`, `codex`,
 `opencode` or `foreign` (the shared reader for Cursor, Windsurf, Zed, Copilot CLI, Pi and the
 rest; a Pi session shows its active branch, and each branch left behind with /tree lists as a
@@ -1000,6 +1012,13 @@ same process to happen at all. Two rules came out of chasing it:
   ~1-in-3 failure rate is roughly a 0.2% chance of coincidence.
 - **Anything keyed on mtime alone needs a tiebreaker** (size, or an explicit generation counter),
   because two writes can share one tick and the second one then looks like no write at all.
+- **A folder has no size to break the tie, so a cached listing follows the racy-git rule.** The
+  folder tree (`server/src/core/folder-tree.ts`) records when it listed each folder and lists it again
+  until that listing is at least `RACY_MS` (2 s) after the folder's mtime. Trusting an unchanged mtime
+  alone missed a file created right after a listing in 407 of 3,000 tries on a Windows PC (2026-10-13),
+  and failed `folder-tree.test.ts` on windows-latest, whose clock steps about every 15.6 ms. The same
+  test passed 200 looped runs on a PC whose steps are about 0.3 ms: a race that hangs on the clock's
+  step size needs a script that drives it directly, not a loop of the ordinary test.
 
 ### A test that waits on a real process, on a loaded box
 

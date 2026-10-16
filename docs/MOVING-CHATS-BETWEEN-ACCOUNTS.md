@@ -178,6 +178,16 @@ tray icon and the fair share first), then reading two working chats' pids out of
   it had not saved. The transcript survives; a tool result still in flight does not, so say so
   in `resume`. `force` never implies it: `force` overrides a hold, nothing more. A hold or the
   breaker is never killed through.
+- **AN OPEN SOURCE APP CAN RESTART THE ENGINE IT JUST LOST** (2026-10-15, #187 -> #215). After
+  the kill, #187's app started a new engine for 'Dealflow app Google Look styling'
+  (`engineReleased.why`: "the app kept the engine: work is in flight"). The app refuses to archive
+  a running chat (`NATIVE_REFUSAL ... isRunning`), so the settle and the sweep's re-settle both
+  failed, and the chat kept working on BOTH accounts. Since commit 577a24e7 the final sweep kills
+  that restarted engine first, from the source account's own row and confirmed on that row only,
+  whenever the batch already holds a kill word for the chat (`terminate_live` or the 98% standing
+  order); without one it is reported, never killed. By hand: kill the source row's `livePid`,
+  then `migrate_reconcile --finish <mutationId>`. The id `--finish` takes is the MUTATION id from
+  `migrate_reconcile --json`, not the session id.
 - **A detached batch's report does not survive a daemon RESTART, and the batch may not either.**
   Operation records live in the daemon process that ran them. On 2026-09-12 a batch's child
   outlived a restart and finished orphaned, so the chats moved and the report vanished; on
@@ -275,6 +285,14 @@ for that chat's account at that moment, takes the one row whose id is the chat's
 refused in the window without a call. A chat that is still working is refused there too, since the
 mover refuses an unfinished turn.
 
+**Duplicate to account ›** is the same mover with the original kept (`keepSource: true`). Its receipt
+is keyed apart from the move's (`copyKey` in `server/src/core/codex-chat-move.ts`), so a finished copy
+never answers a later move "done". Codex gives the copy the original's name, so Desk names it
+"<title> (copy)" with a title mark, as a desktop copy is named, and the item sits beside Fork, never
+under Move to account (2026-10-14). The two submenus open the same account list, and a pointer that
+slid one row down from Move made a copy. The owner saw two chats of one name and took it for a
+move that had duplicated the chat.
+
 ### The source app may stay open (2026-10-13)
 
 Until 2026-10-13 the mover refused while the source account's Codex app was open, and the sidebar asked
@@ -325,6 +343,33 @@ and for about a minute after you switch away). While Codex holds it the move ref
 nothing; it never races a live writer.
 
 The worst case is two readable chats. It is never zero.
+
+### Two chats of one name: which step made them (2026-10-14)
+
+Two Codex chats with one name come from one of three things, and the receipts in
+`~/.agenthydra/codex-chat-moves.json` tell them apart:
+
+- **A Duplicate.** The receipt's key equals `copyKey` (the sha256 of the source home, the source
+  account id, the thread id, `'copy'` and the destination), not `moveKey`. JSON.stringify has no
+  spaces, and the home is spelled as in the receipt's `destination` string. Two chats is what was
+  asked for.
+- **A move that stopped after copying** (`phase: "copied"`). With no `verified`, the copy was written
+  but never verified. With `verified` and `desktopVisible`, the copy is good and shown, and archiving
+  the original failed ("Both chats were kept; move it again to finish"). A cleared `ownerPid` means
+  the mover returned that error itself; a pid still set means the process died mid-move. Moving the
+  same chat again finishes it into the saved copy. Measured on 2026-10-14: 8 of 66 receipts stopped
+  there (5 before verifying, 3 after showing), every one with `ownerPid` cleared, none retried. The
+  owner went on working in one of each pair, and six later moves or copies started from five of
+  those stopped copies, so the chains forked further.
+- **An archived chat still marked Unassigned.** Desk lists Unassigned chats however old (the
+  holding area must never lose one), so an older copy archived while it still had the mark stays in
+  the sidebar beside the copy in use. The fix is `PATCH /api/external/sessions/:id/meta` with
+  `{"unassigned": false}`.
+
+To clean up, keep the newer chat in use. First check that it holds every message of the older
+one in order: compare the `response_item` messages, since a copy rewrites ids but not their text.
+Then archive the older one through `POST /api/codex-instances/:id/archive-chat`
+`{"threadId", "archived": true}` (through its app when open). Unarchive brings it back.
 
 ### The copy keeps its DISPLAYED history, which is not the same as keeping its messages
 
