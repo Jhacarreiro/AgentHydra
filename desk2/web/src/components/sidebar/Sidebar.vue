@@ -1395,8 +1395,10 @@ const HEADER_BTN = 'flex size-6 shrink-0 items-center justify-center rounded-[va
             <ReuseGroupHead :group="group" />
           </header>
           </span>
-          <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. -->
-          <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :css="false" @leave="rowLeave">
+          <!-- Compact sidebar shows a collapsed group's chats too: with no header there is no way to open it. Under a header the
+               rows sit 14px in (about 5% of the sidebar), so a chat led by a person's photo never reads as another project's
+               heading (owner, 2026-10-16). -->
+          <TransitionGroup v-if="compactSidebar || !collapsed.has(group.key)" tag="div" class="flex flex-col gap-[1.5px] pt-[1.5px]" :class="!compactSidebar && 'ps-3.5'" :css="false" @leave="rowLeave">
             <div
               v-for="entry in group.entries"
               :key="`${entry.kind}:${src.rowKeyOf?.(entry.id) ?? entry.id}`"
