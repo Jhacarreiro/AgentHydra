@@ -33,6 +33,7 @@ import { listAllInstances } from './core/instance-ref'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { listClaudeProcesses } from './core/process'
+import { noteRevokedGrant, pruneRevokedGrants } from './core/revoked-grants'
 import { db } from './db'
 import { noteUsageSnapshot } from './reset-watch'
 import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './types'
@@ -130,6 +131,8 @@ export async function checkUsageWithGrants(
     })
     if (!isNoData(snap)) return { snapshot: snap, failure: null }
     const attempt = lastUsageApiFailure(label)
+    // Remembered, so the dead grant leaves its profile once the app is closed (core/revoked-grants.ts).
+    if (apiFailureReason(attempt) === 'token_revoked') noteRevokedGrant(grant.token)
     if (i === 0) failure = attempt
     if (!attempt || !CREDENTIAL_SPECIFIC_STATUSES.has(attempt.status)) break
   }
@@ -349,6 +352,9 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
       : !hadGrant
         ? 'no_token'
         : (apiFailureReason(apiFail) ?? (isRunning ? 'check_failed' : 'stale_token_app_closed'))
+  // The app goes on using a revoked grant until its own expiry date, re-login or not, so the dead
+  // ones leave the profile while it is closed and the app makes new ones (core/revoked-grants.ts).
+  if (reason === 'token_revoked') await pruneRevokedGrants(dir, { prove: true })
   // ⛔ OWNER RULE (2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache

@@ -1179,8 +1179,9 @@ export type UsageReason =
   | 'rate_limited'
   // Anthropic revoked the login the check presented ("OAuth access token has been revoked."). Its
   // own reason because the usage endpoint answers such a login 429, which read as 'rate_limited'
-  // and told the owner to wait; no wait fixes it, only signing in again (instances #72 and #8,
-  // 2026-10-16, see revokedLoginError in usage-api.ts).
+  // and told the owner to wait (instances #72 and #8, 2026-10-16, see revokedLoginError in
+  // usage-api.ts). Signing in again does not fix it either: the app keeps a revoked grant until its
+  // own expiry date, so AgentHydra takes it out while the app is closed (core/revoked-grants.ts).
   | 'token_revoked'
   | 'unknown'
 

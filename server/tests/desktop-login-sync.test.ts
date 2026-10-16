@@ -52,6 +52,7 @@ import {
   tokenExpiry,
 } from '../src/core/desktop-login-sync'
 import { instancesRoot } from '../src/core/paths'
+import { grantDigest } from '../src/core/revoked-grants'
 import { base, store, token } from './login-sync-store'
 import './no-chats'
 
@@ -279,6 +280,99 @@ describe.skipIf(process.platform !== 'win32')('desktop login sync', () => {
       disconnectLoginSync()
       // Retried: on the Windows runner a handle the sync just closed can still hold the folder a moment
       // (EBUSY failed CI run 36986153843 after every assertion had passed).
+      for (const dir of made)
+        rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 120_000)
+
+  // A revoked grant keeps its expiry date, and the year-long one a profile keeps through a re-login
+  // (core/revoked-grants.ts) would win every "later expiry" and put itself back on every PC.
+  test('a grant Anthropic revoked never lands, and never wins the later expiry', async () => {
+    const [UA, UB] = [randomUUID(), randomUUID()]
+    const made: string[] = []
+    const LIVE = 'client:org:https://api:user:inference'
+    const DEAD = 'client:org:https://api:user:inference user:file_upload'
+    const cache = (g: Record<string, { token: string; expiresAt: number }>) => JSON.stringify(g)
+    try {
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const meta = async (id: string) =>
+        ((await store('GET', '/v1/logins')).json.logins as any[]).find((r) => r.id === id)
+      const otherPc = async (id: string, name: string, v2: string, revoked?: string[]) => {
+        const login: PortableDesktopLogin = {
+          kind: 'desktop',
+          id,
+          num: 4343,
+          name,
+          tokenCacheV2: v2,
+          tokenCache: null,
+          cookies: [cookie('sk-r')],
+          expiresAt: 9000,
+          ...(revoked && { revoked }),
+        }
+        const r = await store('PUT', `/v1/logins/${id}`, {
+          version: (await meta(id))?.version ?? 0,
+          blob: sealLogin(key, login),
+          meta: { kind: 'desktop', num: 4343, name, expiresAt: 9000 },
+        })
+        expect(r.status).toBe(200)
+      }
+      const v2Here = async (dir: string) => (await readDesktopTokens(dir))?.v2
+
+      const a = await profile('rev-a', UA, 2000, 'sk-r')
+      made.push(a)
+      await runLoginSync()
+      const mine = await v2Here(a)
+      // An older live grant beside one the other PC found revoked: this PC's 2000 is the later.
+      await otherPc(
+        UA,
+        'rev-a',
+        cache({
+          [LIVE]: { token: 't-1500', expiresAt: 1500 },
+          [DEAD]: { token: 'dead-9000', expiresAt: 9000 },
+        }),
+        [grantDigest('dead-9000')],
+      )
+      await runLoginSync()
+      expect(await v2Here(a)).toBe(mine)
+      expect((await meta(UA)).meta.expiresAt).toBe(2000)
+      // A copy that differs from this one only by a grant known revoked is this one: nothing lands
+      // and nothing goes back up, pass after pass (an older PC keeps sending such a copy).
+      await otherPc(
+        UA,
+        'rev-a',
+        cache({
+          [LIVE]: { token: 't-2000', expiresAt: 2000 },
+          [DEAD]: { token: 'dead-9000', expiresAt: 9000 },
+        }),
+      )
+      const version = (await meta(UA)).version
+      await runLoginSync()
+      await runLoginSync()
+      expect(await v2Here(a)).toBe(mine)
+      expect((await meta(UA)).version).toBe(version)
+      // An account only the store holds lands here without the grant its sender found revoked.
+      await otherPc(
+        UB,
+        'rev-b',
+        cache({
+          [LIVE]: { token: 't-5000', expiresAt: 5000 },
+          [DEAD]: { token: 'dead-b', expiresAt: 9000 },
+        }),
+        [grantDigest('dead-b')],
+      )
+      await runLoginSync()
+      const b = (await listDesktopProfiles()).find((p) => p.name === 'rev-b')!
+      made.push(b.dir)
+      expect(await v2Here(b.dir)).toBe(cache({ [LIVE]: { token: 't-5000', expiresAt: 5000 } }))
+    } finally {
+      disconnectLoginSync()
       for (const dir of made)
         rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }

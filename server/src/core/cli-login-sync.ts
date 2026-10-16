@@ -115,6 +115,7 @@ import { setBeforeLaunchHook } from './instances'
 import { parseSeen, StoreMirror } from './login-sync-mirror'
 import { BASE_MS, SyncPace } from './login-sync-pace'
 import { quietWriter } from './quiet-write'
+import { noteRevokedDigests } from './revoked-grants'
 
 export { IDLE_MAX_MS } from './login-sync-pace'
 /** The loop's tick, and the wait of a PC with something to do. */
@@ -1071,6 +1072,8 @@ async function syncDesktopLoginsPass(
         if (r.status !== 200 || typeof r.json?.blob !== 'string') throw httpError('Downloading', r)
         const login = asDesktopLogin(openBlob(l.key, id, r.json.blob), id)
         if (!login) out.problems.push(`${id}: the store's copy does not open with this PC's key.`)
+        // What the other PC found revoked is dead here too (core/revoked-grants.ts).
+        if (Array.isArray(login?.revoked)) noteRevokedDigests(login.revoked, id)
         return login
       },
       markSignedOut: (uuid: string, num: number | null, name: string | null, expect: number) =>

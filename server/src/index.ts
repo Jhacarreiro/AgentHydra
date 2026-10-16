@@ -68,6 +68,8 @@ import { startLoginSync, stopLoginSync } from './core/cli-login-sync'
 import { startCliResetSweep, stopCliResetSweep } from './core/cli-reset-sweep'
 import { giveCodexInstancesOwnerAgents, reconcileCodexInstanceDirs } from './core/codex-instances'
 import { startDesktopCliFeed, stopDesktopCliFeed } from './core/desktop-cli-pairing'
+import { setBeforeLaunchHook } from './core/instances'
+import { pruneBeforeLaunch } from './core/revoked-grants'
 import { createRunningCodeProbe } from './core/running-code'
 import { readUiPrefs, writeUiPrefs } from './core/ui-prefs'
 import { crashRecordLine, exitRecordLine } from './crash-record'
@@ -1684,6 +1686,8 @@ startCliResetSweep()
 startFeedbackFold()
 // Login sync between the owner's PCs (core/cli-login-sync.ts): idle until set up.
 startLoginSync()
+// A profile's grants known revoked leave it before AgentHydra opens it (core/revoked-grants.ts).
+setBeforeLaunchHook(pruneBeforeLaunch, 'revoked-grants')
 startDesktopCliFeed()
 // The analytics store's ingest: Claude transcripts, the foreign stores and the HSwarm ledger into
 // analytics.db, on boot and every minute after (kit/sweep.ts). The first sweep is long and resumable.

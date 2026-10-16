@@ -25,6 +25,8 @@
 //   sign the other out. A PC joins the store's copy only where it has none: a signed-out profile of
 //   the same folder name, or a new profile made with that name and number.
 // - From then on the copy whose tokens expire later wins, as for the CLI (a refresh pushes them out).
+//   A grant Anthropic revoked (core/revoked-grants.ts) does not count and is never landed: the dead
+//   year-long grant a profile keeps would otherwise win every comparison and put itself back.
 // - A logout reaches every PC, as for the CLI (owner, 2026-10-02): an account this PC held and shared
 //   that no profile here holds now turns its row into the signed-out marker, and the other PCs sign
 //   their profile out of it once its app is closed, unless theirs was signed in after the logout.
@@ -66,6 +68,7 @@ import { claimInstanceNumber, instanceNumbers, instanceRef } from './instance-nu
 import { createInstance } from './lifecycle'
 import { instancesRoot, normalizePath } from './paths'
 import { listClaudeProcesses } from './process'
+import { isRevokedGrant, revokedDigestsFor, withoutRevokedGrants } from './revoked-grants'
 
 const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 const CLAUDE_HOST = /^\.?claude\.ai$|\.claude\.ai$/
@@ -96,6 +99,9 @@ export interface PortableDesktopLogin {
   cookies: DesktopCookie[] | null
   /** The latest expiry among its grants (epoch ms): the later copy wins. */
   expiresAt: number
+  /** Digests of this account's grants the sending PC found revoked (core/revoked-grants.ts): the
+   *  receiving PC drops them too. */
+  revoked?: string[]
 }
 
 /** A store blob's content as a desktop login for `id`, or null. */
@@ -216,14 +222,17 @@ export async function readDesktopTokens(
   return v2 || v1 ? { uuid, v2, v1 } : null
 }
 
-/** The latest `expiresAt` among the grants of the token caches (epoch ms; 0 when none says). */
+/** The latest `expiresAt` among the live grants of the token caches (epoch ms; 0 when none says): a
+ *  grant known revoked keeps its date but never comes back to life. */
 export function tokenExpiry(...caches: Array<string | null>): number {
   let latest = 0
   for (const c of caches) {
     if (!c) continue
     try {
       for (const g of Object.values(JSON.parse(c) as Record<string, unknown>)) {
-        const e = Number((g as { expiresAt?: unknown } | null)?.expiresAt) || 0
+        const grant = g as { expiresAt?: unknown; token?: unknown } | null
+        if (typeof grant?.token === 'string' && isRevokedGrant(grant.token)) continue
+        const e = Number(grant?.expiresAt) || 0
         if (e > latest) latest = e
       }
     } catch {
@@ -481,6 +490,7 @@ export async function portableDesktopLogin(
     tokenCache: tokens.v1,
     cookies,
     expiresAt: tokenExpiry(tokens.v2, tokens.v1),
+    revoked: revokedDigestsFor(p.uuid),
   }
 }
 
@@ -553,11 +563,15 @@ export async function landDesktopLogin(
     }
   const path = join(dir, 'config.json')
   const cfg = readJson(path) ?? {}
+  const live = {
+    v2: withoutRevokedGrants(login.tokenCacheV2),
+    v1: withoutRevokedGrants(login.tokenCache),
+  }
   const [v2, v1] = await Promise.all([
-    login.tokenCacheV2 ? encryptSafeStorage(login.tokenCacheV2, dir) : Promise.resolve(null),
-    login.tokenCache ? encryptSafeStorage(login.tokenCache, dir) : Promise.resolve(null),
+    live.v2 ? encryptSafeStorage(live.v2, dir) : Promise.resolve(null),
+    live.v1 ? encryptSafeStorage(live.v1, dir) : Promise.resolve(null),
   ])
-  if ((login.tokenCacheV2 && !v2) || (login.tokenCache && !v1))
+  if ((live.v2 && !v2) || (live.v1 && !v1))
     return { written: false, created, num, dir, message: 'Its login could not be encrypted here.' }
   cfg.lastKnownAccountUuid = login.id
   if (v2) cfg['oauth:tokenCacheV2'] = v2
@@ -786,7 +800,12 @@ async function syncMovedProfile(
   }
   const theirs = await ctx.download(uuid)
   if (!theirs) return
-  const sameTokens = tokensHash(theirs.tokenCacheV2, theirs.tokenCache) === hash
+  // Compared without the grants known revoked: a copy that differs only by those is this one.
+  const theirLive = [
+    withoutRevokedGrants(theirs.tokenCacheV2),
+    withoutRevokedGrants(theirs.tokenCache),
+  ]
+  const sameTokens = tokensHash(theirLive[0], theirLive[1]) === hash
   // The same tokens with other cookies: the store's are the ones that moved (a profile that was
   // open when its tokens went up sends its cookies once it closes).
   const cookiesToLand =
@@ -796,7 +815,7 @@ async function syncMovedProfile(
   if (sameTokens && !cookiesToLand) {
     ctx.state[uuid] = { version: remote.version, hash, cookies: st.cookies }
     ctx.out.unchanged++
-  } else if (!sameTokens && tokenExpiry(tokens.v2, tokens.v1) > theirs.expiresAt)
+  } else if (!sameTokens && tokenExpiry(tokens.v2, tokens.v1) > tokenExpiry(...theirLive))
     await sendProfile(pass, look, remote.version, theirs.cookies)
   else if (!isClosed) {
     deferred.set(uuid, pending)
