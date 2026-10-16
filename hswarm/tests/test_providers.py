@@ -65,13 +65,17 @@ def test_without_the_overlay_the_builtins_stand():
     #   GPT-6 Sol/6.1 Sol/Astra/Luna (2026-10-13)
     # + Gemini 3.7 Flash, 3.5 Flash and 3.5 Flash-Lite ranked on their own points, no longer 3.8 Flash's siblings
     #   (2026-10-13)
-    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 178
+    # - Qwen3.8 27B on Cerebras: paid-tier only, 404 on every free key (2026-10-16)
+    # + OVHcloud AI Endpoints' 7 keyless models, unranked so AUTO never fans out onto 2 requests a minute (2026-10-16)
+    assert len([m for m in config.MODELS if m.startswith("rank:")]) == 177
     assert sorted(m for m in config.MODELS if not m.startswith("rank:")) == [
-        "aya-expanse-32b", "cerebras-gpt-oss-120b", "cerebras-qwen3.8-27b", "command-a", "command-r7b",
+        "aya-expanse-32b", "cerebras-gpt-oss-120b", "command-a", "command-r7b",
         "deepseek-flash", "deepseek-flash-hf", "deepseek-flash-or", "deepseek-v4-pro",
         "gemini-3.1-flash-lite", "gemini-3.5-flash", "gemini-3.5-flash-lite", "gemini-3.7-flash", "gemini-3.8-flash",
         "glm-4.5-air", "groq-gpt-oss-120b", "groq-gpt-oss-20b", "groq-qwen3.8-27b", "jev-latest",
         "lmstudio-qwen3-30b-a3b", "magistral-medium", "ministral-8b", "mistral-medium-3.5",
+        "ovhcloud-gpt-oss-120b", "ovhcloud-gpt-oss-20b", "ovhcloud-llama-3.3-70b", "ovhcloud-mistral-small-3.2",
+        "ovhcloud-qwen3.5-397b-a17b", "ovhcloud-qwen3.6-27b", "ovhcloud-qwen3.8-27b",
     ]
     with pytest.raises(ValueError, match="PROVIDERS.md"):
         config.resolve_model("kimi-test")

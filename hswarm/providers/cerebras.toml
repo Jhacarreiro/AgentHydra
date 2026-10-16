@@ -23,10 +23,9 @@ ctx = 131072
 price_ref = "cerebras/cerebras-gpt-oss-120b"
 fallback = true
 
-[models."cerebras-qwen3.8-27b"]
-api_id = "qwen-3.8-27b"
-ctx = 131072
-price_ref = "cerebras/cerebras-qwen3.8-27b"
+# No Qwen3.8 27B route: Cerebras lists qwen-3.8-27b in /models but sells it on the paid Developer tier only, and every
+# free key here answers it 404 "Model does not exist or you do not have access to it" (board #4291 from 2026-09-27;
+# 18 of 18 live keys on 2026-10-16). Groq, Nebius, Chutes and Inworld serve it.
 
 # Models with a `benchmark_slug` take part in AUTO: the slug names their published scores in
 # data/published-models.json. `inherits` copies another model's settings; the lines below it
@@ -39,12 +38,3 @@ default_reasoning_effort = "high"
 default_thinking = true
 cc_effort = false
 note = "Direct host of the evidenced configuration (same model, same high effort). Tool-free only: in a multi-tool loop it emits harmony-channel calls the api backend rejects (config.py); schema asks through submit_result work (probed 2026-09-25)."
-
-[models."rank:qwen3-8-27b:cerebras"]
-inherits = "cerebras-qwen3.8-27b"
-benchmark_slug = "qwen3-8-27b"
-tools = true
-default_reasoning_effort = "high"
-default_thinking = true
-cc_effort = false
-note = "Measured at xhigh (qwen3-8-27b); served at high, the highest effort Groq and Cerebras accept (both 400 on xhigh, probed 2026-09-25). Provisional: the evidence is an upper bound for this route."

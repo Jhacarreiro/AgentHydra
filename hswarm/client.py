@@ -127,7 +127,10 @@ _OUT_OF_CREDIT_429 = re.compile(r"[Ii]nsufficient (?:account )?balance|no resour
 # API usage limits. You will regain access on 2026-10-01 at 00:00 UTC." Also per key. 2026-09-30: seven builder tasks
 # died on it with `failover: []` while ~39 of 45 keys were ready, one of them after editing two files. The date it
 # names is when the key serves again, so it is kept (`disabled_until`) and the key comes back then (KeyPool.probation).
-_OUT_OF_SPEND_400 = re.compile(r"spend_limit_reached|credit balance is too low|reached your specified API usage limits", re.I)
+# DashScope (Alibaba Model Studio) answers a key whose account has an unpaid bill with 400 type "Arrearage" ("Access
+# denied, please make sure your account is in good standing"). 2026-10-16: 29 of 30 sampled keys answered it on
+# every model, and as a plain 400 it neither disabled the key nor failed the leg over.
+_OUT_OF_SPEND_400 = re.compile(r"spend_limit_reached|credit balance is too low|reached your specified API usage limits|Arrearage", re.I)
 _REGAIN_AT = re.compile(r"regain access on (\d{4}-\d{2}-\d{2}) at (\d{1,2}:\d{2}) UTC", re.I)
 
 
@@ -205,6 +208,15 @@ _TOO_LARGE_429 = re.compile(r"Request too large", re.I)
 # may have been upgraded since, and one doomed request a day is the price of noticing.
 _TOOLS_REFUSED_400 = re.compile(r"Tool calling is (?:currently )?restricted on your plan", re.I)
 TOOLS_REFUSED_S = 86400.0
+# A 400 that says the key's PLAN does not include this MODEL, not that the request is wrong: Inworld's free plan answers
+# "This model is currently not available on your plan. Setup a valid billing method ... and add credits to unlock." for
+# each paid model it routes. Measured 2026-10-16: 25 of Inworld's 35 routes (Claude Opus and Sonnet, GPT-6 Sol and Astra,
+# Grok, Gemini, Kimi, GLM-5.3, Qwen 3.8) answered it on every key while the other 10 served, and the plain 400 failed the
+# task instead of failing it over. A refused (key, model) is skipped for that model only, for PLAN_GATED_S (a plan may be
+# upgraded since); with no key left whose plan includes the model the leg fails over unsent (NoUsableKey).
+_PLAN_GATED_400 = re.compile(r"not available on your plan", re.I)
+PLAN_GATED_S = 86400.0
+_PLAN_GATED: dict[tuple[str, str, str], float] = {}  # (provider, key fingerprint, api model) -> when its plan refused it
 
 
 def _until_quota_reset(now: dt.datetime | None = None, hour: int = QUOTA_RESET_UTC_HOUR) -> float:
@@ -1212,6 +1224,12 @@ class ChatClient:
         now = time.time()
         return tried | {k for (k, m), (limit, at) in self._tpm.items() if m == model and limit < need and now - at < TPM_KEEP_S}
 
+    def _plan_gated(self, model: str) -> set[str]:
+        """The keys of this pool whose plan refused `model` within PLAN_GATED_S (_PLAN_GATED_400)."""
+        now = time.time()
+        marks = {fp for (p, fp, m), at in _PLAN_GATED.items() if p == self.provider and m == model and now - at < PLAN_GATED_S}
+        return {k for k in self.pool.keys if config.fingerprint(k) in marks} if marks else set()
+
     def _auth(self, key: str) -> dict:
         """The per-request headers: the key (a bearer token, or Anthropic's x-api-key on the native transport) plus
         whatever the provider wants for attribution (OpenRouter reads HTTP-Referer and X-Title; both are public
@@ -1471,6 +1489,10 @@ class ChatClient:
                 if not self.pool.live_besides(no_tools, free=free):
                     raise NoUsableKey(f"NoUsableKey: no live {self.provider} key's plan allows tool calls (_TOOLS_REFUSED_400); not sent")
                 skip = no_tools
+            if (gated := self._plan_gated(model_id)) and not gated <= skip:
+                if not self.pool.live_besides(skip | gated, free=free):
+                    raise NoUsableKey(f"NoUsableKey: no live {self.provider} key's plan includes {model_id} (_PLAN_GATED_400); not sent")
+                skip = skip | gated
             attempt += 1
             self.calls += 1
             transport_failed = False
@@ -1534,6 +1556,10 @@ class ChatClient:
                 self.pool.mark_tools_refused(key)  # see _TOOLS_REFUSED_400: the key keeps serving tool-free calls
                 self.rotations += 1
                 continue  # the loop's top skips it, and fails the leg over once no key is left
+            if r.status_code == 400 and _PLAN_GATED_400.search(r.text or ""):
+                _PLAN_GATED[(self.provider, config.fingerprint(key), model_id)] = time.time()  # see _PLAN_GATED_400
+                self.rotations += 1
+                continue  # the loop's top skips it for this model, and fails the leg over once no key is left
             if r.status_code == 429 and _TOO_LARGE_429.search(r.text or ""):
                 # See _TOO_LARGE_429: the key is not rested, the gate is not halved, no other key is tried.
                 _note_rate_wait(limited_since)

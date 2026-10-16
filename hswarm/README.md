@@ -126,8 +126,12 @@ key. A request goes to a second key only when the provider refused the first bef
 another, up to 8 keys. A call that names its key, or sends a file as a stream, never moves, and a network failure is
 never retried. Where a provider file sets `[limits]`, a request waits unsent for a key with headroom
 ([docs/SERVICE-PROVIDERS.md](docs/SERVICE-PROVIDERS.md)). Chat endpoints accept explicit live model IDs using provider
-prefixes such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:`, `stepfun:` and `inworld:`; these
-models become candidates for automatic routing only after evaluation.
+prefixes such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:`, `stepfun:`, `inworld:` and
+`ovhcloud:`; these models become candidates for automatic routing only after evaluation. OVHcloud AI Endpoints needs
+no key or account: its models run on OVHcloud's servers for free at 2 requests a minute per model, so they are named
+(`ovhcloud-gpt-oss-120b`, `ovhcloud:<catalog id>`) and never picked by AUTO. StepFun and DashScope keys are tied to a
+region: a China-issued key answers 401 on the international endpoint, so a machine holding them sets `base_url` in
+`$HSWARM_HOME/providers/<provider>.toml` to the China endpoint (`api.stepfun.com/v1`, `dashscope.aliyuncs.com/compatible-mode/v1`).
 
 Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius's are priced from its own model listing (`/v1/models?verbose=true`), the only place it publishes per-token rates. StepFun has none: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
 

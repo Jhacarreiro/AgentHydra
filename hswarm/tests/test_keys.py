@@ -280,6 +280,9 @@ _USAGE_LIMIT = "You have reached your specified API usage limits. You will regai
     # died on the second with `failover: []` while ~39 of 45 keys were ready).
     {"message": "Your credit balance is too low to access the Anthropic API.", "type": "invalid_request_error"},
     {"code": "invalid_request_error", "message": _USAGE_LIMIT.format("2026-10-01 at 00:00"), "type": "invalid_request_error"},
+    # DashScope's unpaid-bill refusal, also a 400 (2026-10-16: 29 of 30 keys answered it on every model).
+    {"message": "Access denied, please make sure your account is in good standing. For details, see: "
+                "https://help.aliyun.com/zh/model-studio/error-code#overdue-payment", "type": "Arrearage", "code": "Arrearage"},
 ])
 def test_a_spend_blocked_key_is_disabled_and_the_next_key_serves(refusal):
     seen = []

@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm can use OVHcloud's free hosted models with no key or account.** Seven open models (gpt-oss 120B and 20B, Qwen3.8 27B, Qwen3.6 27B, Qwen3.5 397B, Llama 3.3 70B, Mistral Small 3.2) run on OVHcloud's servers at 2 requests a minute each. Name one to use it; automatic routing never fans out onto them.
+- **HSwarm moves past keys that cannot serve a model instead of failing the task.** A key whose plan leaves a model out now hands the task to another key or another route, and a key whose account has an unpaid bill is set aside like an empty one.
+- **HSwarm no longer tries a Cerebras model its free keys cannot use.** Qwen3.8 27B on Cerebras is paid-only; other routes serve it.
 - **Large Free replies avoid repeated socket-buffer rescans.** Chunked coordinator responses assemble each protocol line once, reducing temporary memory and parsing work. Request identity, cancellation, output limits and no-replay safeguards remain enforced.
 - **Codex and remote session details skip unrelated desktop scans.** Opening those conversations no longer rebuilds Claude Desktop metadata that their detail view does not use. Local Claude details still resolve fresh desktop state.
 - **CliMayte groups time estimates without repeatedly copying its history.** Large estimate histories build their prompt-version groups in one pass, preserving displayed statistics and review ordering.
