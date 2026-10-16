@@ -2299,9 +2299,14 @@ export function leanText(w: CliMayteWorker): CliMayteLeanText {
 }
 
 /** Copy ordinary list fields without invoking any packed-text accessor. */
-function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+function withoutWorkerText(
+  w: CliMayteWorker,
+  text: CliMayteLeanText,
+  omit?: ReadonlySet<string>,
+): CliMayteWorker {
   const row: Record<string, unknown> = {}
   for (const key of Object.keys(w)) {
+    if (omit?.has(key)) continue
     if (key === 'prompt') row.prompt = text.prompt
     else if (key === 'result') row.result = null
     else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
@@ -2333,6 +2338,8 @@ export function toView(
 export interface WorkerViewProjection<A, V> {
   attempts(w: CliMayteWorker): A[]
   verdicts(w: CliMayteWorker): V[] | undefined
+  /** Opt-in list contracts can leave unused raw fields unread; common derived fields stay fresh. */
+  omitWorkerFields?: ReadonlySet<string>
 }
 
 type ProjectedWorkerView<A, V> = Omit<CliMayteWorkerView, 'attempts' | 'verdicts'> & {
@@ -2381,7 +2388,7 @@ export function projectWorkerView<A, V>(
   const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...(text ? withoutWorkerText(w, text) : w),
+    ...(text ? withoutWorkerText(w, text, projection.omitWorkerFields) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
     // Bookkeeping for repeated sends, ten minutes of ids: no view reads it.

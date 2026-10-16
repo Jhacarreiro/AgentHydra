@@ -8,6 +8,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ## [Unreleased]
 
 - **HSwarm routes image generation to the cheapest provider that still has credit.** `hswarm image` knows which providers can make or edit images (RunPod and Replicate FLUX, Stability, Ideogram, Leonardo, OpenAI), what each costs, and which keys are still funded; it serves the cheapest one, and moves on when a key is spent or a provider's content filter refuses the picture.
+- **CliMayte's pane leaves unused launch records out of its lists.** Expanded history transfers less data while keeping task status, actions, verdict tooltips and origin labels. Full task details and other list readers keep their existing responses.
 - **Large chat tails trim old records in one pass.** Removing old message groups no longer repeatedly moves the surviving history. Tool pinning, byte limits and incremental ordering keep their existing behavior.
 - **Free readback rejects obviously oversized snapshots before copying them.** A bounded inspection avoids encoding large optional conversation snapshots only to discard them. Other snapshots still pass the same exact byte-limit and JSON validation.
 - **Session lists index only stores that can own subagents.** Large unrelated histories avoid building discarded parent-lookup entries. Store identity, duplicate handling, cycles and displayed ordering keep their existing behavior.

@@ -236,6 +236,8 @@ export interface CliMayteListFilter {
   lean?: boolean
   /** Desk's bridge contract only; additive to lean so older daemons can ignore it. */
   bridge?: boolean
+  /** With lean, the Hydra pane's fields, without unused raw launch and ETA records. */
+  pane?: boolean
   /** With `brief`: also list finished work a verdict already covers (left out by default). */
   all?: boolean
 }
@@ -300,14 +302,16 @@ export function climayteList(
     })
   if (filter.bridge && !filter.brief)
     return keep.map((w) => climayteBridgeWorker(w, leanTextOf(w).prompt))
-  if (filter.lean && !filter.brief)
+  if (filter.lean && !filter.brief) {
+    const projection = filter.pane ? PANE_VIEW_PROJECTION : LEAN_VIEW_PROJECTION
     return keep.map((w) => {
       const text = leanTextOf(w)
-      return Object.assign(projectWorkerView(w, now, LEAN_VIEW_PROJECTION, originLookup, text), {
+      return Object.assign(projectWorkerView(w, now, projection, originLookup, text), {
         result: null,
         resultChars: text.resultChars,
       })
     })
+  }
   return keep.map((w) => toView(w, now, originLookup))
 }
 
@@ -444,6 +448,25 @@ const LEAN_VIEW_PROJECTION: WorkerViewProjection<
       pct: units > 0 ? Math.round((units / UNITS_PER_PRO_PERCENT) * 10) / 10 : null,
       note: v.note ? (v.note.split('\n', 1)[0] ?? '').slice(0, 200) : null,
     })),
+}
+
+// None of these raw records is part of Hydra's CliMayteWorkerView contract or read by its list,
+// tooltips, actions or detail placeholder. The From fields and role still derive from origin,
+// trace and desk above; the full detail and every existing list contract keep their original data.
+const PANE_VIEW_PROJECTION: typeof LEAN_VIEW_PROJECTION = {
+  ...LEAN_VIEW_PROJECTION,
+  omitWorkerFields: new Set([
+    'eta',
+    'pastEtas',
+    'message',
+    'origin',
+    'trace',
+    'sealed',
+    'check',
+    'desk',
+    'handoffNote',
+    'requestId',
+  ]),
 }
 
 export function climayteLeanWorker(v: CliMayteWorkerView): CliMayteWorkerLean {
