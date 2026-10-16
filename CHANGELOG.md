@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Unchanged Free chat lists keep their history cache.** Background account checks no longer make the app download and process the whole chat history when nothing changed. Real chat updates, titles and errors still refresh it.
 - **Command packs bring a team's slash commands and skills to every account.** Add a git repo in Settings → Command packs, and its commands and skills are copied into every Claude and Codex account on this PC and kept current every 10 minutes. A copy someone edited, or a file of their own with the same name, is kept as it is.
 - **HSwarm finds each key's own region.** DashScope, StepFun, Moonshot and Z.ai keys that only work in the region that issued them, such as China-issued keys, are now found on their own region and kept there. They no longer look revoked, keys from different regions share one pool, and no per-machine endpoint setting is needed.
 - **Refreshed CLI logins can clear an outdated signed-out status.** A read-only server check verifies the current login and account before lifting its authentication block. Rejected logins, account restrictions and genuine rate limits stay protected.

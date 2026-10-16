@@ -388,6 +388,10 @@ export class FreeInstances {
     const forgotten = this.store.data.forgotten
     if (used && forgotten?.includes(id)) this.store.data.forgotten = forgotten.filter(f => f !== id)
     let thread = known ? known.get(id) : this.store.data.threads.find(t => t.id === id)
+    // An identical passive listing must keep the full-history validator. Used
+    // operations still invalidate: their later accounting can change contextChars.
+    const historyChanged = used || !thread || thread.status !== status || thread.error !== error ||
+      !!(serverId && thread.serverId !== serverId) || !!(title && thread.title !== title)
     if (!thread) {
       const created = createdAt || Date.now()
       thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: created, updatedAt: used ? Date.now() : created, error }
@@ -396,7 +400,7 @@ export class FreeInstances {
       this.threadRevision++
     }
     else if (thread.status !== status) this.threadRevision++
-    this.historyRevision++
+    if (historyChanged) this.historyRevision++
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
   }
