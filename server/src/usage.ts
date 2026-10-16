@@ -510,6 +510,8 @@ export function pruneUsageProbeTranscripts(): number {
  * status - 401 the token was refused, 429 rate-limited, 0 the request never completed.
  */
 const lastApiFailure = new Map<string, { status: number; error: string; retryAfterSec?: number }>()
+// The scalar grant identity is kept separately so callers still receive the original failure DTO.
+const lastApiFailureGrant = new Map<string, string>()
 
 /** The last API failure recorded for `label`, or null. Cleared as soon as that label reads OK. */
 export function lastUsageApiFailure(
@@ -569,7 +571,23 @@ export function usageApiBackoffMsRemaining(label: string | null, now = Date.now(
 /** Test seam: forget every recorded API failure and server-issued backoff. */
 export function resetUsageApiBackoff(): void {
   lastApiFailure.clear()
+  lastApiFailureGrant.clear()
   apiBackoffUntil.clear()
+}
+
+/** A successful profile authentication can retire this exact grant's old 401 diagnosis. Genuine
+ *  rate limits, other grants and other labels keep their backoff and last failure. */
+export function clearVerifiedUsageAuthFailure(label: string, token: string): void {
+  const fingerprint = tokenFingerprint(token)
+  const windows = apiBackoffUntil.get(label)
+  if (windows?.get(fingerprint)?.status === 401) {
+    windows.delete(fingerprint)
+    if (!windows.size) apiBackoffUntil.delete(label)
+  }
+  if (lastApiFailure.get(label)?.status === 401 && lastApiFailureGrant.get(label) === fingerprint) {
+    lastApiFailure.delete(label)
+    lastApiFailureGrant.delete(label)
+  }
 }
 
 /**
@@ -606,6 +624,7 @@ async function fastApiUsageRead(
   const backoff = apiBackoffUntil.get(labelKey)?.get(fingerprint)
   const nowMs = Date.now()
   if (backoff && backoff.until > nowMs) {
+    lastApiFailureGrant.set(labelKey, fingerprint)
     lastApiFailure.set(
       labelKey,
       backoff.status === 429
@@ -634,6 +653,7 @@ async function fastApiUsageRead(
   // the user saw the same "Claude returned no usage numbers for this instance", and so did
   // anyone reading the code. Kept per label (not returned) so the snapshot type and every
   // caller stay unchanged; usage-service reads it when it builds the no-data result.
+  lastApiFailureGrant.set(labelKey, fingerprint)
   lastApiFailure.set(labelKey, {
     status: res.status,
     error: res.error,
@@ -789,6 +809,7 @@ export async function checkUsage(opts: UsageCheckOpts = {}): Promise<UsageSnapsh
   // described as rate-limited, and the rate limit outranked the truth. A stale diagnosis is worse
   // than none, because it is confidently specific and sends you to fix the wrong thing.
   lastApiFailure.delete(label ?? '(ambient)')
+  lastApiFailureGrant.delete(label ?? '(ambient)')
 
   // --- fast path: the direct API read, whenever we can lay hands on an OAuth token ---------------
   const fastResult = await fastApiUsageRead(opts, label)

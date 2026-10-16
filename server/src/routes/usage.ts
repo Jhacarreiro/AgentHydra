@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
-import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
+import { climayteCheckCliAuth, climayteLimitWalls, climayteLiveReadings } from '../climayte'
 import { cliInstancesInUse } from '../climayte-core'
 import { remoteActiveCounts } from '../climayte-remote'
 import { cliAccountUuid } from '../core/account-holders'
@@ -665,6 +665,18 @@ app.post('/api/cli-instances/:id/launch', async (c) => {
 app.post('/api/cli-instances/:id/login', (c) =>
   c.json(launchCliInstance(c.req.param('id'), { login: true })),
 )
+// Reconcile a freshly imported login through a real, read-only server authentication check.
+// No clear-wall flag: a stale or refused grant keeps its signed-out block.
+app.post('/api/cli-instances/:id/auth-check', async (c) => {
+  const body = await jsonBody(c)
+  if (body.expectedEmail !== undefined && typeof body.expectedEmail !== 'string')
+    return c.json({ error: 'expectedEmail must be a string' }, 400)
+  const result = await climayteCheckCliAuth(
+    c.req.param('id'),
+    body.expectedEmail as string | undefined,
+  )
+  return c.json(result, result.reason === 'not_found' ? 404 : 200)
+})
 // Sign a CLI instance out (removes .credentials.json) - see core/cli-logout.ts for why it refuses
 // while a session runs on it. On success the cached quota is dropped: it belongs to the old login.
 app.post('/api/cli-instances/:id/logout', (c) => {

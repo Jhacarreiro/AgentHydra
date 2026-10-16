@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Refreshed CLI logins can clear an outdated signed-out status.** A read-only server check verifies the current login and account before lifting its authentication block. Rejected logins, account restrictions and genuine rate limits stay protected.
 - **HSwarm service providers can use query-parameter authentication.** Explicitly configured services and their credential checks send the selected key in the required query field. Other providers keep their existing headers and key rotation behavior.
 - **Windows process checks use a lighter snapshot when available.** Supported Windows versions return process identities without collecting full process statistics. Existing fallback, freshness and unknown-state safeguards stay enforced.
 - **Message previews release the pasted text they no longer need.** Transcript indexes stop at the first nonblank line and detach short previews from large earlier prompts with bounded copy work. Preview text, message order and the newest full prompt stay the same.

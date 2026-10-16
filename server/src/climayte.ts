@@ -218,8 +218,8 @@ import {
   WAVE_MIN_TASKS,
   waveDirs,
 } from './climayte-wave-ops'
+import { type CliAuthCheckResult, createCliAuthChecker } from './core/cli-auth-check'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
-import { cliAuthStatus } from './core/cli-quick-add'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { loadCatalog } from './hydra-core/catalog'
@@ -227,6 +227,7 @@ import { coreDir } from './hydra-core/paths'
 import { seatChatOf } from './hydra-core/seat-chats'
 import { POINTER_DIR } from './instance'
 import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
+import { clearVerifiedUsageAuthFailure } from './usage'
 
 export {
   setCliMayteAccountsProvider,
@@ -299,13 +300,35 @@ let timer: ReturnType<typeof setTimeout> | null = null
 
 let ticking = false
 
-/** Ask the CLI whether `a`'s login works again; a yes lifts its wall. Any answer saves the wall
- *  (its new `until`, or its removal) and schedules the next tick at once. */
+const verifyCliAuth = createCliAuthChecker({
+  instance: getCliInstance,
+  wall: (id) => walls[id],
+  clearWall: (id) => {
+    delete walls[id]
+  },
+  verified: (instance, token) => {
+    if (instance.name) clearVerifiedUsageAuthFailure(instance.name, token)
+  },
+})
+
+/** Authenticate the current grant without sending a message or refreshing it. Only a verified,
+ *  unchanged grant may lift the same signed-out wall; other account and quota walls stay intact. */
+export async function climayteCheckCliAuth(
+  id: string,
+  expectedEmail?: string,
+): Promise<CliAuthCheckResult> {
+  load()
+  const result = await verifyCliAuth(id, expectedEmail)
+  if (result.wallCleared) {
+    trySaveWalls()
+    schedule(0)
+  }
+  return result
+}
+
+/** A changed login is rechecked against the server once, with no message or token refresh. */
 function checkAuth(a: CliMayteAccount): void {
-  void cliAuthStatus(a.configDir)
-    .then((s) => {
-      if (s.loggedIn) delete walls[a.id]
-    })
+  void climayteCheckCliAuth(a.id)
     .catch(() => {})
     .finally(() => {
       authChecks.delete(a.id)
@@ -315,7 +338,7 @@ function checkAuth(a: CliMayteAccount): void {
 }
 
 /** A signed-out wall is lifted only by a new sign-in: when the account's credential file changes,
- *  the CLI's own `auth status` decides (about a quarter of a second, no quota). The clock never asks
+ *  the OAuth profile endpoint verifies that exact grant (no message or quota). The clock never asks
  *  again, so a dead login costs no other worker a failed attempt (it was rechecked every 30 minutes,
  *  and each lift sent waiting work at it). */
 function recheckSignedOut(accounts: CliMayteAccount[]): void {
