@@ -48,14 +48,18 @@ function systemFile(...parts: string[]): string {
   return join(process.env.SystemRoot || 'C:\\Windows', 'System32', ...parts)
 }
 
-/** One argument as a quoted command-line token cmd.exe passes on unchanged. Throws on one it would
- *  change. Inside quotes only a run of backslashes before the closing quote means anything to the
- *  program's own parser (CommandLineToArgvW); doubled, it stays literal. */
+/** One argument as a command-line token cmd.exe passes on unchanged. Throws on one it would change.
+ *  Bare when it holds no space and nothing cmd reads, so the program's command line reads as Bun.spawn
+ *  wrote it and a helper found by exe + match is still found (`daily.mjs --every` spans two arguments:
+ *  with every argument quoted it was never found, 2026-10-16). Quoted otherwise, where only a run of
+ *  backslashes before the closing quote means anything to the program's own parser
+ *  (CommandLineToArgvW); doubled, it stays literal. */
 function cmdToken(arg: string): string {
   if (/["%\r\n]/.test(arg))
     throw new Error(
       `cmd.exe would change the argument ${JSON.stringify(arg)}: one holding " or % cannot be started on Windows`,
     )
+  if (arg && !/[\s&|<>^(),;=!]/.test(arg)) return arg
   return `"${arg.replace(/(\\+)$/, '$1$1')}"`
 }
 

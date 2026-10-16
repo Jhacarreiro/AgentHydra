@@ -12,6 +12,7 @@ import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
+import { loggedCommandLine } from '../src/core/outside-start'
 import { killProcessTree } from '../src/core/process'
 import { createHelpers, type HelperDeps, type Lookup, realDeps } from '../src/helpers'
 
@@ -177,6 +178,19 @@ test('a port held by a program that is not the helper is never adopted, ended or
   w.lines.set(77, '"C:\\Program Files\\nodejs\\node.exe" "C:\\apps\\mcp\\server.mjs" --port 9001')
   await h.tick()
   expect(mcp()).toMatchObject({ state: 'running', pid: 77, adopted: true })
+})
+
+test('a Windows helper gets its arguments as Bun.spawn wrote them, so a match across two of them still finds it', () => {
+  // 2026-10-16: with every argument quoted, `daily.mjs" "--every` no longer held the match
+  // `daily.mjs --every`, and a helper found by exe + match was never found after it started.
+  const line = loggedCommandLine(
+    ['C:/apps/node.exe', 'D:/apps/daily.mjs', '--every', '30', 'C:/My Files/x', 'a&b'],
+    'C:/logs/daily.log',
+  )
+  expect(line).toContain(
+    'C:/apps/node.exe D:/apps/daily.mjs --every 30 "C:/My Files/x" "a&b" >>C:/logs/daily.log 2>&1',
+  )
+  expect(() => loggedCommandLine(['node', '50%'], 'C:/logs/x.log')).toThrow('cmd.exe would change')
 })
 
 describe.skipIf(process.platform !== 'win32')('a daemon relaunch on Windows', () => {
