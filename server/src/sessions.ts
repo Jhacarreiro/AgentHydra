@@ -2081,7 +2081,10 @@ export async function getSession(
   const qmap = queueStatusMap()
   const dmap = doneMarkMap()
   // Same resolution the list uses, so a row does not change its account when you click it.
-  const meta = deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
+  const meta =
+    tf.source === 'claude' && !tf.remote
+      ? deskMetaFor(tf, m, [tf.session_id], sessionMetaMap())
+      : null
   await climayteEffortReady()
   const lookups = rowLookups()
   const other = elsewhereFor(tf, lookups)

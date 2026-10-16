@@ -158,6 +158,28 @@ test('post-write refusals, wrong IDs, malformed replies, missing ACKs and lost c
     ['malformed', (socket) => socket.end('{malformed}\n')],
     ['malformed', (socket, wire) => final(socket, wire)],
     [
+      'refused',
+      (socket, wire) => {
+        ack(socket, wire)
+        ack(socket, wire)
+        final(socket, wire)
+      },
+    ],
+    [
+      'malformed',
+      (socket, wire) => {
+        ack(socket, wire)
+        socket.end('{unfinished')
+      },
+    ],
+    [
+      'malformed',
+      (socket, wire) => {
+        ack(socket, wire)
+        socket.end('\n')
+      },
+    ],
+    [
       'completion_unknown',
       (socket, wire) => {
         ack(socket, wire)
@@ -221,6 +243,120 @@ test('abort closes only the request socket and progress cannot extend the absolu
     },
   )
 })
+
+test('coordinator joins chunk fragments and accepts a final frame at EOF without a newline', async () => {
+  const stdout = 'Synthetic EOF é🙂 result'
+  await broker(
+    (socket, wire) => {
+      const prefix = [
+        JSON.stringify({ accepted: true, request_id: wire.request_id }),
+        JSON.stringify({ request_id: wire.request_id, progress: 'Synthetic progress' }),
+        '',
+      ].join('\n')
+      const bytes = Buffer.from(JSON.stringify({ request_id: wire.request_id, code: 0, stdout }))
+      const split = bytes.indexOf(Buffer.from('🙂')) + 2
+      socket.write(Buffer.concat([Buffer.from(prefix), bytes.subarray(0, split)]))
+      setImmediate(() => socket.end(bytes.subarray(split)))
+    },
+    async (endpoint) => {
+      expect(
+        await runCoordinatorRequest(endpoint, request, STATE, new AbortController().signal),
+      ).toEqual({ code: 0, stdout })
+    },
+  )
+})
+
+test('a large fragmented coordinator frame scans only incoming chunks and retains exact output', async () => {
+  // Isolate the global scan counter: no other suite or caller shares its String prototype.
+  const moduleUrl = JSON.stringify(
+    pathToFileURL(resolve(import.meta.dir, '../src/free-instances/request-coordinator.ts')).href,
+  )
+  const child = Bun.spawn(
+    [
+      process.execPath,
+      '-e',
+      `
+      import { createServer } from 'node:net'
+      import { createHash } from 'node:crypto'
+      const { runCoordinatorRequest } = await import(${moduleUrl})
+      const expected = 'Synthetic fragmented é🙂 ' + 'x'.repeat(256 * 1024)
+      const digest = value => createHash('sha256').update(value).digest('hex')
+      const wanted = digest(expected)
+      const sockets = new Set()
+      let frameBytes = 0, writes = 0
+      const server = createServer(socket => {
+        sockets.add(socket)
+        socket.on('error', () => {})
+        socket.once('close', () => sockets.delete(socket))
+        let input = ''
+        socket.on('data', async chunk => {
+          input += chunk.toString('utf8')
+          if (!input.includes('\\n')) return
+          socket.removeAllListeners('data')
+          const wire = JSON.parse(input)
+          const frame = Buffer.from([
+            JSON.stringify({ accepted: true, request_id: wire.request_id }),
+            JSON.stringify({ request_id: wire.request_id, progress: 'Synthetic progress' }),
+            JSON.stringify({ request_id: wire.request_id, code: 0, stdout: expected }), ''
+          ].join('\\n'))
+          frameBytes = frame.length
+          for (let at = 0; at < frame.length && !socket.destroyed; at += 1024) {
+            const before = scans
+            socket.write(frame.subarray(at, at + 1024)); writes++
+            // Wait for the actual client's newline search, so TCP coalescing
+            // cannot turn this into a one-chunk test under a busy scheduler.
+            while (!socket.destroyed && scans === before)
+              await new Promise(resolve => setImmediate(resolve))
+          }
+          socket.end()
+        })
+      })
+      await new Promise((resolve, reject) => { server.once('error', reject); server.listen(0, '127.0.0.1', resolve) })
+      const indexOf = String.prototype.indexOf
+      let scanned = 0, scans = 0
+      String.prototype.indexOf = function(search, from) {
+        if (search === '\\n') { scanned += Math.max(0, this.length - (from ?? 0)); scans++ }
+        return indexOf.call(this, search, from)
+      }
+      try {
+        const result = await runCoordinatorRequest({ port: server.address().port, token: 'a'.repeat(64), version: 'synthetic' },
+          { requestId: '22222222-2222-4222-8222-222222222222', instanceId: '11111111-1111-4111-8111-111111111111', provider: 'chatgpt', command: 'chat', prompt: 'Synthetic prompt' },
+          '/synthetic/state/11111111-1111-4111-8111-111111111111', new AbortController().signal, { timeoutMs: 10000 })
+        if (!result || result.code !== 0 || digest(result.stdout) !== wanted) throw new Error('Fragmented output changed')
+        console.log(JSON.stringify({ scanned, scans, frameBytes, writes, exact: true }))
+      } finally {
+        String.prototype.indexOf = indexOf
+        for (const socket of sockets) socket.destroy()
+        await new Promise(resolve => server.close(resolve))
+      }
+    `,
+    ],
+    {
+      cwd: resolve(import.meta.dir, '..'),
+      stdout: 'pipe',
+      stderr: 'pipe',
+      windowsHide: true,
+      timeout: 15_000,
+    },
+  )
+  const [out, err, code] = await Promise.all([
+    new Response(child.stdout).text(),
+    new Response(child.stderr).text(),
+    child.exited,
+  ])
+  if (code !== 0) throw new Error(`Synthetic fragmented coordinator failed: ${err || out}`)
+  const result = JSON.parse(out.trim().split('\n').at(-1)!) as {
+    scanned: number
+    scans: number
+    frameBytes: number
+    writes: number
+    exact: boolean
+  }
+  expect(result.exact).toBe(true)
+  expect(result.writes).toBeGreaterThan(250)
+  expect(result.scans).toBeGreaterThan(16)
+  expect(result.scanned).toBeLessThan(result.frameBytes * 4)
+}, 20_000)
 
 test('input, decoded stdout and outer framing caps stop requests without a legacy replay', async () => {
   await expect(

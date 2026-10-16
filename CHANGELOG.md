@@ -7,6 +7,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Large Free replies avoid repeated socket-buffer rescans.** Chunked coordinator responses assemble each protocol line once, reducing temporary memory and parsing work. Request identity, cancellation, output limits and no-replay safeguards remain enforced.
+- **Codex and remote session details skip unrelated desktop scans.** Opening those conversations no longer rebuilds Claude Desktop metadata that their detail view does not use. Local Claude details still resolve fresh desktop state.
+- **CliMayte groups time estimates without repeatedly copying its history.** Large estimate histories build their prompt-version groups in one pass, preserving displayed statistics and review ordering.
+- **Desktop login checks share the filesystem limit.** Overlapping status refreshes and sync passes avoid separate bursts of cookie-database checks and temporary copies. Fresh sign-in detection and temporary-copy cleanup keep their existing behavior.
 - **Queued CliMayte logs allocate their read buffers when admitted.** Large catch-up bursts avoid holding a raw unread-tail buffer for every waiting log. Cursor checks, decoded events and file cleanup remain unchanged.
 - **Live-session and account-history lookups share the filesystem limit.** Transcript existence checks and directory listings join the same queue as other readers. Direct and fallback transcript paths, history ordering and unreadable-record handling stay the same.
 - **CliMayte's history and running logs share the filesystem limit.** Background effort scans, live log reads and registration listings no longer grow separate bursts of retained filesystem workers. Freshness checks, concurrent stop handling and guaranteed file cleanup keep their existing behavior.

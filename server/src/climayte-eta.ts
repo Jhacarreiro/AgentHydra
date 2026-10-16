@@ -514,7 +514,12 @@ export interface EtaPromptStats {
  *  first. */
 export function etaPromptStats(samples: EtaSample[]): EtaPromptStats[] {
   const by = new Map<number, EtaSample[]>([[ETA_PROMPT_VERSION, []]])
-  for (const s of samples) by.set(versionOf(s), [...(by.get(versionOf(s)) ?? []), s])
+  for (const s of samples) {
+    const version = versionOf(s)
+    const list = by.get(version)
+    if (list) list.push(s)
+    else by.set(version, [s])
+  }
   return [...by]
     .sort((a, b) => b[0] - a[0])
     .map(([version, list]) => {

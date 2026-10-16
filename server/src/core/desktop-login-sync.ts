@@ -63,6 +63,7 @@ import {
   getWindowsMasterKey,
 } from './crypto'
 import { ensureWindowsMasterKey } from './crypto/keys.win'
+import { fsSlot } from './fs-slots'
 import { logoutInstance } from './instance-logout'
 import { claimInstanceNumber, instanceNumbers, instanceRef } from './instance-numbers'
 import { createInstance } from './lifecycle'
@@ -196,7 +197,7 @@ export async function listDesktopProfiles(): Promise<DesktopProfile[]> {
  *  nothing is decrypted. Null when the database cannot be copied or read (the app holds it). */
 export async function hasSessionKey(dir: string): Promise<boolean | null> {
   if (
-    !(await stat(cookieDb(dir)).then(
+    !(await fsSlot(() => stat(cookieDb(dir))).then(
       () => true,
       () => false,
     ))
@@ -268,7 +269,7 @@ let cookieCopies = 0
 async function withCookieCopy<T>(dir: string, read: (d: Database) => T): Promise<T | null> {
   const tmp = join(tmpdir(), `ah-cookies-${process.pid}-${Date.now()}-${++cookieCopies}.db`)
   try {
-    await copyFile(cookieDb(dir), tmp)
+    await fsSlot(() => copyFile(cookieDb(dir), tmp))
     const d = new Database(tmp, { readonly: true, safeIntegers: true })
     try {
       return read(d)
@@ -278,7 +279,7 @@ async function withCookieCopy<T>(dir: string, read: (d: Database) => T): Promise
   } catch {
     return null
   } finally {
-    await rm(tmp, { force: true })
+    await fsSlot(() => rm(tmp, { force: true }))
   }
 }
 

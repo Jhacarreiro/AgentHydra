@@ -262,12 +262,13 @@ export async function runCoordinatorRequest(
     let attempted = false,
       accepted = false,
       settled = false,
-      bytes = 0,
-      text = ''
+      bytes = 0
+    const parts: string[] = []
     const decoder = new StringDecoder('utf8')
     const finish = (out: RunOutput | undefined, error?: Error) => {
       if (settled) return
       settled = true
+      parts.length = 0
       clearTimeout(timer)
       signal.removeEventListener('abort', stopped)
       socket?.destroy()
@@ -307,6 +308,27 @@ export async function runCoordinatorRequest(
       }
       // Optional progress is ignored, but only after its request identity was checked above.
     }
+    // Search each decoded chunk once. Repeatedly joining and scanning a growing
+    // result frame copied megabytes of prior text on every small socket chunk.
+    const consume = (chunk: string) => {
+      let offset = 0
+      while (!settled) {
+        const end = chunk.indexOf('\n', offset)
+        if (end < 0) {
+          if (offset < chunk.length) parts.push(chunk.slice(offset))
+          break
+        }
+        const piece = chunk.slice(offset, end)
+        let line = piece
+        if (parts.length) {
+          parts.push(piece)
+          line = parts.join('')
+          parts.length = 0
+        }
+        readLine(line)
+        offset = end + 1
+      }
+    }
     signal.addEventListener('abort', stopped, { once: true })
     if (signal.aborted) return stopped()
     try {
@@ -323,19 +345,16 @@ export async function runCoordinatorRequest(
       socket.on('data', (chunk) => {
         bytes += chunk.length
         if (bytes > OUTPUT_LIMIT) return failed('request_coordinator_output_limit')
-        text += decoder.write(chunk)
-        while (!settled) {
-          const end = text.indexOf('\n')
-          if (end < 0) break
-          const line = text.slice(0, end)
-          text = text.slice(end + 1)
-          readLine(line)
-        }
+        consume(decoder.write(chunk))
       })
       socket.once('error', () => failed('request_coordinator_connection_unknown: do not replay'))
       socket.once('end', () => {
-        text += decoder.end()
-        if (text && !settled) readLine(text)
+        consume(decoder.end())
+        if (parts.length && !settled) {
+          const line = parts.join('')
+          parts.length = 0
+          readLine(line)
+        }
         if (!settled) failed('request_coordinator_completion_unknown: do not replay')
       })
       socket.once('close', () => failed('request_coordinator_completion_unknown: do not replay'))
