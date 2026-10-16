@@ -1,7 +1,7 @@
 // server/tests/mcp-free.test.ts - the Free account tools (server/src/mcp-free.ts) against a stand-in Desk 2
 // on a free port (HYDRA_DESK_PORT), never the real one: which account a task goes to, one operation per
 // account at a time, and a continuation on its own thread's account.
-import { afterAll, beforeAll, describe, expect, test } from 'bun:test'
+import { afterAll, beforeAll, describe, expect, spyOn, test } from 'bun:test'
 import {
   FREE_TOOLS,
   type FreeInstance,
@@ -576,5 +576,31 @@ describe('free_chat through a stand-in Desk 2', () => {
     const out = await run('free_chat', { tasks: [{ prompt: 'x', account: 3 }] })
     expect(out.tasks[0].state).toBe('failed')
     expect(out.tasks[0].error).toContain('account #3')
+  }, 15_000)
+
+  test('free_results expires a normally completed batch after six hours without starting another batch', async () => {
+    resetFreeHealth()
+    const out = await run('free_chat', {
+      tasks: [{ prompt: 'Synthetic retained result', account: 1 }],
+    })
+    expect(out.finished).toBe(true)
+    expect(out.tasks[0]).toMatchObject({
+      state: 'done',
+      response: 're: Synthetic retained result',
+    })
+    const retained = await run('free_results', { batch: out.batch, wait_s: 0 })
+    expect(retained.tasks).toEqual(out.tasks)
+    const sends = ran.length
+    const expiredAt = Date.now() + 6 * 60 * 60_000 + 1
+    const clock = spyOn(Date, 'now').mockReturnValue(expiredAt)
+    try {
+      await expect(run('free_results', { batch: out.batch, wait_s: 0 })).rejects.toThrow(
+        `no batch ${out.batch} here (kept 6 hours`,
+      )
+      expect(ran.length).toBe(sends)
+    } finally {
+      clock.mockRestore()
+      resetFreeHealth()
+    }
   }, 15_000)
 })

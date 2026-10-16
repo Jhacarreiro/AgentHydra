@@ -991,6 +991,10 @@ The detail supports UUIDs, reading, follow-up messages, extracted code, citation
 ChatGPT's small network-response status callback runs on Zendriver's event loop instead of
 dispatching each response to Python's executor. Blocking HTTP readback stays off the loop;
 account checks, Temporary Chat verification and the single-send guard remain unchanged.
+
+AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
+timer releases finished batches even when no later tool call arrives; pending work remains
+available until it settles. This releases daemon memory while keeping stored account/thread metadata intact.
 The verified conversation can supply the final reply directly when it fits the bounded IPC response,
 avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
 fails without another send.

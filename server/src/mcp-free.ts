@@ -14,6 +14,7 @@ import { writeJsonStoreAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
 import { desk2Present, desk2Url } from './desk2'
 import { freeBatchLifecycle } from './free-batch-lifecycle'
+import { FreeBatchRetention } from './free-batch-retention'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -486,6 +487,7 @@ interface Batch {
   id: string
   items: Item[]
   createdAt: number
+  settled: boolean
   done: Promise<void>
 }
 
@@ -495,6 +497,7 @@ const QUEUE_LIMIT_MS = 30 * 60_000
 /** How often a running batch looks at Desk 2 again. */
 const TICK_MS = 1500
 const KEEP_BATCH_MS = 6 * 60 * 60_000
+const batchRetention = new FreeBatchRetention(batches, KEEP_BATCH_MS)
 
 function finish(it: Item, result: FreeResult | undefined, account: FreeInstance | undefined) {
   it.s.seconds = it.startedAt ? Math.round((Date.now() - it.startedAt) / 1000) : undefined
@@ -977,6 +980,7 @@ export const FREE_TOOLS: HydraTool[] = [
       ['tasks'],
     ),
     run: async (a) => {
+      batchRetention.prune()
       if (!Array.isArray(a.tasks) || !a.tasks.length) throw new Error('pass `tasks`: [{ prompt }]')
       if (a.tasks.length > 32) throw new Error('at most 32 tasks per call')
       const items: Item[] = a.tasks.map((t, i) => ({
@@ -988,12 +992,11 @@ export const FREE_TOOLS: HydraTool[] = [
       try {
         // Fail before anything is queued when Desk 2 cannot be reached at all.
         await readStatus()
-        for (const [id, b] of batches)
-          if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
         const b: Batch = {
           id: randomUUID().slice(0, 8),
           items,
           createdAt: Date.now(),
+          settled: false,
           done: Promise.resolve(),
         }
         b.done = runBatch(b)
@@ -1003,9 +1006,14 @@ export const FREE_TOOLS: HydraTool[] = [
                 Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
             releaseFreeBatchInputs(b.items)
           })
-          .finally(release)
+          .finally(() => {
+            release()
+            b.settled = true
+            batchRetention.prune()
+          })
         transferred = true
         batches.set(b.id, b)
+        batchRetention.prune()
         await Promise.race([b.done, sleep(waitMs(a))])
         return snapshot(b)
       } finally {
@@ -1028,6 +1036,7 @@ export const FREE_TOOLS: HydraTool[] = [
       ['batch'],
     ),
     run: async (a) => {
+      batchRetention.prune()
       const b = batches.get(str(a.batch))
       if (!b)
         throw new Error(
