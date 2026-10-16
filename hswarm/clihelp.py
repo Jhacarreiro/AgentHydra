@@ -43,6 +43,9 @@ META: dict[str, dict] = {
     "service": {"effect": SPEND, "guide": "With only a provider name, lists its capabilities and operation schemas offline. An operation makes one authenticated REST request with that provider's payload schema; generations may be billed. "
                 "Use --input for a JSON payload, --path NAME=VALUE for IDs, --file FIELD=PATH for multipart, and --output for binary media. POSTs are never automatically retried; poll a job using the same --key-fingerprint that created it.",
                 "examples": ["hswarm service tavily", "hswarm service tavily search --input search.json", "hswarm service elevenlabs synthesize --path voice_id=example --input speech.json --output speech.mp3"]},
+    "image": {"effect": SPEND, "guide": "Image generation routed like chat: the providers' [images.*] routes, cheapest funded first. `list` and `pick` are offline; `probe` makes one free balance read per key "
+              "and parks the empty ones; `generate` makes one billed image, moving to the next route when a provider has no key left, its content filter refuses, or the call fails, and prints the route, key fingerprint and cost.",
+              "examples": ["hswarm image list --mode edit", "hswarm image generate --prompt \"restyle as a woodcut\" --image in.png --width 704 --height 1536 --output out.png", "hswarm image probe --provider runpod"]},
     "keys": {"effect": WRITE, "guide": "`keys` (list) is offline and read-only; `probe` makes one free GET per key and may return a topped-up key to the pool; "
              "`enable` / `disable` edit the disabled slot. Pass the 8-character fingerprint, never a key.",
              "examples": ["hswarm keys --json", "hswarm keys probe --provider deepseek"]},

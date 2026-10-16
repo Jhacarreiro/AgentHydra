@@ -50,6 +50,26 @@ def build_parser() -> argparse.ArgumentParser:
     svc.add_argument("--key-fingerprint", help="use this provider key's fingerprint (use the same key to poll its generation)")
     svc.add_argument("--timeout-s", type=float, default=120.0)
 
+    im = sub.add_parser("image", help="image generation on the cheapest funded image route: list | pick | probe | generate")
+    im.add_argument("action", nargs="?", default="list", choices=["list", "pick", "probe", "generate"],
+                    help="list (offline: every route, price, live keys) | pick (the order AUTO would try) | probe (one free balance "
+                         "read per key) | generate (one image)")
+    im.add_argument("--mode", choices=["t2i", "edit", "fill"], help="default: fill with --mask, edit with --image, else t2i")
+    im.add_argument("--prompt")
+    im.add_argument("--image", help="input image file (edit, fill)")
+    im.add_argument("--mask", help="mask file for fill: white is repainted")
+    im.add_argument("--width", type=int)
+    im.add_argument("--height", type=int)
+    im.add_argument("--seed", type=int)
+    im.add_argument("--format", default="png", choices=["png", "jpeg", "webp"])
+    im.add_argument("--route", help="provider/name, or a provider for its cheapest route (default: AUTO)")
+    im.add_argument("--max-price", type=float, help="skip routes costing more than this per image (USD); unpriced routes too")
+    im.add_argument("--no-moderated", action="store_true", help="only routes with no content filter")
+    im.add_argument("--provider", help="probe: one provider")
+    im.add_argument("--output", help="generate: where the image is written")
+    im.add_argument("--json", action="store_true")
+    im.add_argument("--timeout-s", type=float, default=300.0)
+
     # The allow-always / block half of read_url's host gate (web.py); allow-once is web_hosts on the batch.
     w = sub.add_parser("web", help="read_url's standing host policy (allow / block) and which backend serves each channel")
     w.add_argument("--allow", action="append", metavar="HOST", help="allow HOST for every batch from now on (repeatable)")

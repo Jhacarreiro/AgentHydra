@@ -140,6 +140,25 @@ shows each provider's placed keys under `regions`.
 
 Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius's are priced from its own model listing (`/v1/models?verbose=true`), the only place it publishes per-token rates. StepFun has none: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
 
+### Image generation
+
+Image work is routed the way chat is. Every provider file's `[images.<name>]` tables are image routes; each says what
+it does (`modes`: `t2i` from a prompt, `edit` from a prompt and an input image whose composition the output keeps,
+`fill` from an image and a mask), its `price` per image or per megapixel when one is on record, and whether the
+provider's content filter refuses some scenes (`moderated`). AUTO serves the cheapest route whose provider still has a
+live key; a route with no price on record comes after every priced one, and a moderated refusal moves the request to
+the next route the way a spent key moves it to the next key.
+
+```bash
+python -m hswarm image list --mode edit          # offline: every route, its price, the live keys behind it
+python -m hswarm image probe                     # one free balance read per key; empty keys are parked
+python -m hswarm image generate --prompt "restyle as a woodcut print" --image in.png --width 704 --height 1536 --output out.png
+```
+
+`generate` prints the route that served the image, the key's fingerprint, its cost (the provider's own reported
+charge where it sends one, as RunPod does, else the route's price) and every leg that did not serve it. Result URLs
+are fetched without credentials. From Python: `await hswarm.image.generate(hswarm.image.Request(...))`.
+
 ### Configuration Directory
 
 Default: `~/.hswarm`
