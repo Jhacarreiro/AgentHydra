@@ -130,6 +130,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   const { done: stuckDone, retry: stuckRetry, save: saveStuck } = loadStuckRecord(stuckFile)
   /** The model id the SDK last reported for an alias, so Settings can show what it resolves to. */
   let resolved: { setting: string; model: string } | null = null
+  /** Items route -> the transcript read() last fetched there and the chat's itemsStamp and updatedAt it was fetched at.
+   *  Reused only while both are the same: the stamp moves with the chat's file (an append that leaves updatedAt alone),
+   *  updatedAt with the rest. Only the chats of the last read are kept, never a failed fetch. */
+  const fetched = new Map<string, { stamp: string; updatedAt: number; items: TranscriptItem[] }>()
 
   /** The judge's model: the owner's test double when the context carries one (tests inject it under deps), else the SDK. */
   const askModel = (): AskModel => (ctx.deps.orchestratorAsk as AskModel | undefined) ?? sdkAskModel(ctx.home, () => claudeCodeBinaryFor(ctx.home).path())
@@ -150,6 +154,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     return typeof answer?.error === 'string' ? answer.error : `${path} answered ${res.status}`
   }
 
+  /** A chat's transcript: the one fetched last while its itemsStamp and updatedAt are what they were then, else fetched
+   *  afresh. A chat with no stamp (an outside session, a running turn) is fetched every time. */
+  async function transcript(path: string, stamp: string | undefined, updatedAt: number): Promise<TranscriptItem[] | null> {
+    const hit = fetched.get(path)
+    if (stamp && hit?.stamp === stamp && hit.updatedAt === updatedAt) return hit.items
+    // The stamp is the one the list gave before this fetch: a change in between moves it again, and the next look fetches.
+    const got = await get<TranscriptItem[]>(path)
+    if (got && stamp) fetched.set(path, { stamp, updatedAt, items: got })
+    else fetched.delete(path)
+    return got
+  }
+
   /** Each open chat's row (with `outside`, each outside session's too), the most recently active first, and each
    *  one's Claude session and transcript. `blind` when Desk's own chats could not be read; `unread`, the chats whose
    *  transcript could not be (each is classified as if it were empty, which is fine to show and never enough to act on). */
@@ -158,10 +174,10 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     outside: boolean
   ): Promise<{ rows: OrchestratorRow[]; session: Map<string, string | null>; blind: boolean; unread: Set<string>; items: Map<string, TranscriptItem[]> }> {
     const now = Date.now()
-    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
+    const [own, others] = await Promise.all([get<ChatSummary[]>('/api/chats?stamps=1'), outside ? get<ExternalSession[]>('/api/external/sessions') : null])
     const subjects = [
-      ...(own ?? []).filter((ch) => !ch.archived).map((ch) => ({ s: fromChat(ch), items: `/api/chats/${encodeURIComponent(ch.id)}/items` })),
-      ...(others ?? []).filter((x) => !x.archived && x.status !== 'stale').map((x) => ({ s: fromExternal(x), items: `/api/external/sessions/${encodeURIComponent(x.id)}/items` }))
+      ...(own ?? []).filter((ch) => !ch.archived).map((ch) => ({ s: fromChat(ch), items: `/api/chats/${encodeURIComponent(ch.id)}/items`, stamp: ch.itemsStamp })),
+      ...(others ?? []).filter((x) => !x.archived && x.status !== 'stale').map((x) => ({ s: fromExternal(x), items: `/api/external/sessions/${encodeURIComponent(x.id)}/items`, stamp: undefined }))
     ]
       .filter(({ s }) => now - s.updatedAt < days * 86_400_000)
       .sort((a, b) => b.s.updatedAt - a.s.updatedAt)
@@ -169,13 +185,16 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     const rows: OrchestratorRow[] = []
     const unread = new Set<string>()
     const transcripts = new Map<string, TranscriptItem[]>()
-    for (const { s, items } of subjects) {
+    const looked = new Set<string>()
+    for (const { s, items, stamp } of subjects) {
       const busy = s.status === 'working' || s.status === 'starting'
-      const got = busy ? null : await get<TranscriptItem[]>(items)
+      if (!busy) looked.add(items)
+      const got = busy ? null : await transcript(items, stamp, s.updatedAt)
       if (!busy && got === null) unread.add(s.id)
       if (got) transcripts.set(s.id, got)
       rows.push(classify(s, got, now))
     }
+    for (const path of fetched.keys()) if (!looked.has(path)) fetched.delete(path)
     return { rows, session: new Map(subjects.map(({ s }) => [s.id, s.session])), blind: own === null, unread, items: transcripts }
   }
 

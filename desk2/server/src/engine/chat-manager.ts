@@ -221,11 +221,18 @@ export class ChatManager {
 
   // Reads
 
-  /** Every chat, newest activity first. */
-  list(o: { archived?: boolean } = {}): ChatSummary[] {
-    const all = [...this.chats.values()].map((e) => this.view(e.chat))
-    const list = o.archived ? all : all.filter((c) => !c.archived)
-    return list.sort((a, b) => b.updatedAt - a.updatedAt)
+  /** Every chat, newest activity first; `stamps` adds each one's itemsStamp (two file stats a chat). */
+  list(o: { archived?: boolean; stamps?: boolean } = {}): ChatSummary[] {
+    const shown = [...this.chats.values()].filter((e) => o.archived || !e.chat.archived)
+    return shown.map((e) => (o.stamps ? { ...this.view(e.chat), ...this.itemsStampOf(e) } : this.view(e.chat))).sort((a, b) => b.updatedAt - a.updatedAt)
+  }
+
+  /** The chat's itemsStamp: the file stamp itemsBody reuses its body on, given only when nothing in memory is laid over
+   *  the file (a running turn, a pinned service's turn, a CliMayte stand-in, a message waiting for another service). */
+  private itemsStampOf(e: Entry): { itemsStamp?: string } {
+    if (e.runtime?.running || e.pinned?.busy || e.sent?.length || e.crossing?.length) return {}
+    const stamp = this.store.itemsStamp(e.chat.id)
+    return stamp ? { itemsStamp: stamp } : {}
   }
 
   get(id: string): ChatSummary {

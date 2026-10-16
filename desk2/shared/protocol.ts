@@ -119,6 +119,10 @@ export interface ChatSummary {
   /** When its newest transcript item happened (a message sent, a reply, a tool call), epoch ms: opening, renaming or
    *  pinning the chat leaves it alone, unlike updatedAt. Absent until it has one. */
   lastActionAt?: number
+  /** Only in GET /api/chats?stamps=1: what GET /api/chats/:id/items answers the same transcript for while it holds (the
+   *  chat's file and media stamp). Absent while anything in memory is laid over the file (a running turn, a message
+   *  standing in): no proof the transcript is unchanged. Never saved. */
+  itemsStamp?: string
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
   pendingCount: number // open permission / question / plan requests
