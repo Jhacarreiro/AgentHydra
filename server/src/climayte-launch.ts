@@ -1063,6 +1063,8 @@ function noteLaunch(
   delete w.revived
   w.accountId = acct.id
   w.status = 'running'
+  // The last attempt's line ('finished (N turns; ...)') is not this one's: Desk shows it under a working chat.
+  w.lastActivity = null
   w.error = null
   w.notBefore = null
   delete w.heldForResetSince
