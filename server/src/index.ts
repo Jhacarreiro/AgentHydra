@@ -13,6 +13,7 @@ import {
   lastUpdateCheck,
   loadAutoUpdateSettings,
   recordUpdateCheck,
+  relaunchAfterUpdate,
   setAutoUpdateEnabled,
   setAutoUpdateHooks,
   setAutoUpdateIntervalSecs,
@@ -83,6 +84,7 @@ import {
 } from './dispatch'
 import { startExtraUsageGuard, stopExtraUsageGuard } from './extra-usage'
 import { findFreePort } from './find-free-port.mjs'
+import { freeBatchLifecycle } from './free-batch-lifecycle'
 import {
   cleanupStaleUpdateArtifacts,
   ensureBunBeforeRelaunch,
@@ -357,6 +359,7 @@ app.get('/api/health', (c) =>
     // Whether this daemon is serving older code than its checkout (a source install that was
     // committed to or pulled without a restart). The app header offers the restart when it is.
     runningCode: runningCode.status(),
+    freeBatchesPending: freeBatchLifecycle.activeCount(),
     mcpRegistration: (() => {
       const last = mcpReasserter.last()
       // `skipped`: this daemon is a side-run and left the machine-wide config alone on purpose.
@@ -554,6 +557,8 @@ app.get('/api/update/available', (c) => {
 // request covers minutes of real work and used to report nothing until it finished.
 app.get('/api/update/progress', (c) => c.json(updateProgress()))
 app.post('/api/update/apply', async (c) => {
+  const free = freeBatchRestartRefusal()
+  if (free) return c.json({ ok: false, error: free }, 409)
   const result = await applyUpdate()
   if (!result.ok || !result.restartRequired) return c.json(result)
   // A compiled apply swapped the binary on disk; the running process is still the OLD one, so it
@@ -573,10 +578,20 @@ app.post('/api/update/apply', async (c) => {
   // far more time than a loopback response needs to flush. The client also recovers on its own now
   // by polling /api/health (composables/useUpdates.ts) — belt and braces, because this end of it
   // can only ever be a race that is made unlikely, never one that is closed.
+  if (freeBatchRestartRefusal()) {
+    void relaunchAfterUpdate(IS_RELEASE ? undefined : () => restartRefusal(false) === null)
+    return c.json({
+      ...result,
+      message: 'AgentHydra was updated. Restart waits for current Free batches to finish.',
+    })
+  }
   const refusal = IS_RELEASE ? null : restartRefusal(false)
   if (refusal)
     return c.json({ ...result, message: `${result.message} It was not restarted: ${refusal}` })
-  setTimeout(() => void relaunchDaemon(), 3000)
+  setTimeout(
+    () => void relaunchAfterUpdate(IS_RELEASE ? undefined : () => restartRefusal(false) === null),
+    3000,
+  )
   return c.json(
     IS_RELEASE
       ? result
@@ -591,10 +606,19 @@ app.post('/api/update/apply', async (c) => {
  *  2026-09-30), whose CLI the restart kills, or a chat move running through the toolbox, which it can leave half-done
  *  (orchestrator.ts). `force` restarts past both. */
 function restartRefusal(force: boolean): string | null {
+  const free = freeBatchRestartRefusal()
+  if (free) return free
   const climayte = climayteRunningCount()
   if (climayte > 0 && !force)
     return `${climayte} CliMayte worker(s) run inside this daemon - pass force:true to restart past them (each resumes its session after the restart, but its current step starts over)`
   return moveRestartRefusal(force)
+}
+
+function freeBatchRestartRefusal(): string | null {
+  const count = freeBatchLifecycle.activeCount()
+  return count
+    ? `${count} Free batch(es) are still preparing, queued or running in this daemon. Restart waits for them to finish.`
+    : null
 }
 
 // RESTART THE DAEMON ON DEMAND (2026-09-10) - the GRACEFUL restart, in-process.
@@ -1424,6 +1448,8 @@ initConnections()
 // is waiting gets the same answer rather than spawning a second successor.
 let relaunchInFlight: Promise<boolean> | null = null
 function relaunchDaemon(): Promise<boolean> {
+  if (relaunchInFlight) return relaunchInFlight
+  if (!freeBatchLifecycle.beginRestart()) return Promise.resolve(false)
   relaunchInFlight ??= (async () => {
     // A new launcher may pin a new bun; fetch it now so the successor starts in seconds. A failure
     // is reported and the relaunch goes ahead: the successor's takeover covers the slow case.
@@ -1448,10 +1474,20 @@ function relaunchDaemon(): Promise<boolean> {
         }, 800)
       },
     })
-  })().then((handedOver) => {
-    if (!handedOver) relaunchInFlight = null
-    return handedOver
-  })
+  })().then(
+    (handedOver) => {
+      if (!handedOver) {
+        relaunchInFlight = null
+        freeBatchLifecycle.abortRestart()
+      }
+      return handedOver
+    },
+    (error) => {
+      relaunchInFlight = null
+      freeBatchLifecycle.abortRestart()
+      throw error
+    },
+  )
   return relaunchInFlight
 }
 
@@ -1511,7 +1547,8 @@ setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
-  relaunch: () => void relaunchDaemon(),
+  hasUnsafeWork: () => freeBatchLifecycle.activeCount() > 0,
+  relaunch: () => relaunchDaemon(),
 })
 
 // A compiled build's self-updater renames the old exe + web/dist aside during a swap; sweep any

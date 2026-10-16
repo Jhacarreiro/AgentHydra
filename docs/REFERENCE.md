@@ -129,6 +129,11 @@ threads are private, so unlike probe chats they need no deleting. The call answe
 with a `batch` for `free_results` while the sending goes on; batches live in the daemon's memory for 6
 hours, the threads in Desk 2 (`free_threads`, `free_read`). Desk 2 must be running.
 
+History lookups use bounded, opt-in Desk queries: `/api/free/threads?view=recent&limit=30&account=...`
+returns `{total,threads}`; `view=lookup&chat_id=...` accepts up to 32 identifiers and returns each ID's
+first stored match. Full history, `since` and full-list ETag behavior are unchanged. Older windows
+that ignore these selectors still work through the MCP's original filtering and routing.
+
 **`babysitter`** (`server/src/mcp-babysitter.ts`) answers which chats a usage limit stopped right now: each
 one (a Desk chat, a Claude Desktop or CLI session) with its account, when it stopped, when its limit resets,
 its state (`waiting`, `resumed`, `no-engine`, `gave-up`) and why, the count and soonest reset per account, and
@@ -740,6 +745,12 @@ POST /api/update/settings   { "enabled": true, "intervalSecs": 21600 }
 the working tree is clean, applies (`git pull --ff-only` + reinstall + rebuild) and relaunches itself
 on the same port (`AGENTHYDRA_RELAUNCH=1` makes the successor wait for the predecessor to free it).
 A dirty tree is never touched.
+
+Free MCP batches stay in the daemon's memory: preparing, queued or running batches are a hard
+restart guard, including during automatic updates. Admission closes synchronously before the
+successor handoff, then reopens if the handoff fails. If work starts while an update builds, the
+applied update keeps a pending restart and retries every five seconds once the work is clear,
+without applying it again. This also completes a requested manual update when auto-apply is off.
 
 Because updates are a `git pull --ff-only` against `origin/main`, **pushing `main` is the release**:
 as soon as `main` moves, every instance with auto-update enabled fast-forwards to it on its next

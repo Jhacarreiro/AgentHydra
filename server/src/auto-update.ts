@@ -50,7 +50,9 @@ export interface AutoUpdateHooks {
   check: typeof checkForUpdate
   apply: typeof applyUpdate
   /** Restart the daemon so the freshly-pulled code takes over. Wired by server/src/index.ts. */
-  relaunch: () => void
+  relaunch: () => void | boolean | Promise<void | boolean>
+  /** Work held only in this process must finish; the one-hour soft defer never overrides it. */
+  hasUnsafeWork: () => boolean
   /** True when dispatch runs are in flight. An update relaunches the daemon; even though runs now
    *  survive that (they're detached + reattached), we DEFER updating while the queue is busy so a
    *  relaunch never churns a live run's stream, for at most AUTO_UPDATE_MAX_DEFER_S. Wired by
@@ -69,6 +71,7 @@ const realHooks: AutoUpdateHooks = {
   apply: applyUpdate,
   relaunch: defaultRelaunch,
   hasActiveRuns: () => false,
+  hasUnsafeWork: () => false,
 }
 let hooks: AutoUpdateHooks = realHooks
 /** Override the side-effect hooks (index.ts sets `relaunch`; tests inject fakes for all three so
@@ -95,6 +98,9 @@ let started = false // true only after the daemon finishes booting (startAutoUpd
 let timer: ReturnType<typeof setTimeout> | null = null
 let ticking = false
 let applying = false // an apply is in flight — never overlap checks/applies
+let pendingRelaunch = false
+let pendingRelaunchGuard: (() => boolean) | null = null
+let relaunchRequest: Promise<boolean> | null = null
 /** When the waiting update was first held back by busy runs; null while nothing waits on them. */
 let deferredSince: number | null = null
 
@@ -159,6 +165,32 @@ export interface AutoUpdateRunResult {
   reason?: string
 }
 
+/** An applied update still needs its restart if new volatile work began during the build.
+ * Keep retrying that handoff without applying the same update again, including after a manual apply. */
+export function relaunchAfterUpdate(mayRelaunch?: () => boolean): Promise<boolean> {
+  pendingRelaunch = true
+  if (mayRelaunch) pendingRelaunchGuard = mayRelaunch
+  if (relaunchRequest) return relaunchRequest
+  if (hooks.hasUnsafeWork() || (pendingRelaunchGuard && !pendingRelaunchGuard())) {
+    retime()
+    return Promise.resolve(false)
+  }
+  relaunchRequest = Promise.resolve()
+    .then(() => hooks.relaunch())
+    .then((handedOver) => {
+      if (handedOver === false) return false
+      pendingRelaunch = false
+      pendingRelaunchGuard = null
+      return true
+    })
+    .catch(() => false)
+    .finally(() => {
+      relaunchRequest = null
+      retime()
+    })
+  return relaunchRequest
+}
+
 /**
  * One check → maybe apply → maybe relaunch. Applies ONLY when the engine reports an update is
  * available AND applicable (`canApply`: clean tree, on a branch with an update remote) — so a dirty
@@ -167,6 +199,20 @@ export interface AutoUpdateRunResult {
  */
 export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRunResult> {
   if (applying) return { checked: false, applied: false, relaunched: false, reason: 'busy' }
+  if (pendingRelaunch) {
+    applying = true
+    try {
+      const relaunched = await relaunchAfterUpdate()
+      return {
+        checked: false,
+        applied: false,
+        relaunched,
+        ...(relaunched ? {} : { reason: 'restart-pending' }),
+      }
+    } finally {
+      applying = false
+    }
+  }
   let status: Awaited<ReturnType<typeof checkForUpdate>>
   try {
     status = await hooks.check()
@@ -193,6 +239,8 @@ export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRun
       relaunched: false,
       reason: status.reason ?? 'cannot-apply',
     }
+  if (hooks.hasUnsafeWork())
+    return { checked: true, applied: false, relaunched: false, reason: 'volatile-work' }
   // Defer while dispatch runs are in flight: applying relaunches the daemon, and even though runs
   // survive that now, we'd rather not churn a live run's stream mid-flight. Re-checked next window,
   // and installed past them once the update has waited AUTO_UPDATE_MAX_DEFER_S.
@@ -211,8 +259,13 @@ export async function runAutoUpdateOnce(now = Date.now()): Promise<AutoUpdateRun
     const res = await hooks.apply()
     if (!res.ok) return { checked: true, applied: false, relaunched: false, reason: 'apply-failed' }
     if (res.restartRequired) {
-      hooks.relaunch()
-      return { checked: true, applied: true, relaunched: true }
+      const relaunched = await relaunchAfterUpdate()
+      return {
+        checked: true,
+        applied: true,
+        relaunched,
+        ...(relaunched ? {} : { reason: 'restart-pending' }),
+      }
     }
     return { checked: true, applied: true, relaunched: false }
   } catch {
@@ -249,6 +302,7 @@ export async function runUpdateCheckOnce(): Promise<{ ok: boolean; updateAvailab
 // what made "I was never told there was an update" the default experience — see lastCheck above.
 /** Seconds until the next tick, given what this loop is currently for. */
 function tickIntervalSecs(): number {
+  if (pendingRelaunch) return 5
   return enabled ? intervalSecs : UPDATE_CHECK_INTERVAL_S
 }
 function schedule(): void {
@@ -258,7 +312,7 @@ async function runTick(): Promise<void> {
   timer = null
   ticking = true
   try {
-    if (enabled) await runAutoUpdateOnce()
+    if (enabled || pendingRelaunch) await runAutoUpdateOnce()
     else await runUpdateCheckOnce()
   } catch {
     /* a round failing is non-fatal — we just try again next window */
@@ -294,6 +348,8 @@ export function startAutoUpdate(): void {
 export function stopAutoUpdate(): void {
   started = false
   deferredSince = null
+  pendingRelaunch = false
+  pendingRelaunchGuard = null
   if (timer) {
     clearTimeout(timer)
     timer = null

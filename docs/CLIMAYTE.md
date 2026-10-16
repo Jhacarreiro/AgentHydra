@@ -510,6 +510,10 @@ Each read stats the credential file and re-parses on change, replacement, deleti
 file. The shared `StatStamp` racy-file guard also re-reads recently written files until a stable parse
 exists, so a rapid same-size rewrite cannot leave a stale label.
 
+Totals also reuse one session-membership lookup per analytics database while its generation and
+the exact requested session set hold. A write on either connection or changed membership forces
+a fresh query; failures propagate instead of caching a guessed empty result.
+
 ### Pure helpers (exported; the tests pin these)
 
 - `classifyAttempt(events: unknown[], stderr: string): { outcome: AttemptOutcome; notice: string | null; result: string | null; turnTexts: string[]; costUsd: number; turns: number }`

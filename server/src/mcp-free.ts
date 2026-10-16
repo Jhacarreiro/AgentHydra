@@ -13,6 +13,7 @@ import { DATA_DIR } from './config'
 import { writeJsonStoreAtomic } from './core/json-store'
 import { mapPool } from './core/map-pool'
 import { desk2Present, desk2Url } from './desk2'
+import { freeBatchLifecycle } from './free-batch-lifecycle'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -76,6 +77,16 @@ interface FreeThread {
   createdAt: number
   updatedAt: number
   error: string | null
+}
+interface FreeThreadPage {
+  total: number
+  threads: FreeThread[]
+}
+
+function threadLookupPath(chatIds: readonly string[]): string {
+  const query = new URLSearchParams({ view: 'lookup' })
+  for (const chatId of new Set(chatIds)) query.append('chat_id', chatId)
+  return `/threads?${query}`
 }
 
 /** Desk 2's server, read at each call (HYDRA_DESK_PORT, see desk2.ts), or null where this install has
@@ -509,6 +520,22 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
 const pending = (b: Batch) =>
   b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')
 
+/** Restart guards protect queued work as well as a provider operation already running. */
+export function freeBatchPendingCount(): number {
+  return freeBatchLifecycle.activeCount()
+}
+
+/** Polling ended without a final acknowledgement; this says nothing about provider success or failure. */
+export function markUnconfirmedFreeOperations(items: readonly Pick<Item, 's'>[]): void {
+  for (const it of items)
+    if (it.s.state === 'running')
+      Object.assign(it.s, {
+        state: 'failed',
+        error:
+          'operation_unconfirmed: Desk remained unavailable after the polling deadline. The final status is unknown; the provider operation may have finished. Check free_threads and free_read before sending again. No automatic resend was made.',
+      })
+}
+
 function failQueued(b: Batch, error: string) {
   for (const it of b.items)
     if (it.s.state === 'queued') Object.assign(it.s, { state: 'failed', error })
@@ -567,7 +594,7 @@ function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unkno
 }
 
 type JobReply = { job?: FreeJob; error?: unknown }
-type BatchReads = { threads: FreeThread[] | null; bulkJobs?: boolean }
+type BatchReads = { threads: FreeThread[] | null; bulkJobs?: boolean; chatIds?: string[] }
 
 /** Results stay available for six hours; the original terminal inputs are never read again. */
 export function releaseFreeBatchInputs(
@@ -635,10 +662,13 @@ function noAccountError(task: FreeTask): string {
 async function accountFor(
   it: Item,
   tick: Tick,
-  cache: { threads: FreeThread[] | null },
+  cache: BatchReads,
 ): Promise<FreeInstance | undefined> {
   if (it.task.chat_id) {
-    cache.threads ??= await desk<FreeThread[]>('GET', '/threads').catch(() => null)
+    cache.threads ??= await desk<FreeThread[]>(
+      'GET',
+      threadLookupPath(cache.chatIds ?? [it.task.chat_id]),
+    ).catch(() => null)
     const thread = cache.threads?.find((t) => t.chatId === it.task.chat_id)
     const account = thread ? tick.byId.get(thread.instanceId) : undefined
     if (!account) {
@@ -723,7 +753,10 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
-  const cache: BatchReads = { threads: null }
+  const cache: BatchReads = {
+    threads: null,
+    chatIds: b.items.flatMap((it) => (it.task.chat_id ? [it.task.chat_id] : [])),
+  }
   await seedOnce()
   while (pending(b)) {
     let status: FreeStatus
@@ -735,7 +768,12 @@ async function runBatch(b: Batch): Promise<void> {
         failQueued(b, String((e as Error).message))
       releaseFreeBatchInputs(b.items, cache)
       await sleep(TICK_MS * 2)
-      if (Date.now() > until) break
+      if (Date.now() > until) {
+        failQueued(b, String((e as Error).message))
+        markUnconfirmedFreeOperations(b.items)
+        releaseFreeBatchInputs(b.items, cache)
+        break
+      }
       continue
     }
     const tick = readTick(b, status)
@@ -945,25 +983,34 @@ export const FREE_TOOLS: HydraTool[] = [
         task: readTask(t, i),
         s: { task: i, state: 'queued' },
       }))
-      // Fail before anything is queued when Desk 2 cannot be reached at all.
-      await readStatus()
-      for (const [id, b] of batches)
-        if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
-      const b: Batch = {
-        id: randomUUID().slice(0, 8),
-        items,
-        createdAt: Date.now(),
-        done: Promise.resolve(),
+      const release = freeBatchLifecycle.acquire()
+      let transferred = false
+      try {
+        // Fail before anything is queued when Desk 2 cannot be reached at all.
+        await readStatus()
+        for (const [id, b] of batches)
+          if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
+        const b: Batch = {
+          id: randomUUID().slice(0, 8),
+          items,
+          createdAt: Date.now(),
+          done: Promise.resolve(),
+        }
+        b.done = runBatch(b)
+          .catch((e) => {
+            for (const it of b.items)
+              if (it.s.state === 'queued' || it.s.state === 'running')
+                Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+            releaseFreeBatchInputs(b.items)
+          })
+          .finally(release)
+        transferred = true
+        batches.set(b.id, b)
+        await Promise.race([b.done, sleep(waitMs(a))])
+        return snapshot(b)
+      } finally {
+        if (!transferred) release()
       }
-      b.done = runBatch(b).catch((e) => {
-        for (const it of b.items)
-          if (it.s.state === 'queued' || it.s.state === 'running')
-            Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-        releaseFreeBatchInputs(b.items)
-      })
-      batches.set(b.id, b)
-      await Promise.race([b.done, sleep(waitMs(a))])
-      return snapshot(b)
     },
   },
   {
@@ -999,16 +1046,32 @@ export const FREE_TOOLS: HydraTool[] = [
       limit: { type: 'number', description: 'At most this many (default 30).' },
     }),
     run: async (a) => {
-      const [status, threads] = await Promise.all([
+      const limit = Math.max(1, Math.min(Number(a.limit) || 30, 500))
+      const query = new URLSearchParams({ view: 'recent', limit: String(limit) })
+      if (a.account != null) query.set('account', String(Number(a.account)))
+      const [status, history] = await Promise.all([
         desk<{ instances: FreeInstance[] }>('GET', '/status'),
-        desk<FreeThread[]>('GET', '/threads'),
+        desk<FreeThread[] | FreeThreadPage>('GET', `/threads?${query}`),
       ])
       const byId = new Map(status.instances.map((i) => [i.id, i]))
-      const limit = Math.max(1, Math.min(Number(a.limit) || 30, 500))
-      const mine = threads
-        .filter((t) => a.account == null || byId.get(t.instanceId)?.num === Number(a.account))
-        .sort((x, y) => y.updatedAt - x.updatedAt)
-      const shown = mine.slice(0, limit).map((t) => {
+      // Older windows ignore the selector and return the same full array they
+      // always did. Reuse that response; never download it a second time.
+      const page = Array.isArray(history)
+        ? (() => {
+            const mine = history
+              .filter((t) => a.account == null || byId.get(t.instanceId)?.num === Number(a.account))
+              .sort((x, y) => y.updatedAt - x.updatedAt)
+            return { total: mine.length, threads: mine }
+          })()
+        : history
+      if (
+        !page ||
+        !Array.isArray(page.threads) ||
+        !Number.isInteger(page.total) ||
+        page.total < page.threads.length
+      )
+        throw new DeskError(503, 'Desk returned an invalid history selection.')
+      const shown = page.threads.slice(0, limit).map((t) => {
         const i = byId.get(t.instanceId)
         return {
           chat_id: t.chatId,
@@ -1020,11 +1083,11 @@ export const FREE_TOOLS: HydraTool[] = [
         }
       })
       return {
-        total: mine.length,
+        total: page.total,
         threads: shown,
-        ...(mine.length > shown.length
+        ...(page.total > shown.length
           ? {
-              more: `${mine.length - shown.length} older: raise limit (at most 500) or pass account`,
+              more: `${page.total - shown.length} older: raise limit (at most 500) or pass account`,
             }
           : {}),
       }
@@ -1045,7 +1108,7 @@ export const FREE_TOOLS: HydraTool[] = [
       const chatId = str(a.chat_id)
       const [status, threads] = await Promise.all([
         desk<{ instances: FreeInstance[] }>('GET', '/status'),
-        desk<FreeThread[]>('GET', '/threads'),
+        desk<FreeThread[]>('GET', threadLookupPath([chatId])),
       ])
       const thread = threads.find((t) => t.chatId === chatId)
       const account = thread && status.instances.find((i) => i.id === thread.instanceId)

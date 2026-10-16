@@ -248,6 +248,24 @@ export class FreeInstances {
     }
   }
   threads(): FreeThread[] { return this.store.data.threads }
+  /** Opt-in bounded history for callers that would otherwise download every row then slice it. */
+  recentThreads(limit: number, account?: number): { total: number; threads: FreeThread[] } {
+    const byId = new Map(this.store.data.instances.map(instance => [instance.id, instance]))
+    const mine = this.store.data.threads.filter(thread => account === undefined || byId.get(thread.instanceId)?.num === account)
+    const count = Math.max(1, Math.min(Number(limit) || 30, 500))
+    return { total: mine.length, threads: mine.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, count) }
+  }
+  /** The first stored match wins, just as a full history's find(chatId) did, even for a removed account. */
+  lookupThreads(chatIds: readonly string[]): FreeThread[] {
+    if (chatIds.length > 32) throw new FreeError('Look up at most 32 chat identifiers.')
+    const wanted = new Set(chatIds)
+    const found: FreeThread[] = []
+    for (const thread of this.store.data.threads) {
+      if (wanted.delete(thread.chatId)) found.push(thread)
+      if (!wanted.size) break
+    }
+    return found
+  }
   /** Full history validators are cheap; only actual thread writes invalidate them. */
   threadsETag(): string { return `"free-threads-${this.historyEpoch}-${this.historyRevision}"` }
   /** Removes one thread from Desk's list (a private chat: it is not in the site's history either). Its tokens stay in the

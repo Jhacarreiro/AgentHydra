@@ -72,6 +72,13 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   // `since` (ms): only the threads started from then on, for a caller that needs the recent few (the pacing in
   // server/src/mcp-free.ts), not all ~22,000 (8 MB).
   router.get('/threads', c => {
+    // Explicit selectors keep raw/conditional history readers backward compatible.
+    // A full-list validator never validates a different selected representation.
+    if (c.req.query('view') === 'recent')
+      return c.json(service.recentThreads(Number(c.req.query('limit')),
+        c.req.query('account') === undefined ? undefined : Number(c.req.query('account'))))
+    if (c.req.query('view') === 'lookup')
+      return c.json(service.lookupThreads(c.req.queries('chat_id') ?? []))
     const since = Number(c.req.query('since'))
     // Filtered callers keep their existing 200 response. Only a full-list reader can
     // validate the full history; no rows are read or serialized when it is unchanged.

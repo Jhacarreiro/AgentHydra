@@ -4,7 +4,7 @@
 import { acctLabel, lastThatRan, load, pct1, workers } from './climayte-core'
 import { addTokens, type CliMayteTokens, type CliMayteWorker, noTokens } from './climayte-lib'
 import { attemptUnits, rereadUnits } from './climayte-scorecard'
-import { sharedKitStore, usageQuery } from './kit/query'
+import { sharedKitStore, storeGeneration, usageQuery } from './kit/query'
 import type { KitStore } from './kit/store'
 
 type TotalsAttempt = CliMayteWorker['attempts'][number]
@@ -119,16 +119,45 @@ export function kitSpend(
   }
 }
 
-/** Which of `ids` the kit holds CliMayte calls for: the per-session ledger's key, one seek each. */
+interface KitSessionsRead {
+  generation: string
+  requested: ReadonlySet<string>
+  known: Set<string>
+}
+
+/** One current membership read per connection, replaced rather than retaining past task sets. */
+const kitSessionReads = new WeakMap<KitStore['db'], KitSessionsRead>()
+
+/** Which of `ids` the kit holds CliMayte calls for. Unchanged totals reuse membership until a write
+ *  on this connection or another connection, or a different requested session set, makes it stale. */
 function kitSessions(ids: string[], store?: KitStore): Set<string> {
-  if (!ids.length) return new Set()
   const db = (store ?? sharedKitStore()).db
+  if (!ids.length) {
+    kitSessionReads.delete(db)
+    return new Set()
+  }
+  const generation = storeGeneration(db)
+  const requested = new Set(ids)
+  const have = kitSessionReads.get(db)
+  if (have?.generation === generation && have.requested.size === requested.size) {
+    let same = true
+    for (const id of requested)
+      if (!have.requested.has(id)) {
+        same = false
+        break
+      }
+    if (same) return have.known
+  }
+  // A failed read must not install an empty result or keep a superseded membership alive.
+  kitSessionReads.delete(db)
   const rows = db
     .query(
-      `select distinct session from usage_session where source = 'climayte' and session in (${ids.map(() => '?').join(',')})`,
+      `select distinct session from usage_session where source = 'climayte' and session in (${[...requested].map(() => '?').join(',')})`,
     )
-    .all(...ids) as { session: string }[]
-  return new Set(rows.map((r) => r.session))
+    .all(...requested) as { session: string }[]
+  const known = new Set(rows.map((r) => r.session))
+  kitSessionReads.set(db, { generation, requested, known })
+  return known
 }
 
 /** Number of sorted times before `t`, or through it when `inclusive`. */

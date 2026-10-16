@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free thread lookups stop downloading the whole history.** Recent lists and chat lookups ask for only the rows they need, with the same account routing and older-window compatibility.
+- **CliMayte totals reuse unchanged session lookups.** A changed session set or a database write refreshes the lookup immediately.
+- **Updates wait for unfinished Free batches.** Preparing, queued and running batches are protected from restart, and new batches wait until the handoff reconnects. A restart deferred during a build retries after the work finishes.
 - **CliMayte skips placement bookkeeping when no task is ready.** Running work, cleanup and CPU monitoring continue as before, while idle checks avoid rebuilding finished-work estimates. Unchanged CLI plan labels also stop rereading saved sign-ins.
 - **Finished Free batches release their original prompts.** Results remain available, and work waiting to run or retry keeps the input it needs.
 - **Unchanged Free history stops downloading and redrawing itself.** The page reuses its current history when the server confirms nothing changed. New results and edits still appear on the next reading.
