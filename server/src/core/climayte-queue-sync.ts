@@ -114,30 +114,43 @@ export async function warmOriginTitles(
   lookup: TitleLookup = indexTitle,
 ): Promise<void> {
   const todo: string[] = []
-  const rank = [...workers.values()].sort(
+  // Cached/no-chat history cannot enter this pass. Avoid sorting it on every list read;
+  // keep duplicate origins until after ranking so their highest-priority worker still wins.
+  const rank: CliMayteWorker[] = []
+  for (const w of workers.values()) {
+    const id = w.origin?.kind === 'chat' ? w.origin.sessionId : null
+    if (!id) continue
+    const c = titleCache.get(id)
+    if (c && (c.title !== null || now - c.at < TITLE_RETRY_MS)) continue
+    rank.push(w)
+  }
+  rank.sort(
     (a, b) =>
       Number(isFinished(a.status)) - Number(isFinished(b.status)) || b.updatedAt - a.updatedAt,
   )
   for (const w of rank) {
     const id = w.origin?.kind === 'chat' ? w.origin.sessionId : null
     if (!id || todo.includes(id)) continue
-    const c = titleCache.get(id)
-    if (c && (c.title !== null || now - c.at < TITLE_RETRY_MS)) continue
     todo.push(id)
     if (todo.length >= TITLE_LOOKUPS_PER_PASS) break
   }
   for (const id of todo) {
     let title: string | null = null
+    let timer: ReturnType<typeof setTimeout> | undefined
     try {
       // A miss can wait on the index's sweep: past TITLE_WAIT_MS it counts as a miss.
       title = cleanTitle(
         await Promise.race([
           lookup(id),
-          new Promise<null>((r) => setTimeout(() => r(null), TITLE_WAIT_MS)),
+          new Promise<null>((r) => {
+            timer = setTimeout(() => r(null), TITLE_WAIT_MS)
+          }),
         ]),
       )
     } catch {
       // a miss
+    } finally {
+      if (timer !== undefined) clearTimeout(timer)
     }
     titleCache.set(id, { title, at: now })
   }

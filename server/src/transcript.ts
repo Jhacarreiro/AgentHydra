@@ -1370,19 +1370,33 @@ async function buildClaudeRecordsAsync(
 ): Promise<void> {
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(store.glob, store.root)
-    const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+    const scanned = new Array<{ rel: string; mtimeMs: number; size: number } | null>(
+      claudeRels.length,
+    )
+    const needsStat: Array<{ index: number; rel: string; path: string }> = []
+    // A quiet cache hit needs no asynchronous work. Pooling it still created and awaited one
+    // resolved callback promise per historical file on every sweep (tens of thousands of them).
+    // Keep the exact freshness test and input order, yielding while inspecting cached entries;
+    // only new, active or full-restat files enter the existing bounded filesystem pool.
+    const cachedSlice = timeSlice()
+    for (let index = 0; index < claudeRels.length; index++) {
+      if (cachedSlice.due()) await cachedSlice.pause()
+      const rel = claudeRels[index] as string
       const path = join(store.root, rel)
       statSeen.add(path)
       const known = claudeStatCache.get(path)
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
-        return { rel, mtimeMs: known.mtimeMs, size: known.size }
+        scanned[index] = { rel, mtimeMs: known.mtimeMs, size: known.size }
+      else needsStat.push({ index, rel, path })
+    }
+    await mapPool(needsStat, INDEX_SCAN_WIDTH, async ({ index, rel, path }) => {
       try {
         const st = await fsSlot(() => statAsync(path))
         claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
-        return { rel, mtimeMs: st.mtimeMs, size: st.size }
+        scanned[index] = { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         claudeStatCache.delete(path)
-        return null
+        scanned[index] = null
       }
     })
     const tops: Array<{ record: TranscriptFile; mtimeMs: number; size: number }> = []

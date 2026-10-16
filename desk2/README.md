@@ -1025,6 +1025,9 @@ while retaining pending or failed writes for retry.
 Authentication keeps its imported-chat checkpoint before awaiting quota. Its final quota reading,
 successful nudge refreshes and cancellation recovery fold into the operation's mandatory final
 save, avoiding a second full-history serialization without changing backups or shutdown flushing.
+The CliMayte page retains its Free display projection across local/remote worker refreshes.
+History replacements and reactive displayed account edits invalidate it; selection remains keyed
+by account/chat identity, and the underlying Free history keeps its existing polling and freshness.
 Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
 304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
 304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered

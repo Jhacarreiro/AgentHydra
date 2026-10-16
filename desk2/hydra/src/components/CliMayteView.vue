@@ -53,8 +53,8 @@ import CliMayteWaves from '@/components/CliMayteWaves.vue'
 import CliMayteWorkerDetail from '@/components/CliMayteWorkerDetail.vue'
 import FreeThreadDetail from '@/components/FreeThreadDetail.vue'
 import { useFreeInstances } from '@/composables/useFreeInstances'
+import { useFreeThreadRows } from '@/composables/useFreeThreadRows'
 import { freeThreadAsk } from '@/lib/free-instances'
-import { freeThreadRow } from '@/lib/free-threads'
 import type { FreeThread } from '@desk/shared/free-instances'
 import { Badge } from '@/components/ui/badge'
 import { Button } from '@/components/ui/button'
@@ -129,8 +129,8 @@ const {
   refreshCliMayte,
 } = useCliMayteData()
 /** Every row the list shows: this PC's workers, then the other PCs'. */
-const freeById = computed(() => new Map(freeInstances.value.map((i) => [i.id, i])))
-const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeThreads.value.map(t => freeThreadRow(t, freeById.value.get(t.instanceId)))])
+const freeRows = useFreeThreadRows(freeThreads, freeInstances)
+const rows = computed<ListRow[]>(() => [...workers.value, ...remoteRows.value, ...freeRows.value])
 /** One warning line per other PC whose build differs from this one's (its `behindNote`). */
 const remoteNotes = computed<Array<{ pc: string; note: string }>>(() =>
   remote.value?.enabled

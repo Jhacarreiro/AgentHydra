@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Large Free histories stay quieter while workers update.** The list reuses its Free rows until their history or displayed account details change, instead of rebuilding them on every worker refresh.
+- **History refreshes skip unnecessary work on unchanged data.** Cached chat titles are excluded before ranking, and quiet transcripts skip asynchronous stat callbacks. Existing file-freshness checks and lookup priorities stay the same.
+- **Login sync stops parsing unchanged account identities repeatedly.** Account emails are reused after checking the file, with replacements, removals and fresh sign-ins detected as before.
 - **CliMayte sends Desk smaller worker lists.** Desk gets the fields it uses without constructing and discarding extra worker details. Session checks and finished-work bookkeeping also create fewer temporary objects.
 - **Free authentication and refreshes avoid duplicate history saves.** Early recovery checkpoints and final metadata, quota readings and backups are still saved.
 - **Free thread lookups stop downloading the whole history.** Recent lists and chat lookups ask for only the rows they need, with the same account routing and older-window compatibility.

@@ -423,6 +423,12 @@ routes keep their shapes, and brief/report reads take precedence. Packed history
 Finished workers skip running-attempt access, and spend settlement collects only open attempts
 instead of allocating intermediate arrays for every historical worker.
 
+Origin-title warming excludes non-chat origins and cached titles before ranking the remaining
+workers. Active-first/newest priority, stable duplicate selection, lookup caps and null-miss retry
+times are unchanged. Completed or failed lookups release their deadline timers immediately.
+The window computes Free display rows independently of local and remote workers; worker-only
+refreshes reuse those row objects, while history changes and displayed account edits refresh them.
+
 ### Model and thinking (field note 16)
 
 The orchestrating chat picks each worker's model and thinking level (owner, 2026-09-30). The CLI
@@ -522,6 +528,11 @@ CLI plan labels retain only their display string (never parsed credentials), bou
 Each read stats the credential file and re-parses on change, replacement, deletion or an unreadable
 file. The shared `StatStamp` racy-file guard also re-reads recently written files until a stable parse
 exists, so a rapid same-size rewrite cannot leave a stale label.
+
+Login sync's scalar account-email cache uses the same racy-file stamp plus device/inode checks,
+bounded to 512 paths. Each call revalidates the file; missing or unreadable metadata discards its
+entry, and the current instance name remains the fallback. Full portable-login export and landing
+checks still read the complete account block fresh.
 
 Totals also reuse one session-membership lookup per analytics database while its generation and
 the exact requested session set hold. A write on either connection or changed membership forces
