@@ -121,7 +121,6 @@ import {
   tooBigOf,
 } from './climayte-lib'
 import { archiveLogsWhenDue } from './climayte-log-archive'
-import { GROWTH_REUSE_MS } from './climayte-memory'
 import {
   type CliMayteOrigin,
   type CliMaytePing,
@@ -129,7 +128,7 @@ import {
   startCliMaytePing,
 } from './climayte-ping'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { installForTick, scheduleDue, tickAccounts, tickState } from './climayte-schedule'
+import { scheduleTick, tickAccounts } from './climayte-schedule'
 import { type CliMayteVerdict, climayteKind, nextRung } from './climayte-scorecard'
 import {
   charge,
@@ -669,23 +668,8 @@ async function tick(): Promise<void> {
     // A stop's kill runs off the daemon's thread (killRunners): nothing launches beside a CLI still
     // being killed, as the next turn of a worker stopped to deliver an urgent message would.
     await killsLanded()
-    const isDue = (w: CliMayteWorker): boolean =>
-      (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
-    // The install guard is asked before the state is read, and only with work to place: its probe
-    // runs off the daemon's thread, and what is due is read after it answers.
-    let anyDue = false
-    for (const w of workers.values())
-      if (isDue(w)) {
-        anyDue = true
-        break
-      }
-    const install = anyDue ? await installForTick() : null
-    // A tick that may start a worker reads the ramping trees anew; one with nothing due reuses a
-    // reading under GROWTH_REUSE_MS old.
-    const state = tickState(accounts, now, install, anyDue ? 0 : GROWTH_REUSE_MS)
-    const due: CliMayteWorker[] = []
-    for (const w of workers.values()) if (isDue(w)) due.push(w)
-    scheduleDue(state, due)
+    const placing = scheduleTick(accounts, now)
+    if (placing) await placing
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
     processBatchWakes(now)

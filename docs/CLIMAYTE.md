@@ -505,6 +505,11 @@ Each pool build then judges those registrations on the thread (`liveIdsOf`: the 
 with no transcript lookups. An account not read yet counts no other sessions until its read lands.
 The tick reads every account before it places work.
 
+CLI plan labels retain only their display string (never parsed credentials), bounded to 512 paths.
+Each read stats the credential file and re-parses on change, replacement, deletion or an unreadable
+file. The shared `StatStamp` racy-file guard also re-reads recently written files until a stable parse
+exists, so a rapid same-size rewrite cannot leave a stale label.
+
 ### Pure helpers (exported; the tests pin these)
 
 - `classifyAttempt(events: unknown[], stderr: string): { outcome: AttemptOutcome; notice: string | null; result: string | null; turnTexts: string[]; costUsd: number; turns: number }`

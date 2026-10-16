@@ -50,6 +50,7 @@ import {
 import { ownerClaudeDir } from './owner-claude-dir'
 import { isPathInside, normalizeInstancePath } from './paths'
 import { type CMActionResult, prettyTier, resolvePlanLabel } from './shared'
+import { type StatStamp, stampOf, unchangedSince } from './stat-stamp'
 
 export type { CliInstance } from '../types'
 
@@ -241,14 +242,32 @@ export function canonicalConfigDir(rec: Pick<CliInstance, 'id' | 'configDir'>): 
  *  label the desktop rows show: "Pro", "Max 5×", "Max 20×" (owner, 2026-09-30). Only those two
  *  fields are used; the token beside them is never returned or logged. Null when there is no login
  *  or it states no plan. */
+// Keep only the display label, never the parsed credentials or their tokens. CLI pool/list reads
+// revisit these files each second; a changed, replaced or removed login is detected on every call.
+const planCache = new Map<
+  string,
+  { stamp: StatStamp; dev: number; ino: number; label: string | null }
+>()
+const PLAN_CACHE_MAX = 512
+
 export function cliPlanLabel(configDir: string): string | null {
+  const path = join(configDir, '.credentials.json')
   try {
-    const path = join(configDir, '.credentials.json')
+    const readAt = Date.now()
+    const st = statSync(path)
+    const hit = planCache.get(path)
+    if (hit && hit.dev === st.dev && hit.ino === st.ino && unchangedSince(hit.stamp, st))
+      return hit.label
     const oauth = JSON.parse(readFileSync(path, 'utf8'))?.claudeAiOauth
     const plan = typeof oauth?.subscriptionType === 'string' ? oauth.subscriptionType : null
     const tier = typeof oauth?.rateLimitTier === 'string' ? oauth.rateLimitTier : null
-    return resolvePlanLabel(plan, prettyTier(tier))
+    const label = resolvePlanLabel(plan, prettyTier(tier))
+    planCache.delete(path)
+    planCache.set(path, { stamp: stampOf(st, readAt), dev: st.dev, ino: st.ino, label })
+    if (planCache.size > PLAN_CACHE_MAX) planCache.delete(planCache.keys().next().value!)
+    return label
   } catch {
+    planCache.delete(path)
     return null
   }
 }

@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte skips placement bookkeeping when no task is ready.** Running work, cleanup and CPU monitoring continue as before, while idle checks avoid rebuilding finished-work estimates. Unchanged CLI plan labels also stop rereading saved sign-ins.
+- **Finished Free batches release their original prompts.** Results remain available, and work waiting to run or retry keeps the input it needs.
 - **Unchanged Free history stops downloading and redrawing itself.** The page reuses its current history when the server confirms nothing changed. New results and edits still appear on the next reading.
 - **CliMayte reuses unchanged placement estimates.** Its scheduling passes keep the same finished-work snapshot until that history changes. ChatGPT's reply polling also refreshes cookies without creating extra HTTP sessions or duplicating cookie objects.
 - **Free work spends less CPU on bookkeeping and keeps fewer large buffers.** Unchanged status polls reuse thread counts, completed operations save their final metadata once, and finished file writes release their JSON buffers. ChatGPT's reply checks skip display formatting until a completed answer is ready.

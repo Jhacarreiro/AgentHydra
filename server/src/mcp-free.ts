@@ -569,6 +569,17 @@ function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unkno
 type JobReply = { job?: FreeJob; error?: unknown }
 type BatchReads = { threads: FreeThread[] | null; bulkJobs?: boolean }
 
+/** Results stay available for six hours; the original terminal inputs are never read again. */
+export function releaseFreeBatchInputs(
+  items: readonly Pick<Item, 'task' | 's'>[],
+  cache?: Pick<BatchReads, 'threads'>,
+): void {
+  for (const it of items) if (it.s.state === 'done' || it.s.state === 'failed') it.task.prompt = ''
+  // Continuations never retry elsewhere. Once each has started or failed, no
+  // future tick needs this batch's full history lookup again.
+  if (cache && !items.some((it) => it.s.state === 'queued' && it.task.chat_id)) cache.threads = null
+}
+
 /** One result lookup for up to 32 running jobs. Older windows retain the same
  * eight-way reads; capability detection never caches a job's result or resends it. */
 async function readJobs(items: Item[], cache: BatchReads): Promise<JobReply[]> {
@@ -722,6 +733,7 @@ async function runBatch(b: Batch): Promise<void> {
       // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
       if (Date.now() > until || (e as DeskError).status !== 0)
         failQueued(b, String((e as Error).message))
+      releaseFreeBatchInputs(b.items, cache)
       await sleep(TICK_MS * 2)
       if (Date.now() > until) break
       continue
@@ -737,11 +749,14 @@ async function runBatch(b: Batch): Promise<void> {
       if (account) await startTask(it, account, tick.busy)
     }
     if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+    // Retry decisions and queued starts are settled before any input is released.
+    releaseFreeBatchInputs(b.items, cache)
     if (pending(b)) await sleep(TICK_MS)
   }
 }
 
 function snapshot(b: Batch) {
+  releaseFreeBatchInputs(b.items)
   const done = b.items.filter((it) => it.s.state === 'done' || it.s.state === 'failed').length
   const finished = done === b.items.length
   return {
@@ -944,6 +959,7 @@ export const FREE_TOOLS: HydraTool[] = [
         for (const it of b.items)
           if (it.s.state === 'queued' || it.s.state === 'running')
             Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+        releaseFreeBatchInputs(b.items)
       })
       batches.set(b.id, b)
       await Promise.race([b.done, sleep(waitMs(a))])
