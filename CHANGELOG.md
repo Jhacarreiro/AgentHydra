@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **A daemon restart waits for a chat move started from `chats`.** While `chats --move-to <account> --yes` is moving chats, a restart is refused the same way it already was for `migrate_chat` and `migrate_batch`, so it no longer leaves a chat on its new account and still unarchived on the old one. Planning a move without `--yes` does not hold a restart.
 - **CliMayte reads less transcript data to find an attempt's first request.** Spend calculation stops once it finds the matching usage record, using the same token parser and time window. Long records decode in chunks without assembling an extra full byte buffer.
 - **Desk's freeze profiler uses less background CPU.** After a freeze starts diagnostics, it samples at the same measured interval as the main daemon. Freeze thresholds and named-function reports remain unchanged.
 - **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.
