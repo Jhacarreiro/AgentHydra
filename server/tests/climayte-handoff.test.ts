@@ -151,6 +151,23 @@ describe('a chat worker winds down silently', () => {
     expect(text).not.toContain('end your turn with one line saying the handoff is written')
   })
 
+  test('the chat ask keeps the turn going: nothing in it reads as handing the work over now', () => {
+    // 2026-10-16: told "the rest of the task goes to a fresh session", chats ended their turn on a
+    // progress report within a minute, and sat done until the owner asked why they stopped.
+    const asks = [
+      ask(true),
+      windDownMessage({ reason: 'usage', pct: 86, week: false }, 'h.md', true),
+      windDownMessage({ reason: 'request' }, 'h.md', true),
+    ]
+    for (const text of asks) {
+      expect(text).toContain('keep working until it is fully done')
+      expect(text).toContain('no reason to stop, wrap up or end your turn early')
+      expect(text).not.toMatch(
+        /rest of the task goes|must hand the task|hand the task to a fresh session/,
+      )
+    }
+  })
+
   test('a non-chat ask keeps its one-line report', () => {
     expect(ask(false)).toContain('end your turn with one line saying the handoff is written')
   })

@@ -1023,15 +1023,27 @@ function windDownCause(why: WindDownWhy): string {
   return `this account is at ${Math.round(why.pct)}% of its ${why.week ? 'weekly' : '5-hour'} usage, past the line where CliMayte stops work so it never reaches the limit, so this session must hand the task to a fresh session (on another account with room, or on this one once that window resets)`
 }
 
+/** The first words of a chat's windDownMessage. A chat's turn that ends stays ended (withStops keeps
+ *  it 'done'), so nothing here may read as the session handing its work over now. */
+function chatWindDownCause(why: WindDownWhy): string {
+  if (why.reason === 'usage')
+    return `this account is at ${Math.round(why.pct)}% of its ${why.week ? 'weekly' : '5-hour'} usage; if it reaches CliMayte's stop line before this chat's work is done, AgentHydra moves the work to a fresh session on another account, which starts from a handoff`
+  if (why.reason === 'context')
+    return `this chat's conversation has grown to about ${Math.round(why.tokens / 1000)}k tokens, so the owner's next message will start a fresh, smaller session from a handoff`
+  return "the orchestrator asked that the owner's next message start a fresh session from a handoff"
+}
+
 /** What a winding-down worker is told after its next tool call (a PostToolUse hook shows it). The
  *  session that has the whole context writes the handoff, while its own cache is warm; the next
  *  account then starts a small fresh session from it instead of re-reading the whole conversation
  *  (a move re-reads it all uncached: 219k tokens cost $1.77 on one live move, 2026-09-30). */
 export function windDownMessage(why: WindDownWhy, path: string, chat = false): string {
   // A chat's owner reads every reply, and the handoff is AgentHydra's bookkeeping: the reply never
-  // mentions it, and the turn goes on with the owner's request.
+  // mentions it, and the turn goes on with the owner's request. Told the task "goes to a fresh
+  // session", 51 of 97 chats wound down for size in a day ended their turn within 150 s on a
+  // progress report, and sat done until the owner asked why they stopped (2026-10-16).
   if (chat)
-    return `AgentHydra: ${windDownCause(why)}. This is bookkeeping for AgentHydra, not something to tell the owner: write the handoff now, silently, with the Write tool to ${path}, for the session that continues this task. Do not mention the handoff, the file or this note in anything you say. Then carry on with the owner's request and end your turn with your normal reply. The handoff holds, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results.`
+    return `AgentHydra: ${chatWindDownCause(why)}. This is bookkeeping for AgentHydra, not something to tell the owner: write the handoff now, silently, with the Write tool to ${path}. Then go straight back to the owner's request and keep working until it is fully done, as you would have without this note. This note is no reason to stop, wrap up or end your turn early with a progress report: the owner reads a turn that ends as the work being finished, and nothing picks it up again until they write. Just before your final reply, update the handoff with whatever changed since you wrote it. Do not mention the handoff, the file or this note in anything you say. The handoff holds, in under 800 words: the goal as you understand it; what is done (files changed, commits, results, with paths); what is in progress and its exact state (if you were about to commit, land or push: the exact commit message and the exact paths); the next steps in order; the facts, decisions and gotchas you learned, carrying forward everything still true from any handoff you started from; and the commands or checks that prove the work, with their results.`
   // The handoff comes FIRST: the hard stop at 90% is a few points away, about 30 seconds of heavy
   // work, and a session stopped before its note is written moves by re-reading everything cold
   // (stress review, 2026-10-02). A task two or three calls from done finishes instead.
