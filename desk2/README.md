@@ -1050,6 +1050,10 @@ Completed jobs in the shared page cache retain metadata rather than whole result
 Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
 uncertain-operation locks remain intact. Successful account removal clears its cache only if no
 newer operation appeared while deletion was awaiting acknowledgement. Server job retention is unchanged.
+Server recovery replies retain their existing 15-minute window and 200-job ceiling. The rolling
+maintenance tick also prunes expired completed replies when no account needs a refresh; active jobs
+and stored thread metadata stay intact. Runner stdout decoding views the exact transferred byte
+slice instead of first duplicating up to 8 MiB; UTF-8 and exit/status handling remain unchanged.
 ChatGPT continuation model and previous-message-ID checks use the existing proof projection,
 avoiding historical code/citation extraction before dispatch. Branch visibility and identity
 validation remain shared with rich reads; completed replies still receive full display fields,

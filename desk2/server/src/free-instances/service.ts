@@ -217,6 +217,8 @@ export class FreeInstances {
   /** One read of the rolling refresh (refresh.ts): the most overdue account's login check or usage, as Desk's own job. */
   refreshNext(): void {
     if (this.stopping) return
+    // Recovery replies keep the same expiry even when no account needs a read.
+    this.prune()
     const now = Date.now()
     const read = nextRead(this.store.data.instances, id => this.busy(id) || now - (this.refreshed.get(id) ?? 0) < USAGE_EVERY_MS, now)
     if (!read) return

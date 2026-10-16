@@ -8,6 +8,11 @@ export interface RunOutput { code: number; stdout: string }
 export type FreeRunRequest = Omit<FreeRequest, 'command'> & { command: FreeHarnessCommand }
 export type FreeRunner = (config: FreeConfig, request: FreeRunRequest, signal: AbortSignal) => Promise<RunOutput>
 
+/** Decode the transferred output slice without copying its full byte buffer first. */
+export function decodeFreeStdout(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8')
+}
+
 /** No shell, credentials in argv, browser fallback, or automatic message retries. */
 export function commandArgs(config: FreeConfig, request: FreeRunRequest): string[] {
   const args = [join(config.harnessDir, 'desk_entry.py'), request.command]
@@ -48,5 +53,5 @@ export const runFree: FreeRunner = async (config, request, signal) => {
     throw err
   }
   if (out.aborted || out.capped || out.timedOut) throw new Error('stopped')
-  return { code: out.code, stdout: Buffer.from(out.stdout).toString('utf8') }
+  return { code: out.code, stdout: decodeFreeStdout(out.stdout) }
 }
