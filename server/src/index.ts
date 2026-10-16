@@ -126,13 +126,11 @@ import { startKitSweep } from './kit/sweep'
 import { initFileLogging, logFilePath } from './log-file.mjs'
 import { startLoopDetector } from './loop-detector'
 import { createLoopbackGuard, isLoopbackOrigin } from './loopback-guard.mjs'
-import { startManagerAnalytics } from './manager-analytics/collect'
-import { startManagerJudge } from './manager-analytics/judge'
-import { autoRsiTick, startTrialSettling } from './manager-analytics/rsi'
 import {
   SERVER_INSTRUCTIONS as MCP_INSTRUCTIONS,
   RENAMED_TOOLS as MCP_RENAMED_TOOLS,
   SERVER_INFO as MCP_SERVER_INFO,
+  TOOLS as MCP_TOOLS,
   UNLISTED_TOOLS as MCP_UNLISTED_TOOLS,
   toolsForCaller as mcpToolsForCaller,
   useOwnDaemon as mcpUseOwnDaemon,
@@ -164,7 +162,7 @@ import {
 } from './notify-settings'
 import { openUi } from './open-ui'
 import { moveRestartRefusal, orchestratorDir, setOrchestratorDaemonUrl } from './orchestrator'
-import { getPeopleAddon, inRepoPeople, registerPeopleVerdicts } from './people-host'
+import { getPeopleAddon, peopleAddon, registerPeopleVerdicts } from './people-host'
 import { startPriceCatalog } from './price-catalog'
 import { getProviderSettings, setProviderSettings } from './provider-settings'
 import { serveQuickInstancesPage } from './quick-instances-page'
@@ -190,6 +188,7 @@ import {
 } from './stall-sentinel'
 import { syncStatusHooks } from './status-hooks'
 import { startTitleSweep } from './title-sweep'
+import { warmToolIntentInBackground } from './tool-intent'
 import { forbidSyncIndexBuild } from './transcript'
 import { resolveEditor } from './transcript-open'
 import { startTrayHostIfMissing, trayHostRunning } from './tray-host'
@@ -1254,12 +1253,8 @@ const pointerReassertTimer = setInterval(() => {
 }, POINTER_REASSERT_MS)
 pointerReassertTimer.unref()
 
-// Set when the Manager Hydra turn collector starts (the primary install, while the people code lives here).
-let stopManagerAnalytics: (() => void) | null = null
-
 /** Clear the interval timers started at boot, so none ticks while the daemon is going away. */
 function stopBackgroundTimers(): void {
-  stopManagerAnalytics?.()
   stopLoginSync()
   stopDesktopCliFeed()
   stopCliResetSweep()
@@ -1269,6 +1264,7 @@ function stopBackgroundTimers(): void {
   stopExtraUsageGuard()
   stopStallSentinel()
   stopCliMaytePing()
+  peopleAddon()?.stop?.()
 }
 
 // Every toolbox child this daemon spawns is told THIS daemon's URL (audit AH-04): the bound
@@ -1777,30 +1773,11 @@ startShortfallWatch()
 // starts or ends them: they are the machine's, and the primary daemon owns them.
 if (IS_PRIMARY_INSTALL) startHelpers()
 
-// The people add-on (server/src/people-host.ts) starts its own timers; the in-repo ones run only while the people code
-// lives here and the add-on module is absent.
+// The people add-on (server/src/people-host.ts) starts its own timers, the Manager Hydra analytics among them.
 registerPeopleVerdicts((worker) =>
   storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
 )
 if (IS_PRIMARY_INSTALL) void getPeopleAddon().then((addon) => addon?.start?.())
-
-// Manager Hydra turn collector (server/src/manager-analytics): every 60 s, from the primary install only.
-if (IS_PRIMARY_INSTALL && inRepoPeople()) {
-  stopManagerAnalytics = startManagerAnalytics((worker) =>
-    storeLoaded() ? climayteWorkers.get(worker)?.verdicts : undefined,
-  )
-  startManagerJudge()
-  startTrialSettling()
-  setTimeout(
-    () =>
-      setInterval(() => {
-        autoRsiTick().catch((e) =>
-          console.error(`[manager-rsi] auto tick failed: ${(e as Error).message}`),
-        )
-      }, 60_000),
-    90_000,
-  )
-}
 
 // Explicit serve, NOT Bun's implicit `export default { fetch }` sugar: the implicit form only
 // auto-serves when THIS file is the process entrypoint, and the compiled binary reaches the daemon
@@ -1863,6 +1840,9 @@ warmSessionMetaIndex()
   // is what the user is waiting for; racing them would slow the visible thing to speed up a tab
   // nobody has opened yet. Fire-and-forget by design (see warmAnalyticsInBackground).
   .finally(() => warmAnalyticsInBackground())
+// hydra_find's intent index: loads the embedding model and embeds every tool, so the first search ranks by meaning
+// instead of answering by words while the model loads (tool-intent.ts). Fire-and-forget; it logs either way.
+warmToolIntentInBackground(MCP_TOOLS)
 
 if (releaseDoubleClick && !noAutoOpen()) {
   const url = `http://127.0.0.1:${server.port}/`

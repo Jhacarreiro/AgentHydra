@@ -240,55 +240,20 @@ describe('chat workers', () => {
     rmSync(join(HOME, '.claude.json'))
   })
 
-  // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
-  // account folder has settings of its own, and the launch carried only the guards. Since 2026-10-15 the router rides
-  // only with the CrAInium people add-on (people-addon.ts), so the home is pointed at one whose settings name a door, as
-  // the add-on's own tests do: on a PC without the add-on the chat had no router and this failed.
-  test("with the people add-on, a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
-    const saved = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME }
-    mkdirSync(join(HOME, '.agenthydra'), { recursive: true })
-    writeFileSync(
-      join(HOME, '.agenthydra', 'people-store.json'),
-      JSON.stringify({ crainium: { command: ['node', 'fake-people-door.mjs'] } }),
-    )
-    process.env.USERPROFILE = HOME
-    process.env.HOME = HOME
-    try {
-      routedChatCarriesTheRouter()
-    } finally {
-      for (const [key, value] of Object.entries(saved)) {
-        if (value === undefined) delete process.env[key]
-        else process.env[key] = value
-      }
-      rmSync(join(HOME, '.agenthydra'), { recursive: true, force: true })
-    }
-  })
-
-  function routedChatCarriesTheRouter(): void {
-    // As managers/install.mjs writes it on Windows.
+  // The owner's Manager Hydra router comes from the people add-on only: without it no chat carries a router hook.
+  test('without the people add-on a chat carries no Manager Hydra router hook', () => {
     const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
     writeFileSync(
       join(OWNER, 'settings.json'),
-      JSON.stringify({
-        hooks: {
-          UserPromptSubmit: [
-            { hooks: [{ type: 'command', command: 'python other_hook.py' }] },
-            { hooks: [router] },
-          ],
-        },
-      }),
+      JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [router] }] } }),
     )
     const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
     const prompts = (file: string) =>
       JSON.parse(readFileSync(file, 'utf8')).hooks.UserPromptSubmit as unknown
-    const chat = dispatch({ title: 'a routed chat', chat: true })
-    expect(prompts(writeWorkerSettings(chat, acct))).toEqual([{ hooks: [router] }])
-    const worker = dispatch({ title: 'a task' })
-    expect(prompts(writeWorkerSettings(worker, acct))).toBeUndefined()
+    const chat = dispatch({ title: 'a chat', chat: true })
+    expect(prompts(writeWorkerSettings(chat, acct))).toBeUndefined()
     rmSync(join(OWNER, 'settings.json'))
-    const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
-    expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
-  }
+  })
 
   // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a
   // worker (no AgentHydra MCP, no chat key) cannot make; its settings leave both files out.
@@ -329,35 +294,6 @@ describe('chat workers', () => {
     expect(workerStops.some(isCore)).toBe(false)
     expect(workerStops.map((g) => g.hooks[0]?.type)).toEqual(['http'])
     rmSync(join(CORE, 'ON'))
-  })
-
-  // 2026-10-15: a PC on the CrAInium flowchart has a CRANIUM file and no ON (ON is the local core mode: no owner
-  // CLAUDE.md, manager tools refused). Its terminal sessions walked the flowchart through the owner's own hooks; its
-  // chats got the Hydra Core hook only while ON was there, so they never did. 2026-10-16: the hook keeps a turn's ledger
-  // line at Stop, so a chat's Stop runs it too; without it no CliMayte chat turn reached the ledger.
-  test('with a CRANIUM file and no ON, a chat runs the Hydra Core hook and keeps the owner instructions', () => {
-    writeFileSync(join(CORE, 'CRANIUM'), '')
-    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
-    const hooks = (file: string) =>
-      JSON.parse(readFileSync(file, 'utf8')).hooks as Record<
-        string,
-        Array<{ hooks: Array<{ command?: string }> }> | undefined
-      >
-    const isCore = (g: { hooks: Array<{ command?: string }> }) =>
-      g.hooks.some((h) => h.command?.endsWith('hydra-core/hook.mjs"'))
-    const chat = dispatch({ title: 'a cranium chat', chat: true })
-    const chatHooks = hooks(writeWorkerSettings(chat, acct))
-    expect(chatHooks.UserPromptSubmit?.some(isCore)).toBe(true)
-    expect(chatHooks.SessionStart?.some(isCore)).toBe(true)
-    expect(chatHooks.Stop?.some(isCore)).toBe(true)
-    const argv = cliArgv(chat, 'sid', false, 'hooks.json', null)
-    const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
-    expect(prompt).toContain(OWNER_RULES)
-    const worker = hooks(writeWorkerSettings(dispatch({ title: 'a cranium worker task' }), acct))
-    expect(worker.UserPromptSubmit).toBeUndefined()
-    expect(worker.SessionStart).toBeUndefined()
-    expect(worker.Stop?.some(isCore) ?? false).toBe(false)
-    rmSync(join(CORE, 'CRANIUM'))
   })
 
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light

@@ -267,6 +267,15 @@ export function climayteList(
     !filter.brief || filter.all || filter.id || filter.ids?.length
       ? recent
       : recent.filter((w) => isLiveStatus(w.status) || !verdictCoversNewestWork(w))
+  if (filter.brief)
+    return keep.map((w) => {
+      // Briefs return no report text. Reuse its exact cached count rather than unpacking
+      // a finished worker's prompt and reports just to discard them in toBrief.
+      const text = leanTextOf(w)
+      const brief = toBrief(toView(w, now, originLookup, text))
+      if (text.resultChars) brief.resultChars = text.resultChars
+      return brief
+    })
   if (filter.bridge && !filter.brief)
     return keep.map((w) => climayteBridgeWorker(w, leanTextOf(w).prompt))
   if (filter.lean && !filter.brief)
@@ -274,8 +283,7 @@ export function climayteList(
       const text = leanTextOf(w)
       return leanWorkerView(toView(w, now, originLookup, text), text.resultChars)
     })
-  const views = keep.map((w) => toView(w, now, originLookup))
-  return filter.brief ? views.map(toBrief) : views
+  return keep.map((w) => toView(w, now, originLookup))
 }
 
 /** Only the fields Desk's bridge consumes, built without full-view spreads, attempt reports or

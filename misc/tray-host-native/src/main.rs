@@ -718,6 +718,19 @@ fn quit_app(hwnd: HWND) {
     }
     a.cancel.store(true, Ordering::Relaxed);
 
+    // What else goes with the app (AgentHydra: its Desk window and Desk's server). First, so it runs
+    // beside the daemon's stop instead of after it, and not waited on: it is its own process and
+    // outlives this one.
+    if let Some(q) = a.cfg.quit_command.as_ref().filter(|q| q.ready()) {
+        let url = get_url().unwrap_or_default();
+        if !win::spawn_in(&q.exe, &q.args_for(&url), &q.cwd) {
+            daemon::tray_log(
+                &a.cfg,
+                &format!("quit command {} could not be started", q.exe.display()),
+            );
+        }
+    }
+
     let use_token = !a.token.is_empty();
     let owned = a.started_by_us.load(Ordering::Relaxed);
 

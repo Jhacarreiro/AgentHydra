@@ -1,7 +1,7 @@
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { dirname, resolve } from 'node:path'
-import { logRoute } from '../manager-analytics/route-log'
+import { reportPlacement } from '../people-host'
 import type { LeadPick } from './lead'
 import { appendLog } from './log'
 import { asksOf, type PackRequest, packFor, packNeedsPick, pickForPack, readPlaced } from './pack'
@@ -172,7 +172,7 @@ export function placeChat(
 
   // Feeds manager RSI one row per message; skipped under bun test unless a test points the analytics folder at its own.
   if (process.env.NODE_ENV !== 'test' || process.env.AGENTHYDRA_MANAGERS_DIR)
-    logRoute(
+    reportPlacement(
       {
         session: req.session,
         deskChat: req.chat !== req.session ? req.chat : null,

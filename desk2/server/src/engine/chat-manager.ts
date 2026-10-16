@@ -72,10 +72,9 @@ import { Timings } from './timings'
 import { ANSWER_NOW, buildHandoff, FRESH_TOKENS, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
-import { chatFace, forgetCoreFaces } from './core-lead'
+import { chatFace } from './core-lead'
 import { coreDir } from './hydra-core-mode'
 import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
-import { forgetManager } from './managers'
 import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
 import { CodexRuntime } from './codex/runtime'
@@ -2232,8 +2231,6 @@ export class ChatManager {
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */
   managerChanged(slug: string): void {
-    forgetManager(slug)
-    forgetCoreFaces()
     for (const e of this.chats.values()) {
       const chat = this.view(e.chat)
       if (chat.manager?.slug === slug) this.emitEvent({ type: 'chat.upsert', chat })

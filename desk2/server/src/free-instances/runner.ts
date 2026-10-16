@@ -3,10 +3,18 @@ import { join } from 'node:path'
 import type { FreeConfig, FreeHarnessCommand, FreeRequest } from '@shared/free-instances'
 import { SpawnLaunchError, spawnOff, type SpawnOffResult } from '../lib/spawn-off'
 import { ensureBrowserPool } from './browser-pool'
+import { runCoordinatedFree } from './request-coordinator'
 
 export interface RunOutput { code: number; stdout: string }
 export type FreeRunRequest = Omit<FreeRequest, 'command'> & { command: FreeHarnessCommand }
 export type FreeRunner = (config: FreeConfig, request: FreeRunRequest, signal: AbortSignal) => Promise<RunOutput>
+// The existing browser slots admit three. Only additional waiters need the lightweight coordinator.
+let admittedChatGPT = 0
+
+/** Decode the transferred output slice without copying its full byte buffer first. */
+export function decodeFreeStdout(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8')
+}
 
 /** No shell, credentials in argv, browser fallback, or automatic message retries. */
 export function commandArgs(config: FreeConfig, request: FreeRunRequest): string[] {
@@ -28,11 +36,16 @@ export function commandArgs(config: FreeConfig, request: FreeRunRequest): string
 /** The spawn runs on the spawn-off worker, so a busy PC cannot stall the server's loop while Python starts. */
 export const runFree: FreeRunner = async (config, request, signal) => {
   if (signal.aborted) throw new Error('stopped')
+  const chatGPT = request.provider === 'chatgpt' && (request.command === 'chat' || request.command === 'resume')
+  const coordinate = chatGPT && ++admittedChatGPT > 3
   let out: SpawnOffResult
   try {
-    const pool = request.provider === 'chatgpt' && (request.command === 'chat' || request.command === 'resume')
-      ? await ensureBrowserPool(config, signal) : undefined
+    const pool = chatGPT ? await ensureBrowserPool(config, signal) : undefined
     if (signal.aborted) throw new Error('stopped')
+    if (pool && coordinate) {
+      const coordinated = await runCoordinatedFree(config, request, pool, signal)
+      if (coordinated !== undefined) return coordinated
+    }
     out = await spawnOff({
       cmd: [config.python, ...commandArgs(config, request)],
       cwd: config.harnessDir,
@@ -46,7 +59,9 @@ export const runFree: FreeRunner = async (config, request, signal) => {
   } catch (err) {
     if (err instanceof SpawnLaunchError) throw new Error('launch_failed')
     throw err
+  } finally {
+    if (chatGPT) admittedChatGPT--
   }
   if (out.aborted || out.capped || out.timedOut) throw new Error('stopped')
-  return { code: out.code, stdout: Buffer.from(out.stdout).toString('utf8') }
+  return { code: out.code, stdout: decodeFreeStdout(out.stdout) }
 }

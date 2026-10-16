@@ -3,13 +3,18 @@
 // The point of the list is one copy of each helper: one nobody runs is started, one already running is
 // adopted and never doubled (not even when the process table cannot be read), one past its memory cap is
 // restarted, one that keeps dying waits longer each time instead of being started every check, and
-// stop-all holds across a daemon restart until start-all.
+// stop-all holds across a daemon restart until start-all. A port held by some other program is never
+// taken for the helper. On Windows a helper the daemon started outlives the daemon's relaunch, and the
+// next daemon adopts it.
 
-import { afterAll, expect, test } from 'bun:test'
+import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { createHelpers, type HelperDeps, type Lookup } from '../src/helpers'
+import { pathToFileURL } from 'node:url'
+import { loggedCommandLine } from '../src/core/outside-start'
+import { killProcessTree } from '../src/core/process'
+import { createHelpers, type HelperDeps, type Lookup, realDeps } from '../src/helpers'
 
 const tmp = mkdtempSync(join(tmpdir(), 'helpers-test-'))
 afterAll(() => rmSync(tmp, { recursive: true, force: true }))
@@ -24,6 +29,7 @@ function world(helpers: unknown[]) {
     ports: new Map<number, Lookup>(),
     commands: new Map<string, Lookup>(),
     memory: new Map<number, number>(),
+    lines: new Map<number, string>(),
     alive: new Set<number>(),
     spawned: [] as string[][],
     killed: [] as number[],
@@ -38,6 +44,7 @@ function world(helpers: unknown[]) {
     findByPort: (port) => w.ports.get(port) ?? 'none',
     findByCommand: (exe, match) => w.commands.get(`${exe}|${match}`) ?? 'none',
     memoryMB: (pid) => w.memory.get(pid) ?? 50,
+    commandLine: (pid) => w.lines.get(pid) ?? null,
     alive: (pid) => w.alive.has(pid),
     spawn: async (cmd) => {
       w.spawned.push(cmd)
@@ -144,4 +151,127 @@ test('stop-all ends every helper and starts none, across a daemon restart, until
 
   await next.startAll()
   expect(w.spawned).toEqual([['python', 'server.py']])
+})
+
+test('a port held by a program that is not the helper is never adopted, ended or started over', async () => {
+  const w = world([
+    { id: 'mcp', command: ['node', 'C:/apps/mcp/server.mjs', '--port', '9001'], port: 9001 },
+  ])
+  w.ports.set(9001, 77)
+  w.lines.set(77, '"C:\\Program Files\\Other\\other.exe" --listen 9001')
+  const h = createHelpers(w.deps)
+  const mcp = () => h.view().helpers.find((r) => r.id === 'mcp')
+
+  await h.tick()
+  await h.restart('mcp')
+  expect(w.spawned).toEqual([])
+  expect(w.killed).toEqual([])
+  expect(mcp()).toMatchObject({
+    state: 'waiting',
+    pid: null,
+    adopted: false,
+    lastError: expect.stringContaining('port 9001 is held by pid 77'),
+  })
+
+  // The helper itself, started by someone else (a chat's connect helper) with its own quoting and
+  // slashes, is adopted.
+  w.lines.set(77, '"C:\\Program Files\\nodejs\\node.exe" "C:\\apps\\mcp\\server.mjs" --port 9001')
+  await h.tick()
+  expect(mcp()).toMatchObject({ state: 'running', pid: 77, adopted: true })
+})
+
+test('a Windows helper gets its arguments as Bun.spawn wrote them, so a match across two of them still finds it', () => {
+  // 2026-10-16: with every argument quoted, `daily.mjs" "--every` no longer held the match
+  // `daily.mjs --every`, and a helper found by exe + match was never found after it started.
+  const line = loggedCommandLine(
+    ['C:/apps/node.exe', 'D:/apps/daily.mjs', '--every', '30', 'C:/My Files/x', 'a&b'],
+    'C:/logs/daily.log',
+  )
+  expect(line).toContain(
+    'C:/apps/node.exe D:/apps/daily.mjs --every 30 "C:/My Files/x" "a&b" >>C:/logs/daily.log 2>&1',
+  )
+  expect(() => loggedCommandLine(['node', '50%'], 'C:/logs/x.log')).toThrow('cmd.exe would change')
+})
+
+describe.skipIf(process.platform !== 'win32')('a daemon relaunch on Windows', () => {
+  // The daemon is a Bun process, and every child Bun.spawn starts on Windows sits in Bun's own
+  // kill-on-close job, so a daemon that exits (each self-update relaunch) used to end every helper it
+  // had started, and every call in flight on it. Here a real daemon process starts a real helper and
+  // exits, as a relaunch's predecessor does.
+  test('the helper the old daemon started keeps serving; the next daemon adopts its pid and starts nothing', async () => {
+    const dir = join(tmp, 'relaunch')
+    mkdirSync(dir)
+    const probe = Bun.serve({ port: 0, hostname: '127.0.0.1', fetch: () => new Response('') })
+    const port = probe.port as number
+    probe.stop(true)
+    const server = join(dir, 'server.ts')
+    writeFileSync(
+      server,
+      `Bun.serve({ port: ${port}, hostname: '127.0.0.1', fetch: () => new Response('up') })\n`,
+    )
+    writeFileSync(
+      join(dir, 'helpers.json'),
+      JSON.stringify({ helpers: [{ id: 'web', command: [process.execPath, server], port }] }),
+    )
+    const paths = {
+      configPath: join(dir, 'helpers.json'),
+      statePath: join(dir, 'state.json'),
+      logDir: join(dir, 'logs'),
+    }
+    const daemon = join(dir, 'daemon.ts')
+    writeFileSync(
+      daemon,
+      `const { createHelpers, realDeps } = await import(${JSON.stringify(pathToFileURL(join(import.meta.dir, '../src/helpers.ts')).href)})
+const h = createHelpers({ ...realDeps(), ...${JSON.stringify(paths)} })
+for (let i = 0; i < 120; i++) {
+  await h.tick()
+  const row = h.view().helpers[0]
+  if (row?.state === 'running') {
+    console.log(JSON.stringify({ pid: row.pid }))
+    process.exit(0)
+  }
+  await Bun.sleep(250)
+}
+console.log(JSON.stringify({ row: h.view().helpers[0] }))
+process.exit(1)
+`,
+    )
+
+    let pid: number | null = null
+    try {
+      const old = Bun.spawn([process.execPath, daemon], {
+        stdout: 'pipe',
+        stderr: 'pipe',
+        windowsHide: true,
+      })
+      const said = (await new Response(old.stdout).text()).trim().split('\n').pop() as string
+      await old.exited
+      expect(JSON.parse(said)).toMatchObject({ pid: expect.any(Number) })
+      pid = (JSON.parse(said) as { pid: number }).pid
+
+      await Bun.sleep(1000) // what ends with the old daemon has ended by now
+      const answer = await fetch(`http://127.0.0.1:${port}/`).then(
+        (r) => r.text(),
+        () => 'nothing listening',
+      )
+      expect(answer).toBe('up')
+
+      const spawned: string[][] = []
+      const next = createHelpers({
+        ...realDeps(),
+        ...paths,
+        spawn: async (cmd) => {
+          spawned.push(cmd)
+          return null
+        },
+      })
+      await next.tick()
+      expect(next.view().helpers[0]).toMatchObject({ state: 'running', pid, adopted: true })
+      expect(spawned).toEqual([])
+    } finally {
+      const still = realDeps().findByPort(port)
+      for (const p of new Set([pid, typeof still === 'number' ? still : null]))
+        if (p) killProcessTree(p)
+    }
+  }, 60_000)
 })

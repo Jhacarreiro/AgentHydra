@@ -10,10 +10,30 @@
 //! daemon's `cat` form, which costs more processes and loses nothing.
 
 use crate::json::{self, Json};
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::net::{Ipv4Addr, Shutdown, TcpListener, TcpStream};
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex};
 use std::time::Duration;
+
+/// The CLI's stdin while it runs, taken (and so closed) by the runner when the turn's result shows.
+pub type Sink = Arc<Mutex<Option<Box<dyn Write + Send>>>>;
+
+/// The `/deliver` route: a message the daemon writes into the running CLI's stdin mid-turn.
+pub struct Deliver {
+    pub token: String,
+    pub sink: Sink,
+    /// One line per accepted message: `{"requestId":...}`.
+    pub delivered: PathBuf,
+}
+
+struct Hub {
+    signal_file: PathBuf,
+    deliver: Option<Deliver>,
+}
+
+const TOKEN_HEADER: &str = "x-climayte-deliver-token";
 
 /// Longest a tool call waits on the hook (SIGNAL_HOOK_TIMEOUT_S in climayte-signal.ts).
 const HOOK_TIMEOUT_S: u32 = 3;
@@ -26,28 +46,31 @@ const MAX_BODY: usize = 64 * 1024 * 1024;
 const IO_TIMEOUT: Duration = Duration::from_secs(10);
 
 /// Binds a loopback port, points the worker's settings at it, then answers on a thread for as long
-/// as this process lives. False, with no port held and the settings untouched, when either step
-/// fails.
-pub fn serve(signal_file: PathBuf, settings_file: &Path) -> bool {
-    let Ok(listener) = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)) else {
-        return false;
-    };
-    let Ok(port) = listener.local_addr().map(|a| a.port()) else {
-        return false;
-    };
+/// as this process lives. The port, or None with no port held and the settings untouched, when a
+/// step fails.
+pub fn serve(signal_file: PathBuf, settings_file: &Path, deliver: Option<Deliver>) -> Option<u16> {
+    let listener = TcpListener::bind((Ipv4Addr::LOCALHOST, 0)).ok()?;
+    let port = listener.local_addr().ok()?.port();
     if !point_hook(settings_file, port) {
-        return false;
+        return None;
     }
+    let hub = Arc::new(Hub {
+        signal_file,
+        deliver,
+    });
     let accept = move || {
         for conn in listener.incoming().flatten() {
-            let file = signal_file.clone();
+            let hub = Arc::clone(&hub);
             // A thread per call: tool calls run in parallel, and one slow client must not hold up
             // the rest. When no thread can be had the connection is dropped, which the CLI treats
             // as a non-blocking hook error.
-            let _ = std::thread::Builder::new().spawn(move || answer(conn, &file));
+            let _ = std::thread::Builder::new().spawn(move || answer(conn, &hub));
         }
     };
-    std::thread::Builder::new().spawn(accept).is_ok()
+    std::thread::Builder::new()
+        .spawn(accept)
+        .ok()
+        .map(|_| port)
 }
 
 /// Rewrites the worker's settings so its PostToolUse hook is an http hook at this port, keeping
@@ -80,6 +103,7 @@ pub fn point_hook(settings_file: &Path, port: u16) -> bool {
 }
 
 struct Request {
+    path: String,
     /// Names lowercased, values trimmed.
     headers: Vec<(String, String)>,
     body: Vec<u8>,
@@ -94,13 +118,13 @@ impl Request {
     }
 }
 
-fn answer(mut conn: TcpStream, signal_file: &Path) {
+fn answer(mut conn: TcpStream, hub: &Hub) {
     let _ = conn.set_read_timeout(Some(IO_TIMEOUT));
     let _ = conn.set_write_timeout(Some(IO_TIMEOUT));
     let Some(req) = read_request(&mut conn) else {
         return;
     };
-    let (status, body) = respond(&req, signal_file);
+    let (status, body) = respond(&req, hub);
     let head = format!(
         "HTTP/1.1 {status}\r\ncontent-type: application/json\r\ncontent-length: {}\r\nconnection: close\r\n\r\n",
         body.len()
@@ -112,12 +136,15 @@ fn answer(mut conn: TcpStream, signal_file: &Path) {
     let _ = conn.shutdown(Shutdown::Write);
 }
 
-fn respond(req: &Request, signal_file: &Path) -> (&'static str, String) {
+fn respond(req: &Request, hub: &Hub) -> (&'static str, String) {
     if let Some(reason) = refused(req) {
         return (
             "403 Forbidden",
             format!("{{\"error\":\"forbidden: {reason}\"}}"),
         );
+    }
+    if req.path == "/deliver" {
+        return deliver(req, hub.deliver.as_ref());
     }
     // A tool call inside one of the worker's sub-agents always gets `{}`: the handoff is the
     // worker's to write, and a sub-agent told to write it quits mid-task and overwrites the
@@ -127,12 +154,77 @@ fn respond(req: &Request, signal_file: &Path) -> (&'static str, String) {
     }
     // Read afresh each time, so the signal shows on every call from the moment it is written until
     // the file is removed. No file, or one caught half written: nothing to say.
-    let body = std::fs::read(signal_file)
+    let body = std::fs::read(&hub.signal_file)
         .ok()
         .and_then(|b| String::from_utf8(b).ok())
         .filter(|t| json::parse(t).is_some())
         .unwrap_or_else(|| "{}".into());
     ("200 OK", body)
+}
+
+/// Writes the message into the CLI's stdin as one stream-json user line, then records its request
+/// id. 409 when the CLI's stdin is closed (its turn has ended, or the write failed): the daemon then
+/// holds the message for the next turn instead.
+fn deliver(req: &Request, route: Option<&Deliver>) -> (&'static str, String) {
+    let Some(route) = route else {
+        return ("404 Not Found", "{\"error\":\"no delivery route\"}".into());
+    };
+    if req.header(TOKEN_HEADER) != Some(route.token.as_str()) {
+        return ("403 Forbidden", "{\"error\":\"forbidden: bad token\"}".into());
+    }
+    let input = std::str::from_utf8(&req.body).ok().and_then(json::parse);
+    let text = input
+        .as_ref()
+        .and_then(|i| i.get("text"))
+        .and_then(Json::as_str);
+    let request_id = input
+        .as_ref()
+        .and_then(|i| i.get("requestId"))
+        .and_then(Json::as_str);
+    let (Some(text), Some(request_id)) = (text, request_id) else {
+        return ("400 Bad Request", "{\"error\":\"text and requestId required\"}".into());
+    };
+    let line = format!("{}\n", json::to_string(&user_line(text)));
+    let mut slot = route.sink.lock().unwrap_or_else(|e| e.into_inner());
+    let Some(stdin) = slot.as_mut() else {
+        return ("409 Conflict", "{\"error\":\"stdin closed\"}".into());
+    };
+    if stdin
+        .write_all(line.as_bytes())
+        .and_then(|_| stdin.flush())
+        .is_err()
+    {
+        *slot = None;
+        return ("409 Conflict", "{\"error\":\"stdin closed\"}".into());
+    }
+    record(&route.delivered, request_id);
+    ("200 OK", "{\"ok\":true}".into())
+}
+
+fn user_line(text: &str) -> Json {
+    Json::obj(vec![
+        ("type", Json::str("user")),
+        (
+            "message",
+            Json::obj(vec![
+                ("role", Json::str("user")),
+                (
+                    "content",
+                    Json::Arr(vec![Json::obj(vec![
+                        ("type", Json::str("text")),
+                        ("text", Json::str(text)),
+                    ])]),
+                ),
+            ]),
+        ),
+    ])
+}
+
+fn record(path: &Path, request_id: &str) {
+    let line = json::to_string(&Json::obj(vec![("requestId", Json::str(request_id))]));
+    if let Ok(mut file) = OpenOptions::new().append(true).create(true).open(path) {
+        let _ = writeln!(file, "{line}");
+    }
 }
 
 fn from_subagent(body: &[u8]) -> bool {
@@ -215,7 +307,13 @@ fn read_request(conn: &mut TcpStream) -> Option<Request> {
         .filter_map(|line| line.split_once(':'))
         .map(|(k, v)| (k.trim().to_ascii_lowercase(), v.trim().to_string()))
         .collect();
+    let path = head
+        .split_whitespace()
+        .nth(1)
+        .unwrap_or_default()
+        .to_string();
     let req = Request {
+        path,
         headers,
         body: Vec::new(),
     };
@@ -339,5 +437,127 @@ mod tests {
             .unwrap();
         let (mut conn, _) = listener.accept().unwrap();
         assert!(read_request(&mut conn).is_none());
+    }
+
+    #[derive(Clone, Default)]
+    struct Shared(Arc<Mutex<Vec<u8>>>);
+
+    impl Write for Shared {
+        fn write(&mut self, bytes: &[u8]) -> std::io::Result<usize> {
+            self.0.lock().unwrap().extend_from_slice(bytes);
+            Ok(bytes.len())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    struct Broken;
+
+    impl Write for Broken {
+        fn write(&mut self, _: &[u8]) -> std::io::Result<usize> {
+            Err(std::io::ErrorKind::BrokenPipe.into())
+        }
+        fn flush(&mut self) -> std::io::Result<()> {
+            Ok(())
+        }
+    }
+
+    fn scratch(name: &str) -> PathBuf {
+        let dir = std::env::temp_dir().join(format!("climayte-signal-{}-{name}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        dir
+    }
+
+    fn hub(dir: &Path, sink: Option<Box<dyn Write + Send>>) -> (Hub, Shared) {
+        let shared = Shared::default();
+        let sink: Sink = Arc::new(Mutex::new(
+            sink.or_else(|| Some(Box::new(shared.clone()) as Box<dyn Write + Send>)),
+        ));
+        let deliver = Deliver {
+            token: "secret".into(),
+            sink,
+            delivered: dir.join("delivered.jsonl"),
+        };
+        let hub = Hub {
+            signal_file: dir.join("signal.json"),
+            deliver: Some(deliver),
+        };
+        (hub, shared)
+    }
+
+    fn post(token: Option<&str>, body: &str) -> Request {
+        let mut headers = vec![("host".to_string(), "127.0.0.1:1".to_string())];
+        if let Some(t) = token {
+            headers.push((TOKEN_HEADER.to_string(), t.to_string()));
+        }
+        Request {
+            path: "/deliver".into(),
+            headers,
+            body: body.as_bytes().to_vec(),
+        }
+    }
+
+    #[test]
+    fn a_delivery_is_one_stream_json_user_line_and_its_request_id_is_recorded() {
+        let dir = scratch("deliver-ok");
+        let (hub, shared) = hub(&dir, None);
+        let req = post(Some("secret"), r#"{"requestId":"r1","text":"hello \"you\""}"#);
+        assert_eq!(respond(&req, &hub).0, "200 OK");
+        let written = String::from_utf8(shared.0.lock().unwrap().clone()).unwrap();
+        assert!(written.ends_with('\n'));
+        let line = json::parse(written.trim_end()).unwrap();
+        assert_eq!(line.get("type").and_then(Json::as_str), Some("user"));
+        let message = line.get("message").unwrap();
+        assert_eq!(message.get("role").and_then(Json::as_str), Some("user"));
+        let Json::Arr(content) = message.get("content").unwrap() else {
+            panic!("content is not an array");
+        };
+        assert_eq!(content[0].get("type").and_then(Json::as_str), Some("text"));
+        assert_eq!(content[0].get("text").and_then(Json::as_str), Some("hello \"you\""));
+        let recorded = std::fs::read_to_string(dir.join("delivered.jsonl")).unwrap();
+        assert_eq!(recorded.trim_end(), r#"{"requestId":"r1"}"#);
+    }
+
+    #[test]
+    fn a_missing_or_wrong_token_is_refused_and_nothing_reaches_stdin() {
+        let dir = scratch("deliver-token");
+        let (hub, shared) = hub(&dir, None);
+        let body = r#"{"requestId":"r2","text":"sneaky"}"#;
+        assert_eq!(respond(&post(Some("guess"), body), &hub).0, "403 Forbidden");
+        assert_eq!(respond(&post(None, body), &hub).0, "403 Forbidden");
+        assert!(shared.0.lock().unwrap().is_empty());
+        assert!(!dir.join("delivered.jsonl").exists());
+    }
+
+    #[test]
+    fn a_closed_stdin_answers_409() {
+        let dir = scratch("deliver-closed");
+        let (hub, _) = hub(&dir, None);
+        *hub.deliver.as_ref().unwrap().sink.lock().unwrap() = None;
+        let body = r#"{"requestId":"r3","text":"late"}"#;
+        assert_eq!(respond(&post(Some("secret"), body), &hub).0, "409 Conflict");
+        assert!(!dir.join("delivered.jsonl").exists());
+    }
+
+    #[test]
+    fn a_failed_write_answers_409_and_closes_the_stdin() {
+        let dir = scratch("deliver-broken");
+        let (hub, _) = hub(&dir, Some(Box::new(Broken)));
+        let body = r#"{"requestId":"r4","text":"into the pipe"}"#;
+        assert_eq!(respond(&post(Some("secret"), body), &hub).0, "409 Conflict");
+        let slot = hub.deliver.as_ref().unwrap().sink.lock().unwrap();
+        assert!(slot.is_none());
+    }
+
+    #[test]
+    fn a_body_without_text_and_request_id_is_a_bad_request() {
+        let dir = scratch("deliver-bad");
+        let (hub, shared) = hub(&dir, None);
+        for body in [r#"{"text":"no id"}"#, r#"{"requestId":"r5"}"#, "not json"] {
+            assert_eq!(respond(&post(Some("secret"), body), &hub).0, "400 Bad Request");
+        }
+        assert!(shared.0.lock().unwrap().is_empty());
     }
 }

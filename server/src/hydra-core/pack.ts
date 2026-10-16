@@ -135,70 +135,16 @@ function foreignTo(cwd: string): (e: CatalogEntry) => boolean {
   }
 }
 
-type SeatReader = (
-  dir: string,
-  chat: { key: string; aliases: string[] },
-  e: CatalogEntry,
-) => unknown
-let seatReader: SeatReader | undefined
-/** seats.ts's roster reader, required on first use rather than imported: seats.ts brings the Desk client
- *  (mcp-managers) and the server core behind it, which the Desk server's typecheck of this pack code does not take. */
-function seatOf(dir: string, chat: { key: string; aliases: string[] }, e: CatalogEntry): unknown {
-  seatReader ??= (require('./seats') as { seatOf: SeatReader }).seatOf
-  return seatReader(dir, chat, e)
-}
-
-function readJsonFile(file: string): unknown {
-  try {
-    return existsSync(file) ? JSON.parse(readFileSync(file, 'utf8')) : undefined
-  } catch {
-    return undefined
-  }
-}
-
-const UNDER_PERSON = /^- (consult|hire) (person:[a-z0-9-]+)\b/
-
-/**
- * The personas this chat has seated or consulted, one line each, so a new session of the chat (a handoff, a resume)
- * knows whom it can go back to: the seat roster, the consult jobs use.ts keeps in consults.json, and hydra.md's
- * "Under you" list.
- */
+/** The chat's seats and consults, as the people add-on lines them (nothing without it). Required on first use rather than
+ *  imported: people-host brings the server core, which the Desk server's typecheck of this pack code does not take. */
 function seatsLine(
   dir: string,
   chat: string,
   entries: CatalogEntry[],
   files: { root: string; hydraMd: string },
 ): string {
-  const facts = new Map<string, string[]>()
-  const add = (id: string, fact: string) => {
-    const list = facts.get(id) ?? []
-    if (!list.includes(fact)) list.push(fact)
-    facts.set(id, list)
-  }
-  for (const e of entries) {
-    if (e.kind !== 'person') continue
-    const seat = seatOf(dir, { key: chat, aliases: [] }, e) as { chat?: unknown } | undefined
-    if (seat) add(e.id, typeof seat.chat === 'string' ? `seat chat ${seat.chat}` : 'seated')
-  }
-  const consults = readJsonFile(join(files.root, 'consults.json'))
-  if (consults && typeof consults === 'object' && !Array.isArray(consults))
-    for (const [id, job] of Object.entries(consults))
-      if (ID_SHAPE.test(id) && typeof job === 'string') add(id, `last consult job ${job}`)
-  const doc = existsSync(files.hydraMd) ? parseHydra(readFileSync(files.hydraMd, 'utf8')) : null
-  for (const line of doc?.under ?? []) {
-    const m = UNDER_PERSON.exec(line)
-    if (m) add(m[2], m[1] === 'hire' ? 'hired' : 'consulted')
-  }
-  if (!facts.size) return ''
-  const named = new Map(entries.map((e) => [e.id, e.name]))
-  const lines = [...facts].map(([id, list]) => {
-    const name = named.get(id)
-    return `- ${name ? `${name} (${id})` : id}: ${list.join(', ')}`
-  })
-  return [
-    `Seats and consults in this chat; resume one with core_use { chat: "${chat}", id: "<person id>", mode: "consult" } (with no question it reads the last answer):`,
-    ...lines,
-  ].join('\n')
+  const { peopleAddon } = require('../people-host') as typeof import('../people-host')
+  return peopleAddon()?.seatsLine?.({ dir, chat, entries, files }) ?? ''
 }
 
 /** Lines a cut may list as left out, and the characters each may take. */

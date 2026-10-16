@@ -415,6 +415,10 @@ compressed. The count includes the earlier recap retained by `statusTurns`; read
 packed text field discards the summary and restores ordinary fields. Full detail and report requests
 continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
 
+Brief lists use the same cached text projection, including explicit history and waiting reads.
+They retain the exact recap-aware `resultChars` count without decompressing prompts or reports
+that the brief contract omits; detail and report reads still restore the original text.
+
 Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
 projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
 chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
@@ -422,6 +426,13 @@ verdict and launch details. Older daemons ignore the flag; ordinary lean/full li
 routes keep their shapes, and brief/report reads take precedence. Packed history remains packed.
 Finished workers skip running-attempt access, and spend settlement collects only open attempts
 instead of allocating intermediate arrays for every historical worker.
+
+Store checkpoints still inspect current worker statuses and serialize before yielding. Revived
+workers come from that pass's hot rows; tracked Map removals identify deleted filed records,
+avoiding a second walk through unchanged finished history. Done-file writes still precede
+`workers.json`, and removals follow it. No checkpoint is deferred or combined by this optimization.
+Cancellation releases the attempt's parsed-log cache even if spend calculation throws; its
+existing error handling and bounded recent summary cache remain intact.
 
 Default Claude parent lookups find only the first two slash/backslash positions rather than
 splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain

@@ -23,8 +23,8 @@
 //
 // ⛔ AND NAMES THE FUNCTIONS (2026-10-04). On a loaded box the daemon was reaped every few minutes
 // with every SATURATED line blaming "(no request: timers/background work)": true, and no help. JSC's
-// sampling profiler runs from boot (BOOT_SAMPLING; Bun has no stop; at Windows' timer tick it takes
-// ~120 samples a second, drained every PROFILE_BUCKET_MS into counts), and every SATURATED line, and
+// sampling profiler runs from boot (BOOT_SAMPLING; Bun has no stop; sampled every 8 ms, about 60
+// samples a second at Windows' timer tick, drained every PROFILE_BUCKET_MS into counts), and every SATURATED line, and
 // every single block of LONG_BLOCK_MS, says which functions the samples were in.
 
 import * as jsc from 'bun:jsc'
@@ -47,6 +47,9 @@ const LATE_FLOOR_MS = 50
 /** Samples are drained into counts this often and kept for WINDOW_MS. */
 const PROFILE_BUCKET_MS = 2_000
 const PROFILE_TOP = 5
+/** Microseconds, as bun:jsc expects. The 1 ms default spent CPU polling between Windows timer
+ *  ticks; 8 ms kept 147 named samples of a 2.3 s synthetic block with far less sampler-thread CPU. */
+const PROFILE_SAMPLE_INTERVAL_US = 8_000
 /**
  * One beat this late is one block, named on its own line with its samples. A lone 2-3 s freeze never
  * fills SATURATED_MS, so after the 2026-10-07 fixes the stalls left were all "in flight: none" and no
@@ -129,7 +132,7 @@ export interface SampledTrace {
   frames?: SampledFrame[]
 }
 type Sampler = {
-  startSamplingProfiler(): void
+  startSamplingProfiler(optionalDirectory?: string, sampleInterval?: number): void
   samplingProfilerStackTraces(): { traces?: SampledTrace[] }
 }
 
@@ -344,7 +347,10 @@ function beatTick(s: BeatState): void {
  * before every route. `logPath` null (file logging failed to open) still runs the main-thread
  * detector, which logs through console like everything else; the worker has nowhere to write.
  */
-export function startStallSentinel(logPath: string | null): MiddlewareHandler {
+export function startStallSentinel(
+  logPath: string | null,
+  sampler: Sampler = jsc as unknown as Sampler,
+): MiddlewareHandler {
   const beat = new BigInt64Array(new SharedArrayBuffer(8))
   Atomics.store(beat, 0, BigInt(Date.now()))
   let worker: Worker | null = null
@@ -377,13 +383,13 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
     lastLongBlockLog: 0,
     // The sampler: on from boot (BOOT_SAMPLING), drained into counts every PROFILE_BUCKET_MS, the
     // last WINDOW_MS of them kept for the next SATURATED line.
-    sampler: jsc as unknown as Sampler,
+    sampler,
     sampling: false,
     lastDrain: Date.now(),
     buckets: [],
   }
   try {
-    s.sampler.startSamplingProfiler()
+    s.sampler.startSamplingProfiler(undefined, PROFILE_SAMPLE_INTERVAL_US)
     s.sampling = true
     sinceStart.at = Date.now()
   } catch {

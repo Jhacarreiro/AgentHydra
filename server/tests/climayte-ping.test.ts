@@ -865,6 +865,25 @@ describe('the outbox', () => {
     h.ping.stop()
   })
 
+  test('a chat that adopted its own group is never pinged about itself, nor about the owner chats in it', async () => {
+    const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
+    const manager = running('w-manager', { group: 'hydra-desk', origin: mgr, chat: true })
+    const other = running('w-chat', { group: 'hydra-desk', origin: mgr, chat: true })
+    const task = running('w-task', { origin: mgr })
+    const h = harness({ workers: [manager, other, task] })
+    h.change(doneOf(other))
+    h.change(doneOf(manager))
+    await h.at(3_600_000)
+    expect(h.workerSends).toHaveLength(0)
+    // A task it dispatched itself still reports to it.
+    h.change(failedOf(task))
+    await h.at(7_200_000)
+    expect(h.workerSends).toHaveLength(1)
+    expect(h.workerSends[0][1]).toContain('w-task')
+    expect(h.workerSends[0][1]).not.toContain('w-chat')
+    h.ping.stop()
+  })
+
   test('a finished line is held while its worker origin runs, and a verdict made meanwhile makes it stale', async () => {
     const mgr: CliMayteOrigin = { kind: 'worker', workerId: 'w-manager' }
     const manager = running('w-manager', { origin: undefined })

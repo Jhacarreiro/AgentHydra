@@ -47,12 +47,3 @@ export interface PeopleSaveResponse {
   catalog: { ok: boolean; message: string }
   state: PeopleState
 }
-
-/** The only characters a folder name carries; the same rule as a manager slug. */
-export const PERSON_SLUG = /^[a-z0-9][a-z0-9-]{0,60}$/
-export const slugOf = (name: string): string =>
-  name
-    .toLowerCase()
-    .replace(/[^a-z0-9]+/g, '-')
-    .replace(/^-+|-+$/g, '')
-    .slice(0, 60)

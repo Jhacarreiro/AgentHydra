@@ -35,25 +35,11 @@ def markers_missing(cookies, now=None):
 @contextmanager
 def browser_slot(directory, *, wait):
     """Bound owned browser memory across harness processes, without stopping work."""
+    from .browser_slots import browser_slot as acquire
+
     root = Path(os.environ.get('CLAUDFREE_CACHE_DIR') or directory) / 'browser-slots'
-    deadline = time.monotonic() + wait
-    while True:
-        for slot in range(3):
-            held = chat_lock(root, 'chatgpt-' + str(slot))
-            try:
-                held.__enter__()
-            except ClaudeError as exc:
-                if exc.code != 'chat_busy':
-                    raise
-                continue
-            try:
-                yield
-            finally:
-                held.__exit__(None, None, None)
-            return
-        if time.monotonic() >= deadline:
-            raise ClaudeError('The browser request queue is busy. No message was sent.', code='browser_busy', retryable=True)
-        time.sleep(.1)
+    with acquire(root, wait=wait, locker=chat_lock):
+        yield
 
 READY = r'''(async()=>{
  const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});
@@ -201,7 +187,7 @@ async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, pr
 
 
 async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary):
-    def response(event):
+    async def response(event):
         if event.request_id == dispatch['network_id']:
             dispatch['status'] = int(event.response.status)
 

@@ -114,6 +114,9 @@ export interface PingWorker {
   verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string; at?: number }>
   error: string | null
   origin?: CliMayteOrigin
+  /** One of the owner's own chats (climayte_run chat: true): the owner reads it in the window, so no
+   *  chat is pinged about it. */
+  chat?: boolean
   /** The wave it belongs to and its kind: a wave task has no origin, its question goes to its manager's. */
   wave?: string | null
   kind?: string | null
@@ -637,6 +640,16 @@ const originKey = (o: CliMayteOrigin): string =>
 const sameOrigin = (a: CliMayteOrigin | undefined, b: CliMayteOrigin): boolean =>
   !!a && originKey(a) === originKey(b)
 
+/** Whether `w`'s news goes to origin `o`. Never a worker's own (a chat that adopted its own group heard of
+ *  its own every turn end), and never an owner's chat's: the owner reads that in the window. Both woke the
+ *  Desk chat that had adopted group hydra-desk each time any Desk chat ended a turn, itself included: 2,485
+ *  turns of "the same automatic ping, nothing to judge" (2026-10-16). */
+export const reportsTo = (
+  w: Pick<PingWorker, 'id' | 'origin' | 'chat'>,
+  o: CliMayteOrigin,
+): boolean =>
+  sameOrigin(w.origin, o) && w.chat !== true && !(o.kind === 'worker' && o.workerId === w.id)
+
 const seqRange = (batch: QueuedPing[]): string => {
   const s = batch.map((e) => e.seq)
   const lo = Math.min(...s)
@@ -704,7 +717,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   const workersOf = (o: CliMayteOrigin, latest?: PingWorker): PingWorker[] => {
     const all = deps.workers().map((x) => (latest && x.id === latest.id ? latest : x))
     if (latest && !all.some((x) => x.id === latest.id)) all.push(latest)
-    return all.filter((x) => sameOrigin(x.origin, o))
+    return all.filter((x) => reportsTo(x, o))
   }
 
   const boxFor = (o: CliMayteOrigin): OriginBox => {
@@ -751,7 +764,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       (w.wave && w.kind !== 'manage' && events.some((e) => e.kind === 'asking')
         ? deps.workers().find((m) => m.kind === 'manage' && m.wave === w.wave)?.origin
         : undefined)
-    if (!origin || !events.length || pingOff()) return
+    if (!origin || !reportsTo({ ...w, origin }, origin) || !events.length || pingOff()) return
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {
       const group = workersOf(origin, w).filter((x) => x.group === w.group)

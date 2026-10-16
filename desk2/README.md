@@ -760,10 +760,14 @@ the tray keeps the AgentHydra daemon alive as before. The tray's Open (its menu,
 AgentHydra shortcut, the tray's own start) runs this launcher (`openCommand` in `..\misc\AgentHydra-Tray.json`),
 so the icon opens or focuses this window, never the old one. Either one brings up the other.
 
+**Quitting is one way** (owner, 2026-10-15). The tray's Quit takes this window and its server with it: the tray starts `launcher\stop.ps1 -Window` (`quitCommand` in the same config),
+which asks the window to close, so it saves where it was, then stops the server, the chats running on for the
+next start. Closing the window leaves the tray, AgentHydra's daemon and this server running.
+
 ```powershell
 powershell -NoProfile -File launcher\install-shortcuts.ps1   # make the shortcuts (-DryRun to preview)
 powershell -NoProfile -File launcher\start.ps1               # what the shortcut does (-DryRun to preview)
-powershell -NoProfile -File launcher\stop.ps1                # stop the server the launcher started
+powershell -NoProfile -File launcher\stop.ps1                # stop the server the launcher started (-Window: and close the window)
 ```
 
 `stop.ps1` stops only the server `start.ps1` started (by the pid file it wrote), together with the
@@ -987,6 +991,33 @@ Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
 **Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in one shared headless browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Each of at most three concurrent requests has its own disposable cookie context, cleared afterward. The empty browser closes after 60 seconds idle. Desk's Free runtime does not install Playwright or Camoufox.
+
+ChatGPT's small network-response status callback runs on Zendriver's event loop instead of
+dispatching each response to Python's executor. Blocking HTTP readback stays off the loop;
+account checks, Temporary Chat verification and the single-send guard remain unchanged.
+
+On Windows, browser-slot waiters block on three named kernel mutexes instead of probing three
+files every 100 ms. The same file locks remain authoritative across old helpers and aliased
+paths: native API failure or legacy file contention returns to the original scan with its
+remaining deadline. File ownership releases before mutex ownership; abandoned mutexes recover
+after a process exits. Other platforms keep the existing file-lock queue.
+
+On Windows, requests admitted after the first three concurrent ChatGPT sends use a server-owned
+request coordinator. Each preflight runs immediately in a short-lived HTTP process; queued work
+retains cookies, headers and validated branch IDs rather than a full waiting interpreter. A second
+GET-only phase confirms the broker's already-sent reply. The account's original file lock remains
+held continuously through both phases and final cookie/registry persistence. Browser admission
+keeps its original 120-second anchor, and one 300-second outer deadline spans the entire request.
+The managed `pythonw.exe` launcher and native process jobs contain phase cancellation and crashes.
+Cancellation waits for the broker's context-disposal receipt before releasing account ownership;
+unconfirmed cleanup quarantines that account and drains the coordinator. No send is replayed after
+a coordinator write attempt. Before dispatch, an unavailable coordinator uses the existing path.
+The idle coordinator exits after 60 seconds, except when it must retain an unconfirmed cleanup lease
+for review. Standalone CLI requests and other commands stay unchanged.
+
+AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
+timer releases finished batches even when no later tool call arrives; pending work remains
+available until it settles. This releases daemon memory while keeping stored account/thread metadata intact.
 The verified conversation can supply the final reply directly when it fits the bounded IPC response,
 avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
 fails without another send.
@@ -1028,14 +1059,25 @@ save, avoiding a second full-history serialization without changing backups or s
 The CliMayte page retains its Free display projection across local/remote worker refreshes.
 History replacements and reactive displayed account edits invalidate it; selection remains keyed
 by account/chat identity, and the underlying Free history keeps its existing polling and freshness.
+Queue sync checks its existing minimum upload gap before building and fitting this PC's snapshot.
+Inside that gap, both the local pending check and an upload skip worker projection, hashing,
+zstd compression and encryption. Title/build/job warming and other PCs' downloads still run;
+the existing shape and live gates, payload fitting, truncation and failed-upload retries are unchanged.
 Completed jobs in the shared page cache retain metadata rather than whole result/transcript objects.
 Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
 uncertain-operation locks remain intact. Successful account removal clears its cache only if no
 newer operation appeared while deletion was awaiting acknowledgement. Server job retention is unchanged.
+Server recovery replies retain their existing 15-minute window and 200-job ceiling. The rolling
+maintenance tick also prunes expired completed replies when no account needs a refresh; active jobs
+and stored thread metadata stay intact. Runner stdout decoding views the exact transferred byte
+slice instead of first duplicating up to 8 MiB; UTF-8 and exit/status handling remain unchanged.
 ChatGPT continuation model and previous-message-ID checks use the existing proof projection,
 avoiding historical code/citation extraction before dispatch. Branch visibility and identity
 validation remain shared with rich reads; completed replies still receive full display fields,
 and a lost or incomplete result never triggers another POST.
+After selecting the continuation model and validating its visible message IDs, the client releases
+the old provider transcript before browser queueing. Only the conversation/parent/privacy reference
+and a frozen previous-ID set remain; direct HTTP callers still validate their full input normally.
 Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
 304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
 304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered
