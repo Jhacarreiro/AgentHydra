@@ -51,6 +51,66 @@ def test_sanitizer_holds_a_window_title_split_across_chunks():
     assert s.feed(b"tle\x07b\n") == "b\n"
 
 
+class _WholeLineSanitizer(Sanitizer):
+    """The line assembly this module had until 2026-10-16, kept as the oracle: the whole unfinished line was copied and
+    split again on every chunk. Its output is the contract; only its cost changed."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.partial = ""
+
+    def feed(self, data: bytes, final: bool = False) -> str:
+        text = self._held + self._decoder.decode(data, final)
+        self._held = ""
+        if not final:
+            cut = text.rfind("\x1b")
+            if cut != -1 and len(text) - cut < 256 and not shelljobs._ESCAPE_RE.match(text, cut):
+                text, self._held = text[:cut], text[cut:]
+            if text.endswith("\r"):
+                text, self._held = text[:-1], "\r" + self._held
+        text = shelljobs._CONTROL_RE.sub("", shelljobs._ESCAPE_RE.sub("", text)).replace("\r\n", "\n")
+        lines = (self.partial + text).split("\n")
+        self.partial = "" if final else lines.pop()
+        if final and lines and lines[-1] == "":
+            lines.pop()
+        return "".join(shelljobs._last_frame(line) + "\n" for line in lines)
+
+    def pending(self) -> str:
+        return shelljobs._last_frame(self.partial)
+
+
+def test_sanitizer_output_is_unchanged_over_random_streams_and_chunkings():
+    # Byte for byte what the whole-line assembly gave, pending() between chunks included: CRs and CRLFs split across
+    # chunks, redraw frames, empty lines, escapes, a UTF-8 character cut in two, and a stream that ends without a newline.
+    import random
+
+    rng = random.Random(61)
+    atoms = [b"a", b"bc", b"\r", b"\n", b"\r\n", b"\r\r", b" 42%", b"\x1b[31m", b"\x1b[0m", b"\x1b]0;t\x07", "é".encode(), b"\t", b"\x07"]
+    for _ in range(400):
+        data = b"".join(rng.choice(atoms) for _ in range(rng.randrange(0, 60)))
+        cuts = sorted(rng.sample(range(len(data) + 1), min(len(data) + 1, rng.randrange(1, 8))))
+        chunks = [data[a:b] for a, b in zip([0, *cuts], [*cuts, len(data)])]
+        new, old = Sanitizer(), _WholeLineSanitizer()
+        for chunk in chunks:
+            assert new.feed(chunk) == old.feed(chunk), data
+            assert new.pending() == old.pending(), data
+        assert new.feed(b"", final=True) == old.feed(b"", final=True), data
+
+
+def test_a_long_line_without_a_newline_costs_each_chunk_only_its_own_length():
+    # Every 4 KB chunk once copied and split the whole unfinished line: 16 MB took 17.5 s (2026-10-16). Linear, 24 MB of
+    # a newline-free line and of progress-bar redraws each take well under a second; the old way took minutes.
+    import time
+
+    for payload in (b"x" * (24 << 20), b"\r 42% [=====>    ] eta 3s" * ((24 << 20) // 26)):
+        s, started = Sanitizer(), time.perf_counter()
+        for i in range(0, len(payload), 4096):
+            assert s.feed(payload[i:i + 4096]) == ""
+            assert time.perf_counter() - started < 10, f"{i >> 20} MB in: the unfinished line is being copied per chunk"
+        tail = s.feed(b"", final=True)
+        assert tail in ("x" * (24 << 20) + "\n", " 42% [=====>    ] eta 3s\n")
+
+
 def test_sanitizer_drops_charset_and_cursor_save_escapes_whole():
     # "ESC ( B" (tput sgr0), "ESC 7" and "ESC =" once went unmatched: held back until 256 chars piled
     # up, which stalled live output, then leaked "(B", "7" or "=" into the text.
