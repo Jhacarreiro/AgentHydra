@@ -1,0 +1,7 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "same-tree-walked-by-several-sweeps",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {}
+}

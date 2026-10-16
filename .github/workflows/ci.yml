@@ -208,6 +208,18 @@ jobs:
       - name: Guardrail (install.ps1 parses under Windows PowerShell 5.1)
         run: bun scripts/checks/ps1-read-as-ansi.mjs
 
+      # Fails on a reversed copy made only to search it (`[...xs].reverse().find(p)`): findLast and
+      # findLastIndex search from the end in place. The 2026-10-16 efficiency audit fixed this in one
+      # file and a sweep found the same line in nine more. See the check's header.
+      - name: Guardrail (no reversed copy just to search it)
+        run: bun scripts/checks/reversed-copy-to-search.mjs
+
+      # Fails on `Promise.all(xs.map(...))` over async fs calls in a Bun process: each item can start an
+      # I/O pool thread Bun never gives back. e5382243 put one back into the function 44429d00 had fixed
+      # two days before. Read one at a time or take an fsSlot. See the check's header.
+      - name: Guardrail (no unbounded async fs fan-out)
+        run: bun scripts/checks/fs-fanout-unbounded.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.

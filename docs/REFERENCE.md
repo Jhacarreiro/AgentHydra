@@ -1077,6 +1077,13 @@ workflow can never check out. Before it had a name, a pre-commit hook was its on
 that hook is skipped by `--no-verify` and silently does nothing on any machine without the sibling
 checkout. External contributors should not run it; nothing in CI depends on it.
 
+`.arkitect/ratchets/` is the other owner-only gate: one inventory per Architect performance check (25 of them,
+seeded 2026-10-16 after the efficiency audit), holding how many warnings each file is allowed per rule. The
+Architect lives in a private repo, so CI skips it; the owner's land tool (`cycle.py`, kept outside this repo) runs
+`arkitect ratchet --check <the inventoried ids>` on every land and fails one whose own files raise a count. A rise
+elsewhere is a note. After fixing a warning, lower its count with
+`arkitect ratchet --check <id> --decrease-baselines`; a count is never raised by tool, only by a reviewed hand edit.
+
 CI runs these across `[ubuntu-latest, windows-latest]`, so a green local run on one OS clears one
 leg of two.
 

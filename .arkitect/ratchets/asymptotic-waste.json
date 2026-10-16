@@ -1,0 +1,273 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "asymptotic-waste",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {
+    "core/smoke/smoke.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 5
+    },
+    "core/src/chat.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/hydra/src/QuickInstancesApp.vue": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/hydra/src/components/CliLoginMoveDialog.vue": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/hydra/src/composables/useInstances.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 5,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/hydra/src/composables/useMoveAllChats.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/hydra/src/composables/useSharedPrefs.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/hydra/src/composables/useShortcuts.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/hydra/src/lib/move-chats.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/browser/store.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/connectors/redesign-mcp.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 6
+    },
+    "desk2/server/src/connectors/redesign-plan.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2
+    },
+    "desk2/server/src/devservers/compose.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/devservers/edit.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/devservers/errors.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/server/src/devservers/free-port.ts": {
+      "asymptotic-waste/nested-data-loop": 2
+    },
+    "desk2/server/src/devservers/manager.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2,
+      "asymptotic-waste/nested-data-loop": 2
+    },
+    "desk2/server/src/devservers/takeover.ts": {
+      "asymptotic-waste/quadratic-accumulate": 1
+    },
+    "desk2/server/src/engine/chat-manager-helpers.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/engine/chat-manager-moves.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/server/src/engine/chat-requests.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/engine/queue.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2
+    },
+    "desk2/server/src/free-instances/service.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 6
+    },
+    "desk2/server/src/free-instances/sync.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/host/client.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/instance-manager/engine.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 5
+    },
+    "desk2/server/src/routines/central.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/routines/manager-board.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/server/src/routines/manager-runs.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/server/src/routines/manager-settle.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/server/src/routines/manager.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/src/routines/manifest.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/server/test/bridge/fake-hydra.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/web/src/components/cloud/logic.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 3
+    },
+    "desk2/web/src/components/external/logic.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/web/src/components/panes/instances.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/web/src/components/panes/settings.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/web/src/components/rail/SessionRail.vue": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "desk2/web/src/components/servers/ServersPane.vue": {
+      "asymptotic-waste/membership-scan-in-loop": 2,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/web/src/components/servers/info/ServerInfo.vue": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/web/src/components/sidebar/Sidebar.vue": {
+      "asymptotic-waste/membership-scan-in-loop": 4
+    },
+    "desk2/web/src/components/sidebar/logic.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2
+    },
+    "desk2/web/src/components/transcript/TranscriptView.vue": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/web/src/components/transcript/parts/CliMayteCard.vue": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "desk2/web/src/stores/desk.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 10,
+      "asymptotic-waste/nested-data-loop": 2
+    },
+    "scripts/build.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1
+    },
+    "scripts/checks/fixer-only-called-by-its-test.mjs": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "scripts/checks/fs-fanout-unbounded.mjs": {
+      "asymptotic-waste/loop-invariant-recompute": 1
+    },
+    "scripts/climayte-live.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1,
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/chat-dossier.ts": {
+      "asymptotic-waste/quadratic-accumulate": 1
+    },
+    "server/src/chat-settings-carry.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/claude-native-send-hold.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/climayte-core.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1,
+      "asymptotic-waste/quadratic-accumulate": 1
+    },
+    "server/src/climayte-dispatch.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2
+    },
+    "server/src/climayte-eta.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/climayte-launch.ts": {
+      "asymptotic-waste/nested-data-loop": 4
+    },
+    "server/src/climayte-manager-mcp.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/climayte-ping.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 3,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/climayte-schedule.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 3,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/climayte-unsaved.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/climayte-view.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/climayte-wave-ops.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/climayte-wave.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/completions.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/core/claude-native/native-program.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/core/cli-login-move.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/core/codex-instances.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/core/codex-thread-guard.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/core/desktop-cli-pairing.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/core/desktop-login-sync.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/core/json-store.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1
+    },
+    "server/src/dashboards.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 4
+    },
+    "server/src/hydra-core/pack.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/hydra-core/track.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1,
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/hydra-core/tree.ts": {
+      "asymptotic-waste/nested-data-loop": 1
+    },
+    "server/src/kit/settled-part.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/mcp-api-levels.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/mcp-fan-out.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1
+    },
+    "server/src/mcp-free.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/routes/kit.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 1
+    },
+    "server/src/routes/usage.ts": {
+      "asymptotic-waste/quadratic-accumulate": 1
+    },
+    "server/src/session-launch.ts": {
+      "asymptotic-waste/loop-invariant-recompute": 1
+    },
+    "server/src/ui-archive.ts": {
+      "asymptotic-waste/quadratic-accumulate": 1
+    },
+    "server/src/usage-service.ts": {
+      "asymptotic-waste/membership-scan-in-loop": 2
+    }
+  }
+}

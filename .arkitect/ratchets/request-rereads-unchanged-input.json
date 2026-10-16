@@ -1,0 +1,95 @@
+{
+  "_doc": "Per-file, per-rule ERROR-finding counts this check is allowed (runner count ratchet). A rise fails the gate; a drop asks to be locked in with `arkitect ratchet --check <id> --decrease-baselines`. Never raise a number by tool: that is a reviewed hand edit. See packages/connections-arkitect/src/core/count-ratchet.mjs.",
+  "check": "request-rereads-unchanged-input",
+  "reason": "Performance warnings held at their 2026-10-16 counts per file and rule (the efficiency audit's sibling sweep, c13c33ee): a rise is a regression of a fixed shape; fix one and lower it with --decrease-baselines.",
+  "severity": "warning",
+  "counts": {
+    "core/src/history.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 2
+    },
+    "desk2/server/src/bridge/seed-session.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 2
+    },
+    "desk2/server/src/bridge/session-jsonl.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 3
+    },
+    "desk2/server/src/engine/chat-manager.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/box-doctor-roots.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/box-doctor.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 4
+    },
+    "server/src/claude-start-shortcut.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/climayte-stops.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/climayte-unsaved.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/climayte-wave.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/codex-desktop.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 3
+    },
+    "server/src/core/crypto/keys.linux.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/crypto/keys.mac.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/crypto/keys.win.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/dsh-instances.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/instances.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 3
+    },
+    "server/src/core/own-build.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/core/process.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 20
+    },
+    "server/src/dispatch.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 2
+    },
+    "server/src/hydra-family.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/kit/sync.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/manager-folders.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/orchestrator.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/routes/box-doctor.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 2
+    },
+    "server/src/routes/session-message.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/routes/sessions.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/screenshot.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/session-keepalive.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    },
+    "server/src/usage.ts": {
+      "request-rereads-unchanged-input/uncached-unchanging-read": 1
+    }
+  }
+}
