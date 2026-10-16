@@ -240,32 +240,19 @@ describe('chat workers', () => {
     rmSync(join(HOME, '.claude.json'))
   })
 
-  // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
-  // account folder has settings of its own, and the launch carried only the guards.
-  test("a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
-    // As managers/install.mjs writes it on Windows.
+  // The owner's Manager Hydra router comes from the people add-on only: without it no chat carries a router hook.
+  test('without the people add-on a chat carries no Manager Hydra router hook', () => {
     const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
     writeFileSync(
       join(OWNER, 'settings.json'),
-      JSON.stringify({
-        hooks: {
-          UserPromptSubmit: [
-            { hooks: [{ type: 'command', command: 'python other_hook.py' }] },
-            { hooks: [router] },
-          ],
-        },
-      }),
+      JSON.stringify({ hooks: { UserPromptSubmit: [{ hooks: [router] }] } }),
     )
     const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
     const prompts = (file: string) =>
       JSON.parse(readFileSync(file, 'utf8')).hooks.UserPromptSubmit as unknown
-    const chat = dispatch({ title: 'a routed chat', chat: true })
-    expect(prompts(writeWorkerSettings(chat, acct))).toEqual([{ hooks: [router] }])
-    const worker = dispatch({ title: 'a task' })
-    expect(prompts(writeWorkerSettings(worker, acct))).toBeUndefined()
+    const chat = dispatch({ title: 'a chat', chat: true })
+    expect(prompts(writeWorkerSettings(chat, acct))).toBeUndefined()
     rmSync(join(OWNER, 'settings.json'))
-    const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
-    expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
   })
 
   // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a

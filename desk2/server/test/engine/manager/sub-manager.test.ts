@@ -8,12 +8,9 @@ import { join } from 'node:path'
 import type { ServerEvent } from '../../../../shared/protocol'
 import { ChatManager } from '../../../src/engine/chat-manager'
 import { parseCreate } from '../../../src/engine/chat-requests'
-import { forgetManagerStats } from '../../../src/engine/manager-stats'
-import { currentManager } from '../../../src/engine/managers'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
 import { fakeBridge, fakeQueries } from './fakes'
 
-const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
 
 const temps: string[] = []
 const managers: ChatManager[] = []
@@ -66,7 +63,6 @@ test('a chat opened under a Desk chat keeps its parent and manager, and runs wit
   expect(m.get(child.id)).toMatchObject({
     parentId: parent.id,
     managerSlug: 'example-manager',
-    manager: { slug: 'example-manager', name: 'Example Manager', title: null, oneLiner: null, photo: null },
   })
   await waitFor(() => q.all.length === 1)
   expect(q.last().options.env).toMatchObject({ AGENTHYDRA_MANAGER: 'example-manager' })
@@ -102,55 +98,6 @@ test('a manager slug that is not a slug is refused', () => {
   expect(() => parseCreate({ cwd: 'C:/work', managerSlug: '../evil' })).toThrow('managerSlug is not a manager slug')
 })
 
-test('the manager label is the pin, else the manager the session is on, and none without a persona', () => {
-  setup()
-  const personas = process.env.AGENTHYDRA_MANAGERS_DIR!
-  mkdirSync(join(personas, 'sessions'))
-  writeFileSync(join(personas, 'sessions', 'sess-1.json'), JSON.stringify({ manager: 'example-manager' }))
-  const label = { slug: 'example-manager', name: 'Example Manager', title: null, oneLiner: null, photo: null, statsLine: null }
-  expect(currentManager(null, 'sess-1')).toEqual(label)
-  expect(currentManager('example-manager', null)).toEqual(label)
-  expect(currentManager('ghost', 'sess-1')).toBeNull()
-  expect(currentManager(null, 'unknown-session')).toBeNull()
-})
-
-test('the manager label carries its analytics line once summary.json has one', () => {
-  setup()
-  const personas = process.env.AGENTHYDRA_MANAGERS_DIR!
-  mkdirSync(join(personas, 'analytics'))
-  writeFileSync(join(personas, 'analytics', 'summary.json'), JSON.stringify({ v: 1, managers: { 'example-manager': { turns: 3, line: '3 turns · 100% answered' } } }))
-  forgetManagerStats()
-  expect(currentManager('example-manager', null)?.statsLine).toBe('3 turns · 100% answered')
-})
-
-test('a manager photo change sends the chats on that manager again, and no others', async () => {
-  const events: ServerEvent[] = []
-  const { home, personas, m } = setup((e) => events.push(e))
-  const pinned = await m.create({ cwd: home, prompt: 'start', managerSlug: 'example-manager', delegateToCliMayte: false })
-  const plain = await m.create({ cwd: home, prompt: 'hi', delegateToCliMayte: false })
-  expect(m.get(pinned.id).manager?.photo).toBeNull()
-  writeFileSync(join(personas, 'example-manager', 'avatar.png'), PNG)
-  events.length = 0
-  m.managerChanged('example-manager')
-  const sent = sentChats(events)
-  expect(sent.map((c) => c.id)).toEqual([pinned.id])
-  expect(sent[0].manager).toMatchObject({ slug: 'example-manager', photo: expect.any(Number) })
-  expect(sent.map((c) => c.id)).not.toContain(plain.id)
-})
-
-test('a photo dropped in by hand shows once the held label is five seconds old', () => {
-  const { personas } = setup()
-  expect(currentManager('example-manager', null)?.photo).toBeNull()
-  writeFileSync(join(personas, 'example-manager', 'avatar.png'), PNG)
-  expect(currentManager('example-manager', null)?.photo).toBeNull()
-  setSystemTime(new Date(Date.now() + 6000))
-  try {
-    expect(currentManager('example-manager', null)?.photo).toEqual(expect.any(Number))
-  } finally {
-    setSystemTime()
-  }
-})
-
 test('a runtime chat.upsert of a pinned chat carries its manager label', async () => {
   const events: ServerEvent[] = []
   const { home, m } = setup((e) => events.push(e))
@@ -159,5 +106,4 @@ test('a runtime chat.upsert of a pinned chat carries its manager label', async (
   ;(m as unknown as { onRuntimeEvent(event: ServerEvent): void }).onRuntimeEvent({ type: 'chat.upsert', chat: m.get(chat.id) })
   const sent = sentChats(events)
   expect(sent.map((c) => c.id)).toEqual([chat.id])
-  expect(sent[0].manager).toMatchObject({ slug: 'example-manager', name: 'Example Manager' })
 })

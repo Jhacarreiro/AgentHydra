@@ -188,13 +188,12 @@ describe('completion registry', () => {
 
 const SRC = join(import.meta.dir, '..', 'src')
 const ANSWER = /status: '(working|started)'/
-// Answers that are not wired yet: a CliMayte worker seat or consult job, whose ticket (climayte-worker) is reserved.
+// Answers that are not wired yet (none in this repo).
 const UNWIRED: { file: string; line: string }[] = [
-  { file: 'hydra-core/use.ts', line: "status: 'working'," },
-  { file: 'hydra-core/use.ts', line: ": { job, status: 'working', read: readHint(e) }" },
+  // The Desk client's wait ran out: its caller registers the chat's completion (core_use's seat modes do, in the add-on).
   {
-    file: 'hydra-core/use.ts',
-    line: "if (args.mode === 'hire') return { status: 'started', job }",
+    file: 'desk-client.ts',
+    line: "if (Date.now() >= deadline) return { chat: chat.id, title: chat.title, status: 'working' }",
   },
 ]
 

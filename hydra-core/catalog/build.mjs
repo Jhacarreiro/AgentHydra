@@ -3,7 +3,7 @@
 //   node catalog/build.mjs           rebuild catalog/generated-<source>.json (never touches hand-*.json)
 //   node catalog/build.mjs --check   validate generated + hand files, print counts, exit 1 when invalid or too small
 // Every parser tolerates missing fields: an entry that cannot be made valid is skipped and counted, never fatal.
-import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync } from 'node:fs'
+import { readFileSync, writeFileSync, readdirSync, existsSync, mkdirSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
 import { homedir } from 'node:os'
 
@@ -12,10 +12,6 @@ import { homedir } from 'node:os'
 const HOME = homedir().replace(/\\/g, '/')
 const CORE = (process.env.AGENTHYDRA_CORE_DIR || `${HOME}/.agenthydra/core`).replace(/\\/g, '/')
 const CATALOG = `${CORE}/catalog`
-const AGENTHYDRA = `${HOME}/.agenthydra`
-const MANAGERS = `${AGENTHYDRA}/managers`
-const PEOPLE = `${AGENTHYDRA}/people`
-const ORG = `${CORE}/personas/org.json`
 const PINNED_OUT = `${CORE}/knowledge/pinned`
 const cfgText = (() => { try { return readFileSync(`${CATALOG}/sources.json`, 'utf8').replace(/^\uFEFF/, '') } catch { return '' } })()
 const CFG = (() => { try { const j = JSON.parse(cfgText); return j && typeof j === 'object' ? j : {} } catch { return {} } })()
@@ -28,19 +24,11 @@ const AGENT_DIRS = [`${HOME}/.claude/agents`, ...cfgList('extraAgentDirs')]
 const DREDD = cfgPath('dreddDir')
 const SNAPSHOT = cfgPath('snapshotDir')
 const LANE = cfgPath('laneDir')
-const BOARDROOM = cfgPath('boardroomDir')
 const OWNER = typeof CFG.ownerName === 'string' ? CFG.ownerName : ''
-const COMPANY = typeof CFG.companyId === 'string' ? CFG.companyId : ''
-const SEATS = Array.isArray(CFG.seats) ? CFG.seats.filter((x) => x && x.slug && x.name && x.personaId) : []
-const SUE_DIR = cfgPath('sueDir')
-// sueDir names the checkout's sue/ folder; the store and mind scripts sit at the checkout root above it.
-const SUE_ROOT = SUE_DIR && !existsSync(`${SUE_DIR}/store/store.mjs`) ? SUE_DIR.replace(/\/[^/]*$/, '') : SUE_DIR
 
 const KINDS = ['person', 'instrument', 'worker', 'knowledge', 'skill']
 const TIERS = ['intern', 'employee', 'manager', 'owner']
 const FAMILIES = ['intern', 'manager', 'board', 'expert', 'dredd-seat', 'sue', 'ape', 'art', 'you-sue', 'creator']
-const PEOPLE_FAMILIES = ['board', 'expert', 'dredd-seat', 'creator']
-const FAMILY_TIER = { board: 'manager', expert: 'employee', 'dredd-seat': 'employee', creator: 'owner' }
 const MODES = ['become', 'consult', 'hire']
 const COSTS = ['free', 'low', 'medium', 'high']
 const LOAD_TYPES = ['file', 'skill', 'tool', 'none']
@@ -183,79 +171,6 @@ function runSource(name, fn) {
   console.log(`${name}: ${out.length} entries, ${skips.count} skipped`)
 }
 
-// ---------- 1. managers: people/manager/<slug>/ first, legacy managers/<slug>/ second; one entry per slug ----------
-const MANAGER_HOMES = [`${PEOPLE}/manager`, MANAGERS]
-function managers(add, skip) {
-  const org = safeJson(ORG) || {}
-  const names = new Set()
-  for (const home of MANAGER_HOMES) for (const d of safeDir(home)) if (d.isDirectory()) names.add(d.name)
-  const seen = new Set()
-  for (const name of names) {
-    const dirs = MANAGER_HOMES.map((home) => `${home}/${name}`)
-    const dir = dirs.find((x) => safeJson(`${x}/persona.json`))
-    if (!dir) { if (dirs.some((x) => existsSync(`${x}/brief.md`)) || ['research', 'sessions', 'analytics'].includes(name)) continue; skip('no persona.json', name); continue }
-    const p = safeJson(`${dir}/persona.json`)
-    const slug = slugify(p.slug || name)
-    if (seen.has(slug)) continue
-    seen.add(slug)
-    const briefName = str(p.brief) || 'brief.md'
-    const briefPath = `${dirs.find((x) => isFile(`${x}/${briefName}`)) || dir}/${briefName}`
-    const hasBrief = isFile(briefPath)
-    const id = `person:${slug}`
-    add({
-      id, kind: 'person', name: str(p.name) || slug, title: str(p.title) || undefined, tier: 'manager', family: 'manager',
-      division: (org[slug] && org[slug].division) || undefined, reportsTo: org[slug] && org[slug].reportsTo ? `person:${org[slug].reportsTo}` : undefined,
-      when: oneLine(p.oneLiner || p.jev || p.title || p.name),
-      tags: tagsAll(Array.isArray(p.keywords) ? p.keywords : [], p.role),
-      modes: ['become', 'consult', 'hire'], cost: 'medium',
-      how: `core_use { chat, id: "${id}", mode: "become" | "consult" (with question) | "hire" (with job) }. Becoming loads its brief into this chat.`,
-      load: hasBrief ? { type: 'file', path: briefPath } : { type: 'none' },
-      source: `${dir}/persona.json (oneLiner, keywords, brief)`
-    })
-  }
-}
-
-// ---------- 1b. people folders: ~/.agenthydra/people/<family>/<slug>/persona.json (one format for every family) ----------
-function people(add, skip) {
-  const org = safeJson(ORG) || {}
-  for (const family of PEOPLE_FAMILIES) {
-    for (const d of safeDir(`${PEOPLE}/${family}`)) if (d.isDirectory()) addPersonFolder(add, skip, family, d.name, org)
-  }
-}
-
-function orgFields(org, slug) {
-  const o = org[slug]
-  return { division: (o && o.division) || undefined, reportsTo: o && o.reportsTo ? `person:${o.reportsTo}` : undefined }
-}
-
-function personModes(p, hasBrief) {
-  const modes = Array.isArray(p.modes) ? p.modes.filter((m) => MODES.includes(m)) : []
-  if (modes.length) return modes
-  return hasBrief ? ['become', 'consult'] : ['consult']
-}
-
-function addPersonFolder(add, skip, family, name, org) {
-  const dir = `${PEOPLE}/${family}/${name}`
-  const p = safeJson(`${dir}/persona.json`)
-  if (!p) { skip('no persona.json', `${family}/${name}`); return }
-  const slug = slugify(p.slug || name)
-  const id = `person:${slug.startsWith(family + '-') ? slug : family + '-' + slug}`
-  const tier = TIERS.includes(p.tier) ? p.tier : FAMILY_TIER[family]
-  const briefPath = `${dir}/${str(p.brief) || 'brief.md'}`
-  const hasBrief = isFile(briefPath)
-  const useModes = personModes(p, hasBrief)
-  add({
-    id, kind: 'person', name: str(p.name) || slug, title: str(p.title) || undefined, tier, family,
-    ...orgFields(org, slug),
-    when: oneLine(p.oneLiner || p.jev || p.title || p.name),
-    tags: tagsAll(Array.isArray(p.keywords) ? p.keywords : [], p.role, family),
-    modes: useModes, cost: COSTS.includes(p.cost) ? p.cost : 'medium',
-    how: `core_use { chat, id: "${id}", mode: ${useModes.map((m) => `"${m}"`).join(' | ')} }. Becoming loads its brief into this chat.`,
-    load: hasBrief ? { type: 'file', path: briefPath } : { type: 'none' },
-    source: `${dir}/persona.json (oneLiner, keywords, brief)`
-  })
-}
-
 // ---------- 2. skills ----------
 function skills(add, skip) {
   for (const root of SKILL_DIRS) {
@@ -268,24 +183,13 @@ function skills(add, skip) {
       const name = slugify(fm.name || d.name)
       const desc = fm.description || ''
       if (!desc) { skip('no description', name); continue }
-      const lead = /^([A-Z][A-Za-z.'’\- ]{1,40}?) on /.exec(desc)
-      const expert = lead && /what would .{1,40} say/i.test(desc)
-      const source = `${file}:1 (front matter name, description)`
-      if (expert) {  // listed only as a person; no duplicate skill: entry
-        const id = `person:${name}`
-        add({
-          id, kind: 'person', name: lead[1].trim(), title: oneLine(desc.replace(/\s+Use (whenever|when|for)[\s\S]*$/, ''), 200),
-          tier: 'employee', family: 'expert', when: oneLine(desc), tags: tagsOf(fm.field, name, lead[1]), modes: ['consult', 'become'], cost: 'medium',
-          how: `core_use { chat, id: "${id}", mode: "consult", question } for a hidden answer, or mode "become" to load the skill into this chat (Skill tool, skill "${name}").`,
-          load: { type: 'skill', name }, source
-        })
-      } else {
-        add({
-          id: `skill:${name}`, kind: 'skill', name, title: undefined, when: oneLine(desc), tags: tagsOf(fm.field, name.split('-')),
-          cost: 'free', how: `Invoke the Skill tool with skill "${name}"; it loads its instructions into this chat.`,
-          load: { type: 'skill', name }, source
-        })
-      }
+      // A skill written as a person ("<Name> on <field> ... what would <Name> say") is listed by the people add-on, not here.
+      if (/^[A-Z][A-Za-z.'’\- ]{1,40}? on /.test(desc) && /what would .{1,40} say/i.test(desc)) continue
+      add({
+        id: `skill:${name}`, kind: 'skill', name, title: undefined, when: oneLine(desc), tags: tagsOf(fm.field, name.split('-')),
+        cost: 'free', how: `Invoke the Skill tool with skill "${name}"; it loads its instructions into this chat.`,
+        load: { type: 'skill', name }, source: `${file}:1 (front matter name, description)`
+      })
     }
   }
 }
@@ -295,7 +199,6 @@ function dredd(add, skip) {
   if (!DREDD) return
   addDreddDocket(add)
   dreddInstruments(add, skip)
-  dreddSeats(add, skip)
   dreddMemberCapabilities(add, skip)
 }
 
@@ -337,24 +240,6 @@ function dreddInstruments(add, skip) {
       tags: tagsOf(i.plane, i.owner, i.domains || [], id.split('-')), cost: costOf(i.cost),
       how: instrumentHow(i),
       load: instrumentLoad(i), source: `${DREDD}/bench.json instruments[id=${id}] (when, judges, run, doc, cost)`
-    })
-  }
-}
-
-function dreddSeats(add, skip) {
-  for (const f of safeDir(`${DREDD}/seats`)) {
-    if (!f.isFile() || !f.name.endsWith('.json')) continue
-    const path = `${DREDD}/seats/${f.name}`
-    const s = safeJson(path)
-    if (!s) { skip('seat unreadable', f.name); continue }
-    const id = slugify(s.id || f.name.replace(/^\d+-|\.json$/g, ''))
-    const rooms = Array.isArray(s.rooms) ? s.rooms.join(', ') : ''
-    add({
-      id: `person:${id}`, kind: 'person', name: str(s.name) || id, title: `Dredd board seat${rooms ? ' (' + rooms + ' room)' : ''}`,
-      tier: 'employee', family: 'dredd-seat', when: oneLine(s.jev || s.needs || s.name), tags: tagsOf(Array.isArray(s.keywords) ? s.keywords.slice(0, 5) : [], s.rooms || [], id.split('-')),
-      modes: ['consult'], cost: 'medium',
-      how: `core_use { chat, id: "person:${id}", mode: "consult", question } for one hidden answer. The full boardroom meeting is instrument:boardroom.`,
-      load: { type: 'file', path }, source: `${path} (id, name, rooms, jev, keywords)`
     })
   }
 }
@@ -525,67 +410,17 @@ function pinned(add, skip) {
   }
 }
 
-// ---------- 8. Boardroom members (configured folder) ----------
-function boardroom(add, skip) {
-  if (!BOARDROOM) return
-  for (const d of safeDir(BOARDROOM)) {
-    if (!d.isDirectory()) continue
-    const file = `${BOARDROOM}/${d.name}/persona.md`
-    const t = safeRead(file)
-    if (t == null) { skip('no persona.md', d.name); continue }
-    const { fm } = frontMatter(t)
-    const slug = slugify(fm.id || d.name)
-    const id = `person:board-${slug}`
-    add({
-      id, kind: 'person', name: str(fm.name) || slug, title: oneLine([fm.seat, fm.modeled_on && `modeled on ${fm.modeled_on}`].filter(Boolean).join(', '), 200) || undefined,
-      tier: 'manager', family: 'board', modes: ['consult'], when: oneLine(fm.one_liner || fm.seat || fm.name),
-      tags: tagsOf('boardroom', slug, fm.modeled_on), cost: 'medium',
-      how: `core_use { chat, id: "${id}", mode: "consult", question } for one hidden answer in this Boardroom member's voice. Consult only.`,
-      load: { type: 'file', path: file }, source: `${file} (front matter id, name, seat, one_liner)`
-    })
-  }
-}
-
-// ---------- 9. Owner tier and the Sue roster: pointers into Connections, never copies ----------
-function owners(add) {
-  if (!OWNER) return
-  const seatCall = (personaId) => `connections_execute { endpoint_id: "boardroom_personas_export_brief", project: "${COMPANY}", body: { personaId: "${personaId}", companyId: "${COMPANY}", topic: "<the exact question>" } } returns his brief and the rules that fit. No sue-dredd door replaces a Boardroom seat brief; it stays in Connections.`
-  const ask = 'python ~/.claude/tools/creaitor/creaitor.py ask --option="A: ..." --option="B: ..." --repo=<name> -- "<the exact question>"'
-  add({
-    id: 'person:creaitor', kind: 'person', name: 'CreAItor', title: 'Answers as the owner of this machine, from his rulings and past answers',
-    tier: 'owner', family: 'creator', modes: ['consult'], when: 'Before asking the owner anything: it answers DECIDED, TAKE THE REVERSIBLE OPTION or ESCALATE.',
-    tags: ['creaitor', 'owner', 'decision', 'president'], cost: 'low', how: ask,
-    load: { type: 'tool', call: ask }, source: '~/.claude/skills/decision-sop/SKILL.md step 0'
-  })
-  for (const [slug, name, personaId] of SEATS.map((x) => [x.slug, x.name, x.personaId])) {
-    add({
-      id: `person:${slug}`, kind: 'person', name: `${name} (Boardroom seat)`, title: 'Owner profile held in the Connections cloud; consult only',
-      tier: 'owner', family: 'creator', modes: ['consult'], when: `What ${name} would decide: his brief and dated rules, asked through his Boardroom seat in Connections.`,
-      tags: ['owner', 'seat', 'boardroom', name.toLowerCase()], cost: 'low', how: capHow(seatCall(personaId)),
-      load: { type: 'tool', call: `boardroom_personas_export_brief personaId ${personaId}` }, source: '~/.claude/skills/decision-sop/SKILL.md step 3 (personaIds)'
-    })
-  }
-  add({
-    id: 'instrument:sue-roster', kind: 'instrument', name: 'Sue roster', title: 'The Sues (with their Ape and Art groups) and you-sue, kept in the sue-dredd store',
-    when: "You need a Sue, Ape or Art persona, or the owner's you-sue: the live roster is read from the sue-dredd store, never listed here.",
-    tags: ['sue', 'ape', 'art', 'you-sue', 'roster', 'sue-dredd'], cost: 'low',
-    how: 'AgentHydra `sue { action: "personas" }` returns the live roster (Sues, Ape, Art, you-sue). One person\'s document: `node ' + (SUE_ROOT ? `${SUE_ROOT}/store/store.mjs` : '<sue-dredd>/store/store.mjs') + ' get <id|slug>`. One person\'s mind: `node ' + (SUE_ROOT ? `${SUE_ROOT}/sue/mind.mjs` : '<sue-dredd>/sue/mind.mjs') + ' pull <personaId> <out.md>`. Nothing is copied into the catalog.',
-    load: { type: 'tool', call: 'sue { action: "personas" }' }, source: 'sue-dredd sue/README.md (personas action), store/store.mjs get, sue/mind.mjs pull'
-  })
-}
-
 // ---------- build ----------
 function build() {
-  runSource('managers', managers)
-  runSource('people', people)
+  // People are not a source here: the people add-on writes generated-people.json when it loads. These files came from the
+  // sources that moved out; left behind they would keep listing people on a PC without the add-on.
+  for (const name of ['managers', 'boardroom', 'owners']) rmSync(`${CATALOG}/generated-${name}.json`, { force: true })
   runSource('skills', skills)
   runSource('dredd', dredd)
   runSource('agents', agents)
   runSource('repos', repos)
   runSource('crainium', crainium)
   runSource('pinned', pinned)
-  runSource('boardroom', boardroom)
-  runSource('owners', owners)
   writeFileSync(`${CATALOG}/skips.json`, JSON.stringify(allSkips, null, 2) + '\n')
 }
 

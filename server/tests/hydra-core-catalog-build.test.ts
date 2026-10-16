@@ -1,9 +1,8 @@
 import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { spawnSync } from 'node:child_process'
-import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { loadCatalog } from '../src/hydra-core/catalog'
 
 const BUILDER = join(import.meta.dir, '..', '..', 'hydra-core', 'catalog', 'build.mjs')
 
@@ -27,6 +26,8 @@ const put = (rel: string, body: unknown) => {
   writeFileSync(file, typeof body === 'string' ? body : JSON.stringify(body))
 }
 
+const catalogFile = (name: string) => join(home, '.agenthydra/core/catalog', name)
+
 test('an empty home builds a valid empty catalog with no home path in the output', () => {
   const built = run()
   expect(built.status).toBe(0)
@@ -38,94 +39,34 @@ test('an empty home builds a valid empty catalog with no home path in the output
   expect(out).not.toContain(home.split('\\').join('/'))
 })
 
-test('people folders and legacy manager folders become person entries', () => {
-  put('.agenthydra/people/manager/ada/persona.json', {
-    name: 'Ada',
-    oneLiner: 'Plans releases',
-    keywords: ['release'],
-  })
-  put('.agenthydra/people/expert/grace/persona.json', {
-    name: 'Grace',
-    title: 'Compiler expert',
-    oneLiner: 'Answers compiler questions',
-  })
+test('the builder lists no person: people folders, owner sources and skill experts are the add-on', () => {
+  put('.agenthydra/people/manager/ada/persona.json', { name: 'Ada', oneLiner: 'Plans releases' })
   put('.agenthydra/managers/lin/persona.json', { name: 'Lin', oneLiner: 'Keeps the books' })
-  expect(run().status).toBe(0)
-  const ids = (f: string) =>
-    (
-      JSON.parse(readFileSync(join(home, '.agenthydra/core/catalog', f), 'utf8')) as {
-        id: string
-      }[]
-    ).map((e) => e.id)
-  expect(ids('generated-people.json')).toEqual(['person:expert-grace'])
-  expect(ids('generated-managers.json').sort()).toEqual(['person:ada', 'person:lin'])
-  const loaded = loadCatalog(join(home, '.agenthydra/core'))
-  expect(loaded.entries.has('person:expert-grace')).toBe(true)
-  expect(loaded.skipped).toEqual([])
-})
-
-const managerEntries = () =>
-  JSON.parse(
-    readFileSync(join(home, '.agenthydra/core/catalog/generated-managers.json'), 'utf8'),
-  ) as {
-    id: string
-    name: string
-    load: { path?: string }
-  }[]
-
-test('a manager in both homes is one entry, and the people copy wins', () => {
-  put('.agenthydra/people/manager/ada/persona.json', {
-    name: 'Ada From People',
-    oneLiner: 'People copy',
-  })
-  put('.agenthydra/managers/ada/persona.json', { name: 'Ada From Legacy', oneLiner: 'Legacy copy' })
-  expect(run().status).toBe(0)
-  const ada = managerEntries().filter((e) => e.id === 'person:ada')
-  expect(ada).toHaveLength(1)
-  expect(ada[0].name).toBe('Ada From People')
-})
-
-test('a legacy manager with no people copy keeps its legacy brief', () => {
-  put('.agenthydra/people/manager/ada/persona.json', { name: 'Ada', oneLiner: 'People copy' })
-  put('.agenthydra/managers/ada/brief.md', 'legacy brief')
-  put('.agenthydra/managers/lin/persona.json', { name: 'Lin', oneLiner: 'Legacy only' })
-  put('.agenthydra/managers/lin/brief.md', 'lin brief')
-  expect(run().status).toBe(0)
-  const byId = new Map(managerEntries().map((e) => [e.id, e]))
-  expect(byId.get('person:ada')?.load.path).toMatch(/\.agenthydra\/managers\/ada\/brief\.md$/)
-  expect(byId.get('person:lin')?.load.path).toMatch(/\.agenthydra\/managers\/lin\/brief\.md$/)
-})
-
-test('no person id appears twice across the generated catalog files', () => {
-  put('.agenthydra/people/manager/ada/persona.json', { name: 'Ada', oneLiner: 'People copy' })
-  put('.agenthydra/managers/ada/persona.json', { name: 'Ada', oneLiner: 'Legacy copy' })
-  put('.agenthydra/managers/lin/persona.json', { name: 'Lin', oneLiner: 'Legacy only' })
-  put('.agenthydra/people/expert/grace/persona.json', { name: 'Grace', oneLiner: 'Expert' })
-  expect(run().status).toBe(0)
-  const files = ['generated-managers.json', 'generated-people.json']
-  const ids = files.flatMap((f) =>
-    (
-      JSON.parse(readFileSync(join(home, '.agenthydra/core/catalog', f), 'utf8')) as {
-        id: string
-      }[]
-    ).map((e) => e.id),
+  put(
+    '.claude/skills/grace/SKILL.md',
+    '---\nname: grace\ndescription: Grace on compilers. What would Grace say?\n---\n',
   )
-  expect(ids.filter((id) => id.startsWith('person:')).sort()).toEqual([
-    'person:ada',
-    'person:expert-grace',
-    'person:lin',
-  ])
-})
-
-test('owner sources are read only from sources.json', () => {
+  put('.claude/skills/plain/SKILL.md', '---\nname: plain\ndescription: A plain skill.\n---\n')
   put('.agenthydra/core/catalog/sources.json', {
     ownerName: 'Example Owner',
     seats: [{ slug: 'owner-seat', name: 'Example Owner', personaId: 'p1' }],
     companyId: 'c1',
   })
   expect(run().status).toBe(0)
-  const owners = JSON.parse(
-    readFileSync(join(home, '.agenthydra/core/catalog/generated-owners.json'), 'utf8'),
-  ) as { id: string }[]
-  expect(owners.map((e) => e.id)).toContain('person:owner-seat')
+  for (const name of ['managers', 'people', 'boardroom', 'owners'])
+    expect(existsSync(catalogFile(`generated-${name}.json`))).toBe(false)
+  const skills = JSON.parse(readFileSync(catalogFile('generated-skills.json'), 'utf8')) as {
+    id: string
+  }[]
+  expect(skills.map((e) => e.id)).toEqual(['skill:plain'])
+})
+
+test('a rebuild removes the files of the sources that moved out and leaves the add-on file', () => {
+  for (const name of ['managers', 'boardroom', 'owners'])
+    put(`.agenthydra/core/catalog/generated-${name}.json`, '[]')
+  put('.agenthydra/core/catalog/generated-people.json', '[]')
+  expect(run().status).toBe(0)
+  for (const name of ['managers', 'boardroom', 'owners'])
+    expect(existsSync(catalogFile(`generated-${name}.json`))).toBe(false)
+  expect(existsSync(catalogFile('generated-people.json'))).toBe(true)
 })

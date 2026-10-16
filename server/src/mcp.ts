@@ -71,7 +71,6 @@ import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
-import { managerTools } from './mcp-managers'
 import { withOutputShaping } from './mcp-output'
 import { PRICECHECK_TOOLS } from './mcp-pricecheck'
 import { ROUTINES_TOOLS } from './mcp-routines'
@@ -1815,7 +1814,6 @@ export const TOOLS: HydraTool[] = [
   ...PRICECHECK_TOOLS,
   ...SUE_DREDD_TOOLS,
   ...PEOPLE_ADDON_TOOLS,
-  ...managerTools(),
   ...CORE_TOOLS,
   {
     name: 'archive_desktop_chat',

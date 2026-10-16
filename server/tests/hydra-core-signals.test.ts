@@ -194,8 +194,8 @@ test('A5-F10: core_stats counts questions asked and defaulted, pushback by chat,
   answer(dir, chat, { answer: 'myself' }, now)
   findTool(dir, { need: 'dashboard', chat }, now)
   findTool(dir, { need: 'nothing here zzz', chat }, now)
-  appendLog(dir, { event: 'president-block', chat }, now)
-  appendLog(dir, { event: 'president-block', chat }, now)
+  appendLog(dir, { event: 'block', chat, pushback: true }, now)
+  appendLog(dir, { event: 'block', chat, pushback: true }, now)
   appendLog(dir, { event: 'miss', id: 'person:iris-ui', need: 'x', why: 'none' }, now)
   const s = statsOf(dir) as Ev
   expect(s.questions).toMatchObject({

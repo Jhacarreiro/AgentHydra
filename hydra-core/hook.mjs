@@ -6,7 +6,6 @@ import {
   fstatSync,
   mkdirSync,
   openSync,
-  readdirSync,
   readFileSync,
   readSync,
   writeFileSync,
@@ -14,16 +13,15 @@ import {
 import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { loadAddon } from "./addon.mjs";
 
 export const EVENTS = new Set(["UserPromptSubmit", "SessionStart", "Stop"]);
+const APP_ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..");
 const LEAD_CAP = 20000;
 const TAIL_CHUNK = 1 << 20;
 const NAME_CAP = 60;
 export const PACK_TIMEOUT_MS = 1500;
-const OWNER_FALLBACK = /^person:(creaitor|seat-)/;
-const ASK_CREAITOR = /creaitor(?:\.py)?\s+ask\b/;
-const BLOCK_REASON =
-  'Before you ask the person, ask the owner tier (core_use { mode: "consult", id: "person:creaitor", question } or the creaitor.py ask command); ask the person only if that answer says it needs them (a credential, money, a physical step); otherwise act on the answer.';
+const PRESIDENT = path.join("people", "router", "president.mjs");
 
 export function coreDir(env = process.env) {
   return env.AGENTHYDRA_CORE_DIR || path.join(os.homedir(), ".agenthydra", "core");
@@ -373,68 +371,16 @@ function lastTurn(input) {
   return { text, tools };
 }
 
-export function asksQuestion(text) {
-  // Markdown headings are labels, not questions (the recap's "## Am I 100% done?" ends every reply).
-  const prose = text
-    .replace(/```[\s\S]*?```/g, "")
-    .replace(/`[^`\n]*`/g, "")
-    .replace(/^#{1,6}\s.*$/gm, "");
-  const paragraphs = prose
-    .split(/\n\s*\n/)
-    .map((paragraph) => paragraph.trim())
-    .filter(Boolean);
-  return /\?(?=\s|$)/.test(paragraphs.at(-1) ?? "");
-}
-
-function ownerIds(dir) {
-  const ids = new Set();
-  const catalog = path.join(dir, "catalog");
-  if (!existsSync(catalog)) return ids;
-  for (const name of readdirSync(catalog)) {
-    if (!/^(generated|hand)-.*\.json$/.test(name)) continue;
-    try {
-      for (const entry of JSON.parse(readFileSync(path.join(catalog, name), "utf8"))) {
-        if (entry?.kind === "person" && entry.tier === "owner" && typeof entry.id === "string") ids.add(entry.id);
-      }
-    } catch {}
-  }
-  return ids;
-}
-
-function isOwner(id, dir) {
-  const owners = ownerIds(dir);
-  return owners.size ? owners.has(id) : OWNER_FALLBACK.test(id);
-}
-
-function consults(tool, dir) {
-  const input = tool.input ?? {};
-  if (typeof tool.name === "string" && tool.name.endsWith("core_use")) {
-    return input.mode === "consult" && typeof input.id === "string" && isOwner(input.id, dir);
-  }
-  if (tool.name === "Bash" || tool.name === "PowerShell") return ASK_CREAITOR.test(String(input.command ?? ""));
-  return false;
-}
-
-function logBlock(input, env, dir) {
+// The president rule lives in the people add-on (people/router/president.mjs in the sue-dredd checkout); without that
+// checkout a Stop does nothing. Any failure to load or run it lets the stop through.
+async function presidentStop(input, env, dir) {
   try {
-    mkdirSync(dir, { recursive: true });
-    const chat = chatKey(input, env);
-    appendFileSync(path.join(dir, "log.jsonl"), `${JSON.stringify({ at: new Date().toISOString(), event: "president-block", chat })}\n`);
-  } catch {}
-}
-
-function stopCheck(input, env, dir) {
-  if (input.stop_hook_active === true) return null;
-  try {
-    if (!ownerIds(dir).size) return null;
-    const { text, tools } = lastTurn(input);
-    if (!asksQuestion(text)) return null;
-    if (tools.some((tool) => consults(tool, dir))) return null;
+    const president = await loadAddon(PRESIDENT, APP_ROOT, env);
+    if (!president) return null;
+    return president.stop(input, env, dir, { chatKey, lastTurn });
   } catch {
     return null;
   }
-  logBlock(input, env, dir);
-  return { decision: "block", reason: BLOCK_REASON };
 }
 
 export async function run(input, env = process.env) {
@@ -449,7 +395,7 @@ export async function run(input, env = process.env) {
   }
   if (event === "Stop") {
     logPackRead(input, env, dir);
-    return stopCheck(input, env, dir);
+    return presidentStop(input, env, dir);
   }
   const placement = placementOf(dir);
   if (placement === "slot" || placement === "file") {

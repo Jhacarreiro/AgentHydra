@@ -45,7 +45,6 @@ test('with the add-on loaded a chat takes its face from the add-on', async () =>
     name: 'Fake Lead',
     role: 'lead',
     photo: null,
-    persona: true,
   })
 })
 

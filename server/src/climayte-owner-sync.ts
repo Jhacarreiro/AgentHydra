@@ -49,7 +49,7 @@ import {
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
 import type { Hook } from './climayte-signal'
-import { inRepoPeople, type PeopleOpts, peopleAddon } from './people-host'
+import { peopleAddon } from './people-host'
 
 const STAMP = '.agenthydra-owner-sync.json'
 
@@ -451,38 +451,8 @@ export function forgetOwnerSync(): void {
   saidLeftOut.clear()
 }
 
-/** A command that runs Manager Hydra's router (managers/install.mjs writes `node "<repo>/managers/router.mjs"`). */
-const ROUTER_COMMAND = /[\\/]managers[\\/]router\.mjs"?\s*$/
-
-/** The owner's Manager Hydra router hook groups (UserPromptSubmit, a command running managers/router.mjs) from the
- *  settings.json in `ownerDir`, for a chat's own settings (climayte-launch.ts writeWorkerSettings): an account folder
- *  has settings of its own, so the owner's never reach a CliMayte chat, and the router picks which manager the
- *  chat is on every message. Only those groups: the owner's other hooks stay his. None when the file is missing or
- *  unreadable, and always without the people add-on (server/src/people-addon.ts). */
-export function ownerRouterHooks(ownerDir: string, addon?: PeopleOpts): Array<{ hooks: Hook[] }> {
-  const fromAddon = peopleAddon()?.routerHooks
-  if (fromAddon) return fromAddon(ownerDir)
-  if (!inRepoPeople(addon)) return []
-  let groups: unknown
-  try {
-    groups = (
-      JSON.parse(readFileSync(join(ownerDir, 'settings.json'), 'utf8')) as {
-        hooks?: { UserPromptSubmit?: unknown }
-      }
-    ).hooks?.UserPromptSubmit
-  } catch {
-    return []
-  }
-  if (!Array.isArray(groups)) return []
-  const out: Array<{ hooks: Hook[] }> = []
-  for (const group of groups) {
-    const hooks = (group as { hooks?: unknown } | null)?.hooks
-    if (!Array.isArray(hooks)) continue
-    const routers = hooks.filter(
-      (h): h is Hook =>
-        h?.type === 'command' && typeof h.command === 'string' && ROUTER_COMMAND.test(h.command),
-    )
-    if (routers.length) out.push({ hooks: routers })
-  }
-  return out
+/** The owner's Manager Hydra router hook groups for a chat's own settings (climayte-launch.ts writeWorkerSettings), from
+ *  the people add-on; none without it. */
+export function ownerRouterHooks(ownerDir: string): Array<{ hooks: Hook[] }> {
+  return peopleAddon()?.routerHooks?.(ownerDir) ?? []
 }
