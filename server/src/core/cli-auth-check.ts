@@ -242,14 +242,16 @@ export function createCliAuthChecker(deps: CheckDeps) {
         return failed('credentials_changed')
       const wall = deps.wall(id)
       if (
-        wall !== originalWall ||
-        (wall &&
+        (originalWall &&
           (!wallState ||
-            wall.reason !== wallState.reason ||
-            wall.until !== wallState.until ||
-            wall.cred !== wallState.cred))
+            originalWall.reason !== wallState.reason ||
+            originalWall.until !== wallState.until ||
+            originalWall.cred !== wallState.cred)) ||
+        (wall !== originalWall && !(wall === undefined && wallState?.reason === 'signed out'))
       )
         return failed('state_changed')
+      // A concurrent proof may already have removed this unchanged signed-out wall. The same
+      // verified grant succeeds idempotently; a replacement or another kind of wall never does.
       if (wall && (wall.reason === ORG_DISABLED_WALL || wall.reason === IDENTITY_WALL))
         return { ...result, ok: false, loggedIn: false, reason: 'account_restricted' }
       deps.verified?.(current, captured.token)

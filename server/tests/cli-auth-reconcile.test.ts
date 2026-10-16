@@ -316,6 +316,77 @@ test('a valid grant preserves organization, identity and quota walls', async () 
   }
 })
 
+test('overlapping checks accept the same cleared signed-out wall but preserve a replacement wall', async () => {
+  for (const replace of [false, true]) {
+    const f = fixture()
+    const releases: Array<(response: Response) => void> = []
+    const checker = createCliAuthChecker({
+      instance: () => f.state.instance && { ...f.state.instance },
+      wall: () => f.state.wall,
+      clearWall: () => {
+        f.state.cleared++
+        f.state.wall = undefined
+      },
+      verified: () => {
+        f.state.verified++
+      },
+      fetchProfile: async () =>
+        await new Promise<Response>((resolve) => {
+          releases.push(resolve)
+        }),
+    })
+    const first = checker('example-managed')
+    const second = checker('example-managed', EMAIL)
+    expect(releases).toHaveLength(2)
+    releases[0]!(profile())
+    expect(await first).toMatchObject({
+      ok: true,
+      loggedIn: true,
+      wallCleared: true,
+      reason: 'verified',
+    })
+    expect(f.state.cleared).toBe(1)
+    const replacement = { reason: 'signed out', until: 2, cred: statSync(f.file).mtimeMs }
+    if (replace) f.state.wall = replacement
+    releases[1]!(profile())
+    const result = await second
+    expect(result.wallCleared).toBe(false)
+    expect(f.state.cleared).toBe(1)
+    if (replace) {
+      expect(result.reason).toBe('state_changed')
+      expect(result.ok).toBe(false)
+      expect(f.state.wall).toBe(replacement)
+      expect(f.state.verified).toBe(1)
+    } else {
+      expect(result).toMatchObject({
+        ok: true,
+        loggedIn: true,
+        reason: 'verified',
+        email: EMAIL,
+        accountUuid: UUID,
+      })
+      expect(f.state.wall).toBeUndefined()
+      expect(f.state.verified).toBe(2)
+    }
+  }
+})
+
+test('removed restricted walls and mutated then removed signed-out walls still refuse stale proof', async () => {
+  for (const reason of ['session limit', ORG_DISABLED_WALL, IDENTITY_WALL, 'signed out']) {
+    const f = fixture()
+    f.state.wall!.reason = reason
+    const result = await f.check(async () => {
+      if (reason === 'signed out') f.state.wall!.cred++
+      f.state.wall = undefined
+      return profile()
+    })
+    expect(result.reason).toBe('state_changed')
+    expect(result.ok).toBe(false)
+    expect(f.state.cleared).toBe(0)
+    expect(f.state.verified).toBe(0)
+  }
+})
+
 test('one deadline bounds stalled headers and bodies, with no retries or late wall mutation', async () => {
   const f = fixture()
   let release: ((response: Response) => void) | undefined
