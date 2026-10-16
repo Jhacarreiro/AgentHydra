@@ -42,11 +42,13 @@ import atexit
 import contextlib
 import contextvars
 import datetime as dt
+import functools
 import json
 import math
 import os
 import random
 import re
+import ssl
 import threading
 import time
 from collections.abc import Collection
@@ -852,22 +854,26 @@ class KeyPool:
         the key out then, neither sooner nor a day later."""
         with self._locked() as tx:
             self._load(force=True, tx=tx)
-            now = time.time()
-            e = dict(self._entry(key))
-            # A strike is a NEW failure. A probe that reads "still empty" on a key already disabled is the same
-            # failure seen again, and counting it would turn every disabled key "dead" after three probes.
-            if not self._parked(key, now):
-                e["strikes"] = int(e.get("strikes") or 0) + 1
-            e["status"] = status
-            e["balance_usd"] = balance_usd if balance_usd is not None else min(0.0, float(e.get("balance_usd") or 0.0))
-            e["balance_at"] = now
-            e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
-            self._disable_entry(e, OUT_OF_CREDIT, status=status, now=now, free_ok=free_ok)
-            if until is not None:
-                e["disabled_until"] = until
-            else:
-                e.pop("disabled_until", None)  # the latest verdict wins: a later 402 names no date
-            self._put(tx, key, e)
+            self._broke(tx, key, time.time(), status, balance_usd, free_ok, until)
+
+    def _broke(self, tx, key: str, now: float, status: int | None, balance_usd: float | None, free_ok: bool | None,
+               until: float | None = None) -> None:
+        """broke's change to one key's record, inside the caller's write transaction."""
+        e = dict(self._entry(key))
+        # A strike is a NEW failure. A probe that reads "still empty" on a key already disabled is the same
+        # failure seen again, and counting it would turn every disabled key "dead" after three probes.
+        if not self._parked(key, now):
+            e["strikes"] = int(e.get("strikes") or 0) + 1
+        e["status"] = status
+        e["balance_usd"] = balance_usd if balance_usd is not None else min(0.0, float(e.get("balance_usd") or 0.0))
+        e["balance_at"] = now
+        e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
+        self._disable_entry(e, OUT_OF_CREDIT, status=status, now=now, free_ok=free_ok)
+        if until is not None:
+            e["disabled_until"] = until
+        else:
+            e.pop("disabled_until", None)  # the latest verdict wins: a later 402 names no date
+        self._put(tx, key, e)
 
     def disable(self, key: str, reason: str = "disabled by hand", status: int | None = None) -> None:
         """Put a key in the disabled slot outright (the `hswarm keys disable` path)."""
@@ -967,28 +973,38 @@ class KeyPool:
         Not usable: disabled. An unknown reading (None, None) is a probe that learned nothing: it stamps the time
         so the pool does not ask again inside the window, and leaves the key's record, its disabling and its last
         balance alone. Returns whether the key is usable now."""
-        usable = available if available is not None else (usd is None or usd > 0.0)
-        if not usable and self.balance_authority == "reading":
-            self.broke(key, status=402, balance_usd=usd, free_ok=bool(free_left))
-            return False
-        learned = available is not None or usd is not None
+        return self.note_balances([(key, usd, available, free_left)])[0]
+
+    def note_balances(self, readings: list[tuple[str, float | None, bool | None, int | None]]) -> list[bool]:
+        """note_balance for each (key, usd, available, free_left), all in ONE write transaction; whether each key is
+        usable now, in order. A probe of every key wrote one transaction per key on the shared server's event loop,
+        and a doctor's were most of the stack dumps taken while GET /health waited (2026-10-16)."""
+        out: list[bool] = []
         with self._locked() as tx:
             self._load(force=True, tx=tx)
             now = time.time()
-            e = dict(self._entry(key))
-            if learned and usable:
-                # A positive reading clears rest, strikes and disabling; the key's region stays.
-                e = {"balance_usd": usd, "balance_at": now, **({"base_url": e["base_url"]} if e.get("base_url") else {})}
-            else:
-                # Either the probe learned nothing, or it read an empty balance for a provider whose number is not
-                # authority (OpenRouter). Keep the reading for the report, keep the disabling as it stands.
-                e["probed_at"] = now
-                if learned:
-                    e["balance_usd"], e["balance_at"] = usd, now
-            if free_left is not None:
-                e["free_left"] = int(free_left)
-            self._put(tx, key, e)
-        return not self._parked(key, now)
+            for key, usd, available, free_left in readings:
+                usable = available if available is not None else (usd is None or usd > 0.0)
+                if not usable and self.balance_authority == "reading":
+                    self._broke(tx, key, now, 402, usd, bool(free_left))
+                    out.append(False)
+                    continue
+                learned = available is not None or usd is not None
+                e = dict(self._entry(key))
+                if learned and usable:
+                    # A positive reading clears rest, strikes and disabling; the key's region stays.
+                    e = {"balance_usd": usd, "balance_at": now, **({"base_url": e["base_url"]} if e.get("base_url") else {})}
+                else:
+                    # Either the probe learned nothing, or it read an empty balance for a provider whose number is not
+                    # authority (OpenRouter). Keep the reading for the report, keep the disabling as it stands.
+                    e["probed_at"] = now
+                    if learned:
+                        e["balance_usd"], e["balance_at"] = usd, now
+                if free_left is not None:
+                    e["free_left"] = int(free_left)
+                self._put(tx, key, e)
+                out.append(not self._parked(key, now))
+        return out
 
     def stale_keys(self, max_age_s: float = BALANCE_FRESH_S, disabled_age_s: float = DISABLED_RECHECK_S) -> list[str]:
         """The keys whose balance has not been read within their window: never, or too long ago. A probe that
@@ -1245,6 +1261,14 @@ async def find_region(http: httpx.AsyncClient, pool: KeyPool, key: str, refused:
     return found
 
 
+@functools.cache
+def tls() -> ssl.SSLContext:
+    """The one TLS context every HTTP client in the process verifies with (`verify=tls()`). Without it httpx builds one
+    per client and loads the CA bundle into it: about 60 ms on the shared server's event loop for each new client, 38
+    of them in its first hswarm_doctor and one per decide (2026-10-16). A context serves any number of clients."""
+    return httpx.create_ssl_context()
+
+
 class ChatClient:
     """One provider's chat endpoint. `DeepSeekClient` is the same class under its older name."""
 
@@ -1272,6 +1296,7 @@ class ChatClient:
             headers={"Content-Type": "application/json"},
             timeout=httpx.Timeout(timeout_s, connect=30.0, pool=None),
             limits=httpx.Limits(max_connections=max_connections, max_keepalive_connections=max_connections),
+            verify=tls(),
         )
         self.calls = 0
         self.retries = 0
@@ -1382,46 +1407,56 @@ class ChatClient:
         The reading is ACTED on: a key at or under zero is parked and one above zero is cleared. (Until
         2026-09-16 a key that merely ANSWERED the balance endpoint was cleared, so every `doctor` run put the
         empty keys back into rotation and the next worker died of 402 on one of them.)
+        The readings are written once every GET has answered, in one transaction (note_balances).
         """
         wanted = None if keys is None else set(keys)
         pairs = [(k, st) for k, st in zip(self.pool.keys, self.pool.status()) if wanted is None or k in wanted]
         gate = asyncio.Semaphore(PROBE_WIDTH)
 
-        async def one(k: str, st: dict) -> dict:
+        async def one(k: str, st: dict) -> tuple[dict, tuple | None]:
             async with gate:
                 return await self._balance_row(k, st)
 
-        return list(await asyncio.gather(*(one(k, st) for k, st in pairs)))
+        done = await asyncio.gather(*(one(k, st) for k, st in pairs))
+        readings = [(k, *reading) for (k, _), (_, reading) in zip(pairs, done) if reading is not None]
+        usable = iter(self.pool.note_balances(readings) if readings else ())
+        for row, reading in done:
+            if reading is not None:
+                row["usable"] = next(usable)
+        return [row for row, _ in done]
 
-    async def _balance_row(self, k: str, st: dict) -> dict:
+    async def _balance_row(self, k: str, st: dict) -> tuple[dict, tuple | None]:
+        """One key's row, and the reading (usd, available, free_left) balances() records for it; None when the
+        provider refused the key and that is recorded here already."""
         row: dict = {"fingerprint": config.fingerprint(k), "strikes": st["strikes"], "dead": st["dead"], "resting_s": st["resting_s"],
                      "state": st["state"], "disabled": st["disabled"], "disabled_reason": st["disabled_reason"]}
-        if self.spec.get("balance_path"):
-            try:
-                body = await self.get_json(self.spec["balance_path"], key=k)
-                free_left = openrouter_free_left(body) if self.provider == "openrouter" else None
-                body = await self._merge_credits(body, k)
-                row["balance"] = body
-                usd, available = balance_reading(body, self.provider)
-                row["credit_usd"], row["free_left"] = usd, free_left
-                row["usable"] = self.pool.note_balance(k, usd, available, free_left=free_left)
-                if usd is not None and usd <= 0 and self.pool.balance_authority == "status":
-                    # Reported, not acted on: this provider's number is not its word on whether it will serve the key.
-                    row["note"] = f"credit reads {usd:.4f}, which {self.provider} does not treat as out of credit; only a 402 disables"
-            except ApiError as e:
-                row["error"] = f"{type(e).__name__}: {e}"[:160]
-                if e.status == 402 or key_limit_spent(e.body):
-                    self.pool.broke(k, status=e.status)
-                    row["usable"] = False
-                elif e.status in DEAD_KEY_STATUS:
-                    self.pool.rest(k, 0, status=e.status, dead=True, gone=account_gone(e.body))
-                    row["usable"] = False
-                else:
-                    row["usable"] = self.pool.note_balance(k, None, None)  # the endpoint failed: a probe that learned nothing
-            except Exception as e:  # noqa: BLE001 - a dead key is reported, not fatal
-                row["error"] = f"{type(e).__name__}: {e}"[:160]
-                row["usable"] = self.pool.note_balance(k, None, None)
-        return row
+        if not self.spec.get("balance_path"):
+            return row, None
+        try:
+            body = await self.get_json(self.spec["balance_path"], key=k)
+            free_left = openrouter_free_left(body) if self.provider == "openrouter" else None
+            body = await self._merge_credits(body, k)
+            row["balance"] = body
+            usd, available = balance_reading(body, self.provider)
+            row["credit_usd"], row["free_left"] = usd, free_left
+            if usd is not None and usd <= 0 and self.pool.balance_authority == "status":
+                # Reported, not acted on: this provider's number is not its word on whether it will serve the key.
+                row["note"] = f"credit reads {usd:.4f}, which {self.provider} does not treat as out of credit; only a 402 disables"
+            return row, (usd, available, free_left)
+        except ApiError as e:
+            row["error"] = f"{type(e).__name__}: {e}"[:160]
+            if e.status == 402 or key_limit_spent(e.body):
+                self.pool.broke(k, status=e.status)
+                row["usable"] = False
+            elif e.status in DEAD_KEY_STATUS:
+                self.pool.rest(k, 0, status=e.status, dead=True, gone=account_gone(e.body))
+                row["usable"] = False
+            else:
+                return row, (None, None, None)  # the endpoint failed: a probe that learned nothing
+        except Exception as e:  # noqa: BLE001 - a dead key is reported, not fatal
+            row["error"] = f"{type(e).__name__}: {e}"[:160]
+            return row, (None, None, None)
+        return row, None
 
     async def _merge_credits(self, body: dict, key: str) -> dict:
         """OpenRouter's /key answers about the KEY (its spending limit, its free-tier allowance) and its /credits

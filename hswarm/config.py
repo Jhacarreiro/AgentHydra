@@ -20,6 +20,7 @@ import json
 import os
 import re
 import sys
+import threading
 import time
 import tomllib
 from pathlib import Path
@@ -653,29 +654,36 @@ def _reset() -> None:
         _add_provider(name, doc, user=False)
 
 
+# reload() empties the registry's tables and fills them again in place (other modules hold them by reference), so a
+# thread reading them meanwhile would see them half built. reload() holds this lock; so does a reader that runs off the
+# event loop and needs the registry whole (settings.snapshot).
+RELOAD_LOCK = threading.RLock()
+
+
 def reload() -> None:
     """Rebuild the registry: the shipped provider files, then the generated catalogue (`hswarm models --refresh`),
     then the user's provider files and settings.toml. Order is the point: a price a person wrote outlives the next
     refresh. Called at import; tests call it too."""
     global _LOADED
-    stamp = _stamp()  # taken before the reads: a change landing mid-read shows up as a new stamp next refresh()
-    _reset()
-    for name, spec in (_read_json(CATALOGUE_FILE).get("models") or {}).items():
-        if isinstance(spec, dict) and spec.get("provider") in PROVIDERS:
-            MODELS[str(name).strip().lower()] = spec
-    for cache in (_LAST_GOOD, _KEYS_READ):  # a file that is gone takes what it last said with it
-        for path in [p for p in cache if not Path(p).exists()]:
-            del cache[path]
-    for f in sorted(PROVIDERS_DIR.glob("*.toml")):
-        if not NAME_RX.match(f.stem.lower()):
-            print(f"[hswarm] {f.name}: not a provider name; ignoring it", file=sys.stderr)
-            continue
-        _add_provider(f.stem.lower(), _user_doc(f), user=True)
-    _apply_settings(_user_doc(SETTINGS_FILE))
-    _inherit()
-    _LOADED = stamp
-    from . import redaction  # the exact-value key scrub rebuilds its set from the keys this reload can see
-    redaction.forget_keys()
+    with RELOAD_LOCK:
+        stamp = _stamp()  # taken before the reads: a change landing mid-read shows up as a new stamp next refresh()
+        _reset()
+        for name, spec in (_read_json(CATALOGUE_FILE).get("models") or {}).items():
+            if isinstance(spec, dict) and spec.get("provider") in PROVIDERS:
+                MODELS[str(name).strip().lower()] = spec
+        for cache in (_LAST_GOOD, _KEYS_READ):  # a file that is gone takes what it last said with it
+            for path in [p for p in cache if not Path(p).exists()]:
+                del cache[path]
+        for f in sorted(PROVIDERS_DIR.glob("*.toml")):
+            if not NAME_RX.match(f.stem.lower()):
+                print(f"[hswarm] {f.name}: not a provider name; ignoring it", file=sys.stderr)
+                continue
+            _add_provider(f.stem.lower(), _user_doc(f), user=True)
+        _apply_settings(_user_doc(SETTINGS_FILE))
+        _inherit()
+        _LOADED = stamp
+        from . import redaction  # the exact-value key scrub rebuilds its set from the keys this reload can see
+        redaction.forget_keys()
 
 
 def _stamp() -> tuple:

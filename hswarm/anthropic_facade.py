@@ -376,8 +376,10 @@ class Facade:
         self._conns: set[asyncio.Task] = set()
 
     async def __aenter__(self) -> "Facade":
+        from .client import tls
+
         self._http = httpx.AsyncClient(base_url=self.spec["base_url"], transport=self._transport,
-                                       timeout=httpx.Timeout(UPSTREAM_READ_S, connect=30.0))
+                                       timeout=httpx.Timeout(UPSTREAM_READ_S, connect=30.0), verify=tls())
         self._server = await asyncio.start_server(self._serve, "127.0.0.1", 0)
         self.url = f"http://127.0.0.1:{self._server.sockets[0].getsockname()[1]}"
         return self

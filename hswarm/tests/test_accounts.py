@@ -102,6 +102,25 @@ def test_sessions_fold_onto_accounts_and_only_the_ones_that_worked_are_costed(hy
     assert accounts.day_plan_usd({}) is None  # nothing known is not measured, never zero
 
 
+def test_a_session_the_accounts_do_not_know_reads_them_again_once_a_window_not_once_a_line(hydra, monkeypatch):
+    """Every ledger line looks its caller's account up, and a session the cache did not know read AgentHydra's session
+    table and caches again for each line: about 12 ms a line on the shared server's event loop (2026-10-16)."""
+    monkeypatch.setattr(utilization, "_rechecked", {})
+    reads = []
+    real = accounts.session_instances
+    monkeypatch.setattr(accounts, "session_instances", lambda: reads.append(1) or real())
+    accounts.resolver()
+    reads.clear()
+    assert [utilization.caller_account({"session_id": "sess-new"}) for _ in range(20)] == [""] * 20
+    assert len(reads) == 1
+    db = sqlite3.connect(hydra / "data" / "agenthydra.db")  # AgentHydra's scan reaches the new session
+    db.execute("INSERT INTO session_stats (session_key, session_id, instance) VALUES ('k4', 'sess-new', 'five')")
+    db.commit()
+    db.close()
+    monkeypatch.setattr(utilization, "SESSION_RECHECK_S", 0.0)  # its window has passed: the next line reads again
+    assert utilization.caller_account({"session_id": "sess-new"}) == accounts.account_id(UUID_B)
+
+
 def test_plan_json_overrides_prices_and_can_be_one_flat_figure(hydra):
     config.HOME.mkdir(parents=True, exist_ok=True)
     (config.HOME / "plan.json").write_text(json.dumps({"tier_usd_month": {"max_20x": 250}}), encoding="utf-8")

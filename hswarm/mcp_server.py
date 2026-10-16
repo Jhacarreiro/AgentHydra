@@ -661,7 +661,7 @@ async def hswarm_keys(action: str = "list", fingerprint: str | None = None, prov
     from . import keys as keymod
 
     if action == "list":
-        return keymod.report(provider, verbose=verbose)
+        return await asyncio.to_thread(keymod.report, provider, verbose=verbose)
     if action == "probe":
         return await keymod.probe(provider)
     if action in ("enable", "disable"):

@@ -376,7 +376,7 @@ def test_a_disabled_key_is_re_read_only_on_its_long_window_and_a_top_up_still_he
     assert not c.pool.status()[0]["disabled"] and c.pool.available() == 3
 
 
-def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order():
+def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order(monkeypatch):
     flight = {"now": 0, "peak": 0}
 
     async def handler(req: httpx.Request):
@@ -387,10 +387,17 @@ def test_a_probe_reads_every_key_at_once_and_keeps_the_pool_order():
         return _balance("-1.00", available=False) if _key_of(req) == K[1] else _balance("2.00")
 
     c = _client_with_transport(handler)
+    writes = []
+    real = keystate.txn
+    monkeypatch.setattr(keystate, "txn", lambda: writes.append(1) or real())
     rows = asyncio.run(c.balances())
     assert flight["peak"] == 3, flight  # one by one, sixteen real keys took 7 s
+    # Every reading in one write: one per key held the shared server's event loop for most of a doctor (2026-10-16).
+    assert len(writes) == 1
     assert [r["fingerprint"] for r in rows] == [config.fingerprint(k) for k in K]
     assert [r["usable"] for r in rows] == [True, False, True]
+    st = KeyPool(K).status()
+    assert [s["disabled"] for s in st] == [False, True, False] and st[0]["balance_usd"] == 2.0
     assert [r["fingerprint"] for r in asyncio.run(c.balances([K[2]]))] == [config.fingerprint(K[2])]
 
 
@@ -486,6 +493,44 @@ def test_pools_in_one_process_read_each_row_from_the_database_once(monkeypatch):
     fetched.clear()
     assert all(p.status()[0]["strikes"] == 2 for p in pools)  # every pool sees the burst...
     assert 500 <= sum(map(len, fetched)) < 1000  # ...read from the database once
+
+
+def test_a_pool_nobody_holds_is_freed_once_its_queued_writes_are_out():
+    """The process kept every KeyPool it ever built so a queued write would be flushed at exit, and the shared server
+    builds dozens per doctor and per console read: its RSS reached 1.25 GB (2026-10-16). A pool is kept only while
+    it has a write queued."""
+    import gc
+    import weakref
+
+    p = KeyPool(K)
+    p.rest(K[0], 60.0, status=429)  # the first rest after a quiet spell is written at once
+    p.rest(K[1], 60.0, status=429)  # the next one waits for the process's merged write
+    pool = weakref.ref(p)
+    del p
+    gc.collect()
+    assert pool() is not None  # its owner let go, but its queued rest still has to be written
+    pool().flush()
+    assert {config.fingerprint(K[0]), config.fingerprint(K[1])} <= set(keystate.read_all())
+    gc.collect()
+    assert pool() is None
+
+
+def test_the_keys_list_is_read_off_the_event_loop(monkeypatch):
+    """hswarm_keys list reads every provider's pool, 0.3 s for 45 of them, and ran on the shared server's event loop,
+    where GET /health waited for it (2026-10-16)."""
+    import threading
+
+    from hswarm import keys, mcp_server
+
+    read_on = []
+    monkeypatch.setattr(keys, "report", lambda *a, **kw: read_on.append(threading.get_ident()) or {"providers": {}})
+
+    async def listed():
+        assert await mcp_server.hswarm_keys() == {"providers": {}}
+        return threading.get_ident()
+
+    loop_thread = asyncio.run(listed())
+    assert read_on and read_on != [loop_thread]
 
 
 def test_a_failed_probe_counts_as_a_probe_and_leaves_every_record_alone():
