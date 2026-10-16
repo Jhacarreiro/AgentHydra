@@ -606,6 +606,7 @@ stable interface and must not be assumed by product logic.
 | `AGENTHYDRA_CODEX_HUB_HEADERS` | unset | JSON object of extra headers for each push, e.g. a Cloudflare Access service token in front of the hub |
 | `AGENTHYDRA_CODEX_HUB_INTERVAL_MIN` | `2` | minutes between pushes |
 | `AGENTHYDRA_CODEX_HUB_RELAY` | `ask` | on a pushing PC: `ask` lets the hub continue this PC's chats with approvals and the sandbox on, `full` also without them (Desk's bypass mode), `off` keeps the relay closed |
+| `AGENTHYDRA_CODEX_HUB_UPDATE` | on | on a PC running the compiled pusher: `off` keeps the installed build instead of following the hub's |
 | `AGENTHYDRA_HOOKS_CONFIG` | `$CLAUDE_CONFIG_DIR/settings.json` or [`~/.claude/settings.json`](CLAUDE-CONFIG-LAYOUT.md) | Claude Code settings file the opt-in agent-status hooks are written to (`status_hooks`) |
 | `AGENTHYDRA_OPENCODE_DB` | `~/.local/share/opencode/opencode.db` | OpenCode CLI/Desktop SQLite session store |
 | `AGENTHYDRA_BOOT_DEADLINE_MS` | `120000` (full daemon) / `30000` (`--instances`) | startup-liveness watchdog deadline; if boot hasn't reached a bound port by then, the process logs its last-known phase and exits `87` for the supervisor to restart it (see `server/src/boot-watchdog.ts`) |
@@ -892,6 +893,16 @@ on the hub can rename or archive a chat on its PC.
   a PC that does not run the daemon can run `bun server/src/codex-hub-push-main.ts` (`--once` for one
   round). The first push sends every rollout, later ones only what changed; a chat archived or deleted
   on the PC leaves the hub at its next push. Add PCs by repeating this on each with its own name.
+- **Pusher updates:** a PC without Bun runs the pusher compiled (`bun build --compile
+  server/src/codex-hub-push-main.ts`, `codex-hub-push.exe`), and that build follows the hub's: put the new
+  build at `<config dir>/codex-hub/.pusher/codex-hub-push.exe` on the hub, and each pusher compares its own
+  file with it (`GET /api/codex-hub/pusher`, its SHA-256 and size; `/download`, the file; same token) when it
+  starts and every six hours. A different build is downloaded beside it, checked against that hash, and
+  started once with `--version`; only a build that starts replaces the running one, leaving the previous file
+  as `.old` until the next start. The pusher then exits and the new build takes over: started with the same
+  arguments, or on Windows by the scheduled task that runs the pusher, so that task should repeat every few
+  minutes with one instance at a time. The PC trusts the hub with its
+  build as it already does with relay turns; `AGENTHYDRA_CODEX_HUB_UPDATE=off` keeps the installed one.
 
 ### Usage across PCs (`POST /api/kit/sync`)
 
