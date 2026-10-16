@@ -212,6 +212,18 @@ export function roleOf(w: {
   return w.desk?.manager ? 'seat' : 'prime'
 }
 
+/** A Hydra Core seat: a chat sat as a catalog persona under a Prime (climayte.ts seatTask), whose Prime sums it up
+ *  with the time left, so it estimates each message (SEAT_ETA_INSTRUCTION). A Desk chat pinned to a manager is a
+ *  seat by roleOf too, but has no persona and no Prime above it to show an estimate. */
+export function isCoreSeat(w: {
+  role?: CliMayteRole
+  chat?: boolean
+  desk?: { manager?: string }
+  persona?: string
+}): boolean {
+  return w.chat === true && !!w.persona && roleOf(w) === 'seat'
+}
+
 export const DRONE_REFUSAL =
   'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
 

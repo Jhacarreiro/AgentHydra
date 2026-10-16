@@ -84,7 +84,8 @@ describe('seatsOf: the parent chat sums up the seats it opened', () => {
     worker('w1', 'unrelated-session', { eta: { minutes: 40, at: NOW - 10 * MIN, tookS: null } }), // listed in Ava's workerIds
     worker('w2', 's-ava', { eta: { minutes: 90, at: NOW - 20 * MIN, tookS: null } }), // started from Ava's session
     worker('w3', 's-ava', { status: 'done', active: false, eta: { minutes: 600, at: NOW - 60 * MIN, tookS: 900 } }), // finished
-    worker('own-leo', 's-leo', { chat: true }), // the worker Leo's chat runs as is the seat, not an agent it started
+    // The worker Leo's chat runs as is the seat, not an agent it started; its own estimate (100 min, said 10 min ago) counts.
+    worker('own-leo', 's-leo', { chat: true, eta: { minutes: 100, at: NOW - 10 * MIN, tookS: null } }),
     worker('w4', 's-prime') // the parent's own worker belongs to its tasks line
   ]
 
@@ -96,8 +97,8 @@ describe('seatsOf: the parent chat sums up the seats it opened', () => {
       ['working', ['Ava', 'Leo']]
     ])
     expect(s.agents).toBe(2)
-    // w2's 90 min from 20 min ago outlasts w1's; the finished w3 no longer counts.
-    expect(seatsLabel(s, NOW)).toBe('4 seats · Mia needs you · Ava, Leo working · 2 agents running · about 1 h 10 min left')
+    // Leo's own 100 min from 10 min ago outlasts w2's 90 from 20 min ago and w1's; the finished w3 no longer counts.
+    expect(seatsLabel(s, NOW)).toBe('4 seats · Mia needs you · Ava, Leo working · 2 agents running · about 1 h 30 min left')
   })
 
   test('without an estimate it says how long the working seats have been at it', () => {

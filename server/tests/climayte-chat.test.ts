@@ -18,6 +18,7 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
+import { SEAT_ETA_INSTRUCTION } from '../src/climayte-eta'
 import {
   CHAT_NOTE,
   cliArgv,
@@ -25,7 +26,13 @@ import {
   writeWorkerMcp,
   writeWorkerSettings,
 } from '../src/climayte-launch'
-import { type CliMayteAccount, DRONE_BRIEF, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
+import {
+  type CliMayteAccount,
+  type CliMayteWorker,
+  DRONE_BRIEF,
+  LIGHT_BRIEF,
+  WORKER_BRIEF,
+} from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -102,6 +109,22 @@ describe('chat workers', () => {
     expect(prompt.startsWith(CHAT_NOTE)).toBe(true)
     expect(prompt).toContain(OWNER_RULES)
     expect(prompt).not.toContain('a CliMayte worker')
+  })
+
+  test("a Hydra Core seat's prompt asks for an ETA line each message; a Prime's and a manager chat's do not", () => {
+    const prime = dispatch({ title: 'a prime chat', chat: true })
+    const promptOf = (w: CliMayteWorker) =>
+      readFileSync(
+        valueAfter(cliArgv(w, 'sid', false, 'hooks.json', null), '--append-system-prompt-file') ??
+          '',
+        'utf8',
+      )
+    expect(promptOf(prime)).not.toContain(SEAT_ETA_INSTRUCTION)
+    expect(promptOf({ ...prime, role: 'seat', persona: 'person:example' })).toContain(
+      SEAT_ETA_INSTRUCTION,
+    )
+    // A Desk chat pinned to a manager is a seat by roleOf, but no Prime shows its estimate: no persona, no line.
+    expect(promptOf({ ...prime, role: 'seat' })).not.toContain(SEAT_ETA_INSTRUCTION)
   })
 
   test("a Desk chat's add-ons: its servers (the owner's of a name win) and its append, once", () => {

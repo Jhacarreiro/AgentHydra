@@ -29,7 +29,8 @@ export interface SeatsSummary {
   groups: SeatGroup[]
   /** The CliMayte workers the seats started that are still active (each seat's own worker left out). */
   agents: number
-  /** When the latest still-working estimate among those workers runs out (epoch ms); null when none gave one. */
+  /** When the latest still-working estimate runs out (epoch ms), among those workers and the seats themselves (a Hydra
+   *  Core seat writes an `ETA:` line for each message, the daemon's SEAT_ETA_INSTRUCTION); null when none gave one. */
   etaEndsAt: number | null
   /** When the earliest working seat began: its turn, or its oldest active worker; null when none works. */
   since: number | null
@@ -73,12 +74,14 @@ export function seatsOf(parent: Pick<ChatSummary, 'id' | 'archived'>, chats: rea
   })
   const started = kids.map((c) => ({ c, ws: chatWorkers([...workers], c.sessionId, c.workerIds).filter((w) => w.active && w.id !== c.workerId) }))
   const live = started.flatMap((s) => s.ws)
+  // The worker each seat runs as: its own estimate for the message it is on.
+  const own = workers.filter((w) => kids.some((c) => c.workerId === w.id))
   const working = started.filter((s) => stateOf(s.c) === 'working')
   return {
     total: kids.length,
     groups,
     agents: live.length,
-    etaEndsAt: maxOf(live.map(etaEnd)),
+    etaEndsAt: maxOf([...live, ...own].map(etaEnd)),
     since: minOf(working.flatMap((s) => [s.c.turnStartedAt, ...s.ws.map((w) => w.startedAt)]))
   }
 }
