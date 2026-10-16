@@ -8,10 +8,11 @@
 // own API-error events, an errored terminal `result`, or stderr are evidence of a wall. Model prose
 // and tool output never are, or a worker that merely TALKS about a session limit gets walled.
 
-import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
+import { cpSync, existsSync, mkdirSync, readdirSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { type DoingKind, doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
+import { firstRequestFromFile } from './climayte-first-request'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
 import type { CliMayteOrigin } from './climayte-ping'
 import {
@@ -38,7 +39,7 @@ import {
   isApiErrorEvent,
   limitEventText,
 } from './rate-limit-signal'
-import { contextOf, parseUsageLine, readTurnUsage } from './usage-tokens'
+import { contextOf, readTurnUsage } from './usage-tokens'
 
 export type CliMayteStatus =
   | 'queued'
@@ -1578,7 +1579,7 @@ export function attemptSpend(
   // The kit has no per-call read, so the first request is the one thing still read from the file.
   let first: CliMayteTokens | null = null
   try {
-    first = firstRequest(readFileSync(files[0] as string, 'utf8'), startedAt, endedAt)
+    first = firstRequestFromFile(files[0] as string, startedAt, endedAt)
   } catch {
     // unreadable: no first request
   }
@@ -1623,17 +1624,6 @@ export interface AttemptSpend {
   /** True when the kit had ingested every transcript file of the attempt (kitHolds), so the figures
    *  are final. False: the sweep is behind and the attempt is charged again once it catches up. */
   settled: boolean
-}
-
-/** The first assistant request's usage in [startedAt, endedAt] of a transcript, or null. */
-function firstRequest(text: string, startedAt: number, endedAt: number): CliMayteTokens | null {
-  for (const line of text.split('\n')) {
-    const turn = parseUsageLine(line)
-    if (!turn || !(turn.ts >= startedAt && turn.ts <= endedAt)) continue
-    const u = turn.usage
-    return { input: u.input, output: u.output, cacheRead: u.cacheRead, cacheWrite: u.cacheCreation }
-  }
-  return null
 }
 
 /** Every `*.jsonl` under `dir`, at most `depth` folders down; none when it does not exist. */
