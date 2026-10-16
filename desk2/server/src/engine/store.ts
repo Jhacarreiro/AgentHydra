@@ -299,10 +299,10 @@ export class ChatStore {
       }
       const lines = from > 0 && cached ? cached.lines : new Map<string, string>()
       const end = chunk.lastIndexOf(0x0a) + 1
-      addLines(lines, chunk.toString('utf8', 0, end))
+      addLines(lines, chunk.toString('utf8', 0, end), true)
       // A last line with no newline yet may be a write in progress: counted if it parses, read again from its start next time.
       const tail = new Map<string, string>()
-      addLines(tail, chunk.toString('utf8', end))
+      addLines(tail, chunk.toString('utf8', end), true)
       cached = { size: st.size, mtimeMs: st.mtimeMs, offset: from + end, lines, tail }
     }
     // Most recently read last; the oldest entries go once there are more than the cap (a miss just reads the file again).
@@ -418,15 +418,27 @@ function readFrom(file: string, from: number, to: number): Buffer {
 }
 
 /** Each parsable item line in `text`, filed by id (a later line replaces an earlier one, keeping its place); a torn line is skipped. */
-function addLines(lines: Map<string, string>, text: string): void {
+function addLines(lines: Map<string, string>, text: string, detach = false): void {
+  if (!text) return
+  const updates = detach ? new Map<string, string>() : lines
   for (const line of text.split('\n')) {
     if (!line.trim()) continue
     try {
       const item = JSON.parse(line) as TranscriptItem
-      if (item && typeof item.id === 'string') lines.set(item.id, line)
+      if (item && typeof item.id === 'string') updates.set(item.id, line)
     } catch {
       // a torn line (crash mid-write): skip it
     }
+  }
+  if (detach) {
+    let kept = 0
+    for (const line of updates.values()) kept += line.length
+    // Long split lines can retain superseded versions from the same read. Copy
+    // final winners only when most text was discarded; unique reads need no
+    // string copies. Only UTF-8-decoded file chunks use this round-trip.
+    const copy = text.length > 2 * kept
+    for (const [id, line] of updates)
+      lines.set(id, copy ? Buffer.from(line, 'utf8').toString('utf8') : line)
   }
 }
 

@@ -1,7 +1,7 @@
 // Per-account token windows for the instance tables (docs/ANALYTICS-PLAN.md piece 9): what each
 // account has run in its current 5-hour window, its current week and all time, read from the kit.
 // Windows are cut by the one resolver in query.ts (the account's quota snapshot, else rolling). Each
-// account's 5h, week and all-time sums are one statement each: whole hours from the hourly rollup, raw
+// account's 5h, week and all-time sums share bounded statements with accounts at the same start: whole hours from the hourly rollup, raw
 // rows only for the partial start hour and the newest two hours (KitStore.readSplit). The answer is
 // reused until the store is written.
 import type { Database } from 'bun:sqlite'
@@ -18,57 +18,76 @@ const zero = (): TokenParts => ({ input: 0, output: 0, cacheRead: 0, cacheWrite:
 
 const HOUR_MS = 3_600_000
 const NEVER = 8.64e15
+const COHORT_SIZE = 4
 
 /**
  * Token sums per account from each account's own start to now: whole hours from the hourly rollup
  * (every hour below the first stale one), raw rows only for the partial hour at the start and for the
  * stale tail. Other PCs' imported hours (kit/sync.ts) have no raw rows here, so their stale-tail hours are
- * read from the rollup too. `starts` maps account to start; 0 reads all time. One statement per account
- * (an all-time sum over every hour of one account is tens of milliseconds, over all of them a few
- * hundred), and a step of the event loop between them when the caller is async.
+ * read from the rollup too. `starts` maps account to start; 0 reads all time. Accounts with the exact
+ * same start share a statement, at most COHORT_SIZE at once, and the async caller yields between
+ * cohorts. Each account's complete sum stays in SQLite; partial sums are never merged in JavaScript.
  */
 function* windowSums(
   db: Database,
   split: number,
   starts: Map<string, number>,
 ): Generator<void, Map<string, TokenParts>, void> {
-  const sql = `select sum(input) as input, sum(output) as output, sum(cache_read) as cache_read,
-      sum(cache_write) as cache_write from (
-        select h.input, h.output, h.cache_read, h.cache_write_5m + h.cache_write_1h as cache_write
-          from usage_hour h where h.account = $id and h.hour >= $fc and h.hour < $split
-        union all
-        select e.input, e.output, e.cache_read, e.cache_write_5m + e.cache_write_1h
-          from usage_event e where e.account = $id and e.ts >= $f and e.ts < $fc
-        union all
-        select e.input, e.output, e.cache_read, e.cache_write_5m + e.cache_write_1h
-          from usage_event e where e.account = $id and e.ts >= max($fc, $split)
-        union all
-        select h.input, h.output, h.cache_read, h.cache_write_5m + h.cache_write_1h
-          from usage_hour h where h.account = $id and h.hour >= max($fc, $split)
-            and h.pc in (select pc from imported_pc)
-      )`
-  const stmt = db.query(sql)
-  const out = new Map<string, TokenParts>()
+  const byStart = new Map<number, string[]>()
   for (const [id, from] of starts) {
-    const r = stmt.get({
-      $id: id,
-      $f: from,
-      $fc: Math.ceil(from / HOUR_MS) * HOUR_MS,
-      $split: split,
-    }) as Record<string, string | number | null>
-    yield
-    if (r.input === null) continue
-    const input = Number(r.input)
-    const output = Number(r.output)
-    const cacheRead = Number(r.cache_read)
-    const cacheWrite = Number(r.cache_write)
-    out.set(id, {
-      input,
-      output,
-      cacheRead,
-      cacheWrite,
-      total: input + output + cacheRead + cacheWrite,
-    })
+    const ids = byStart.get(from)
+    if (ids) ids.push(id)
+    else byStart.set(from, [id])
+  }
+  const out = new Map<string, TokenParts>()
+  for (const [from, ids] of byStart) {
+    for (let offset = 0; offset < ids.length; offset += COHORT_SIZE) {
+      const cohort = ids.slice(offset, offset + COHORT_SIZE)
+      const names = cohort.map((_, i) => `$a${i}`).join(', ')
+      const sql = `select account, sum(input) as input, sum(output) as output, sum(cache_read) as cache_read,
+      sum(cache_write) as cache_write from (
+        select h.account, h.input, h.output, h.cache_read, h.cache_write_5m + h.cache_write_1h as cache_write
+          from usage_hour h where h.account in (${names}) and h.hour >= $fc and h.hour < $split
+        union all
+        select e.account, e.input, e.output, e.cache_read, e.cache_write_5m + e.cache_write_1h
+          from usage_event e where e.account in (${names}) and e.ts >= $f and e.ts < $fc
+        union all
+        select e.account, e.input, e.output, e.cache_read, e.cache_write_5m + e.cache_write_1h
+          from usage_event e where e.account in (${names}) and e.ts >= max($fc, $split)
+        union all
+        select h.account, h.input, h.output, h.cache_read, h.cache_write_5m + h.cache_write_1h
+          from usage_hour h where h.account in (${names}) and h.hour >= max($fc, $split)
+            and h.pc in (select pc from imported_pc)
+      ) group by account`
+      const params: Record<string, string | number> = {
+        $f: from,
+        $fc: Math.ceil(from / HOUR_MS) * HOUR_MS,
+        $split: split,
+      }
+      for (let i = 0; i < cohort.length; i++) params[`$a${i}`] = cohort[i]!
+      const rows = db.query(sql).all(params) as Array<{
+        account: string
+        input: string | number | null
+        output: string | number | null
+        cache_read: string | number | null
+        cache_write: string | number | null
+      }>
+      yield
+      for (const r of rows) {
+        if (r.input === null) continue
+        const input = Number(r.input)
+        const output = Number(r.output)
+        const cacheRead = Number(r.cache_read)
+        const cacheWrite = Number(r.cache_write)
+        out.set(r.account, {
+          input,
+          output,
+          cacheRead,
+          cacheWrite,
+          total: input + output + cacheRead + cacheWrite,
+        })
+      }
+    }
   }
   return out
 }
@@ -126,7 +145,7 @@ export function accountTokenWindows(
   for (let r = steps.next(); ; r = steps.next()) if (r.done) return r.value
 }
 
-/** The same answer with a turn of the event loop between the per-account statements. */
+/** The same answer with a turn of the event loop between bounded account cohorts. */
 export async function accountTokenWindowsAsync(
   accounts: string[],
   opts: UsageQueryOpts = {},
