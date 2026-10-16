@@ -168,6 +168,12 @@ export function matches(
   )
 }
 
+function hasSession(w: CliMayteWorker, want: ReadonlySet<string>): boolean {
+  const current = w.sessionId
+  if (current && want.has(current)) return true
+  return w.sessions?.some((s) => !!s && want.has(s)) ?? false
+}
+
 /**
  * The workers these chat sessions dispatched: each whose origin is one of them, each a worker of theirs
  * dispatched (through any depth, cycle-safe), and each task of a wave whose manager is theirs (a wave's
@@ -198,9 +204,7 @@ export function dispatchedFrom(
     }
     if (w.origin?.kind === 'chat' && want.has(w.origin.sessionId)) seeds.push(w.id)
   }
-  for (const w of list)
-    if ([w.sessionId, ...(w.sessions ?? [])].some((s) => s && want.has(s)))
-      seeds.push(...(children.get(w.id) ?? []))
+  for (const w of list) if (hasSession(w, want)) seeds.push(...(children.get(w.id) ?? []))
   const mine = new Set<string>()
   for (let queue = seeds; queue.length; ) {
     const next: string[] = []
@@ -236,6 +240,21 @@ export interface CliMayteListFilter {
   all?: boolean
 }
 
+/** Membership is compiled for this synchronous read only. A later read sees every filter and
+ *  worker mutation; exported matches and wait subscriptions keep their ordinary live predicates. */
+function listMatcher(f: CliMayteListFilter): ((w: CliMayteWorker) => boolean) | null {
+  if (!f.ids && !f.sessions) return null
+  // A single id needs one comparison, so it gains nothing from building a Set.
+  const ids = f.ids && f.ids.length > 1 ? new Set(f.ids) : null
+  const sessions = f.sessions ? new Set(f.sessions) : null
+  return (w) =>
+    (!f.id || w.id === f.id) &&
+    (!f.ids || (ids ? ids.has(w.id) : f.ids.includes(w.id))) &&
+    (!sessions || hasSession(w, sessions)) &&
+    (!f.group || w.group === f.group) &&
+    (!f.active || isActive(w))
+}
+
 /** Who dispatched a worker, for the list and detail: a worker origin's session, and a chat origin's
  *  title as the queue pass last cached it (climayte-origin.ts). */
 const originLookup: OriginLookup = {
@@ -257,8 +276,9 @@ export function climayteList(
   load()
   const now = Date.now()
   const mine = filter.origin?.length ? dispatchedFrom(workers.values(), filter.origin) : null
+  const matchesRow = listMatcher(filter) ?? ((w: CliMayteWorker) => matches(w, filter))
   const recent = recentWorkers(
-    [...workers.values()].filter((w) => matches(w, filter) && (!mine || mine.has(w.id))),
+    [...workers.values()].filter(mine ? (w) => matchesRow(w) && mine.has(w.id) : matchesRow),
     filter.limit,
   )
   // An orchestrator's default list is what it may act on: live work and unjudged results. Judged

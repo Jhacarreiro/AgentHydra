@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Unchanged Claude folders reuse their transcript paths.** Refreshes avoid rebuilding the same absolute path strings while retaining directory relists, file checks and new or removed transcript detection.
+- **Large scoped CliMayte reads avoid repeated membership searches.** Account-history filters build their membership once per read and skip temporary session arrays. Ordering, live changes and waiting reads keep their existing behavior.
 - **CliMayte's compact history builds only the details it displays.** Large lists avoid constructing discarded attempt fields and copying attempt arrays, while full reports and fresh status reads keep their existing behavior.
 - **Free continuations inspect their selected history once.** Model selection and previous message IDs share one validated projection, which is released before the browser wait. MCP guidance also stops recommending legacy prewarming for automatic sends.
 - **Always-on helpers and the HSwarm server keep running when AgentHydra updates itself.** On Windows they used to end at every self-update restart, along with any request they were serving. The restarted AgentHydra now picks them up where they are, and a program that only shares a helper's port is left alone.

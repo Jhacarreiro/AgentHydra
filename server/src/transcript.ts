@@ -12,7 +12,7 @@ import { CLAUDE_PROJECTS_ROOT, DATA_DIR, OPENCODE_DB_PATH, REMOTE_CHATS_DIR } fr
 import { codexInstanceStores } from './core/codex-instances'
 import { readCodexTail } from './core/codex-transcript-lineage'
 import { dshInstanceStores } from './core/dsh-instances'
-import { walkFolderTree } from './core/folder-tree'
+import { type Folder, walkFolderTree } from './core/folder-tree'
 import { fsSlot } from './core/fs-slots'
 import { intern } from './core/intern'
 import { timeSlice } from './core/loop-yield'
@@ -585,22 +585,45 @@ async function scanRootGlobAsync(pattern: string, cwd: string): Promise<string[]
   return out
 }
 
+// Folder objects last only while their listing is current. Keep the canonical absolute paths
+// already held by the Claude stat cache, indexed by filename; relative paths remain sweep-local.
+const claudeFolderPaths = new WeakMap<Folder, string[]>()
+
 /** Async twin of {@link scanRootSync}, with the same "a missing root is an empty one" contract.
  *
  *  A single Bun glob scan held the loop ~270 ms on a 60,000-file Claude store, and scanning one
  *  folder at a time still did on a folder of 28,000 subagent files. So a `**` pattern is matched
  *  over the shared folder tree (core/folder-tree.ts), which is walked a level at a time with pooled
  *  calls and lists again only the folders whose mtime moved; the kit's Claude ingest reads the same
- *  tree. A pattern that does not start with `**` is scanned whole, as before. */
-async function scanRootAsync(pattern: string, cwd: string): Promise<string[]> {
-  if (!pattern.startsWith('**/')) return scanRootGlobAsync(pattern, cwd)
+ *  tree. A pattern that does not start with `**` is scanned whole, as before. Claude can request a
+ *  parallel array of paths, reused while each folder's listing is unchanged. */
+async function scanRootAsync(pattern: string, cwd: string, paths?: string[]): Promise<string[]> {
+  if (!pattern.startsWith('**/')) {
+    const rels = await scanRootGlobAsync(pattern, cwd)
+    if (paths) for (const rel of rels) paths.push(join(cwd, rel))
+    return rels
+  }
   const out: string[] = []
   const matches = nameMatcher(pattern)
-  for (const folder of (await walkFolderTree(cwd)).values())
-    for (const name of folder.files) {
+  for (const folder of (await walkFolderTree(cwd)).values()) {
+    let known = paths ? claudeFolderPaths.get(folder) : undefined
+    for (let i = 0; i < folder.files.length; i++) {
+      const name = folder.files[i] as string
       const rel = folder.rel ? `${folder.rel}/${name}` : name
-      if (matches(rel, name)) out.push(rel)
+      if (!matches(rel, name)) continue
+      out.push(rel)
+      // Re-intern a reused path so it stays canonical across the intern table's rotations.
+      if (paths) {
+        if (!known) {
+          known = new Array<string>(folder.files.length)
+          claudeFolderPaths.set(folder, known)
+        }
+        const path = intern(known[i] ?? join(cwd, rel))
+        known[i] = path
+        paths.push(path)
+      }
     }
+  }
   return out
 }
 
@@ -1383,7 +1406,8 @@ async function buildClaudeRecordsAsync(
   statSeen: Set<string>,
 ): Promise<void> {
   for (const store of claudeStores()) {
-    const claudeRels = await scanRootAsync(store.glob, store.root)
+    const claudePaths: string[] = []
+    const claudeRels = await scanRootAsync(store.glob, store.root, claudePaths)
     const scanned = new Array<{ rel: string; path: string; mtimeMs: number; size: number } | null>(
       claudeRels.length,
     )
@@ -1398,7 +1422,7 @@ async function buildClaudeRecordsAsync(
     for (let index = 0; index < claudeRels.length; index++) {
       if (cachedSlice.due()) await cachedSlice.pause()
       const rel = claudeRels[index] as string
-      const path = join(store.root, rel)
+      const path = claudePaths[index] as string
       statSeen.add(path)
       const known = claudeStatCache.get(path)
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)

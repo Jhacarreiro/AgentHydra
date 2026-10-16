@@ -48,6 +48,12 @@ test('async transcript sweeps normalize each path once and retain sync metadata 
       for (const file of [child, orphan, unicode]) write(file)
       for (const file of [audit, sandbox, lost]) write(file)
       write(other, '{}\\n{}\\n')
+      const quietDirs = dir => {
+        for (const entry of fs.readdirSync(dir, { withFileTypes: true }))
+          if (entry.isDirectory()) quietDirs(path.join(dir, entry.name))
+        fs.utimesSync(dir, quiet, quiet)
+      }
+      for (const dir of [root, fork, cowork]) quietDirs(dir)
       const actualJoin = path.join
       let joins = 0
       spyOn(path, 'join').mockImplementation((...parts) => {
@@ -125,9 +131,9 @@ test('async transcript sweeps normalize each path once and retain sync metadata 
       changed: { id: string; size: number }[]
     }
     expect(result.coldJoins).toBe(8)
-    expect(result.warmJoins).toBe(8)
+    expect(result.warmJoins).toBe(0)
     expect(result.syncJoins).toBe(16)
-    expect(result.changedJoins).toBe(8)
+    expect(result.changedJoins).toBe(2)
     expect(result.coldWarmParity).toBe(true)
     expect(result.asyncSyncParity).toBe(true)
     expect(result.changedParity).toBe(true)
