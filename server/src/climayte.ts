@@ -115,6 +115,7 @@ import {
   type CliMayteAccount,
   type CliMayteAttempt,
   type CliMayteSealed,
+  type CliMayteSendId,
   type CliMayteWave,
   type CliMayteWorker,
   classifyAttempt,
@@ -1413,11 +1414,24 @@ function sendUrgent(
   return null
 }
 
-/** How many message request ids a worker keeps (CliMayteWorker.sendIds): a caller retries a message
- *  within seconds, so the newest few are enough. */
-const SEND_IDS_KEPT = 50
+/** How long a worker keeps a message request id (CliMayteWorker.sendIds). By age, not by count: a
+ *  caller retries a message it got no answer for within seconds or a few minutes, and a busy worker can
+ *  take any number of other messages in that time (kept by count, the 50 newest, a slow retry after 50
+ *  more was delivered twice). Ten minutes outlasts any retry while the caller still waits. */
+const SEND_ID_WINDOW_MS = 10 * 60_000
+/** The most ids a worker keeps, a bound on memory only: 100 messages a minute for ten minutes, far
+ *  beyond what any worker is sent. */
+const SEND_IDS_MAX = 1000
 /** What a message sent again (the same requestId) is answered: it was taken the first time. */
 const TAKEN_ALREADY = 'Already taken: this message arrived before, so it was not queued again.'
+
+/** The message request ids `w` still keeps at `now`, oldest first. An id saved before they carried
+ *  their time (a bare string) counts from the worker's last change, which is no earlier than it. */
+function keptSendIds(w: CliMayteWorker, now: number): CliMayteSendId[] {
+  return (w.sendIds ?? [])
+    .map((s) => (typeof s === 'string' ? { id: s, at: w.updatedAt } : s))
+    .filter((s) => now - s.at < SEND_ID_WINDOW_MS)
+}
 
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
@@ -1609,7 +1623,9 @@ export function climayteSend(
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
   const badId = requestIdProblem(opts.requestId)
   if (badId) return { ok: false, message: badId }
-  if (opts.requestId && w.sendIds?.includes(opts.requestId))
+  const now = Date.now()
+  const kept = keptSendIds(w, now)
+  if (opts.requestId && kept.some((s) => s.id === opts.requestId))
     return { ok: true, message: TAKEN_ALREADY, model: w.model, effort: w.effort }
   const setting = sendSetting(w, opts)
   if (typeof setting === 'string') return { ok: false, message: setting }
@@ -1620,8 +1636,11 @@ export function climayteSend(
     w.desk = opts.desk as CliMayteWorker['desk']
   }
   applySendSetting(w, setting)
-  // Every path from here takes the message, so its id is kept now; each path saves it with the worker.
-  if (opts.requestId) w.sendIds = [...(w.sendIds ?? []), opts.requestId].slice(-SEND_IDS_KEPT)
+  // Every path from here takes the message, so its id is kept now and the expired ones go; each path
+  // saves them with the worker.
+  if (opts.requestId) kept.push({ id: opts.requestId, at: now })
+  if (kept.length) w.sendIds = kept.slice(-SEND_IDS_MAX)
+  else delete w.sendIds
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
   // A stopped worker stays stopped for a ping: its text waits with the owner's next message.
   if (opts.ping && w.status === 'cancelled') {

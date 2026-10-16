@@ -240,6 +240,12 @@ export function verdictCoversNewestWork(w: {
   return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
 }
 
+/** A message request id a worker took (CliMayteWorker.sendIds) and when (epoch ms). */
+export interface CliMayteSendId {
+  id: string
+  at: number
+}
+
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
@@ -306,9 +312,10 @@ export interface CliMayteWorker {
    *  again answers this worker and makes none (climayteRun). Hydra Desk retries a start AgentHydra
    *  was too slow to answer; it started anyway, and a second worker ran the same message (2026-10-13). */
   requestId?: string
-  /** The newest message request ids it took (climayteSend `requestId`, at most SEND_IDS_KEPT): the
-   *  same message sent again is answered as taken and queued once. */
-  sendIds?: string[]
+  /** The message request ids it took within SEND_ID_WINDOW_MS (climayteSend `requestId`), each with
+   *  when it was taken: the same message sent again is answered as taken and queued once. A bare
+   *  string is an id saved before they carried their time (climayte.ts keptSendIds). */
+  sendIds?: (CliMayteSendId | string)[]
   /** A sealed worker (CliMayteSealed): nothing of the owner's or of CliMayte's in its context, and
    *  an empty temp folder as `cwd`. Absent: an ordinary delegated worker. */
   sealed?: CliMayteSealed
@@ -2377,7 +2384,7 @@ export function projectWorkerView<A, V>(
     ...(text ? withoutWorkerText(w, text) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
-    // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
+    // Bookkeeping for repeated sends, ten minutes of ids: no view reads it.
     sendIds: undefined,
     prompt: text ? text.prompt : w.prompt.slice(0, 300),
     ...(text ? undefined : keptReport(w)),
