@@ -760,10 +760,14 @@ the tray keeps the AgentHydra daemon alive as before. The tray's Open (its menu,
 AgentHydra shortcut, the tray's own start) runs this launcher (`openCommand` in `..\misc\AgentHydra-Tray.json`),
 so the icon opens or focuses this window, never the old one. Either one brings up the other.
 
+**Quitting is one way** (owner, 2026-10-15). The tray's Quit takes this window and its server with it: the tray starts `launcher\stop.ps1 -Window` (`quitCommand` in the same config),
+which asks the window to close, so it saves where it was, then stops the server, the chats running on for the
+next start. Closing the window leaves the tray, AgentHydra's daemon and this server running.
+
 ```powershell
 powershell -NoProfile -File launcher\install-shortcuts.ps1   # make the shortcuts (-DryRun to preview)
 powershell -NoProfile -File launcher\start.ps1               # what the shortcut does (-DryRun to preview)
-powershell -NoProfile -File launcher\stop.ps1                # stop the server the launcher started
+powershell -NoProfile -File launcher\stop.ps1                # stop the server the launcher started (-Window: and close the window)
 ```
 
 `stop.ps1` stops only the server `start.ps1` started (by the pid file it wrote), together with the
