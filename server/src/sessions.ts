@@ -164,8 +164,8 @@ const upsertScan = db.query(
   'insert into session_scan_cache (cache_key, path, mtime_ms, size_bytes, title, cwd, git_branch, ' +
     'message_count, created_at, last_activity_at, last_role, last_text_preview, ' +
     'substantive_turns, limit_notice, limit_pending, limit_at, title_source, title_tag, ' +
-    'thread_key, ended_because, model, effort, scan_version, scanned_at) ' +
-    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
+    'thread_key, ended_because, model, effort, fold_bytes, fold_check, scan_version, scanned_at) ' +
+    'values (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?) ' +
     'on conflict(cache_key) do update set path = excluded.path, mtime_ms = excluded.mtime_ms, ' +
     'size_bytes = excluded.size_bytes, title = excluded.title, cwd = excluded.cwd, ' +
     'git_branch = excluded.git_branch, message_count = excluded.message_count, ' +
@@ -175,8 +175,14 @@ const upsertScan = db.query(
     'limit_pending = excluded.limit_pending, limit_at = excluded.limit_at, ' +
     'title_source = excluded.title_source, title_tag = excluded.title_tag, ' +
     'thread_key = excluded.thread_key, ended_because = excluded.ended_because, ' +
-    'model = excluded.model, effort = excluded.effort, scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
+    'model = excluded.model, effort = excluded.effort, fold_bytes = excluded.fold_bytes, ' +
+    'fold_check = excluded.fold_check, scan_version = excluded.scan_version, scanned_at = excluded.scanned_at',
 )
+// The fold position a row was written at, with the count it had reached there; see carriedCount.
+const selectFoldCarry = db.query<
+  { message_count: number; fold_bytes: number | null; fold_check: Uint8Array | null },
+  [string]
+>('select message_count, fold_bytes, fold_check from session_scan_cache where cache_key = ?')
 
 /**
  * Every session the cache ALREADY knows stopped at a usage wall, as cache keys.
@@ -246,7 +252,14 @@ function readScanCache(tf: TranscriptFile, key: string, allowStale = false): Sca
   }
 }
 
-function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): ScannedMeta {
+/** `fold` is where the transcript fold stopped for this meta (parseMeta's line-by-line sources);
+ *  shared stores have none, and their rows carry nothing across a restart. */
+function rememberScan(
+  tf: TranscriptFile,
+  key: string,
+  meta: ScannedMeta,
+  fold?: Pick<ParseState, 'consumed' | 'check'>,
+): ScannedMeta {
   titles?.set(key, { title: meta.title, cwd: meta.cwd })
   metaCache.set(key, { mtimeMs: tf.mtime_ms, sizeBytes: tf.size_bytes, meta })
   try {
@@ -273,6 +286,8 @@ function rememberScan(tf: TranscriptFile, key: string, meta: ScannedMeta): Scann
       meta.ended_because,
       meta.model,
       meta.effort,
+      fold?.consumed ?? null,
+      fold?.check ?? null,
       SCAN_VERSION,
       Date.now(),
     )
@@ -567,7 +582,7 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
 
   return oneParseAtATime(key, async () => {
     const state = await foldAppended(tf, key)
-    return state ? rememberScan(tf, key, metaFromState(tf, state)) : null
+    return state ? rememberScan(tf, key, metaFromState(tf, state), state) : null
   })
 }
 
@@ -585,7 +600,11 @@ async function parseMeta(tf: TranscriptFile, key: string): Promise<ScannedMeta |
 // shrank, drops the state and parses from scratch. One difference from a fresh parse, on purpose:
 // a transcript past the 12 MB window keeps folding from where its first parse started instead of
 // sliding the window, so its first-message fields stay the ones that parse saw. A daemon restart
-// re-anchors it.
+// re-anchors those fields to the new window, but not the message count: the scan row keeps where
+// the fold stopped (fold_bytes, fold_check), and when the file only grew since and that point is
+// inside the new window, the count carries on from the row's and only the newer bytes add to it
+// (carriedCount). It still counts from its window alone when the file was first seen past 12 MB
+// (the window is all it ever read) or grew by more than the window since its last scan.
 const READ_WINDOW_BYTES = 12 * 1024 * 1024
 const RESUME_CHECK_BYTES = 64
 // ~1,200 transcripts on a busy machine; past this the oldest-touched states are dropped and those
@@ -606,6 +625,11 @@ interface ParseState {
 }
 const parseStates = new Map<string, ParseState>()
 const parseChains = new Map<string, Promise<unknown>>()
+
+/** Forget every in-memory fold state, as a daemon restart does. Tests only. */
+export function resetFoldStatesForTests(): void {
+  parseStates.clear()
+}
 const utf8 = new TextDecoder()
 
 /** Parses of one transcript run one after another: two revisions in flight at once (scanMeta
@@ -651,11 +675,44 @@ function sameBytes(a: Uint8Array, b: Uint8Array): boolean {
   return true
 }
 
+/** A whole-history message count to carry into a fresh window fold: `count` messages lie before
+ *  file offset `at`, a whole-line boundary inside the window. */
+interface FoldCarry {
+  at: number
+  count: number
+}
+
 /** A fold state and the bytes it folds next, which start at file offset `base`. */
 interface FoldRead {
   state: ParseState
   base: number
   bytes: Uint8Array
+  carry: FoldCarry | null
+}
+
+/** The persisted row's count when this fresh window fold may continue it: the row recorded where
+ *  its fold stopped, the file has only grown since (the check bytes ending there are unchanged and
+ *  lie inside the window just read), and the window is not the whole file (then its own count is
+ *  exact). Null otherwise, and the window counts alone as it always has. Never reads the file. */
+function carriedCount(
+  key: string,
+  size: number,
+  base: number,
+  bytes: Uint8Array,
+): FoldCarry | null {
+  if (base === 0) return null
+  let row: ReturnType<typeof selectFoldCarry.get>
+  try {
+    row = selectFoldCarry.get(key)
+  } catch {
+    return null
+  }
+  if (!row || row.fold_bytes === null || !row.fold_check?.length) return null
+  const at = row.fold_bytes
+  const from = at - row.fold_check.length - base
+  if (at > size || from < 0) return null
+  if (!sameBytes(bytes.subarray(from, at - base), row.fold_check)) return null
+  return { at, count: row.message_count }
 }
 
 /** The saved state with the bytes from just before where it stopped when the file only grew,
@@ -670,7 +727,7 @@ async function readForFold(tf: TranscriptFile, key: string): Promise<FoldRead> {
       bytes.length >= prev.check.length &&
       sameBytes(bytes.subarray(0, prev.check.length), prev.check)
     ) {
-      return { state: prev, base, bytes }
+      return { state: prev, base, bytes, carry: null }
     }
   }
   const base = Math.max(0, file.size - READ_WINDOW_BYTES)
@@ -695,7 +752,7 @@ async function readForFold(tf: TranscriptFile, key: string): Promise<FoldRead> {
      */
     limits: tf.source === 'claude' ? createLimitStopTracker() : null,
   }
-  return { state, base, bytes }
+  return { state, base, bytes, carry: carriedCount(key, file.size, base, bytes) }
 }
 
 /** Folds bytes[from..lastNl], decoded a slice at a time, each ending on a newline: decoding a
@@ -745,12 +802,23 @@ async function foldAppended(tf: TranscriptFile, key: string): Promise<ParseState
     parseStates.delete(key)
     return null
   }
-  const { state, base, bytes } = read
+  const { state, base, bytes, carry } = read
+
+  let from = state.consumed - base
+  // A carried count: the window up to the old stop point is folded for every other field exactly
+  // as a fresh parse would, then its count is replaced by the row's whole-history one, and only the
+  // bytes after that point add to it. carry.at is a whole-line boundary (after a newline, or after
+  // a last line that parsed), so the split never cuts a record.
+  if (carry) {
+    const cut = carry.at - base
+    await foldSlices(state, tf, bytes, from, cut - 1)
+    state.acc.messageCount = carry.count
+    from = cut
+  }
 
   // Only whole lines are folded (a newline byte never sits inside a UTF-8 sequence, so splitting
   // on it is safe). A last line with no newline yet is folded only once it parses: a record is an
   // object, so a half-written one never does, and it is read again next time.
-  const from = state.consumed - base
   const lastNl = bytes.lastIndexOf(0x0a)
   let end = from
   if (lastNl >= from) {
