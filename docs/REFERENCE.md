@@ -407,6 +407,45 @@ the window being waited out, so an account that tripped a limit could never reco
 2026-09-11, accounts that had read fine two hours earlier sat at 429 all day. The number obeyed is
 always the server's own. None is invented here.
 
+### A 429 can be a revoked login
+
+The usage endpoint answers a REVOKED OAuth token the same way it answers a rate limit: 429
+`rate_limit_error` with a fresh `Retry-After` of about an hour, on every read, for as long as anyone
+asks. Measured 2026-10-16 on two instances that had read "rate limited, it clears on its own" for
+days: the profile endpoint (`/api/oauth/profile`) answered the same tokens 401 "OAuth access token
+has been revoked." So every 429 is followed by one profile read with the same token
+(`revokedLoginError`, `server/src/usage-api.ts`). A 401 there is recorded as the 401 it is, the row
+reads `token_revoked` instead of `rate_limited` (desktop and CLI rows alike), the account's last
+reading leaves the room ranking as a signed-out one does, and the token is held off as long as a real
+429 would be.
+
+**Signing in again does not replace a revoked desktop login.** Claude Desktop keeps its saved grants
+through a sign-in to the same account (its `main.log`: "preserving oauth cache (same-user
+re-login)"), and its token getter hands out a saved grant until that grant's own `expiresAt`
+without asking whether it still works. It makes a new grant only when the saved one is missing, or
+expired with its refresh refused. Revoking a grant does not move its expiry, so a revoked Claude Code
+grant (a month long) or inference grant (a year long) stays in use through any number of re-logins.
+AgentHydra therefore takes such grants out itself (`server/src/core/revoked-grants.ts`):
+
+- A grant is revoked only on the profile endpoint's word (a 401 that says revoked); an expired grant
+  is the app's to refresh and is left alone. It is remembered by a SHA-256 digest of its token, never
+  the token, in `revoked-grants.json` in the data dir.
+- It leaves the profile's token caches (`oauth:tokenCacheV2` and `oauth:tokenCache` in
+  `config.json`) only while the app is closed, when a usage check reads `token_revoked` (every grant
+  of the profile is asked about then, the profile-only ones included) and just before AgentHydra
+  opens the profile (known digests only, no network). The file is read again right before the write
+  and left alone if anything changed it meanwhile (Login sync may have landed a newer login).
+- The app then makes new grants from its claude.ai sign-in the next time it needs one. Until then the
+  row reads `no_token`; a profile whose claude.ai sign-in was revoked too may ask for a sign-in once.
+- Login sync never lands a remembered grant, leaves it out of "the later expiry wins" (a dead
+  year-long grant would otherwise win every comparison and put itself back on every PC), treats a
+  copy that differs only by such grants as the same copy, and sends each account's digests with its
+  login so the other PC drops them too.
+
+What revokes these grants in the first place is not settled. Revocations of the same shape predate
+Login sync. One hazard remains under investigation: Login sync puts one desktop login, refresh token
+included, on both PCs.
+
 ### Built-in guidance
 
 The MCP `initialize` handshake returns an `instructions` block (`SERVER_INSTRUCTIONS` in

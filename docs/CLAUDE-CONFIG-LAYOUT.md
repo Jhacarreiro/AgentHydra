@@ -29,7 +29,13 @@ The default login belongs to no managed instance and no dispatch account. When a
 - A **Claude Desktop instance** is an isolated user-data dir under `<home>/.claude-instances/<name>`
   (`server/src/core/shared.ts`, `INSTANCES_DIR_NAME`); the main install uses `%APPDATA%/Claude`.
   Its per-chat metadata links to the shared transcript store above by `cliSessionId`
-  ([REFERENCE.md](REFERENCE.md#claude-desktop-session-mapping)).
+  ([REFERENCE.md](REFERENCE.md#claude-desktop-session-mapping)). Its logins are the OAuth grants in
+  `config.json` (`oauth:tokenCacheV2`, and the older `oauth:tokenCache`), encrypted under the
+  profile's own key, beside `lastKnownAccountUuid`, plus the claude.ai sign-in cookies in
+  `Network/Cookies`. The running app holds both and saves its own copy over them, so AgentHydra
+  writes them only while the app is closed: Login sync, and the removal of revoked grants that the app
+  keeps through a sign-in to the same account
+  ([REFERENCE.md](REFERENCE.md#a-429-can-be-a-revoked-login)).
 
 How a session works out which of these it is billing to is in
 [AI_USAGE_SELFCHECK.md](AI_USAGE_SELFCHECK.md).
