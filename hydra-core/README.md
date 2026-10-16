@@ -5,7 +5,7 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 ## TL;DR
 
 - Three hook events: `UserPromptSubmit` on every message, `SessionStart` after a compact or resume, `Stop` for the president rule below.
-- Core mode is on only while `<core dir>/ON` exists. Without it the hook prints nothing, unless `DOORBELL` is set (below).
+- Core mode is on only while `<core dir>/ON` exists. Without it the hook prints nothing, unless a `CRANIUM` file is there (below).
 - No output for CliMayte workers, for prompts starting with `/`, or for a fresh session.
 - Each message is written to `chats/<key>/prompt.txt` and the working folder to `chats/<key>/cwd.txt`. The injected line is one short block that names `hydra.md`, its lead and its tier.
 - Node 22 or newer, no dependencies. Runs in well under 300 ms.
@@ -19,12 +19,12 @@ The hook that runs Hydra Core in a Claude Code chat. It replaces the Manager Hyd
 
 ## Where things live
 
-- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `DOORBELL`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
+- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `CRANIUM`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and `router-entry.json` (the saved router entry, keyed by settings path) live there.
 - Chat key: `HYDRA_DESK_CHAT_ID` when set, else the Claude `session_id`. Characters outside `A-Za-z0-9_.-` become `_`.
 
-## Doorbell (the CrAInium flowchart)
+## The CrAInium flowchart (`CRANIUM`)
 
-`<core dir>/DOORBELL` holding `crainium` moves the core off this PC. The flowchart lives in the CrAInium, one per workspace, behind the Connections MCP tool `connections_core`. The file turns the hook on by itself. Leave `ON` out, because `ON` also turns on the daemon's local core mode: chats get the core chat prompt instead of the owner's CLAUDE.md, and the manager tools refuse. With the file, the hook only rings the flowchart:
+A `<core dir>/CRANIUM` file (empty is fine) moves the core off this PC. The flowchart lives in the CrAInium, one per workspace, behind the Connections MCP tool `connections_core`. The file turns the hook on by itself. Leave `ON` out, because `ON` also turns on the daemon's local core mode: chats get the core chat prompt instead of the owner's CLAUDE.md, and the manager tools refuse. With the file, the hook only points each chat at the flowchart:
 
 - Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
 - After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.

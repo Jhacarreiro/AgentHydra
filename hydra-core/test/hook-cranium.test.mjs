@@ -5,18 +5,18 @@ import path from "node:path";
 import { test } from "node:test";
 import { run } from "../hook.mjs";
 
-// `<core>/DOORBELL` holding `crainium`: the flowchart lives in the CrAInium, so the hook only tells the chat to walk it
-// through connections_core, and keeps nothing on this PC. It needs no `<core>/ON`: ON also turns on the daemon's local
-// core mode (core chat prompt, CLAUDE.md excludes, manager tools refused), which a doorbell PC must not get. A PC
-// without the file keeps the local tree (hook.test.mjs).
+// A `<core>/CRANIUM` file: the flowchart lives in the CrAInium, so the hook only tells the chat to walk it through
+// connections_core, and keeps nothing on this PC. It needs no `<core>/ON`: ON also turns on the daemon's local core
+// mode (core chat prompt, CLAUDE.md excludes, manager tools refused), which a CRANIUM PC must not get. A PC without
+// the file keeps the local tree (hook.test.mjs).
 
 const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT", "AGENTHYDRA_ROLE"];
 const FOLDER = "C:\\Users\\me\\project";
 
-async function withDoorbell(fn) {
-  const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-doorbell-"));
+async function withCranium(fn) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-cranium-"));
   try {
-    writeFileSync(path.join(dir, "DOORBELL"), "crainium\n");
+    writeFileSync(path.join(dir, "CRANIUM"), "");
     return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -33,7 +33,7 @@ const turn = (prompt) => ({ hook_event_name: "UserPromptSubmit", session_id: "se
 const told = (result) => result?.hookSpecificOutput?.additionalContext ?? null;
 
 test("an owner message is told to walk the CrAInium flowchart for its chat and folder, and nothing is kept here", () =>
-  withDoorbell(async (dir) => {
+  withCranium(async (dir) => {
     const before = readdirSync(dir).sort();
     const text = told(await run(turn("ship the tray fix"), envFor(dir)));
     assert.match(text, /connections_core \{ action: "run", chat: "sess-1"/);
@@ -42,21 +42,21 @@ test("an owner message is told to walk the CrAInium flowchart for its chat and f
     assert.deepEqual(readdirSync(dir).sort(), before);
   }));
 
-test("a command or a ping that is not the owner's rings nothing", () =>
-  withDoorbell(async (dir) => {
+test("a command or a ping that is not the owner's gets nothing", () =>
+  withCranium(async (dir) => {
     assert.equal(await run(turn("/compact"), envFor(dir)), null);
     assert.equal(await run(turn("<task-notification>done</task-notification>"), envFor(dir)), null);
   }));
 
 test("after a compact the chat is told how to get its delegate brief back; a fresh start gets nothing", () =>
-  withDoorbell(async (dir) => {
+  withCranium(async (dir) => {
     const start = (source) => ({ hook_event_name: "SessionStart", session_id: "sess-1", source, cwd: FOLDER });
     assert.match(told(await run(start("compact"), envFor(dir))), /connections_core \{ action: "brief", chat: "sess-1"/);
     assert.equal(await run(start("startup"), envFor(dir)), null);
   }));
 
 test("the local president rule stays out of it: a question at Stop is not blocked", () =>
-  withDoorbell(async (dir) => {
+  withCranium(async (dir) => {
     mkdirSync(path.join(dir, "catalog"));
     writeFileSync(
       path.join(dir, "catalog", "hand-people.json"),
@@ -77,7 +77,7 @@ test("the local president rule stays out of it: a question at Stop is not blocke
   }));
 
 test("a drone or a seat still gets nothing, and its skip is not kept here either", () =>
-  withDoorbell(async (dir) => {
+  withCranium(async (dir) => {
     const before = readdirSync(dir).sort();
     assert.equal(await run(turn("move notes"), envFor(dir, { AGENTHYDRA_ROLE: "drone" })), null);
     assert.equal(await run(turn("what do you think?"), envFor(dir, { AGENTHYDRA_ROLE: "seat" })), null);

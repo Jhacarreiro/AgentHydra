@@ -214,17 +214,16 @@ function asksOf(dir) {
   return !existsSync(file) || readFileSync(file, "utf8").trim() !== "off";
 }
 
-// The `<core>/DOORBELL` setting: `crainium` means the flowchart lives in the CrAInium, one per workspace behind
-// connections_core, so the hook only tells the chat to walk it and keeps nothing on this PC (the owner's ruling
-// 2026-10-15). Absent, the local tree below runs as before; each PC switches when its owner says.
-function doorbellOf(dir) {
-  const file = path.join(dir, "DOORBELL");
-  return existsSync(file) && readFileSync(file, "utf8").trim() === "crainium";
+// The `<core>/CRANIUM` file: the flowchart lives in the CrAInium, one per workspace behind connections_core, so the
+// hook only tells the chat to walk it and keeps nothing on this PC (the owner's ruling 2026-10-15). Absent, the local
+// tree below runs as before; each PC switches when its owner says.
+function craniumOn(dir) {
+  return existsSync(path.join(dir, "CRANIUM"));
 }
 
 const CORE_VIA = '(Connections MCP; when it is not in your tool list, connections_execute { tool_name: "connections_core", params })';
 
-function doorbellPrompt(input, env) {
+function craniumPrompt(input, env) {
   if (!ownerPrompt(input)) return null;
   const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
   return output(
@@ -233,7 +232,7 @@ function doorbellPrompt(input, env) {
   );
 }
 
-function doorbellSession(input, env) {
+function craniumSession(input, env) {
   if (input.source !== "compact") return null;
   const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
   return output(
@@ -469,16 +468,16 @@ export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
   const dir = coreDir(env);
-  // DOORBELL needs no ON: ON also turns on the daemon's local core mode, which a doorbell PC must not get.
-  if (!existsSync(path.join(dir, "ON")) && !doorbellOf(dir)) return null;
+  // CRANIUM needs no ON: ON also turns on the daemon's local core mode, which a CRANIUM PC must not get.
+  if (!existsSync(path.join(dir, "ON")) && !craniumOn(dir)) return null;
   const skip = skipOf(env, dir);
   if (skip) {
-    if (event !== "Stop" && !doorbellOf(dir)) logSkip(input, env, dir, skip);
+    if (event !== "Stop" && !craniumOn(dir)) logSkip(input, env, dir, skip);
     return null;
   }
-  if (doorbellOf(dir)) {
-    if (event === "UserPromptSubmit") return doorbellPrompt(input, env);
-    return event === "SessionStart" ? doorbellSession(input, env) : null;
+  if (craniumOn(dir)) {
+    if (event === "UserPromptSubmit") return craniumPrompt(input, env);
+    return event === "SessionStart" ? craniumSession(input, env) : null;
   }
   if (event === "Stop") {
     logPackRead(input, env, dir);
