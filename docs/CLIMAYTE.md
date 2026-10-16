@@ -399,6 +399,15 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   highest 5-hour % per window from the CLI's rate_limit_events, `attempt.peak`), `sizing` (finished
   tasks' expected against used, `ratio` used/expected), plus `usedPct`, `rereadPct`,
   `rereadShare`, `rereadByCause`. Waiting rows carry `waitUntil` (ISO, UTC) and every row `size`.
+- Ceiling-stop overlap counts use a sorted endpoint index built only when this totals call needs one.
+  Starts and ends remain inclusive, open attempts retain their existing upper bound, and each new
+  call rebuilds from current attempts. History outside `since` still participates in overlap counts.
+
+Compact worker lists (`GET /api/corch/workers?lean=1`) use the same derived row fields as full lists,
+but read a packed worker's cached prompt preview and report character count. Its long text stays
+compressed. The count includes the earlier recap retained by `statusTurns`; reading or changing a
+packed text field discards the summary and restores ordinary fields. Full detail and report requests
+continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
 
 ### Model and thinking (field note 16)
 

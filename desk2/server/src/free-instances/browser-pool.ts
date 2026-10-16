@@ -1,12 +1,25 @@
 import { spawn } from 'node:child_process'
 import { createHash } from 'node:crypto'
-import { mkdirSync, readFileSync } from 'node:fs'
+import { mkdirSync, readFileSync, statSync } from 'node:fs'
 import { connect } from 'node:net'
-import { join } from 'node:path'
+import { basename, dirname, isAbsolute, join } from 'node:path'
 import type { FreeConfig } from '@shared/free-instances'
 
 interface Endpoint { port: number; token: string; version: string }
 const starting = new Map<string, Promise<string>>()
+
+/** Windows' console venv launcher can open a console in its base interpreter even with
+ *  windowsHide. Use that same environment's windowless launcher, never a PATH fallback. */
+export function browserPoolPython(python: string, platform: NodeJS.Platform = process.platform): string {
+  if (platform !== 'win32') return python
+  if (!isAbsolute(python) || !/^pythonw?\.exe$/i.test(basename(python)))
+    throw new Error('browser_pool_requires_pythonw: Windows requires an absolute Python environment launcher.')
+  const windowless = join(dirname(python), 'pythonw.exe')
+  try {
+    if (statSync(windowless).isFile()) return windowless
+  } catch { /* a missing windowless launcher must never fall back to a visible console */ }
+  throw new Error('browser_pool_requires_pythonw: The Python environment has no pythonw.exe launcher.')
+}
 
 /** One server-owned process, outside disposable CLI jobs' cancellation trees. */
 export async function ensureBrowserPool(config: FreeConfig, signal: AbortSignal): Promise<string> {
@@ -36,11 +49,12 @@ export async function ensureBrowserPool(config: FreeConfig, signal: AbortSignal)
 async function start(config: FreeConfig, directory: string, version: string): Promise<string> {
   const file = join(directory, 'endpoint.json')
   if (await healthy(file, version)) return file
+  const python = browserPoolPython(config.python)
   mkdirSync(directory, { recursive: true })
   // No account credentials, prompts or cookies are passed on the command line.
   let launchFailed = false
   const launch = () => {
-    const child = spawn(config.python, ['-m', 'claudfree.chatgpt.browser_pool', '--directory', directory, '--version', version], {
+    const child = spawn(python, ['-m', 'claudfree.chatgpt.browser_pool', '--directory', directory, '--version', version], {
       cwd: config.harnessDir, windowsHide: true, detached: true, stdio: 'ignore',
       env: { ...process.env, PYTHONUTF8: '1', PYTHONDONTWRITEBYTECODE: '1' }
     })

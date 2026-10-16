@@ -18,7 +18,6 @@ import {
   climayteJournal,
   climayteJournalLines,
   climayteLeanWave,
-  climayteLeanWorker,
   climayteList,
   climaytePingState,
   climayteReady,
@@ -46,7 +45,6 @@ import {
   setLogArchiveDays,
   verdictNoteTooLong,
 } from '../climayte'
-import type { CliMayteWorkerView } from '../climayte-lib'
 import type { CliMayteOrigin } from '../climayte-ping'
 import { buildStatus, remoteSnapshots } from '../climayte-remote'
 import {
@@ -237,9 +235,10 @@ app.get('/api/corch/workers', async (c) => {
   // `lean=1` (the CliMayte pane and Desk 2's server): the full rows without the long text no list
   // shows (climayteLeanWorker); it means nothing next to `brief`, which is already short.
   const lean = flag(c.req.query('lean')) && !filter.brief
-  const rows = wait > 0 ? await climayteWait(filter, wait) : climayteList(filter)
+  const listFilter = { ...filter, lean }
+  const rows = wait > 0 ? await climayteWait(listFilter, wait) : climayteList(listFilter)
   if (seenBy) seenAsAnswered(rows as { id: string }[], seenBy)
-  return c.json(lean ? (rows as CliMayteWorkerView[]).map(climayteLeanWorker) : rows)
+  return c.json(rows)
 })
 /** `seen_by=<session id>` (climayte_status for a waiting scoped read): the caller's own workers in this
  *  answer are stamped seen as of now, the moment it was built. A stamp taken after the answer arrived

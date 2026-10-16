@@ -2247,6 +2247,39 @@ export function ranSeconds(w: CliMayteWorker, now: number): number {
   )
 }
 
+export const WORKER_TEXT_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+
+export interface CliMayteLeanText {
+  readonly prompt: string
+  readonly resultChars: number
+}
+
+/** The lean list's text metadata, computed before a finished worker is packed. */
+export function leanText(w: CliMayteWorker): CliMayteLeanText {
+  const prompt = w.prompt
+  const prefix = prompt.slice(0, 300)
+  return {
+    // A sliced string can keep its entire long backing string alive. Copy code
+    // units so even a prefix ending on a lone surrogate stays byte-for-byte JS text.
+    prompt: prompt.length > 300 ? prefix.split('').join('') : prefix,
+    resultChars: statusTurns(w).reduce((sum, turn) => sum + turn.length, 0),
+  }
+}
+
+/** Copy ordinary list fields without invoking any packed-text accessor. */
+function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+  const row: Record<string, unknown> = {}
+  for (const key of Object.keys(w)) {
+    if (key === 'prompt') row.prompt = text.prompt
+    else if (key === 'result') row.result = null
+    else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
+      row[key] = (w as unknown as Record<string, unknown>)[key]
+  }
+  row.prompt = text.prompt
+  row.result = null
+  return row as unknown as CliMayteWorker
+}
+
 /** `result` and `results` as the view shows them (statusTurns); nothing when they stay as stored. */
 function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results'> | undefined {
   const turns = statusTurns(w)
@@ -2254,17 +2287,22 @@ function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results
   return { results: turns, result: joinResults(turns) }
 }
 
-export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): CliMayteWorkerView {
+export function toView(
+  w: CliMayteWorker,
+  now: number,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...w,
+    ...(text ? withoutWorkerText(w, text) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
     // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
     sendIds: undefined,
-    prompt: w.prompt.slice(0, 300),
-    ...keptReport(w),
+    prompt: text ? text.prompt : w.prompt.slice(0, 300),
+    ...(text ? undefined : keptReport(w)),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day

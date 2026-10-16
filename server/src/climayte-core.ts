@@ -40,6 +40,7 @@ import {
   addTokens,
   attemptSpend,
   type CliMayteAccount,
+  type CliMayteLeanText,
   type CliMayteLiveUsage,
   type CliMayteWalls,
   type CliMayteWorker,
@@ -47,6 +48,7 @@ import {
   fullUntilReset,
   isOrgDisabled,
   isWalledNow,
+  leanText,
   liveUsage,
   noTokens,
   ORG_DISABLED_WALL,
@@ -54,6 +56,7 @@ import {
   pastOnArrival,
   READING_STALE_MS,
   summarizeEvent,
+  WORKER_TEXT_FIELDS,
 } from './climayte-lib'
 import { type MachineMemory, readMachineMemory } from './climayte-memory'
 import {
@@ -201,9 +204,10 @@ export const workers = new Map<string, CliMayteWorker>()
 // accessors. Reading any of them (a spread, JSON.stringify and every caller included) puts all four
 // back as plain fields first, so readers and writers see exactly what they always saw; packColdWorkers
 // packs a worker again once it has been left alone for COLD_AFTER_MS.
-const PACKED_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+const PACKED_FIELDS = WORKER_TEXT_FIELDS
 type PackedField = (typeof PACKED_FIELDS)[number]
 const packedFields = new WeakMap<CliMayteWorker, Uint8Array>()
+const packedLeanText = new WeakMap<CliMayteWorker, CliMayteLeanText>()
 /** When a worker's fields were last unpacked: it stays plain while something is reading it. */
 const unpackedAt = new WeakMap<CliMayteWorker, number>()
 const COLD_AFTER_MS = 5 * 60_000
@@ -220,6 +224,7 @@ function unpackWorker(w: CliMayteWorker): void {
   if (!blob) return
   const vals = JSON.parse(zstdDecompressSync(blob).toString('utf8')) as Record<string, unknown>
   packedFields.delete(w)
+  packedLeanText.delete(w)
   unpackedAt.set(w, Date.now())
   for (const k of PACKED_FIELDS)
     if (Object.getOwnPropertyDescriptor(w, k)?.get)
@@ -264,8 +269,24 @@ function packRead(w: CliMayteWorker): void {
   if (!keys.length) return
   const vals: Partial<Record<PackedField, unknown>> = {}
   for (const k of keys) vals[k] = w[k]
+  let preview: CliMayteLeanText | undefined
+  try {
+    preview = leanText(w)
+  } catch {
+    // Older files may have malformed text. Preserve their original packed data;
+    // interpreting those fields still fails only when a reader asks for them.
+  }
   packedFields.set(w, zstdCompressSync(Buffer.from(JSON.stringify(vals)), PACK_LEVEL))
+  if (preview) packedLeanText.set(w, preview)
   for (const k of keys) Object.defineProperty(w, k, packedAccessors[k])
+}
+
+/** A packed worker's tiny list preview never reads its long-text accessors. */
+export function leanTextOf(w: CliMayteWorker): CliMayteLeanText {
+  const preview = packedLeanText.get(w)
+  if (preview) return preview
+  unpackWorker(w)
+  return leanText(w)
 }
 
 /** Pack the finished workers nothing has changed or read for COLD_AFTER_MS, within PACK_SLICE_MS (the

@@ -9,6 +9,7 @@ import {
   acctLabel,
   isActive,
   JOURNAL_PATH,
+  leanTextOf,
   listeners,
   load,
   workers,
@@ -223,6 +224,8 @@ export interface CliMayteListFilter {
   origin?: string[]
   limit?: number
   brief?: boolean
+  /** The list row's text counts and prompt preview, without unpacking finished reports. */
+  lean?: boolean
   /** With `brief`: also list finished work a verdict already covers (left out by default). */
   all?: boolean
 }
@@ -236,11 +239,13 @@ const originLookup: OriginLookup = {
 
 export function climayteList(filter: CliMayteListFilter & { brief: true }): CliMayteWorkerBrief[]
 
+export function climayteList(filter: CliMayteListFilter & { lean: true }): CliMayteWorkerLean[]
+
 export function climayteList(filter?: CliMayteListFilter): CliMayteWorkerView[]
 
 export function climayteList(
   filter: CliMayteListFilter = {},
-): CliMayteWorkerView[] | CliMayteWorkerBrief[] {
+): CliMayteWorkerView[] | CliMayteWorkerBrief[] | CliMayteWorkerLean[] {
   load()
   const now = Date.now()
   const mine = filter.origin?.length ? dispatchedFrom(workers.values(), filter.origin) : null
@@ -256,6 +261,11 @@ export function climayteList(
     !filter.brief || filter.all || filter.id || filter.ids?.length
       ? recent
       : recent.filter((w) => isLiveStatus(w.status) || !verdictCoversNewestWork(w))
+  if (filter.lean && !filter.brief)
+    return keep.map((w) => {
+      const text = leanTextOf(w)
+      return leanWorkerView(toView(w, now, originLookup, text), text.resultChars)
+    })
   const views = keep.map((w) => toView(w, now, originLookup))
   return filter.brief ? views.map(toBrief) : views
 }
@@ -265,7 +275,7 @@ export function climayteList(
  *  each attempt keeps its account, outcome, ceiling flag and tokens; each verdict keeps who, what and
  *  the first line of its note (the row's hover). Everything else, the 300-character prompt included,
  *  stays. */
-export function climayteLeanWorker(v: CliMayteWorkerView): Omit<
+export type CliMayteWorkerLean = Omit<
   CliMayteWorkerView,
   'results' | 'reports' | 'attempts' | 'verdicts'
 > & {
@@ -278,13 +288,19 @@ export function climayteLeanWorker(v: CliMayteWorkerView): Omit<
     Omit<NonNullable<CliMayteWorkerView['verdicts']>[number], 'note'> & { note: string | null }
   >
   resultChars: number
-} {
+}
+
+export function climayteLeanWorker(v: CliMayteWorkerView): CliMayteWorkerLean {
+  return leanWorkerView(v)
+}
+
+function leanWorkerView(v: CliMayteWorkerView, resultChars?: number): CliMayteWorkerLean {
   const { results, reports: _reports, ...row } = v
   const text = results?.length ? results : v.result ? [v.result] : []
   return {
     ...row,
     result: null,
-    resultChars: text.reduce((n, r) => n + r.length, 0),
+    resultChars: resultChars ?? text.reduce((n, r) => n + r.length, 0),
     attempts: v.attempts.map((a) => ({
       account: a.account,
       outcome: a.outcome,
@@ -316,7 +332,7 @@ export function climayteReports(
   filter: CliMayteListFilter = {},
   chars?: number,
 ): CliMayteWorkerReport[] {
-  return climayteList({ ...filter, brief: false }).map((v) => toReport(v, chars))
+  return climayteList({ ...filter, brief: false, lean: false }).map((v) => toReport(v, chars))
 }
 
 /** `fullPrompt`: the whole brief instead of the views' first 300 characters, for a window showing the
@@ -349,7 +365,7 @@ export function climayteGet(
 export function climayteWait(
   filter: CliMayteListFilter,
   timeoutMs: number,
-): Promise<CliMayteWorkerView[] | CliMayteWorkerBrief[]> {
+): Promise<CliMayteWorkerView[] | CliMayteWorkerBrief[] | CliMayteWorkerLean[]> {
   load()
   if (![...workers.values()].some((w) => matches(w, filter) && isActive(w)))
     return Promise.resolve(climayteList(filter))

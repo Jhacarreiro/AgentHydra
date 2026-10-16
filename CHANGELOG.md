@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free work spends less CPU on bookkeeping and keeps fewer large buffers.** Unchanged status polls reuse thread counts, completed operations save their final metadata once, and finished file writes release their JSON buffers. ChatGPT's reply checks skip display formatting until a completed answer is ready.
+- **CliMayte's compact lists keep old reports compressed.** Listing history no longer unpacks text the list immediately hides, and ceiling statistics use an index instead of rescanning account history for each event. Full reports remain available on request.
+- **ChatGPT's background helper stays out of the Windows desktop.** Its detached Python helper uses the matching windowless interpreter, preventing the virtual-environment launcher from opening a console.
 - **Free batches spend less time checking their running work.** A single request reads several operations at once, while older windows keep their existing polling. ChatGPT also reuses the completed reply its browser already verified instead of fetching it again.
 - **Brief CliMayte lists skip finished history sooner.** Already-reviewed workers no longer build detailed rows that the brief list immediately discards. Explicit history requests and workers with new results still appear as before.
 - **AgentHydra uses about half the CPU while CliMayte work runs.** Its once-a-second CliMayte check no longer re-reads every finished worker, and a check that starts nothing reuses its memory reading for a few seconds.

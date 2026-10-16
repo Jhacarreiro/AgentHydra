@@ -82,6 +82,9 @@ export class FreeInstances {
   private runs = new Map<string, Promise<void>>()
   /** Each account's messages in the last hour and how they ended (health.ts). Kept in memory: an hour is gone soon. */
   private outcomes = new Map<string, SendOutcome[]>()
+  /** Thread counts change only on insertion, removal or a status transition, not on every poll. */
+  private threadRevision = 0
+  private threadSummary?: { threads: FreeThread[]; length: number; revision: number; running: number; counts: Record<string, number> }
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   /** An account moved between free and paid (notePlan); the plugin tells the window. */
@@ -168,6 +171,7 @@ export class FreeInstances {
       } catch { /* deleted regardless */ }
       for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
       this.store.remove(id, opts.tombstone ?? true)
+      this.threadSummary = undefined
       this.refreshed.delete(id)
       this.outcomes.delete(id)
     } finally { this.forgetting.delete(id) }
@@ -248,6 +252,7 @@ export class FreeInstances {
     if (!thread) throw new FreeError('Thread not found.', 404)
     if (thread.status === 'running') throw new FreeError('This chat has a message running. Wait for it to finish or cancel it first.', 409)
     this.store.data.threads = this.store.data.threads.filter(t => t !== thread)
+    this.threadSummary = undefined
     this.store.data.forgotten = [...(this.store.data.forgotten ?? []).filter(f => f !== id), id].slice(-5000)
     this.store.save()
     return { ok: true }
@@ -267,13 +272,17 @@ export class FreeInstances {
       const hour = healthOf(this.outcomes.get(i.id), now)
       if (hour) health[i.id] = hour
     }
-    let running = 0
-    const threadCounts: Record<string, number> = {}
-    for (const t of this.store.data.threads) {
-      if (t.status === 'running') running++
-      threadCounts[t.instanceId] = (threadCounts[t.instanceId] ?? 0) + 1
+    const threads = this.store.data.threads
+    let summary = this.threadSummary
+    if (!summary || summary.threads !== threads || summary.length !== threads.length || summary.revision !== this.threadRevision) {
+      summary = { threads, length: threads.length, revision: this.threadRevision, running: 0, counts: {} }
+      for (const t of threads) {
+        if (t.status === 'running') summary.running++
+        summary.counts[t.instanceId] = (summary.counts[t.instanceId] ?? 0) + 1
+      }
+      this.threadSummary = summary
     }
-    return { ready: this.runtime.ready(), tokens, health, running, threadCounts, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    return { ready: this.runtime.ready(), tokens, health, running: summary.running, threadCounts: { ...summary.counts }, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   /** The last `days` days' messages by account and model (stats.ts). */
   stats(days: number): FreeStatRow[] { return statRows(this.store.data.stats ?? {}, days, Date.now()) }
@@ -357,7 +366,9 @@ export class FreeInstances {
       thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: created, updatedAt: used ? Date.now() : created, error }
       this.store.data.threads.push(thread)
       known?.set(id, thread)
+      this.threadRevision++
     }
+    else if (thread.status !== status) this.threadRevision++
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
   }
@@ -376,7 +387,9 @@ export class FreeInstances {
       const instance = this.instance(r.instanceId)
       if (r.command === 'auth' || r.command === 'login') await this.afterAuth(r, job.result, instance, config, controller.signal)
       if (r.command === 'nudge') await this.afterNudge(r, job.result, instance, config, controller.signal)
-      spent = this.apply(r, job.result)
+      // finally saves the result together with its stats. Serializing here too
+      // copied the entire history twice with no asynchronous work in between.
+      spent = this.apply(r, job.result, false)
     } catch {
       job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
       this.markThread(r, 'failed', r.chatId, job.result.error!.message)
@@ -433,7 +446,7 @@ export class FreeInstances {
     return instance
   }
   /** Returns the message's token estimate, or null for anything that was not an answered message. */
-  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
+  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>, persist = true): TokenEntry | null {
     const instance = this.instance(r.instanceId)
     if (result.usage) this.applyUsage(instance, result.usage)
     if (r.command === 'usage') instance.usageReadAt = Date.now()
@@ -441,7 +454,7 @@ export class FreeInstances {
     if (result.chats) this.applyChats(r, result.chats)
     if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) this.applyChatThread(r, instance, result)
     const spent = result.ok ? this.countTokens(r, result) : null
-    this.store.save()
+    if (persist) this.store.save()
     return spent
   }
   /** Takes a reading's usage as the row's, and tells the watchers, after noting any plan change. */

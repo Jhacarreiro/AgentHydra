@@ -990,6 +990,10 @@ The detail supports UUIDs, reading, follow-up messages, extracted code, citation
 The verified conversation can supply the final reply directly when it fits the bounded IPC response,
 avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
 fails without another send.
+Confirmation polls inspect the same visible branch, identities and completion status without rendering
+code blocks or citations; the final answer keeps that rich output. On Windows the detached browser helper
+uses the managed virtual environment's `pythonw.exe`, with no console. A missing windowless interpreter
+refuses startup instead of silently opening a console.
 Usage counters that the provider does not expose stay unknown, and
 historical usage readings retain their observation and reset times. Free web accounts use their own
 allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
@@ -1014,6 +1018,10 @@ chats and required for tracking. Claude messages also accept `webSearch`. Poll
 Batch callers can instead read `GET /api/free/jobs?ids=<comma-separated UUIDs>`: up to 32 IDs, with a
 `jobs` object keyed by ID and `null` for expired or unknown operations. Reads start no work. Free MCP batches
 use this endpoint when available and fall back to individual reads on older Desk versions.
+Unchanged status polls reuse only thread counts; insertions, removals and status transitions invalidate
+them immediately. Usage, health and jobs remain live readings. Completed operations serialize their final
+thread metadata, tokens and statistics together, and settled file writers release the serialized buffer
+while retaining pending or failed writes for retry.
 The job's `phase` distinguishes automatic setup from the operation. `DELETE /api/free/jobs/{requestId}`
 cancels its owned process, including a login window. Requests from another browser origin are refused.
 Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.

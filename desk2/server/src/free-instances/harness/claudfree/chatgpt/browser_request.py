@@ -259,7 +259,7 @@ async def _own_message_completed(http, server_id, own_message, prompt, temporary
         body = await asyncio.to_thread(http._json, 'GET', '/backend-api/conversation/' + server_id)
         if body.get('conversation_id') != server_id:
             raise ClaudeError('ChatGPT returned a different conversation.', code='invalid_response')
-        messages = visible_messages(body)
+        messages = visible_messages(body, rich=False)
         positions = [i for i,m in enumerate(messages) if m['role']=='user' and m['id']==own_message and m['text']==prompt]
         if not positions or not any(m['role']=='assistant' and not m['incomplete'] for m in messages[positions[-1]+1:]):
             return False

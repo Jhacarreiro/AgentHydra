@@ -52,6 +52,11 @@ type WindowPeak = {
 
 type SizedTask = { id: string; title: string; expected: number; used: number; work: number }
 
+interface AccountRuns {
+  starts: number[]
+  ends: number[]
+}
+
 /** climayteTotals' running sums. With `since`, every figure covers only runs that ended after it
  *  (or are running); without, the whole record, as the CliMayte view's counter shows it. */
 interface TotalsTally {
@@ -66,10 +71,9 @@ interface TotalsTally {
   ceilingStops: number
   ceilings: CeilingStop[]
   placedPast: PlacedPast[]
-  /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
-  allAttempts: TotalsAttempt[]
-  /** allAttempts by account id, built on the first ceiling stop that asks. */
-  byAccount?: Map<string, TotalsAttempt[]>
+  /** Every attempt's interval, sorted per account on the first ceiling stop that asks. Includes
+   *  attempts outside these totals' scope: they can still overlap a counted stop. */
+  byAccount?: Map<string, AccountRuns>
   tasksInScope: Set<string>
   hits: LimitHit[]
   peaks: Map<string, WindowPeak>
@@ -127,22 +131,46 @@ function kitSessions(ids: string[], store?: KitStore): Set<string> {
   return new Set(rows.map((r) => r.session))
 }
 
-/** How many runs were on an account at a moment, the one that asks included. */
-// Each ceiling stop used to filter every attempt on record (stops x attempts per totals call): the
-// stall profiler had that filter on top of AgentHydra at 10-12% of its samples (2026-10-09).
+/** Number of sorted times before `t`, or through it when `inclusive`. */
+function countTimes(times: number[], t: number, inclusive: boolean): number {
+  let lo = 0
+  let hi = times.length
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (inclusive ? times[mid]! <= t : times[mid]! < t) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/** How many runs were on an account at a moment, the one that asks included. A stop still scanned
+ *  every attempt on its account after the whole-fleet scan was removed: stops x account history.
+ *  Sorted endpoints count starts <= t minus ends < t, including zero-length runs and both ends.
+ *  The index is local to this synchronous totals call; later calls see changed/open attempts anew. */
 function runsOnAccount(tally: TotalsTally, accountId: string, t: number): number {
   if (!tally.byAccount) {
     tally.byAccount = new Map()
-    for (const a of tally.allAttempts) {
-      const list = tally.byAccount.get(a.account.id)
-      if (list) list.push(a)
-      else tally.byAccount.set(a.account.id, [a])
+    for (const w of workers.values())
+      for (const a of w.attempts) {
+        const start = a.startedAt
+        const end = a.endedAt ?? Number.MAX_SAFE_INTEGER
+        // An inverted or invalid interval never satisfied the former pair of comparisons.
+        if (!(start <= end)) continue
+        let runs = tally.byAccount.get(a.account.id)
+        if (!runs) {
+          runs = { starts: [], ends: [] }
+          tally.byAccount.set(a.account.id, runs)
+        }
+        runs.starts.push(start)
+        runs.ends.push(end)
+      }
+    for (const runs of tally.byAccount.values()) {
+      runs.starts.sort((a, b) => a - b)
+      runs.ends.sort((a, b) => a - b)
     }
   }
-  let n = 0
-  for (const a of tally.byAccount.get(accountId) ?? [])
-    if (a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t) n++
-  return n
+  const runs = tally.byAccount.get(accountId)
+  return runs ? countTimes(runs.starts, t, true) - countTimes(runs.ends, t, false) : 0
 }
 
 /** Over the whole record a task counts with its own sums; with `since` it only counts as a task
@@ -412,7 +440,6 @@ export function climayteTotals(
     ceilingStops: 0,
     ceilings: [],
     placedPast: [],
-    allAttempts: [...workers.values()].flatMap((w) => w.attempts),
     tasksInScope: new Set<string>(),
     hits: [],
     peaks: new Map<string, WindowPeak>(),

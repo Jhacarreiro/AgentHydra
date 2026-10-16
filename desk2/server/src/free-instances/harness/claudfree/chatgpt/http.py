@@ -89,12 +89,12 @@ def prune_per_chat_cookies(cookies):
     return kept
 
 
-def visible_messages(conversation):
-    """Follow the selected branch and allow only visible user/assistant text."""
+def visible_messages(conversation, *, rich=True):
+    """Follow the selected branch; proof reads skip display-only extraction."""
     result = []
     for message in reversed(_branch(conversation)):
         if isinstance(message, dict):
-            visible = _visible_message(message)
+            visible = _visible_message(message, rich=rich)
             if visible:
                 result.append(visible)
     return result
@@ -171,7 +171,7 @@ def _branch(conversation):
     return branch
 
 
-def _visible_message(message):
+def _visible_message(message, *, rich=True):
     author, content = message.get("author", {}), message.get("content", {})
     metadata = message.get("metadata") or {}
     if (
@@ -202,18 +202,20 @@ def _visible_message(message):
         r"[\1](\2)",
         text,
     )
-    return {
+    result = {
         "id": message.get("id"),
         "role": role,
         "text": text,
         "model": metadata.get("model_slug") or metadata.get("resolved_model_slug"),
         "incomplete": message.get("status") != "finished_successfully",
-        "content": [{"type": "text", "text": text}],
-        "code_blocks": code_blocks(text),
-        "citations": _citations(metadata, text),
-        "tool_calls": [],
-        "tool_results": [],
     }
+    if rich:
+        result["content"] = [{"type": "text", "text": text}]
+        result["code_blocks"] = code_blocks(text)
+        result["citations"] = _citations(metadata, text)
+        result["tool_calls"] = []
+        result["tool_results"] = []
+    return result
 
 
 def _citations(metadata, text):

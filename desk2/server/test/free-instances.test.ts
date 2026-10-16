@@ -150,6 +150,77 @@ describe('Free instance boundary', () => {
 })
 
 describe('Free jobs and routes', () => {
+  test('unchanged status polls do not walk 36000 historical threads again or expose mutable cached counts', () => {
+    const { service, instance } = fixture()
+    const store = (service as unknown as { store: FreeStorage }).store
+    let visits = 0
+    store.data.threads = Array.from({ length: 36_000 }, (_, n) => ({
+      id: `${instance.id}/${n}`, instanceId: instance.id, provider: 'claude' as const,
+      chatId: String(n), title: 'Synthetic history', createdAt: n, updatedAt: n, error: null,
+      get status() { visits++; return 'done' as const },
+    }))
+    const first = service.status()
+    expect(first.threadCounts?.[instance.id]).toBe(36_000)
+    expect(first.running).toBe(0)
+    expect(visits).toBe(36_000)
+    first.threadCounts![instance.id] = 0
+    visits = 0
+    for (let n = 0; n < 20; n++) expect(service.status().threadCounts?.[instance.id]).toBe(36_000)
+    expect(visits).toBe(0)
+  })
+
+  test('cached thread counts immediately follow new chats, resumes, list refreshes, forgetting and account removal', async () => {
+    let release: ((value: RunOutput) => void) | undefined
+    const another = '22222222-3333-4444-8555-666666666666'
+    const { service, op, instance } = fixture(async (_config, request) => {
+      if (request.command === 'resume') return new Promise(resolve => { release = resolve })
+      if (request.command === 'chats') return output({ ok: true, chats: [CHAT, another].map(chat_id => ({ chat_id, is_temporary: true })) })
+      return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })
+    })
+    const finish = async (job: ReturnType<FreeInstances['start']>) => {
+      while (job.state !== 'done') await tick()
+    }
+    expect(service.status().threadCounts).toEqual({})
+    await finish(service.start(op({ command: 'chat', prompt: 'Synthetic prompt' })))
+    expect(service.status().threadCounts?.[instance.id]).toBe(1)
+    const resumed = service.start(op({ command: 'resume', chatId: CHAT, prompt: 'Synthetic followup' }))
+    expect(service.status().running).toBe(1)
+    await tick()
+    release!(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic followup reply' }))
+    await finish(resumed)
+    expect(service.status().running).toBe(0)
+    await finish(service.start(op({ command: 'chats' })))
+    expect(service.status().threadCounts?.[instance.id]).toBe(2)
+    service.forgetThread(`${instance.id}/${CHAT}`)
+    expect(service.status().threadCounts?.[instance.id]).toBe(1)
+    await service.remove(instance.id)
+    expect(service.status().threadCounts).toEqual({})
+  })
+
+  test('a completed message serializes history once and persists its thread, tokens and final stats together', async () => {
+    const { service, home, op, instance } = fixture(async () => output({ ok: true,
+      chat_id: CHAT, is_temporary: true, response: 'Synthetic reply', model: 'synthetic-model' }))
+    await service.settled()
+    const store = (service as unknown as { store: FreeStorage }).store
+    let serializations = 0
+    const normal = store.data.threads
+    Object.defineProperty(normal, 'toJSON', { configurable: true, value() {
+      serializations++
+      return [...this]
+    } })
+    const job = service.start(op({ command: 'chat', prompt: 'Synthetic prompt' }))
+    while (job.state !== 'done') await tick()
+    await service.settled()
+    expect(serializations).toBe(1)
+    const saved = new FreeStorage(home).data
+    expect(saved.threads).toHaveLength(1)
+    expect(saved.threads[0]?.status).toBe('done')
+    expect(saved.tokens?.[instance.id]?.total).toEqual({ input: 4, output: 4 })
+    expect(saved.stats?.[dayOf(Date.now())]?.[instance.id]?.['synthetic-model']?.sent).toBe(1)
+    expect(job.result?.response).toBe('Synthetic reply')
+    expect(readFileSync(join(home, 'free', 'accounts.json'), 'utf8')).not.toContain('Synthetic reply')
+  })
+
   test('a duplicate send shares its job, another send is blocked, separate accounts can run independently', async () => {
     const calls: FreeRunRequest[] = []
     const release: ((output: RunOutput) => void)[] = []
