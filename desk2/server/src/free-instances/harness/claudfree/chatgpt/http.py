@@ -465,7 +465,7 @@ class ChatGPTHttp:
         listed = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
         return resolve(prefer, listed) or default_text(listed)[0] or TEXT_MODEL
 
-    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL, prepared_request=None):
+    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL, prepared_request=None, previous_ids=None):
         """One private POST. A prepared credential is consumed before transmission."""
         if not isinstance(prompt, str) or not prompt.strip():
             raise ClaudeError("Supply a nonempty prompt.", code="invalid_arguments")
@@ -473,7 +473,10 @@ class ChatGPTHttp:
             raise ClaudeError("Temporary Chat is not verified.", code="privacy_not_verified")
         if model != TEXT_MODEL and not (isinstance(model, str) and SLUG.fullmatch(model)):
             raise ClaudeError("That ChatGPT model is not one AgentHydra sends.", code="invalid_model")
-        previous = {m["id"] for m in visible_messages(existing, rich=False)} if existing else set()
+        # The client may already have validated and released a large continuation
+        # before queueing. Direct HTTP callers retain the ordinary validation.
+        previous = previous_ids if previous_ids is not None else (
+            {m["id"] for m in visible_messages(existing, rich=False)} if existing else set())
         payload = prepared_request['payload'] if prepared_request else _send_payload(prompt, existing, model)
         server_id = payload.get("conversation_id")
         headers = {"Accept": "text/event-stream"}

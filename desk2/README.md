@@ -1054,6 +1054,9 @@ ChatGPT continuation model and previous-message-ID checks use the existing proof
 avoiding historical code/citation extraction before dispatch. Branch visibility and identity
 validation remain shared with rich reads; completed replies still receive full display fields,
 and a lost or incomplete result never triggers another POST.
+After selecting the continuation model and validating its visible message IDs, the client releases
+the old provider transcript before browser queueing. Only the conversation/parent/privacy reference
+and a frozen previous-ID set remain; direct HTTP callers still validate their full input normally.
 Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
 304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
 304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered
