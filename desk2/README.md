@@ -685,7 +685,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   runs `git merge-tree --write-tree` with no fetch and no change to the work tree (`server/src/git/git.ts`,
   `web/src/components/panes/merge-preview.ts`). A chat whose saved session is in no folder on this PC no longer refuses
   a send: the message starts a fresh session that carries a condensed handoff of the chat (`engine/handoff.ts`), a
-  takeover line says so, and the transcript shows only what was typed (`takeOver` in `engine/chat-manager.ts`). A
+  takeover line says so, and the transcript shows only what was typed (`takeOver` in `engine/chat-manager-moves.ts`). A
   plain folder on the New screen shows its own logo: conventional icon files, an HTML `<link rel="icon">`, then the
   same in an app one folder down (`server/src/projects/icon-detect.ts`). A dev server's own printed address (its
   "Local:" line first) is the one shown and probed (`server/src/devservers/advertised-url.ts`). A chat marked unread by
