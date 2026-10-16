@@ -5,9 +5,12 @@ fake usage cache and a fake session table in tmp_path, and conftest redirects co
 """
 from __future__ import annotations
 
+import io
 import json
 import sqlite3
 import sys
+import threading
+import time
 from pathlib import Path
 
 import pytest
@@ -17,6 +20,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))
 from hswarm import accounts, claude_usage, config, report_html, utilization  # noqa: E402
 
 UUID_A, UUID_B, UUID_C = "uuid-max20", "uuid-max5", "uuid-pro"
+_agenthydra_prices = accounts._agenthydra_prices  # the real one: conftest swaps in {} for every test
 
 
 @pytest.fixture
@@ -50,6 +54,29 @@ def test_account_id_is_a_stable_hash_and_never_the_uuid():
     assert a.startswith("acct-") and len(a) == len("acct-") + 8
     assert a == accounts.account_id(UUID_A) and a != accounts.account_id(UUID_B)
     assert UUID_A not in a
+
+
+def test_stale_plan_prices_are_answered_at_once_and_fetched_on_another_thread(monkeypatch):
+    """The shared server looks a caller's account up on its event loop for every ledger line, and a price copy past its
+    window was fetched again right there: GET /health waited out AgentHydra's round trip, up to the 2 s timeout
+    (2026-10-16). Only a process's first call may wait; after that the copy stands until a thread brings the next."""
+    reply = threading.Event()
+    fetched_on = []
+
+    def urlopen(url, timeout):
+        fetched_on.append(threading.current_thread())
+        reply.wait(2)
+        return io.BytesIO(json.dumps({"settings": {"planPrices": {"Pro": 25}}}).encode())
+
+    monkeypatch.setenv("AGENTHYDRA_URL", "http://127.0.0.1:9")  # conftest blanks it; urlopen above answers instead
+    monkeypatch.setattr(accounts.urllib.request, "urlopen", urlopen)
+    monkeypatch.setattr(accounts, "_ah_cache", (time.monotonic() - accounts._AH_TTL_S - 1, {"pro": 20.0}))
+    assert _agenthydra_prices() == {"pro": 20.0}  # the stale copy, while AgentHydra has not answered yet
+    reply.set()
+    assert accounts._ah_fetching.acquire(timeout=5)  # the refresh has finished
+    accounts._ah_fetching.release()
+    assert fetched_on and fetched_on[0] is not threading.current_thread()
+    assert _agenthydra_prices() == {"pro": 25.0}
 
 
 def test_tiers_read_from_the_rate_limit_tier_then_what_agenthydra_displays(hydra):

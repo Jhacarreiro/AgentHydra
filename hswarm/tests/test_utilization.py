@@ -5,6 +5,7 @@ from __future__ import annotations
 import asyncio
 import json
 import sys
+import threading
 from pathlib import Path
 
 import pytest
@@ -312,6 +313,34 @@ def test_decide_books_its_jev_spend_as_a_utilization(tmp_path, monkeypatch):
     assert rows[0]["worker_usd"] == pytest.approx(0.0001) and rows[0]["orchestrator_model"] == "claude-opus-5-5"
     ledger = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines() if line.strip()]
     assert [(r["job"], r["provider"], r["calls"]) for r in ledger] == [("decide", "typesafe", 3)]
+
+
+def test_booking_an_ask_leaves_the_event_loop_free(tmp_path, monkeypatch):
+    """The shared server booked every ask and decide on its event loop: the caller stamp, the account lookup behind
+    each ledger line (with an HTTP call to AgentHydra) and the ledger append, and a decide held GET /health for that
+    call (2026-10-16). Here the stamp finishes only once the loop has served another coroutine."""
+    from hswarm import booking
+    from hswarm.spec import Result
+
+    _isolate(monkeypatch, tmp_path)
+    monkeypatch.setattr(config, "HOME", tmp_path)
+    served = threading.Event()
+
+    def stamp(kind):
+        assert served.wait(2), "the event loop was held while the ask was booked"
+        return {"instance": "7"}
+
+    monkeypatch.setattr(booking, "detect_caller", stamp)
+
+    async def main():
+        booked = asyncio.create_task(booking.book_asks([Result(id="a", status="ok", model="deepseek-flash")], "ask"))
+        await asyncio.sleep(0)  # the booking starts first
+        served.set()
+        return await booked
+
+    assert "bookkeeping_error" not in asyncio.run(main())
+    ledger = [json.loads(line) for line in config.LEDGER.read_text(encoding="utf-8").splitlines()]
+    assert [(r["task"], r["caller_instance"]) for r in ledger] == [("a", "7")]
 
 
 def test_old_db_migrates_to_a_stored_day_and_readers_cover_unbackfilled_rows(tmp_path):

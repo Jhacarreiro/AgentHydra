@@ -267,6 +267,11 @@ def serve(port: int = PORT) -> None:
     from . import vault
 
     threading.Thread(target=vault.autosync_loop, name="hswarm-vault-sync", daemon=True).start()  # idle until `hswarm vault init|join|adopt`
+    from . import accounts
+
+    # The first account lookup asks AgentHydra for its plan prices and waits (accounts._agenthydra_prices); made here, the
+    # wait is this thread's and not the event loop's, where every ledger line looks its caller's account up.
+    threading.Thread(target=accounts.resolver, name="hswarm-accounts-warm", daemon=True).start()
     mcp.run(transport="streamable-http", host=HOST, port=port, session_idle_timeout=IDLE_SESSION_S)
 
 
