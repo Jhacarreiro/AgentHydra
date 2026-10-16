@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Completed Free operations release their cached reply data.** Open chats keep their returned messages, while account rows retain only operation metadata and recovery IDs. Successful account deletion also clears its unused page state.
+- **Nested subagent lists reuse their shared ancestry.** Deep chains avoid repeatedly walking the same parents, with unchanged ownership, ordering and orphan handling.
+- **Source updates no longer race their own update checks.** Checks and applies take turns through the complete operation, preventing a background fetch from interfering with an update's Git pull.
 - **Large Free histories stay quieter while workers update.** The list reuses its Free rows until their history or displayed account details change, instead of rebuilding them on every worker refresh.
 - **History refreshes skip unnecessary work on unchanged data.** Cached chat titles are excluded before ranking, and quiet transcripts skip asynchronous stat callbacks. Existing file-freshness checks and lookup priorities stay the same.
 - **Login sync stops parsing unchanged account identities repeatedly.** Account emails are reused after checking the file, with replacements, removals and fresh sign-ins detected as before.

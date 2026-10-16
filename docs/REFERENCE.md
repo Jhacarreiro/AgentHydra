@@ -746,6 +746,12 @@ the working tree is clean, applies (`git pull --ff-only` + reinstall + rebuild) 
 on the same port (`AGENTHYDRA_RELAUNCH=1` makes the successor wait for the predecessor to free it).
 A dirty tree is never touched.
 
+Source checks and applies share one operation queue in the app adapter, covering the complete
+fetch/check or pull/install/build sequence. The spawn lane alone serializes only individual
+commands, which allowed another check to replace `FETCH_HEAD` during a pull. Each queued check
+still reads fresh state, failures reach their caller without wedging the queue, and apply progress
+starts only when that apply begins. Compiled release updates keep their existing path.
+
 Free MCP batches stay in the daemon's memory: preparing, queued or running batches are a hard
 restart guard, including during automatic updates. Admission closes synchronously before the
 successor handoff, then reopens if the handoff fails. If work starts while an update builds, the

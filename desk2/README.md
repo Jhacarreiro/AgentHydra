@@ -1028,6 +1028,10 @@ save, avoiding a second full-history serialization without changing backups or s
 The CliMayte page retains its Free display projection across local/remote worker refreshes.
 History replacements and reactive displayed account edits invalidate it; selection remains keyed
 by account/chat identity, and the underlying Free history keeps its existing polling and freshness.
+Completed jobs in the shared page cache retain metadata rather than whole result/transcript objects.
+Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
+uncertain-operation locks remain intact. Successful account removal clears its cache only if no
+newer operation appeared while deletion was awaiting acknowledgement. Server job retention is unchanged.
 Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
 304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
 304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered

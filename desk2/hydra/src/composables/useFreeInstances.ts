@@ -33,6 +33,15 @@ let refreshing: Promise<void> | null = null
 
 const busy = (id: string) => jobs[id]?.state === 'running'
 
+/** The caller owns a completed reply; the shared row cache needs only its recovery ID and status. */
+function cacheJob(job: FreeJob): void {
+  if (job.state === 'running') jobs[job.instanceId] = job
+  else {
+    const { result: _result, ...metadata } = job
+    jobs[job.instanceId] = metadata
+  }
+}
+
 /** The new list, keeping each unchanged item's own object: a row redraws only when its account changed. */
 function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
   const before = new Map(old.map(x => [x.id, x]))
@@ -85,12 +94,12 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
   const own = mine.has(first.id) || rememberedJob(first.instanceId) === first.id
   const task = (async () => {
     let job = first
-    jobs[job.instanceId] = job
+    cacheJob(job)
     try {
       while (job.state === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1000))
         job = await readJob(job.id)
-        jobs[job.instanceId] = job
+        cacheJob(job)
       }
       if (own) rememberedJob(job.instanceId, null)
       if (!job.result?.ok && own) errors[job.instanceId] = job.result?.error?.message || 'The operation did not complete. Read the chat before sending again.'
@@ -169,11 +178,20 @@ async function planSeen(instance: FreeInstance): Promise<void> {
  *  worked; the reason lands in errors[instance.id]. */
 async function remove(instance: FreeInstance): Promise<boolean> {
   if (busy(instance.id)) return false
+  const previousJob = jobs[instance.id]?.id
+  const previousRemembered = rememberedJob(instance.id)
   errors[instance.id] = ''
   try {
     await freeApi.remove(instance.id)
     instances.value = instances.value.filter(i => i.id !== instance.id)
     threads.value = threads.value.filter(t => t.instanceId !== instance.id)
+    // An operation begun while deletion was awaiting its acknowledgement keeps
+    // its own state and recovery ID; never clear another pending operation.
+    if (!busy(instance.id) && jobs[instance.id]?.id === previousJob && rememberedJob(instance.id) === previousRemembered) {
+      delete jobs[instance.id]
+      delete errors[instance.id]
+      rememberedJob(instance.id, null)
+    }
     return true
   } catch (error) {
     errors[instance.id] = freeErrorText(error, 'Could not delete. Try again.')
