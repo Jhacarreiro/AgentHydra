@@ -79,7 +79,13 @@ the current compiler compatibility note are in the native-control runbook.
 The root suite's preload (`tests/setup.ts`, `tests/real-home-guard.ts`) refuses a test's write into the developer's
 real agent homes (`~/.claude` and `~/.claude-instances`, docs/CLAUDE-CONFIG-LAYOUT.md; `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` the shell started with) and a remove of the working folder; point a test at its
-scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
+scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md). A test that reads people (a lead, a
+manager, a seat's persona) brings its own people door with `usePeopleDoor()` (`server/tests/hydra-core-fixture.ts`): the
+real one is this PC's, so without it a test passes or fails by machine (docs/REFERENCE.md, "Checks").
+
+The docs in `docs/` live in git: `.crainium.json` says docs home `git` (the owner, 2026-10-15), so edit them here with
+Edit or Write. Never put an AgentHydra doc to the CrAInium with the docs tool expecting it to stay: git's text replaces
+the CrAInium copy on its next docs push.
 
 Hydra Core lives in `hydra-core/` and `server/src/hydra-core/` (see `hydra-core/README.md`).
 People sync to CrAInium, the owners' private persona store, through the private sue-dredd checkout's people door

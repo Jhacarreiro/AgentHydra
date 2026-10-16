@@ -3,7 +3,7 @@
 // tab's refresh only reads the list, and Desk's own reads (FreeJob.auto) show no spinner.
 import { expect, it } from 'bun:test'
 import { effectScope } from 'vue'
-import type { FreeInstance, FreeStatus } from '@desk/shared/free-instances'
+import type { FreeInstance, FreeStatus, FreeThread } from '@desk/shared/free-instances'
 import { useFreeInstances } from './useFreeInstances'
 
 const account: FreeInstance = {
@@ -132,5 +132,50 @@ it('the running count needs no thread list; a page that lists the threads reads 
     expect(reads).toEqual(['status'])
   } finally {
     globalThis.fetch = realFetch
+  }
+})
+
+it('unchanged conditional history keeps the same list and row objects; changed rows appear immediately', async () => {
+  const realFetch = globalThis.fetch
+  const initial: FreeThread = {
+    id: `${account.id}/synthetic-chat`, instanceId: account.id, provider: 'claude',
+    chatId: 'synthetic-chat', title: 'Synthetic thread', status: 'done', createdAt: 1, updatedAt: 1, error: null,
+  }
+  let version = '"initial"'
+  let title = initial.title
+  let conditional = 0
+  globalThis.fetch = (async (url: string | URL, init?: RequestInit) => {
+    if (!String(url).endsWith('/threads'))
+      return new Response(JSON.stringify({ ready: true, running: 0, instances: [account], jobs: [] }))
+    if (new Headers(init?.headers).get('If-None-Match') === version) {
+      conditional++
+      return new Response(null, { status: 304, headers: { ETag: version } })
+    }
+    return new Response(JSON.stringify([{ ...initial, title }]), { headers: { ETag: version } })
+  }) as typeof fetch
+  const page = effectScope()
+  try {
+    const free = page.run(() => useFreeInstances({ threads: true }))!
+    await free.refreshFree({ silent: true })
+    const list = free.threads.value
+    const row = list[0]
+    await free.refreshFree({ silent: true })
+    expect(conditional).toBeGreaterThan(0)
+    expect(free.threads.value).toBe(list)
+    expect(free.threads.value[0]).toBe(row)
+    version = '"updated"'
+    title = 'Changed synthetic thread'
+    await free.refreshFree({ silent: true })
+    expect(free.threads.value).not.toBe(list)
+    expect(free.threads.value[0]?.title).toBe(title)
+    const updated = free.threads.value
+    await free.refreshFree({ silent: true })
+    expect(free.threads.value).toBe(updated)
+  } finally {
+    // A legacy response clears the shared composable's validator for later fixtures.
+    globalThis.fetch = (async (url: string | URL) => new Response(String(url).endsWith('/threads')
+      ? '[]' : JSON.stringify({ ready: true, running: 0, instances: [account], jobs: [] }))) as typeof fetch
+    try { await useFreeInstances().refreshFree({ silent: true }) }
+    finally { page.stop(); globalThis.fetch = realFetch }
   }
 })

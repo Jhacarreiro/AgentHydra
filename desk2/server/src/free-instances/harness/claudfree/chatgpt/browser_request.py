@@ -1,9 +1,9 @@
-"""Prepare a single request with the current website, then close its browser.
+"""Send once with the current website, then dispose the request's browser context.
 
 No login is submitted. The website owns its ordinary verification and sends the
 requested message once over its normal HTTP connection. Python verifies readback
-without resending. The browser closes and its owned profile is removed afterward.
-Cookies and request credentials stay in memory and the owned profile is removed.
+without resending. Desk shares one headless browser; account contexts are cleared
+afterward and the empty browser closes when idle. Standalone callers own a profile.
 """
 
 import asyncio
@@ -13,15 +13,15 @@ import os
 import re
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
+from requests.cookies import RequestsCookieJar
 
 from ..errors import ClaudeError
 from .. import signin
 from ..registry import chat_lock
-from .http import BASE, ChatGPTHttp, visible_messages
-from .quiet_window import ARGS as OFF_SCREEN, FocusReturn
+from .http import BASE, bounded_confirmed_conversation, load_chatgpt_cookies, visible_messages
 
 
 def markers_missing(cookies, now=None):
@@ -35,25 +35,11 @@ def markers_missing(cookies, now=None):
 @contextmanager
 def browser_slot(directory, *, wait):
     """Bound owned browser memory across harness processes, without stopping work."""
+    from .browser_slots import browser_slot as acquire
+
     root = Path(os.environ.get('CLAUDFREE_CACHE_DIR') or directory) / 'browser-slots'
-    deadline = time.monotonic() + wait
-    while True:
-        for slot in range(3):
-            held = chat_lock(root, 'chatgpt-' + str(slot))
-            try:
-                held.__enter__()
-            except ClaudeError as exc:
-                if exc.code != 'chat_busy':
-                    raise
-                continue
-            try:
-                yield
-            finally:
-                held.__exit__(None, None, None)
-            return
-        if time.monotonic() >= deadline:
-            raise ClaudeError('The browser request queue is busy. No message was sent.', code='browser_busy', retryable=True)
-        time.sleep(.1)
+    with acquire(root, wait=wait, locker=chat_lock):
+        yield
 
 READY = r'''(async()=>{
  const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});
@@ -108,16 +94,16 @@ def request_headers(headers):
 def prepare(http, prompt, existing=None, *, directory, model, temporary=True, on_id=None):
     """One bound request, never a reusable preparation pool or an automatic resend."""
     with browser_slot(directory, wait=min(120, http.timeout)):
+        endpoint = os.environ.get('CLAUDFREE_BROWSER_POOL')
+        if endpoint:
+            from .browser_pool import request
+            return request(http, prompt, existing, endpoint=endpoint, model=model, temporary=temporary, on_id=on_id)
         return asyncio.run(_prepare(http, prompt, existing, directory=directory, model=model, temporary=temporary, on_id=on_id))
 
 
 def adopt_cookies(http, cookies):
-    replacement = ChatGPTHttp({'cookies': cookies, 'origins': []}, timeout=http.timeout)
-    try:
-        http.session.cookies = replacement.session.cookies.copy()
-        http.original['cookies'] = cookies
-    finally:
-        replacement.close()
+    http.session.cookies = load_chatgpt_cookies(RequestsCookieJar(), cookies)
+    http.original['cookies'] = cookies
 
 
 def _refuse_unready_proof(http, proof):
@@ -201,7 +187,7 @@ async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, pr
 
 
 async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary):
-    def response(event):
+    async def response(event):
         if event.request_id == dispatch['network_id']:
             dispatch['status'] = int(event.response.status)
 
@@ -244,20 +230,26 @@ async def _adopt_captured_session(http, browser, headers):
 
 
 async def _conversation_candidate(tab, existing):
+    if existing:
+        return existing['conversation_id']
     path = await tab.evaluate('location.pathname')
     match = re.fullmatch(r'/c/([0-9a-f-]{36})', path or '')
-    return existing['conversation_id'] if existing else match[1] if match else None
+    return match[1] if match else None
 
 
-async def _own_message_completed(http, server_id, own_message, prompt, temporary):
+async def _own_message_completed(http, server_id, own_message, prompt, temporary, confirmed=None):
     try:
         body = await asyncio.to_thread(http._json, 'GET', '/backend-api/conversation/' + server_id)
-        messages = visible_messages(body)
+        if body.get('conversation_id') != server_id:
+            raise ClaudeError('ChatGPT returned a different conversation.', code='invalid_response')
+        messages = visible_messages(body, rich=False)
         positions = [i for i,m in enumerate(messages) if m['role']=='user' and m['id']==own_message and m['text']==prompt]
         if not positions or not any(m['role']=='assistant' and not m['incomplete'] for m in messages[positions[-1]+1:]):
             return False
         if temporary and body.get('is_temporary_chat') is not True:
             raise ClaudeError('The completed browser message was not Temporary. No second message was sent.', code='privacy_not_verified')
+        if confirmed is not None:
+            confirmed['body'] = body
         return True
     except ClaudeError as exc:
         if exc.code not in {'not_found','invalid_response'}:
@@ -265,18 +257,20 @@ async def _own_message_completed(http, server_id, own_message, prompt, temporary
         return False
 
 
-async def _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id):
+async def _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id, confirmed=None):
     deadline = time.monotonic() + min(90, http.timeout)
     own_message = payload['messages'][0].get('id')
-    server_id = None
+    server_id = existing['conversation_id'] if existing else None
+    notified = False
     while time.monotonic() < deadline:
         adopt_cookies(http, await signin.export_cookies(browser))
-        candidate = await _conversation_candidate(tab, existing)
-        if candidate:
-            if server_id is None and on_id:
-                on_id(candidate)
-            server_id = candidate
-            if await _own_message_completed(http, server_id, own_message, prompt, temporary):
+        if server_id is None:
+            server_id = await _conversation_candidate(tab, existing)
+        if server_id:
+            if not notified and on_id:
+                on_id(server_id)
+            notified = True
+            if await _own_message_completed(http, server_id, own_message, prompt, temporary, confirmed):
                 return server_id
         if dispatch['status'] and dispatch['status'] >= 400:
             raise ClaudeError('The ordinary browser send was refused. No second message was sent.', code='browser_send_rejected', status=dispatch['status'])
@@ -292,7 +286,7 @@ async def _close_browser(http, browser, identity_verified):
         await browser.stop()
 
 
-async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id):
+async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id, browser_factory=None):
     import zendriver as zd
 
     started = time.monotonic()
@@ -301,12 +295,12 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
     dispatch = {'network_id': None, 'status': None, 'sent': False}
     identity_verified = False
     server_id = None
-    returning = asyncio.create_task(FocusReturn().watch())
+    confirmed = {}
     # The session lock held by ChatGPTClient protects both cookies and this profile.
-    with tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
+    with nullcontext(None) if browser_factory else tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
         try:
-            browser = await zd.start(user_data_dir=profile, headless=False,
-                browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check', *OFF_SCREEN])
+            browser = await browser_factory() if browser_factory else await zd.start(user_data_dir=profile, headless=True,
+                browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check'])
             await signin.load_cookies(browser, http.saved_state()['cookies'])
             path = '/c/' + existing['conversation_id'] if existing else '/'
             tab = await browser.get(BASE + path)
@@ -320,13 +314,16 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
             payload, headers = await _await_capture(http, captured)
             await _adopt_captured_session(http, browser, headers)
             if dispatch['sent']:
-                server_id = await _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id)
-            return {'payload': payload, 'headers': headers,
+                server_id = await _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id, confirmed)
+            result = {'payload': payload, 'headers': headers,
                 'already_sent': True, 'server_id': server_id,
                 'metrics': {'seconds': round(time.monotonic()-started, 2), 'browser_preparation': True,
                     'browser_closed_before_send': False, 'browser_completed_send': True,
                     'renewed_browser_markers': missing_before}}
+            snapshot = bounded_confirmed_conversation(confirmed.get('body'))
+            if snapshot is not None:
+                result['confirmed_conversation'] = snapshot
+            return result
         finally:
-            returning.cancel()
             if browser:
                 await _close_browser(http, browser, identity_verified)

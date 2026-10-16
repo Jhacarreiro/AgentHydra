@@ -1,8 +1,9 @@
 import { readFileSync, statSync } from 'node:fs'
 import type { RoutineDefinition, RoutineOutcome, RoutineProposal, RunDescription } from '@shared/routines'
 import { renameOver, writeFlushed } from '../write-flushed'
-import type { Memory } from './decide'
+import type { Memory, SlotClaim } from './decide'
 import { ROUTINE_ID } from './manifest'
+import type { Claim } from './runs'
 import type { RunResult } from './runner'
 import { BUSY_EXIT, RUNS_KEPT } from './manager-config'
 
@@ -40,6 +41,8 @@ export function load(file: string): Record<string, Memory> {
         lastSlot: typeof m?.lastSlot === 'number' ? m.lastSlot : null,
         paused: m?.paused === true,
       }
+      const claim = slotClaimOf(m?.claim)
+      if (claim) mem.claim = claim
       // A run still marked running when AgentHydra started again goes on: a prompt run's chat runs on, and a command run's
       // runner is outside Desk's process tree. The first look reads whether it ended meanwhile.
       if (m?.running && Number.isFinite(m.running.startedAt)) {
@@ -47,11 +50,22 @@ export function load(file: string): Record<string, Memory> {
         const pid = typeof m.running.pid === 'number' ? m.running.pid : null
         // A run kept without its kind (a Desk before 2026-10-13) is a prompt run when it has its chat, else a command run.
         const kind = m.running.kind === 'prompt' || workerId ? 'prompt' : 'command'
-        mem.running = { startedAt: m.running.startedAt, kind, pid: workerId ? null : pid, workerId, sessionId: null }
+        mem.running = { startedAt: m.running.startedAt, kind, pid: workerId ? null : pid, workerId, sessionId: null, slot: typeof m.running.slot === 'number' ? m.running.slot : null }
       }
       return [id, mem]
     }),
   ))
+}
+
+const num = (v: unknown): v is number => typeof v === 'number' && Number.isFinite(v)
+
+/** A shared routine's claim as routines.json kept it, or null when it is not one. */
+function slotClaimOf(v: unknown): SlotClaim | null {
+  const c = v as Partial<SlotClaim> | null
+  if (!c || typeof c !== 'object' || !num(c.asked) || !num(c.at) || typeof c.mine !== 'boolean') return null
+  const k = c.claim as Partial<Claim> | null | undefined
+  const claim = k && num(k.slot) && typeof k.holder === 'string' && num(k.leaseUntil) && (k.endedAt === null || num(k.endedAt)) ? (k as Claim) : null
+  return { asked: c.asked, claim, mine: c.mine && claim !== null, error: typeof c.error === 'string' ? c.error : null, at: c.at }
 }
 
 /** How long ago a file was last written, ms; null when it is not there. */

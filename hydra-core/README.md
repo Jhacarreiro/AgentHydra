@@ -5,7 +5,7 @@ The hook that runs Hydra Core in a Claude Code chat. It registers the core hooks
 ## TL;DR
 
 - Three hook events: `UserPromptSubmit` on every message, `SessionStart` after a compact or resume, `Stop` for the add-on rule below.
-- Core mode is on only while `<core dir>/ON` exists. Without it the hook prints nothing.
+- Core mode is on only while `<core dir>/ON` exists. Without it the hook prints nothing, unless a `CRANIUM` file is there (below).
 - No output for CliMayte workers, for prompts starting with `/`, or for a fresh session.
 - Each message is written to `chats/<key>/prompt.txt` and the working folder to `chats/<key>/cwd.txt`. The injected line is one short block that names `hydra.md`, its lead and its tier.
 - Node 22 or newer, no dependencies. Runs in well under 300 ms.
@@ -20,8 +20,18 @@ The hook that runs Hydra Core in a Claude Code chat. It registers the core hooks
 
 ## Where things live
 
-- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and the saved-entry file an add-on names (keyed by settings path) live there.
+- Core folder: `AGENTHYDRA_CORE_DIR`, default `~/.agenthydra/core`. The `ON`, `CRANIUM`, `INJECT`, `PLACEMENT` and `ASK` flag files, the `chats/` folder and the saved-entry file an add-on names (keyed by settings path) live there.
 - Chat key: `HYDRA_DESK_CHAT_ID` when set, else the Claude `session_id`. Characters outside `A-Za-z0-9_.-` become `_`.
+
+## The CrAInium flowchart (`CRANIUM`)
+
+A `<core dir>/CRANIUM` file (empty is fine) moves the core off this PC. The flowchart lives in the CrAInium, one per workspace, behind the Connections MCP tool `connections_core`. The file turns the hook on by itself. Leave `ON` out, because `ON` also turns on the daemon's local core mode: chats get the core chat prompt instead of the owner's CLAUDE.md, and the manager tools refuse. With the file, the hook only points each chat at the flowchart:
+
+- Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
+- After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.
+- Fast path: the flowchart's quick exits are kept per folder in `~/.connections/cranium/core-head.json` (`AGENTHYDRA_CRANIUM_HEAD_FILE` overrides it), written by the Connections MCP and used for a day. When a folder has them, the message lists its questions and exits, and the chat answers those itself with no tool call; only answers they do not settle call `connections_core`. A folder marked `none` gets no line. Each turn's Stop appends one line to `~/.connections/cranium/core-outbox.jsonl` (`AGENTHYDRA_CRANIUM_OUTBOX_FILE`): whether the chat walked the core and whether it handed work to a delegate, so the core calls that remain can be counted.
+- Nothing is written under the core folder, and the placement, pack and Stop add-on below are off.
+- Seats, drones and worker shells still get nothing, and their skips are not logged. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
 
 ## Stop and add-ons
 
@@ -44,7 +54,7 @@ The installer writes these entries (the command path is the absolute path of `ho
 "Stop":             [ { "hooks": [ { "type": "command", "command": "node \"<repo>/hydra-core/hook.mjs\"" } ] } ]
 ```
 
-Other hooks are left alone. An add-on may ask install to take out one of its entries; the group is saved in the core folder, and `--uninstall` removes only the core entries and puts the saved entry back where it was.
+Each event keeps one core entry. Installing from another checkout points the existing entry at this checkout's `hook.mjs` and removes any further `hydra-core/hook.mjs` entries, so moving the hook between checkouts never leaves two. Other hooks are left alone. An add-on may ask install to take out one of its entries; the group is saved in the core folder, and `--uninstall` removes only the core entries and puts the saved entry back where it was.
 
 ## Placement
 

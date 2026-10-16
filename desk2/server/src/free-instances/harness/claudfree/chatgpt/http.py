@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
 import re
 import time
 from uuid import uuid4
@@ -36,6 +37,41 @@ _VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 # three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.
 PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
 PER_CHAT_COOKIES_KEPT = 20  # of each family
+CONFIRMED_CONVERSATION_MAX_BYTES = 512 * 1024
+
+
+def bounded_confirmed_conversation(body):
+    """An optional in-memory readback; large conversations keep the normal GET."""
+    if not isinstance(body, dict):
+        return None
+    try:
+        size = len(json.dumps(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    return body if size <= CONFIRMED_CONVERSATION_MAX_BYTES else None
+
+
+def confirmed_reply(body, server_id, own_message, prompt, previous):
+    """Revalidate a completed browser read without accepting a different branch."""
+    if not isinstance(body, dict) or body.get('conversation_id') != server_id:
+        raise ClaudeError('ChatGPT returned a different or invalid conversation.', code='invalid_response')
+    if body.get('is_temporary_chat') is not True:
+        raise ClaudeError('The completed browser chat was not confirmed as Temporary. No second message was sent.', code='privacy_not_verified')
+    messages = visible_messages(body)
+    identities = [message['id'] for message in messages]
+    if any(not isinstance(identity, str) or not identity for identity in identities) or len(set(identities)) != len(identities):
+        raise ClaudeError('The completed browser branch has invalid message identities.', code='invalid_response')
+    positions = [i for i, message in enumerate(messages)
+        if message['role'] == 'user' and message['id'] == own_message and message['text'] == prompt]
+    if not isinstance(own_message, str) or not own_message or own_message in previous or len(positions) != 1:
+        raise ClaudeError('The captured user message is not confirmed on this branch. Read the chat before sending again.', code='response_pending')
+    following = messages[positions[0] + 1:]
+    # A later user turn is someone else's request, not evidence for this send.
+    following = following[:next((i for i, message in enumerate(following) if message['role'] == 'user'), len(following))]
+    fresh = [message for message in following if message['role'] == 'assistant' and message['id'] not in previous]
+    if not fresh or fresh[-1]['incomplete']:
+        raise ClaudeError('A completed new assistant reply is not confirmed. Read the chat before sending again.', code='response_pending')
+    return messages, fresh[-1]
 
 
 def prune_per_chat_cookies(cookies):
@@ -53,12 +89,38 @@ def prune_per_chat_cookies(cookies):
     return kept
 
 
-def visible_messages(conversation):
-    """Follow the selected branch and allow only visible user/assistant text."""
+def load_chatgpt_cookies(jar, cookies, *, headers=None):
+    """Restore only applicable cookies into a jar without creating an HTTP session."""
+    for cookie in prune_per_chat_cookies(cookies):
+        # A cookie from auth.openai.com must never be sent to chatgpt.com.
+        expiry = cookie.get("expires", -1)
+        if cookie.get("domain", "").lstrip(".").lower() != "chatgpt.com" or (
+            expiry > 0 and expiry <= time.time()
+        ):
+            continue
+        jar.set(
+            cookie["name"],
+            cookie["value"],
+            domain=cookie["domain"],
+            path=cookie.get("path", "/"),
+            secure=cookie.get("secure", True),
+            expires=int(expiry) if expiry > 0 else None,
+            rest={
+                "HttpOnly": cookie.get("httpOnly", False),
+                "SameSite": cookie.get("sameSite", "Lax"),
+            },
+        )
+        if headers is not None and cookie["name"] == "oai-did":
+            headers["OAI-Device-ID"] = cookie["value"]
+    return jar
+
+
+def visible_messages(conversation, *, rich=True):
+    """Follow the selected branch; proof reads skip display-only extraction."""
     result = []
     for message in reversed(_branch(conversation)):
         if isinstance(message, dict):
-            visible = _visible_message(message)
+            visible = _visible_message(message, rich=rich)
             if visible:
                 result.append(visible)
     return result
@@ -68,7 +130,7 @@ def thread_model(conversation):
     """The model a continued chat is sent on: the one its latest reply came from, when it is one AgentHydra sends, else
     Luna Instant. Before 2026-10-13 every continued message went to Luna Instant, so a thread started on GPT-6 answered
     only its first message there: a Free tool task, whose every tool result is a continued message, ran on Luna mini."""
-    for message in reversed(visible_messages(conversation)):
+    for message in reversed(visible_messages(conversation, rich=False)):
         if message["role"] == "assistant" and message.get("model"):
             sent = message["model"]
             return sent if isinstance(sent, str) and SLUG.fullmatch(sent) else TEXT_MODEL
@@ -135,7 +197,7 @@ def _branch(conversation):
     return branch
 
 
-def _visible_message(message):
+def _visible_message(message, *, rich=True):
     author, content = message.get("author", {}), message.get("content", {})
     metadata = message.get("metadata") or {}
     if (
@@ -166,18 +228,20 @@ def _visible_message(message):
         r"[\1](\2)",
         text,
     )
-    return {
+    result = {
         "id": message.get("id"),
         "role": role,
         "text": text,
         "model": metadata.get("model_slug") or metadata.get("resolved_model_slug"),
         "incomplete": message.get("status") != "finished_successfully",
-        "content": [{"type": "text", "text": text}],
-        "code_blocks": code_blocks(text),
-        "citations": _citations(metadata, text),
-        "tool_calls": [],
-        "tool_results": [],
     }
+    if rich:
+        result["content"] = [{"type": "text", "text": text}]
+        result["code_blocks"] = code_blocks(text)
+        result["citations"] = _citations(metadata, text)
+        result["tool_calls"] = []
+        result["tool_results"] = []
+    return result
 
 
 def _citations(metadata, text):
@@ -216,27 +280,7 @@ class ChatGPTHttp:
         self.session.headers.update(
             {"Accept": "application/json", "Origin": BASE, "Referer": BASE + "/"}
         )
-        for cookie in prune_per_chat_cookies(saved.get("cookies", [])):
-            # A cookie from auth.openai.com must never be sent to chatgpt.com.
-            expiry = cookie.get("expires", -1)
-            if cookie.get("domain", "").lstrip(".").lower() != "chatgpt.com" or (
-                expiry > 0 and expiry <= time.time()
-            ):
-                continue
-            self.session.cookies.set(
-                cookie["name"],
-                cookie["value"],
-                domain=cookie["domain"],
-                path=cookie.get("path", "/"),
-                secure=cookie.get("secure", True),
-                expires=int(expiry) if expiry > 0 else None,
-                rest={
-                    "HttpOnly": cookie.get("httpOnly", False),
-                    "SameSite": cookie.get("sameSite", "Lax"),
-                },
-            )
-            if cookie["name"] == "oai-did":
-                self.session.headers["OAI-Device-ID"] = cookie["value"]
+        load_chatgpt_cookies(self.session.cookies, saved.get("cookies", []), headers=self.session.headers)
 
     def close(self):
         self.session.close()
@@ -421,7 +465,7 @@ class ChatGPTHttp:
         listed = self._json("GET", "/backend-api/models?history_and_training_disabled=true").get("models", [])
         return resolve(prefer, listed) or default_text(listed)[0] or TEXT_MODEL
 
-    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL, prepared_request=None):
+    def send(self, prompt, *, existing=None, on_id=None, model=TEXT_MODEL, prepared_request=None, previous_ids=None):
         """One private POST. A prepared credential is consumed before transmission."""
         if not isinstance(prompt, str) or not prompt.strip():
             raise ClaudeError("Supply a nonempty prompt.", code="invalid_arguments")
@@ -429,7 +473,10 @@ class ChatGPTHttp:
             raise ClaudeError("Temporary Chat is not verified.", code="privacy_not_verified")
         if model != TEXT_MODEL and not (isinstance(model, str) and SLUG.fullmatch(model)):
             raise ClaudeError("That ChatGPT model is not one AgentHydra sends.", code="invalid_model")
-        previous = {m["id"] for m in visible_messages(existing)} if existing else set()
+        # The client may already have validated and released a large continuation
+        # before queueing. Direct HTTP callers retain the ordinary validation.
+        previous = previous_ids if previous_ids is not None else (
+            {m["id"] for m in visible_messages(existing, rich=False)} if existing else set())
         payload = prepared_request['payload'] if prepared_request else _send_payload(prompt, existing, model)
         server_id = payload.get("conversation_id")
         headers = {"Accept": "text/event-stream"}
@@ -446,6 +493,12 @@ class ChatGPTHttp:
             if on_id:
                 on_id(server_id)
             complete = True
+            confirmed = prepared_request.get('confirmed_conversation')
+            if confirmed is not None:
+                messages, reply = confirmed_reply(confirmed, server_id,
+                    payload['messages'][0].get('id'), prompt, previous)
+                if bounded_confirmed_conversation(confirmed) is not None:
+                    return confirmed, messages, reply, complete
         else:
             response = self._request(
                 "POST",

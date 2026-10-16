@@ -17,6 +17,8 @@ const CALL_TIMEOUT_MS = 25_000
 const PROTOCOL = '2025-03-26'
 
 export interface HttpServerConfig {
+  /** The entry's key in the config, which Claude Code gives the helper as CLAUDE_CODE_MCP_SERVER_NAME. */
+  name: string
   url: string
   /** The shell command whose stdout is a JSON object of request headers, or null. */
   headersHelper: string | null
@@ -39,10 +41,10 @@ const strings = (o: unknown): Record<string, string> => {
   return out
 }
 
-/** The `http` entry's fields from a parsed config entry, or null when it is not one. */
-export function httpConfig(s: Record<string, unknown>): HttpServerConfig | null {
+/** The `http` entry's fields from a parsed config entry under key `name`, or null when it is not one. */
+export function httpConfig(s: Record<string, unknown>, name: string): HttpServerConfig | null {
   if (s.type !== 'http' || typeof s.url !== 'string' || !/^https?:\/\//.test(s.url)) return null
-  return { url: s.url, headersHelper: typeof s.headersHelper === 'string' && s.headersHelper.trim() ? s.headersHelper : null, headers: strings(s.headers) }
+  return { name, url: s.url, headersHelper: typeof s.headersHelper === 'string' && s.headersHelper.trim() ? s.headersHelper : null, headers: strings(s.headers) }
 }
 
 /** Runs the headersHelper as Claude Code does, for one chat; resolves its JSON object's string values. */
@@ -53,7 +55,7 @@ export function runHeadersHelper(cfg: HttpServerConfig, cwd: string, sessionId: 
       ...process.env,
       CLAUDECODE: '1',
       CLAUDE_PROJECT_DIR: cwd,
-      CLAUDE_CODE_MCP_SERVER_NAME: 'connections',
+      CLAUDE_CODE_MCP_SERVER_NAME: cfg.name,
       CLAUDE_CODE_MCP_SERVER_URL: cfg.url
     }
     if (sessionId) env.CLAUDE_CODE_SESSION_ID = sessionId

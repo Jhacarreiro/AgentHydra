@@ -2092,17 +2092,27 @@ export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'created
   ws: T[],
   limit: number | undefined,
 ): T[] {
-  const keep =
-    limit === undefined
-      ? ws
-      : [
-          ...ws.filter(isLive),
-          ...ws
-            .filter((w) => !isLive(w))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, Math.max(0, limit)),
-        ]
-  return [...keep].sort((a, b) => b.createdAt - a.createdAt)
+  if (limit === undefined) return [...ws].sort((a, b) => b.createdAt - a.createdAt)
+  // The `limit` latest changes, newest first, an earlier worker winning a tie (as the stable sort of
+  // every finished worker this replaces did): one pass from the newest, which fills the list first, so
+  // an older worker is mostly one comparison (17,000 workers sorted on every list read, 2026-10-15).
+  const n = Math.max(0, limit)
+  const live: T[] = []
+  const recent: T[] = []
+  for (let i = ws.length - 1; i >= 0; i--) {
+    const w = ws[i]!
+    if (isLive(w)) {
+      live.push(w)
+      continue
+    }
+    if (!n || (recent.length === n && w.updatedAt < recent[n - 1]!.updatedAt)) continue
+    // Before every kept one it ties or beats: it is earlier than all of them.
+    let at = 0
+    while (at < recent.length && recent[at]!.updatedAt > w.updatedAt) at++
+    recent.splice(at, 0, w)
+    if (recent.length > n) recent.pop()
+  }
+  return [...live.reverse(), ...recent].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** A list row for an orchestrator deciding what to do next: the report row (toReport) without the
@@ -2237,6 +2247,39 @@ export function ranSeconds(w: CliMayteWorker, now: number): number {
   )
 }
 
+export const WORKER_TEXT_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+
+export interface CliMayteLeanText {
+  readonly prompt: string
+  readonly resultChars: number
+}
+
+/** The lean list's text metadata, computed before a finished worker is packed. */
+export function leanText(w: CliMayteWorker): CliMayteLeanText {
+  const prompt = w.prompt
+  const prefix = prompt.slice(0, 300)
+  return {
+    // A sliced string can keep its entire long backing string alive. Copy code
+    // units so even a prefix ending on a lone surrogate stays byte-for-byte JS text.
+    prompt: prompt.length > 300 ? prefix.split('').join('') : prefix,
+    resultChars: statusTurns(w).reduce((sum, turn) => sum + turn.length, 0),
+  }
+}
+
+/** Copy ordinary list fields without invoking any packed-text accessor. */
+function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+  const row: Record<string, unknown> = {}
+  for (const key of Object.keys(w)) {
+    if (key === 'prompt') row.prompt = text.prompt
+    else if (key === 'result') row.result = null
+    else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
+      row[key] = (w as unknown as Record<string, unknown>)[key]
+  }
+  row.prompt = text.prompt
+  row.result = null
+  return row as unknown as CliMayteWorker
+}
+
 /** `result` and `results` as the view shows them (statusTurns); nothing when they stay as stored. */
 function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results'> | undefined {
   const turns = statusTurns(w)
@@ -2244,17 +2287,22 @@ function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results
   return { results: turns, result: joinResults(turns) }
 }
 
-export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): CliMayteWorkerView {
+export function toView(
+  w: CliMayteWorker,
+  now: number,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...w,
+    ...(text ? withoutWorkerText(w, text) : w),
     ...originFields(w.origin, lookup, w.trace),
     role: roleOf(w),
     // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
     sendIds: undefined,
-    prompt: w.prompt.slice(0, 300),
-    ...keptReport(w),
+    prompt: text ? text.prompt : w.prompt.slice(0, 300),
+    ...(text ? undefined : keptReport(w)),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day

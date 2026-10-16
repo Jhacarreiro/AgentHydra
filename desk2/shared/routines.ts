@@ -52,6 +52,37 @@
 // A routine's file is written by its owner. An AI can only propose one (see RoutineProposal): a proposal lives in
 // <desk home>/routines/proposed/<id>.json with a required "why" and never runs until the owner approves it in Settings >
 // Managers > Routines.
+//
+// CENTRAL ROUTINES (owner, 2026-10-15: "move these Routines ... into some sort of centralized location? In the cranium ...
+// for other people to use this"). When <desk home>/routines-store.json names a store, the manager also reads the routines
+// kept there, which every computer reading that store sees: today the CrAInium, as documents routines/<id>.md under one
+// docs repo key, read and written through the person's own Connections server. The file is:
+//   { "store": { "kind": "crainium", "repo": "example/routines" },
+//     "runner": "my-pc",                                   (this computer's name as a runner; default its host name)
+//     "labels": ["gpu"],                                   (more labels it carries; it always carries its name and system)
+//     "repos": { "example/project": "C:/Users/me/project" }, (its checkouts, for a routine's workdir)
+//     "approvers": [{ "name": "Example Owner's laptop", "key": "ed25519:..." }], (other computers whose approvals count)
+//     "approverName": "Example Owner" }                    (the name an approval made here carries)
+// A routine document is a JSON front matter between --- lines, then its body:
+//   kind "routine", format "routine/1", title (its name), askedBy, why (while it is a proposal), the contract's WHEN and
+//   WHAT keys above (a "schedule" also names its IANA "timeZone"), its folder as "workdir": { "repo", "path" } (found
+//   through "repos" on each computer) or "cwd" (a full path, or one starting with ~/), "runsOn" (the runner labels it
+//   runs on), timeoutMinutes, until, describe, and "approval". Its prompt is the body. A document runs only once a person
+//   approved it: "approval" is an Ed25519 signature over its id and everything in it but the approval, by this computer's
+//   approver key (<desk home>/routines-approver.key, made with the store) or one listed in "approvers". An AI may write a
+//   proposal there (POST propose with "store": "central"), never an approval; any change after an approval makes it a
+//   proposal again. A schedule keeps its "timeZone" on every runner, and so does its "until" day.
+// WHERE IT RUNS: only on a runner that carries every label its runsOn names. When one of them is a runner's name it is
+//   pinned to that runner and runs as a local routine does. When none is, any runner carrying them may run it (a schedule
+//   routine only) and exactly one runs each slot: before a slot runs, its runner claims it on the store's run board (the
+//   CrAInium's `routine_runs` tool, under the same repo key), which grants it to the first runner that asks, with a lease
+//   of twice its timeout that the holder renews while the run lives; a lease that lapsed lets another runner take the
+//   slot, and no newer slot is granted while one runs. A board that does not answer holds back only those shared slots.
+//   Every central run, wherever it runs, is reported to the run log as CloudEvents (routine.claimed, routine.started,
+//   routine.ended), and each computer's card shows the newest run of each central routine (`latestRun`). A routine its
+//   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is not
+//   listed (the store's `problems` name it): the file runs. The manager keeps a copy of each document in
+//   <desk home>/routines/central/ and runs from it while the store cannot be reached.
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
@@ -71,8 +102,9 @@ export type RoutineOutcome = 'ok' | 'busy' | 'failed' | 'timed-out' | 'interrupt
  * ended     past its `until` day: never runs, still listed
  * broken    its file or its status does not check out (the reason says which)
  * waiting   a proposal waiting for the owner's yes (listed separately, never run)
+ * elsewhere a central routine placed on another runner: listed, never run on this computer
  */
-export type RoutineState = 'idle' | 'due' | 'running' | 'paused' | 'off' | 'ended' | 'broken' | 'waiting'
+export type RoutineState = 'idle' | 'due' | 'running' | 'paused' | 'off' | 'ended' | 'broken' | 'waiting' | 'elsewhere'
 
 /** Which way a routine decides when it runs. */
 export type RoutineKind = 'schedule' | 'status' | 'windowsTask'
@@ -107,6 +139,24 @@ export interface RoutineRunning {
   pid: number | null
   workerId: string | null
   sessionId: string | null
+  /** The schedule slot it runs for (ms), or null for a run not tied to one (a manual run, a status routine's). */
+  slot?: number | null
+}
+
+/** A central routine's newest run, wherever it ran, from the run log every computer reads. Times in ms; the facts of its
+ *  end are null while it runs (or when it never said how it ended). */
+export interface CentralRun {
+  /** The runner it ran on. */
+  runner: string
+  /** The schedule slot it ran for, or null for a run not tied to one. */
+  slot: number | null
+  startedAt: number | null
+  endedAt: number | null
+  outcome: RoutineOutcome | null
+  exitCode: number | null
+  lastLine: string | null
+  /** What it did, as an AI read it (its routine's `describe` is on). */
+  description: string | null
 }
 
 /** A status routine's modes: the options the owner picks from, and the command that takes a pick (its argv, the option
@@ -136,6 +186,39 @@ export interface RoutineDefinition {
 /** A proposal an AI wrote: the definition, plus why it should be a routine rather than a background task it runs itself. */
 export interface RoutineProposal extends RoutineDefinition {
   why: string
+  /** 'central': kept in the central store (routines-store.json), where any computer reading it sees it; absent: this PC's file. */
+  source?: 'central'
+  /** A central proposal's runner labels. */
+  runsOn?: string[]
+}
+
+/** POST propose's object: a proposal, and for one kept in the central store `store: "central"` with its central keys
+ *  (runsOn defaults to this runner, a schedule's timeZone to this computer's). */
+export type RoutineProposalRequest = RoutineProposal & {
+  store?: 'central'
+  timeZone?: string
+  workdir?: { repo: string; path: string }
+}
+
+/** The central store this computer reads routines from (GET /api/routines `store`): null when routines-store.json names none. */
+export interface RoutineStoreStatus {
+  /** The CrAInium docs repo key the routine documents live under ('' when routines-store.json does not check out). */
+  repo: string
+  /** This computer's runner name: a routine's runsOn names it to run here. */
+  runner: string
+  labels: string[]
+  /** This computer's approver key: another computer trusts approvals made here by listing it in its "approvers". */
+  approverKey: string
+  /** When the store last answered, ms; null when it never has (the central routines are this computer's copies). */
+  readAt: number | null
+  /** Why the store did not answer, or why routines-store.json does not check out; null when it did. */
+  error: string | null
+  /** Documents under routines/ that are not a routine, each with why (never run, never listed). */
+  problems: { id: string; reason: string }[]
+  /** When the run log last answered, ms; null when it never has. */
+  runsReadAt: number | null
+  /** Why the run log did not answer, or did not take this computer's runs; null when it did. */
+  runsError: string | null
 }
 
 /** One routine, as the last look saw it. */
@@ -179,6 +262,14 @@ export interface Routine {
   runs: RoutineRun[]
   /** How many runs it has ever had (its full history; the card shows the newest 30). */
   runsTotal?: number
+  /** 'central': kept in the central store; absent: this PC's file. */
+  source?: 'central'
+  /** A central routine's runner labels: where it runs. */
+  runsOn?: string[]
+  /** A central schedule routine's IANA time zone: its schedule and until day keep it, wherever it runs. */
+  timeZone?: string
+  /** A central routine's newest run, wherever it ran (the run log); null when none is known. */
+  latestRun?: CentralRun | null
 }
 
 /** GET /api/routines. */
@@ -193,6 +284,8 @@ export interface RoutinesStatus {
   proposals: RoutineProposal[]
   /** Why the last look failed as a whole, or null. */
   error: string | null
+  /** The central store, when this computer reads one. */
+  store?: RoutineStoreStatus | null
 }
 
 /**
@@ -209,7 +302,7 @@ export interface RoutinesRequest {
   resume?: string
   approve?: string
   discard?: string
-  propose?: RoutineProposal
+  propose?: RoutineProposalRequest
   edit?: { id: string; set: Record<string, unknown> }
   mode?: { id: string; value: string }
 }

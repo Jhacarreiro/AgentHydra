@@ -173,7 +173,7 @@ DESK_APPEND (the orchestrator default every chat gets):
 
 When `delegateToCliMayte` is off, DESK_APPEND is only its first sentence.
 
-### A chat moves folders (engine/cwd-move.ts, chat-manager noteCwd)
+### A chat moves folders (engine/cwd-move.ts, chat-manager-moves noteCwd)
 
 Like Claude Code's own app: tell a chat "make folder X and move yourself there" and its sidebar group
 becomes X, and later turns run in X with X's instructions and MCP servers.
@@ -524,7 +524,7 @@ picks the account and moves the worker when that account hits its limit or its l
 - **No SDK chat ends on an account failure (in-runtime failover, not CliMayte):** AgentHydra's
   `POST /api/corch/workers` takes only a prompt and cwd (no resume or seed option), so an imported session
   cannot start as a worker. Instead, when a turn fails on its account (expired/revoked login, 401/403 auth,
-  org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `ChatManager.carryToAnotherAccount`
+  org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `carryToAnotherAccount` (`engine/chat-manager-moves.ts`)
   asks `listAccounts()` (AgentHydra's word: `signedIn`, usage percentages, never a token) for the least used
   signed-in account not yet tried whose 5-hour and weekly readings are both under the fleet's 85% line, or under
   the owner's lower cap for the account, the owner's higher priority first (`AccountInfo.priority`, `maxFiveHourPct`,

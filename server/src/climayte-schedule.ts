@@ -113,10 +113,16 @@ function groupCounts(byGroup: Map<string, Map<string, number>>, g: string): Map<
   return m
 }
 
+/** Keep the CPU window warm even on ticks with nothing to place. */
+function sampleTickCpu(now: number): number | null {
+  return recordCpu(now, cpuReader?.() ?? null)
+}
+
 export function tickState(
   accounts: CliMayteAccount[],
   now: number,
   install: InstallState | null = null,
+  growthMaxAgeMs = 0,
 ): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
@@ -133,12 +139,13 @@ export function tickState(
   for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
   const memory = memoryReader?.() ?? null
-  // Process trees are read only when the gate is on.
+  // Process trees are read only when the gate is on, and anew only when the caller may start a
+  // worker on them (growthMaxAgeMs 0); otherwise a reading of the same runners under that age stands.
   const growing: Growth = memory
-    ? growthOf(live, now)
+    ? growthOf(live, now, undefined, growthMaxAgeMs)
     : { expectedBytes: DEFAULT_GROWN_BYTES, sets: [] }
   // Sampled every tick, so the window fills whether or not a start is waiting (climayte-cpu.ts).
-  const cpu = recordCpu(now, cpuReader?.() ?? null)
+  const cpu = sampleTickCpu(now)
   return {
     now,
     accounts,
@@ -599,6 +606,32 @@ export function scheduleDue(s: TickState, due: CliMayteWorker[]): void {
       console.error(`[climayte] could not schedule ${w.id}:`, err)
     }
   }
+}
+
+/** The scheduler portion of a tick. No due worker means no account placement, history scan or
+ *  process-tree reservation is needed; CPU counters still sample at the normal cadence. Return
+ *  synchronously when idle, so the caller does not introduce another yield into that tick. */
+export function scheduleTick(accounts: CliMayteAccount[], now: number): Promise<void> | void {
+  const isDue = (w: CliMayteWorker): boolean =>
+    (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
+  let anyDue = false
+  for (const w of workers.values())
+    if (isDue(w)) {
+      anyDue = true
+      break
+    }
+  if (!anyDue) {
+    sampleTickCpu(now)
+    return
+  }
+  // The probe yields. Re-read the due workers after it settles: a route can cancel, hold, remove
+  // or enqueue them while it runs. Only a non-empty current list builds fresh placement state.
+  return installForTick().then((install) => {
+    const due: CliMayteWorker[] = []
+    for (const w of workers.values()) if (isDue(w)) due.push(w)
+    if (due.length) scheduleDue(tickState(accounts, now, install), due)
+    else sampleTickCpu(now)
+  })
 }
 
 /** Prime chats holding the launch slot they took while their lead pick runs (startOn). */

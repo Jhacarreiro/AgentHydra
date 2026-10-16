@@ -44,13 +44,21 @@ function removeHooks(groups, test) {
   return kept;
 }
 
+// The first core entry, from whichever checkout, takes this checkout's command; every later one goes.
 function upsertCore(groups, command) {
-  if (!groups.some((group) => hasHook(group, isCore))) return [...groups, { hooks: [{ type: "command", command }] }];
-  return groups.map((group) =>
-    hasHook(group, isCore)
-      ? { ...group, hooks: group.hooks.map((hook) => (isCore(hook) ? { ...hook, command } : hook)) }
-      : group,
-  );
+  let placed = false;
+  const keepFirst = (hook) => {
+    if (!isCore(hook)) return [hook];
+    if (placed) return [];
+    placed = true;
+    return [{ ...hook, command }];
+  };
+  const kept = groups.flatMap((group) => {
+    if (!hasHook(group, isCore)) return [group];
+    const hooks = group.hooks.flatMap(keepFirst);
+    return hooks.length ? [{ ...group, hooks }] : [];
+  });
+  return placed ? kept : [...kept, { hooks: [{ type: "command", command }] }];
 }
 
 function readSettings(file) {

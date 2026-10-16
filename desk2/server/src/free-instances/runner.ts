@@ -2,10 +2,16 @@ import { createHash } from 'node:crypto'
 import { join } from 'node:path'
 import type { FreeConfig, FreeHarnessCommand, FreeRequest } from '@shared/free-instances'
 import { SpawnLaunchError, spawnOff, type SpawnOffResult } from '../lib/spawn-off'
+import { ensureBrowserPool } from './browser-pool'
 
 export interface RunOutput { code: number; stdout: string }
 export type FreeRunRequest = Omit<FreeRequest, 'command'> & { command: FreeHarnessCommand }
 export type FreeRunner = (config: FreeConfig, request: FreeRunRequest, signal: AbortSignal) => Promise<RunOutput>
+
+/** Decode the transferred output slice without copying its full byte buffer first. */
+export function decodeFreeStdout(bytes: Uint8Array): string {
+  return Buffer.from(bytes.buffer, bytes.byteOffset, bytes.byteLength).toString('utf8')
+}
 
 /** No shell, credentials in argv, browser fallback, or automatic message retries. */
 export function commandArgs(config: FreeConfig, request: FreeRunRequest): string[] {
@@ -29,10 +35,13 @@ export const runFree: FreeRunner = async (config, request, signal) => {
   if (signal.aborted) throw new Error('stopped')
   let out: SpawnOffResult
   try {
+    const pool = request.provider === 'chatgpt' && (request.command === 'chat' || request.command === 'resume')
+      ? await ensureBrowserPool(config, signal) : undefined
+    if (signal.aborted) throw new Error('stopped')
     out = await spawnOff({
       cmd: [config.python, ...commandArgs(config, request)],
       cwd: config.harnessDir,
-      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_STATE_DIR: config.stateDir, CLAUDFREE_CACHE_DIR: config.cacheDir },
+      env: { ...process.env, PYTHONUTF8: '1', PYTHONIOENCODING: 'utf-8', PYTHONDONTWRITEBYTECODE: '1', CLAUDFREE_STATE_DIR: config.stateDir, CLAUDFREE_CACHE_DIR: config.cacheDir, CLAUDFREE_BROWSER_POOL: pool ?? '' },
       stdin: request.prompt ?? '',
       maxBytes: 8 * 1024 * 1024,
       timeoutMs: request.command === 'login' ? 960_000 : 300_000,
@@ -44,5 +53,5 @@ export const runFree: FreeRunner = async (config, request, signal) => {
     throw err
   }
   if (out.aborted || out.capped || out.timedOut) throw new Error('stopped')
-  return { code: out.code, stdout: Buffer.from(out.stdout).toString('utf8') }
+  return { code: out.code, stdout: decodeFreeStdout(out.stdout) }
 }

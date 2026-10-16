@@ -34,6 +34,22 @@ async function request<T>(path: string, method = 'GET', body?: unknown, timeout 
   return value as T
 }
 
+/** An opt-in conditional read; ordinary threads() consumers still receive the full array. */
+async function changedThreads(version: string | null): Promise<{ threads: FreeThread[] | null; version: string | null }> {
+  const response = await fetch('/api/free/threads', {
+    cache: 'no-store',
+    headers: version ? { 'If-None-Match': version } : undefined,
+    signal: AbortSignal.timeout(15_000),
+  })
+  if (response.status === 304) {
+    if (!version) throw new FreeApiError('History was not supplied for its first read.', 304)
+    return { threads: null, version: response.headers.get('ETag') ?? version }
+  }
+  const value = await response.json()
+  if (!response.ok) throw new FreeApiError(value.error || `Request failed (${response.status})`, response.status)
+  return { threads: value as FreeThread[], version: response.headers.get('ETag') }
+}
+
 export const freeApi = {
   status: () => request<FreeStatus>('status'),
   create: (provider: FreeProvider) => request<FreeInstance>('instances', 'POST', { provider }),
@@ -45,6 +61,7 @@ export const freeApi = {
   settings: () => request<FreeSettings>('settings'),
   updateSettings: (patch: Partial<FreeSettings>) => request<FreeSettings>('settings', 'PATCH', patch),
   threads: () => request<FreeThread[]>('threads'),
+  changedThreads,
   stats: (days: number) => request<FreeStatRow[]>(`stats?days=${days}`),
   forgetThread: (id: string) => request<{ ok: true }>(`threads/${encodeURIComponent(id)}`, 'DELETE'),
   start: (operation: FreeRequest) => request<FreeJob>('jobs', 'POST', operation),

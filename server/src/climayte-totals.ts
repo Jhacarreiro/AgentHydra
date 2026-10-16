@@ -4,7 +4,7 @@
 import { acctLabel, lastThatRan, load, pct1, workers } from './climayte-core'
 import { addTokens, type CliMayteTokens, type CliMayteWorker, noTokens } from './climayte-lib'
 import { attemptUnits, rereadUnits } from './climayte-scorecard'
-import { sharedKitStore, usageQuery } from './kit/query'
+import { sharedKitStore, storeGeneration, usageQuery } from './kit/query'
 import type { KitStore } from './kit/store'
 
 type TotalsAttempt = CliMayteWorker['attempts'][number]
@@ -52,6 +52,11 @@ type WindowPeak = {
 
 type SizedTask = { id: string; title: string; expected: number; used: number; work: number }
 
+interface AccountRuns {
+  starts: number[]
+  ends: number[]
+}
+
 /** climayteTotals' running sums. With `since`, every figure covers only runs that ended after it
  *  (or are running); without, the whole record, as the CliMayte view's counter shows it. */
 interface TotalsTally {
@@ -66,10 +71,9 @@ interface TotalsTally {
   ceilingStops: number
   ceilings: CeilingStop[]
   placedPast: PlacedPast[]
-  /** Every attempt on record: a ceiling stop says how many runs were on its account then. */
-  allAttempts: TotalsAttempt[]
-  /** allAttempts by account id, built on the first ceiling stop that asks. */
-  byAccount?: Map<string, TotalsAttempt[]>
+  /** Every attempt's interval, sorted per account on the first ceiling stop that asks. Includes
+   *  attempts outside these totals' scope: they can still overlap a counted stop. */
+  byAccount?: Map<string, AccountRuns>
   tasksInScope: Set<string>
   hits: LimitHit[]
   peaks: Map<string, WindowPeak>
@@ -115,34 +119,87 @@ export function kitSpend(
   }
 }
 
-/** Which of `ids` the kit holds CliMayte calls for: the per-session ledger's key, one seek each. */
-function kitSessions(ids: string[], store?: KitStore): Set<string> {
-  if (!ids.length) return new Set()
-  const db = (store ?? sharedKitStore()).db
-  const rows = db
-    .query(
-      `select distinct session from usage_session where source = 'climayte' and session in (${ids.map(() => '?').join(',')})`,
-    )
-    .all(...ids) as { session: string }[]
-  return new Set(rows.map((r) => r.session))
+interface KitSessionsRead {
+  generation: string
+  requested: ReadonlySet<string>
+  known: Set<string>
 }
 
-/** How many runs were on an account at a moment, the one that asks included. */
-// Each ceiling stop used to filter every attempt on record (stops x attempts per totals call): the
-// stall profiler had that filter on top of AgentHydra at 10-12% of its samples (2026-10-09).
+/** One current membership read per connection, replaced rather than retaining past task sets. */
+const kitSessionReads = new WeakMap<KitStore['db'], KitSessionsRead>()
+
+/** Which of `ids` the kit holds CliMayte calls for. Unchanged totals reuse membership until a write
+ *  on this connection or another connection, or a different requested session set, makes it stale. */
+function kitSessions(ids: string[], store?: KitStore): Set<string> {
+  const db = (store ?? sharedKitStore()).db
+  if (!ids.length) {
+    kitSessionReads.delete(db)
+    return new Set()
+  }
+  const generation = storeGeneration(db)
+  const requested = new Set(ids)
+  const have = kitSessionReads.get(db)
+  if (have?.generation === generation && have.requested.size === requested.size) {
+    let same = true
+    for (const id of requested)
+      if (!have.requested.has(id)) {
+        same = false
+        break
+      }
+    if (same) return have.known
+  }
+  // A failed read must not install an empty result or keep a superseded membership alive.
+  kitSessionReads.delete(db)
+  const rows = db
+    .query(
+      `select distinct session from usage_session where source = 'climayte' and session in (${[...requested].map(() => '?').join(',')})`,
+    )
+    .all(...requested) as { session: string }[]
+  const known = new Set(rows.map((r) => r.session))
+  kitSessionReads.set(db, { generation, requested, known })
+  return known
+}
+
+/** Number of sorted times before `t`, or through it when `inclusive`. */
+function countTimes(times: number[], t: number, inclusive: boolean): number {
+  let lo = 0
+  let hi = times.length
+  while (lo < hi) {
+    const mid = Math.floor((lo + hi) / 2)
+    if (inclusive ? times[mid]! <= t : times[mid]! < t) lo = mid + 1
+    else hi = mid
+  }
+  return lo
+}
+
+/** How many runs were on an account at a moment, the one that asks included. A stop still scanned
+ *  every attempt on its account after the whole-fleet scan was removed: stops x account history.
+ *  Sorted endpoints count starts <= t minus ends < t, including zero-length runs and both ends.
+ *  The index is local to this synchronous totals call; later calls see changed/open attempts anew. */
 function runsOnAccount(tally: TotalsTally, accountId: string, t: number): number {
   if (!tally.byAccount) {
     tally.byAccount = new Map()
-    for (const a of tally.allAttempts) {
-      const list = tally.byAccount.get(a.account.id)
-      if (list) list.push(a)
-      else tally.byAccount.set(a.account.id, [a])
+    for (const w of workers.values())
+      for (const a of w.attempts) {
+        const start = a.startedAt
+        const end = a.endedAt ?? Number.MAX_SAFE_INTEGER
+        // An inverted or invalid interval never satisfied the former pair of comparisons.
+        if (!(start <= end)) continue
+        let runs = tally.byAccount.get(a.account.id)
+        if (!runs) {
+          runs = { starts: [], ends: [] }
+          tally.byAccount.set(a.account.id, runs)
+        }
+        runs.starts.push(start)
+        runs.ends.push(end)
+      }
+    for (const runs of tally.byAccount.values()) {
+      runs.starts.sort((a, b) => a - b)
+      runs.ends.sort((a, b) => a - b)
     }
   }
-  let n = 0
-  for (const a of tally.byAccount.get(accountId) ?? [])
-    if (a.startedAt <= t && (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= t) n++
-  return n
+  const runs = tally.byAccount.get(accountId)
+  return runs ? countTimes(runs.starts, t, true) - countTimes(runs.ends, t, false) : 0
 }
 
 /** Over the whole record a task counts with its own sums; with `since` it only counts as a task
@@ -412,7 +469,6 @@ export function climayteTotals(
     ceilingStops: 0,
     ceilings: [],
     placedPast: [],
-    allAttempts: [...workers.values()].flatMap((w) => w.attempts),
     tasksInScope: new Set<string>(),
     hits: [],
     peaks: new Map<string, WindowPeak>(),

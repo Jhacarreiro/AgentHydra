@@ -85,6 +85,32 @@ test("install adds the core hook to both events, keeps other hooks, and is a no-
     assert.equal(readdirSync(dir).filter((f) => f.includes(".bak-")).length, 1);
   }));
 
+test("install from another checkout replaces every older core entry, leaving one per event", () =>
+  withTemp(async (dir) => {
+    const settingsPath = path.join(dir, "settings.json");
+    const coreDir = path.join(dir, "core");
+    const hookPath = "C:\\Example\\live\\hydra-core\\hook.mjs";
+    const older = (root) => ({ type: "command", command: `node "C:\\Example\\${root}\\hydra-core\\hook.mjs"`, timeout: 10 });
+    writeFileSync(
+      settingsPath,
+      JSON.stringify({
+        hooks: {
+          UserPromptSubmit: [{ hooks: [older("app")] }, { hooks: [otherHook, older("spare")] }],
+          SessionStart: [{ hooks: [otherHook] }, { hooks: [older("app")] }],
+          Stop: [{ hooks: [older("app"), older("spare")] }],
+        },
+      }),
+    );
+
+    await install({ settingsPath, coreDir, hookPath, env: { SUE_DREDD_HOME: path.join(dir, "none") } });
+    const current = { type: "command", command: `node "${hookPath}"`, timeout: 10 };
+    assert.deepStrictEqual(readJson(settingsPath).hooks, {
+      UserPromptSubmit: [{ hooks: [current] }, { hooks: [otherHook] }],
+      SessionStart: [{ hooks: [otherHook] }, { hooks: [current] }],
+      Stop: [{ hooks: [current] }],
+    });
+  }));
+
 test("install takes out the add-on's hook, and uninstall puts it back exactly", () =>
   withTemp(async (dir) => {
     const settingsPath = path.join(dir, "settings.json");

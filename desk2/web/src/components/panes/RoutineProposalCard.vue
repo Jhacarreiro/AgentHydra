@@ -77,6 +77,9 @@ async function act(body: { approve: string } | { discard: string }) {
         </button>
       </template>
       <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">Asked for by {{ proposal.askedBy }}</div>
+      <div v-if="proposal.source === 'central'" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">
+        In the central store; runs on {{ proposal.runsOn?.join(', ') }}. Approve signs it with this computer's key.
+      </div>
       <div class="mt-3 flex flex-wrap gap-2">
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ discard: proposal.id })">Discard</button>
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ approve: proposal.id })">Approve</button>

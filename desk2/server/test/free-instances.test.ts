@@ -150,6 +150,158 @@ describe('Free instance boundary', () => {
 })
 
 describe('Free jobs and routes', () => {
+  test('conditional history reads skip all 36000 rows and preserve raw and filtered callers', async () => {
+    const { service, app, instance } = fixture()
+    const store = (service as unknown as { store: FreeStorage }).store
+    store.data.threads = Array.from({ length: 36_000 }, (_, n) => ({
+      id: `${instance.id}/${n}`, instanceId: instance.id, provider: 'claude' as const,
+      chatId: String(n), title: 'Synthetic history', status: 'done' as const,
+      createdAt: n, updatedAt: n, error: null,
+    }))
+    let reads = 0
+    const original = service.threads.bind(service)
+    service.threads = () => { reads++; return original() }
+    const first = await app.request('/api/free/threads')
+    expect(first.status).toBe(200)
+    expect((await first.json()).length).toBe(36_000)
+    const tag = first.headers.get('ETag')!
+    expect(tag).toMatch(/^"free-threads-[a-f0-9-]+-0"$/)
+    reads = 0
+    for (const validator of [tag, `"another", W/${tag}`, '*']) {
+      const unchanged = await app.request('/api/free/threads', { headers: { 'If-None-Match': validator } })
+      expect(unchanged.status).toBe(304)
+      expect(unchanged.headers.get('ETag')).toBe(tag)
+      expect(unchanged.headers.get('Cache-Control')).toBe('no-store')
+      expect(await unchanged.text()).toBe('')
+    }
+    expect(reads).toBe(0)
+    const opaque = await app.request('/api/free/threads', { headers: { 'If-None-Match': '"opaque,*,comma"' } })
+    expect(opaque.status).toBe(200)
+    const raw = await app.request('/api/free/threads')
+    expect(raw.status).toBe(200)
+    expect((await raw.json()).length).toBe(36_000)
+    const filtered = await app.request('/api/free/threads?since=35999', { headers: { 'If-None-Match': tag } })
+    expect(filtered.status).toBe(200)
+    expect((await filtered.json()).map((t: { chatId: string }) => t.chatId)).toEqual(['35999'])
+    expect(filtered.headers.get('ETag')).toBeNull()
+  })
+
+  test('history validators change for thread state, title, context, forgetting and account removal', async () => {
+    let release: ((value: RunOutput) => void) | undefined
+    const { service, app, op, instance } = fixture(async (_config, request) => {
+      if (request.command === 'resume') return new Promise(resolve => { release = resolve })
+      return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })
+    })
+    const finish = async (job: ReturnType<FreeInstances['start']>) => {
+      while (job.state !== 'done') await tick()
+    }
+    let tag = service.threadsETag()
+    const changed = async () => {
+      const response = await app.request('/api/free/threads', { headers: { 'If-None-Match': tag } })
+      expect(response.status).toBe(200)
+      expect(response.headers.get('ETag')).not.toBe(tag)
+      tag = response.headers.get('ETag')!
+      return response.json()
+    }
+    await finish(service.start(op({ command: 'chat', prompt: 'Synthetic prompt' })))
+    expect((await changed())[0].status).toBe('done')
+    const resumed = service.start(op({ command: 'resume', chatId: CHAT, prompt: 'Synthetic followup' }))
+    expect((await changed())[0].status).toBe('running')
+    await tick()
+    release!(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic followup reply' }))
+    await finish(resumed)
+    expect((await changed())[0].status).toBe('done')
+    await finish(service.start(op({ command: 'track', chatId: CHAT, name: 'Renamed synthetic thread' })))
+    expect((await changed())[0].title).toBe('Renamed synthetic thread')
+    await finish(service.start(op({ command: 'read', chatId: CHAT })))
+    expect((await changed())[0].contextChars).toBe('Synthetic reply'.length)
+    service.forgetThread(`${instance.id}/${CHAT}`)
+    expect(await changed()).toEqual([])
+    await finish(service.start(op({ command: 'chat', prompt: 'Another synthetic prompt' })))
+    await changed()
+    await service.remove(instance.id)
+    expect(await changed()).toEqual([])
+  })
+
+  test('a restarted service cannot validate history from the previous process', async () => {
+    const { service, home, runtime } = fixture()
+    await service.settled()
+    const restarted = new FreeInstances(home, async () => output({ ok: true }), runtime)
+    services.push(restarted)
+    expect(restarted.threadsETag()).not.toBe(service.threadsETag())
+  })
+
+  test('unchanged status polls do not walk 36000 historical threads again or expose mutable cached counts', () => {
+    const { service, instance } = fixture()
+    const store = (service as unknown as { store: FreeStorage }).store
+    let visits = 0
+    store.data.threads = Array.from({ length: 36_000 }, (_, n) => ({
+      id: `${instance.id}/${n}`, instanceId: instance.id, provider: 'claude' as const,
+      chatId: String(n), title: 'Synthetic history', createdAt: n, updatedAt: n, error: null,
+      get status() { visits++; return 'done' as const },
+    }))
+    const first = service.status()
+    expect(first.threadCounts?.[instance.id]).toBe(36_000)
+    expect(first.running).toBe(0)
+    expect(visits).toBe(36_000)
+    first.threadCounts![instance.id] = 0
+    visits = 0
+    for (let n = 0; n < 20; n++) expect(service.status().threadCounts?.[instance.id]).toBe(36_000)
+    expect(visits).toBe(0)
+  })
+
+  test('cached thread counts immediately follow new chats, resumes, list refreshes, forgetting and account removal', async () => {
+    let release: ((value: RunOutput) => void) | undefined
+    const another = '22222222-3333-4444-8555-666666666666'
+    const { service, op, instance } = fixture(async (_config, request) => {
+      if (request.command === 'resume') return new Promise(resolve => { release = resolve })
+      if (request.command === 'chats') return output({ ok: true, chats: [CHAT, another].map(chat_id => ({ chat_id, is_temporary: true })) })
+      return output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic reply' })
+    })
+    const finish = async (job: ReturnType<FreeInstances['start']>) => {
+      while (job.state !== 'done') await tick()
+    }
+    expect(service.status().threadCounts).toEqual({})
+    await finish(service.start(op({ command: 'chat', prompt: 'Synthetic prompt' })))
+    expect(service.status().threadCounts?.[instance.id]).toBe(1)
+    const resumed = service.start(op({ command: 'resume', chatId: CHAT, prompt: 'Synthetic followup' }))
+    expect(service.status().running).toBe(1)
+    await tick()
+    release!(output({ ok: true, chat_id: CHAT, is_temporary: true, response: 'Synthetic followup reply' }))
+    await finish(resumed)
+    expect(service.status().running).toBe(0)
+    await finish(service.start(op({ command: 'chats' })))
+    expect(service.status().threadCounts?.[instance.id]).toBe(2)
+    service.forgetThread(`${instance.id}/${CHAT}`)
+    expect(service.status().threadCounts?.[instance.id]).toBe(1)
+    await service.remove(instance.id)
+    expect(service.status().threadCounts).toEqual({})
+  })
+
+  test('a completed message serializes history once and persists its thread, tokens and final stats together', async () => {
+    const { service, home, op, instance } = fixture(async () => output({ ok: true,
+      chat_id: CHAT, is_temporary: true, response: 'Synthetic reply', model: 'synthetic-model' }))
+    await service.settled()
+    const store = (service as unknown as { store: FreeStorage }).store
+    let serializations = 0
+    const normal = store.data.threads
+    Object.defineProperty(normal, 'toJSON', { configurable: true, value() {
+      serializations++
+      return [...this]
+    } })
+    const job = service.start(op({ command: 'chat', prompt: 'Synthetic prompt' }))
+    while (job.state !== 'done') await tick()
+    await service.settled()
+    expect(serializations).toBe(1)
+    const saved = new FreeStorage(home).data
+    expect(saved.threads).toHaveLength(1)
+    expect(saved.threads[0]?.status).toBe('done')
+    expect(saved.tokens?.[instance.id]?.total).toEqual({ input: 4, output: 4 })
+    expect(saved.stats?.[dayOf(Date.now())]?.[instance.id]?.['synthetic-model']?.sent).toBe(1)
+    expect(job.result?.response).toBe('Synthetic reply')
+    expect(readFileSync(join(home, 'free', 'accounts.json'), 'utf8')).not.toContain('Synthetic reply')
+  })
+
   test('a duplicate send shares its job, another send is blocked, separate accounts can run independently', async () => {
     const calls: FreeRunRequest[] = []
     const release: ((output: RunOutput) => void)[] = []
@@ -266,6 +418,24 @@ describe('Free jobs and routes', () => {
     const response = await app.request('http://127.0.0.1:7798/api/free/status', { headers: { host: '127.0.0.1:7798', origin: 'http://127.0.0.1:7798' } })
     expect(response.status).toBe(200)
     expect(response.headers.get('cache-control')).toBe('no-store')
+  })
+
+  test('a bounded Free job lookup preserves known results and identifies missing operations without starting work', async () => {
+    const { app, service, op } = fixture()
+    const job = service.start(op())
+    while (service.get(job.id).state !== 'done') await tick()
+    const missing = crypto.randomUUID()
+    const response = await app.request(`/api/free/jobs?ids=${job.id},${missing},${job.id}`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const result = await response.json()
+    expect(result.jobs[job.id]).toEqual(service.get(job.id))
+    expect(result.jobs[missing]).toBeNull()
+    expect(Object.keys(result.jobs)).toHaveLength(2)
+    expect(service.status().jobs).toHaveLength(1)
+    for (const path of ['/api/free/jobs', '/api/free/jobs?ids=invalid', `/api/free/jobs?ids=${Array(33).fill(job.id).join(',')}`])
+      expect((await app.request(path)).status).toBe(400)
+    expect((await app.request('/api/free/jobs?ids=' + job.id, { headers: { origin: 'https://example.test' } })).status).toBe(403)
   })
 
   test('routes return structured validation and not-found errors; no arbitrary CLI commands', async () => {

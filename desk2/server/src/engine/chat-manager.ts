@@ -9,7 +9,7 @@
 
 import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, readFileSync, statSync, watch } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
 import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type {
@@ -48,19 +48,17 @@ import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
 import type { AhWorker, WorkerSendSetting } from '../bridge/client'
-import { isActiveWorkerStatus, keptWorkerIds, workersOfChat } from '../bridge/climayte'
 import { isLongLived } from './long-lived'
 import { copyMedia, endedTask, settled, TASK_SESSION_ENDED } from './chat-items'
-import { climayteSetting, LIVE_STATUSES, restoreSetting, SUS_WHY, workerAccount, workerChatStatus, workerTurnSetting } from './chat-worker-status'
+import { climayteSetting, restoreSetting, SUS_WHY, workerTurnSetting } from './chat-worker-status'
 import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
-import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
-import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
+import { findSessionJsonl } from '../bridge/session-jsonl'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
 import { classifyTurn, PushbackStore, type PushbackRow, workerTurnKey } from './pushback'
 import { claudeCodeBinaryFor } from './claude-code-binary'
-import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
+import { ChatRuntime, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
 import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, SERVER_ERROR_TRIES, sleep } from './send-retry'
@@ -71,7 +69,7 @@ import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
-import { ANSWER_NOW, buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
+import { ANSWER_NOW, buildHandoff, FRESH_TOKENS, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
 import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
 import { chatFace } from './core-lead'
@@ -83,13 +81,15 @@ import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
 import type { ServiceRuntime } from './service-runtime'
 import {
-  CLIMAYTE_ACCOUNT, CUT_NOT_FOUND, ITEMS_BODY_BYTES, LIVE, MAX_MOVES, READ_ONLY_SOURCES, SERVICE_LABEL, SIGN_IN_HOLD_MS, TITLE_TRIES, TURN_WATCH_MS, UNDO_NOT_FOUND,
-  WORKER_END_GRACE_MS, WORKER_GROUP, WORKER_MODEL,
+  CLIMAYTE_ACCOUNT, CUT_NOT_FOUND, ITEMS_BODY_BYTES, LIVE, READ_ONLY_SOURCES, SERVICE_LABEL, TITLE_TRIES, UNDO_NOT_FOUND,
+  WORKER_GROUP, WORKER_MODEL,
   type ChatManagerOptions, type Cut, type Entry, type ManagerBridge, type QueueCreated, type RequestAnswerer, type ResolvedAccount, type RetryPace, type SendOptions, type StoredRecord, type UserItem,
 } from './chat-manager-types'
 import {
-  accountName, accountRef, busy, entryOf, forkTitle, importTitle, isFolder, pickHealthy, ranInOf, retryLater, sameFolder, signature, squash, standInFor, workersKey,
+  accountName, accountRef, busy, entryOf, forkTitle, importTitle, pickHealthy, ranInOf, retryLater, signature, squash, workersKey,
 } from './chat-manager-helpers'
+import { WorkerSync } from './chat-manager-workers'
+import { ChatMoves } from './chat-manager-moves'
 export type { ChatManagerOptions, ManagerBridge, QueueCreated, SendOptions } from './chat-manager-types'
 export { CLIMAYTE_ACCOUNT, LIVE, WORKER_GROUP, WORKER_MODEL } from './chat-manager-types'
 export { pickHealthy } from './chat-manager-helpers'
@@ -139,8 +139,8 @@ export class ChatManager {
   private readonly liveListTimeoutMs: number
   private liveModels: ModelChoice[] | null = null
   private readonly newChats: 'climayte' | 'sdk'
-  private syncing: Promise<void> | null = null
-  private workerRows = new Map<string, AhWorker>()
+  private readonly workers: WorkerSync
+  private readonly moves: ChatMoves
   /** The JSON of each chat's items as last answered, while its file and media stand as they were (see itemsBody). */
   private readonly itemIndexes = new Map<string, { stamp: string; index: TranscriptIndex }>()
   private readonly itemsBodies = new Map<string, { stamp: string; body: string; count: number }>()
@@ -194,6 +194,18 @@ export class ChatManager {
     this.codexDir = o.codex ?? null
     this.openCodex = o.openCodex
     this.free = o.free ?? (() => undefined)
+    this.workers = new WorkerSync({
+      chats: this.chats, bridge: this.bridge, store: this.store, timings: this.timings, failures: this.failures, emitEvent: this.emitEvent,
+      now: () => this.now(), isClosing: () => this.closing, stored: this.stored.bind(this), changed: this.changed.bind(this), systemLine: this.systemLine.bind(this),
+      fail: this.fail.bind(this), endTasks: this.endTasks.bind(this), noteTask: this.noteTask.bind(this), dropStandIn: this.dropStandIn.bind(this),
+      deskItems: this.deskItems.bind(this), countWorkerTurn: this.countWorkerTurn.bind(this), undelivered: this.undelivered.bind(this),
+      markQueued: this.markQueued.bind(this), noteCwd: (e, file) => this.moves.noteCwd(e, file),
+    })
+    this.moves = new ChatMoves({
+      chats: this.chats, bridge: this.bridge, store: this.store, failures: this.failures, emitEvent: this.emitEvent, signInHeld: this.signInHeld,
+      deskUrl: () => this.deskUrl(), root: this.root.bind(this), placeable: this.placeable.bind(this), bigSession: this.bigSession.bind(this),
+      seedResume: this.seedResume.bind(this), changed: this.changed.bind(this), systemLine: this.systemLine.bind(this), fail: this.fail.bind(this),
+    })
     for (const stored of this.store.loadChats()) {
       const e = entryOf(stored as StoredRecord)
       this.chats.set(e.chat.id, e)
@@ -458,7 +470,7 @@ export class ChatManager {
     return this.pushback.backfill(
       chats.map((e) => {
         if (e.chat.workerId === undefined) return { id: e.chat.id, model: e.chat.model, effort: e.chat.effort, items: () => this.store.loadItems(e.chat.id) }
-        const w = e.chat.workerId ? this.workerRows.get(e.chat.workerId) : undefined
+        const w = e.chat.workerId ? this.workers.workerRows.get(e.chat.workerId) : undefined
         const ran = w ? workerTurnSetting(w) : { model: e.chat.model, effort: e.chat.effort }
         return { id: e.chat.id, ...ran, items: () => this.store.loadItems(e.chat.id), worker: { busy: busy(e.chat) } }
       }),
@@ -1078,7 +1090,7 @@ export class ChatManager {
     if (connectors) await connectors
     const sus = this.workerSusSetting(chat)
     const restore = !sus && chat.susRestore ? restoreSetting(chat.susRestore) : null
-    const had = sus && !chat.susRestore ? this.workerRows.get(chat.workerId) : undefined
+    const had = sus && !chat.susRestore ? this.workers.workerRows.get(chat.workerId) : undefined
     const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? restore ?? undefined)
     if (sus && !chat.susRestore) chat.susRestore = { model: had?.model ?? null, effort: had?.effort ?? null }
     else if (restore) delete chat.susRestore
@@ -1789,266 +1801,18 @@ export class ChatManager {
     return { cut, items: items.slice(0, index) }
   }
 
-  /**
-   * Reads the CliMayte chats' workers again (every live one, or only `only`): status, account and
-   * transcript. One read at a time; a read that fails (AgentHydra down) leaves the chats as they were.
-   */
+  /** Reads the CliMayte chats' workers again (every live one, or only `only`): chat-manager-workers.ts. */
   syncWorkers(only?: string): Promise<void> {
-    const run = (this.syncing ?? Promise.resolve())
-      .then(() => this.syncWorkersNow(only))
-      .catch((err) => console.warn(`[desk] could not read the chats' workers: ${err instanceof Error ? err.message : String(err)}`))
-    this.syncing = run
-    void run.then(() => {
-      if (this.syncing === run) this.syncing = null
-    })
-    return run
+    return this.workers.syncWorkers(only)
   }
 
-  private async syncWorkersNow(only?: string): Promise<void> {
-    const entries = [...this.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false))
-    if (!entries.length) return
-    const from = this.now()
-    const ids = entries.map((e) => e.chat.workerId as string)
-    let raw: AhWorker[]
-    try {
-      raw = await this.bridge.workersByIds(ids)
-      this.workerRows = new Map(raw.map((w) => [w.id, w]))
-    } catch (err) {
-      console.warn(`[desk] could not read the chats' workers this round: ${err instanceof Error ? err.message : String(err)}`)
-      raw = ids.flatMap((id) => this.workerRows.get(id) ?? [])
-    }
-    const byId = new Map(raw.map((w) => [w.id, w]))
-    for (const e of entries) {
-      const w = byId.get(e.chat.workerId as string)
-      if (w && this.chats.get(e.chat.id) === e) await this.applyWorker(e, w)
-      // One worker's read at a time: a click's request and the timers run between two workers, not after the whole pass.
-      await new Promise((done) => setImmediate(done))
-      if (this.closing) return
-    }
-    this.timings.poll(this.now() - from)
-  }
-
-  /** The chat as its worker stands: status, account (a move is said in the transcript), model, transcript. */
-  private async applyWorker(e: Entry, w: AhWorker): Promise<void> {
-    const chat = e.chat
-    const before = { ...chat }
-    const was = chat.status
-    this.endMovedWorkerTasks(e, w, before)
-    if (w.accountId && w.accountId !== chat.account.id) this.applyWorkerAccount(e, w)
-
-    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
-    // Desk file is read once, for what it already holds (emitted), not on every poll.
-    if (!e.emitted) this.deskItems(e)
-    // The turn ended: its JSONL is looked for afresh. A new session's file is missing when its first poll looks, and
-    // the bridge leaves a missed file 5 s, then 10, before looking again, so a short first turn was never read while
-    // it ran and its done came in before its reply (live, 2026-10-14: idle at 11.4 s, the reply read at 12.4 s).
-    const ending = LIVE_STATUSES.has(was) && workerChatStatus(w).status === 'idle'
-    const rescan = e.readAccount !== w.accountId || ending
-    const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
-    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
-    // Deleted meanwhile, or Undo let this worker go.
-    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) {
-      e.turnWatch?.stop()
-      e.turnWatch = undefined
-      return
-    }
-    e.readAccount = w.accountId
-    const newReply = this.syncWorkerItems(e, items)
-    // The status after the transcript: a chat never reads done before its reply is in. A message waiting for that
-    // reply goes once the chat is not busy, and a status set before the read let any change during it send the
-    // message without the reply (live, 2026-10-14: Codex was asked 'What code word did I give you?' bare). A JSONL
-    // that does not show what was sent yet is behind the worker: the chat stays busy, at most WORKER_END_GRACE_MS.
-    if (this.endHeldForReply(e, before, ending)) return
-    const next = this.applyWorkerStatus(e, w, was)
-    this.watchTurnFile(e, LIVE_STATUSES.has(next.status) && writing ? this.bridge.workerFileOf(writing.sessionId) : null)
-    if (ending && next.status === 'idle') this.countWorkerTurn(e, w, items)
-    if (next.status === 'error') this.undelivered(e)
-    else if (next.waiting) this.markQueued(e)
-    this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
-    // A finished worker's process is gone, and every background task it started with it.
-    if (!e.workerLive) this.endTasks(e)
-    this.adoptWorkerCwd(e, w)
-    this.noteWorkerFolderEnd(e, w, was, next.status)
-    this.forgetFinishedWorker(e)
-    if (!chatDiffers(before, chat)) return
-    chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
-    this.changed(chat)
-  }
-
-  /** Moved to another account, or continued in a fresh session: the process that ran the old session is gone,
-   *  and the background tasks it started with it (their notices never come). */
-  private endMovedWorkerTasks(e: Entry, w: AhWorker, before: ChatSummary): void {
-    const moved = !!w.accountId && w.accountId !== e.chat.account.id && e.chat.account.id !== CLIMAYTE_ACCOUNT.id
-    const freshSession = !!before.sessionId && !!w.sessionId && w.sessionId !== before.sessionId
-    if (moved || freshSession) this.endTasks(e)
-  }
-
-  /** The worker's turn ended but its JSONL does not show what was sent yet: the chat stays busy, at most
-   *  WORKER_END_GRACE_MS, so it never reads done before its reply. True while the end is held. */
-  private endHeldForReply(e: Entry, before: ChatSummary, ending: boolean): boolean {
-    if (ending && e.sent?.length && this.now() - (e.endHeldSince ??= this.now()) < WORKER_END_GRACE_MS) {
-      if (chatDiffers(before, e.chat)) this.changed(e.chat)
-      return true
-    }
-    e.endHeldSince = undefined
-    return false
-  }
-
-  /** A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders"). */
-  private noteWorkerFolderEnd(e: Entry, w: AhWorker, was: ChatSummary['status'], nextStatus: ChatSummary['status']): void {
-    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(nextStatus)) {
-      this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
-    }
-  }
-
-  /** A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again). */
-  private forgetFinishedWorker(e: Entry): void {
-    if (e.workerLive) return
-    e.emitted = undefined
-    e.workerSeen = undefined
-    e.cwdFile = undefined
-  }
-
-  /**
-   * The folder AgentHydra has for the worker (its pending one, else where it runs) moves the chat, at once, when the
-   * chat still sits where the worker was last started or sent. A folder the Desk side set first is passed to the
-   * worker by the next send instead, so it is never undone here.
-   */
-  private adoptWorkerCwd(e: Entry, w: AhWorker): void {
-    const chat = e.chat
-    const known = e.workerCwd ?? w.cwd
-    if (!sameFolder(chat.cwd, known)) return
-    const reported = w.pendingCwd ?? w.cwd
-    if (!reported || !isAbsolute(reported) || isUncOrDevicePath(reported) || sameFolder(reported, known)) return
-    const target = resolve(reported)
-    if (!isFolder(target)) return
-    chat.cwd = target
-    this.setWorkerCwd(e, target)
-    this.systemLine(chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
-    this.changed(chat)
+  /** Sets climayteActive and the chat's workerIds from the worker list (chat-manager-workers.ts). */
+  private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
+    return this.workers.matchWorkers(chat, workers)
   }
 
   private setWorkerCwd(e: Entry, cwd: string): void {
-    if (e.workerCwd !== undefined && sameFolder(e.workerCwd, cwd)) return
-    e.workerCwd = cwd
-    this.store.saveChats(this.stored())
-  }
-
-  /** The worker runs on another account than the chat says: the chat follows, and a move is said in the transcript. */
-  private applyWorkerAccount(e: Entry, w: AhWorker): void {
-    const chat = e.chat
-    const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
-    chat.account = workerAccount(w)
-    if (!from) return
-    this.timings.workerMoved(chat, `${accountName(from)}>${accountName(chat.account)}`)
-    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
-    this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
-  }
-
-  private applyWorkerStatus(e: Entry, w: AhWorker, was: ChatSummary['status']): ReturnType<typeof workerChatStatus> {
-    const chat = e.chat
-    const next = workerChatStatus(w)
-    chat.status = next.status
-    chat.activity = next.activity
-    chat.waiting = next.waiting
-    chat.lastError = next.status === 'error' ? (w.error ?? 'The worker failed.') : null
-    if (chat.lastError && (was !== 'error' || chat.lastError !== e.workerErrorSeen)) this.fail(e, { message: chat.lastError, fallback: 'worker_failed' })
-    e.workerErrorSeen = chat.lastError
-    if (LIVE_STATUSES.has(next.status)) chat.turnStartedAt ??= this.now()
-    else chat.turnStartedAt = null
-    if (LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) chat.unread = true
-    chat.model = w.reportedModel ?? w.model ?? chat.model
-    if (w.sessionId) chat.sessionId = w.sessionId
-    e.workerLive = isActiveWorkerStatus(w.status)
-    return next
-  }
-
-  /** The worker's items that are new or changed go to the Desk file and the windows; true when one is a new reply. */
-  private syncWorkerItems(e: Entry, items: TranscriptItem[]): boolean {
-    const chat = e.chat
-    const emitted = e.emitted!
-    let newReply = false
-    // The same array as last time: nothing in the worker's files changed, so nothing in it is new.
-    const unchanged = items === e.workerSeen
-    e.workerSeen = items
-    for (const item of unchanged ? [] : items) {
-      const sig = signature(item)
-      if (emitted.get(item.id) === sig) continue
-      // The ended session's JSONL still says 'running' or answers its old notice: the settled item stays.
-      if (item.kind === 'task' && e.ended?.has(item.id)) continue
-      if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
-      emitted.set(item.id, sig)
-      if (item.kind === 'user' && e.sent?.length) {
-        const i = standInFor(e.sent, item, new Set(e.retrying?.map((r) => r.itemId)))
-        if (i >= 0) this.dropStandIn(e, e.sent[i]!)
-      }
-      this.store.appendItem(chat.id, item)
-      this.emitEvent({ type: 'item.upsert', chatId: chat.id, item })
-      this.noteTask(e, item)
-    }
-    return newReply
-  }
-
-  /** Watches the file a turn in flight writes to: a write reads the worker at once, instead of at the next poll. */
-  private watchTurnFile(e: Entry, file: string | null): void {
-    if (e.turnWatch?.file === file) return
-    e.turnWatch?.stop()
-    e.turnWatch = undefined
-    if (!file) return
-    const turn: NonNullable<Entry['turnWatch']> = {
-      file,
-      stop: () => {
-        clearTimeout(turn.timer)
-        watcher?.close()
-      }
-    }
-    let watcher: ReturnType<typeof watch> | undefined
-    try {
-      watcher = watch(file, { persistent: false }, () => {
-        clearTimeout(turn.timer)
-        turn.timer = setTimeout(() => void this.syncWorkers(e.chat.id), TURN_WATCH_MS)
-      })
-    } catch {
-      return
-    }
-    watcher.on('error', turn.stop)
-    e.turnWatch = turn
-  }
-
-  /** The worker's session file: the one found last time while the session and account are the same and it is still there, else searched for. */
-  private workerFile(e: Entry, sessionId: string, account: string | null): string | null {
-    const hit = e.cwdFile
-    if (hit && hit.sessionId === sessionId && hit.account === account && existsSync(hit.file)) return hit.file
-    const file = findSessionJsonl(sessionId, this.bridge.sessionRoots(), e.chat.cwd)
-    e.cwdFile = file ? { sessionId, account, file } : undefined
-    return file
-  }
-
-  /** Sets climayteActive (its active workers and running seats), drops the stored workerIds that are another chat's, and adds the workers now matched; true when workerIds changed. */
-  private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
-    const mine = workersOfChat(workers, chat)
-    chat.climayteActive = mine.filter((w) => w.active).length + this.seatsRunning(chat.id)
-    const others = new Set<string>()
-    for (const e of this.chats.values()) if (e.chat.id !== chat.id && e.chat.workerId) others.add(e.chat.workerId)
-    const ids = chat.workerIds ?? []
-    const kept = keptWorkerIds(workers, chat, others)
-    const keptSet = new Set(kept)
-    const fresh = mine.map((w) => w.id).filter((id) => !keptSet.has(id))
-    if (!fresh.length && kept.length === ids.length) return false
-    chat.workerIds = [...kept, ...fresh]
-    return true
-  }
-
-  /** The chat's sub-chats (seats, sub-managers) still at work, counted as its drones are (A4-F8): one that is
-   *  working, asking or starting, or whose own drones or seats still run. Seat workers carry no origin session, so
-   *  workersOfChat never finds them. */
-  private seatsRunning(id: string): number {
-    let n = 0
-    for (const e of this.chats.values()) {
-      const c = e.chat
-      if (c.parentId === id && (c.status === 'working' || c.status === 'needs_you' || c.status === 'starting' || c.climayteActive > 0)) n++
-    }
-    return n
+    this.workers.setWorkerCwd(e, cwd)
   }
 
   /** A sub-chat changed: its parent counts it again, and a parent that replied turns unread when its last one finishes. */
@@ -2138,7 +1902,7 @@ export class ChatManager {
    */
   async closeAll(o: { chats?: boolean } = {}): Promise<void> {
     this.closing = true
-    await this.syncing?.catch(() => {})
+    await this.workers.syncing?.catch(() => {})
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.pinned?.close() : e.pinned?.shutdown())?.catch(() => {})))
     closeAppServers()
@@ -2328,122 +2092,14 @@ export class ChatManager {
     return e.runtime
   }
 
-  /**
-   * An SDK chat's turn ended: if its session's own transcript says the process is now in another folder
-   * (the model cd'd out), the chat moves there. The process runs in the old folder, so it ends at once (the
-   * chat is idle) and the next send starts in the new one, resuming the same session (seedResume puts the
-   * transcript under the new folder).
-   */
+  /** A turn ended in another folder: chat-manager-moves.ts. */
   private checkMoved(chatId: string): void {
-    const e = this.chats.get(chatId)
-    if (!e?.chat.sessionId || e.chat.workerId !== undefined) return
-    const root = this.root((e.runtime?.startedAs ?? e.chat.account).configDir)
-    if (this.noteCwd(e, findSessionJsonl(e.chat.sessionId, [root, ...this.bridge.sessionRoots()], e.chat.cwd))) void e.runtime?.closeWhenIdle()
+    this.moves.checkMoved(chatId)
   }
 
-  /**
-   * A turn ended: moves the chat to the folder `file` (its session's transcript) says it ended in, when that
-   * is a folder a chat can live in outside its own (movedOutOf) AND either the owner's message asked for that
-   * move or the previous turn also ended there and this one began there (its first line's cwd). Otherwise the
-   * folder is only remembered as pending. Moving: stored cwd, one muted line, the sidebar update.
-   */
-  private noteCwd(e: Entry, file: string | null): boolean {
-    const pending = e.cwdPending
-    const ask = e.lastAsk
-    e.cwdPending = undefined
-    e.lastAsk = undefined
-    if (!file) return false
-    let observed: string | null
-    let size: number
-    try {
-      observed = lastCwd(file)
-      size = statSync(file).size
-    } catch {
-      return false
-    }
-    const target = movedOutOf(e.chat.cwd, observed)
-    if (!target) return false
-    let held = false
-    if (pending && pending.file === file && pending.target.toLowerCase() === target.toLowerCase()) {
-      try {
-        const began = firstCwdFrom(file, pending.offset)
-        held = began !== null && resolve(began).toLowerCase() === target.toLowerCase()
-      } catch {
-        held = false
-      }
-    }
-    if (!held && !askedToMove(ask, target)) {
-      e.cwdPending = { target, file, offset: size }
-      return false
-    }
-    e.chat.cwd = target
-    this.systemLine(e.chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
-    this.changed(e.chat)
-    return true
-  }
-
-  /**
-   * An SDK chat's turn failed on its account (login dead or usage limit): the session is copied into
-   * another healthy account's folder and the unanswered messages are sent again there, once, with a muted
-   * line saying so. At most MAX_MOVES accounts per message; then the runtime's own error stays. Answers
-   * synchronously whether a move was taken on (the runtime then does not notify a stop); the move itself
-   * runs after. Accounts and their health are AgentHydra's word (listAccounts), never a token or credential.
-   */
+  /** A turn failed on its account (limit or sign-in): chat-manager-moves.ts. */
   private carryToAnotherAccount(chatId: string, signIn: boolean, window: string | null): boolean {
-    const e = this.chats.get(chatId)
-    const rt = e?.runtime
-    // Auto off: the chat waits for its own account's reset (the runtime's limit stands).
-    if (!e || !rt || e.chat.workerId !== undefined || e.chat.accountPinned) return false
-    const tried = (e.moved ??= [e.chat.account.id])
-    if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
-    if (signIn) this.signInHeld.set(e.chat.account.id, Date.now() + SIGN_IN_HOLD_MS)
-    if (tried.length > MAX_MOVES) return false
-    let done!: () => void
-    e.moving = new Promise<void>((r) => (done = r))
-    void this.moveChat(e, rt, signIn, window)
-      .catch((err) => this.moveFailed(e, rt, `Could not move this chat to another account: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => {
-        e.moving = undefined
-        done()
-      })
-    return true
-  }
-
-  private async moveChat(e: Entry, rt: ChatRuntime, signIn: boolean, window: string | null): Promise<void> {
-    const chat = e.chat
-    const tried = e.moved ?? []
-    const from = chat.account
-    const accounts = await this.bridge.listAccounts().catch(() => [])
-    const next = pickHealthy(this.placeable(accounts), tried)
-    if (!next) {
-      this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
-      return
-    }
-    const { cut, sends } = rt.carrySends()
-    const big = this.bigSession(e)
-    tried.push(next.id)
-    chat.account = accountRef(next)
-    chat.accountAuto = true
-    // A big session is not copied: the chat starts a fresh one from the handoff, so there is nothing slow to wait for.
-    const out: QueuedInput[] = big ? [this.handoffSend(e, big, signIn ? 'signed out' : window ? `${window} limit` : 'usage limit', sends)] : []
-    // Said before the session copy, which can take a while on a long chat.
-    this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
-    if (big) this.systemLine(chat.id, 'handoff', 'info', `The session had grown to about ${Math.round(big.tokens / 1000)}k tokens, so it continues as a fresh session from a condensed handoff instead of a copy. This chat keeps the whole record.`)
-    this.changed(chat)
-    if (!big) {
-      const cannot = await this.seedResume(e)
-      if (cannot) {
-        this.moveFailed(e, rt, cannot)
-        return
-      }
-      // A turn that had replied is told to go on, once; its message would only ask it to start over.
-      out.push(...(cut ? [{ text: CONTINUE_TEXT }, ...sends] : sends))
-    }
-    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
-    await rt.close()
-    if (this.chats.get(chat.id) !== e) return
-    this.changed(chat)
-    rt.replay(out)
+    return this.moves.carryToAnotherAccount(chatId, signIn, window)
   }
 
   /** The session the chat leaves and its size, when it is past `limit` (by default too big to copy and resume on
@@ -2457,73 +2113,14 @@ export class ChatManager {
     return tokens !== null && tokens > limit ? { sessionId, tokens } : null
   }
 
-  /**
-   * An idle chat whose session has grown past freshTokens (bigSession): its process (if any) is closed and the
-   * message becomes the first of a fresh session, the condensed handoff of the chat's record with the message at its
-   * end (handoffSend). The chat keeps its whole record and the old session joins pastSessions.
-   */
-  private async freshFrom(e: Entry, grown: { sessionId: string; tokens: number }, send: QueuedInput): Promise<QueuedInput> {
-    await e.runtime?.close()
-    const out = this.handoffSend(e, grown, GROWN, [send])
-    this.systemLine(e.chat.id, 'fresh', 'info', `The session had grown to about ${Math.round(grown.tokens / 1000)}k tokens, so this message starts a fresh session from a condensed handoff of the chat. This chat keeps the whole record.`)
-    this.changed(e.chat)
-    return out
+  /** An idle chat whose session has grown past freshTokens starts fresh: chat-manager-moves.ts. */
+  private freshFrom(e: Entry, grown: { sessionId: string; tokens: number }, send: QueuedInput): Promise<QueuedInput> {
+    return this.moves.freshFrom(e, grown, send)
   }
 
-  /**
-   * The chat leaves its big session for a fresh one (no resume): the old session joins pastSessions and the
-   * first message is the condensed handoff built from the chat file, with the sends the old session had not
-   * answered after it.
-   */
-  private handoffSend(e: Entry, left: { sessionId: string; tokens: number | null }, why: string, sends: QueuedInput[]): QueuedInput {
-    const chat = e.chat
-    const text = buildHandoff({
-      chatId: chat.id,
-      title: chat.title,
-      cwd: chat.cwd,
-      items: this.store.loadItems(chat.id),
-      sessions: [left.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
-      tokens: left.tokens,
-      why,
-      deskUrl: this.deskUrl(),
-    })
-    e.pastSessions = [...(e.pastSessions ?? []), left.sessionId]
-    chat.sessionId = null
-    chat.forkedFrom = null
-    e.forkAt = undefined
-    const images = sends.flatMap((s) => s.images ?? [])
-    const heading = left.tokens === null || why === GROWN ? "The owner's message to answer now" : "The owner's messages the old session had not answered yet"
-    const pending = sends.length ? `\n\n## ${heading}\n${sends.map((s) => s.text).join('\n\n')}` : ''
-    return images.length ? { text: text + pending, images } : { text: text + pending }
-  }
-
-  /**
-   * The saved session cannot be reopened on this machine (seedResume's reason): the chat leaves it for a fresh
-   * session, whose first message is a condensed handoff of its record with the owner's message in it. Without this
-   * every later send is refused with the same 409 and the chat is stuck. One message, not the handoff and then the
-   * owner's: a handoff alone says to carry on where the old session stopped, and the fresh session would do that
-   * before it read what the owner just asked. Idea from stablyai/orca's ACP "reopen takeover" (MIT); written fresh
-   * here. The old session joins pastSessions (handoffSend), the chat keeps its record. Null with no session to leave.
-   */
+  /** The saved session cannot be reopened: a fresh session from a handoff: chat-manager-moves.ts. */
   private takeOver(e: Entry, why: string, send: QueuedInput): QueuedInput | null {
-    const chat = e.chat
-    const sessionId = chat.sessionId ?? chat.forkedFrom
-    if (!sessionId) return null
-    const handoff = this.handoffSend(e, { sessionId, tokens: null }, why, [send])
-    this.systemLine(chat.id, 'takeover', 'warn', 'The saved session could not be reopened on this machine, so this chat continues in a fresh session from a condensed handoff of its record. The chat keeps its whole record.')
-    this.changed(chat)
-    return handoff
-  }
-
-  /** The move could not be made: the chat keeps the error state, said once and notified. */
-  private moveFailed(e: Entry, rt: ChatRuntime, text: string): void {
-    const chat = e.chat
-    this.systemLine(chat.id, 'move-failed', 'warn', text)
-    this.fail(e, { message: text, cause: 'move_failed' })
-    rt.rearmLimit()
-    chat.lastError = text
-    this.emitEvent({ type: 'notify', chatId: chat.id, reason: 'error', title: chat.title, body: text })
-    this.changed(chat)
+    return this.moves.takeOver(e, why, send)
   }
 
   private onRuntimeEvent(event: ServerEvent): void {

@@ -1,15 +1,17 @@
 // What the Routines list says at a glance, as pure functions: a status from the routine's state and last run, times as
 // '2 h ago' / 'in 3 h', a schedule in plain words with its time zone, and the list's count line.
-import type { Routine, RoutineOutcome } from '@shared/routines'
+import type { CentralRun, Routine, RoutineOutcome, RoutineStoreStatus } from '@shared/routines'
 
-export type RoutineStatus = 'ok' | 'failed' | 'running' | 'paused' | 'waiting' | 'new'
+export type RoutineStatus = 'ok' | 'failed' | 'running' | 'paused' | 'waiting' | 'new' | 'elsewhere'
 
 const FAILED: RoutineOutcome[] = ['failed', 'timed-out', 'interrupted']
 
-/** The chip a routine wears: running wins, then paused (and off, ended), then a broken file or a failed last run, else ok. */
+/** The chip a routine wears: running wins, then paused (and off, ended), then a broken file or a failed last run, else ok.
+ *  A central routine placed on another computer runs there, so it wears that. */
 export function routineStatus(r: Pick<Routine, 'state' | 'runs'>): RoutineStatus {
   if (r.state === 'running') return 'running'
   if (r.state === 'waiting') return 'waiting'
+  if (r.state === 'elsewhere') return 'elsewhere'
   if (r.state === 'paused' || r.state === 'off' || r.state === 'ended') return 'paused'
   if (r.state === 'broken') return 'failed'
   const last = r.runs[0]
@@ -24,6 +26,26 @@ export const STATUS_LABEL: Record<RoutineStatus, string> = {
   paused: 'Paused',
   waiting: 'Awaiting approval',
   new: 'Not run yet',
+  elsewhere: 'Runs elsewhere',
+}
+
+/** The Routines list's line about its central store: which store, this computer's runner name, when it was last read, and
+ *  what is wrong with it (it did not answer, or a document in it does not check out). Null when there is no store. */
+export function storeLine(s: RoutineStoreStatus | null | undefined, now: number): string | null {
+  if (!s) return null
+  if (!s.repo) return `Central store: ${s.error ?? 'not set up'}`
+  const read = s.readAt === null ? 'not read yet' : `read ${relativeTime(s.readAt, now)}`
+  const problems = s.problems.length ? `; not routines: ${s.problems.map((p) => `${p.id} (${p.reason})`).join('; ')}` : ''
+  return `Central store ${s.repo}, this computer as ${s.runner}, ${read}${s.error ? `; ${s.error}` : ''}${s.runsError ? `; ${s.runsError}` : ''}${problems}`
+}
+
+/** A central routine's newest run, wherever it ran, for its row: '2 h ago on example-pc', 'started 3 min ago on
+ *  example-pc' while it runs, 'claimed by example-pc' before it starts; null when none is known. */
+export function centralRunText(run: CentralRun | null | undefined, now: number): string | null {
+  if (!run) return null
+  if (run.endedAt !== null) return `${relativeTime(run.endedAt, now)} on ${run.runner}`
+  if (run.startedAt !== null) return `started ${relativeTime(run.startedAt, now)} on ${run.runner}`
+  return `claimed by ${run.runner}`
 }
 
 /** A result's icon family: ok, failed or busy (busy is neither a pass nor a failure). */
@@ -82,6 +104,7 @@ export function lastRunText(r: Pick<Routine, 'runs' | 'lastRunAt'>, now: number)
 /** The row's next-run text: 'paused' or 'not scheduled' when there is none, 'running now' while it runs. */
 export function nextRunText(r: Pick<Routine, 'state' | 'nextRunAt' | 'paused'>, now: number): string {
   if (r.state === 'running') return 'running now'
+  if (r.state === 'elsewhere') return 'on another computer'
   if (r.paused || r.state === 'paused') return 'paused'
   if (r.state === 'ended' || r.state === 'off' || r.nextRunAt === null) return 'not scheduled'
   return r.nextRunAt <= now ? 'due now' : relativeTime(r.nextRunAt, now)

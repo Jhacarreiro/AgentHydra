@@ -1023,7 +1023,7 @@ export function collapseSubagents(files: TranscriptFile[]): {
 
   /** The top-level session this row belongs to, or null when it is one itself — or owned by nothing
    *  real, which is the same answer as far as this list is concerned. */
-  const ownerOf = (file: TranscriptFile): TranscriptFile | null => {
+  const uncachedOwnerOf = (file: TranscriptFile): TranscriptFile | null => {
     const seen = new Set<string>([key(file, file.session_id)])
     let parent = file.parentId ? byId.get(key(file, file.parentId)) : undefined
     while (parent) {
@@ -1036,6 +1036,55 @@ export function collapseSubagents(files: TranscriptFile[]): {
     }
     // The chain ran off the end of the index: the owner was deleted or pruned. Keep the row.
     return null
+  }
+
+  // Shared ancestors are resolved once per call, including unowned chains and cycles. Rewalking
+  // a depth-N chain for each of its children used N(N+1)/2 parent visits and one Set per child.
+  // Only the last row for a key is canonical: an earlier duplicate can have a different parent
+  // edge, so its own cycle guard must keep the original walk rather than reuse canonical answers.
+  const owners = new Map<TranscriptFile, TranscriptFile | null>()
+  const ownerOf = (file: TranscriptFile): TranscriptFile | null => {
+    const ownKey = key(file, file.session_id)
+    if (byId.get(ownKey) !== file) return uncachedOwnerOf(file)
+    const remembered = owners.get(file)
+    if (remembered !== undefined) return remembered
+    const parentId = file.parentId
+    const parent = parentId ? byId.get(key(file, parentId)) : undefined
+    // Ordinary siblings and known-unowned branches need neither a path array nor a cycle Set.
+    if (!parent || key(parent, parent.session_id) === ownKey) {
+      owners.set(file, null)
+      return null
+    }
+    const parentOwner = owners.get(parent)
+    if (parentOwner !== undefined || !parent.parentId) {
+      const owner = parentOwner !== undefined ? parentOwner : parent
+      owners.set(parent, owner)
+      owners.set(file, owner)
+      return owner
+    }
+    const path: TranscriptFile[] = []
+    const seen = new Set<string>()
+    let current: TranscriptFile | undefined = file
+    let owner: TranscriptFile | null = null
+    while (current) {
+      const id = key(current, current.session_id)
+      if (seen.has(id)) break
+      const known = owners.get(current)
+      if (known !== undefined) {
+        owner = known
+        break
+      }
+      seen.add(id)
+      path.push(current)
+      const parentId = current.parentId
+      if (!parentId) {
+        owner = current
+        break
+      }
+      current = byId.get(key(current, parentId))
+    }
+    for (const visited of path) owners.set(visited, owner)
+    return owner
   }
 
   const rows: TranscriptFile[] = []

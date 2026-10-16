@@ -128,7 +128,7 @@ import {
   startCliMaytePing,
 } from './climayte-ping'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { installForTick, scheduleDue, tickAccounts, tickState } from './climayte-schedule'
+import { scheduleTick, tickAccounts } from './climayte-schedule'
 import { type CliMayteVerdict, climayteKind, nextRung } from './climayte-scorecard'
 import {
   charge,
@@ -668,14 +668,8 @@ async function tick(): Promise<void> {
     // A stop's kill runs off the daemon's thread (killRunners): nothing launches beside a CLI still
     // being killed, as the next turn of a worker stopped to deliver an urgent message would.
     await killsLanded()
-    const isDue = (w: CliMayteWorker): boolean =>
-      (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
-    // The install guard is asked before the state is read, and only with work to place: its probe
-    // runs off the daemon's thread, and what is due is read after it answers.
-    const install = [...workers.values()].some(isDue) ? await installForTick() : null
-    const state = tickState(accounts, now, install)
-    const due = [...workers.values()].filter(isDue)
-    scheduleDue(state, due)
+    const placing = scheduleTick(accounts, now)
+    if (placing) await placing
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
     processBatchWakes(now)
@@ -1890,8 +1884,9 @@ export async function climayteWaveStart(input: {
 
 /** The attempt a stop kills: a running worker's last; null when the worker is not running. */
 const runningAttempt = (w: CliMayteWorker): Attempt | null => {
+  if (w.status !== 'running') return null
   const at = w.attempts[w.attempts.length - 1]
-  return w.status === 'running' && at ? at : null
+  return at ? at : null
 }
 
 /** Before a stop: a CLI that finished just now has that turn's result, cost and turns recorded
@@ -1915,8 +1910,11 @@ function recordStop(w: CliMayteWorker, at: Attempt, notice: string | null): void
   at.outcome = 'cancelled'
   at.notice = notice
   at.endedAt = Date.now()
-  charge(w, at)
-  forgetRead(at.log)
+  try {
+    charge(w, at)
+  } finally {
+    forgetRead(at.log)
+  }
 }
 
 /** A stopped worker's signal and settings files, removed once its CLI's tree is gone. */

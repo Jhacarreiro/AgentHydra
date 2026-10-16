@@ -6,7 +6,7 @@
 import { readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { RoutineDefinition, RoutineKind, RoutineProposal } from '@shared/routines'
-import { parseCron } from './cron'
+import { momentOf, parseCron, systemZone } from './cron'
 
 export const ROUTINE_ID = /^[a-z0-9][a-z0-9-]{0,39}$/
 export const TIMEOUT_MIN = 5
@@ -15,8 +15,26 @@ export const TIMEOUT_DEFAULT = 120
 const ASKED_MAX = 500
 const WHY_MAX = 500
 
-/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one). */
-export type Entry<T extends RoutineDefinition = RoutineDefinition> = { id: string; def: T; broken: null } | { id: string; def: null; broken: string; name?: string }
+/** Where a central routine runs, seen from this computer (routines/central.ts placementOf): pinned here, shared by every
+ *  runner its labels match, or elsewhere. */
+export type Placement = 'here' | 'shared' | 'elsewhere'
+
+/** Where a central routine (routines/central.ts) is kept and where it runs: its document's path and the sha of its text in
+ *  the store, its runner labels, where they place it (and why not here), and a schedule's time zone. */
+export interface CentralMark {
+  path: string
+  docSha: string
+  runsOn: string[]
+  placement: Placement
+  why: string | null
+  timeZone?: string
+}
+
+/** One <id>.json in a folder: its definition, or the reason it is broken (and its `name`, when the file still says one).
+ *  A central routine's entry carries its `central` mark. */
+export type Entry<T extends RoutineDefinition = RoutineDefinition> =
+  | { id: string; def: T; broken: null; central?: CentralMark }
+  | { id: string; def: null; broken: string; name?: string; central?: CentralMark }
 
 /** The name a file that does not check out still gives itself, so its card keeps its name rather than its file's. */
 function nameIn(raw: string): string | undefined {
@@ -146,14 +164,15 @@ export function checkDefinition(id: string, value: unknown, allowed: readonly st
   return def
 }
 
-/** The end of a `until` day (YYYY-MM-DD, local), in ms: the start of the next day. Null when the text is not a real day. */
-export function untilEndOf(day: string): number | null {
+/** The end of a `until` day (YYYY-MM-DD in `zone`, this computer's unless given), in ms: the start of the next day. Null when
+ *  the text is not a real day. */
+export function untilEndOf(day: string, zone: string = systemZone()): number | null {
   const m = /^(\d{4})-(\d{2})-(\d{2})$/.exec(day)
   if (!m) return null
   const [y, mo, d] = [Number(m[1]), Number(m[2]), Number(m[3])]
-  const start = new Date(y, mo - 1, d)
-  if (start.getFullYear() !== y || start.getMonth() !== mo - 1 || start.getDate() !== d) return null
-  return new Date(y, mo - 1, d + 1).getTime()
+  const start = new Date(Date.UTC(y, mo - 1, d))
+  if (start.getUTCFullYear() !== y || start.getUTCMonth() !== mo - 1 || start.getUTCDate() !== d) return null
+  return momentOf(zone, Date.UTC(y, mo - 1, d + 1))
 }
 
 /** A routine file's text, checked. Throws with the reason. */

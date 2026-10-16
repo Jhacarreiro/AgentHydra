@@ -399,6 +399,50 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   highest 5-hour % per window from the CLI's rate_limit_events, `attempt.peak`), `sizing` (finished
   tasks' expected against used, `ratio` used/expected), plus `usedPct`, `rereadPct`,
   `rereadShare`, `rereadByCause`. Waiting rows carry `waitUntil` (ISO, UTC) and every row `size`.
+- Ceiling-stop overlap counts use a sorted endpoint index built only when this totals call needs one.
+  Starts and ends remain inclusive, open attempts retain their existing upper bound, and each new
+  call rebuilds from current attempts. History outside `since` still participates in overlap counts.
+
+Placement keeps the same ordered immutable finished-work snapshot while its entries are unchanged,
+including a manager's completed wakes. Grouped history indexes, scaled sums and model estimates can
+then be reused across scheduling passes. A changed entry, insertion, removal or reordered history
+creates a new snapshot; an earlier pass keeps its original snapshot. Running loads and recent spend
+continue to be read live.
+
+Compact worker lists (`GET /api/corch/workers?lean=1`) use the same derived row fields as full lists,
+but read a packed worker's cached prompt preview and report character count. Its long text stays
+compressed. The count includes the earlier recap retained by `statusTurns`; reading or changing a
+packed text field discards the summary and restores ordinary fields. Full detail and report requests
+continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
+
+Brief lists use the same cached text projection, including explicit history and waiting reads.
+They retain the exact recap-aware `resultChars` count without decompressing prompts or reports
+that the brief contract omits; detail and report reads still restore the original text.
+
+Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
+projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
+chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
+verdict and launch details. Older daemons ignore the flag; ordinary lean/full lists and detail
+routes keep their shapes, and brief/report reads take precedence. Packed history remains packed.
+Finished workers skip running-attempt access, and spend settlement collects only open attempts
+instead of allocating intermediate arrays for every historical worker.
+
+Store checkpoints still inspect current worker statuses and serialize before yielding. Revived
+workers come from that pass's hot rows; tracked Map removals identify deleted filed records,
+avoiding a second walk through unchanged finished history. Done-file writes still precede
+`workers.json`, and removals follow it. No checkpoint is deferred or combined by this optimization.
+Cancellation releases the attempt's parsed-log cache even if spend calculation throws; its
+existing error handling and bounded recent summary cache remain intact.
+
+Default Claude parent lookups find only the first two slash/backslash positions rather than
+splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain
+their previous ownership results; named-session stores keep their prefixed-ancestor rules.
+
+Origin-title warming excludes non-chat origins and cached titles before ranking the remaining
+workers. Active-first/newest priority, stable duplicate selection, lookup caps and null-miss retry
+times are unchanged. Completed or failed lookups release their deadline timers immediately.
+The window computes Free display rows independently of local and remote workers; worker-only
+refreshes reuse those row objects, while history changes and displayed account edits refresh them.
 
 ### Model and thinking (field note 16)
 
@@ -489,6 +533,25 @@ the session registrations of every pool account last read 3 seconds ago or more
 Each pool build then judges those registrations on the thread (`liveIdsOf`: the pid, then the pipe),
 with no transcript lookups. An account not read yet counts no other sessions until its read lands.
 The tick reads every account before it places work.
+
+Registration discovery reads fresh canonical folders from the registry without hydrating account
+numbers, identities, plans or usage. It checks the refresh deadline before probing credentials;
+new or newly signed-in accounts are still discovered on the next tick. Placement continues to
+read the full account metadata when needed, with the same registration and pool intervals.
+
+CLI plan labels retain only their display string (never parsed credentials), bounded to 512 paths.
+Each read stats the credential file and re-parses on change, replacement, deletion or an unreadable
+file. The shared `StatStamp` racy-file guard also re-reads recently written files until a stable parse
+exists, so a rapid same-size rewrite cannot leave a stale label.
+
+Login sync's scalar account-email cache uses the same racy-file stamp plus device/inode checks,
+bounded to 512 paths. Each call revalidates the file; missing or unreadable metadata discards its
+entry, and the current instance name remains the fallback. Full portable-login export and landing
+checks still read the complete account block fresh.
+
+Totals also reuse one session-membership lookup per analytics database while its generation and
+the exact requested session set hold. A write on either connection or changed membership forces
+a fresh query; failures propagate instead of caching a guessed empty result.
 
 ### Pure helpers (exported; the tests pin these)
 
@@ -1115,13 +1178,16 @@ effect. Placement weighs the accounts; this weighs the machine.
   check goes red for the machine).
 - **The gate** (startOn, every start path: the pick, a spill, a short start): a start waits while it
   would leave free RAM under 8% of the machine (`FREE_FLOOR_SHARE`, fairjob's floor) or, on Windows,
-  commit under 5% of its limit (`COMMIT_FLOOR_SHARE`). The commit check counts every worker as
+  commit under 12% of its limit (`COMMIT_FLOOR_SHARE`; 5% until 2026-10-09). The commit check counts every worker as
   `WORKER_COMMIT_BYTES` (0.75 GB private: 24.5 GB over the 33 worker trees measured that day). The
   RAM check counts working set, not private bytes (2026-10-06: about 0.45 GB a grown tree, learned
   as the median of workers older than `RAMP_MS`, re-read each minute, clamped 0.25-1.0 GB): free RAM
   already excludes what running workers hold, so a worker that started within `RAMP_MS` (2 minutes)
   reserves only what it has left to grow (its tree's working set read now, runner pid and
-  descendants), a tree that cannot be read and the start itself reserve the full amount.
+  descendants), a tree that cannot be read and the start itself reserve the full amount. A tick that
+  may start a worker reads those trees anew. One with nothing due, or a status read, reuses a reading
+  of the same runners under `GROWTH_REUSE_MS` (3 s) old, so no start is ever decided on a reused
+  reading (`growthOf`, since ff394bfc).
 - **Held, not refused:** the task stays `queued` with "Waiting for memory: ..." (journaled once, not
   every tick) and starts on the first tick with room, highest priority first (`dueOrder`). Nothing
   running is stopped or slowed. The spill and start-short journal lines are written only when the

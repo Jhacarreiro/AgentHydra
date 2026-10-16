@@ -1,15 +1,13 @@
 """No-network guards for first-party request handoff, privacy and single dispatch."""
-import asyncio
 from copy import deepcopy
 from contextlib import ExitStack
 from pathlib import Path
 import tempfile
 import unittest
-from unittest.mock import AsyncMock, Mock, patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
-from claudfree.chatgpt.browser_request import _prepare, browser_slot, markers_missing, request_headers, validate
-from claudfree.chatgpt.quiet_window import SPOT, FocusReturn
+from claudfree.chatgpt.browser_request import browser_slot, markers_missing, request_headers, validate
 from claudfree.chatgpt.http import ChatGPTHttp, TEXT_MODEL
 from claudfree.errors import ClaudeError
 
@@ -103,49 +101,6 @@ class BrowserRequestTests(unittest.TestCase):
             h.preparations.take.assert_not_called()
             on_id.assert_called_once_with(conversation)
         finally:h.close()
-
-
-class FakeWindows:
-    """The foreground window and where each window sits."""
-    def __init__(self, now, spots):self.now,self.spots,self.handed=now,spots,[]
-    def foreground(self):return self.now
-    def position(self,window):return self.spots[window]
-    def exists(self,window):return window in self.spots
-    def activate(self,window,holder):self.handed.append((window,holder));self.now=window
-
-
-class QuietWindowTests(unittest.TestCase):
-    def test_the_request_browser_opens_beyond_the_screen(self):
-        start=AsyncMock(side_effect=RuntimeError('stop after launch'))
-        http=Mock(timeout=120);http.saved_state.return_value={'cookies':[]}
-        with tempfile.TemporaryDirectory() as root, patch('zendriver.start',start), self.assertRaises(RuntimeError):
-            asyncio.run(_prepare(http,'Example prompt',None,directory=root,model=TEXT_MODEL,temporary=True,on_id=None))
-        position=[a for a in start.call_args.kwargs['browser_args'] if a.startswith('--window-position=')]
-        self.assertEqual(len(position),1)
-        self.assertTrue(all(int(v)<-10000 for v in position[0].split('=')[1].split(',')))
-
-    def test_the_browser_taking_the_keyboard_gives_it_straight_back(self):
-        windows=FakeWindows('desk',{'desk':(0,0),'chrome':SPOT})
-        focus=FocusReturn(windows)
-        windows.now='chrome';focus.step()
-        self.assertEqual(windows.handed,[('desk','chrome')])
-        self.assertEqual(windows.now,'desk')
-
-    def test_the_person_switching_apps_is_left_alone_and_followed(self):
-        windows=FakeWindows('desk',{'desk':(0,0),'editor':(-1920,0),'chrome':SPOT})
-        focus=FocusReturn(windows)
-        windows.now='editor';focus.step()
-        self.assertEqual(windows.handed,[])
-        windows.now='chrome';focus.step()
-        self.assertEqual(windows.handed,[('editor','chrome')])
-
-    def test_another_requests_browser_is_never_the_window_returned_to(self):
-        windows=FakeWindows('other request',{'desk':(0,0),'other request':SPOT,'chrome':SPOT})
-        focus=FocusReturn(windows)
-        windows.now='chrome';focus.step()
-        self.assertEqual(windows.handed,[])
-        windows.now='desk';focus.step();windows.now='chrome';focus.step()
-        self.assertEqual(windows.handed,[('desk','chrome')])
 
 
 if __name__=='__main__':unittest.main()

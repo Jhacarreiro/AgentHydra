@@ -53,7 +53,7 @@ sidebar on the left stays put, and only the pane on the right changes.
 - **Connectors: outside apps hooked in without copying them** (owner, 2026-10-06). RepoYeti, ReDesign, DevWebUI and Connections each are a file in `server/src/connectors/defs/` (`ConnectorDef`, `server/src/connectors/types.ts`; contract `shared/connectors.ts`). `server/src/connectors/registry.ts` polls every connector's `detect()` every 15 s and after any action, keeps the last status, and `GET /api/connectors` (plugin `57-connectors.ts`, own page only) lists them; `POST /api/connectors/<id>/<install|start|enable|disable>` runs an action. Settings → Connectors shows one row per connector: a status dot and word, its version, Install, Start, Open (a pane connector that runs), a homepage link, and the switch "Give chats its tools" (kept in `~/.hydra-desk-2/connectors.json`). Install downloads the release asset of the connector's GitHub repository into `~/.hydra-desk-2/apps/<id>/` (`server/src/connectors/release.ts`) and runs nothing that does not match its line in the release's `SHA256SUMS.txt`; start is hidden, and an enabled connector that is installed starts by itself, hidden, when Desk starts (and when its switch is turned back on), so chats get its tools without a click. While a connector runs and is enabled, every chat started afterwards gets its MCP servers (under the person's own config of the same name; AgentHydra's still wins) and one prompt paragraph after Desk's own. Dev servers (id `devwebui`) is built in, so there is nothing to install: while it is enabled every chat gets its `devservers` tools and prompt paragraph (below), and its row shows the dev-servers service with Restart and Stop.
 - **The git bar above the message box runs through RepoYeti** (owner, 2026-10-06). The project, branch and +N -N stay as they were. While RepoYeti runs, the Create PR split button becomes one control (`composer/RepoYetiActions.vue`, pure logic in `repoyeti-bar.ts`): a primary button plus a menu with Commit (a message box prefilled from RepoYeti's drafted message, Amend as an option), Push and Pull (with ahead/behind), switch or create a branch, Undo / Redo of the last git action (RepoYeti's reflog; its preview is the confirm text), Open in RepoYeti, Create PR and Undo this chat's changes. Desk's server makes the calls (`server/src/plugins/59-repoyeti-git.ts`, `/api/repoyeti/git/*`, own page only, only while the connector runs) over RepoYeti's REST API, never its MCP tools, which wait for approval in RepoYeti's pane. RepoYeti has no pull-request route, so Create PR (on the default branch) makes a new branch, commits anything uncommitted, pushes, and opens GitHub's `compare/<branch>?expand=1` page from the remote URL. RepoYeti refuses to push a branch with no upstream, so Desk writes that branch's `remote`/`merge` git config first. When RepoYeti is not running the bar keeps the old Create PR (an ask to the AI) plus one item that installs or starts RepoYeti.
 - **One Changes tab, with RepoYeti inside** (owner, 2026-10-06). The chat header has one Changes button, not two. The pane has a small `Changes | RepoYeti` switch at its top (`panes/ChangesPane.vue`); RepoYeti shows `RepoYetiPane` (its Install or Start offer included) and the choice is remembered per Desk in `localStorage` (`hydra-desk.changes.tab`). With the RepoYeti connector off in Settings the switch is hidden and the pane is plain Changes. The git bar's Open in RepoYeti opens Changes with RepoYeti selected.
-- **The Connections chip works with the HTTP entry too** (owner, 2026-10-06). When the main Claude config has `mcpServers.connections` as `{type:'http', url, headersHelper}` (one shared local server for every chat) the connector is running when the url's `/health` answers, and Desk's calls (`server/src/connectors/connections-http.ts`) run the `headersHelper` per chat folder and session the way Claude Code does, then speak MCP Streamable HTTP; the helper is run again on a 401. The stdio entry still works. Header values are never logged.
+- **The Connections chip works with the HTTP entry too** (owner, 2026-10-06). When the main Claude config's Connections entry is `{type:'http', url, headersHelper}` (one shared local server for every chat) the connector is running when the url's `/health` answers, and Desk's calls (`server/src/connectors/connections-http.ts`) run the `headersHelper` per chat folder and session the way Claude Code does, then speak MCP Streamable HTTP; the helper is run again on a 401. The stdio entry still works. Desk finds the entry by what it launches, never by its key (`connections`, `connections-local` or any other; `connectionsEntry` in `server/src/connectors/connections-client.ts`, 2026-10-15): a Connections loader or the connections-mcp package, a `headersHelper` that runs a loader's `--connect`, or the shared server's loopback `:7791/mcp`, as Connections' own `launchesConnectionsMcp` decides; with several, the http one wins. Header values are never logged.
 - **A Connections tab in the chat header** (owner, 2026-10-06): the Connections mark beside Changes and Browser, shown whenever the chip shows. Its pane (`connectors/ConnectionsPane.vue`) shows the server this Desk is connected to (transport, address, state, version), the sign-in state with Sign in, and this chat's workspace with the chip's switcher, the default-for-new-chats star, No workspace, the read-only Bypass permissions row and the Studio link. It and the chip share `connectors/connections-workspace.ts`; the chip stays in the title bar.
   **Undo this chat's changes** (`server/src/chat-undo/plan.ts`, `/api/chats/:id/file-undo`) reads the chat's own Claude transcript: the first Edit/Write of each file records its pre-chat content, replaying every edit gives what the file should be now. A confirm lists each file with +/- before anything changes; a file whose current content differs from that replay (someone else changed it) is refused, and one the transcript cannot settle (no recorded original, notebooks, outside the chat folder) is flagged and left alone. Files made by shell commands are not covered, and a file the chat created is deleted. The SDK's `rewindFiles` is not used: Desk starts queries without file checkpointing, it needs the live query, and it returns only totals.
 - **A clean sidebar, and no Back and Forward arrows** (owner, 2026-10-06). The chrome bar holds Menu and Hide
@@ -685,7 +685,7 @@ sidebar on the left stays put, and only the pane on the right changes.
   runs `git merge-tree --write-tree` with no fetch and no change to the work tree (`server/src/git/git.ts`,
   `web/src/components/panes/merge-preview.ts`). A chat whose saved session is in no folder on this PC no longer refuses
   a send: the message starts a fresh session that carries a condensed handoff of the chat (`engine/handoff.ts`), a
-  takeover line says so, and the transcript shows only what was typed (`takeOver` in `engine/chat-manager.ts`). A
+  takeover line says so, and the transcript shows only what was typed (`takeOver` in `engine/chat-manager-moves.ts`). A
   plain folder on the New screen shows its own logo: conventional icon files, an HTML `<link rel="icon">`, then the
   same in an app one folder down (`server/src/projects/icon-detect.ts`). A dev server's own printed address (its
   "Local:" line first) is the one shown and probed (`server/src/devservers/advertised-url.ts`). A chat marked unread by
@@ -986,7 +986,28 @@ recorded as a chat. Off by default, saved in `free/accounts.json`: `GET /api/fre
 Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
-**Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in an owned browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Request browsers are limited to three at once and their profiles are removed afterward. Desk's Free runtime does not install Playwright or Camoufox.
+**Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in one shared headless browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Each of at most three concurrent requests has its own disposable cookie context, cleared afterward. The empty browser closes after 60 seconds idle. Desk's Free runtime does not install Playwright or Camoufox.
+
+ChatGPT's small network-response status callback runs on Zendriver's event loop instead of
+dispatching each response to Python's executor. Blocking HTTP readback stays off the loop;
+account checks, Temporary Chat verification and the single-send guard remain unchanged.
+
+On Windows, browser-slot waiters block on three named kernel mutexes instead of probing three
+files every 100 ms. The same file locks remain authoritative across old helpers and aliased
+paths: native API failure or legacy file contention returns to the original scan with its
+remaining deadline. File ownership releases before mutex ownership; abandoned mutexes recover
+after a process exits. Other platforms keep the existing file-lock queue.
+
+AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
+timer releases finished batches even when no later tool call arrives; pending work remains
+available until it settles. This releases daemon memory while keeping stored account/thread metadata intact.
+The verified conversation can supply the final reply directly when it fits the bounded IPC response,
+avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
+fails without another send.
+Confirmation polls inspect the same visible branch, identities and completion status without rendering
+code blocks or citations; the final answer keeps that rich output. On Windows the detached browser helper
+uses the managed virtual environment's `pythonw.exe`, with no console. A missing windowless interpreter
+refuses startup instead of silently opening a console.
 Usage counters that the provider does not expose stay unknown, and
 historical usage readings retain their observation and reset times. Free web accounts use their own
 allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
@@ -1008,6 +1029,42 @@ server UUIDs. `POST /api/free/jobs` accepts a unique `requestId` UUID, `instance
 use `prompt`; `read`, `resume` and `track` require an explicit `chatId` UUID. `name` is optional for new
 chats and required for tracking. Claude messages also accept `webSearch`. Poll
 `GET /api/free/jobs/{requestId}` until `state` is `done`, then inspect `result.ok` and `result.error`.
+Batch callers can instead read `GET /api/free/jobs?ids=<comma-separated UUIDs>`: up to 32 IDs, with a
+`jobs` object keyed by ID and `null` for expired or unknown operations. Reads start no work. Free MCP batches
+use this endpoint when available and fall back to individual reads on older Desk versions.
+Unchanged status polls reuse only thread counts; insertions, removals and status transitions invalidate
+them immediately. Usage, health and jobs remain live readings. Completed operations serialize their final
+thread metadata, tokens and statistics together, and settled file writers release the serialized buffer
+while retaining pending or failed writes for retry.
+Authentication keeps its imported-chat checkpoint before awaiting quota. Its final quota reading,
+successful nudge refreshes and cancellation recovery fold into the operation's mandatory final
+save, avoiding a second full-history serialization without changing backups or shutdown flushing.
+The CliMayte page retains its Free display projection across local/remote worker refreshes.
+History replacements and reactive displayed account edits invalidate it; selection remains keyed
+by account/chat identity, and the underlying Free history keeps its existing polling and freshness.
+Queue sync checks its existing minimum upload gap before building and fitting this PC's snapshot.
+Inside that gap, both the local pending check and an upload skip worker projection, hashing,
+zstd compression and encryption. Title/build/job warming and other PCs' downloads still run;
+the existing shape and live gates, payload fitting, truncation and failed-upload retries are unchanged.
+Completed jobs in the shared page cache retain metadata rather than whole result/transcript objects.
+Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
+uncertain-operation locks remain intact. Successful account removal clears its cache only if no
+newer operation appeared while deletion was awaiting acknowledgement. Server job retention is unchanged.
+Server recovery replies retain their existing 15-minute window and 200-job ceiling. The rolling
+maintenance tick also prunes expired completed replies when no account needs a refresh; active jobs
+and stored thread metadata stay intact. Runner stdout decoding views the exact transferred byte
+slice instead of first duplicating up to 8 MiB; UTF-8 and exit/status handling remain unchanged.
+ChatGPT continuation model and previous-message-ID checks use the existing proof projection,
+avoiding historical code/citation extraction before dispatch. Branch visibility and identity
+validation remain shared with rich reads; completed replies still receive full display fields,
+and a lost or incomplete result never triggers another POST.
+After selecting the continuation model and validating its visible message IDs, the client releases
+the old provider transcript before browser queueing. Only the conversation/parent/privacy reference
+and a frozen previous-ID set remain; direct HTTP callers still validate their full input normally.
+Full `/api/free/threads` reads carry an opaque `ETag`; a matching `If-None-Match` returns a bodyless
+304 before traversing or serializing history. The Free UI keeps its existing list and row objects on
+304. Thread writes and server restarts invalidate the tag. Raw readers, older servers and filtered
+`since` reads keep their existing array responses.
 The job's `phase` distinguishes automatic setup from the operation. `DELETE /api/free/jobs/{requestId}`
 cancels its owned process, including a login window. Requests from another browser origin are refused.
 Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.

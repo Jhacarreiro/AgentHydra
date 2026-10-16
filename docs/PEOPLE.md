@@ -33,7 +33,7 @@ the same slug is under `people/manager/`, that copy wins (see Managers below).
 
 ## Other sources
 
-The builder also reads skills (`~/.claude/skills`) and sub-agents (`~/.claude/agents`). Home paths always come from
+The builder also reads skills (`~/.claude/skills`) and sub-agents (`~/.claude/agents`), both in [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md). Home paths always come from
 `os.homedir()`. `AGENTHYDRA_CORE_DIR` overrides the core folder (default `~/.agenthydra/core`). Hand-written
 `hand-*.json` files in `<core>/catalog/` are never touched and win over generated entries with the same id.
 

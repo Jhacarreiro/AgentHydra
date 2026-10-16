@@ -53,3 +53,78 @@ describe('climayteTotals honesty fields', () => {
     expect(t.firstAt!).toBeLessThanOrEqual(T)
   })
 })
+
+describe('climayteTotals interval counts', () => {
+  test('matches the former inclusive scan for unsorted, open, zero-length and out-of-scope runs', () => {
+    const ceiling = { pct: 90, week: false, resetsAt: null }
+    const group = [
+      attempt({ started: true, startedAt: T + 10, endedAt: T + 20, ceiling }),
+      attempt({ started: true, startedAt: T - 100, endedAt: null }),
+      attempt({ started: true, startedAt: T + 10, endedAt: T + 10 }),
+      attempt({ started: true, startedAt: T, endedAt: T + 10, ceiling }),
+      attempt({ started: true, startedAt: T + 30, endedAt: T + 5 }),
+      attempt({ started: true, startedAt: T, endedAt: T, ceiling }),
+      attempt({ started: false, startedAt: T + 8, endedAt: T + 12 }),
+    ]
+    const earlier = attempt({ started: true, startedAt: T + 5, endedAt: T + 12 })
+    const other = attempt({
+      account: { id: 'other-example', num: 2, name: 'Other' },
+      started: true,
+    })
+    put('t-intervals', 'done', group)
+    put('t-interval-earlier', 'done', [earlier])
+    workers.get('t-interval-earlier')!.createdAt = T - 1000
+    put('t-interval-other', 'done', [other])
+    const all = [...group, earlier, other]
+    const totals = climayteTotals(T)
+    const stops = totals.ceilingStopList.filter((s) => s.id === 't-intervals')
+    expect(stops).toHaveLength(3)
+    for (const stop of stops) {
+      const at = Date.parse(stop.at)
+      const expected = all.filter(
+        (a) =>
+          a.account.id === 'acct-example' &&
+          a.startedAt <= at &&
+          (a.endedAt ?? Number.MAX_SAFE_INTEGER) >= at,
+      ).length
+      expect(stop.workers).toBe(expected)
+    }
+    expect(stops.map((s) => s.workers)).toEqual([2, 6, 3])
+    // Never-launched and open attempts were excluded from these future-scoped totals, but the
+    // interval scan always included them when counting overlap. A fresh totals call sees edits.
+    group[1]!.endedAt = T + 5
+    expect(
+      climayteTotals(T).ceilingStopList.find(
+        (s) => s.id === 't-intervals' && Date.parse(s.at) === T + 10,
+      )?.workers,
+    ).toBe(5)
+  })
+
+  test('12000 historical attempts are visited once for 4000 ceiling stops instead of once per stop', () => {
+    let startReads = 0
+    const count = 12000
+    for (let worker = 0; worker < 1000; worker++) {
+      const attempts = Array.from({ length: 12 }, (_, i) => {
+        const n = worker * 12 + i
+        return {
+          ...attempt({ started: true, endedAt: T + n * 10 + 100 }),
+          get startedAt() {
+            startReads++
+            return T + n * 10
+          },
+          ...(n % 3 === 0 ? { ceiling: { pct: 90, week: false, resetsAt: null } } : {}),
+        }
+      })
+      put(`t-interval-scale-${worker}`, 'done', attempts)
+    }
+    const totals = climayteTotals(T - 1)
+    expect(totals.ceilingStops).toBe(4000)
+    expect(startReads).toBeLessThanOrEqual(count * 2)
+    // Independent closed-form counts: each 100 ms interval overlaps the next ten starts,
+    // including the start/end tie, until the end of the record cuts that number short.
+    for (const stop of totals.ceilingStopList) {
+      const n = (Date.parse(stop.at) - T - 100) / 10
+      expect(stop.workers).toBe(Math.min(11, count - n))
+    }
+  })
+})

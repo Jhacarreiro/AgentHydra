@@ -172,7 +172,15 @@ class ChatGPTClient(Client):
                     return self._read_or_track(registry, args, entry, server_id, body)
                 # A preference picks a NEW chat's model; a continued chat stays on the model its thread answered on.
                 model = http.model_for(args.prefer) if body is None else thread_model(body)
-                return self._send(http, registry, pool, args.prompt, entry, server_id, body, model)
+                continuation = {}
+                if body is not None:
+                    # Validate the selected visible branch before dispatch, then
+                    # release its text/metadata before waiting for a browser slot.
+                    continuation['previous_ids'] = frozenset(message['id']
+                        for message in visible_messages(body, rich=False))
+                    body = {key: body[key] for key in
+                        ('conversation_id', 'current_node', 'is_temporary_chat') if key in body}
+                return self._send(http, registry, pool, args.prompt, entry, server_id, body, model, **continuation)
         finally:
             registry.close()
 
@@ -218,7 +226,7 @@ class ChatGPTClient(Client):
             }
         return self._read_result(entry, server_id, messages)
 
-    def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL):
+    def _send(self, http, registry, pool, prompt, entry, server_id, body, model=TEXT_MODEL, *, previous_ids=None):
         # Verify the reference and privacy before preparing. Reuse this
         # authenticated connection for preparation and readback. The ordinary
         # browser dispatches the automatic generation request exactly once.
@@ -246,6 +254,7 @@ class ChatGPTClient(Client):
                 on_id=partial(registry.link, entry["chat_id"]),
                 model=model,
                 prepared_request=prepared_request,
+                **({'previous_ids': previous_ids} if previous_ids is not None else {}),
             )
         except ClaudeError as error:
             registry.status(entry["chat_id"], error.code)
@@ -311,7 +320,7 @@ class ChatGPTClient(Client):
             "default_privacy": {"temporary": True, "personalization": False},
             "browser_required_for": ["login", "message_send"],
             "preparation_methods": {"default": "first_party_browser_http", "explicit_legacy": "javascript"},
-            "preparation_runtime": "Installed Chrome/Edge with zendriver; restores saved cookies without submitting login. The browser sends the requested message once, then its owned profile closes after authenticated HTTP readback.",
+            "preparation_runtime": "Installed headless Chrome/Edge with zendriver; restores saved cookies without submitting login. Desk reuses one browser with up to three disposable isolated contexts. Each context closes after authenticated HTTP readback; the empty browser closes after 60 idle seconds.",
             "commands": {
                 name: "Use --provider chatgpt"
                 for name in [

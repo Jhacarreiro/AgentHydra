@@ -1,7 +1,7 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Check, Hourglass, ListChecks } from '@lucide/vue'
-import { routineCountLine } from './routine-view'
+import { routineCountLine, storeLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
 import type { InstanceManagerStatus } from '@shared/instance-manager'
@@ -74,6 +74,7 @@ const routines = shallowRef<RoutinesStatus | null>(null)
 /** The routine whose details replace the list (its Details button), or null. */
 const detailsOf = ref<string | null>(null)
 const routineCount = computed(() => routineCountLine(routines.value?.routines ?? []))
+const routineStore = computed(() => storeLine(routines.value?.store, Date.now()))
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -729,6 +730,9 @@ onBeforeUnmount(() => {
               <div v-if="r.id === 'routines' && routines" class="basis-full">
                 <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
                   No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
+                </div>
+                <div v-if="routineStore" class="wrap-break-word text-ui-sm leading-4.5" :class="routines.store?.error ? 'text-danger-text' : 'text-text-muted'">
+                  {{ routineStore }}
                 </div>
                 <RoutineDetails
                   v-if="detailsOf && routines.routines.some((x) => x.id === detailsOf)"

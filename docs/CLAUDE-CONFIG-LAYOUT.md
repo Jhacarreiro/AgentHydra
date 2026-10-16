@@ -14,6 +14,8 @@ their usual `~` form; this page says what each one is and who owns it.
 | `<config>/settings.json` | Claude Code (user) | User settings: permission allow rules, hooks. The opt-in agent-status hooks go here (`AGENTHYDRA_HOOKS_CONFIG` overrides it). |
 | `<config>/projects/<encoded-cwd>/<session-id>.jsonl` | Claude Code | The transcript store. Claude Desktop and the `claude` CLI both write here, Desktop-instance sessions included, so a transcript's location says where a session LOGS, not which account PAYS ([AI_USAGE_SELFCHECK.md](AI_USAGE_SELFCHECK.md)). `server/src/config.ts` names it `CLAUDE_PROJECTS_ROOT`. |
 | `<config>/sessions/<pid>.json` | Claude Code | The CLI's live registry of running sessions, keyed by engine pid. `whoami` and the history tools match the caller against it. |
+| `<config>/skills/<name>/SKILL.md` | the user | User-level skills. The Hydra Core catalog builder (`hydra-core/catalog/build.mjs`) reads each one as a catalog entry; it never writes here. |
+| `<config>/agents/<name>.md` | the user | User-level sub-agent definitions. The same catalog builder reads them as catalog entries, read-only. |
 | `<config>/commands/` | the user | User-level slash commands. The canonical `/orchestrate` command lives in this repo at [`.claude/commands/orchestrate.md`](../.claude/commands/orchestrate.md) and is copied here. |
 | `<home>/.claude/scheduled-tasks/<taskId>/SKILL.md` | Claude Desktop | Where the desktop app looks for a scheduled task's prompt; the path is hardcoded in the app, and the task row's own `filePath` is ignored. |
 

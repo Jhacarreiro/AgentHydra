@@ -212,6 +212,123 @@ function asksOf(dir) {
   return !existsSync(file) || readFileSync(file, "utf8").trim() !== "off";
 }
 
+// The `<core>/CRANIUM` file: the flowchart lives in the CrAInium, one per workspace behind connections_core, so the
+// hook only tells the chat to walk it and keeps nothing on this PC (the owner's ruling 2026-10-15). Absent, the local
+// tree below runs as before; each PC switches when its owner says.
+function craniumOn(dir) {
+  return existsSync(path.join(dir, "CRANIUM"));
+}
+
+const CORE_VIA = '(Connections MCP; when it is not in your tool list, connections_execute { tool_name: "connections_core", params })';
+
+// The Connections MCP writes each folder's quick exits to a head file: the flowchart's first questions, which the chat
+// answers itself. The owner's design is three quick questions on every message, which cut most of what a message costs;
+// only what they do not settle needs the core. An entry older than a day is not trusted: the flowchart may have changed.
+const HEAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function folderKey(p) {
+  const key = String(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(key) ? key.toLowerCase() : key;
+}
+
+function headEntry(input, env) {
+  let head;
+  try {
+    head = JSON.parse(
+      readFileSync(env.AGENTHYDRA_CRANIUM_HEAD_FILE || path.join(os.homedir(), ".connections", "cranium", "core-head.json"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  const entry = head?.folders?.[folderKey(cwdOf(input))];
+  const at = Date.parse(entry?.readAt);
+  return Number.isFinite(at) && Date.now() - at < HEAD_TTL_MS ? entry : null;
+}
+
+// Null when the entry holds no usable quick exit (no ask, no exit, or a shape this does not read): the walk line stands.
+function fastPath(entry, at) {
+  if (!entry.asks?.length || !entry.exits?.length) return null;
+  try {
+    const asks = entry.asks.map((ask) => `- ${ask.id}: ${ask.text} (${ask.answers.join(" | ")})`);
+    const exits = entry.exits.map((exit) => {
+      const when = Object.entries(exit.answers).map(([id, answer]) => `${id} ${answer}`).join(", ");
+      return `If your answers are ${when}: ${exit.outcome}.${exit.say ? ` ${exit.say}` : ""}`;
+    });
+    return [
+      `Hydra Core (flowchart v${entry.version}): answer these yourself before you act; they need no tool call.`,
+      ...asks,
+      ...exits,
+      `Any other answers: walk it, connections_core { action: "run", ${at}, answers: { <your answers to the questions above> }, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with that answer added. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+    ].join("\n");
+  } catch {
+    return null;
+  }
+}
+
+function craniumPrompt(input, env) {
+  if (!ownerPrompt(input)) return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  const entry = headEntry(input, env);
+  if (entry?.status === "none") return null;
+  const fast = entry?.status === "ok" ? fastPath(entry, at) : null;
+  return output(
+    "UserPromptSubmit",
+    fast ??
+      `Hydra Core: before you act on this message, walk the workspace flowchart: connections_core { action: "run", ${at}, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with answers: { <ask.id>: <one of ask.answers> } added to the answers so far. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+  );
+}
+
+// One outbox line per turn: whether the chat walked the core and whether it handed work to a delegate. Only a delegate
+// needs the core (the quick questions are answered in the chat), so these two counts show which turns still pay for a
+// core call. Never blocks the Stop and never throws.
+const DELEGATES = /^(Agent|Task|Workflow)$|(hswarm_run|climayte_run|fan_out)$/;
+
+function craniumLedger(input, env) {
+  try {
+    if (input.stop_hook_active === true) return;
+    // A folder whose workspace has no flowchart has no core to measure.
+    const entry = headEntry(input, env);
+    if (entry?.status === "none") return;
+    const { tools } = lastTurn(input);
+    const called = tools.some((tool) => {
+      const name = String(tool.name ?? "");
+      if (name.endsWith("connections_core")) return true;
+      return (
+        name.endsWith("connections_execute") &&
+        tool.input?.tool_name === "connections_core" &&
+        (tool.input?.params?.action ?? "run") === "run"
+      );
+    });
+    const delegated = tools.some((tool) => DELEGATES.test(String(tool.name ?? "")));
+    const chat = chatKey(input, env);
+    const line = {
+      uid: `turn:${chat.slice(0, 50)}:${Date.now()}`.replace(/[^A-Za-z0-9._:-]/g, "_"),
+      at: new Date().toISOString(),
+      chat,
+      folder: folderKey(cwdOf(input)),
+      // The server matches a folder as written, so the ledger sends this; folder is the cache key.
+      folderPath: cwdOf(input),
+      called,
+      delegated,
+      version: entry?.version ?? null,
+      pc: os.hostname(),
+    };
+    const outbox =
+      env.AGENTHYDRA_CRANIUM_OUTBOX_FILE || path.join(os.homedir(), ".connections", "cranium", "core-outbox.jsonl");
+    mkdirSync(path.dirname(outbox), { recursive: true });
+    appendFileSync(outbox, `${JSON.stringify(line)}\n`);
+  } catch {}
+}
+
+function craniumSession(input, env) {
+  if (input.source !== "compact") return null;
+  const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  return output(
+    "SessionStart",
+    `Hydra Core: this chat was compacted. If the flowchart handed this work on, connections_core { action: "brief", ${at} } ${CORE_VIA} gives its last brief back.`,
+  );
+}
+
 // Under slot or file the pack is already in the chat's prompt: a message gets only the strong matches it has not had,
 // after the core_scope line when ASK is on (the chat picks its own lead; the owner's ruling 2026-10-15).
 async function placedPrompt(input, env, dir) {
@@ -387,11 +504,17 @@ export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
   const dir = coreDir(env);
-  if (!existsSync(path.join(dir, "ON"))) return null;
+  // CRANIUM needs no ON: ON also turns on the daemon's local core mode, which a CRANIUM PC must not get.
+  if (!existsSync(path.join(dir, "ON")) && !craniumOn(dir)) return null;
   const skip = skipOf(env, dir);
   if (skip) {
-    if (event !== "Stop") logSkip(input, env, dir, skip);
+    if (event !== "Stop" && !craniumOn(dir)) logSkip(input, env, dir, skip);
     return null;
+  }
+  if (craniumOn(dir)) {
+    if (event === "UserPromptSubmit") return craniumPrompt(input, env);
+    if (event === "Stop") craniumLedger(input, env);
+    return event === "SessionStart" ? craniumSession(input, env) : null;
   }
   if (event === "Stop") {
     logPackRead(input, env, dir);

@@ -16,6 +16,35 @@ process.on('exit', () => {
   if (root !== null) rmSync(root, { recursive: true, force: true })
 })
 
+/** The people door present, as on a PC with the private checkout: a fake door in a temp home and no add-on module, so
+ *  the in-repo lead pick asks the model on every PC (2026-10-15: 20 lead-pick tests read this PC's own door and failed
+ *  on one without it). The returned cleanup forgets the load and removes the home. */
+export async function usePeopleDoor(): Promise<() => void> {
+  const { forgetPeopleAddon, loadPeopleAddon } = await import('../src/people-host')
+  const home = mkdtempSync(join(scratchRoot(), 'people-door-'))
+  mkdirSync(join(home, '.agenthydra'), { recursive: true })
+  const command = [
+    process.execPath,
+    join(import.meta.dir, 'fixtures', 'fake-people-door.mjs'),
+    join(home, 'people.json'),
+    join(home, 'door-log.txt'),
+  ]
+  writeFileSync(
+    join(home, '.agenthydra', 'people-store.json'),
+    JSON.stringify({ crainium: { command } }),
+  )
+  await loadPeopleAddon({
+    home,
+    env: {},
+    appRoot: join(home, 'AgentHydra'),
+    coreDir: join(home, 'core'),
+  })
+  return () => {
+    forgetPeopleAddon()
+    rmSync(home, { recursive: true, force: true })
+  }
+}
+
 export function scratch(): string {
   const dir = mkdtempSync(join(scratchRoot(), 'core-'))
   process.env.AGENTHYDRA_CORE_DIR = dir
