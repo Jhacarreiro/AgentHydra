@@ -69,6 +69,7 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
   // A thread's id is `<instance>/<chat>`: the slash may arrive encoded or not.
   router.delete('/threads/:id{.+}', c => c.json(service.forgetThread(c.req.param('id'))))
   router.post('/jobs', async c => c.json(service.start(await c.req.json().catch(() => null)), 202))
+  router.get('/jobs', c => c.json({ jobs: service.getMany(c.req.query('ids')?.split(',')) }))
   router.get('/jobs/:id', c => c.json(service.get(c.req.param('id'))))
   router.delete('/jobs/:id', c => { service.cancel(c.req.param('id')); return c.json({ ok: true }) })
   app.route('/api/free', router)

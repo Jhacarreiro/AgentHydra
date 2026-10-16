@@ -268,6 +268,24 @@ describe('Free jobs and routes', () => {
     expect(response.headers.get('cache-control')).toBe('no-store')
   })
 
+  test('a bounded Free job lookup preserves known results and identifies missing operations without starting work', async () => {
+    const { app, service, op } = fixture()
+    const job = service.start(op())
+    while (service.get(job.id).state !== 'done') await tick()
+    const missing = crypto.randomUUID()
+    const response = await app.request(`/api/free/jobs?ids=${job.id},${missing},${job.id}`)
+    expect(response.status).toBe(200)
+    expect(response.headers.get('cache-control')).toBe('no-store')
+    const result = await response.json()
+    expect(result.jobs[job.id]).toEqual(service.get(job.id))
+    expect(result.jobs[missing]).toBeNull()
+    expect(Object.keys(result.jobs)).toHaveLength(2)
+    expect(service.status().jobs).toHaveLength(1)
+    for (const path of ['/api/free/jobs', '/api/free/jobs?ids=invalid', `/api/free/jobs?ids=${Array(33).fill(job.id).join(',')}`])
+      expect((await app.request(path)).status).toBe(400)
+    expect((await app.request('/api/free/jobs?ids=' + job.id, { headers: { origin: 'https://example.test' } })).status).toBe(403)
+  })
+
   test('routes return structured validation and not-found errors; no arbitrary CLI commands', async () => {
     const { app, op } = fixture()
     const invalid = await app.request('/api/free/jobs', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(op({ command: 'forget' as 'auth' })) })

@@ -987,6 +987,9 @@ Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
 **Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in one shared headless browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Each of at most three concurrent requests has its own disposable cookie context, cleared afterward. The empty browser closes after 60 seconds idle. Desk's Free runtime does not install Playwright or Camoufox.
+The verified conversation can supply the final reply directly when it fits the bounded IPC response,
+avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
+fails without another send.
 Usage counters that the provider does not expose stay unknown, and
 historical usage readings retain their observation and reset times. Free web accounts use their own
 allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.
@@ -1008,6 +1011,9 @@ server UUIDs. `POST /api/free/jobs` accepts a unique `requestId` UUID, `instance
 use `prompt`; `read`, `resume` and `track` require an explicit `chatId` UUID. `name` is optional for new
 chats and required for tracking. Claude messages also accept `webSearch`. Poll
 `GET /api/free/jobs/{requestId}` until `state` is `done`, then inspect `result.ok` and `result.error`.
+Batch callers can instead read `GET /api/free/jobs?ids=<comma-separated UUIDs>`: up to 32 IDs, with a
+`jobs` object keyed by ID and `null` for expired or unknown operations. Reads start no work. Free MCP batches
+use this endpoint when available and fall back to individual reads on older Desk versions.
 The job's `phase` distinguishes automatic setup from the operation. `DELETE /api/free/jobs/{requestId}`
 cancels its owned process, including a login window. Requests from another browser origin are refused.
 Prompts travel to the subprocess over stdin; credentials and filesystem paths never reach the UI.

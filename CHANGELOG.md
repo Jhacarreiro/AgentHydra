@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free batches spend less time checking their running work.** A single request reads several operations at once, while older windows keep their existing polling. ChatGPT also reuses the completed reply its browser already verified instead of fetching it again.
+- **Brief CliMayte lists skip finished history sooner.** Already-reviewed workers no longer build detailed rows that the brief list immediately discards. Explicit history requests and workers with new results still appear as before.
 - **AgentHydra uses about half the CPU while CliMayte work runs.** Its once-a-second CliMayte check no longer re-reads every finished worker, and a check that starts nothing reuses its memory reading for a few seconds.
 - **Routines can live in one central place that every PC reads.** With a `routines-store.json` in Desk's folder, the Routines page also lists the routines kept in a central store (today the CrAInium), beside the ones on this PC. A routine there runs only after you approve it on one of your PCs, stops again if anything in it changes, and runs where its labels say: on one named PC, or on any PC that matches, never two at once. Each card shows the newest run wherever it ran, and a PC goes on running its routines from its own copy while the store is unreachable. Without the file nothing changes.
 - **A routine's card can switch its mode.** A routine that offers modes (for example Idle, Adaptive and Aggressive) shows a Mode row on its Routines card. A pick runs the routine's own command, and the card then shows the mode the routine reports. Only you can change it; an agent cannot.

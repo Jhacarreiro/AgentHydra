@@ -566,6 +566,49 @@ function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unkno
   }
 }
 
+type JobReply = { job?: FreeJob; error?: unknown }
+type BatchReads = { threads: FreeThread[] | null; bulkJobs?: boolean }
+
+/** One result lookup for up to 32 running jobs. Older windows retain the same
+ * eight-way reads; capability detection never caches a job's result or resends it. */
+async function readJobs(items: Item[], cache: BatchReads): Promise<JobReply[]> {
+  if (!items.length) return []
+  if (cache.bulkJobs !== false) {
+    const chunks: Item[][] = []
+    for (let i = 0; i < items.length; i += 32) chunks.push(items.slice(i, i + 32))
+    try {
+      const replies = await mapPool(chunks, 8, async (chunk) => {
+        const ids = chunk.map((it) => it.requestId!)
+        const response = await desk<{ jobs: Record<string, FreeJob | null> }>(
+          'GET',
+          `/jobs?ids=${ids.join(',')}`,
+        )
+        if (!response?.jobs || typeof response.jobs !== 'object' || Array.isArray(response.jobs))
+          throw new DeskError(503, 'Desk returned an invalid operation lookup.')
+        return ids.map((id) => {
+          const job = response.jobs[id]
+          if (job === null) return { error: new DeskError(404, 'Operation expired.') }
+          if (!job || job.id !== id || (job.state !== 'running' && job.state !== 'done'))
+            throw new DeskError(503, 'Desk returned a different operation.')
+          return { job }
+        })
+      })
+      cache.bulkJobs = true
+      return replies.flat()
+    } catch (error) {
+      if (![404, 405].includes((error as DeskError).status)) return items.map(() => ({ error }))
+      cache.bulkJobs = false
+    }
+  }
+  return mapPool(items, 8, async (it) => {
+    try {
+      return { job: await desk<FreeJob>('GET', `/jobs/${it.requestId}`) }
+    } catch (error) {
+      return { error }
+    }
+  })
+}
+
 function noAccountError(task: FreeTask): string {
   const asked =
     task.account != null
@@ -669,7 +712,7 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
-  const cache: { threads: FreeThread[] | null } = { threads: null }
+  const cache: BatchReads = { threads: null }
   await seedOnce()
   while (pending(b)) {
     let status: FreeStatus
@@ -687,13 +730,7 @@ async function runBatch(b: Batch): Promise<void> {
     const running = b.items.filter((x) => x.s.state === 'running')
     // These reads are independent. Keep health, retries and provider probe accounting in the same
     // task order as before, even when Desk answers them in a different order.
-    const replies = await mapPool(running, 8, async (it) => {
-      try {
-        return { job: await desk<FreeJob>('GET', `/jobs/${it.requestId}`) }
-      } catch (error) {
-        return { error }
-      }
-    })
+    const replies = await readJobs(running, cache)
     for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
     for (const it of b.items.filter((x) => x.s.state === 'queued')) {
       const account = await accountFor(it, tick, cache)

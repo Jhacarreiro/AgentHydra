@@ -68,7 +68,15 @@ class Pool:
         self.draining = False
 
     async def write(self, writer, value):
-        writer.write((json.dumps(value, separators=(',', ':')) + '\n').encode())
+        raw = (json.dumps(value, separators=(',', ':')) + '\n').encode()
+        prepared = value.get('request')
+        if len(raw) > MAX_FRAME and isinstance(prepared, dict) and 'confirmed_conversation' in prepared:
+            # The verified snapshot only saves a readback. Preserve the real
+            # result and cookies when the complete IPC envelope is too large.
+            value = {**value, 'request': {key: item for key, item in prepared.items()
+                if key != 'confirmed_conversation'}}
+            raw = (json.dumps(value, separators=(',', ':')) + '\n').encode()
+        writer.write(raw)
         await writer.drain()
 
     async def handle(self, reader, writer):

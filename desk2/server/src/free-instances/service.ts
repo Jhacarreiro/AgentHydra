@@ -283,6 +283,13 @@ export class FreeInstances {
     if (!job) throw new FreeError('Operation not found or expired. Refresh the chat list and read the chat before sending again.', 404)
     return job
   }
+  /** One bounded read/prune for a batch; an expired ID must not hide its siblings. */
+  getMany(ids: unknown): Record<string, FreeJob | null> {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 32 || ids.some(id => !isUuid(id)))
+      throw new FreeError('Read between 1 and 32 operation UUIDs.')
+    this.prune()
+    return Object.fromEntries([...new Set(ids as string[])].map(id => [id, this.jobs.get(id) ?? null]))
+  }
   cancel(id: string): void { this.get(id); this.controllers.get(id)?.abort() }
   /** True while start() would refuse an operation a person or a chat asks for on the account: one of theirs runs
    *  there, or its log out does (a read of Desk's own does not count: that one is waited for). */

@@ -7,7 +7,7 @@ import unittest
 from unittest.mock import AsyncMock, Mock
 from uuid import uuid4
 
-from claudfree.chatgpt.browser_pool import ContextBrowser, Pool
+from claudfree.chatgpt.browser_pool import MAX_FRAME, ContextBrowser, Pool
 from claudfree.errors import ClaudeError
 
 
@@ -146,6 +146,32 @@ class ContextBrowserTests(unittest.IsolatedAsyncioTestCase):
 
 
 class PoolGuardTests(unittest.IsolatedAsyncioTestCase):
+    async def test_optional_readback_cannot_overflow_the_complete_ipc_frame(self):
+        browser, cdp = fixture()
+        pool = Pool(browser, cdp, 'fixture-token')
+        prepared = {'already_sent': True, 'server_id': str(uuid4()),
+            'payload': 'x' * (MAX_FRAME - 1000),
+            'confirmed_conversation': {'text': '\u4e00' * 1000}}
+        value = {'ok': True, 'request': prepared,
+            'cookies': [{'name': 'fixture-cookie', 'value': 'fixture-only'}]}
+        writer = Writer()
+        await pool.write(writer, value)
+        self.assertLessEqual(len(writer.data), MAX_FRAME)
+        restored = json.loads(writer.data)
+        self.assertNotIn('confirmed_conversation', restored['request'])
+        self.assertEqual(restored['cookies'], value['cookies'])
+        self.assertEqual(restored['request'], {key: item for key, item in prepared.items()
+            if key != 'confirmed_conversation'})
+        self.assertIn('confirmed_conversation', prepared)
+
+    async def test_small_readback_is_preserved_in_the_ipc_reply(self):
+        browser, cdp = fixture()
+        writer = Writer()
+        value = {'ok': True, 'request': {'already_sent': True,
+            'confirmed_conversation': {'mapping': {}}}, 'cookies': []}
+        await Pool(browser, cdp, 'fixture-token').write(writer, value)
+        self.assertEqual(json.loads(writer.data), value)
+
     async def test_idle_stop_drains_without_stopping_an_active_context(self):
         browser, cdp = fixture()
         pool = Pool(browser, cdp, 'fixture-token')

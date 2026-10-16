@@ -20,7 +20,7 @@ from urllib.parse import urlparse
 from ..errors import ClaudeError
 from .. import signin
 from ..registry import chat_lock
-from .http import BASE, ChatGPTHttp, visible_messages
+from .http import BASE, ChatGPTHttp, bounded_confirmed_conversation, visible_messages
 
 
 def markers_missing(cookies, now=None):
@@ -247,20 +247,26 @@ async def _adopt_captured_session(http, browser, headers):
 
 
 async def _conversation_candidate(tab, existing):
+    if existing:
+        return existing['conversation_id']
     path = await tab.evaluate('location.pathname')
     match = re.fullmatch(r'/c/([0-9a-f-]{36})', path or '')
-    return existing['conversation_id'] if existing else match[1] if match else None
+    return match[1] if match else None
 
 
-async def _own_message_completed(http, server_id, own_message, prompt, temporary):
+async def _own_message_completed(http, server_id, own_message, prompt, temporary, confirmed=None):
     try:
         body = await asyncio.to_thread(http._json, 'GET', '/backend-api/conversation/' + server_id)
+        if body.get('conversation_id') != server_id:
+            raise ClaudeError('ChatGPT returned a different conversation.', code='invalid_response')
         messages = visible_messages(body)
         positions = [i for i,m in enumerate(messages) if m['role']=='user' and m['id']==own_message and m['text']==prompt]
         if not positions or not any(m['role']=='assistant' and not m['incomplete'] for m in messages[positions[-1]+1:]):
             return False
         if temporary and body.get('is_temporary_chat') is not True:
             raise ClaudeError('The completed browser message was not Temporary. No second message was sent.', code='privacy_not_verified')
+        if confirmed is not None:
+            confirmed['body'] = body
         return True
     except ClaudeError as exc:
         if exc.code not in {'not_found','invalid_response'}:
@@ -268,18 +274,20 @@ async def _own_message_completed(http, server_id, own_message, prompt, temporary
         return False
 
 
-async def _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id):
+async def _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id, confirmed=None):
     deadline = time.monotonic() + min(90, http.timeout)
     own_message = payload['messages'][0].get('id')
-    server_id = None
+    server_id = existing['conversation_id'] if existing else None
+    notified = False
     while time.monotonic() < deadline:
         adopt_cookies(http, await signin.export_cookies(browser))
-        candidate = await _conversation_candidate(tab, existing)
-        if candidate:
-            if server_id is None and on_id:
-                on_id(candidate)
-            server_id = candidate
-            if await _own_message_completed(http, server_id, own_message, prompt, temporary):
+        if server_id is None:
+            server_id = await _conversation_candidate(tab, existing)
+        if server_id:
+            if not notified and on_id:
+                on_id(server_id)
+            notified = True
+            if await _own_message_completed(http, server_id, own_message, prompt, temporary, confirmed):
                 return server_id
         if dispatch['status'] and dispatch['status'] >= 400:
             raise ClaudeError('The ordinary browser send was refused. No second message was sent.', code='browser_send_rejected', status=dispatch['status'])
@@ -304,6 +312,7 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
     dispatch = {'network_id': None, 'status': None, 'sent': False}
     identity_verified = False
     server_id = None
+    confirmed = {}
     # The session lock held by ChatGPTClient protects both cookies and this profile.
     with nullcontext(None) if browser_factory else tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
         try:
@@ -322,12 +331,16 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
             payload, headers = await _await_capture(http, captured)
             await _adopt_captured_session(http, browser, headers)
             if dispatch['sent']:
-                server_id = await _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id)
-            return {'payload': payload, 'headers': headers,
+                server_id = await _await_confirmation(http, tab, browser, dispatch, payload, prompt, existing, temporary, on_id, confirmed)
+            result = {'payload': payload, 'headers': headers,
                 'already_sent': True, 'server_id': server_id,
                 'metrics': {'seconds': round(time.monotonic()-started, 2), 'browser_preparation': True,
                     'browser_closed_before_send': False, 'browser_completed_send': True,
                     'renewed_browser_markers': missing_before}}
+            snapshot = bounded_confirmed_conversation(confirmed.get('body'))
+            if snapshot is not None:
+                result['confirmed_conversation'] = snapshot
+            return result
         finally:
             if browser:
                 await _close_browser(http, browser, identity_verified)

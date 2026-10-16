@@ -170,6 +170,9 @@ describe('free_chat through a stand-in Desk 2', () => {
   let jobReadDelay = 0
   let activeJobReads = 0
   let peakJobReads = 0
+  let bulkSupported = false
+  let bulkReads = 0
+  let individualJobReads = 0
   let server: ReturnType<typeof Bun.serve>
   let port: string | undefined
 
@@ -180,7 +183,8 @@ describe('free_chat through a stand-in Desk 2', () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
-        const path = new URL(req.url).pathname.replace('/api/free', '')
+        const url = new URL(req.url)
+        const path = url.pathname.replace('/api/free', '')
         if (path === '/status') {
           statusReads++
           if (statusDelay) await Bun.sleep(statusDelay)
@@ -244,6 +248,10 @@ describe('free_chat through a stand-in Desk 2', () => {
             model: r.model,
           })
           setTimeout(() => {
+            if (r.prompt === 'missing-operation') {
+              jobs.delete(job.id)
+              return
+            }
             job.state = 'done'
             job.result = refuse
               ? {
@@ -260,6 +268,15 @@ describe('free_chat through a stand-in Desk 2', () => {
           }, 100)
           return Response.json(job, { status: 202 })
         }
+        if (path === '/jobs' && req.method === 'GET') {
+          bulkReads++
+          if (!bulkSupported) return Response.json({ error: 'unknown route' }, { status: 404 })
+          const ids = (url.searchParams.get('ids') ?? '').split(',')
+          return Response.json({
+            jobs: Object.fromEntries(ids.map((id) => [id, jobs.get(id) ?? null])),
+          })
+        }
+        individualJobReads++
         activeJobReads++
         peakJobReads = Math.max(peakJobReads, activeJobReads)
         try {
@@ -373,7 +390,66 @@ describe('free_chat through a stand-in Desk 2', () => {
     }
   }, 15_000)
 
+  test('one Free bulk read replaces 24 individual job requests without changing ordered replies', async () => {
+    resetFreeHealth()
+    const original = [...INSTANCES]
+    const priorJobs = new Set(jobs.keys())
+    const priorRan = ran.length
+    const before = { bulkReads, individualJobReads }
+    bulkSupported = true
+    INSTANCES.splice(
+      0,
+      INSTANCES.length,
+      ...Array.from({ length: 24 }, (_, n) => ({
+        id: `bulk-${n}`,
+        num: n + 1,
+        provider: 'claude' as const,
+        name: `bulk account ${n}`,
+        loggedIn: true,
+        usage: usage(10, 10),
+      })),
+    )
+    try {
+      const prompts = Array.from({ length: 24 }, (_, n) => `bulk prompt ${n}`)
+      const out = await run('free_chat', { tasks: prompts.map((prompt) => ({ prompt })) })
+      expect(out.finished).toBe(true)
+      expect(out.tasks.map((t: { response: string }) => t.response)).toEqual(
+        prompts.map((p) => `re: ${p}`),
+      )
+      expect(bulkReads - before.bulkReads).toBe(1)
+      expect(individualJobReads - before.individualJobReads).toBe(0)
+      expect(ran.length - priorRan).toBe(24)
+      expect(overlap).toBe(0)
+    } finally {
+      bulkSupported = false
+      INSTANCES.splice(0, INSTANCES.length, ...original)
+      ran.splice(priorRan)
+      for (const id of jobs.keys()) if (!priorJobs.has(id)) jobs.delete(id)
+      resetFreeHealth()
+    }
+  }, 15_000)
+
+  test('an expired bulk operation fails only its task and never repeats either send', async () => {
+    resetFreeHealth()
+    const before = ran.length
+    bulkSupported = true
+    try {
+      const out = await run('free_chat', {
+        tasks: [{ prompt: 'missing-operation' }, { prompt: 'bulk sibling' }],
+      })
+      expect(out.finished).toBe(true)
+      expect(out.tasks[0].state).toBe('failed')
+      expect(out.tasks[0].error).toContain('no longer holds this operation')
+      expect(out.tasks[1]).toMatchObject({ state: 'done', response: 're: bulk sibling' })
+      expect(ran.length - before).toBe(2)
+    } finally {
+      bulkSupported = false
+      resetFreeHealth()
+    }
+  }, 15_000)
+
   test('more tasks than idle accounts all finish, one operation per account at a time; a continuation goes to its thread', async () => {
+    const beforeBulk = bulkReads
     const out = await run('free_chat', {
       tasks: [
         { prompt: 'p1' },
@@ -404,6 +480,7 @@ describe('free_chat through a stand-in Desk 2', () => {
     expect(overlap).toBe(0)
     const batch = await run('free_results', { batch: out.batch, wait_s: 0 })
     expect(batch.done).toBe('4 of 4')
+    expect(bulkReads - beforeBulk).toBe(1)
   }, 30_000)
 
   // 2026-10-08: the GPT-6 trial asks a Free ChatGPT account for GPT-6 by name.

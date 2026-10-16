@@ -43,6 +43,7 @@ import {
   toBrief,
   toReport,
   toView,
+  verdictCoversNewestWork,
 } from './climayte-lib'
 import { GROWTH_REUSE_MS, memoryShort } from './climayte-memory'
 import type { OriginLookup } from './climayte-origin'
@@ -243,18 +244,20 @@ export function climayteList(
   load()
   const now = Date.now()
   const mine = filter.origin?.length ? dispatchedFrom(workers.values(), filter.origin) : null
-  const views = recentWorkers(
+  const recent = recentWorkers(
     [...workers.values()].filter((w) => matches(w, filter) && (!mine || mine.has(w.id))),
     filter.limit,
-  ).map((w) => toView(w, now, originLookup))
-  if (!filter.brief) return views
+  )
   // An orchestrator's default list is what it may act on: live work and unjudged results. Judged
-  // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02).
+  // finished rows were 80 KB of a 96 KB default answer (stress review, 2026-10-02). Filter before
+  // toView spreads and unpacks their long fields, but after the recent limit: judged work still
+  // occupies the same recent slots as before.
   const keep =
-    filter.all || filter.id || filter.ids?.length
-      ? views
-      : views.filter((v) => isLiveStatus(v.status) || !v.judged)
-  return keep.map(toBrief)
+    !filter.brief || filter.all || filter.id || filter.ids?.length
+      ? recent
+      : recent.filter((w) => isLiveStatus(w.status) || !verdictCoversNewestWork(w))
+  const views = keep.map((w) => toView(w, now, originLookup))
+  return filter.brief ? views.map(toBrief) : views
 }
 
 /** `lean=1` on the workers list (Desk 2's server and pane): the same rows without the long text no list

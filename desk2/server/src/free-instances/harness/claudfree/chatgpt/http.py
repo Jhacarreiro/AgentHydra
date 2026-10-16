@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+import json
 import re
 import time
 from uuid import uuid4
@@ -36,6 +37,41 @@ _VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 # three accounts down 16 hours). read() sends its own history_off marker, so only the newest few are kept.
 PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
 PER_CHAT_COOKIES_KEPT = 20  # of each family
+CONFIRMED_CONVERSATION_MAX_BYTES = 512 * 1024
+
+
+def bounded_confirmed_conversation(body):
+    """An optional in-memory readback; large conversations keep the normal GET."""
+    if not isinstance(body, dict):
+        return None
+    try:
+        size = len(json.dumps(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
+    except (TypeError, ValueError, UnicodeError):
+        return None
+    return body if size <= CONFIRMED_CONVERSATION_MAX_BYTES else None
+
+
+def confirmed_reply(body, server_id, own_message, prompt, previous):
+    """Revalidate a completed browser read without accepting a different branch."""
+    if not isinstance(body, dict) or body.get('conversation_id') != server_id:
+        raise ClaudeError('ChatGPT returned a different or invalid conversation.', code='invalid_response')
+    if body.get('is_temporary_chat') is not True:
+        raise ClaudeError('The completed browser chat was not confirmed as Temporary. No second message was sent.', code='privacy_not_verified')
+    messages = visible_messages(body)
+    identities = [message['id'] for message in messages]
+    if any(not isinstance(identity, str) or not identity for identity in identities) or len(set(identities)) != len(identities):
+        raise ClaudeError('The completed browser branch has invalid message identities.', code='invalid_response')
+    positions = [i for i, message in enumerate(messages)
+        if message['role'] == 'user' and message['id'] == own_message and message['text'] == prompt]
+    if not isinstance(own_message, str) or not own_message or own_message in previous or len(positions) != 1:
+        raise ClaudeError('The captured user message is not confirmed on this branch. Read the chat before sending again.', code='response_pending')
+    following = messages[positions[0] + 1:]
+    # A later user turn is someone else's request, not evidence for this send.
+    following = following[:next((i for i, message in enumerate(following) if message['role'] == 'user'), len(following))]
+    fresh = [message for message in following if message['role'] == 'assistant' and message['id'] not in previous]
+    if not fresh or fresh[-1]['incomplete']:
+        raise ClaudeError('A completed new assistant reply is not confirmed. Read the chat before sending again.', code='response_pending')
+    return messages, fresh[-1]
 
 
 def prune_per_chat_cookies(cookies):
@@ -446,6 +482,12 @@ class ChatGPTHttp:
             if on_id:
                 on_id(server_id)
             complete = True
+            confirmed = prepared_request.get('confirmed_conversation')
+            if confirmed is not None:
+                messages, reply = confirmed_reply(confirmed, server_id,
+                    payload['messages'][0].get('id'), prompt, previous)
+                if bounded_confirmed_conversation(confirmed) is not None:
+                    return confirmed, messages, reply, complete
         else:
             response = self._request(
                 "POST",
