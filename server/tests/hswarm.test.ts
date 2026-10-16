@@ -327,16 +327,18 @@ describe.skipIf(process.platform !== 'win32' || !Bun.which('python'))(
     // The daemon is a Bun process, and every child Bun.spawn starts on Windows sits in Bun's own
     // kill-on-close job, so a daemon that exits (each self-update relaunch) ended the server and every
     // hswarm call in flight on it. Here a real daemon process starts a real server (a stand-in package
-    // that answers /health as hswarm does) and exits the way a relaunch's predecessor does.
+    // that answers /health as hswarm does, as slowly as a busy one: 1 s) and exits the way a relaunch's
+    // predecessor does.
     test('the server the old daemon started keeps serving; the next daemon adopts its pid, starts nothing, and its stop ends it', async () => {
       const pkg = withPackage('relaunch')
       writeFileSync(
         join(pkg, 'hswarm', '__main__.py'),
-        `import json, os, sys
+        `import json, os, sys, time
 from http.server import BaseHTTPRequestHandler, HTTPServer
 port = int(sys.argv[sys.argv.index('--port') + 1])
 class H(BaseHTTPRequestHandler):
     def do_GET(self):
+        time.sleep(1)
         body = json.dumps({'hswarm': True, 'pid': os.getpid(), 'package': os.getcwd()}).encode()
         self.send_response(200)
         self.send_header('content-type', 'application/json')

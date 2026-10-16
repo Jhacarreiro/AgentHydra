@@ -345,11 +345,16 @@ interface StartPlan {
   env: NodeJS.ProcessEnv
 }
 
+/** How long a start waits for the server already on the port to answer /health. A busy one took 3.9 s
+ *  and 14 s (measured 2026-10-16) where it usually takes 2 ms, and after a relaunch a missed answer
+ *  starts a second server beside the one serving every chat. A port nothing listens on answers at once. */
+const SETTLE_PROBE_TIMEOUT_MS = 20_000
+
 /** Probe for an existing live hswarm before starting a competitor: one of another folder is replaced,
  *  any other is adopted. True when that ends this start (adopted, or a replacement that did not end). */
 async function settleLive(deps: HSwarmDeps, plan: StartPlan): Promise<boolean> {
   const { port, dir, python, env } = plan
-  const liveHSwarm = await (deps.probe ?? probeHSwarm)(port)
+  const liveHSwarm = await (deps.probe ?? probeHSwarm)(port, SETTLE_PROBE_TIMEOUT_MS)
   const sideRun = isSideRun(deps)
   if (liveHSwarm?.hswarm === true && !sideRun && !runsFrom(liveHSwarm, dir)) {
     // Adopting it would leave this folder's code unserved: end it and start our own.
