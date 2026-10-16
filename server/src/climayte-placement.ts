@@ -124,6 +124,25 @@ interface FinishedIndex {
 
 const indexes = new WeakMap<FinishedCost[], FinishedIndex>()
 
+/** A level's scaled sum per task multiplier, added in the list's order exactly as a map then a reduce
+ *  would: a pass asks the same few models for every queued worker, and each ask walked every finished
+ *  task through modelMultiplier (5% of the daemon's samples, 2026-10-15). */
+const scaledSums = new WeakMap<FinishedCost[], Map<number, number>>()
+
+function scaledSum(list: FinishedCost[], own: number): number {
+  let sums = scaledSums.get(list)
+  const have = sums?.get(own)
+  if (have !== undefined) return have
+  let sum = 0
+  for (const f of list) sum += (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
+  if (!sums) {
+    sums = new Map()
+    scaledSums.set(list, sums)
+  }
+  sums.set(own, sum)
+  return sum
+}
+
 function indexOf(finished: FinishedCost[]): FinishedIndex {
   const have = indexes.get(finished)
   if (have) return have
@@ -170,8 +189,6 @@ export function expectedCost(
       : { pct: MANAGER_WAKE_PCT, basis: 'default', samples: 0 }
   }
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
-  const scaled = (f: FinishedCost): number =>
-    (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
   const ix = indexOf(finished)
   const family = ix.byFamily.get(modelFamily(task.model)) ?? []
   const kind = task.kind ? (ix.byKind.get(task.kind) ?? []) : []
@@ -179,21 +196,21 @@ export function expectedCost(
     ? (ix.byKindFamily.get(`${task.kind}|${modelFamily(task.model)}`) ?? [])
     : []
   const exact = kindFamily.filter((f) => f.model === task.model && f.effort === task.effort)
-  const levels: Array<[CostEstimate['basis'], number[]]> = [
-    // Scaled at every family level too: Haiku 4.5 (0.5x) and Haiku 5.5 (0.14x) share the family.
-    ['model', family.map(scaled)],
-    ['kind', kind.map(scaled)],
-    ['kind-model', kindFamily.map(scaled)],
-    ['setting', exact.map((f) => f.pct)],
+  // Each level: its tasks and the sum of their cost. Scaled at every family level too: Haiku 4.5
+  // (0.5x) and Haiku 5.5 (0.14x) share the family.
+  const levels: Array<[CostEstimate['basis'], FinishedCost[], () => number]> = [
+    ['model', family, () => scaledSum(family, own)],
+    ['kind', kind, () => scaledSum(kind, own)],
+    ['kind-model', kindFamily, () => scaledSum(kindFamily, own)],
+    ['setting', exact, () => exact.reduce((s, f) => s + f.pct, 0)],
   ]
   let est: CostEstimate = { pct: DEFAULT_TASK_PCT, basis: 'default', samples: 0 }
-  for (const [basis, pcts] of levels) {
-    if (!pcts.length) continue
-    const sum = pcts.reduce((s, p) => s + p, 0)
+  for (const [basis, list, sumOf] of levels) {
+    if (!list.length) continue
     est = {
-      pct: (sum + PRIOR_WEIGHT * est.pct) / (pcts.length + PRIOR_WEIGHT),
+      pct: (sumOf() + PRIOR_WEIGHT * est.pct) / (list.length + PRIOR_WEIGHT),
       basis,
-      samples: pcts.length,
+      samples: list.length,
     }
   }
   return est

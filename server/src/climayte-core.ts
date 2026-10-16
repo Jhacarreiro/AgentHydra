@@ -207,6 +207,9 @@ const packedFields = new WeakMap<CliMayteWorker, Uint8Array>()
 /** When a worker's fields were last unpacked: it stays plain while something is reading it. */
 const unpackedAt = new WeakMap<CliMayteWorker, number>()
 const COLD_AFTER_MS = 5 * 60_000
+/** How often packColdWorkers walks every worker: a walk each tick found nothing new to pack. */
+const PACK_WALK_EVERY_MS = 10_000
+let packWalkAt = Number.NEGATIVE_INFINITY
 /** The most a tick spends packing, so a pass after a full-list read never holds a request up. */
 const PACK_SLICE_MS = 8
 /** Level 1: 64 us a worker against level 3's 115, for 3% more bytes (3,000 real workers, 2026-10-12). */
@@ -268,6 +271,9 @@ function packRead(w: CliMayteWorker): void {
 /** Pack the finished workers nothing has changed or read for COLD_AFTER_MS, within PACK_SLICE_MS (the
  *  tick). The packed count. */
 export function packColdWorkers(now = Date.now()): number {
+  // A worker is packed only after COLD_AFTER_MS untouched, so a walk every tick finds nothing new.
+  if (now - packWalkAt < PACK_WALK_EVERY_MS) return 0
+  packWalkAt = now
   const t0 = performance.now()
   let n = 0
   for (const w of workers.values()) {
@@ -961,6 +967,70 @@ export function voidSpec(log: string): boolean {
   return true
 }
 
+/** A done task's placement entries, kept per worker while finishedFingerprint is unchanged. */
+const finishedMemo = new WeakMap<CliMayteWorker, { fp: unknown[]; entries: FinishedCost[] }>()
+
+/** Every field finishedEntries reads, in a fixed order. Tokens and reread are replaced whole, never
+ *  edited in place (climayte-core's spend writes and climayte-stops' model writes); updatedAt is not
+ *  used, since it is not set on every change to these fields. */
+function finishedFingerprint(w: CliMayteWorker): unknown[] {
+  const fp: unknown[] = [w.status, w.kind, w.model, w.effort, w.chat, w.tokens, w.attempts.length]
+  for (const a of w.attempts) fp.push(a.tokens, a.spend?.reread, a.model, a.cacheTtl)
+  return fp
+}
+
+/** Whether `w` still reads as `fp` (finishedFingerprint's order), checked in place: an unchanged
+ *  worker, nearly every one on a tick, allocates nothing. */
+function fingerprintHolds(fp: readonly unknown[], w: CliMayteWorker): boolean {
+  const n = w.attempts.length
+  if (
+    fp.length !== 7 + 4 * n ||
+    !Object.is(fp[0], w.status) ||
+    !Object.is(fp[1], w.kind) ||
+    !Object.is(fp[2], w.model) ||
+    !Object.is(fp[3], w.effort) ||
+    !Object.is(fp[4], w.chat) ||
+    !Object.is(fp[5], w.tokens) ||
+    !Object.is(fp[6], n)
+  )
+    return false
+  for (let i = 0, j = 7; i < n; i++, j += 4) {
+    const a = w.attempts[i]!
+    if (
+      !Object.is(fp[j], a.tokens) ||
+      !Object.is(fp[j + 1], a.spend?.reread) ||
+      !Object.is(fp[j + 2], a.model) ||
+      !Object.is(fp[j + 3], a.cacheTtl)
+    )
+      return false
+  }
+  return true
+}
+
+/** What a worker adds to the placement's finished work (placementState). */
+function finishedEntries(w: CliMayteWorker): FinishedCost[] {
+  const model = ladderModel(w.model ?? w.attempts.at(-1)?.model)
+  const work = (a: CliMayteWorker['attempts'][number]): number =>
+    (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model)) /
+    UNITS_PER_PRO_PERCENT
+  // A manager is priced per wake (an attempt), however long its wave keeps it open (piece 6).
+  if (w.kind === 'manage')
+    return w.attempts
+      .filter((a) => a.tokens)
+      .map((a): FinishedCost => ({ kind: 'manage', model, effort: w.effort, pct: work(a) }))
+  // The work only: a move's re-read is what the move cost, not what the task costs.
+  if (w.status === 'done' && w.tokens && !w.chat)
+    return [
+      {
+        kind: w.kind ?? null,
+        model,
+        effort: w.effort,
+        pct: w.attempts.reduce((s, a) => s + work(a), 0),
+      },
+    ]
+  return []
+}
+
 /** Placement inputs (climayte-placement.ts): what a task is expected to cost, what is running on
  *  each account and what it is expected to cost, and what attempts that ended since an account's
  *  first running worker started spent there (part of the meter's rise that is not the running
@@ -972,23 +1042,20 @@ export function placementState(): {
 } {
   const finished: FinishedCost[] = []
   for (const w of workers.values()) {
-    const model = ladderModel(w.model ?? w.attempts.at(-1)?.model)
-    const work = (a: CliMayteWorker['attempts'][number]): number =>
-      (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model)) /
-      UNITS_PER_PRO_PERCENT
-    // A manager is priced per wake (an attempt), however long its wave keeps it open (piece 6).
+    // A done task's entries depend only on what finishedFingerprint lists, so they are kept per worker.
     if (w.kind === 'manage') {
-      for (const a of w.attempts)
-        if (a.tokens) finished.push({ kind: 'manage', model, effort: w.effort, pct: work(a) })
-    } else if (w.status === 'done' && w.tokens && !w.chat) {
-      // The work only: a move's re-read is what the move cost, not what the task costs.
-      finished.push({
-        kind: w.kind ?? null,
-        model,
-        effort: w.effort,
-        pct: w.attempts.reduce((s, a) => s + work(a), 0),
-      })
+      for (const e of finishedEntries(w)) finished.push(e)
+      continue
     }
+    // Any other task adds only once done (finishedEntries): a failed or open one is skipped unread.
+    if (w.status !== 'done') continue
+    const kept = finishedMemo.get(w)
+    let entries = kept?.entries
+    if (!kept || !fingerprintHolds(kept.fp, w)) {
+      entries = finishedEntries(w)
+      finishedMemo.set(w, { fp: finishedFingerprint(w), entries })
+    }
+    for (const e of entries!) finished.push(e)
   }
   // A chat is the owner's conversation, not a sized task: it has no estimate, so nothing holds it
   // for room and no overrun cap applies (notConverging).

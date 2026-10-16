@@ -230,6 +230,10 @@ let runnerCheck: Promise<void> | null = null
 
 let runnerCheckAt = 0
 
+/** False only when the last killLateStarts walk left no attempt marked killOnStart. Starts true: a
+ *  load can bring marks back from disk, which nothing else here would notice. */
+let lateStartsMaybe = true
+
 /** 'unknown' is read as still running: taking a failed or blank query for "ended" classed the
  *  attempt interrupted and relaunched it with --resume beside a CLI that may still have been
  *  running the same session, paying for the same work twice (review, 2026-10-01). */
@@ -309,8 +313,9 @@ export function checkRunners(): void {
     for (const r of w.staleChecks ?? [])
       if (r.pid && runnerIdentity(r.pid) === 'unknown') runners.push({ pid: r.pid, log: r.log })
   }
-  if (!runners.length) return
+  // Stamped with the walk, found or not: with no unknown runner the walk itself is what 5 s paces.
   runnerCheckAt = Date.now()
+  if (!runners.length) return
   runnerCheck = (async () => {
     // In-process first (win-process-table.ts): a few ms, and no PowerShell walking every process.
     const native = nativeCommandLines(runners.map((p) => p.pid))
@@ -395,7 +400,10 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
       const pids = readRunnerPids(runner.pidFile)
       if (!pids) {
         if (voidSpec(at.log)) removeRunnerFiles(at)
-        else runner.killOnStart = true
+        else {
+          runner.killOnStart = true
+          lateStartsMaybe = true
+        }
         continue
       }
       takeRunnerPids(at, runner, pids)
@@ -414,7 +422,10 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
   // checkRunners knows, instead of the stop being forgotten while the CLI runs on (re-review,
   // 2026-10-02). Marked now, so the caller's save keeps it.
   for (const { runner, pid } of kill)
-    if (runnerIdentity(pid) === 'unknown') runner.killOnStart = true
+    if (runnerIdentity(pid) === 'unknown') {
+      runner.killOnStart = true
+      lateStartsMaybe = true
+    }
 }
 
 /** Kill the runners a stop reached after they claimed their spec but before they wrote a pid
@@ -422,6 +433,7 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
  *  cancel the worker is no longer 'running', so pollRunning never visits it, and after an urgent
  *  message a new attempt is already the worker's last. */
 export function killLateStarts(): void {
+  if (!lateStartsMaybe) return
   for (const w of workers.values())
     for (const at of w.attempts) {
       const runner = at.runner
@@ -445,6 +457,10 @@ export function killLateStarts(): void {
       )
         settle()
     }
+  // Read once the walk is done, so the flag matches what it left marked (a kill's settle lands later).
+  lateStartsMaybe = false
+  for (const w of workers.values())
+    for (const a of w.attempts) if (a.runner?.killOnStart) lateStartsMaybe = true
 }
 
 /** Kills started by killRunners, each with what runs once its trees are gone. The tick waits for them

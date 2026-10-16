@@ -2092,17 +2092,27 @@ export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'created
   ws: T[],
   limit: number | undefined,
 ): T[] {
-  const keep =
-    limit === undefined
-      ? ws
-      : [
-          ...ws.filter(isLive),
-          ...ws
-            .filter((w) => !isLive(w))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, Math.max(0, limit)),
-        ]
-  return [...keep].sort((a, b) => b.createdAt - a.createdAt)
+  if (limit === undefined) return [...ws].sort((a, b) => b.createdAt - a.createdAt)
+  // The `limit` latest changes, newest first, an earlier worker winning a tie (as the stable sort of
+  // every finished worker this replaces did): one pass from the newest, which fills the list first, so
+  // an older worker is mostly one comparison (17,000 workers sorted on every list read, 2026-10-15).
+  const n = Math.max(0, limit)
+  const live: T[] = []
+  const recent: T[] = []
+  for (let i = ws.length - 1; i >= 0; i--) {
+    const w = ws[i]!
+    if (isLive(w)) {
+      live.push(w)
+      continue
+    }
+    if (!n || (recent.length === n && w.updatedAt < recent[n - 1]!.updatedAt)) continue
+    // Before every kept one it ties or beats: it is earlier than all of them.
+    let at = 0
+    while (at < recent.length && recent[at]!.updatedAt > w.updatedAt) at++
+    recent.splice(at, 0, w)
+    if (recent.length > n) recent.pop()
+  }
+  return [...live.reverse(), ...recent].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** A list row for an orchestrator deciding what to do next: the report row (toReport) without the

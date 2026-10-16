@@ -672,9 +672,16 @@ async function tick(): Promise<void> {
       (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
     // The install guard is asked before the state is read, and only with work to place: its probe
     // runs off the daemon's thread, and what is due is read after it answers.
-    const install = [...workers.values()].some(isDue) ? await installForTick() : null
+    let anyDue = false
+    for (const w of workers.values())
+      if (isDue(w)) {
+        anyDue = true
+        break
+      }
+    const install = anyDue ? await installForTick() : null
     const state = tickState(accounts, now, install)
-    const due = [...workers.values()].filter(isDue)
+    const due: CliMayteWorker[] = []
+    for (const w of workers.values()) if (isDue(w)) due.push(w)
     scheduleDue(state, due)
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
