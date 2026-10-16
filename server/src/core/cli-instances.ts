@@ -430,6 +430,11 @@ export function reconcileCliInstanceDirs(): CliInstanceReconciliation {
 
 // --- read --------------------------------------------------------------------
 
+/** Fresh canonical config folders without reading logins, account metadata or instance numbers. */
+export function listCliConfigDirs(): string[] {
+  return readStore().instances.map(canonicalConfigDir)
+}
+
 /** Every CLI instance, each with its live loggedIn state. */
 export function listCliInstances(): CliInstance[] {
   const records = readStore().instances

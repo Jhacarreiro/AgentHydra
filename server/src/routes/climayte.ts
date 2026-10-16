@@ -235,7 +235,7 @@ app.get('/api/corch/workers', async (c) => {
   // `lean=1` (the CliMayte pane and Desk 2's server): the full rows without the long text no list
   // shows (climayteLeanWorker); it means nothing next to `brief`, which is already short.
   const lean = flag(c.req.query('lean')) && !filter.brief
-  const listFilter = { ...filter, lean }
+  const listFilter = { ...filter, lean, bridge: flag(c.req.query('bridge')) && !filter.brief }
   const rows = wait > 0 ? await climayteWait(listFilter, wait) : climayteList(listFilter)
   if (seenBy) seenAsAnswered(rows as { id: string }[], seenBy)
   return c.json(rows)

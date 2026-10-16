@@ -72,7 +72,12 @@ import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from '.
 import { queueSideWrite, queueStoreWrite } from './climayte-store-writer'
 import { readTarEntry } from './climayte-tar'
 import { resolveClaudeExe } from './config'
-import { getCliInstance, listCliInstances } from './core/cli-instances'
+import {
+  getCliInstance,
+  isLoggedIn,
+  listCliConfigDirs,
+  listCliInstances,
+} from './core/cli-instances'
 import { loginExpiryState } from './core/desktop-cli-renew'
 import { fsSlot } from './core/fs-slots'
 import { handsOnAgoMs } from './core/hands-on'
@@ -415,12 +420,11 @@ const registrations = new Map<string, { at: number; regs: Registration[] }>()
 /** Read again, off the thread, the registrations of every pool account last read POOL_MS ago or
  *  more; a pool built after it judges the new reads. The tick awaits it before it places work. */
 export async function refreshPoolSessions(now = Date.now()): Promise<void> {
-  const dirs = listCliInstances()
-    .filter(
-      (i) =>
-        (i.loggedIn || !!i.loginNote) && now - (registrations.get(i.configDir)?.at ?? 0) >= POOL_MS,
-    )
-    .map((i) => i.configDir)
+  // Session discovery needs only fresh registry paths and credential presence. Hydrating every
+  // account here also read numbers, plans, identities and usage on ticks with no session read due.
+  const dirs = listCliConfigDirs().filter(
+    (dir) => now - (registrations.get(dir)?.at ?? 0) >= POOL_MS && isLoggedIn(dir),
+  )
   if (!dirs.length) return
   const read = await mapPool(dirs, 8, readRegistrationsAsync)
   for (const [k, dir] of dirs.entries())
@@ -1421,9 +1425,9 @@ export function chargeAttempt(
  *  to its task, so the task's totals end equal to what the transcripts hold. Does nothing, and
  *  reads nothing, with no open attempt. True when any record changed. */
 export function settleSpends(now: number = Date.now()): boolean {
-  const open = [...workers.values()].flatMap((w) =>
-    w.attempts.filter((a) => a.spendOpen !== undefined).map((a) => ({ w, a })),
-  )
+  const open: Array<{ w: CliMayteWorker; a: CliMayteWorker['attempts'][number] }> = []
+  for (const w of workers.values())
+    for (const a of w.attempts) if (a.spendOpen !== undefined) open.push({ w, a })
   if (!open.length) return false
   let any = false
   for (const { w, a } of open) {

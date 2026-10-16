@@ -1884,8 +1884,9 @@ export async function climayteWaveStart(input: {
 
 /** The attempt a stop kills: a running worker's last; null when the worker is not running. */
 const runningAttempt = (w: CliMayteWorker): Attempt | null => {
+  if (w.status !== 'running') return null
   const at = w.attempts[w.attempts.length - 1]
-  return w.status === 'running' && at ? at : null
+  return at ? at : null
 }
 
 /** Before a stop: a CLI that finished just now has that turn's result, cost and turns recorded

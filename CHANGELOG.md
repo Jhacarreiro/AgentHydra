@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte sends Desk smaller worker lists.** Desk gets the fields it uses without constructing and discarding extra worker details. Session checks and finished-work bookkeeping also create fewer temporary objects.
+- **Free authentication and refreshes avoid duplicate history saves.** Early recovery checkpoints and final metadata, quota readings and backups are still saved.
 - **Free thread lookups stop downloading the whole history.** Recent lists and chat lookups ask for only the rows they need, with the same account routing and older-window compatibility.
 - **CliMayte totals reuse unchanged session lookups.** A changed session set or a database write refreshes the lookup immediately.
 - **Updates wait for unfinished Free batches.** Preparing, queued and running batches are protected from restart, and new batches wait until the handoff reconnects. A restart deferred during a build retries after the work finishes.

@@ -547,6 +547,8 @@ export function createClient(opts: HydraClientOptions = {}) {
       if (q.origin?.length) query.set('origin', q.origin.join(','))
       // `lean`: the rows without the long text no list reads (result, reports, whole attempts); an older AgentHydra ignores it.
       query.set('lean', '1')
+      // The bridge contract only, without unused worker configuration/attempt detail. Old daemons ignore it.
+      query.set('bridge', '1')
       return get<AhWorker[]>(`/api/corch/workers?${query}`)
     },
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
@@ -569,10 +571,10 @@ export function createClient(opts: HydraClientOptions = {}) {
     resolveIncidents: (scope: string, key: string) =>
       post<{ resolved: number }>('/api/incidents/resolve-by-key', { scope, key }),
     /** These workers however old (a chat's worker that finished a week ago), in one read. */
-    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1`),
+    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1&bridge=1`),
     /** The workers that ran in these sessions (current or earlier), however old, without reading every worker. */
     workersBySession: (sessionIds: string[]) =>
-      get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1`),
+      get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1&bridge=1`),
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       request<{ group: string; workers: AhWorker[] }>('POST', '/api/corch/workers', {

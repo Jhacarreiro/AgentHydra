@@ -415,6 +415,14 @@ compressed. The count includes the earlier recap retained by `statusTurns`; read
 packed text field discards the summary and restores ordinary fields. Full detail and report requests
 continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
 
+Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
+projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
+chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
+verdict and launch details. Older daemons ignore the flag; ordinary lean/full lists and detail
+routes keep their shapes, and brief/report reads take precedence. Packed history remains packed.
+Finished workers skip running-attempt access, and spend settlement collects only open attempts
+instead of allocating intermediate arrays for every historical worker.
+
 ### Model and thinking (field note 16)
 
 The orchestrating chat picks each worker's model and thinking level (owner, 2026-09-30). The CLI
@@ -504,6 +512,11 @@ the session registrations of every pool account last read 3 seconds ago or more
 Each pool build then judges those registrations on the thread (`liveIdsOf`: the pid, then the pipe),
 with no transcript lookups. An account not read yet counts no other sessions until its read lands.
 The tick reads every account before it places work.
+
+Registration discovery reads fresh canonical folders from the registry without hydrating account
+numbers, identities, plans or usage. It checks the refresh deadline before probing credentials;
+new or newly signed-in accounts are still discovered on the next tick. Placement continues to
+read the full account metadata when needed, with the same registration and pool intervals.
 
 CLI plan labels retain only their display string (never parsed credentials), bounded to 512 paths.
 Each read stats the credential file and re-parses on change, replacement, deletion or an unreadable
