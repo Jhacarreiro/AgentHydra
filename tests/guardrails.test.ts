@@ -1118,6 +1118,18 @@ test('at least one check was actually discovered and exercised above', () => {
   expect(CHECK_FILES.length).toBeGreaterThan(0)
 })
 
+test('CI runs every check, so every land runs it too', () => {
+  // This file proves each check clean only when the whole suite runs. CI's own step per check is what the owner's land
+  // tool reads to choose the guardrails it runs on every land, so a check missing from ci.yml gates no land: the
+  // credential-writer ratchet sat outside it from 2026-10-10 until a land turned it red on main (2026-10-16), and the
+  // efficiency audit's two checks (c13c33ee) the same day.
+  const ci = readFileSync(join(REPO_ROOT, '.github', 'workflows', 'ci.yml'), 'utf8')
+  const run = new Set(
+    [...ci.matchAll(/^\s*run:\s*bun\s+scripts\/checks\/([\w.-]+\.mjs)\s*$/gm)].map((m) => m[1]),
+  )
+  expect(CHECK_FILES.filter((f) => !run.has(f))).toEqual([])
+})
+
 // ── CASE-INSENSITIVE SELF-EXCLUSION ────────────────────────────────────────────────────────────
 // The net above runs every audit against REPO_ROOT, which is derived from import.meta.dir — the
 // SAME canonical spelling a check's own `import.meta.url` resolves to. So the two always agreed,

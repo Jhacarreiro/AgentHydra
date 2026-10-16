@@ -220,6 +220,12 @@ jobs:
       - name: Guardrail (no unbounded async fs fan-out)
         run: bun scripts/checks/fs-fanout-unbounded.mjs
 
+      # Fails if a file outside the deliberate owners writes a login's credential file or token-store key: a
+      # second writer can put a stale token back over a fresh refresh. Landed 2026-10-10 without this step,
+      # so no land ran it, and 9acd9397 turned it red on main on 2026-10-16. See the check's header.
+      - name: Guardrail (only the deliberate owners write a login's credentials)
+        run: bun scripts/checks/credential-writer-ratchet.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.
