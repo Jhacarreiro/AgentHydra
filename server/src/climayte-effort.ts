@@ -17,6 +17,7 @@
 import { readFileSync, statSync } from 'node:fs'
 import { readdir, readFile, stat } from 'node:fs/promises'
 import { join } from 'node:path'
+import { fsSlot } from './core/fs-slots'
 import { POINTER_DIR } from './instance'
 
 const TTL_MS = 5_000
@@ -108,10 +109,10 @@ function readRecord(path: string): FileRecord | null {
 
 async function readRecordOff(path: string): Promise<void> {
   try {
-    const st = await stat(path)
+    const st = await fsSlot(() => stat(path))
     const have = files.get(path)
     if (have && have.mtimeMs === st.mtimeMs && have.size === st.size) return
-    files.set(path, recordOf(JSON.parse(await readFile(path, 'utf8')), st))
+    files.set(path, recordOf(JSON.parse(await fsSlot(() => readFile(path, 'utf8'))), st))
   } catch {
     // unreadable or half-written: the next pass reads it again
   }
@@ -129,12 +130,14 @@ function scanDoneOff(doneAt: number, full: boolean): Promise<void> {
   scanning ??= (async () => {
     let names: string[] = []
     try {
-      names = (await readdir(DONE_DIR)).filter((name) => name.endsWith('.json'))
+      names = (await fsSlot(() => readdir(DONE_DIR))).filter((name) => name.endsWith('.json'))
     } catch {
       // no finished work yet, or gone meanwhile
     }
     const paths = names.map((name) => join(DONE_DIR, name))
     const todo = full ? paths : paths.filter((path) => !files.has(path))
+    // Batch queued bookkeeping, but admit each native call through the shared I/O ceiling.
+    // Otherwise this history sweep grows Bun's retained pool independently of live log reads.
     for (let i = 0; i < todo.length; i += 64)
       await Promise.all(todo.slice(i, i + 64).map(readRecordOff))
     const keep = new Set(paths)

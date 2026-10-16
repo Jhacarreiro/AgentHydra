@@ -246,7 +246,7 @@ export async function readRegistrationsAsync(claudeHome: string): Promise<Regist
   const dir = join(claudeHome, 'sessions')
   let files: string[] = []
   try {
-    files = (await readdir(dir)).filter((f) => f.endsWith('.json'))
+    files = (await fsSlot(() => readdir(dir))).filter((f) => f.endsWith('.json'))
   } catch {
     return []
   }

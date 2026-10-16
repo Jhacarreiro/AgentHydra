@@ -795,7 +795,7 @@ async function readDoneAhead(): Promise<void> {
   try {
     let names: string[]
     try {
-      names = (await readdirAsync(DONE)).filter((n) => n.endsWith('.json'))
+      names = (await fsSlot(() => readdirAsync(DONE))).filter((n) => n.endsWith('.json'))
     } catch {
       return
     }
@@ -1372,22 +1372,22 @@ export async function readIntoAsync(path: string, r: LogRead, replay = false): P
   let size = 0
   let writtenAt = 0
   try {
-    const stat = await statAsync(path)
+    const stat = await fsSlot(() => statAsync(path))
     size = stat.size
     writtenAt = stat.mtimeMs
   } catch {
     return r.offset === from ? feedPacked(path, r) : r
   }
   if (size <= from) return r
-  const file = await openAsync(path, 'r')
+  const file = await fsSlot(() => openAsync(path, 'r'))
   let text: string
   try {
     const buf = Buffer.alloc(size - from)
-    const { bytesRead } = await file.read(buf, 0, buf.length, from)
+    const { bytesRead } = await fsSlot(() => file.read(buf, 0, buf.length, from))
     text = buf.toString('utf8', 0, bytesRead)
     size = from + bytesRead
   } finally {
-    await file.close()
+    await fsSlot(() => file.close())
   }
   if (r.offset !== from) return r
   r.offset = size

@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte's history and running logs share the filesystem limit.** Background effort scans, live log reads and registration listings no longer grow separate bursts of retained filesystem workers. Freshness checks, concurrent stop handling and guaranteed file cleanup keep their existing behavior.
 - **Free Claude accounts confirm a chat is private before sending anything.** A new chat is created first, and its message goes out only after Claude confirms the chat is Incognito; otherwise nothing is sent. The unused option for ordinary, non-private chats is gone, so Free accounts can only ever use private chats.
 - **Confirmed Free replies avoid another Python process.** Small browser-confirmed replies use the same validation in the existing account worker after browser cleanup. Replies needing HTTP keep their owned process, and account locks, cancellation, cookie saving and output limits remain enforced.
 - **Unfinished links no longer stall Free reply rendering.** Incomplete link tokens stay unchanged without repeatedly scanning the same text. Completed links, citations and code blocks keep their existing output.
