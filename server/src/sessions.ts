@@ -1008,7 +1008,9 @@ export function collapseSubagents(files: TranscriptFile[]): {
 } {
   // A store that records no parentage at all is every store but OpenCode, so leave early rather than
   // build an index of every session on the machine for nothing.
-  if (!files.some((f) => f.parentId)) return { rows: files, counts: new Map() }
+  const parentStores = new Set<string>()
+  for (const file of files) if (file.parentId) parentStores.add(storeKeyOf(file))
+  if (parentStores.size === 0) return { rows: files, counts: new Map() }
   // Keyed by the locator's STORE identity (session-locator.ts's storeKeyOf), not just tool: a
   // parent/child pair is always read out of the same physical store's own tables, so storeKey is
   // exactly the disambiguator a bare tool misses whenever the store is database-backed. Tool alone
@@ -1019,7 +1021,24 @@ export function collapseSubagents(files: TranscriptFile[]): {
   // file-backed formats, so this is a strict extension of the previous key for those).
   const key = (tf: Pick<TranscriptFile, 'source' | 'tool' | 'path'>, id: string) =>
     `${storeKeyOf({ source: tf.source, tool: tf.tool, path: tf.path, session_id: id })}:${id}`
-  const byId = new Map(files.map((f) => [key(f, f.session_id), f]))
+  const parentPrefixes = new Set<string>()
+  for (const store of parentStores)
+    for (let at = store.indexOf(':'); at >= 0; at = store.indexOf(':', at + 1))
+      parentPrefixes.add(store.slice(0, at))
+  const neededStores = new Map<string, boolean>()
+  const neededStore = (store: string): boolean => {
+    const known = neededStores.get(store)
+    if (known !== undefined) return known
+    // Keep legacy concatenated-key aliases without comparing every pair of store namespaces.
+    let needed = parentStores.has(store) || parentPrefixes.has(store)
+    for (let at = store.indexOf(':'); !needed && at >= 0; at = store.indexOf(':', at + 1))
+      needed = parentStores.has(store.slice(0, at))
+    neededStores.set(store, needed)
+    return needed
+  }
+  const byId = new Map<string, TranscriptFile>()
+  for (const file of files)
+    if (neededStore(storeKeyOf(file))) byId.set(key(file, file.session_id), file)
 
   /** The top-level session this row belongs to, or null when it is one itself — or owned by nothing
    *  real, which is the same answer as far as this list is concerned. */

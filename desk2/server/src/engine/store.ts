@@ -417,6 +417,15 @@ function readFrom(file: string, from: number, to: number): Buffer {
   }
 }
 
+interface LineChunk {
+  chars: number
+  kept: number
+  ids: string[]
+}
+
+/** Scalar ownership only, with the cached Map's lifetime: no whole read is kept here. */
+const lineChunks = new WeakMap<Map<string, string>, Map<string, LineChunk>>()
+
 /** Each parsable item line in `text`, filed by id (a later line replaces an earlier one, keeping its place); a torn line is skipped. */
 function addLines(lines: Map<string, string>, text: string, detach = false): void {
   if (!text) return
@@ -430,16 +439,48 @@ function addLines(lines: Map<string, string>, text: string, detach = false): voi
       // a torn line (crash mid-write): skip it
     }
   }
-  if (detach) {
-    let kept = 0
-    for (const line of updates.values()) kept += line.length
-    // Long split lines can retain superseded versions from the same read. Copy
-    // final winners only when most text was discarded; unique reads need no
-    // string copies. Only UTF-8-decoded file chunks use this round-trip.
-    const copy = text.length > 2 * kept
-    for (const [id, line] of updates)
-      lines.set(id, copy ? Buffer.from(line, 'utf8').toString('utf8') : line)
+  if (!detach || !updates.size) return
+  let kept = 0
+  for (const line of updates.values()) kept += line.length
+  // Long split lines can retain superseded versions from the same read. Copy
+  // final winners only when most text was discarded; unique reads need no
+  // string copies. Only UTF-8-decoded file chunks use this round-trip.
+  const copy = text.length > 2 * kept
+  let owners = lineChunks.get(lines)
+  // Small-record metadata can cost more than its backing text. Track only
+  // substantial chunks with substantial lines; earlier owners still retire below.
+  const track = !copy && text.length >= 1024 * 1024 && kept >= updates.size * 1024
+  const owner: LineChunk | null = track ? { chars: text.length, kept, ids: [] } : null
+  if (owner && !owners) {
+    owners = new Map()
+    lineChunks.set(lines, owners)
   }
+  let touched: Set<LineChunk> | null = null
+  for (const [id, line] of updates) {
+    const previous = owners?.get(id)
+    if (previous) {
+      previous.kept -= (lines.get(id)?.length ?? 0)
+      owners!.delete(id)
+      ;(touched ??= new Set()).add(previous)
+    }
+    lines.set(id, copy ? Buffer.from(line, 'utf8').toString('utf8') : line)
+    if (owner) {
+      owner.ids.push(id)
+      owners!.set(id, owner)
+    }
+  }
+  // A formerly unique read can become mostly obsolete after later appends.
+  // Detach its remaining lines once, then discard that chunk's bookkeeping.
+  if (touched) for (const previous of touched) {
+    if (previous.chars <= 2 * previous.kept) continue
+    for (const id of previous.ids) {
+      if (owners!.get(id) !== previous) continue
+      lines.set(id, Buffer.from(lines.get(id)!, 'utf8').toString('utf8'))
+      owners!.delete(id)
+    }
+    previous.ids.length = 0
+  }
+  if (owners && !owners.size) lineChunks.delete(lines)
 }
 
 /** True for a missing or empty file, or one whose last byte is a newline. */

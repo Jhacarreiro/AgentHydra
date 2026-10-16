@@ -7,6 +7,9 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Session lists index only stores that can own subagents.** Large unrelated histories avoid building discarded parent-lookup entries. Store identity, duplicate handling, cycles and displayed ordering keep their existing behavior.
+- **Unchanged OpenCode previews reuse bounded rendered responses.** Small responses avoid rereading and reparsing quiet session history. Fresh database and WAL checks, caller isolation and cache limits remain enforced.
+- **Large chat reads release backing text after later replacements.** Cached long records track their original read so replacing most of a large chunk also releases its surviving text from that chunk. Small-record reads keep their existing lightweight path.
 - **A revoked login no longer shows as "rate limited".** Anthropic answers a revoked login's usage check as if it were rate-limited, so an account could say "wait, it clears on its own" for days. AgentHydra now asks Anthropic which it is and says when a login was revoked, on desktop and CLI rows alike.
 - **Signing in again now fixes a revoked desktop login.** The Claude app keeps a saved login through a sign-in to the same account and goes on using it until its expiry date, even after Anthropic revoked it. AgentHydra removes revoked logins from an instance while it is closed, so the app makes new ones the next time you open it, and Login sync no longer copies them back from your other PC.
 - **HSwarm can use OVHcloud's free hosted models with no key or account.** Seven open models (gpt-oss 120B and 20B, Qwen3.8 27B, Qwen3.6 27B, Qwen3.5 397B, Llama 3.3 70B, Mistral Small 3.2) run on OVHcloud's servers at 2 requests a minute each. Name one to use it; automatic routing never fans out onto them.
