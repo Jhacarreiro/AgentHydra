@@ -70,3 +70,38 @@ test('a rebuild removes the files of the sources that moved out and leaves the a
     expect(existsSync(catalogFile(`generated-${name}.json`))).toBe(false)
   expect(existsSync(catalogFile('generated-people.json'))).toBe(true)
 })
+
+test("a bench instrument with its own call says that call first; one without is convened by Dredd's docket", () => {
+  put('.agenthydra/core/catalog/sources.json', { dreddDir: '~/dredd' })
+  put('dredd/bench.json', {
+    instruments: [
+      {
+        id: 'price',
+        name: 'Price check',
+        when: 'Price the page before and after you change any page or screen of a web app.',
+        call: 'price_check { mode: "page", page: "<file>" } before and after the change',
+        run: 'node pricecheck scan',
+      },
+      {
+        id: 'sonar',
+        name: 'Sonar',
+        when: 'Any ask about what visitors do on a page, measured from the logs.',
+      },
+    ],
+  })
+  expect(run().status).toBe(0)
+  const how = Object.fromEntries(
+    (
+      JSON.parse(readFileSync(catalogFile('generated-dredd.json'), 'utf8')) as {
+        id: string
+        how: string
+      }[]
+    ).map((e) => [e.id, e.how]),
+  )
+  expect(how['instrument:price']).toBe(
+    'Call it yourself: price_check { mode: "page", page: "<file>" } before and after the change. Dredd also convenes it in a docket (dredd tool { action: "docket", ask }). Runner: node pricecheck scan.',
+  )
+  expect(how['instrument:sonar']).toBe(
+    'Dredd convenes it in a docket: AgentHydra dredd tool { action: "docket", ask }.',
+  )
+})

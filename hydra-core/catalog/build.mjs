@@ -223,8 +223,11 @@ function instrumentLoad(i) {
   return { type: 'none' }
 }
 
+/** An instrument with its own tool call (bench `call`) says that call first, so a chat runs it without a docket. */
 function instrumentHow(i) {
-  return capHow(`Dredd convenes it in a docket: AgentHydra dredd tool { action: "docket", ask }.${i.run ? ' Runner: ' + str(i.run) + '.' : ''}${i.doc ? ' Doc: ' + str(i.doc) + '.' : ''}`)
+  const tail = `${i.run ? ' Runner: ' + str(i.run) + '.' : ''}${i.doc ? ' Doc: ' + str(i.doc) + '.' : ''}`
+  if (i.call) return capHow(`Call it yourself: ${str(i.call)}. Dredd also convenes it in a docket (dredd tool { action: "docket", ask }).${tail}`)
+  return capHow(`Dredd convenes it in a docket: AgentHydra dredd tool { action: "docket", ask }.${tail}`)
 }
 
 function dreddInstruments(add, skip) {
