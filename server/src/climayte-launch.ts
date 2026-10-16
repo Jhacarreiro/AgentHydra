@@ -611,10 +611,12 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
           w.chat && ownerClaudeDir && !w.sealed && (coreModeOn() || craniumOn())
             ? coreHookGroups()
             : undefined,
-        // Its president rule: a chat about to ask the owner something asks the owner tier first. Core mode only:
-        // with the CrAInium flowchart the hook does nothing at Stop.
+        // At Stop core mode runs its president rule (a chat about to ask the owner something asks the owner tier
+        // first), and the CrAInium flowchart keeps the turn's ledger line.
         stopHooks:
-          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
+          w.chat && ownerClaudeDir && !w.sealed && (coreModeOn() || craniumOn())
+            ? coreHookGroups()
+            : undefined,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed

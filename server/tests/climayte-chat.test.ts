@@ -333,7 +333,8 @@ describe('chat workers', () => {
 
   // 2026-10-15: a PC on the CrAInium flowchart has a CRANIUM file and no ON (ON is the local core mode: no owner
   // CLAUDE.md, manager tools refused). Its terminal sessions walked the flowchart through the owner's own hooks; its
-  // chats got the Hydra Core hook only while ON was there, so they never did.
+  // chats got the Hydra Core hook only while ON was there, so they never did. 2026-10-16: the hook keeps a turn's ledger
+  // line at Stop, so a chat's Stop runs it too; without it no CliMayte chat turn reached the ledger.
   test('with a CRANIUM file and no ON, a chat runs the Hydra Core hook and keeps the owner instructions', () => {
     writeFileSync(join(CORE, 'CRANIUM'), '')
     const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
@@ -348,12 +349,14 @@ describe('chat workers', () => {
     const chatHooks = hooks(writeWorkerSettings(chat, acct))
     expect(chatHooks.UserPromptSubmit?.some(isCore)).toBe(true)
     expect(chatHooks.SessionStart?.some(isCore)).toBe(true)
+    expect(chatHooks.Stop?.some(isCore)).toBe(true)
     const argv = cliArgv(chat, 'sid', false, 'hooks.json', null)
     const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
     expect(prompt).toContain(OWNER_RULES)
     const worker = hooks(writeWorkerSettings(dispatch({ title: 'a cranium worker task' }), acct))
     expect(worker.UserPromptSubmit).toBeUndefined()
     expect(worker.SessionStart).toBeUndefined()
+    expect(worker.Stop?.some(isCore) ?? false).toBe(false)
     rmSync(join(CORE, 'CRANIUM'))
   })
 
