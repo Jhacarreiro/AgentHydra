@@ -7,6 +7,21 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+**TL;DR**
+
+- **Codex chats from your other PCs appear here, and Desk can continue them**
+- **Codex starts on a Mac or Linux PC that runs AgentHydra as a service**
+
+**Everything in Unreleased**
+
+- **Codex chats from your other PCs appear here, and Desk can continue them.** Each PC can send its Codex chats
+  to one AgentHydra you pick as the hub, which lists, searches and opens them beside its own, each marked with its
+  PC. While that PC is on, Desk continues one of its chats there, on that PC's files and Codex sign-in, asking for
+  approvals as usual. Nothing changes until a hub is set up.
+- **Codex starts on a Mac or Linux PC that runs AgentHydra as a service.** A service sees fewer program folders
+  than your terminal does, so AgentHydra could miss Codex, or find an npm install of it that could not start. It
+  now looks where Codex is usually installed and starts it so it finds its own Node.js, and a Codex that fails to
+  start says why.
 - **CliMayte reads less transcript data to find an attempt's first request.** Spend calculation stops once it finds the matching usage record, using the same token parser and time window. Long records decode in chunks without assembling an extra full byte buffer.
 - **Desk's freeze profiler uses less background CPU.** After a freeze starts diagnostics, it samples at the same measured interval as the main daemon. Freeze thresholds and named-function reports remain unchanged.
 - **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.
