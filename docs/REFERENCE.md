@@ -1054,7 +1054,7 @@ left are:
   fixture: a `bun test` started from an agent's shell can have one live parent, not two.
   `climayte-origin.test.ts`'s nearest-engine case starts a relay that starts the asker, and asserts the
   asker's chain is exactly [relay, test]. Its children get a scratch `HOME` and `USERPROFILE` (Bun's
-  `os.homedir()` follows them), so a crashed session's stale `~/.claude/sessions/<pid>.json`, naming a
+  `os.homedir()` follows them), so a crashed session's stale [`~/.claude/sessions/<pid>.json`](CLAUDE-CONFIG-LAYOUT.md), naming a
   pid Windows has since given to the relay, cannot answer.
 - **A timing assertion says which stall it saw.** The limit-reset thread test
   (`cli-limit-reset.test.ts`) runs a ticker on a second thread; on a failure it prints whether that
