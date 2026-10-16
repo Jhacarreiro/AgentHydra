@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **An unused database index stays removed after a restart.** An earlier storage cleanup removed an index nothing reads, but every later start of AgentHydra created it again and kept it updated as chats were scanned. It is now removed at every start, also after an older copy of AgentHydra opened the same database.
+
 ## [2.0.5] - 2026-10-16
 
 **TL;DR**
