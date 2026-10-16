@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **HSwarm service providers can use query-parameter authentication.** Explicitly configured services and their credential checks send the selected key in the required query field. Other providers keep their existing headers and key rotation behavior.
 - **Windows process checks use a lighter snapshot when available.** Supported Windows versions return process identities without collecting full process statistics. Existing fallback, freshness and unknown-state safeguards stay enforced.
 - **Message previews release the pasted text they no longer need.** Transcript indexes stop at the first nonblank line and detach short previews from large earlier prompts with bounded copy work. Preview text, message order and the newest full prompt stay the same.
 - **Session-file searches keep filesystem work bounded.** Overlapping searches share a small queue instead of creating large bursts of retained filesystem workers. Cwd priority, newest-copy selection and fresh file discovery stay the same.

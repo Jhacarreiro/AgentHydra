@@ -242,10 +242,11 @@ async def _check_by_get(provider: str, spec: dict, key: str, path: str, pool: Ke
     """The free GET, on the key's own region when one was found for it. A 401 there asks the provider's other listed
     regions (find_region): a China-issued key is accepted where it was issued, not rejected for where it was asked."""
     from .client import find_region
-    from .provider_auth import request_headers
+    from .provider_auth import auth_query, request_headers
     from .usage import ApiError
 
     headers = request_headers(spec, key)
+    params = {field: key} if (field := auth_query(spec)) else None
     if spec.get("transport") == "anthropic":
         from . import anthropic_native
 
@@ -253,7 +254,7 @@ async def _check_by_get(provider: str, spec: dict, key: str, path: str, pool: Ke
         headers.pop("Authorization", None)
     base = pool.base_url(key) or spec["base_url"]
     async with httpx.AsyncClient(base_url=base, timeout=30, follow_redirects=False) as client:
-        response = await client.get(path, headers=headers)
+        response = await client.get(path, headers=headers, params=params)
         if response.status_code == 401 and not path.startswith(("http://", "https://")) and (
                 found := await find_region(client, pool, key, base, headers, path)):
             response = found[1] or await client.get(found[0] + path, headers=headers)

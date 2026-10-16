@@ -23,7 +23,7 @@ import httpx
 
 from . import config, egress, keylimits, redaction
 from .client import _OUT_OF_CREDIT_429, KeyPool, NoUsableKey
-from .provider_auth import request_headers
+from .provider_auth import auth_query, request_headers
 from .usage import ApiError
 
 # How many keys one call may try when each refuses it before doing anything. Measured 2026-10-07: 12 of 20 sampled Jina
@@ -221,6 +221,8 @@ class ServiceClient:
             try:
                 if self._key is None:
                     self._key = key
+                if (field := auth_query(self.spec)):  # a query-auth provider carries the key in the URL, not a header
+                    kwargs["params"] = {**(kwargs.get("params") or {}), field: key}
                 kwargs["headers"] = {**(op.get("headers") or {}), **request_headers(self.spec, key), **typed}
                 request = self._http.build_request(method, target_url, **kwargs)
                 # For multipart, materialise the body once. The receipt holds a hash and length, never a payload/key.
