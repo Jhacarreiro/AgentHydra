@@ -3,14 +3,14 @@
 // Until 2026-10-16 hydra_find matched words only, so an ask put in other words than a tool's own ("is this screen
 // too busy" against "what a page costs the person looking") found nothing, and the owner asked for every tool's
 // description and parameter descriptions to be embedded so the search finds a tool by what the agent means. Each
-// tool's name, description and parameter descriptions (toolText) are embedded with a small local model (bge-small,
-// about 34 MB, downloaded once into DATA_DIR/models), the ask is embedded the same way, and mcp-find.ts fuses the
-// meaning ranking with its word ranking.
+// tool's name, description and parameter descriptions (toolText) are embedded with a static model (LOCAL_MODEL: a
+// table of one vector per word piece, about 31 MB downloaded once into DATA_DIR/models), the ask is embedded the same
+// way, and mcp-find.ts fuses the meaning ranking with its word ranking. No model runs: a text's vector is a lookup
+// and a mean, so a search takes milliseconds and the table is the only memory it holds.
 //
 // The vectors are kept in memory and in DATA_DIR/tool-intent/<model>.json, keyed by a hash of each tool's text, so a
-// restart embeds nothing and a changed tool is the only one embedded again. The model is an optional dependency and
-// is not in the release bundle: without it, while it loads, or when it fails, hydra_find answers by words and its
-// `reason` says why.
+// restart embeds nothing and a changed tool is the only one embedded again. Before the table is downloaded (the first
+// ask on a PC), while it loads, or when it fails, hydra_find answers by words and its `reason` says why.
 import { createHash } from 'node:crypto'
 import { existsSync, mkdirSync, readFileSync, renameSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -232,7 +232,7 @@ export class ToolIntent {
         () =>
           resolve({
             reason:
-              'intent search is still loading its model (the first use downloads about 34 MB); this answer is by words',
+              'intent search is still loading its model (the first use downloads about 31 MB); this answer is by words',
           }),
         this.opts.waitMs ?? INTENT_WAIT_MS,
       )
@@ -257,55 +257,185 @@ export class ToolIntent {
   }
 }
 
-/** The model and how it is run. Its vectors are only comparable with vectors made exactly this way. */
-export const LOCAL_MODEL = {
-  repo: 'Xenova/bge-small-en-v1.5',
-  dtype: 'q8',
-  pooling: 'cls',
-  // bge is trained with this instruction on the query side only
-  queryPrefix: 'Represent this sentence for searching relevant passages: ',
-} as const
-
-interface Transformers {
-  env: { cacheDir: string }
-  pipeline: (
-    task: 'feature-extraction',
-    model: string,
-    options: { dtype: string },
-  ) => Promise<
-    (
-      texts: string[],
-      options: { pooling: string; normalize: boolean },
-    ) => Promise<{ tolist(): number[][] }>
-  >
+/** A model2vec model on Hugging Face, pinned to one revision, each file by its sha256. */
+export interface StaticModelSpec {
+  repo: string
+  revision: string
+  files: { 'tokenizer.json': string; 'model.safetensors': string }
 }
 
-// A specifier the bundler cannot read, so the release bundle leaves the optional model out instead of inlining it.
-const importOptional = (spec: string): Promise<unknown> => import(spec)
+/** potion-base-8M (model2vec, MIT): one fixed vector per word piece, distilled from bge-base. On the bench it found
+ *  29 of 35 asks in the top 3 against 31 for the bge-small model it replaced (2026-10-16), at 3 ms a search instead
+ *  of 54, about 8 MB of memory instead of 110, and no inference library, so the release runs it too. */
+export const LOCAL_MODEL: StaticModelSpec = {
+  repo: 'minishlab/potion-base-8M',
+  revision: 'bf8b056651a2c21b8d2565580b8569da283cab23',
+  files: {
+    'tokenizer.json': 'e67e803f624fb4d67dea1c730d06e1067e1b14d830e2c2202569e3ef0f70bb50',
+    'model.safetensors': 'f65d0f325faadc1e121c319e2faa41170d3fa07d8c89abd48ca5358d9a223de2',
+  },
+}
+
+type Fetch = (url: string) => Promise<Response>
+const sha256 = (b: Uint8Array) => createHash('sha256').update(b).digest('hex')
+
+/** One of the spec's files from `dir`, downloaded at the pinned revision when missing or not the pinned bytes; a
+ *  download that is not the pinned bytes is refused and nothing is written. */
+async function modelFile(
+  spec: StaticModelSpec,
+  dir: string,
+  name: keyof StaticModelSpec['files'],
+  get: Fetch,
+): Promise<Buffer> {
+  const file = join(dir, name)
+  if (existsSync(file)) {
+    const saved = readFileSync(file)
+    if (sha256(saved) === spec.files[name]) return saved
+  }
+  const url = `https://huggingface.co/${spec.repo}/resolve/${spec.revision}/${name}`
+  const res = await get(url)
+  if (!res.ok) throw new Error(`${url}: HTTP ${res.status}`)
+  const bytes = Buffer.from(await res.arrayBuffer())
+  if (sha256(bytes) !== spec.files[name]) throw new Error(`${url}: sha256 is not the pinned one`)
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(`${file}.tmp`, bytes)
+  renameSync(`${file}.tmp`, file)
+  return bytes
+}
+
+export interface WordPieceVocab {
+  pieces: Map<string, number>
+  unk: number | undefined
+  prefix: string
+  maxChars: number
+}
+
+export function wordPieceVocab(tokenizerJson: string): WordPieceVocab {
+  const m = (
+    JSON.parse(tokenizerJson) as {
+      model?: {
+        type?: string
+        vocab?: Record<string, number>
+        unk_token?: string
+        continuing_subword_prefix?: string
+        max_input_chars_per_word?: number
+      }
+    }
+  ).model
+  if (m?.type !== 'WordPiece' || !m.vocab)
+    throw new Error('tokenizer.json is not a WordPiece tokenizer')
+  const pieces = new Map(Object.entries(m.vocab))
+  return {
+    pieces,
+    unk: m.unk_token === undefined ? undefined : pieces.get(m.unk_token),
+    prefix: m.continuing_subword_prefix ?? '##',
+    maxChars: m.max_input_chars_per_word ?? 100,
+  }
+}
+
+// BERT's words: each ASCII symbol and each Unicode punctuation mark alone, else a run of letters and digits.
+const WORDS = /[\p{P}!-/:-@[-`{-~]|[^\s\p{P}!-/:-@[-`{-~]+/gu
+
+/** A text as word-piece ids, the way BERT's uncased tokenizer splits it (lowercased, accents stripped, punctuation
+ *  apart, each word as its longest known pieces); a word with no known split is dropped, as model2vec drops [UNK]. */
+export function wordPieces(text: string, v: WordPieceVocab): number[] {
+  const clean = text
+    .replace(/[\p{Cc}\p{Cf}�]/gu, (c) => (/\s/.test(c) ? ' ' : ''))
+    .replace(/\p{Ideographic}/gu, ' $& ')
+    .normalize('NFD')
+    .replace(/\p{Mn}/gu, '')
+    .toLowerCase()
+  const ids: number[] = []
+  for (const word of clean.match(WORDS) ?? []) {
+    const chars = Array.from(word)
+    if (chars.length > v.maxChars) continue
+    const split: number[] = []
+    for (let start = 0; start < chars.length; ) {
+      let end = chars.length
+      let id: number | undefined
+      for (; end > start; end--) {
+        id = v.pieces.get((start ? v.prefix : '') + chars.slice(start, end).join(''))
+        if (id !== undefined) break
+      }
+      if (id === undefined) {
+        split.length = 0
+        break
+      }
+      split.push(id)
+      start = end
+    }
+    ids.push(...split)
+  }
+  return ids.filter((id) => id !== v.unk)
+}
+
+/** The table: one row per word piece, 8-bit with a scale per row (a quarter of the float table's memory, and the
+ *  same bench result). */
+export interface StaticTable {
+  dim: number
+  rows: Int8Array
+  scales: Float32Array
+}
+
+/** The one 2-D F32 tensor of a model2vec safetensors file, as a StaticTable. */
+export function staticTable(bytes: Uint8Array): StaticTable {
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength)
+  const headerLength = Number(view.getBigUint64(0, true))
+  const header = JSON.parse(
+    new TextDecoder().decode(bytes.subarray(8, 8 + headerLength)),
+  ) as Record<string, { dtype?: string; shape?: number[]; data_offsets?: [number, number] }>
+  const tensor = Object.entries(header).find(([k]) => k !== '__metadata__')?.[1]
+  if (tensor?.dtype !== 'F32' || tensor.shape?.length !== 2 || !tensor.data_offsets)
+    throw new Error('model.safetensors does not hold one 2-D F32 table')
+  const [count, dim] = tensor.shape
+  const base = 8 + headerLength + tensor.data_offsets[0]
+  const at = (i: number) => view.getFloat32(base + i * 4, true)
+  const rows = new Int8Array(count * dim)
+  const scales = new Float32Array(count)
+  for (let r = 0; r < count; r++) {
+    let max = 0
+    for (let d = 0; d < dim; d++) max = Math.max(max, Math.abs(at(r * dim + d)))
+    const scale = max / 127 || 1
+    scales[r] = scale
+    for (let d = 0; d < dim; d++) rows[r * dim + d] = Math.round(at(r * dim + d) / scale)
+  }
+  return { dim, rows, scales }
+}
+
+/** The spec's model, downloaded into `dir` the first time. */
+export async function loadStaticEmbedder(
+  spec: StaticModelSpec,
+  dir: string,
+  get: Fetch = fetch,
+): Promise<Embedder> {
+  const vocab = wordPieceVocab((await modelFile(spec, dir, 'tokenizer.json', get)).toString('utf8'))
+  const table = staticTable(await modelFile(spec, dir, 'model.safetensors', get))
+  return staticEmbedder(`${spec.repo}@${spec.revision.slice(0, 7)}-q8`, vocab, table)
+}
+
+/** A text's vector is the normalized mean of its pieces' rows, the same for an ask as for a tool text, so a search is
+ *  a table lookup. Built apart from the loader so the closures hold the table and not the 31 MB file it was read from. */
+function staticEmbedder(model: string, vocab: WordPieceVocab, table: StaticTable): Embedder {
+  const { dim, rows, scales } = table
+  for (const id of vocab.pieces.values())
+    if (id >= scales.length)
+      throw new Error(`tokenizer.json names piece ${id}, past the table's ${scales.length} rows`)
+  const vectorOf = (text: string) => {
+    const sum = new Float64Array(dim)
+    for (const id of wordPieces(text, vocab))
+      for (let d = 0; d < dim; d++) sum[d] += rows[id * dim + d] * scales[id]
+    let norm = 0
+    for (const x of sum) norm += x * x
+    norm = Math.sqrt(norm) || 1
+    return Array.from(sum, (x) => x / norm)
+  }
+  return { model, embed: async (texts) => texts.map(vectorOf) }
+}
 
 export async function loadLocalEmbedder(): Promise<EmbedderLoad> {
   if (process.env.AGENTHYDRA_TOOL_INTENT === '0')
     return { unavailable: 'intent search is off (AGENTHYDRA_TOOL_INTENT=0)' }
-  let hf: Transformers
-  try {
-    hf = (await importOptional('@huggingface/transformers')) as Transformers
-  } catch (e) {
-    return {
-      unavailable: `intent search needs @huggingface/transformers, which is not installed here (${errorText(e)})`,
-    }
-  }
-  hf.env.cacheDir = join(DATA_DIR, 'models')
-  const extract = await hf.pipeline('feature-extraction', LOCAL_MODEL.repo, {
-    dtype: LOCAL_MODEL.dtype,
-  })
-  return {
-    model: `${LOCAL_MODEL.repo}-${LOCAL_MODEL.dtype}-${LOCAL_MODEL.pooling}`,
-    embed: async (texts, kind) => {
-      const input = kind === 'query' ? texts.map((t) => LOCAL_MODEL.queryPrefix + t) : texts
-      const out = await extract(input, { pooling: LOCAL_MODEL.pooling, normalize: true })
-      return out.tolist()
-    },
-  }
+  return loadStaticEmbedder(LOCAL_MODEL, join(DATA_DIR, 'models', LOCAL_MODEL.repo))
 }
 
 let shared: ToolIntent | null = null

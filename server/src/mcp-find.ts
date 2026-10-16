@@ -171,7 +171,7 @@ function foundOf(t: McpEngineTool, score: number, listed?: ReadonlySet<string>):
 
 /** Reciprocal-rank fusion of the word and meaning rankings: a tool scores weight / (k + rank) in each list it is in,
  *  the meaning list cut to its `intentTop` closest tools. Values from the bench (scripts/tool-intent-bench.ts). */
-export const FUSE = { k: 10, intentTop: 12, words: 0.5, intent: 1.5 }
+export const FUSE = { k: 10, intentTop: 12, words: 0.5, intent: 2 }
 
 /** The tools of `byWords` (rankTools, every tool with a word match) and `hits` (closest first) in fused order. */
 export function fuseRanks(

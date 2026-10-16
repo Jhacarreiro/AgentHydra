@@ -1,9 +1,19 @@
 import { describe, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync } from 'node:fs'
+import { createHash } from 'node:crypto'
+import { existsSync, mkdtempSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { findTools } from '../src/mcp-find'
-import { type Embedder, ToolIntent, toolHead, toolText } from '../src/tool-intent'
+import {
+  type Embedder,
+  loadStaticEmbedder,
+  staticTable,
+  ToolIntent,
+  toolHead,
+  toolText,
+  wordPieces,
+  wordPieceVocab,
+} from '../src/tool-intent'
 
 // A fake model that understands meaning without sharing words: each axis is a concept, and a text
 // lights the axes whose words it uses. The asks below share no word with the tool they should find.
@@ -169,5 +179,116 @@ describe('the vector cache', () => {
     if (!('hits' in out)) throw new Error(out.reason)
     expect(out.hits[0]?.name).toBe('check_my_usage')
     expect(out.hits.length).toBe(TOOLS.length)
+  })
+})
+
+// A tiny model2vec-shaped model: a WordPiece vocabulary and one row per piece.
+const PIECES = ['[UNK]', 'restart', 'the', 'service', '##s', 'cafe', '.', 'quota']
+const tokenizerJson = JSON.stringify({
+  model: {
+    type: 'WordPiece',
+    unk_token: '[UNK]',
+    continuing_subword_prefix: '##',
+    max_input_chars_per_word: 100,
+    vocab: Object.fromEntries(PIECES.map((p, i) => [p, i])),
+  },
+})
+const ROWS = [
+  [0, 0, 0],
+  [1, 0, 0], // restart
+  [0, 0, 0.5], // the
+  [0, 1, 0], // service
+  [0, 0.5, 0], // ##s
+  [0, 0, 1], // cafe
+  [0, 0, 0.25], // .
+  [0, 0, -1], // quota
+]
+function safetensors(rows: number[][]): Uint8Array {
+  const data = new Float32Array(rows.flat())
+  const header = JSON.stringify({
+    __metadata__: {},
+    embeddings: {
+      dtype: 'F32',
+      shape: [rows.length, rows[0].length],
+      data_offsets: [0, data.byteLength],
+    },
+  })
+  const head = new TextEncoder().encode(header)
+  const out = new Uint8Array(8 + head.length + data.byteLength)
+  new DataView(out.buffer).setBigUint64(0, BigInt(head.length), true)
+  out.set(head, 8)
+  out.set(new Uint8Array(data.buffer), 8 + head.length)
+  return out
+}
+const sha256 = (b: Uint8Array | string) => createHash('sha256').update(b).digest('hex')
+
+describe('the static model', () => {
+  const vocab = wordPieceVocab(tokenizerJson)
+
+  test('splits text into the longest pieces the vocabulary has, BERT style', () => {
+    // lowercased, accents stripped, punctuation its own word, a suffix as a ## piece, an unknown word dropped
+    expect(wordPieces('Restart the SERVICES, café.', vocab)).toEqual([1, 2, 3, 4, 5, 6])
+    expect(wordPieces('restart zebra', vocab)).toEqual([1])
+  })
+
+  test("a text's vector is the normalized mean of its pieces' rows, the same for asks and tool texts", async () => {
+    const e = await loadStaticEmbedder(
+      {
+        repo: 'test/tiny',
+        revision: 'abc1234',
+        files: {
+          'model.safetensors': sha256(safetensors(ROWS)),
+          'tokenizer.json': sha256(tokenizerJson),
+        },
+      },
+      scratch(),
+      async (url) =>
+        new Response(url.endsWith('tokenizer.json') ? tokenizerJson : safetensors(ROWS)),
+    )
+    const [ask] = await e.embed(['restart service'], 'query')
+    const [tool] = await e.embed(['restart service'], 'passage')
+    expect(ask).toEqual(tool)
+    expect(ask[0]).toBeCloseTo(Math.SQRT1_2, 2)
+    expect(ask[1]).toBeCloseTo(Math.SQRT1_2, 2)
+    expect(ask[2]).toBeCloseTo(0, 2)
+  })
+
+  test('the table is kept 8-bit, one scale per row', () => {
+    const t = staticTable(safetensors(ROWS))
+    expect(t.dim).toBe(3)
+    expect(t.rows).toBeInstanceOf(Int8Array)
+    expect(t.rows[7 * 3 + 2] * t.scales[7]).toBeCloseTo(-1, 2)
+    expect(t.rows[2 * 3 + 2] * t.scales[2]).toBeCloseTo(0.5, 2)
+  })
+
+  test('downloads each file once at the pinned revision, and refuses one whose sha256 is not the pinned one', async () => {
+    const dir = scratch()
+    const spec = {
+      repo: 'test/tiny',
+      revision: 'abc1234',
+      files: {
+        'model.safetensors': sha256(safetensors(ROWS)),
+        'tokenizer.json': sha256(tokenizerJson),
+      },
+    }
+    const asked: string[] = []
+    const get = async (url: string) => {
+      asked.push(url)
+      return new Response(url.endsWith('tokenizer.json') ? tokenizerJson : safetensors(ROWS))
+    }
+    await loadStaticEmbedder(spec, dir, get)
+    expect(asked).toEqual([
+      'https://huggingface.co/test/tiny/resolve/abc1234/tokenizer.json',
+      'https://huggingface.co/test/tiny/resolve/abc1234/model.safetensors',
+    ])
+    await loadStaticEmbedder(spec, dir, get)
+    expect(asked.length).toBe(2)
+
+    // a file on disk that is not the pinned one is fetched again, and a fetched one that is not is refused
+    writeFileSync(join(dir, 'tokenizer.json'), '{}')
+    await expect(
+      loadStaticEmbedder(spec, dir, async () => new Response('{"tampered":true}')),
+    ).rejects.toThrow('sha256')
+    expect(existsSync(join(dir, 'tokenizer.json.tmp'))).toBe(false)
   })
 })
