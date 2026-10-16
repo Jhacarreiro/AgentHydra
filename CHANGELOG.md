@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free Claude accounts confirm a chat is private before sending anything.** A new chat is created first, and its message goes out only after Claude confirms the chat is Incognito; otherwise nothing is sent. The unused option for ordinary, non-private chats is gone, so Free accounts can only ever use private chats.
 - **Unchanged Claude folders reuse their transcript paths.** Refreshes avoid rebuilding the same absolute path strings while retaining directory relists, file checks and new or removed transcript detection.
 - **Large scoped CliMayte reads avoid repeated membership searches.** Account-history filters build their membership once per read and skip temporary session arrays. Ordering, live changes and waiting reads keep their existing behavior.
 - **CliMayte's compact history builds only the details it displays.** Large lists avoid constructing discarded attempt fields and copying attempt arrays, while full reports and fresh status reads keep their existing behavior.
