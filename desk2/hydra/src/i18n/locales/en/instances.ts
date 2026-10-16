@@ -268,12 +268,14 @@ export default {
   // Says what to DO, because "try again in a moment" is false here: a closed instance's stored
   // login is only refreshed by the app itself, so retrying can never succeed while it is shut.
   // Retrying is the one thing that cannot help, so this says to wait where every other reason says
-  // to act. It deliberately does NOT promise recovery: one account here has answered 429 on every
-  // read for twelve days straight, so "it will come back shortly" would have been a lie told once
-  // per refresh. State the fact, name the one check that distinguishes a passing limit from a stuck
-  // account, and let the number in `detail` speak for the window.
+  // to act. Shown only when the profile endpoint still accepts the login: the accounts that
+  // answered 429 on every read for days (#72 and #8) were revoked, not limited (usageReasonRevoked).
   usageReasonRateLimited:
     'Anthropic is rate-limiting usage checks for this account. Refreshing cannot help and signing in again does not either - the window can run for hours, and it clears on its own.',
+  // The usage endpoint answers a revoked login 429, so this read as the rate limit above and told
+  // the owner to wait; the profile endpoint's 401 is what tells them apart (server revokedLoginError).
+  usageReasonRevoked:
+    'Anthropic revoked the Claude Code login saved in this instance, so its usage cannot be read and waiting will not bring it back. Sign out of Claude in this instance and sign back in.',
   usageReasonAppClosed:
     'This account is closed, so its saved login is too old to read usage. Open it and check again.',
   usageSession: 'Session (5h)',

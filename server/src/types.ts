@@ -1177,6 +1177,11 @@ export type UsageReason =
   // someone to 'try again in a moment' while they hammer a rate limit is worse than saying
   // nothing (owner hit exactly this on a signed-in account, 2026-09-07).
   | 'rate_limited'
+  // Anthropic revoked the login the check presented ("OAuth access token has been revoked."). Its
+  // own reason because the usage endpoint answers such a login 429, which read as 'rate_limited'
+  // and told the owner to wait; no wait fixes it, only signing in again (instances #72 and #8,
+  // 2026-10-16, see revokedLoginError in usage-api.ts).
+  | 'token_revoked'
   | 'unknown'
 
 /**

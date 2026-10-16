@@ -330,9 +330,11 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
         ? 'no_token'
         : apiFail?.status === 429
           ? 'rate_limited'
-          : isRunning
-            ? 'check_failed'
-            : 'stale_token_app_closed'
+          : apiFail?.status === 401 && /revoked/i.test(apiFail.error)
+            ? 'token_revoked'
+            : isRunning
+              ? 'check_failed'
+              : 'stale_token_app_closed'
   // ⛔ OWNER RULE (2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
