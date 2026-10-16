@@ -47,8 +47,8 @@ async function child<T>(body: string): Promise<T> {
         } finally { active-- }
       }
       const original = { stat: fsp.stat, readdir: fsp.readdir,
-        readFile: fsp.readFile, open: fsp.open }
-      for (const kind of ['stat', 'readdir', 'readFile'])
+        readFile: fsp.readFile, open: fsp.open, access: fsp.access }
+      for (const kind of ['stat', 'readdir', 'readFile', 'access'])
         spyOn(fsp, kind).mockImplementation((path, ...args) =>
           io(kind, path, () => original[kind](path, ...args)))
       spyOn(fsp, 'open').mockImplementation((path, ...args) => io('open', path, async () => {
@@ -78,6 +78,9 @@ async function child<T>(body: string): Promise<T> {
         ...globalThis.process.env,
         HOME: home,
         USERPROFILE: home,
+        APPDATA: join(home, 'roaming'),
+        LOCALAPPDATA: join(home, 'local'),
+        CLAUDE_CONFIG_DIR: join(home, '.claude'),
         CODEX_HOME: join(home, '.codex'),
         HSWARM_HOME: join(home, '.hswarm'),
         AGENTHYDRA_HOME: home,
@@ -186,4 +189,90 @@ test('failed log opens, reads and closes release their slots and retain guarante
   expect(result.closeFailures).toBe(1)
   expect(result.recovered).toBe(24)
   expect(result.peak).toBeLessThanOrEqual(8)
+}, 30_000)
+
+test('queued log tails allocate their read buffer only inside an admitted filesystem slot', async () => {
+  const result = await child<{
+    peakBuffers: number
+    liveBuffers: number
+    peak: number
+    closed: number
+  }>(`
+    const body = line('x'.repeat(64 * 1024))
+    const bytes = Buffer.byteLength(body)
+    const buffers = new WeakSet()
+    let liveBuffers = 0, peakBuffers = 0
+    const alloc = Buffer.alloc, stringify = Buffer.prototype.toString
+    spyOn(Buffer, 'alloc').mockImplementation((size, ...args) => {
+      const buffer = alloc(size, ...args)
+      if (size === bytes) {
+        buffers.add(buffer); liveBuffers++
+        peakBuffers = Math.max(peakBuffers, liveBuffers)
+      }
+      return buffer
+    })
+    spyOn(Buffer.prototype, 'toString').mockImplementation(function(...args) {
+      try { return stringify.apply(this, args) }
+      finally { if (buffers.delete(this)) liveBuffers-- }
+    })
+    const logs = Array.from({ length: 32 }, (_, i) => {
+      const path = join(home, 'burst-' + i + '.jsonl')
+      fs.writeFileSync(path, body)
+      return { path, r: core.freshRead() }
+    })
+    await Promise.all(logs.map(({ path, r }) => core.readIntoAsync(path, r)))
+    assert(logs.every(({ r }) => r.offset === bytes && r.events.length === 1), 'Incomplete log burst')
+    console.log(JSON.stringify({ peakBuffers, liveBuffers, peak, closed: closed.length }))
+  `)
+  expect(result.peakBuffers).toBe(8)
+  expect(result.liveBuffers).toBe(0)
+  expect(result.peak).toBe(8)
+  expect(result.closed).toBe(32)
+}, 30_000)
+
+test('live transcript direct, fallback and missing lookups share quota without changing their paths', async () => {
+  const result = await child<{
+    before: number
+    peak: number
+    access: number
+    listed: number
+    active: number
+  }>(`
+    const registryHome = join(home, 'live-home')
+    const cwd = 'D:/ExampleProject'
+    const direct = registry.projectKeyForCwd(cwd)
+    fs.mkdirSync(join(registryHome, 'sessions'), { recursive: true })
+    for (const dir of [direct, 'case-variant'])
+      fs.mkdirSync(join(registryHome, 'projects', dir), { recursive: true })
+    const wanted = new Map()
+    for (let i = 0; i < 32; i++) {
+      const sessionId = 'example-live-' + i
+      fs.writeFileSync(join(registryHome, 'sessions', i + '.json'),
+        JSON.stringify({ pid: process.pid, sessionId, cwd, name: sessionId, startedAt: i }))
+      const dir = i < 12 ? direct : i < 24 ? 'case-variant' : null
+      const path = dir === null ? null : join(registryHome, 'projects', dir, sessionId + '.jsonl')
+      if (path) fs.writeFileSync(path, '{}\\n')
+      wanted.set(sessionId, path)
+    }
+    const unlocated = await registry.readLiveRegistryAsync(registryHome, { transcripts: false })
+    assert(unlocated.length === 32 && unlocated.every(row => row.transcriptPath === null), 'ID-only lookup changed')
+    assert(!counts.access, 'ID-only lookup accessed transcripts')
+    for (const key of Object.keys(counts)) delete counts[key]
+    peak = 0
+    const occupied = await occupy()
+    const pending = registry.readLiveRegistryAsync(registryHome)
+    await Bun.sleep(10)
+    const before = Object.values(counts).reduce((sum, n) => sum + n, 0)
+    occupied.release()
+    const rows = await pending
+    await Promise.all(occupied.holds)
+    assert(rows.length === 32, 'Live sessions were lost')
+    assert(rows.every(row => row.transcriptPath === wanted.get(row.sessionId)), 'Transcript lookup changed')
+    console.log(JSON.stringify({ before, peak, active, access: counts.access, listed: counts.readdir }))
+  `)
+  expect(result.before).toBe(0)
+  expect(result.peak).toBe(8)
+  expect(result.active).toBe(0)
+  expect(result.access).toBeGreaterThan(32)
+  expect(result.listed).toBe(21)
 }, 30_000)

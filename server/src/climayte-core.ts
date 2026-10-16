@@ -1382,10 +1382,15 @@ export async function readIntoAsync(path: string, r: LogRead, replay = false): P
   const file = await fsSlot(() => openAsync(path, 'r'))
   let text: string
   try {
-    const buf = Buffer.alloc(size - from)
-    const { bytesRead } = await fsSlot(() => file.read(buf, 0, buf.length, from))
-    text = buf.toString('utf8', 0, bytesRead)
-    size = from + bytesRead
+    // Allocate only when this read is admitted, and drop its raw buffer before
+    // waiting to close. Queued logs retain no full unread-tail allocation.
+    const read = await fsSlot(async () => {
+      const buf = Buffer.alloc(size - from)
+      const { bytesRead } = await file.read(buf, 0, buf.length, from)
+      return { text: buf.toString('utf8', 0, bytesRead), bytesRead }
+    })
+    text = read.text
+    size = from + read.bytesRead
   } finally {
     await fsSlot(() => file.close())
   }

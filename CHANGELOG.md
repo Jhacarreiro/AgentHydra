@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Queued CliMayte logs allocate their read buffers when admitted.** Large catch-up bursts avoid holding a raw unread-tail buffer for every waiting log. Cursor checks, decoded events and file cleanup remain unchanged.
+- **Live-session and account-history lookups share the filesystem limit.** Transcript existence checks and directory listings join the same queue as other readers. Direct and fallback transcript paths, history ordering and unreadable-record handling stay the same.
 - **CliMayte's history and running logs share the filesystem limit.** Background effort scans, live log reads and registration listings no longer grow separate bursts of retained filesystem workers. Freshness checks, concurrent stop handling and guaranteed file cleanup keep their existing behavior.
 - **Free Claude accounts confirm a chat is private before sending anything.** A new chat is created first, and its message goes out only after Claude confirms the chat is Incognito; otherwise nothing is sent. The unused option for ordinary, non-private chats is gone, so Free accounts can only ever use private chats.
 - **Confirmed Free replies avoid another Python process.** Small browser-confirmed replies use the same validation in the existing account worker after browser cleanup. Replies needing HTTP keep their owned process, and account locks, cancellation, cookie saving and output limits remain enforced.

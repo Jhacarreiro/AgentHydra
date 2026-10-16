@@ -144,7 +144,7 @@ export function readLoginHistory(instanceDir: string): CMLoginHistory {
 
 async function subdirsOff(dir: string): Promise<string[]> {
   try {
-    return (await readdir(dir, { withFileTypes: true }))
+    return (await fsSlot(() => readdir(dir, { withFileTypes: true })))
       .filter((d) => d.isDirectory())
       .map((d) => d.name)
   } catch {
@@ -159,7 +159,9 @@ async function newestRecord(accountDir: string): Promise<number> {
     const orgDir = path.join(accountDir, org)
     let names: string[] = []
     try {
-      names = (await readdir(orgDir)).filter((n) => n.startsWith('local_') && n.endsWith('.json'))
+      names = (await fsSlot(() => readdir(orgDir))).filter(
+        (n) => n.startsWith('local_') && n.endsWith('.json'),
+      )
     } catch {
       continue
     }

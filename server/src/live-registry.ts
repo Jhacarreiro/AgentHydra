@@ -143,7 +143,7 @@ async function transcriptPathForAsync(
   if (await exists(direct)) return direct
   let dirs: string[]
   try {
-    dirs = await readdir(join(claudeHome, 'projects'))
+    dirs = await fsSlot(() => readdir(join(claudeHome, 'projects')))
   } catch {
     return null
   }
@@ -155,7 +155,7 @@ async function transcriptPathForAsync(
 }
 
 const exists = (path: string): Promise<boolean> =>
-  access(path).then(
+  fsSlot(() => access(path)).then(
     () => true,
     () => false,
   )
