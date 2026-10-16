@@ -27,6 +27,7 @@ import { type MachineMemory, memoryShort } from '../src/climayte-memory'
 import {
   DEFAULT_TASK_PCT,
   expectedCost,
+  type FinishedCost,
   MANAGER_WAKE_PCT,
   planFactor,
   projectedPct,
@@ -59,6 +60,36 @@ describe('projectedPct', () => {
 })
 
 describe('expectedCost', () => {
+  test('one placement record calculates a setting once without changing estimates, and the next record learns new spend', () => {
+    let reads = 0
+    const finished: FinishedCost[] = Array.from({ length: 12_000 }, (_, n) => ({
+      kind: n % 2 ? 'code' : 'docs',
+      model: n % 3 ? 'claude-sonnet-5-5' : 'claude-haiku-5-5',
+      effort: n % 2 ? 'medium' : 'low',
+      get pct() {
+        reads++
+        return (n % 20) + 1
+      },
+    }))
+    const setting = { kind: 'code', model: 'claude-sonnet-5-5', effort: 'medium' }
+    const first = expectedCost(setting, finished)
+    const once = reads
+    expect(once).toBeGreaterThan(0)
+    for (let n = 0; n < 50; n++) expect(expectedCost(setting, finished)).toEqual(first)
+    expect(reads).toBe(once)
+    // A caller's edits never leak into the next worker's estimate.
+    const changed = expectedCost(setting, finished)
+    changed.pct = -1
+    expect(expectedCost(setting, finished)).toEqual(first)
+    // Other settings keep their own estimate, with bit-identical arithmetic to a new record.
+    const other = { ...setting, effort: 'low' }
+    const low = expectedCost(other, finished)
+    expect(low).not.toEqual(first)
+    expect(low).toEqual(expectedCost(other, [...finished]))
+    const next = [...finished, { ...setting, pct: 100 }]
+    expect(expectedCost(setting, next).pct).toBeGreaterThan(first.pct)
+  })
+
   test('blends from the broadest record to the narrowest, by how many tasks each has', () => {
     const O = 'claude-opus-5-5'
     const S = 'claude-sonnet-5-5'

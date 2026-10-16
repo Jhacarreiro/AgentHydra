@@ -1,9 +1,9 @@
-"""Prepare a single request with the current website, then close its browser.
+"""Send once with the current website, then dispose the request's browser context.
 
 No login is submitted. The website owns its ordinary verification and sends the
 requested message once over its normal HTTP connection. Python verifies readback
-without resending. The browser closes and its owned profile is removed afterward.
-Cookies and request credentials stay in memory and the owned profile is removed.
+without resending. Desk shares one headless browser; account contexts are cleared
+afterward and the empty browser closes when idle. Standalone callers own a profile.
 """
 
 import asyncio
@@ -13,7 +13,7 @@ import os
 import re
 import tempfile
 import time
-from contextlib import contextmanager
+from contextlib import contextmanager, nullcontext
 from pathlib import Path
 from urllib.parse import urlparse
 
@@ -107,6 +107,10 @@ def request_headers(headers):
 def prepare(http, prompt, existing=None, *, directory, model, temporary=True, on_id=None):
     """One bound request, never a reusable preparation pool or an automatic resend."""
     with browser_slot(directory, wait=min(120, http.timeout)):
+        endpoint = os.environ.get('CLAUDFREE_BROWSER_POOL')
+        if endpoint:
+            from .browser_pool import request
+            return request(http, prompt, existing, endpoint=endpoint, model=model, temporary=temporary, on_id=on_id)
         return asyncio.run(_prepare(http, prompt, existing, directory=directory, model=model, temporary=temporary, on_id=on_id))
 
 
@@ -291,7 +295,7 @@ async def _close_browser(http, browser, identity_verified):
         await browser.stop()
 
 
-async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id):
+async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id, browser_factory=None):
     import zendriver as zd
 
     started = time.monotonic()
@@ -301,9 +305,9 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
     identity_verified = False
     server_id = None
     # The session lock held by ChatGPTClient protects both cookies and this profile.
-    with tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
+    with nullcontext(None) if browser_factory else tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
         try:
-            browser = await zd.start(user_data_dir=profile, headless=False,
+            browser = await browser_factory() if browser_factory else await zd.start(user_data_dir=profile, headless=True,
                 browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check'])
             await signin.load_cookies(browser, http.saved_state()['cookies'])
             path = '/c/' + existing['conversation_id'] if existing else '/'

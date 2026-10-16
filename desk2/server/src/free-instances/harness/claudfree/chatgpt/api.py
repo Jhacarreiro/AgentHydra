@@ -311,7 +311,7 @@ class ChatGPTClient(Client):
             "default_privacy": {"temporary": True, "personalization": False},
             "browser_required_for": ["login", "message_send"],
             "preparation_methods": {"default": "first_party_browser_http", "explicit_legacy": "javascript"},
-            "preparation_runtime": "Installed Chrome/Edge with zendriver; restores saved cookies without submitting login. The browser sends the requested message once, then its owned profile closes after authenticated HTTP readback.",
+            "preparation_runtime": "Installed headless Chrome/Edge with zendriver; restores saved cookies without submitting login. Desk reuses one browser with up to three disposable isolated contexts. Each context closes after authenticated HTTP readback; the empty browser closes after 60 idle seconds.",
             "commands": {
                 name: "Use --provider chatgpt"
                 for name in [

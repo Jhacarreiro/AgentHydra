@@ -160,6 +160,16 @@ describe('free_chat through a stand-in Desk 2', () => {
     model?: string
   }[] = []
   let overlap = 0
+  let statusReads = 0
+  let threadReads = 0
+  let statusDelay = 0
+  let threadDelay = 0
+  let emptyThreads = false
+  let threadFailures = 0
+  let statusFailures = 0
+  let jobReadDelay = 0
+  let activeJobReads = 0
+  let peakJobReads = 0
   let server: ReturnType<typeof Bun.serve>
   let port: string | undefined
 
@@ -171,9 +181,19 @@ describe('free_chat through a stand-in Desk 2', () => {
       port: 0,
       async fetch(req) {
         const path = new URL(req.url).pathname.replace('/api/free', '')
-        if (path === '/status')
+        if (path === '/status') {
+          statusReads++
+          if (statusDelay) await Bun.sleep(statusDelay)
+          if (statusFailures-- > 0)
+            return Response.json({ error: 'status unavailable' }, { status: 503 })
           return Response.json({ ready: true, instances: INSTANCES, jobs: [...jobs.values()] })
-        if (path === '/threads')
+        }
+        if (path === '/threads') {
+          threadReads++
+          if (threadDelay) await Bun.sleep(threadDelay)
+          if (threadFailures-- > 0)
+            return Response.json({ error: 'history unavailable' }, { status: 503 })
+          if (emptyThreads) return Response.json([])
           return Response.json([
             {
               instanceId: 'b',
@@ -186,6 +206,7 @@ describe('free_chat through a stand-in Desk 2', () => {
               error: null,
             },
           ])
+        }
         if (path === '/jobs' && req.method === 'POST') {
           const r = (await req.json()) as {
             requestId: string
@@ -239,8 +260,15 @@ describe('free_chat through a stand-in Desk 2', () => {
           }, 100)
           return Response.json(job, { status: 202 })
         }
-        const job = jobs.get(path.replace('/jobs/', ''))
-        return job ? Response.json(job) : Response.json({ error: 'gone' }, { status: 404 })
+        activeJobReads++
+        peakJobReads = Math.max(peakJobReads, activeJobReads)
+        try {
+          if (jobReadDelay) await Bun.sleep(jobReadDelay)
+          const job = jobs.get(path.replace('/jobs/', ''))
+          return job ? Response.json(job) : Response.json({ error: 'gone' }, { status: 404 })
+        } finally {
+          activeJobReads--
+        }
       },
     })
     port = process.env.HYDRA_DESK_PORT
@@ -253,6 +281,97 @@ describe('free_chat through a stand-in Desk 2', () => {
   })
   const run = (name: string, args: Record<string, unknown>) =>
     FREE_TOOLS.find((t) => t.name === name)!.run(args) as Promise<any>
+
+  test('overlapping Free callers share in-flight reads, then read fresh status without rereading empty history', async () => {
+    resetFreeHealth()
+    statusDelay = threadDelay = 50
+    emptyThreads = true
+    const before = { statusReads, threadReads }
+    try {
+      const replies = await Promise.all(Array.from({ length: 12 }, () => run('free_status', {})))
+      expect(replies.every((s) => s.ready)).toBe(true)
+      expect(statusReads - before.statusReads).toBe(1)
+      expect(threadReads - before.threadReads).toBe(1)
+      const prior = INSTANCES[0]!.loggedIn
+      INSTANCES[0]!.loggedIn = false
+      try {
+        const fresh = await run('free_status', {})
+        expect(fresh.accounts.find((a: { num: number }) => a.num === 1).signedIn).toBe(false)
+        expect(statusReads - before.statusReads).toBe(2)
+        expect(threadReads - before.threadReads).toBe(1)
+      } finally {
+        INSTANCES[0]!.loggedIn = prior
+      }
+    } finally {
+      statusDelay = threadDelay = 0
+      emptyThreads = false
+      resetFreeHealth()
+    }
+  })
+
+  test('failed shared status and history reads are retried on the next Free call', async () => {
+    resetFreeHealth()
+    statusDelay = 75
+    threadDelay = 25
+    statusFailures = threadFailures = 1
+    emptyThreads = true
+    const before = { statusReads, threadReads }
+    try {
+      const failed = await Promise.allSettled(
+        Array.from({ length: 12 }, () => run('free_status', {})),
+      )
+      expect(failed.every((r) => r.status === 'rejected')).toBe(true)
+      expect(statusReads - before.statusReads).toBe(1)
+      expect(threadReads - before.threadReads).toBe(1)
+      expect((await run('free_status', {})).ready).toBe(true)
+      expect(statusReads - before.statusReads).toBe(2)
+      expect(threadReads - before.threadReads).toBe(2)
+      await run('free_status', {})
+      expect(threadReads - before.threadReads).toBe(2)
+    } finally {
+      statusDelay = threadDelay = 0
+      statusFailures = threadFailures = 0
+      emptyThreads = false
+      resetFreeHealth()
+    }
+  })
+
+  test('Free job reads run at a bounded eight-way concurrency while task results retain their order', async () => {
+    resetFreeHealth()
+    const original = [...INSTANCES]
+    const priorJobs = new Set(jobs.keys())
+    const priorRan = ran.length
+    INSTANCES.splice(
+      0,
+      INSTANCES.length,
+      ...Array.from({ length: 24 }, (_, n) => ({
+        id: `parallel-${n}`,
+        num: n + 1,
+        provider: 'claude' as const,
+        name: `account-${n}`,
+        loggedIn: true,
+        usage: usage(10, 10),
+      })),
+    )
+    jobReadDelay = 50
+    peakJobReads = 0
+    try {
+      const prompts = Array.from({ length: 24 }, (_, n) => `parallel prompt ${n}`)
+      const out = await run('free_chat', { tasks: prompts.map((prompt) => ({ prompt })) })
+      expect(out.finished).toBe(true)
+      expect(out.tasks.map((t: { response: string }) => t.response)).toEqual(
+        prompts.map((p) => `re: ${p}`),
+      )
+      expect(peakJobReads).toBe(8)
+      expect(overlap).toBe(0)
+    } finally {
+      jobReadDelay = 0
+      INSTANCES.splice(0, INSTANCES.length, ...original)
+      ran.splice(priorRan)
+      for (const id of jobs.keys()) if (!priorJobs.has(id)) jobs.delete(id)
+      resetFreeHealth()
+    }
+  }, 15_000)
 
   test('more tasks than idle accounts all finish, one operation per account at a time; a continuation goes to its thread', async () => {
     const out = await run('free_chat', {

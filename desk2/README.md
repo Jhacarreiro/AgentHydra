@@ -986,7 +986,7 @@ recorded as a chat. Off by default, saved in `free/accounts.json`: `GET /api/fre
 Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
-**Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in an owned browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Request browsers are limited to three at once and their profiles are removed afterward. Desk's Free runtime does not install Playwright or Camoufox.
+**Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in one shared headless browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Each of at most three concurrent requests has its own disposable cookie context, cleared afterward. The empty browser closes after 60 seconds idle. Desk's Free runtime does not install Playwright or Camoufox.
 Usage counters that the provider does not expose stay unknown, and
 historical usage readings retain their observation and reset times. Free web accounts use their own
 allowances and are not Claude Code, Codex CLI, or HSwarm execution accounts.

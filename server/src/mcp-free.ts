@@ -11,6 +11,7 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { writeJsonStoreAtomic } from './core/json-store'
+import { mapPool } from './core/map-pool'
 import { desk2Present, desk2Url } from './desk2'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
@@ -58,6 +59,13 @@ interface FreeJob {
   instanceId: string
   state: 'running' | 'done'
   result?: FreeResult
+}
+interface FreeStatus {
+  ready: boolean
+  instances: FreeInstance[]
+  jobs: FreeJob[]
+  health?: Record<string, { sent: number; failed: number; failing: boolean }>
+  threadCounts?: Record<string, number>
 }
 interface FreeThread {
   instanceId: string
@@ -108,6 +116,16 @@ async function desk<T>(method: string, path: string, body?: unknown): Promise<T>
   const json = (await res.json().catch(() => null)) as { error?: string } | null
   if (!res.ok) throw new DeskError(res.status, json?.error ?? `HTTP ${res.status}`)
   return json as T
+}
+
+/** Overlapping batches and status callers share only the read already in flight, never a cached
+ *  answer: a send made after it settles must see the account's new busy state. */
+let statusRead: Promise<FreeStatus> | null = null
+function readStatus(): Promise<FreeStatus> {
+  statusRead ??= desk<FreeStatus>('GET', '/status').finally(() => {
+    statusRead = null
+  })
+  return statusRead
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -335,7 +353,7 @@ function paceLockout(id: string, now: number): void {
 let seeded = false
 const BOOTED = Date.now() // a send this daemon made is in `sends` already
 function seedSends(threads: readonly FreeThread[], now = Date.now()): void {
-  if (seeded || !threads.length) return
+  if (seeded) return
   seeded = true
   for (const t of threads)
     if (now - t.createdAt < PACE_WINDOW_MS && t.createdAt < BOOTED)
@@ -521,9 +539,9 @@ function retryElsewhere(it: Item, code: string | undefined): boolean {
   return true
 }
 
-async function pollRunning(it: Item, tick: Tick) {
-  try {
-    const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
+function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unknown }) {
+  if (reply.job) {
+    const job = reply.job
     if (job.state === 'done') {
       const inst = tick.byId.get(it.instanceId ?? '')
       finish(it, job.result, inst)
@@ -532,8 +550,8 @@ async function pollRunning(it: Item, tick: Tick) {
       noteProviderOutcome(inst?.provider, code)
       if (code) retryElsewhere(it, code)
     }
-  } catch (e) {
-    if ((e as DeskError).status === 404)
+  } else {
+    if ((reply.error as DeskError)?.status === 404)
       finish(
         it,
         {
@@ -654,9 +672,9 @@ async function runBatch(b: Batch): Promise<void> {
   const cache: { threads: FreeThread[] | null } = { threads: null }
   await seedOnce()
   while (pending(b)) {
-    let status: { instances: FreeInstance[]; jobs: FreeJob[] }
+    let status: FreeStatus
     try {
-      status = await desk('GET', '/status')
+      status = await readStatus()
     } catch (e) {
       // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
       if (Date.now() > until || (e as DeskError).status !== 0)
@@ -666,7 +684,17 @@ async function runBatch(b: Batch): Promise<void> {
       continue
     }
     const tick = readTick(b, status)
-    for (const it of b.items.filter((x) => x.s.state === 'running')) await pollRunning(it, tick)
+    const running = b.items.filter((x) => x.s.state === 'running')
+    // These reads are independent. Keep health, retries and provider probe accounting in the same
+    // task order as before, even when Desk answers them in a different order.
+    const replies = await mapPool(running, 8, async (it) => {
+      try {
+        return { job: await desk<FreeJob>('GET', `/jobs/${it.requestId}`) }
+      } catch (error) {
+        return { error }
+      }
+    })
+    for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
     for (const it of b.items.filter((x) => x.s.state === 'queued')) {
       const account = await accountFor(it, tick, cache)
       if (account) await startTask(it, account, tick.busy)
@@ -731,26 +759,22 @@ function readTask(raw: unknown, index: number): FreeTask {
 /** The pacing's sends from before this process started, read once: the threads started in the last window, not
  *  the whole list (8 MB at ~22,000 threads, 2026-10-10), which HSwarm's free_status before every task read each minute.
  *  The status carries each account's thread count. An older Desk ignores `since` and sends every thread. */
+let seedRead: Promise<void> | null = null
 async function seedOnce(): Promise<void> {
   if (seeded) return
-  seedSends(
-    await desk<FreeThread[]>('GET', `/threads?since=${Date.now() - PACE_WINDOW_MS}`).catch(
-      () => [],
-    ),
-  )
+  seedRead ??= desk<FreeThread[]>('GET', `/threads?since=${Date.now() - PACE_WINDOW_MS}`)
+    .then((threads) => seedSends(threads))
+    .catch(() => {
+      /* An unavailable history is retried, unlike a successful empty history. */
+    })
+    .finally(() => {
+      seedRead = null
+    })
+  await seedRead
 }
 
 async function freeStatus() {
-  const [status] = await Promise.all([
-    desk<{
-      ready: boolean
-      instances: FreeInstance[]
-      jobs: FreeJob[]
-      health?: Record<string, { sent: number; failed: number; failing: boolean }>
-      threadCounts?: Record<string, number>
-    }>('GET', '/status'),
-    seedOnce(),
-  ])
+  const [status] = await Promise.all([readStatus(), seedOnce()])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
   const now = Date.now()
   return {
@@ -870,7 +894,7 @@ export const FREE_TOOLS: HydraTool[] = [
         s: { task: i, state: 'queued' },
       }))
       // Fail before anything is queued when Desk 2 cannot be reached at all.
-      await desk('GET', '/status')
+      await readStatus()
       for (const [id, b] of batches)
         if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
       const b: Batch = {

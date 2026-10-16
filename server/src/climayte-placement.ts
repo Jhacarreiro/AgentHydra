@@ -120,6 +120,7 @@ interface FinishedIndex {
   byFamily: Map<string, FinishedCost[]>
   byKind: Map<string, FinishedCost[]>
   byKindFamily: Map<string, FinishedCost[]>
+  estimates: Map<string, CostEstimate>
 }
 
 const indexes = new WeakMap<FinishedCost[], FinishedIndex>()
@@ -146,7 +147,12 @@ function scaledSum(list: FinishedCost[], own: number): number {
 function indexOf(finished: FinishedCost[]): FinishedIndex {
   const have = indexes.get(finished)
   if (have) return have
-  const ix: FinishedIndex = { byFamily: new Map(), byKind: new Map(), byKindFamily: new Map() }
+  const ix: FinishedIndex = {
+    byFamily: new Map(),
+    byKind: new Map(),
+    byKindFamily: new Map(),
+    estimates: new Map(),
+  }
   const push = (m: Map<string, FinishedCost[]>, key: string, f: FinishedCost): void => {
     const list = m.get(key)
     if (list) list.push(f)
@@ -176,20 +182,28 @@ export function expectedCost(
   task: { kind?: string | null; model: string | null; effort: string | null },
   finished: FinishedCost[],
 ): CostEstimate {
+  // Running and queued workers often share a setting. The immutable record is already indexed
+  // once per placement pass; its estimate is unchanged too. Return a copy so no caller can alter
+  // the next task's result, and a new finished list always learns the next pass's new spend.
+  const ix = indexOf(finished)
+  const key = JSON.stringify([task.kind ?? null, task.model, task.effort])
+  const cached = ix.estimates.get(key)
+  if (cached) return { ...cached }
   // A manager's cost is per wake: the average of the kind's wake attempts (they arrive as one
   // FinishedCost each), else MANAGER_WAKE_PCT. Never the whole-task default, never a whole task.
   if (task.kind === 'manage') {
-    const wakes = finished.filter((f) => f.kind === 'manage')
-    return wakes.length
+    const wakes = ix.byKind.get('manage') ?? []
+    const estimate: CostEstimate = wakes.length
       ? {
           pct: wakes.reduce((s, f) => s + f.pct, 0) / wakes.length,
           basis: 'kind',
           samples: wakes.length,
         }
       : { pct: MANAGER_WAKE_PCT, basis: 'default', samples: 0 }
+    ix.estimates.set(key, estimate)
+    return { ...estimate }
   }
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
-  const ix = indexOf(finished)
   const family = ix.byFamily.get(modelFamily(task.model)) ?? []
   const kind = task.kind ? (ix.byKind.get(task.kind) ?? []) : []
   const kindFamily = task.kind
@@ -213,7 +227,8 @@ export function expectedCost(
       samples: list.length,
     }
   }
-  return est
+  ix.estimates.set(key, est)
+  return { ...est }
 }
 
 export function expectedPct(
