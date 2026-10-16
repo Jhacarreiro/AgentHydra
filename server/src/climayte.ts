@@ -1910,8 +1910,11 @@ function recordStop(w: CliMayteWorker, at: Attempt, notice: string | null): void
   at.outcome = 'cancelled'
   at.notice = notice
   at.endedAt = Date.now()
-  charge(w, at)
-  forgetRead(at.log)
+  try {
+    charge(w, at)
+  } finally {
+    forgetRead(at.log)
+  }
 }
 
 /** A stopped worker's signal and settings files, removed once its CLI's tree is gone. */

@@ -427,6 +427,13 @@ routes keep their shapes, and brief/report reads take precedence. Packed history
 Finished workers skip running-attempt access, and spend settlement collects only open attempts
 instead of allocating intermediate arrays for every historical worker.
 
+Store checkpoints still inspect current worker statuses and serialize before yielding. Revived
+workers come from that pass's hot rows; tracked Map removals identify deleted filed records,
+avoiding a second walk through unchanged finished history. Done-file writes still precede
+`workers.json`, and removals follow it. No checkpoint is deferred or combined by this optimization.
+Cancellation releases the attempt's parsed-log cache even if spend calculation throws; its
+existing error handling and bounded recent summary cache remain intact.
+
 Default Claude parent lookups find only the first two slash/backslash positions rather than
 splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain
 their previous ownership results; named-session stores keep their prefixed-ancestor rules.

@@ -987,6 +987,10 @@ Conversations live under
 **HSwarm → CliMayte**, alongside its task list, with their own private-chat detail and transport.
 The detail supports UUIDs, reading, follow-up messages, extracted code, citations and opening by UUID.
 **Sign in** opens installed Chrome or Edge on a throwaway profile through zendriver. Claude messaging uses HTTP. ChatGPT restores saved cookies in one shared headless browser for its current first-party HTTP send, then verifies the reply over HTTP without resending; no email login is submitted. Each of at most three concurrent requests has its own disposable cookie context, cleared afterward. The empty browser closes after 60 seconds idle. Desk's Free runtime does not install Playwright or Camoufox.
+
+ChatGPT's small network-response status callback runs on Zendriver's event loop instead of
+dispatching each response to Python's executor. Blocking HTTP readback stays off the loop;
+account checks, Temporary Chat verification and the single-send guard remain unchanged.
 The verified conversation can supply the final reply directly when it fits the bounded IPC response,
 avoiding a duplicate read. Oversized or unavailable snapshots keep the HTTP readback; an invalid snapshot
 fails without another send.

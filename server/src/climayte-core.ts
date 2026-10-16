@@ -199,8 +199,39 @@ const isFinished = (w: CliMayteWorker): boolean =>
 /** Finished workers that have a file under done/, and the workers changed since the last save. */
 const filed = new Set<string>()
 const dirty = new Set<string>()
+/** Filed keys actually removed since the last checkpoint, not every finished worker on record. */
+const removedFiled = new Set<string>()
 
-export const workers = new Map<string, CliMayteWorker>()
+class WorkerMap extends Map<string, CliMayteWorker> {
+  // Production records keep key === id. Preserve the old full-scan behavior for unusual test/import maps.
+  private mismatchedKeys = new Set<string>()
+
+  override set(key: string, w: CliMayteWorker): this {
+    if (key === w.id) this.mismatchedKeys.delete(key)
+    else this.mismatchedKeys.add(key)
+    removedFiled.delete(key)
+    return super.set(key, w)
+  }
+
+  override delete(key: string): boolean {
+    // Even a key already absent from the Map may still name a filed checkpoint.
+    if (filed.has(key)) removedFiled.add(key)
+    this.mismatchedKeys.delete(key)
+    return super.delete(key)
+  }
+
+  override clear(): void {
+    for (const id of filed) removedFiled.add(id)
+    this.mismatchedKeys.clear()
+    super.clear()
+  }
+
+  hasMismatchedKeys(): boolean {
+    return this.mismatchedKeys.size > 0
+  }
+}
+
+export const workers = new WorkerMap()
 
 // FINISHED WORK KEEPS ITS LONG TEXT PACKED (2026-10-12). Every worker under done/ stayed in memory as
 // parsed text: 11,109 workers (141 MB of files) held 238 MB of the daemon's ~1 GB start, its largest
@@ -923,12 +954,28 @@ export function save(): void {
   // A revived worker's file (and a removed one's) goes only after workers.json is written: a
   // finished worker is filed before it leaves workers.json and unfiled after it is back there, so
   // a crash at any point leaves it in at least one of them.
-  for (const id of filed) {
-    const w = workers.get(id)
-    if (w && isFinished(w)) continue
-    files.set(donePath(id), null)
-    filed.delete(id)
+  if (workers.hasMismatchedKeys()) {
+    for (const id of filed) {
+      const w = workers.get(id)
+      if (w && isFinished(w)) continue
+      files.set(donePath(id), null)
+      filed.delete(id)
+    }
+  } else {
+    // The first pass already read current statuses. Only hot rows can have revived, and only
+    // keys removed from the Map can have disappeared; unchanged filed history needs no second walk.
+    for (const w of hot)
+      if (filed.has(w.id)) {
+        files.set(donePath(w.id), null)
+        filed.delete(w.id)
+      }
+    for (const id of removedFiled)
+      if (filed.has(id) && !workers.has(id)) {
+        files.set(donePath(id), null)
+        filed.delete(id)
+      }
   }
+  removedFiled.clear()
   queueStoreWrite(files, {
     path: STORE_SPEC.path,
     text: JSON.stringify({ workers: hot, perAccount, perAccountStrict }, null, 2),

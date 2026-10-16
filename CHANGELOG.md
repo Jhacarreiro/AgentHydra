@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Free browser responses avoid unnecessary background threads.** Lightweight network status callbacks run on the browser's existing event loop, preserving message verification and single-send behavior.
+- **CliMayte saves skip a redundant history scan.** Each checkpoint keeps its existing persistence order while checking only revived or removed files for cleanup. Cancelled attempts also release their parsed logs if spend calculation fails.
 - **Background diagnostics use less CPU.** The stall sampler runs less often while keeping boot-time capture and the same freeze warnings. CliMayte's brief reads also keep old result text compressed instead of expanding text they never return.
 - **Free continuations skip historical display formatting before sending.** Model selection and message identity checks read the same validated branch without rebuilding code blocks or citations. Completed replies still include their full display data.
 - **Transcript parent lookups create fewer temporary objects.** Ordinary Claude paths identify their owning session without splitting every nested path component. Named-session layouts keep their existing rules.

@@ -201,7 +201,7 @@ async def _answer_conversation_request(tab, zd, event, *, captured, dispatch, pr
 
 
 async def _arm_interception(tab, zd, *, captured, dispatch, prompt, model, existing, temporary):
-    def response(event):
+    async def response(event):
         if event.request_id == dispatch['network_id']:
             dispatch['status'] = int(event.response.status)
 
