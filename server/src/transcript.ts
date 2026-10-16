@@ -729,11 +729,17 @@ function lastIndexStartingWith(parts: string[], prefix: string): number {
   return -1
 }
 
-function claudeRecord(rel: string, mtimeMs: number, sizeBytes: number, store: ClaudeStore) {
+function claudeRecord(
+  rel: string,
+  mtimeMs: number,
+  sizeBytes: number,
+  store: ClaudeStore,
+  path = join(store.root, rel),
+) {
   return {
     session_id: claudeSessionId(rel, store),
     source: 'claude' as const,
-    path: join(store.root, rel),
+    path,
     project: rel.split(/[\\/]/)[0] ?? store.tool,
     mtime_ms: mtimeMs,
     size_bytes: sizeBytes,
@@ -757,6 +763,7 @@ function promoteOrphans(
   pending: Array<{
     parentId: string
     rel: string
+    path?: string
     store: ClaudeStore
     mtimeMs: number
     size: number
@@ -775,11 +782,11 @@ function promoteOrphan(
   c: PendingChild,
 ): void {
   if (known.has(c.parentId)) {
-    rememberChild(children, c.parentId, join(c.store.root, c.rel))
+    rememberChild(children, c.parentId, c.path ?? join(c.store.root, c.rel))
     return
   }
   const orphan = { ...c.store, idFrom: 'basename' as const, idPrefix: '' }
-  files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan))
+  files.push(claudeRecord(c.rel, c.mtimeMs, c.size, orphan, c.path))
 }
 
 /** {@link promoteOrphans} for the async build: tens of thousands of subagent files, so it hands the
@@ -1377,7 +1384,7 @@ async function buildClaudeRecordsAsync(
 ): Promise<void> {
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(store.glob, store.root)
-    const scanned = new Array<{ rel: string; mtimeMs: number; size: number } | null>(
+    const scanned = new Array<{ rel: string; path: string; mtimeMs: number; size: number } | null>(
       claudeRels.length,
     )
     const needsStat: Array<{ index: number; rel: string; path: string }> = []
@@ -1385,6 +1392,8 @@ async function buildClaudeRecordsAsync(
     // resolved callback promise per historical file on every sweep (tens of thousands of them).
     // Keep the exact freshness test and input order, yielding while inspecting cached entries;
     // only new, active or full-restat files enter the existing bounded filesystem pool.
+    // Carry this same absolute path into records and child promotion: a second join of every
+    // historical path normalizes and allocates it again without discovering anything new.
     const cachedSlice = timeSlice()
     for (let index = 0; index < claudeRels.length; index++) {
       if (cachedSlice.due()) await cachedSlice.pause()
@@ -1393,14 +1402,14 @@ async function buildClaudeRecordsAsync(
       statSeen.add(path)
       const known = claudeStatCache.get(path)
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
-        scanned[index] = { rel, mtimeMs: known.mtimeMs, size: known.size }
+        scanned[index] = { rel, path, mtimeMs: known.mtimeMs, size: known.size }
       else needsStat.push({ index, rel, path })
     }
     await mapPool(needsStat, INDEX_SCAN_WIDTH, async ({ index, rel, path }) => {
       try {
         const st = await fsSlot(() => statAsync(path))
         claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
-        scanned[index] = { rel, mtimeMs: st.mtimeMs, size: st.size }
+        scanned[index] = { rel, path, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         claudeStatCache.delete(path)
         scanned[index] = null
@@ -1416,7 +1425,7 @@ async function buildClaudeRecordsAsync(
         pendingChildren.push({ parentId: parent, ...f, store })
         continue
       }
-      const record = claudeRecord(f.rel, f.mtimeMs, f.size, store)
+      const record = claudeRecord(f.rel, f.mtimeMs, f.size, store, f.path)
       files.push(record)
       tops.push({ record, mtimeMs: f.mtimeMs, size: f.size })
     }

@@ -764,7 +764,15 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       (w.wave && w.kind !== 'manage' && events.some((e) => e.kind === 'asking')
         ? deps.workers().find((m) => m.kind === 'manage' && m.wave === w.wave)?.origin
         : undefined)
-    if (!origin || !reportsTo({ ...w, origin }, origin) || !events.length || pingOff()) return
+    // Worker text may be packed behind enumerable getters. Ownership needs only these
+    // three fields; spreading a history worker unpacks its reports on every heartbeat.
+    if (
+      !origin ||
+      !events.length ||
+      !reportsTo({ id: w.id, chat: w.chat, origin }, origin) ||
+      pingOff()
+    )
+      return
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {
       const group = workersOf(origin, w).filter((x) => x.group === w.group)

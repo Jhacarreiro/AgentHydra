@@ -42,14 +42,20 @@ def browser_slot(directory, *, wait):
         yield
 
 READY = r'''(async()=>{
- const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});
- if(!r.ok)return null;const s=await r.json();
  const visible=e=>e.getClientRects().length&&getComputedStyle(e).visibility!=='hidden';
- const composer=[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')].find(visible);
- return {email:s.user?.email,ready:document.readyState==='complete'&&!!s.accessToken&&!!composer,
+ const cues=()=>({
+ composer:[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')].find(visible),
  login:[...document.querySelectorAll('input[type="email"],input[type="password"]')].some(visible),
  challenge:[...document.querySelectorAll('iframe[src*="hcaptcha.com"][title*="challenge"],iframe[src*="recaptcha"][title*="challenge"]')].some(visible)||
-  [...document.querySelectorAll('h1,h2,[role="alert"]')].some(e=>visible(e)&&/verify you are human|complete the captcha|verification required/i.test(e.innerText))};
+  [...document.querySelectorAll('h1,h2,[role="alert"]')].some(e=>visible(e)&&/verify you are human|complete the captcha|verification required/i.test(e.innerText))});
+ const before=cues();
+ if(!before.composer&&!before.login&&!before.challenge)return {ready:false,login:false,challenge:false};
+ const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});
+ if(!r.ok)return null;const s=await r.json();
+ // Refresh the DOM after the request, as before: it can change while session lookup waits.
+ const {composer,login,challenge}=cues();
+ return {email:s.user?.email,ready:document.readyState==='complete'&&!!s.accessToken&&!!composer,
+ login,challenge};
 })()'''
 
 FOCUS = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')]
