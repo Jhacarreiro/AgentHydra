@@ -90,6 +90,11 @@ between server/ and web/.
   a Desk 2 task. Desk's design notes and audit tools (`desk/docs`, `desk/tools`) were not copied.
 - Bun for everything (`bun install`, `bun test`, `bun run`). Tests set `HYDRA_DESK_HOME` to a temp
   folder; never write to the real `~/.hydra-desk-2/` from a test.
+- `bun run test` runs `server/test-own-process/` as a `bun test` of its own after the main suite. It holds a file that
+  crashed the shared process: `free-request-coordinator.test.ts` runs a node:net server and its client in the test
+  process, and Bun 1.4.3 on Windows frees such a socket's state while a poll still holds it (a segfault in 3 of 4 full
+  runs, 2026-10-16; its header has the detail). In a test's own server, wait for an accepted socket's `close`; never
+  `destroy()` it.
 - Every `bun test` run from `desk2/` preloads `server/test/preload.ts` (`desk2/bunfig.toml`): removing the folder the
   suite runs in, or a folder holding it, throws, and `process.env` cannot be reassigned. A test restores only the env
   keys it changed: a `{ ...process.env }` copy holds Bun's upper-cased Windows keys, so assigning it back left
