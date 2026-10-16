@@ -1723,6 +1723,21 @@ Desktop account signed in on one PC is signed in on the other without the browse
   them together would let either PC's refresh sign the other out. A PC joins the store's copy only
   where it has none: a signed-out profile of the same folder name, else a new profile with that
   name (or `<name>-synced`) and number. From then on the later expiry among the grants wins.
+- A grant Anthropic revoked (2026-10-16, `server/src/core/revoked-grants.ts`) never lands and does
+  not count toward the later expiry, and each login carries the account's revoked-grant digests so
+  the other PC drops them too. The rules, and why a re-login does not replace such a grant, are in
+  REFERENCE.md, "A 429 can be a revoked login". Its prune writes config.json only when the file is
+  unchanged since it read it, so it never undoes a login a pass landed meanwhile; the
+  credential-writer ratchet (`scripts/checks/credential-writer-ratchet.mjs`) lists it as a login
+  writer with that reason.
+- Known hazard, cause unproven (measured 2026-10-16): a profile that joined the store's copy holds
+  the same claude.ai session cookie and the same rotating refresh-token family as the PC it came
+  from, so a refresh by either PC's app can leave the other's tokens dead; separate sign-ins (above)
+  avoid exactly that. Three accounts' desktop grants were revoked within a day of each other in
+  mid-October, and for one the other PC's copy showed a refresh 24 minutes before the last good read
+  here. Revocations of the same shape also happened in September, before login sync existed, so it
+  is not proven to be the cause. Sending only the sign-in cookies, so each PC makes its own grants,
+  would remove the hazard; that change waits on the owner.
 - Cookies are read only while the profile is closed (Chromium locks the database); a pass while it
   runs uploads the new tokens with the cookies the store already has, and the profile's own cookies
   follow once it closes (an upload only when they differ from the store's). The same tokens with
@@ -1735,13 +1750,18 @@ Desktop account signed in on one PC is signed in on the other without the browse
   were open, so their cookies follow), and two landed logins answered live from Anthropic. The run
   found both gaps above (no cookies on a PC with no profile; later cookies ignored), each now
   pinned by the test.
-- A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one.
+- A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one, and
+  reaches every PC (2026-10-02): the account's store row turns into a signed-out marker, and each
+  other PC signs its profile out once that profile's app is closed, unless it was signed in after
+  the logout. A Log out only edits files on each PC; it never asks Anthropic to end the login.
 - Windows only (elsewhere the profile key is in the Keychain or a keyring).
 - The test (`server/tests/desktop-login-sync.test.ts`, Windows) proves the key round trip, a
   store-only account landing in a new profile under its own key with the cookie in Chromium's
   format, the later expiry winning both ways, a separate sign-in left alone, and a left-out login
-  staying put. Not proven by a test: that Claude Desktop itself accepts a landed profile; that
-  takes opening one, which only the owner does.
+  staying put. `server/tests/revoked-grants.test.ts` (Windows) proves a usage check taking the
+  revoked grants out of a closed profile while keeping the live one, and a prune leaving alone a
+  login that landed while it waited. Not proven by a test: that Claude Desktop itself accepts a
+  landed profile; that takes opening one, which only the owner does.
 
 ### One sign-in for desktop and CLI: `server/src/core/desktop-cli-feed.ts` (owner, 2026-10-01)
 
