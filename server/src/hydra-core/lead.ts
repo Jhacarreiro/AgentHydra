@@ -164,11 +164,7 @@ ${message}`
     pick = { id: wordLead(entries, message)?.id ?? null, path: 'words', ms: 0 }
   else {
     const budget = opts.late ? LATE_BUDGET_MS : budgetMs
-    const asked = askLead(
-      addon,
-      { message, entries, current: opts.current ?? null },
-      budget,
-    )
+    const asked = askLead(addon, { message, entries, current: opts.current ?? null }, budget)
     const then = opts.late
     pick = then
       ? await pickByBudget(asked, budgetMs, toPick, opts.log, (lp) => {
@@ -191,12 +187,14 @@ function askLead(
   },
   budget: number,
 ): Promise<Decision> {
-  const answer: Promise<Decision> = (addon.lead?.({
-    message: ask.message,
-    entries: ask.entries,
-    current: ask.current?.id ?? null,
-    budgetMs: budget,
-  }) ?? Promise.resolve(null)).then((r) => ({ answer: r?.slug ?? 'none' }))
+  const answer: Promise<Decision> = (
+    addon.lead?.({
+      message: ask.message,
+      entries: ask.entries,
+      current: ask.current?.id ?? null,
+      budgetMs: budget,
+    }) ?? Promise.resolve(null)
+  ).then((r) => ({ answer: r?.slug ?? 'none' }))
   return answer.catch(
     (err): Decision => ({
       answer: null,

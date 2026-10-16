@@ -393,7 +393,7 @@ test('?ask=1 hands each waiting question and its choices to the CreAitor and sho
   const tool = join(dir, 'creaitor.js')
   // Reads its command line as strictly as the CreAitor's argparse (a choice that starts with a dash and is not passed
   // as --option=value is refused) and answers with the last choice, so the row shows the choices arrived intact.
-  const flags = { repo: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
+  const flags = { repo: 's', folder: 's', timeout: 's', json: 'b', session: 's', via: 's', option: 'm' }
   const options = Object.fromEntries(Object.entries(flags).map(([k, t]) => [k, { type: t === 'b' ? 'boolean' : 'string', multiple: t === 'm' }]))
   writeFileSync(tool, `const { values: v, positionals: p } = require('node:util').parseArgs({ args: process.argv.slice(2), allowPositionals: true, options: ${JSON.stringify(options)} }); const o = v.option ?? []; console.log(JSON.stringify({ verdict: o.length ? 'decide' : 'escalate', option: o.at(-1) ?? '', answer: p[1], confidence: 0.9, basis: [v.session, v.via].filter(Boolean), need_line: o.length ? null : '🔴 NEED: x', mode: 'shadow' }))\n`)
   process.env.HYDRA_DESK_CREAITOR = tool
