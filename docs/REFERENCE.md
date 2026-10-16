@@ -687,6 +687,14 @@ wave judges running git, the account map reading every profile's past logins, th
 CliMayte's finished workers, a cancel's `taskkill`; each now runs off the thread), so read these lines before
 profiling a second daemon.
 
+A steady load never blocks long enough to leave a `STALL` line, so the same sampler keeps every sample since
+boot: `GET /api/health/profile?top=0&heap=1` answers `since`, `samples` and the `top`, `inner` and `outer` rows
+(`top=0` lists every row, so two reads can be subtracted), with `memory` (`process.memoryUsage()`) and, with
+`heap=1`, the JS heap by object type. The counts only grow: read it twice a minute apart and subtract, and
+compare only two reads with the same `since`, at steady state, since a read soon after a restart is mostly boot.
+That is how the CliMayte tick was found to take about half the daemon's samples on 2026-10-15 (a98f9edd):
+1,674 a minute before, 901 after.
+
 ## Auto-update
 
 Background self-update, on by default since 2026-10-05 (it restarts the daemon; turn it off in
@@ -1012,6 +1020,19 @@ same process to happen at all. Two rules came out of chasing it:
   ~1-in-3 failure rate is roughly a 0.2% chance of coincidence.
 - **Anything keyed on mtime alone needs a tiebreaker** (size, or an explicit generation counter),
   because two writes can share one tick and the second one then looks like no write at all.
+- **A test that reads people brings its own people door.** Managers, leads and seat personas come only
+  from the people add-on, which reads this PC's `~/.agenthydra/people-store.json` or the sue-dredd
+  checkout beside it, so a test without its own door passes or fails by machine: on 2026-10-15 the
+  lead-pick and core-slot tests failed on a PC that has the real door.
+  `usePeopleDoor()` gives a test a scratch door and forgets it after (`server/tests/hydra-core-fixture.ts`,
+  `desk2/server/test/people-addon-fixture.ts`).
+- **A file that moves `HOME` or `USERPROFILE` puts it back.** Every later file in the run inherits it:
+  desk2's `people-setup.test.ts` pointed both at a folder it then removed, and the headless Chrome
+  tests in later files never opened their debugging port (38 failures over three runs, each file green
+  alone). desk2's preload now puts `HOME`, `USERPROFILE`, `LOCALAPPDATA` and `APPDATA` back between
+  files, and the next file's first test names the one that moved them (`desk2/server/test/preload.ts`).
+  In both suites, `scripts/checks/test-stub-outlives-its-file.mjs` rule E flags a home or temp
+  variable set at module scope or in a before hook and never put back.
 - **A folder has no size to break the tie, so a cached listing follows the racy-git rule.** The
   folder tree (`server/src/core/folder-tree.ts`) records when it listed each folder and lists it again
   until that listing is at least `RACY_MS` (2 s) after the folder's mtime. Trusting an unchanged mtime

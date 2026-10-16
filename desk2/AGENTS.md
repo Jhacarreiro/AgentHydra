@@ -98,6 +98,10 @@ between server/ and web/.
   A test that swaps a global (`fetch`, `WebSocket`, a DOM stand-in) saves the real one first and puts it back in an
   `afterAll` or `afterEach`: on 2026-10-12 a store test's stubs, left behind, failed 286 tests in later files. The
   preload names the file that leaves one swapped (the next file's first test fails with it) and puts it back.
+  It does the same for `HOME`, `USERPROFILE`, `LOCALAPPDATA` and `APPDATA` (2026-10-15: a file that moved them to a
+  folder it then removed left later files' headless Chrome without a debugging port, 38 failures over three runs).
+  A test that reads people (a lead, a manager, a seat's persona) brings its own people door, `usePeopleDoor()` in
+  `server/test/people-addon-fixture.ts`: without one it reads this PC's real door, and passes or fails by machine.
   The preload also gives each test file a TEMP folder of its own and removes it after that file, while a shared module
   (a fixture under `server/test/fixtures/`) is loaded once per run: such a module makes its temp folder when it is
   called, never at import (2026-10-15: a root made at import was gone for every later file, and 5 core-slot tests

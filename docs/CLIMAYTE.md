@@ -1115,13 +1115,16 @@ effect. Placement weighs the accounts; this weighs the machine.
   check goes red for the machine).
 - **The gate** (startOn, every start path: the pick, a spill, a short start): a start waits while it
   would leave free RAM under 8% of the machine (`FREE_FLOOR_SHARE`, fairjob's floor) or, on Windows,
-  commit under 5% of its limit (`COMMIT_FLOOR_SHARE`). The commit check counts every worker as
+  commit under 12% of its limit (`COMMIT_FLOOR_SHARE`; 5% until 2026-10-09). The commit check counts every worker as
   `WORKER_COMMIT_BYTES` (0.75 GB private: 24.5 GB over the 33 worker trees measured that day). The
   RAM check counts working set, not private bytes (2026-10-06: about 0.45 GB a grown tree, learned
   as the median of workers older than `RAMP_MS`, re-read each minute, clamped 0.25-1.0 GB): free RAM
   already excludes what running workers hold, so a worker that started within `RAMP_MS` (2 minutes)
   reserves only what it has left to grow (its tree's working set read now, runner pid and
-  descendants), a tree that cannot be read and the start itself reserve the full amount.
+  descendants), a tree that cannot be read and the start itself reserve the full amount. A tick that
+  may start a worker reads those trees anew. One with nothing due, or a status read, reuses a reading
+  of the same runners under `GROWTH_REUSE_MS` (3 s) old, so no start is ever decided on a reused
+  reading (`growthOf`, since ff394bfc).
 - **Held, not refused:** the task stays `queued` with "Waiting for memory: ..." (journaled once, not
   every tick) and starts on the first tick with room, highest priority first (`dueOrder`). Nothing
   running is stopped or slowed. The spill and start-short journal lines are written only when the
