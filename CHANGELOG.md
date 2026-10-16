@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Large Free queues release waiting Python processes.** On Windows, excess ChatGPT requests keep small validated snapshots while waiting for the same three browser slots. Account locks, cookie updates and interrupted-chat recovery stay owned through completion; ordinary requests keep their existing path and all helpers remain hidden.
 - **Free replies use less temporary memory.** Subprocess output decodes without duplicating its byte buffer. Expired recovery replies also clear during normal maintenance when no account needs a refresh, with the same recovery window and active-job protection.
 - **Queued Free continuations release old transcript data sooner.** ChatGPT keeps only the branch reference and validated previous message IDs while waiting to send. Model selection, privacy checks and complete final replies remain unchanged.
 - **CliMayte skips queue snapshots that cannot be uploaded yet.** Background sync avoids rebuilding, compressing and encrypting a large queue during its existing upload cooldown. Other PCs' updates still download on the same schedule.

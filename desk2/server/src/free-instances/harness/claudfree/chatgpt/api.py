@@ -267,8 +267,13 @@ class ChatGPTClient(Client):
                 model=model,
             ) from None
         registry.status(entry["chat_id"], "available")
+        return self._chat_result(entry, body, messages, reply, complete, measurements)
+
+    @staticmethod
+    def _chat_result(entry, body, messages, reply, complete, measurements):
+        """Render one confirmed reply without account, registry or filesystem access."""
         return {
-            **self._read_result(entry, body["conversation_id"], messages),
+            **ChatGPTClient._read_result(entry, body["conversation_id"], messages),
             "response": reply["text"],
             "model": reply["model"],
             "message_id": reply["id"],

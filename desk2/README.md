@@ -998,6 +998,19 @@ paths: native API failure or legacy file contention returns to the original scan
 remaining deadline. File ownership releases before mutex ownership; abandoned mutexes recover
 after a process exits. Other platforms keep the existing file-lock queue.
 
+On Windows, requests admitted after the first three concurrent ChatGPT sends use a server-owned
+request coordinator. Each preflight runs immediately in a short-lived HTTP process; queued work
+retains cookies, headers and validated branch IDs rather than a full waiting interpreter. A second
+GET-only phase confirms the broker's already-sent reply. The account's original file lock remains
+held continuously through both phases and final cookie/registry persistence. Browser admission
+keeps its original 120-second anchor, and one 300-second outer deadline spans the entire request.
+The managed `pythonw.exe` launcher and native process jobs contain phase cancellation and crashes.
+Cancellation waits for the broker's context-disposal receipt before releasing account ownership;
+unconfirmed cleanup quarantines that account and drains the coordinator. No send is replayed after
+a coordinator write attempt. Before dispatch, an unavailable coordinator uses the existing path.
+The idle coordinator exits after 60 seconds, except when it must retain an unconfirmed cleanup lease
+for review. Standalone CLI requests and other commands stay unchanged.
+
 AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
 timer releases finished batches even when no later tool call arrives; pending work remains
 available until it settles. This releases daemon memory while keeping stored account/thread metadata intact.
