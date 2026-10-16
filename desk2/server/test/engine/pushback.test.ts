@@ -39,6 +39,12 @@ describe('classifyTurn', () => {
     expect(classifyTurn('end_turn', text).cls).toBe('pushback')
   })
 
+  test('asking for permission is its own pushback (its word boundaries were backspace bytes and never matched)', () => {
+    for (const text of ['I need your permission to delete the branch.', "I won't push without your explicit approval."]) {
+      expect(classifyTurn('end_turn', text)).toEqual({ cls: 'pushback', label: 'asks permission' })
+    }
+  })
+
   test('is case-insensitive', () => {
     expect(classifyTurn('end_turn', 'I CAN’T HELP with this.')).toEqual({ cls: 'pushback', label: "can't help" })
   })
