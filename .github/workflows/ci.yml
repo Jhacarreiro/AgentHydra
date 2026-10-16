@@ -226,6 +226,13 @@ jobs:
       - name: Guardrail (only the deliberate owners write a login's credentials)
         run: bun scripts/checks/credential-writer-ratchet.mjs
 
+      # Fails if a tracked .ts/.vue/.py/.js/.mjs file holds a raw control byte (anything below 0x20
+      # but TAB, LF and CR). pushback.ts carried four backspace bytes where its regex meant `\b`
+      # from d5e3904b to 2026-10-16, most likely written through a shell that halves backslashes,
+      # so the pattern never matched and an editor showed nothing wrong. See the check's header.
+      - name: Guardrail (no raw control bytes in source)
+        run: bun scripts/checks/raw-control-bytes-in-source.mjs
+
       - name: Test
         # ⛔ SERIAL ON PURPOSE. `bun run test` is --parallel=4 for a fast local loop (34.9s
         # -> 22.1s); CI is NOT, and the difference is deliberate rather than an oversight.

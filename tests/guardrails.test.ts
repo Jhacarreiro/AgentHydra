@@ -13,6 +13,7 @@
 // the fixed one. A guardrail that cannot fail is not a guardrail.
 
 import { afterEach, describe, expect, test } from 'bun:test'
+import { execFileSync } from 'node:child_process'
 import { mkdirSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -34,6 +35,15 @@ const CHECK_FILES = readdirSync(CHECKS_DIR)
 // Assembled at runtime, never written as a contiguous literal in this file's source: see the
 // wmi-commandline-query-self-match fixtures below for why.
 const CMD_LINE = 'Command' + 'Line'
+
+// raw-control-bytes-in-source.mjs scans this file as well, so its fixtures build the bytes at runtime
+// and take the escaped spelling as String.raw, which no shell or editor can turn into the byte.
+const BACKSPACE = String.fromCharCode(0x08)
+const SOH = String.fromCharCode(0x01)
+const asksPermission = (boundary: string) =>
+  `export const ASKS = /${boundary}(?:with|need) your (?:permission|approval)${boundary}/i\n`
+const dedupKey = (sep: string) =>
+  `const hex = await sha256Hex(\`\${scope}${sep}\${key}${sep}\${normalized}\`)\n`
 
 // Bespoke broken / fixed text for each check that exports findViolations, written from the real bug
 // each check's own header comment documents, not a synthetic near-miss. A check that exports
@@ -78,6 +88,24 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       app.post('/api/cli-instances/:id/launch', (c) => c.json(launchCliInstance(c.req.param('id'))))
       // app.post('/api/instances/:dir/open', async (c) => openInstance(c.req.param('dir')))
       `,
+    ],
+  },
+  'raw-control-bytes-in-source.mjs': {
+    broken: [
+      // pushback.ts's 'asks permission' regex as it stood from d5e3904b to 2026-10-16: backspace
+      // bytes where the word boundary was meant, so the pattern could only match a backspace.
+      asksPermission(BACKSPACE),
+      // incidents.ts's dedup key: SOH bytes as separators inside a template literal. Harmless at
+      // runtime, invisible in an editor, and the same class of byte.
+      dedupKey(SOH),
+      // ESC is no exception: no tracked file needs it raw.
+      `console.log('${String.fromCharCode(0x1b)}[31mred')\n`,
+    ],
+    fixed: [
+      asksPermission(String.raw`\b`),
+      dedupKey(String.raw`\x01`),
+      // TAB, CRLF line endings and non-ASCII text are all ordinary source.
+      'function f() {\r\n\treturn "café — ok"\r\n}\r\n',
     ],
   },
   'ps1-read-as-ansi.mjs': {
@@ -1217,4 +1245,65 @@ db.close()
 `
     expect(findViolations(readonly)).toHaveLength(0)
   })
+})
+
+// raw-control-bytes-in-source.mjs, fired at a PLANTED git repo: a tracked file carrying pushback.ts's
+// backspace where the regex word boundary was meant must fail the run and name its file and line, the
+// same file written with the escape passes, and an untracked file is never read (the check judges what
+// git tracks, so scratch files and node_modules stay out of it). A root it cannot list fails too.
+describe('raw-control-bytes-in-source.mjs — planted backspace', () => {
+  let root = ''
+  afterEach(() => {
+    if (root) rmSync(root, { recursive: true, force: true })
+    root = ''
+  })
+  const write = (files: Record<string, string>) => {
+    for (const [rel, text] of Object.entries(files)) {
+      mkdirSync(join(root, rel, '..'), { recursive: true })
+      writeFileSync(join(root, rel), text)
+    }
+  }
+  const plant = (tracked: Record<string, string>, untracked: Record<string, string> = {}) => {
+    root = mkdtempSync(join(tmpdir(), 'raw-control-bytes-'))
+    const git = (...args: string[]) =>
+      execFileSync('git', args, { cwd: root, stdio: 'ignore', windowsHide: true })
+    git('init', '-q')
+    write(tracked)
+    git('add', '--', ...Object.keys(tracked))
+    write(untracked)
+  }
+  const load = async () =>
+    import(pathToFileURL(join(CHECKS_DIR, 'raw-control-bytes-in-source.mjs')).href)
+
+  test('fails on a tracked file holding a raw backspace, naming the file and line', async () => {
+    plant({
+      'src/engine/pushback.ts': `// phrases\n${asksPermission(BACKSPACE)}`,
+      'src/clean.ts': 'export const x = 1\n',
+    })
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(true)
+    expect(
+      result.findings.map((f: { file: string; line: number }) => `${f.file}:${f.line}`),
+    ).toEqual(['src/engine/pushback.ts:2'])
+    expect(result.report).toContain('src/engine/pushback.ts:2')
+    expect(result.report).toContain('0x08 backspace')
+  }, 30_000)
+
+  test('passes once the byte is the escape, and never reads an untracked file', async () => {
+    plant(
+      { 'src/engine/pushback.ts': `// phrases\n${asksPermission(String.raw`\b`)}` },
+      { 'scratch/notes.ts': asksPermission(BACKSPACE) },
+    )
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(false)
+    expect(result.report).toContain('1 tracked source file(s)')
+  }, 30_000)
+
+  test('a root with no tracked source file fails rather than passing on nothing read', async () => {
+    root = mkdtempSync(join(tmpdir(), 'raw-control-bytes-'))
+    write({ 'src/clean.ts': 'export const x = 1\n' })
+    const result = await (await load()).audit.run({ root })
+    expect(result.failed).toBe(true)
+    expect(result.findings).toHaveLength(1)
+  }, 30_000)
 })
