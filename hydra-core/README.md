@@ -52,7 +52,7 @@ The installer writes these entries (the command path is the absolute path of `ho
 "Stop":             [ { "hooks": [ { "type": "command", "command": "node \"<repo>/hydra-core/hook.mjs\"" } ] } ]
 ```
 
-Other hooks are left alone. A Manager Hydra router entry (any command ending in `managers/router.mjs`) is removed, and its group is saved in `router-entry.json`. `--uninstall` removes only the core entries and puts the router back where it was.
+Each event keeps one core entry. Installing from another checkout points the existing entry at this checkout's `hook.mjs` and removes any further `hydra-core/hook.mjs` entries, so moving the hook between checkouts never leaves two. Other hooks are left alone. A Manager Hydra router entry (any command ending in `managers/router.mjs`) is removed, and its group is saved in `router-entry.json`. `--uninstall` removes only the core entries and puts the router back where it was.
 
 ## Placement
 
