@@ -129,9 +129,14 @@ never retried. Where a provider file sets `[limits]`, a request waits unsent for
 prefixes such as `openai:`, `baseten:`, `chutes:`, `xai:`, `nebius:`, `together:`, `stepfun:`, `inworld:` and
 `ovhcloud:`; these models become candidates for automatic routing only after evaluation. OVHcloud AI Endpoints needs
 no key or account: its models run on OVHcloud's servers for free at 2 requests a minute per model, so they are named
-(`ovhcloud-gpt-oss-120b`, `ovhcloud:<catalog id>`) and never picked by AUTO. StepFun and DashScope keys are tied to a
-region: a China-issued key answers 401 on the international endpoint, so a machine holding them sets `base_url` in
-`$HSWARM_HOME/providers/<provider>.toml` to the China endpoint (`api.stepfun.com/v1`, `dashscope.aliyuncs.com/compatible-mode/v1`).
+(`ovhcloud-gpt-oss-120b`, `ovhcloud:<catalog id>`) and never picked by AUTO. DashScope, StepFun, Moonshot and Z.ai keys are
+tied to the region that issued them: a China-issued key answers 401 on the international endpoint. Their provider files
+list every region (`region_base_urls`), and HSwarm finds each key's own by itself: a key's first 401 (in a chat call or
+`hswarm keys` checking it) asks the provider's other listed regions for their free model list once, and the region that
+answers 200 is kept on that key's shared state, by fingerprint. From then on its chat calls, the model watch and `cc`
+runs send it there, so keys from different regions share one pool and no per-machine `base_url` overlay is needed. A key
+is never sent to a host its provider file does not list, and one every region refuses is dead as before. `hswarm keys`
+shows each provider's placed keys under `regions`.
 
 Benchmarked models from OpenAI, Z.ai, Hugging Face, Baseten, Chutes and Together are ranked routes (`rank:<benchmark slug>:<provider>`) in their provider files, priced from each provider's own published rate in `data/prices.json`. Nebius's are priced from its own model listing (`/v1/models?verbose=true`), the only place it publishes per-token rates. StepFun has none: its live model IDs are not the ones Artificial Analysis scores, and it prices in yuan.
 

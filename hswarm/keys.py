@@ -102,6 +102,9 @@ def report(only: str | None = None, *, verbose: bool = True, counts_only: bool =
             "disabled": sum(1 for r in rows if r["disabled"]),
             "free_only": sum(1 for r in rows if r["free_only"]),
         }
+        placed = [r["region"] for r in rows if r.get("region")]
+        if placed:  # keys served on another of the provider's regions than base_url (client.find_region), per region
+            entry["regions"] = {u: placed.count(u) for u in dict.fromkeys(placed)}
         entry["limits"] = keylimits.describe(name)
         if entry["limits"]:
             entry["keys_at_limit"] = keylimits.keys_at_limit(name, keys)
@@ -210,7 +213,7 @@ async def check(provider: str, fingerprint: str) -> dict:
         if model_check:
             await _check_by_model(provider, spec, key)
         else:
-            await _check_by_get(provider, spec, key, path)
+            await _check_by_get(provider, spec, key, path, pool)
     except ApiError as e:
         if _is_rejection(e, service):
             pool.disable(key, reason=f"{provider} rejected this key (HTTP {e.status})", status=e.status)
@@ -235,7 +238,10 @@ async def _check_by_model(provider: str, spec: dict, key: str) -> None:
             raise ApiError(r.status_code, r.text, provider)
 
 
-async def _check_by_get(provider: str, spec: dict, key: str, path: str) -> None:
+async def _check_by_get(provider: str, spec: dict, key: str, path: str, pool: KeyPool) -> None:
+    """The free GET, on the key's own region when one was found for it. A 401 there asks the provider's other listed
+    regions (find_region): a China-issued key is accepted where it was issued, not rejected for where it was asked."""
+    from .client import find_region
     from .provider_auth import request_headers
     from .usage import ApiError
 
@@ -245,8 +251,12 @@ async def _check_by_get(provider: str, spec: dict, key: str, path: str) -> None:
 
         headers = {**(spec.get("headers") or {}), "x-api-key": key, "anthropic-version": anthropic_native.VERSION}
         headers.pop("Authorization", None)
-    async with httpx.AsyncClient(base_url=spec["base_url"], timeout=30, follow_redirects=False) as client:
+    base = pool.base_url(key) or spec["base_url"]
+    async with httpx.AsyncClient(base_url=base, timeout=30, follow_redirects=False) as client:
         response = await client.get(path, headers=headers)
+        if response.status_code == 401 and not path.startswith(("http://", "https://")) and (
+                found := await find_region(client, pool, key, base, headers, path)):
+            response = found[1] or await client.get(found[0] + path, headers=headers)
     if not response.is_success:
         raise ApiError(response.status_code, response.text, provider)
 

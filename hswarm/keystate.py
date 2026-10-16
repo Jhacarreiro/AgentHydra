@@ -25,7 +25,8 @@ from . import config
 
 LOCK_WAIT_S = 2.0          # a write waits this long for another process's write before giving up (the pool keeps its own copy)
 TOMBSTONE_KEEP_S = 86400.0 # an emptied row is kept this long so every process sees it go (readers re-sync every few seconds)
-_READINGS = ("balance_usd", "balance_at", "probed_at", "free_left")
+# What a recovery keeps: the last balance reading, and the region the key is served on (client.find_region).
+_READINGS = ("balance_usd", "balance_at", "probed_at", "free_left", "base_url")
 _KEEP = (*_READINGS, "tools_refused_at")  # what a key's row keeps once its rest has run out (prune)
 _SCHEMA = """
 CREATE TABLE IF NOT EXISTS keys (fp TEXT PRIMARY KEY, entry TEXT NOT NULL, rev INTEGER NOT NULL, ts REAL NOT NULL) WITHOUT ROWID;

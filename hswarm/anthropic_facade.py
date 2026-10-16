@@ -425,9 +425,19 @@ class Facade:
         except (TypeError, AttributeError, KeyError, ValueError) as e:
             return await _respond(writer, 400, error_body(400, f"cannot convert the request: {type(e).__name__}: {e}"))
         auth = {"Authorization": "Bearer " + key, **(self.spec.get("headers") or {})}
+        # A provider that sells region-locked keys (config.regions): the run's key goes to the region it was found served
+        # on, and a 401 asks the provider's other regions once (client.find_region), as a ChatClient call does.
+        pool = None
+        if key and len(config.regions(self.provider)) > 1:
+            from .client import KeyPool
+
+            pool = KeyPool([key], self.provider)
+        base = (pool and pool.base_url(key)) or self.spec["base_url"]
         try:
             if not req.get("stream"):
-                r = await self._http.post("/chat/completions", json=req, headers=auth)
+                r = await self._http.post(base + "/chat/completions", json=req, headers=auth)
+                if r.status_code == 401 and (moved := await self._relocated(pool, key, base, auth)):
+                    r = await self._http.post(moved + "/chat/completions", json=req, headers=auth)
                 if r.status_code >= 400:
                     return await _respond(writer, r.status_code, error_body(r.status_code, _upstream_message(r.text, key)),
                                           r.headers.get("retry-after"))
@@ -436,15 +446,28 @@ class Facade:
                 except ValueError:  # a 200 that is not JSON (a proxy's HTML page) still gets an answer, not a dropped socket
                     return await _respond(writer, 502, error_body(502, f"{self.provider} sent a 200 that is not JSON: {_upstream_message(r.text, key)[:200]}"))
                 return await _respond(writer, 200, to_message(reply, model, self.extras))
-            async with self._http.stream("POST", "/chat/completions", json=req, headers=auth) as r:
-                if r.status_code >= 400:
-                    text = (await r.aread()).decode("utf-8", "replace")
-                    return await _respond(writer, r.status_code, error_body(r.status_code, _upstream_message(text, key)),
-                                          r.headers.get("retry-after"))
-                writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
-                await self._relay(r, StreamConverter(model, self.extras, estimate_tokens(body)), writer, key)
+            for first in (True, False):
+                async with self._http.stream("POST", base + "/chat/completions", json=req, headers=auth) as r:
+                    if r.status_code == 401 and first and (moved := await self._relocated(pool, key, base, auth)):
+                        base = moved
+                        continue
+                    if r.status_code >= 400:
+                        text = (await r.aread()).decode("utf-8", "replace")
+                        return await _respond(writer, r.status_code, error_body(r.status_code, _upstream_message(text, key)),
+                                              r.headers.get("retry-after"))
+                    writer.write(b"HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nCache-Control: no-cache\r\nConnection: close\r\n\r\n")
+                    return await self._relay(r, StreamConverter(model, self.extras, estimate_tokens(body)), writer, key)
         except httpx.HTTPError as e:
             await _respond(writer, 502, error_body(502, f"{self.provider} unreachable: {type(e).__name__}: {e}"))
+
+    async def _relocated(self, pool, key: str, refused: str, auth: dict) -> str | None:
+        """The region the run's key is served on after a 401 on `refused` (client.find_region), or None."""
+        if pool is None:
+            return None
+        from .client import find_region
+
+        found = await find_region(self._http, pool, key, refused, auth)
+        return found[0] if found else None
 
     @staticmethod
     async def _relay(r: httpx.Response, conv: StreamConverter, writer: asyncio.StreamWriter, key: str) -> None:

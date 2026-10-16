@@ -746,7 +746,7 @@ class KeyPool:
             e["last"] = dt.datetime.now(dt.timezone.utc).isoformat(timespec="seconds")
             self._put(tx, key, e)
 
-    _READINGS = ("balance_usd", "balance_at", "probed_at", "free_left")
+    _READINGS = keystate._READINGS
 
     @staticmethod
     def _disable_entry(e: dict, reason: str, status: int | None = None, now: float | None = None, free_ok: bool | None = None) -> dict:
@@ -921,6 +921,22 @@ class KeyPool:
         now = time.time()
         return sum(1 for k in self._keys if self._parked(k, now) and self.enable(k))
 
+    def base_url(self, key: str, fresh: bool = False) -> str | None:
+        """The base URL find_region found `key` served on, while the provider still lists it (config.regions); None for a
+        key served on the provider's own base_url, or not asked about yet. `fresh` reads the shared state first."""
+        self._load(force=fresh)
+        url = self._entry(key).get("base_url")
+        return url if url and url in config.regions(self.provider) else None
+
+    def place(self, key: str, base_url: str) -> None:
+        """Keep the region `key` is served on, on its shared row (its fingerprint, never the key), written at once so every
+        process sends it there from now on."""
+        with self._locked() as tx:
+            self._load(force=True, tx=tx)
+            e = dict(self._entry(key))
+            e["base_url"] = base_url
+            self._put(tx, key, e)
+
     def disabled(self) -> list[str]:
         """Fingerprints currently in the disabled slot, including any an older build left parked on a timer."""
         self._load(force=True)
@@ -961,7 +977,8 @@ class KeyPool:
             now = time.time()
             e = dict(self._entry(key))
             if learned and usable:
-                e = {"balance_usd": usd, "balance_at": now}  # a positive reading clears rest, strikes and disabling
+                # A positive reading clears rest, strikes and disabling; the key's region stays.
+                e = {"balance_usd": usd, "balance_at": now, **({"base_url": e["base_url"]} if e.get("base_url") else {})}
             else:
                 # Either the probe learned nothing, or it read an empty balance for a provider whose number is not
                 # authority (OpenRouter). Keep the reading for the report, keep the disabling as it stands.
@@ -1060,6 +1077,7 @@ class KeyPool:
         if reload:
             self._load(force=True)
         now = time.time()
+        regions = config.regions(self.provider)
         out = []
         for k in self._keys:
             e = self._entry(k)
@@ -1078,6 +1096,7 @@ class KeyPool:
                 "broke": self._parked(k, now),
                 "balance_usd": e.get("balance_usd"),
                 "balance_age_s": round(now - float(e["balance_at"]), 1) if e.get("balance_at") else None,
+                "region": e.get("base_url") if e.get("base_url") in regions else None,
             })
         return out
 
@@ -1170,6 +1189,62 @@ def model_rows(body: dict | list) -> list:
     return body if isinstance(body, list) else (body.get("data") or [])
 
 
+_LOCATING: dict[tuple, asyncio.Future] = {}  # (provider, fingerprint, path) -> the region ask in flight for that key
+
+
+def _probe_path(spec: dict) -> str | None:
+    """The free authenticated GET a region is asked with: the provider's credential check, else its model list, as a path
+    under each region's base URL."""
+    for path in (spec.get("check_path"), spec.get("models_path")):
+        if path and not str(path).startswith(("http://", "https://")):
+            return str(path)
+    return None
+
+
+async def find_region(http: httpx.AsyncClient, pool: KeyPool, key: str, refused: str, headers: dict,
+                      path: str | None = None) -> tuple[str, httpx.Response | None] | None:
+    """Where `key` is served, after it answered 401 on the base URL `refused`. DashScope, StepFun, Moonshot and Z.ai sell
+    keys bound to the region that issued them, and a China key answers 401 on the international endpoint the provider
+    file names (measured 2026-10-16: all 30 DashScope keys and the StepFun key on one machine, which looked revoked until
+    a hand-written per-machine base_url overlay that the other machine never had).
+
+    Each of the provider's other listed regions (config.regions, and no other host) is asked once for the free `path`
+    (default: its credential check or model list) with this key. The first that answers 200 is kept on the key's shared
+    row (KeyPool.place) and returned with that answer: (base URL, the 200). A region another request found meanwhile is
+    returned with no answer, and nothing is asked. None when the provider lists no other region or none serves the key:
+    the 401 then counts against the key as it always did. Concurrent asks for one key share one round of GETs."""
+    path = path or _probe_path(config.PROVIDERS.get(pool.provider, {}))
+    others = [u for u in config.regions(pool.provider) if u != refused.rstrip("/")]
+    if not path or not others or len(config.regions(pool.provider)) < 2:
+        return None
+    known = pool.base_url(key, fresh=True)
+    if known and known != refused.rstrip("/"):
+        return known, None
+    ck = (pool.provider, config.fingerprint(key), path)
+    loop = asyncio.get_running_loop()
+    if (running := _LOCATING.get(ck)) is not None and running.get_loop() is loop:
+        found = await asyncio.shield(running)
+        return (found[0], None) if found else None
+    fut: asyncio.Future = loop.create_future()
+    _LOCATING[ck] = fut
+    found = None
+    try:
+        for base in others:
+            try:
+                r = await http.get(base + path, headers=headers)
+            except httpx.HTTPError:
+                continue
+            if r.status_code == 200:
+                pool.place(key, base)
+                found = (base, r)
+                break
+    finally:
+        _LOCATING.pop(ck, None)
+        if not fut.done():
+            fut.set_result(found)
+    return found
+
+
 class ChatClient:
     """One provider's chat endpoint. `DeepSeekClient` is the same class under its older name."""
 
@@ -1215,6 +1290,9 @@ class ChatClient:
             self._chat_url = self.spec.get("chat_path") or openai_responses.PATH
         else:
             self._chat_url = self.spec.get("chat_path", "/chat/completions")
+        # A provider that sells region-locked keys lists its regions (region_base_urls): each key goes to the region
+        # find_region found it served on, and a key with none found goes to base_url as before.
+        self._regional = not self.native and len(config.regions(provider)) > 1
         self._sticky = bool(self.spec.get("sticky_keys"))
         self._pins: dict = {}  # conversation -> the key it runs on (_pick)
         self._tpm: dict[tuple[str, str], tuple[int, float]] = {}  # (key, api model) -> (its account's limit, when learned): _LIMIT_413
@@ -1266,9 +1344,22 @@ class ChatClient:
     async def __aexit__(self, *exc) -> None:
         await self.aclose()
 
+    def _target(self, key: str, path: str) -> tuple[str, str]:
+        """(base URL, URL) of one request with `key`: on the key's own region when find_region found one, else `path`
+        under the client's base_url, exactly as before."""
+        default = str(self._http.base_url).rstrip("/")
+        base = (self._regional and self.pool.base_url(key)) or default
+        if base == default or path.startswith(("http://", "https://")):
+            return default, path
+        return base, base + path
+
     async def get_json(self, path: str, key: str | None = None) -> dict:
         # any_key, not pick: these GETs are free, and a pool where every key is disabled must still be probeable.
-        r = await self._http.get(path, headers=self._auth(key or self.pool.any_key()))
+        key = key or self.pool.any_key()
+        base, url = self._target(key, path)
+        r = await self._http.get(url, headers=self._auth(key))
+        if r.status_code == 401 and self._regional and (found := await find_region(self._http, self.pool, key, base, self._auth(key), path)):
+            r = found[1] or await self._http.get(self._target(key, path)[1], headers=self._auth(key))
         if r.status_code != 200:
             raise ApiError(r.status_code, r.text, self.provider)
         return r.json()
@@ -1473,8 +1564,8 @@ class ChatClient:
         req_timeout = httpx.Timeout(read_s, connect=30.0, pool=None)
         # Serialised once, here, so the egress receipt hashes the exact bytes that go on the wire.
         payload = json.dumps(body, ensure_ascii=False).encode("utf-8")
-        sink = f"{self.provider}:{self._http.base_url.host}"
         headers_json = {"Content-Type": "application/json"}
+        relocated: set[str] = set()  # keys this call already sent to another region (find_region): once each
         model_id = str(body.get("model") or "")
         # What this request weighs against a key's account limit: four bytes a token until a 413 says the provider's own count.
         need = len(payload) // 4
@@ -1507,13 +1598,15 @@ class ChatClient:
                                                                f"every key is at {self.provider}'s own [limits]"), self.provider) from None
             # Nothing awaits between the acquire and the try, so the finally below always releases it.
             try:
+                base, url = self._target(key, self._chat_url)
+                sink = f"{self.provider}:{httpx.URL(base).host}"
                 # One receipt per attempt: every retry is another copy of the bytes leaving. Fail-closed raises here, unsent.
                 # In a thread: the append takes a file lock and reads the ledger's tail, 272k times a day on the server's
                 # loop (2026-10-02). to_thread copies the context, so egress.fail_closed still holds there.
                 await asyncio.to_thread(egress.record, sink, payload, provider=self.provider, model=model_id)
                 if (wire := ON_WIRE.get()) is not None:
                     wire[0] = True  # until a reply comes back, a cut here may leave a request the provider bills
-                r = await self._http.post(self._chat_url, content=payload, headers={**headers_json, **self._auth(key)}, timeout=req_timeout)
+                r = await self._http.post(url, content=payload, headers={**headers_json, **self._auth(key)}, timeout=req_timeout)
                 if wire is not None:
                     wire[0] = False  # answered: a 200 brings its cost, and any other status billed nothing
             except httpx.ReadTimeout:
@@ -1535,6 +1628,10 @@ class ChatClient:
             if transport_failed:
                 await asyncio.sleep(self._backoff(attempt))
                 continue
+            if r.status_code == 401 and self._regional and key not in relocated and await find_region(
+                    self._http, self.pool, key, base, self._auth(key)):
+                relocated.add(key)
+                continue  # served on another of the provider's regions: no strike, and its next request goes there
             if self.native:  # Anthropic names the key's input-tokens-per-minute limit on every answer; cc reads it (input_limit.py)
                 input_limit.from_headers(key, model_id, r.headers)
             if r.status_code == 200:

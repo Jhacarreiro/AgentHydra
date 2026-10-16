@@ -439,6 +439,8 @@ def _add_provider(name: str, doc: dict, user: bool) -> None:
     for k in ("base_url", "anthropic_url"):
         if isinstance(spec.get(k), str):
             spec[k] = spec[k].strip().rstrip("/")
+    if isinstance(spec.get("region_base_urls"), list):
+        spec["region_base_urls"] = tuple(u.strip().rstrip("/") for u in spec["region_base_urls"] if isinstance(u, str) and u.strip())
     if "key_priority" in spec:
         spec["key_priority"] = ranks(spec["key_priority"])
     PROVIDERS[name] = PROVIDERS.get(name, _default_provider(name)) | spec
@@ -700,6 +702,14 @@ def refresh() -> bool:
 def provider_enabled(provider: str) -> bool:
     """False for a provider switched off in settings (`enabled = false` in its user file)."""
     return PROVIDERS.get(provider, {}).get("enabled", True) is not False
+
+
+def regions(provider: str) -> tuple[str, ...]:
+    """Every base URL a key of this provider may be sent to: `base_url`, then the provider's other regions
+    (`region_base_urls`) in its file's order. A provider that sells region-locked keys (a China key answers 401 on the
+    international endpoint) lists them, and client.find_region looks for a key's own region among these and nowhere else."""
+    spec = PROVIDERS.get(provider, {})
+    return tuple(dict.fromkeys(u for u in (spec.get("base_url"), *(spec.get("region_base_urls") or ())) if u))
 
 
 def provider_chat(provider: str) -> bool:
