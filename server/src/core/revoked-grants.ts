@@ -163,7 +163,8 @@ export async function pruneRevokedGrants(
 ): Promise<number> {
   try {
     const path = join(dir, 'config.json')
-    const cfg = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+    const text = readFileSync(path, 'utf8')
+    const cfg = JSON.parse(text) as Record<string, unknown>
     const account = typeof cfg.lastKnownAccountUuid === 'string' ? cfg.lastKnownAccountUuid : null
     const plain = await Promise.all(
       TOKEN_CACHES.map((k) =>
@@ -191,6 +192,11 @@ export async function pruneRevokedGrants(
       removed +=
         Object.keys(grantsOf(plain[i]) ?? {}).length - Object.keys(grantsOf(kept[i]) ?? {}).length
     }
+    // Desktop login sync, the owner of this file, may have saved it while the steps above awaited
+    // (decrypting, asking the network, encrypting, the process scan): writing `cfg` now would put
+    // that older copy back over it. Leave it; the next check finds the dead grants again. Nothing
+    // awaits between this read and the rename, so no writer in this process lands in between.
+    if (readFileSync(path, 'utf8') !== text) return 0
     const tmp = `${path}.${process.pid}.${Date.now()}.tmp`
     try {
       writeFileSync(tmp, JSON.stringify(cfg, null, 2))

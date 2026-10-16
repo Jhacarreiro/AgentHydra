@@ -18,6 +18,7 @@ import { DATA_DIR } from '../src/config'
 import { decryptSafeStorage, encryptSafeStorage } from '../src/core/crypto'
 import { ensureWindowsMasterKey } from '../src/core/crypto/keys.win'
 import { instancesRoot } from '../src/core/paths'
+import { pruneRevokedGrants } from '../src/core/revoked-grants'
 import { PROFILE_API_URL } from '../src/core/shared'
 import { resetUsageApiBackoff } from '../src/usage'
 import { USAGE_API_URL } from '../src/usage-api'
@@ -107,6 +108,48 @@ describe.skipIf(process.platform !== 'win32')('revoked desktop grants', () => {
         const text = readFileSync(join(DATA_DIR, f), 'utf8')
         for (const t of [code, year, legacy]) expect(text).not.toContain(t)
       }
+    } finally {
+      rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
+    }
+  }, 60_000)
+
+  test('a login saved while the prune is asking the network is not overwritten by the older copy', async () => {
+    const uuid = randomUUID()
+    const org = randomUUID()
+    const grantKey = `acct:${uuid}|code:${org}:https://api.anthropic.com:user:inference user:profile`
+    const dead = `sk-ant-oat-test-dead-${uuid}`
+    const synced = `sk-ant-oat-test-synced-${uuid}`
+    const dir = join(instancesRoot(), `revoked-race-${uuid.slice(0, 8)}`)
+    const path = join(dir, 'config.json')
+    mkdirSync(dir, { recursive: true })
+    try {
+      await ensureWindowsMasterKey(dir)
+      const cache = (token: string) =>
+        encryptSafeStorage(
+          JSON.stringify({ [grantKey]: { token, refreshToken: 'r', expiresAt: Date.now() + 1e9 } }),
+          dir,
+        )
+      writeFileSync(
+        path,
+        JSON.stringify({ lastKnownAccountUuid: uuid, 'oauth:tokenCacheV2': await cache(dead) }),
+      )
+      // Login sync lands a newer login while the prune awaits the profile endpoint's answer.
+      const landed = JSON.stringify(
+        { lastKnownAccountUuid: uuid, 'oauth:tokenCacheV2': await cache(synced) },
+        null,
+        2,
+      )
+      globalThis.fetch = mock(async (url: unknown) => {
+        if (String(url) !== PROFILE_API_URL) throw new TypeError('fetch failed')
+        writeFileSync(path, landed)
+        return new Response(
+          '{"type":"error","error":{"type":"authentication_error","message":"OAuth access token has been revoked."}}',
+          { status: 401 },
+        )
+      }) as unknown as typeof fetch
+
+      expect(await pruneRevokedGrants(dir, { prove: true })).toBe(0)
+      expect(readFileSync(path, 'utf8')).toBe(landed)
     } finally {
       rmSync(dir, { recursive: true, force: true, maxRetries: 10, retryDelay: 100 })
     }
