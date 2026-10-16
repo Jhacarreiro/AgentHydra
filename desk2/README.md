@@ -1042,6 +1042,10 @@ save, avoiding a second full-history serialization without changing backups or s
 The CliMayte page retains its Free display projection across local/remote worker refreshes.
 History replacements and reactive displayed account edits invalidate it; selection remains keyed
 by account/chat identity, and the underlying Free history keeps its existing polling and freshness.
+Queue sync checks its existing minimum upload gap before building and fitting this PC's snapshot.
+Inside that gap, both the local pending check and an upload skip worker projection, hashing,
+zstd compression and encryption. Title/build/job warming and other PCs' downloads still run;
+the existing shape and live gates, payload fitting, truncation and failed-upload retries are unchanged.
 Completed jobs in the shared page cache retain metadata rather than whole result/transcript objects.
 Run and recovery callers still receive their complete result; account-row errors, recovery IDs and
 uncertain-operation locks remain intact. Successful account removal clears its cache only if no

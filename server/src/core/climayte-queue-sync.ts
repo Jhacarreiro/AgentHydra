@@ -486,6 +486,8 @@ const livePrint = (snap: QueueSnapshot): string =>
 export function queueUploadPending(pc: string, now = Date.now()): boolean {
   const sent = sentBy.get(pc)
   if (!sent) return true
+  // No kind of change can upload inside the shortest gate; avoid building a discarded snapshot.
+  if (now - sent.at < Math.min(QUEUE_SHAPE_GAP_MS, LIVE_GATE_MS)) return false
   const snap = buildSnapshot(pc, '', now)
   if (shapePrint(snap) !== sent.shape) return now - sent.at >= QUEUE_SHAPE_GAP_MS
   return now - sent.at >= LIVE_GATE_MS && livePrint(snap) !== sent.live
@@ -495,11 +497,14 @@ export function queueUploadPending(pc: string, now = Date.now()): boolean {
  *  volatile-only change (activity, cost, clocks, error, running time) goes up only once LIVE_GATE_MS has
  *  passed since the last upload, with the current values, and is not news. */
 async function upload(io: QueueIo, own: number, now: number): Promise<boolean> {
+  const sent = sentBy.get(io.pc)
+  // Fit can compress a large snapshot repeatedly. The existing gates reject every upload here,
+  // regardless of its shape, so wait to build and fit it until any upload is eligible again.
+  if (sent && now - sent.at < Math.min(QUEUE_SHAPE_GAP_MS, LIVE_GATE_MS)) return false
   const { blob, snap } = fitSnapshot(io.key, buildSnapshot(io.pc, io.name, now))
   const s = shapePrint(snap)
   const v = volatilePrint(snap)
   const l = livePrint(snap)
-  const sent = sentBy.get(io.pc)
   // A shape change goes at once after a quiet spell, else when QUEUE_SHAPE_GAP_MS is up; a live-bucket
   // or volatile change only after LIVE_GATE_MS; else nothing.
   if (sent && sent.shape === s) {
