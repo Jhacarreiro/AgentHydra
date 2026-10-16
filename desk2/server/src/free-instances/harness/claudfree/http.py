@@ -376,18 +376,20 @@ class ClaudeHttp:
         model: str,
         *,
         chat_id: str | None = None,
-        temporary: bool = True,
         web_search: bool = False,
         new_chat_id: str | None = None,
         existing: dict[str, Any] | None = None,
         timezone: str = "America/Chicago",
         locale: str = "en-US",
         on_text: Callable[[str], None] | None = None,
+        on_created: Callable[[bool | None], None] | None = None,
     ) -> dict[str, Any]:
-        """Send once, then identify the persisted reply against the prior transcript.
+        """Send once in an Incognito chat, then identify the persisted reply against the prior transcript.
 
-        HTTP EOF alone does not prove generation finished. Keep partial answers
-        readable, but require a terminal event or stored stop reason for completion.
+        A Free account only ever uses Incognito chats: there is no switch for a regular one. A new chat is
+        created on its own first and nothing is sent unless Claude's create answer says it is temporary;
+        `on_created` receives that answer. HTTP EOF alone does not prove generation finished. Keep partial
+        answers readable, but require a terminal event or stored stop reason for completion.
         """
         org = valid_uuid(organization_id)
         self.last_usage = None
@@ -395,14 +397,17 @@ class ClaudeHttp:
         existing = (
             existing if existing is not None else self.read(org, chat_id) if chat_id else None
         )
-        # The prior IDs distinguish this turn from a previously identical answer.
-        previous_ids = _message_ids(existing) if existing is not None else set()
-        if existing is not None and temporary and existing.get("is_temporary") is not True:
-            raise HttpError("This is a regular chat. Pass --regular explicitly to continue it.")
+        if existing is not None and existing.get("is_temporary") is not True:
+            raise HttpError(
+                "This chat is not Incognito. Free accounts only continue Incognito chats; no message was sent.",
+                code="privacy_mismatch",
+            )
         chat = valid_uuid(chat_id or new_chat_id) if chat_id or new_chat_id else str(uuid4())
-        payload = _completion_payload(
-            prompt, model, timezone, locale, web_search, temporary, existing
-        )
+        if existing is None:
+            existing = self._create_temporary(org, chat, web_search, on_created)
+        # The prior IDs distinguish this turn from a previously identical answer.
+        previous_ids = _message_ids(existing)
+        payload = _completion_payload(prompt, model, timezone, locale, web_search, existing)
         path = f"/api/organizations/{org}/chat_conversations/{chat}/completion"
         response = self._request(
             "POST", path, json=payload, stream=True, headers={"Accept": "text/event-stream"}
@@ -411,7 +416,7 @@ class ClaudeHttp:
             response, chat, on_text
         )
         conversation, assistant = self._confirm_answer(
-            org, chat, temporary, previous_ids, server_message_id, streamed
+            org, chat, previous_ids, server_message_id, streamed
         )
         return {
             "chat_id": chat,
@@ -443,6 +448,31 @@ class ClaudeHttp:
             "event_types": sorted(event_types),
             "usage": self.last_usage,
         }
+
+    def _create_temporary(self, org, chat, web_search, on_created):
+        """Create an empty Incognito chat and return Claude's answer; refuse one Claude does not call temporary.
+
+        Creation used to ride on the first message's POST (create_conversation_params), so a chat was confirmed
+        private only after that message had gone (owner, 2026-10-16). Claude's create answer carries
+        is_temporary (probed 2026-10-16), so it is checked before anything is sent, as ChatGPT's prepared
+        request is (chatgpt/browser_request.py validate). The model rides on the message, not here: the create
+        refuses a model the account may not use with a bare 400, where the message refuses it with
+        model_not_available, the 403 the model fallback reads (probed 2026-10-16).
+        """
+        params = {"uuid": chat, "name": "", "is_temporary": True}
+        if web_search:
+            params["enabled_web_search"] = True
+        created = self._json("POST", f"/api/organizations/{org}/chat_conversations", json=params)
+        answer = created.get("is_temporary") if isinstance(created, dict) else None
+        if on_created:
+            on_created(answer if isinstance(answer, bool) else None)
+        if answer is not True:
+            raise HttpError(
+                "Claude did not confirm that the new chat is Incognito. No message was sent.",
+                code="privacy_not_verified",
+                chat_id=chat,
+            )
+        return created
 
     def _read_reply_stream(self, response, chat, on_text):
         """Return the streamed text, server message UUID, event types and terminal flag."""
@@ -500,14 +530,18 @@ class ClaudeHttp:
         if observed:
             self.last_usage = observed
 
-    def _confirm_answer(self, org, chat, temporary, previous_ids, server_message_id, streamed):
+    def _confirm_answer(self, org, chat, previous_ids, server_message_id, streamed):
         # Claude can assign its own message UUIDs. Identify the newly stored answer
         # using the pre-request transcript, and allow a brief persistence delay.
         for attempt in range(10):
             # Poll only GETs for persistence; never repeat the message POST.
             conversation = self.read(org, chat)
-            if temporary and conversation.get("is_temporary") is not True:
-                raise HttpError("Claude did not confirm that this chat is temporary.")
+            if conversation.get("is_temporary") is not True:
+                raise HttpError(
+                    "Claude did not confirm that this chat is Incognito.",
+                    code="privacy_not_verified",
+                    chat_id=chat,
+                )
             candidate = _new_answer(conversation, previous_ids, server_message_id, streamed)
             if candidate is not None:
                 assistant = message_details(candidate)
@@ -543,7 +577,7 @@ def _check_send_arguments(model, prompt, chat_id, new_chat_id, existing):
         )
 
 
-def _completion_payload(prompt, model, timezone, locale, web_search, temporary, existing):
+def _completion_payload(prompt, model, timezone, locale, web_search, existing):
     payload = {
         "prompt": prompt,
         "model": model,
@@ -560,16 +594,8 @@ def _completion_payload(prompt, model, timezone, locale, web_search, temporary, 
         },
         "completion_request_id": str(uuid4()),
     }
-    if existing is None:
-        # Creation and the first message share one POST and one recovery UUID.
-        payload["create_conversation_params"] = {
-            "name": "",
-            "model": model,
-            "is_temporary": temporary,
-        }
-        if web_search:
-            payload["create_conversation_params"]["enabled_web_search"] = True
-    elif existing.get("current_leaf_message_uuid"):
+    # The chat already exists (ClaudeHttp._create_temporary), so the message never creates one.
+    if existing.get("current_leaf_message_uuid"):
         # Continuing the current leaf preserves the server's conversation branch.
         payload["parent_message_uuid"] = valid_uuid(existing["current_leaf_message_uuid"])
     return payload

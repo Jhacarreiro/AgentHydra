@@ -109,9 +109,9 @@ class ChatGPTClient(Client):
             }
 
     def _execute(self, args, *, on_text=None):
-        if args.model or args.regular or args.web_search or args.org_id or args.stream or on_text:
+        if args.model or args.web_search or args.org_id or args.stream or on_text:
             raise ClaudeError(
-                "ChatGPT currently supports default-model Temporary Chats. Model selection, regular chats, forced web search, organizations and token streaming are not supported.",
+                "ChatGPT currently supports default-model Temporary Chats. Model selection, forced web search, organizations and token streaming are not supported.",
                 code="unsupported_option",
             )
         command = args.command
