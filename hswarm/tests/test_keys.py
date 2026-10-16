@@ -463,6 +463,28 @@ def test_a_rest_writes_only_its_own_row(tmp_path, monkeypatch):
     assert a.status()[2]["resting_s"] > 0 and a.status()[0]["broke"]  # and the other process picks just that row up
 
 
+def test_pools_in_one_process_read_each_row_from_the_database_once(monkeypatch):
+    """Each KeyPool asked the database for every row past its own mark: the shared server's hswarm_doctor built 38 new
+    pools over 4,448 rows on its event loop and held GET /health for 5.9 s, and after the 1,780 rows its balance probes
+    wrote, every pool read all 1,780 again (2026-10-16). The process reads each row once and every pool shares it."""
+    keys = [f"sk-many-{i:04d}" for i in range(2000)]
+    with keystate.txn() as tx:
+        for k in keys:
+            tx.put(config.fingerprint(k), {"strikes": 1})
+    fetched = []
+    real = keystate.changes
+    monkeypatch.setattr(keystate, "changes", lambda c, since: fetched.append(rows := real(c, since)) or rows)
+    pools = [KeyPool(keys[i::20]) for i in range(20)]  # one pool per provider, as keys.report and a cold plan build them
+    assert all(p.status(reload=False)[0]["strikes"] == 1 for p in pools)
+    assert len(keys) <= sum(map(len, fetched)) < 2 * len(keys)  # each row once, not once per pool
+    with keystate.txn() as tx:  # another process's burst of writes
+        for k in keys[:500]:
+            tx.put(config.fingerprint(k), {"strikes": 2})
+    fetched.clear()
+    assert all(p.status()[0]["strikes"] == 2 for p in pools)  # every pool sees the burst...
+    assert 500 <= sum(map(len, fetched)) < 1000  # ...read from the database once
+
+
 def test_a_failed_probe_counts_as_a_probe_and_leaves_every_record_alone():
     gets = []
 

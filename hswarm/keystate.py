@@ -13,6 +13,7 @@ The legacy keys.json is imported once (the `imported` meta row), then deleted; n
 """
 from __future__ import annotations
 
+import bisect
 import contextlib
 import json
 import sqlite3
@@ -175,16 +176,72 @@ def changes(c: sqlite3.Connection, since: int | None) -> list[tuple[str, str, in
     return c.execute("SELECT fp, entry, rev FROM keys WHERE rev > ? ORDER BY rev", (since or 0,)).fetchall()
 
 
-def read_changes(since: int | None) -> list[tuple[str, str, int]] | None:
-    """`changes` on a fresh connection; None when the database cannot be read now (the caller keeps what it had)."""
-    try:
-        c = connect()
+class _Copy:
+    """This process's one copy of the table, which read_changes answers from: {fingerprint: (entry JSON, rev)} and every
+    row's place in rev order. Each catch-up asks the database only for the rows written since the last one.
+
+    Every KeyPool reads through read_changes, one pool per provider, and each used to ask the database for every row
+    past its own mark: a new pool for all 4,448 rows (860 KB, 0.1 s), and after a burst of writes every pool for every
+    row written. The shared server does it on its event loop, so one `hswarm_doctor` (38 new pools in keys.report) held
+    GET /health for 5.9 s, and the plan after it (each pool reading the 1,780 rows the doctor's balance probes had just
+    written) for 1.1 s (py-spy, 2026-10-16). Through this copy the database hands each row to the process once."""
+
+    def __init__(self, path: str):
+        self.path = path
+        self._clear()
+
+    def _clear(self) -> None:
+        self.rev = 0
+        self.rows: dict[str, tuple[str, int]] = {}
+        self.order: list[tuple[int, str]] = []  # (rev, fingerprint), oldest first; a row written again is listed again
+
+    def _take(self, rows: list[tuple[str, str, int]]) -> None:
+        for fp, text, rev in rows:  # oldest first
+            self.rows[fp] = (text, rev)
+            self.order.append((rev, fp))
+            self.rev = rev
+
+    def catch_up(self, c: sqlite3.Connection) -> None:
+        c.execute("BEGIN")  # one snapshot: the count and the rows describe the same moment
         try:
-            return changes(c, since)
+            count, top = c.execute("SELECT count(*), COALESCE(MAX(rev), 0) FROM keys").fetchone()
+            if top < self.rev:  # the database was made again under the same name
+                self._clear()
+            self._take(changes(c, self.rev))
+            if len(self.rows) != count:  # a row was deleted (prune), which no rev says: read the table whole
+                self._clear()
+                self._take(changes(c, None))
         finally:
-            c.close()
-    except sqlite3.Error:
-        return None
+            c.execute("COMMIT")
+        if len(self.order) > 2 * len(self.rows) + 4096:  # keep only each row's newest place
+            self.order = sorted((rev, fp) for fp, (_, rev) in self.rows.items())
+
+    def since(self, since: int | None) -> list[tuple[str, str, int]]:
+        start = bisect.bisect_right(self.order, since or 0, key=lambda place: place[0])
+        return [(fp, self.rows[fp][0], rev) for rev, fp in self.order[start:] if self.rows[fp][1] == rev]
+
+
+_copy: _Copy | None = None  # on the newest database path only, as _held
+_copy_guard = threading.Lock()
+
+
+def read_changes(since: int | None) -> list[tuple[str, str, int]] | None:
+    """(fingerprint, entry JSON, rev) of every row past `since` (all of them when None), oldest first, as the database
+    has them now; None when it cannot be read now (the caller keeps what it had). Answered from the process's _Copy."""
+    global _copy
+    path = str(db_path())
+    with _copy_guard:
+        try:
+            c = connect()
+            try:
+                if _copy is None or _copy.path != path:
+                    _copy = _Copy(path)
+                _copy.catch_up(c)
+            finally:
+                c.close()
+        except sqlite3.Error:
+            return None
+        return _copy.since(since)
 
 
 _ALL: tuple = ((), {})  # ((database, rows, newest rev), {fingerprint: entry}) as last read
