@@ -203,6 +203,101 @@ class ConfirmedReadbackTests(unittest.TestCase):
         body['padding'] = '\u00e9' * (CONFIRMED_CONVERSATION_MAX_BYTES // 2)
         self.assertIsNone(bounded_confirmed_conversation(body))
 
+    def test_obviously_oversized_valid_strings_skip_serialization_and_fragment_copies(self):
+        bodies = [
+            {'mapping': {'node': {'metadata': {'large': 'x' * (CONFIRMED_CONVERSATION_MAX_BYTES + 1)}}}},
+            {'mapping': {'parts': ['x' * 8192 for _ in range(128)]}},
+            {'mapping': {'parts': ('x' * (CONFIRMED_CONVERSATION_MAX_BYTES + 1),)}},
+        ]
+        for body in bodies:
+            with self.subTest(shape=type(body['mapping']).__name__), \
+                    patch('claudfree.chatgpt.http.json.dumps',
+                        side_effect=AssertionError('A proven oversized snapshot must not serialize')):
+                self.assertIsNone(bounded_confirmed_conversation(body))
+
+    def test_exact_unicode_cap_and_escaping_still_use_the_original_encoder(self):
+        padding = {'padding': ''}
+        overhead = len(json.dumps(padding, ensure_ascii=False, separators=(',', ':')).encode('utf-8'))
+        remaining = CONFIRMED_CONVERSATION_MAX_BYTES - overhead
+        bodies = [
+            {'padding': '\u00e9' * (remaining // 2) + 'x' * (remaining % 2)},
+            {'padding': '\u754c' * (remaining // 3) + 'x' * (remaining % 3)},
+            {'padding': '\U0001f642' * (remaining // 4) + 'x' * (remaining % 4)},
+            {'padding': '\x00' * (remaining // 6) + 'x' * (remaining % 6)},
+        ]
+        dumps = json.dumps
+        for body in bodies:
+            with self.subTest(character=body['padding'][0]), \
+                    patch('claudfree.chatgpt.http.json.dumps', wraps=dumps) as encode:
+                self.assertEqual(len(dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')),
+                    CONFIRMED_CONVERSATION_MAX_BYTES)
+                self.assertIs(bounded_confirmed_conversation(body), body)
+                encode.assert_called_once_with(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False)
+            body['padding'] += 'x'
+            self.assertIsNone(bounded_confirmed_conversation(body))
+
+    def test_bounded_inspection_preserves_wide_nested_shared_and_invalid_json_cases(self):
+        nested = {'value': 'small'}
+        for _ in range(60):
+            nested = {'nested': nested}
+        shared = ['shared text']
+        accepted = [nested, {'parts': [0] * 100_000}, {'parts': [shared] * 3000}]
+        invalid = [
+            {'text': '\ud800'},
+            {'text': '\udc00'},
+            {'text': '\ud83d\ude42'},
+            {'number': float('nan')},
+            {'number': float('inf')},
+            {'unsupported': object()},
+            {'unsupported': {1, 2}},
+        ]
+        cyclic = {}
+        cyclic['cycle'] = cyclic
+        invalid.append(cyclic)
+        dumps = json.dumps
+        for body in accepted:
+            with self.subTest(kind='accepted'), patch('claudfree.chatgpt.http.json.dumps', wraps=dumps) as encode:
+                self.assertIs(bounded_confirmed_conversation(body), body)
+                encode.assert_called_once()
+        for body in invalid:
+            with self.subTest(kind='invalid'), patch('claudfree.chatgpt.http.json.dumps', wraps=dumps) as encode:
+                self.assertIsNone(bounded_confirmed_conversation(body))
+                encode.assert_called_once()
+        # A large later string lies beyond the inspection allowance. It still
+        # receives the exact ordinary check, rather than widening admission.
+        wide = {'parts': [0] * 2048 + ['x' * CONFIRMED_CONVERSATION_MAX_BYTES]}
+        with patch('claudfree.chatgpt.http.json.dumps', wraps=dumps) as encode:
+            self.assertIsNone(bounded_confirmed_conversation(wide))
+            encode.assert_called_once()
+
+    def test_custom_builtin_subclasses_cannot_supply_false_lower_bounds(self):
+        class LongString(str):
+            def __len__(self):
+                return CONFIRMED_CONVERSATION_MAX_BYTES + 1
+
+        class LongList(list):
+            def __len__(self):
+                return CONFIRMED_CONVERSATION_MAX_BYTES + 1
+
+        class LongDict(dict):
+            def __len__(self):
+                return CONFIRMED_CONVERSATION_MAX_BYTES + 1
+
+        class SmallTuple(tuple):
+            def __len__(self):
+                return CONFIRMED_CONVERSATION_MAX_BYTES + 1
+
+        bodies = [{'value': LongString('small')}, {'value': LongList(['small'])},
+            LongDict(value='small'), {'value': SmallTuple(('small',))}]
+        dumps = json.dumps
+        for body in bodies:
+            with self.subTest(kind=type(body).__name__), \
+                    patch('claudfree.chatgpt.http.json.dumps', wraps=dumps) as encode:
+                self.assertLess(len(dumps(body, ensure_ascii=False, separators=(',', ':')).encode('utf-8')),
+                    CONFIRMED_CONVERSATION_MAX_BYTES)
+                self.assertIs(bounded_confirmed_conversation(body), body)
+                encode.assert_called_once()
+
     def test_oversized_snapshot_retains_normal_read_fallback(self):
         payload, body = fixture()
         snapshot = deepcopy(body)

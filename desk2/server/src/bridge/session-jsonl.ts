@@ -307,17 +307,22 @@ function trimWindow(m: Memo, items: TranscriptItem[], keep: number, cap: number)
   let pin = open.size ? m.recs.findIndex((r) => r.uses?.some((id) => open.has(id))) : -1
   if (pin < 0) pin = m.recs.length
   let dropped = 0
-  while (m.recs.length > 1 && m.bytes > keep) {
-    let j = 1
+  let from = 0
+  while (m.recs.length - from > 1 && m.bytes > keep) {
+    let j = from + 1
     while (j < m.recs.length && m.recs[j]!.mid !== undefined && m.recs[j]!.mid === m.recs[j - 1]!.mid) j++
     if (j >= m.recs.length) break
     if (j > pin && m.bytes <= cap) break
-    for (const r of m.recs.splice(0, j)) {
+    for (let i = from; i < j; i++) {
+      const r = m.recs[i]!
       m.bytes -= r.bytes
       dropped += r.bytes
     }
-    pin -= j
+    from = j
   }
+  // Decide the whole prefix before moving the survivors: shifting them once per old message
+  // makes a tail with many short records quadratic to trim.
+  if (from) m.recs.splice(0, from)
   return dropped
 }
 

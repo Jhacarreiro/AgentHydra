@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Large chat tails trim old records in one pass.** Removing old message groups no longer repeatedly moves the surviving history. Tool pinning, byte limits and incremental ordering keep their existing behavior.
+- **Free readback rejects obviously oversized snapshots before copying them.** A bounded inspection avoids encoding large optional conversation snapshots only to discard them. Other snapshots still pass the same exact byte-limit and JSON validation.
 - **Session lists index only stores that can own subagents.** Large unrelated histories avoid building discarded parent-lookup entries. Store identity, duplicate handling, cycles and displayed ordering keep their existing behavior.
 - **Unchanged OpenCode previews reuse bounded rendered responses.** Small responses avoid rereading and reparsing quiet session history. Fresh database and WAL checks, caller isolation and cache limits remain enforced.
 - **Large chat reads release backing text after later replacements.** Cached long records track their original read so replacing most of a large chunk also releases its surviving text from that chunk. Small-record reads keep their existing lightweight path.

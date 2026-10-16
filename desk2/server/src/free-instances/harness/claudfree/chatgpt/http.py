@@ -3,6 +3,7 @@
 from contextlib import contextmanager
 from copy import deepcopy
 from datetime import datetime, timezone
+from itertools import chain
 import json
 import re
 import time
@@ -38,6 +39,7 @@ _VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
 PER_CHAT_COOKIES_KEPT = 20  # of each family
 CONFIRMED_CONVERSATION_MAX_BYTES = 512 * 1024
+_SNAPSHOT_INSPECTION_NODES = 1024
 _LINK_TOKEN = re.compile(r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201")
 
 
@@ -53,9 +55,52 @@ def _render_links(text):
     return rendered if end == len(text) - 1 else rendered + text[end + 1:]
 
 
+def _snapshot_certainly_oversize(body):
+    """Reject only a proven lower bound, without copying large JSON strings.
+
+    Inspection is bounded and lazy. Shared containers can only undercount; the
+    ordinary encoder still decides every answer not already proven oversized.
+    """
+    remaining = CONFIRMED_CONVERSATION_MAX_BYTES
+    stack = [iter((body,))]
+    seen = set()
+    for _ in range(_SNAPSHOT_INSPECTION_NODES):
+        while stack:
+            try:
+                value = next(stack[-1])
+                break
+            except StopIteration:
+                stack.pop()
+        else:
+            return False
+        kind = type(value)
+        if kind is str:
+            # UTF-8/JSON need at least one byte per Python string character.
+            remaining -= len(value)
+        elif kind is dict or kind is list or kind is tuple:
+            identity = id(value)
+            if identity in seen:
+                continue
+            seen.add(identity)
+            # Each member requires at least one output byte, independently of
+            # the character bytes counted in its keys or string values.
+            remaining -= len(value)
+            children = chain.from_iterable(value.items()) if kind is dict else value
+            stack.append(iter(children))
+        elif value is not None and kind is not int and kind is not float and kind is not bool:
+            # Subclass/custom iteration may differ from len()/items(). Let the
+            # existing encoder handle it rather than inferring an invalid size.
+            return False
+        if remaining < 0:
+            return True
+    return False
+
+
 def bounded_confirmed_conversation(body):
     """An optional in-memory readback; large conversations keep the normal GET."""
     if not isinstance(body, dict):
+        return None
+    if _snapshot_certainly_oversize(body):
         return None
     try:
         size = len(json.dumps(body, ensure_ascii=False, separators=(',', ':'), allow_nan=False).encode('utf-8'))
