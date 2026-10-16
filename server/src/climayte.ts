@@ -2392,6 +2392,8 @@ export function climayteAdopt(
   for (const w of workers.values()) {
     if (w.group !== group || !isActive(w)) continue
     live++
+    // Never the caller itself, nor an owner's chat: neither is news to anyone (climayte-ping.ts reportsTo).
+    if (w.chat === true || (o.kind === 'worker' && o.workerId === w.id)) continue
     if (w.origin) {
       owned++
       continue
