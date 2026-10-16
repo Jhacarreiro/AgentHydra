@@ -7,7 +7,7 @@ import { scratch, startChat } from './hydra-core-fixture'
 
 let dir = ''
 const chat = 'chat-example-no-leads'
-const now = new Date('2026-10-15T10:00:00.000Z')
+const now = new Date()
 
 beforeEach(() => {
   dir = scratch()

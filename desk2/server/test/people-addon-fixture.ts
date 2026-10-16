@@ -22,6 +22,7 @@ export function presentAddon(home: string) {
 export async function usePeopleDoor(): Promise<() => void> {
   // Imported here, not at the top: people-setup.test.ts points HOME elsewhere before the people code loads.
   const { forgetPeopleAddon, loadPeopleAddon } = await import('../../../server/src/people-host')
+  // arkitect-ignore-next-line scratch-dir-reaped/violation - the returned cleanup removes it and every caller runs that in an afterEach; the preload also removes each file's TEMP after it
   const home = mkdtempSync(join(tmpdir(), 'people-door-'))
   await loadPeopleAddon({ ...presentAddon(home), coreDir: join(home, 'core') })
   return () => {

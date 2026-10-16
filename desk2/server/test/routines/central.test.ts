@@ -18,6 +18,8 @@ import type { ServerContext } from '../../src/context'
 import { approvedText, approverKey, checkApproval, FORMAT, parseDoc, renderDoc, type ApproverKey } from '../../src/routines/central'
 import plugin from '../../src/plugins/73-routines'
 
+/** An approval's time: signed into the text, never compared with the clock. */
+const SIGNED_AT = new Date().toISOString()
 const at = (y: number, mo: number, d: number, h: number, mi = 0): number => new Date(y, mo - 1, d, h, mi).getTime()
 const ZONE = Intl.DateTimeFormat().resolvedOptions().timeZone
 const askedBy = 'Example Owner, 2026-10-15: "run the example check every minute"'
@@ -68,7 +70,7 @@ describe('approval (routines/central.ts)', () => {
     const owner = approverKey(join(dir, 'owner.key'))
     const stranger = approverKey(join(dir, 'stranger.key'))
     const trusted = [{ name: 'Example Owner', key: owner.public }]
-    const signed = approvedText(parseDoc('example-a', renderDoc(front({}), '')), owner, 'Example Owner', '2026-10-15T12:00:00.000Z')
+    const signed = approvedText(parseDoc('example-a', renderDoc(front({}), '')), owner, 'Example Owner', SIGNED_AT)
 
     expect(checkApproval(parseDoc('example-a', signed), trusted)).toEqual({ ok: true, by: 'Example Owner' })
     // Its display line is not signed: the store's page may change it.
@@ -80,7 +82,7 @@ describe('approval (routines/central.ts)', () => {
     // The same text under another id is another routine: the signature names the id.
     expect(checkApproval(parseDoc('example-b', signed), trusted)).toMatchObject({ ok: false, why: 'its approval signature does not check out' })
     // A key this computer does not trust approves nothing, even one that signed correctly.
-    const theirs = approvedText(parseDoc('example-a', renderDoc(front({}), '')), stranger, 'Example Owner', '2026-10-15T12:00:00.000Z')
+    const theirs = approvedText(parseDoc('example-a', renderDoc(front({}), '')), stranger, 'Example Owner', SIGNED_AT)
     expect(checkApproval(parseDoc('example-a', theirs), trusted).ok).toBe(false)
   })
 })
@@ -179,7 +181,7 @@ function rig(): Rig {
 function putDoc(r: Rig, id: string, f: Record<string, unknown>, key?: ApproverKey, by = 'Example Approver'): void {
   const text = renderDoc(f, '')
   const s = r.store.read()
-  s.docs[`routines/${id}.md`] = { text: key ? approvedText(parseDoc(id, text), key, by, '2026-10-15T12:00:00.000Z') : text }
+  s.docs[`routines/${id}.md`] = { text: key ? approvedText(parseDoc(id, text), key, by, SIGNED_AT) : text }
   r.store.write(s)
 }
 

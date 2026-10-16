@@ -4,7 +4,7 @@ import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node
 import { homedir } from 'node:os'
 import { dirname, join } from 'node:path'
 import { contentWords } from '../mcp-find'
-import { inRepoPeople, peopleAddon } from '../people-host'
+import { inRepoPeople, type PeopleAddon, peopleAddon } from '../people-host'
 import { type CatalogEntry, LEAD_TIERS, loadRef, loadText } from './catalog'
 import { type Feedback, readFeedback } from './feedback'
 import { detailOf, rankEntries, terms } from './find'
@@ -310,50 +310,83 @@ ${message}`
     pick = { id: wordLead(entries, message)?.id ?? null, path: 'words', ms: 0 }
   else {
     const budget = opts.late ? LATE_BUDGET_MS : budgetMs
-    const answer: Promise<Decision> = addon?.lead
-      ? addon
-          .lead({ message, entries, current: opts.current?.id ?? null, budgetMs: budget })
-          .then((r) => ({ answer: r?.slug ?? 'none' }))
-      : decider(leadQuestion(managers, message, opts.current ?? null), budget)
-    const asked = answer.catch(
-      (err): Decision => ({
-        answer: null,
-        error: err instanceof Error ? err.message : String(err),
-      }),
+    const asked = askLead(
+      addon,
+      { message, entries, managers, current: opts.current ?? null },
+      budget,
     )
     const then = opts.late
-    if (!then) pick = toPick(await asked)
-    else {
-      let timer: ReturnType<typeof setTimeout> | undefined
-      const out = new Promise<null>((r) => {
-        timer = setTimeout(() => r(null), Math.max(100, budgetMs - 50))
-      })
-      const d = await Promise.race([asked, out])
-      clearTimeout(timer)
-      if (d) pick = toPick(d)
-      else {
-        pick = toPick({ answer: null, error: 'no answer in time; asking on' })
-        const landing: Promise<void> = asked
-          .then((ld) => {
-            const lp = toPick(ld)
-            keep(lp, { late: true }, new Date())
-            then(lp)
-          })
-          .catch((err) => {
-            if (opts.log)
-              appendLog(opts.log.dir, {
-                event: 'lead-pick',
-                chat: opts.log.chat,
-                late: true,
-                error: String(err instanceof Error ? err.message : err).slice(0, 200),
-              })
-          })
-          .finally(() => late.delete(landing))
-        late.add(landing)
-      }
-    }
+    pick = then
+      ? await pickByBudget(asked, budgetMs, toPick, opts.log, (lp) => {
+          keep(lp, { late: true }, new Date())
+          then(lp)
+        })
+      : toPick(await asked)
   }
   keep(pick)
+  return pick
+}
+
+/** The model's answer for a lead pick: the add-on's lead member when it has one, else the in-repo question through the
+ *  decider. A call that fails answers its error. */
+function askLead(
+  addon: PeopleAddon | null,
+  ask: {
+    message: string
+    entries: CatalogEntry[]
+    managers: CatalogEntry[]
+    current: CatalogEntry | null
+  },
+  budget: number,
+): Promise<Decision> {
+  const answer: Promise<Decision> = addon?.lead
+    ? addon
+        .lead({
+          message: ask.message,
+          entries: ask.entries,
+          current: ask.current?.id ?? null,
+          budgetMs: budget,
+        })
+        .then((r) => ({ answer: r?.slug ?? 'none' }))
+    : decider(leadQuestion(ask.managers, ask.message, ask.current), budget)
+  return answer.catch(
+    (err): Decision => ({
+      answer: null,
+      error: err instanceof Error ? err.message : String(err),
+    }),
+  )
+}
+
+/** A late pick: the model's answer when it is back by `budgetMs`, else the word ranker's at once, with the model's
+ *  answer handed to `landed` when it comes (a late failure is logged). */
+async function pickByBudget(
+  asked: Promise<Decision>,
+  budgetMs: number,
+  toPick: (d: Decision) => LeadPick,
+  log: { dir: string; chat: string } | undefined,
+  landed: (pick: LeadPick) => void,
+): Promise<LeadPick> {
+  let timer: ReturnType<typeof setTimeout> | undefined
+  const out = new Promise<null>((r) => {
+    timer = setTimeout(() => r(null), Math.max(100, budgetMs - 50))
+  })
+  const d = await Promise.race([asked, out])
+  clearTimeout(timer)
+  if (d) return toPick(d)
+  const pick = toPick({ answer: null, error: 'no answer in time; asking on' })
+  const landing: Promise<void> = asked
+    .then((ld) => landed(toPick(ld)))
+    .catch((err) => {
+      if (log)
+        appendLog(log.dir, {
+          event: 'lead-pick',
+          chat: log.chat,
+          late: true,
+          error: String(err instanceof Error ? err.message : err).slice(0, 200),
+        })
+    })
+    .finally(() => late.delete(landing))
+  late.add(landing)
   return pick
 }
 

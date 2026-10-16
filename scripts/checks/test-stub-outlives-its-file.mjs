@@ -271,8 +271,17 @@ export function findViolations(text) {
   const code = blankNonCode(text)
   const before = callSpans(code, BEFORE_HOOK)
   const after = callSpans(code, AFTER_HOOK)
-  const hits = []
+  return [
+    ...globalStubs(code, before, after),
+    ...moduleMocks(text, code, after),
+    ...orchestratorLocks(code, after),
+    ...envLeaks(text, code, before, after),
+    ...sharedAppCalls(text, code),
+  ].sort((a, b) => a.index - b.index)
+}
 
+/** Rule A: a module-scope or before-hook global assignment with no after-hook assignment to the same global. */
+function globalStubs(code, before, after) {
   const restored = new Set()
   const stubs = []
   GLOBAL_STUB.lastIndex = 0
@@ -281,10 +290,13 @@ export function findViolations(text) {
     if (within(after, m.index)) restored.add(name)
     else if (depthAt(code, m.index) === 0 || within(before, m.index)) stubs.push({ index: m.index, name })
   }
-  for (const s of stubs) if (!restored.has(s.name)) hits.push({ index: s.index, kind: 'global', name: s.name })
+  return stubs.filter((s) => !restored.has(s.name)).map((s) => ({ index: s.index, kind: 'global', name: s.name }))
+}
 
-  // A mock whose specifier is not a literal cannot be matched by name; any re-mock in an after hook
-  // is then accepted, which errs towards silence rather than a false red on an exotic shape.
+/** Rule B: a mock.module(SPEC) with no mock.module(SPEC) inside an after hook. A mock whose specifier is not a
+ *  literal cannot be matched by name; any re-mock in an after hook is then accepted, which errs towards silence
+ *  rather than a false red on an exotic shape. */
+function moduleMocks(text, code, after) {
   const remocked = new Set()
   const mocks = []
   MODULE_MOCK.lastIndex = 0
@@ -293,44 +305,47 @@ export function findViolations(text) {
     if (within(after, m.index)) remocked.add(spec)
     else mocks.push({ index: m.index, spec })
   }
-  for (const k of mocks) {
-    if (remocked.has(k.spec) || remocked.has('*')) continue
-    hits.push({ index: k.index, kind: 'module', name: k.spec })
-  }
+  if (remocked.has('*')) return []
+  return mocks.filter((k) => !remocked.has(k.spec)).map((k) => ({ index: k.index, kind: 'module', name: k.spec }))
+}
 
-  // Rule C: a never-settling spawn parked in the orchestrator's route lock, with nothing in an
-  // after hook to hand it back. The reset must be INSIDE the hook: a test that fails or times out
-  // never reaches the rest of its own body, which is the same reason rule A demands a hook.
+/** Rule C: a never-settling spawn parked in the orchestrator's route lock, with nothing in an after hook to hand it
+ *  back. The reset must be INSIDE the hook: a test that fails or times out never reaches the rest of its own body,
+ *  which is the same reason rule A demands a hook. */
+function orchestratorLocks(code, after) {
   ORCH_CALL.lastIndex = 0
   ORCH_RESET.lastIndex = 0
   const callsOrchestrator = [...code.matchAll(ORCH_CALL)].length > 0
-  const releasesInAfterHook = [...code.matchAll(ORCH_RESET)].some((m) => within(after, m.index))
-  if (callsOrchestrator && !releasesInAfterHook) {
-    NEVER_SETTLES.lastIndex = 0
-    for (const m of code.matchAll(NEVER_SETTLES)) hits.push({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' })
-  }
+  if (!callsOrchestrator || [...code.matchAll(ORCH_RESET)].some((m) => within(after, m.index))) return []
+  NEVER_SETTLES.lastIndex = 0
+  return [...code.matchAll(NEVER_SETTLES)].map((m) => ({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' }))
+}
 
-  // Rule E: a home or temp variable set at module scope or in a before hook, never put back.
+/** Rule E: a home or temp variable set at module scope or in a before hook, never put back. */
+function envLeaks(text, code, before, after) {
   ENV_PUT_BACK_ANY.lastIndex = 0
-  const envPutBackAll = [...code.matchAll(ENV_PUT_BACK_ANY)].some((m) => within(after, m.index))
+  if ([...code.matchAll(ENV_PUT_BACK_ANY)].some((m) => within(after, m.index))) return []
   const envPutBack = new Set()
   ENV_PUT_BACK.lastIndex = 0
   for (const m of code.matchAll(ENV_PUT_BACK)) if (within(after, m.index)) envPutBack.add(m[1] ?? m[2])
+  const hits = []
   ENV_SET.lastIndex = 0
-  if (!envPutBackAll)
-    for (const m of code.matchAll(ENV_SET)) {
-      if (within(after, m.index) || envPutBack.has(m[1]) || keptForTheRun(text, m.index)) continue
-      if (depthAt(code, m.index) === 0 || within(before, m.index))
-        hits.push({ index: m.index, kind: 'env', name: `process.env.${m[1]}` })
-    }
+  for (const m of code.matchAll(ENV_SET)) {
+    if (within(after, m.index) || envPutBack.has(m[1]) || keptForTheRun(text, m.index)) continue
+    if (depthAt(code, m.index) === 0 || within(before, m.index))
+      hits.push({ index: m.index, kind: 'env', name: `process.env.${m[1]}` })
+  }
+  return hits
+}
 
-  // Rule D: a request or fetch through the shared app, under whatever local name it was imported as.
+/** Rule D: a request or fetch through the shared app, under whatever local name it was imported as. */
+function sharedAppCalls(text, code) {
+  const hits = []
   for (const name of sharedAppNames(text, code)) {
     const call = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\s*\\.\\s*(?:request|fetch)\\s*\\(`, 'g')
     for (const m of code.matchAll(call)) hits.push({ index: m.index, kind: 'shared-app', name })
   }
-
-  return hits.sort((a, b) => a.index - b.index)
+  return hits
 }
 
 /** A redirect the file keeps on purpose for every later file says so on one of the three lines above it,
