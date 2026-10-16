@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.
 - **Large Free queues release waiting Python processes.** On Windows, excess ChatGPT requests keep small validated snapshots while waiting for the same three browser slots. Account locks, cookie updates and interrupted-chat recovery stay owned through completion; ordinary requests keep their existing path and all helpers remain hidden.
 - **Free replies use less temporary memory.** Subprocess output decodes without duplicating its byte buffer. Expired recovery replies also clear during normal maintenance when no account needs a refresh, with the same recovery window and active-job protection.
 - **Queued Free continuations release old transcript data sooner.** ChatGPT keeps only the branch reference and validated previous message IDs while waiting to send. Model selection, privacy checks and complete final replies remain unchanged.
