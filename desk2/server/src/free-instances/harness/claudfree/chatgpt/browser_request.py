@@ -394,7 +394,7 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
                 'metrics': {'seconds': round(time.monotonic()-started, 2), 'browser_preparation': True,
                     'browser_closed_before_send': False, 'browser_completed_send': True,
                     'renewed_browser_markers': missing_before}}
-            snapshot = bounded_confirmed_conversation(confirmed.get('body'))
+            snapshot = bounded_confirmed_conversation(confirmed.pop('body', None))
             if snapshot is not None:
                 result['confirmed_conversation'] = snapshot
             return result

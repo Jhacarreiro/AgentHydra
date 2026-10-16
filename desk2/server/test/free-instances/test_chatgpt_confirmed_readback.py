@@ -8,6 +8,7 @@ from types import SimpleNamespace
 import unittest
 from unittest.mock import AsyncMock, Mock, patch
 from uuid import uuid4
+import weakref
 
 from claudfree.chatgpt import browser_request
 from claudfree.chatgpt.http import (
@@ -315,6 +316,69 @@ class ConfirmedReadbackTests(unittest.TestCase):
 
 
 class BrowserConfirmationTests(unittest.IsolatedAsyncioTestCase):
+    async def prepare_with_observed_body(self, size, *, retained):
+        class WeakBody(dict):
+            pass
+
+        payload, original = fixture()
+        server_id = original['conversation_id']
+        references = []
+        cleanup_observations = []
+        browser = SimpleNamespace(get=AsyncMock(return_value=object()))
+        http = SimpleNamespace(saved_state=Mock(return_value={'cookies': []}))
+
+        async def arm(_tab, _zd, **options):
+            options['dispatch']['sent'] = True
+
+        async def confirm(_http, _tab, _browser, _dispatch, _payload, _prompt,
+                          _existing, _temporary, _on_id, confirmed):
+            body = WeakBody({'conversation_id': server_id, 'padding': 'x' * size})
+            references.append(weakref.ref(body))
+            confirmed['body'] = body
+            return server_id
+
+        async def close(actual_http, actual_browser, identity_verified):
+            self.assertIs(actual_http, http)
+            self.assertIs(actual_browser, browser)
+            self.assertTrue(identity_verified)
+            cleanup_observations.append(references[0]() is not None)
+            self.assertIs(cleanup_observations[-1], retained)
+            # Collection must precede the real asynchronous cleanup interval,
+            # without forcing GC or recording the body in a mock's call history.
+            await browser_request.asyncio.sleep(0)
+            self.assertIs(references[0]() is not None, retained)
+
+        with ExitStack() as stack:
+            stack.enter_context(patch.dict('sys.modules', {'zendriver': SimpleNamespace()}))
+            for name in ('_wait_for_composer', '_select_temporary_chat', '_submit_prompt',
+                         '_adopt_captured_session'):
+                stack.enter_context(patch.object(browser_request, name, AsyncMock()))
+            stack.enter_context(patch.object(browser_request, '_close_browser', close))
+            stack.enter_context(patch.object(browser_request.signin, 'load_cookies', AsyncMock()))
+            stack.enter_context(patch.object(browser_request, '_arm_interception', arm))
+            stack.enter_context(patch.object(browser_request, '_await_capture',
+                AsyncMock(return_value=(payload, {}))))
+            stack.enter_context(patch.object(browser_request, '_await_confirmation', confirm))
+            result = await browser_request._prepare(http, PROMPT, None, directory=Path('.'),
+                model=TEXT_MODEL, temporary=True, on_id=None,
+                browser_factory=AsyncMock(return_value=browser))
+        self.assertEqual(cleanup_observations, [retained])
+        self.assertIs(result['payload'], payload)
+        self.assertTrue(result['already_sent'])
+        self.assertEqual(result['server_id'], server_id)
+        return result, references[0]
+
+    async def test_omitted_large_body_is_released_before_context_cleanup_awaits(self):
+        result, reference = await self.prepare_with_observed_body(
+            2 * CONFIRMED_CONVERSATION_MAX_BYTES, retained=False)
+        self.assertNotIn('confirmed_conversation', result)
+        self.assertIsNone(reference())
+
+    async def test_accepted_snapshot_keeps_identity_and_result_during_context_cleanup(self):
+        result, reference = await self.prepare_with_observed_body(1024, retained=True)
+        self.assertIs(result['confirmed_conversation'], reference())
+        self.assertEqual(result['confirmed_conversation']['padding'], 'x' * 1024)
+
     async def test_known_continuation_never_evaluates_the_page_path(self):
         payload, body = fixture()
         tab = SimpleNamespace(evaluate=AsyncMock(side_effect=AssertionError('Known ID needs no URL read')))

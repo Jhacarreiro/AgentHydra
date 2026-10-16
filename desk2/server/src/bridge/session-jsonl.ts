@@ -16,6 +16,7 @@ import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { historyBuilder, historyToItems, parseJsonl, type HistoryOptions } from '../engine/normalize'
 import { mediaCache } from '../media/cache'
+import { fsSlot, mapFs } from '../fs-pool'
 import { readTail, TAIL_BYTES } from './session-tail'
 
 /** How a session file's records become items: with the media cache, so a Read of a picture, a screenshot and the
@@ -89,15 +90,15 @@ export async function findSessionJsonlAsync(sessionId: string, roots: string[], 
   if (!SESSION_ID.test(sessionId)) return null
   const file = `${sessionId}.jsonl`
   const consider = async (path: string) => {
-    const st = await stat(path).catch(() => null)
+    const st = await fsSlot(() => stat(path)).catch(() => null)
     return st?.isFile() ? { path, mtime: st.mtimeMs } : null
   }
   const found = (list: ({ path: string; mtime: number } | null)[]) => list.filter((h): h is { path: string; mtime: number } => h !== null)
-  let hits = cwd ? found(await Promise.all(roots.map((root) => consider(join(root, encodeProjectDir(cwd), file))))) : []
+  let hits = cwd ? found(await mapFs(roots, (root) => consider(join(root, encodeProjectDir(cwd), file)))) : []
   if (!hits.length) {
     for (const root of roots) {
-      const projects = await readdir(root).catch(() => [] as string[])
-      hits.push(...found(await Promise.all(projects.map((p) => consider(join(root, p, file))))))
+      const projects = await fsSlot(() => readdir(root)).catch(() => [] as string[])
+      hits.push(...found(await mapFs(projects, (p) => consider(join(root, p, file)))))
     }
   }
   if (!hits.length) return null
