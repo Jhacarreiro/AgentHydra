@@ -8,9 +8,10 @@ import { enabled, memOf, readStatus, reportBroken, save, type Manager } from './
 import { settleCommands } from './manager-settle'
 import { pollPrompts, recordTaskRun, startRun } from './manager-runs'
 import { centralEntries, refreshCentral } from './manager-central'
+import { claimSlot, readRuns, tendClaims } from './manager-board'
 
-/** Whether this computer reads and runs an entry: a local file, or a central routine placed here. */
-export const runsHere = (e: Entry): boolean => !e.central || e.central.placed
+/** Whether this computer reads and runs an entry: a local file, or a central routine pinned here or shared with this runner. */
+export const runsHere = (e: Entry): boolean => e.central?.placement !== 'elsewhere'
 
 /** A look soon after this one, for what the store just brought. */
 function lookSoon(m: Manager): void {
@@ -22,13 +23,14 @@ function lookSoon(m: Manager): void {
 }
 
 /** The central store's routines and proposals, from this computer's copy; the store is read again in the background
- *  (refreshCentral says how often), and a look follows when it brought a change. */
+ *  (refreshCentral says how often), and a look follows when it brought a change. The run log is read in the background too. */
 function centralRead(m: Manager, localIds: Set<string>): { entries: Entry[]; proposals: RoutineProposal[] } {
   const c = m.central
   if (!c) return { entries: [], proposals: [] }
   void refreshCentral(c, false, m.clock()).then((changed) => {
     if (changed) lookSoon(m)
   })
+  void readRuns(c, false, m.clock())
   return centralEntries(c, localIds)
 }
 
@@ -67,7 +69,8 @@ async function readAll(m: Manager): Promise<{ seen: Seen[]; proposals: RoutinePr
   return { seen: reads, proposals: [...found, ...central.proposals] }
 }
 
-/** One look: reads everything, judges, and starts the runs that fell due. One look at a time. */
+/** One look: reads everything, judges, and starts the runs that fell due (a shared central routine's slot once the run board
+ *  grants it this runner), then tends the claims this runner holds. One look at a time. */
 export function look(m: Manager): Promise<void> {
   m.looking ??= (async () => {
     try {
@@ -86,8 +89,11 @@ export function look(m: Manager): Promise<void> {
         recordTaskRun(m, s, mem)
         const j = judge(s, mem, t, enabled(m), false)
         if (j.skipSlot !== null) mem.lastSlot = j.skipSlot
-        if (j.start && s.entry.def) startRun(m, s.entry.def, mem, j.slot)
+        if (!j.start || !s.entry.def) continue
+        if (s.entry.central?.placement === 'shared' && j.slot !== null && !(await claimSlot(m, s.entry.def, mem, j.slot))) continue
+        startRun(m, s.entry.def, mem, j.slot)
       }
+      await tendClaims(m)
       save(m)
     } catch (err) {
       m.lastError = `the last look failed: ${message(err)}`

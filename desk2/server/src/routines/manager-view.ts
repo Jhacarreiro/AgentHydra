@@ -7,6 +7,7 @@ import { enabled, historyFile, keepHistory, type Manager } from './manager'
 import { settleCommands } from './manager-settle'
 import { look } from './manager-look'
 import { refreshCentral, storeStatus } from './manager-central'
+import { latestRunOf, readRuns } from './manager-board'
 
 function routineView(m: Manager, s: Seen, t: number): Routine {
   const { entry } = s
@@ -41,7 +42,14 @@ function routineView(m: Manager, s: Seen, t: number): Routine {
     running: mem.running ? { ...mem.running } : null,
     runs: [...mem.runs],
     runsTotal: Math.max(mem.runs.length, m.runCounts.get(entry.id) ?? 0),
-    ...(entry.central ? { source: 'central' as const, runsOn: entry.central.runsOn } : {}),
+    ...(entry.central
+      ? {
+          source: 'central' as const,
+          runsOn: entry.central.runsOn,
+          latestRun: latestRunOf(m.central, entry.id),
+          ...(entry.central.timeZone ? { timeZone: entry.central.timeZone } : {}),
+        }
+      : {}),
   }
 }
 
@@ -87,9 +95,9 @@ export function detailsFor(m: Manager, id: string, before: string | undefined, l
 }
 
 /** GET /api/routines: the last look's view, or a fresh look when asked for one or when none has run yet. A fresh look reads
- *  the central store first. */
+ *  the central store and its run log first. */
 export async function readRoutines(m: Manager, fresh: boolean): Promise<RoutinesStatus> {
-  if (fresh && m.central) await refreshCentral(m.central, true, m.clock())
+  if (fresh && m.central) await Promise.all([refreshCentral(m.central, true, m.clock()), readRuns(m.central, true, m.clock())])
   if (m.checkedAt === null || fresh) await look(m)
   else
     await settleCommands(m).catch((err) => {

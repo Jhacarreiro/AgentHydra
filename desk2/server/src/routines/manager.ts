@@ -10,6 +10,7 @@ import { appendRows, descriptionRow, readHistory, syncHistory } from './history'
 import { LINE_CHARS, message, runArgv } from './proc'
 import { RUNS_KEPT, STATUS_MS, type RoutineIncidents, type RoutineTasks, type RoutineWorkers } from './manager-config'
 import type { Central } from './manager-central'
+import { reportDescribed, reportEnded } from './manager-board'
 
 /** One routines manager's state: the folders it reads, its seams, and what its looks have seen and remember. */
 export interface Manager {
@@ -85,6 +86,7 @@ export function finishRun(m: Manager, id: string, mem: Memory, r: RoutineRun, ou
   if (described) r.description = { state: 'pending', text: '' }
   mem.runs.unshift(r)
   mem.runs.splice(RUNS_KEPT)
+  reportEnded(m, id, mem.running, r)
   mem.running = null
   save(m)
   keepHistory(m, id, mem)
@@ -141,6 +143,7 @@ async function describeRun(m: Manager, id: string, def: RoutineDefinition, r: Ro
   if (!kept || m.stopping) return
   kept.description = description
   save(m)
+  reportDescribed(m, id, r, description)
   try {
     appendRows(historyFile(m, id), [descriptionRow(r.startedAt, description)])
   } catch (err) {

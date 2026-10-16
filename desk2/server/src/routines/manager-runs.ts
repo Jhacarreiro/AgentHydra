@@ -10,6 +10,7 @@ import { lastLineOf, LINE_CHARS, message } from './proc'
 import { RUNNER_ENTRY, runPaths, writeJson, type RunFile, type RunSpec } from './runner'
 import { TASK_NEVER_RAN, TASK_RUNNING } from './wintask'
 import { finishRun, keepHistory, save, type Manager } from './manager'
+import { reportStarted } from './manager-board'
 import { groupStamp, localStamp } from './manager-files'
 import { LOG_MAX_BYTES, RUNS_KEPT, type WorkerView } from './manager-config'
 
@@ -107,9 +108,10 @@ async function startPrompt(m: Manager, def: RoutineDefinition, mem: Memory, star
  *  It starts at the clock's now, not at its look's: the status commands a look reads first can take a minute. */
 export function startRun(m: Manager, def: RoutineDefinition, mem: Memory, slot: number | null): void {
   const t = m.clock()
-  mem.running = { startedAt: t, kind: def.prompt !== undefined ? 'prompt' : 'command', pid: null, workerId: null, sessionId: null }
+  mem.running = { startedAt: t, kind: def.prompt !== undefined ? 'prompt' : 'command', pid: null, workerId: null, sessionId: null, slot }
   if (slot !== null) mem.lastSlot = slot
   save(m)
+  reportStarted(m, def.id, mem.running)
   if (def.prompt !== undefined) void startPrompt(m, def, mem, t)
   else startCommand(m, def, mem, t)
 }

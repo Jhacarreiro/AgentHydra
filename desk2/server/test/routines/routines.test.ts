@@ -60,6 +60,20 @@ describe('cron (routines/cron.ts)', () => {
     expect(nextSlot(parseCron('0 0 31 * *'), at(2026, 10, 31, 0, 0))).toBe(at(2026, 12, 31, 0, 0))
   })
 
+  test('in a zone with summer time, a wall time the clocks skip runs once just after the gap, and one they show twice runs once, the first', () => {
+    // America/New_York moved forward at 2026-03-08 02:00 EST (07:00 UTC) and back at 2026-11-01 02:00 EDT (06:00 UTC).
+    const ny = 'America/New_York'
+    // 02:30 is not on March 8's clocks: its slot is 03:30 EDT (07:30 UTC), and the next is March 9, 02:30 EDT.
+    const skipped = parseCron('30 2 * * *')
+    expect(nextSlot(skipped, Date.UTC(2026, 2, 8, 6, 0), ny)).toBe(Date.UTC(2026, 2, 8, 7, 30))
+    expect(nextSlot(skipped, Date.UTC(2026, 2, 8, 7, 30), ny)).toBe(Date.UTC(2026, 2, 9, 6, 30))
+    // 01:30 comes twice on November 1: the slot is the first (EDT, 05:30 UTC); the second (EST, 06:30 UTC) is none.
+    const twice = parseCron('30 1 * * *')
+    expect(nextSlot(twice, Date.UTC(2026, 10, 1, 4, 0), ny)).toBe(Date.UTC(2026, 10, 1, 5, 30))
+    expect(nextSlot(twice, Date.UTC(2026, 10, 1, 5, 30), ny)).toBe(Date.UTC(2026, 10, 2, 6, 30))
+    expect(previousSlot(twice, Date.UTC(2026, 10, 1, 7, 0), ny)).toBe(Date.UTC(2026, 10, 1, 5, 30))
+  })
+
   test('rejects what it does not take, with a reason', () => {
     expect(() => parseCron('0 9 * * MON')).toThrow()
     expect(() => parseCron('@daily')).toThrow()

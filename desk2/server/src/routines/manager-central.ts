@@ -2,7 +2,8 @@
 // the store; without it nothing here runs. A copy of each routine document is kept in <desk home>/routines/central/, so
 // the routines run from it while the store cannot be reached; it is read again from the store at most every 5 minutes
 // (at once when the page asks for a fresh look), and a look turns it into entries and proposals beside the local files.
-// The owner's approve, discard and edit, and any caller's central propose, write the store first and then the copy.
+// The owner's approve, discard and edit, and any caller's central propose, write the store first and then the copy. The
+// run board under the same repo key (claims and the run log) is routines/manager-board.ts's.
 
 import { mkdirSync, readFileSync, readdirSync, rmSync } from 'node:fs'
 import { homedir } from 'node:os'
@@ -19,7 +20,7 @@ import {
   FORMAT,
   parseDoc,
   parseStoreConfig,
-  placedOn,
+  placementOf,
   renderDoc,
   type ApproverKey,
   type RoutineDoc,
@@ -27,9 +28,10 @@ import {
   type StoreConfig,
   type TrustedKey,
 } from './central'
-import { ROUTINE_ID, type Entry } from './manifest'
+import { ROUTINE_ID, type CentralMark, type Entry } from './manifest'
 import { message } from './proc'
-import { crainiumStore, StoreError, type DocsCall, type RoutineStore } from './store-crainium'
+import type { RunEvent } from './runs'
+import { crainiumRunBoard, crainiumStore, RUNS_TOOL, StoreError, type RoutineStore, type RunBoard } from './store-crainium'
 
 export const STORE_FILE = 'routines-store.json'
 export const KEY_FILE = 'routines-approver.key'
@@ -58,10 +60,27 @@ export interface Central {
   /** How many writes this computer made to the store: a read that saw one start under it is not kept. */
   writes: number
   problems: { id: string; reason: string }[]
+  /** The run board (routines/manager-board.ts): claims and the run log, under the store's repo key. */
+  board: RunBoard
+  /** The run log's newest run of each routine, as its events, from the board's last answer. */
+  boardEvents: unknown[]
+  /** The run events this computer reported that the board's last answer did not hold yet, by id. */
+  ownEvents: Map<string, RunEvent>
+  /** Those the board has not taken yet: sent again before the next read. */
+  unsent: Map<string, RunEvent>
+  /** An ended event that waits for its run's description, by `<id>@<startedAt>`. */
+  describing: Map<string, RunEvent>
+  runsReadAt: number | null
+  runsError: string | null
+  runsLastTry: number | null
+  runsReading: Promise<void> | null
 }
 
+/** One call of one of the person's Connections tools. */
+export type ConnectionsCall = (tool: string, params: Record<string, unknown>) => Promise<string>
+
 /** The central store routines-store.json names, ready to read: null when there is none, or why the file does not check out. */
-export function openCentral(home: string, call: DocsCall, platform: NodeJS.Platform): { central: Central | null; error: string | null } {
+export function openCentral(home: string, call: ConnectionsCall, platform: NodeJS.Platform): { central: Central | null; error: string | null } {
   let raw: string
   try {
     raw = readFileSync(join(home, STORE_FILE), 'utf8')
@@ -82,7 +101,7 @@ export function openCentral(home: string, call: DocsCall, platform: NodeJS.Platf
     runner,
     trusted: [{ name: config.approverName, key: key.public }, ...config.approvers],
     key,
-    store: crainiumStore(call, config.repo),
+    store: crainiumStore((params) => call('docs', params), config.repo),
     cacheDir,
     docs: loadCopies(cacheDir),
     readAt: null,
@@ -91,6 +110,15 @@ export function openCentral(home: string, call: DocsCall, platform: NodeJS.Platf
     refreshing: null,
     writes: 0,
     problems: [],
+    board: crainiumRunBoard((params) => call(RUNS_TOOL, params), config.repo),
+    boardEvents: [],
+    ownEvents: new Map(),
+    unsent: new Map(),
+    describing: new Map(),
+    runsReadAt: null,
+    runsError: null,
+    runsLastTry: null,
+    runsReading: null,
   }
   central.readAt = readAtOf(cacheDir)
   return { central, error: null }
@@ -195,9 +223,10 @@ function proposalOf(doc: RoutineDoc, why: string): RoutineProposal {
   return { ...definitionOf(doc), why, source: 'central', runsOn: doc.runsOn }
 }
 
-/** The copies as a look reads them: each approved routine as an entry (run here when placed here, else listed as elsewhere),
- *  each other document as a proposal. A document that is not a routine, or has the id of one of this computer's routine
- *  or proposal files (`localIds`: the file is the one listed and run), goes to `problems`, never listed. */
+/** The copies as a look reads them: each approved routine as an entry (run here when pinned here or shared with this runner,
+ *  else listed as elsewhere), each other document as a proposal. A document that is not a routine, or has the id of one of
+ *  this computer's routine or proposal files (`localIds`: the file is the one listed and run), goes to `problems`, never
+ *  listed. Only a schedule routine is shared: a status or Windows-task one has no slot to claim, so it is pinned or broken. */
 export function centralEntries(c: Central, localIds: Set<string>): { entries: Entry[]; proposals: RoutineProposal[] } {
   const entries: Entry[] = []
   const proposals: RoutineProposal[] = []
@@ -219,9 +248,12 @@ export function centralEntries(c: Central, localIds: Set<string>): { entries: En
       proposals.push(proposalOf(doc, doc.why ?? `Not approved yet: ${approval.why}.`))
       continue
     }
-    const central = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, placed: placedOn(doc.runsOn, c.runner) }
+    const zone = typeof doc.front.timeZone === 'string' ? { timeZone: doc.front.timeZone } : {}
+    const central: CentralMark = { path: cached.path, docSha: cached.docSha, runsOn: doc.runsOn, ...placementOf(doc.runsOn, c.runner), ...zone }
     try {
-      entries.push({ id, def: central.placed ? definitionOn(doc, c.runner) : definitionOf(doc), broken: null, central })
+      if (central.placement === 'shared' && doc.front.schedule === undefined)
+        throw new Error(`it runs on any runner labelled ${doc.runsOn.join(', ')}, and only a schedule routine is shared between runners: name the runner it runs on in its runsOn`)
+      entries.push({ id, def: central.placement === 'elsewhere' ? definitionOf(doc) : definitionOn(doc, c.runner), broken: null, central })
     } catch (err) {
       entries.push({ id, def: null, broken: message(err), name: doc.name, central })
     }
@@ -231,8 +263,19 @@ export function centralEntries(c: Central, localIds: Set<string>): { entries: En
 
 /** GET /api/routines `store`. */
 export function storeStatus(c: Central | null, error: string | null): RoutineStoreStatus | null {
-  if (c) return { repo: c.config.repo, runner: c.runner.id, labels: c.runner.labels, approverKey: c.key.public, readAt: c.readAt, error: c.error, problems: c.problems }
-  return error ? { repo: '', runner: '', labels: [], approverKey: '', readAt: null, error, problems: [] } : null
+  if (c)
+    return {
+      repo: c.config.repo,
+      runner: c.runner.id,
+      labels: c.runner.labels,
+      approverKey: c.key.public,
+      readAt: c.readAt,
+      error: c.error,
+      problems: c.problems,
+      runsReadAt: c.runsReadAt,
+      runsError: c.runsError,
+    }
+  return error ? { repo: '', runner: '', labels: [], approverKey: '', readAt: null, error, problems: [], runsReadAt: null, runsError: null } : null
 }
 
 /** A refused central action: its HTTP status and reason. */

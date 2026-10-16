@@ -8,7 +8,8 @@
 // never run. No model decides here: a prompt routine is a Desk chat that runs its prompt, and a routine whose file says
 // `describe` has each run's output read by one Haiku turn afterwards (routines/describe.ts), kept with the run. When
 // <home>/routines-store.json names a central store, its routine documents are listed beside the files (routines/central.ts
-// and routines/manager-central.ts): an approved one runs where its runsOn places it, any other one is a proposal.
+// and routines/manager-central.ts): an approved one runs where its runsOn places it (on any runner its labels match, one
+// per slot by a claim on the run board: routines/manager-board.ts), any other one is a proposal.
 
 import type { Hono } from 'hono'
 import { appendFileSync, mkdirSync } from 'node:fs'
@@ -40,12 +41,13 @@ export default function plugin(app: Hono, ctx: ServerContext, opts: RoutinesOpti
   const describer = opts.describer ?? sdkDescriber(ctx.home, () => bridge().listAccounts(), () => claudeCodeBinaryFor(ctx.home).path())
   const platform = opts.platform ?? process.platform
   // The central store, when routines-store.json names one, is read and written through the person's own Connections `docs`
-  // tool. The client starts its server at the first call, so a Desk with no store starts none.
+  // tool, and its run board through their `routine_runs` tool. The client starts its server at the first call, so a Desk
+  // with no store starts none.
   const given = ctx.deps.connections as ConnectionsClient | undefined
   let made: ConnectionsClient | null = null
   const connections = (): ConnectionsClient =>
     given ?? (made ??= new ConnectionsClient(mainConfigFile(ctx.deps.mainClaudeJson as string | null | undefined, ctx.deps.agentHydraMcp)))
-  const central = openCentral(ctx.home, (params) => connections().call({ cwd: ctx.home, sessionId: null }, 'docs', params), platform)
+  const central = openCentral(ctx.home, (tool, params) => connections().call({ cwd: ctx.home, sessionId: null }, tool, params), platform)
   const m: Manager = {
     ctx,
     routinesDir,

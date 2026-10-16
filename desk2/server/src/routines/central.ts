@@ -11,7 +11,7 @@ import { mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { hostname } from 'node:os'
 import { dirname, isAbsolute, join } from 'node:path'
 import type { RoutineDefinition } from '@shared/routines'
-import { checkDefinition, ROUTINE_ID } from './manifest'
+import { checkDefinition, ROUTINE_ID, type Placement } from './manifest'
 
 export const FORMAT = 'routine/1'
 /** The folder of a store that holds its routine documents. */
@@ -62,8 +62,8 @@ export interface RoutineDoc {
   approval: Approval | null
 }
 
-/** This computer as a runner: its name, the labels it carries (its name and its system among them), its clock's time zone,
- *  its home folder (for ~/), and where its checkouts of the repos a routine's workdir names are. */
+/** This computer as a runner: its name, the labels it carries (its name and its system among them), its clock's time zone
+ *  (a proposal's default), its home folder (for ~/), and where its checkouts of the repos a routine's workdir names are. */
 export interface Runner {
   id: string
   labels: string[]
@@ -227,11 +227,9 @@ function cwdOn(front: Record<string, unknown>, runner: Runner): string | undefin
   return cwd
 }
 
-/** The routine a document defines, as this runner runs it: its folder found here, ~/ in its commands made this home, and
- *  its time zone this computer's. Throws with the reason this runner cannot run it. */
+/** The routine a document defines, as this runner runs it: its folder found here and ~/ in its commands made this home (its
+ *  schedule keeps the document's timeZone wherever it runs). Throws with the reason this runner cannot run it. */
 export function definitionOn(doc: RoutineDoc, runner: Runner): RoutineDefinition {
-  if (doc.front.schedule !== undefined && doc.front.timeZone !== runner.zone)
-    throw new Error(`it keeps ${String(doc.front.timeZone)} time and this computer keeps ${runner.zone}: for now a routine runs only on a computer in its own time zone`)
   const def = checkDefinition(doc.id, contractOf(doc, cwdOn(doc.front, runner)))
   if (def.run) def.run = def.run.map((a) => homeOf(a, runner.home))
   if (def.status) def.status = def.status.map((a) => homeOf(a, runner.home))
@@ -244,10 +242,12 @@ export function definitionOf(doc: RoutineDoc): RoutineDefinition {
   return checkDefinition(doc.id, contractOf(doc, placeText(doc.front)))
 }
 
-/** Whether a routine whose runsOn is these labels runs on this runner: it names this runner, and this runner carries every
- *  label it names. Until runners claim runs from the store, a routine runs only where its runsOn names a runner. */
-export function placedOn(runsOn: string[], runner: Runner): boolean {
-  return runsOn.includes(runner.id) && runsOn.every((l) => runner.labels.includes(l))
+/** Where a routine whose runsOn is these labels runs, seen from this runner. It runs only on a runner that carries every label
+ *  it names: `here` when one of them is this runner's name (pinned: no other runner runs it, so it needs no claim), `shared`
+ *  when none is (any runner carrying them may run it, one per slot by a claim on the run board), else `elsewhere`, with why. */
+export function placementOf(runsOn: string[], runner: Runner): { placement: Placement; why: string | null } {
+  if (!runsOn.every((l) => runner.labels.includes(l))) return { placement: 'elsewhere', why: `it runs on ${runsOn.join(', ')}, not on this computer` }
+  return { placement: runsOn.includes(runner.id) ? 'here' : 'shared', why: null }
 }
 
 /** The bytes an approval signs. */

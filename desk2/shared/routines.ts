@@ -67,13 +67,22 @@
 //   kind "routine", format "routine/1", title (its name), askedBy, why (while it is a proposal), the contract's WHEN and
 //   WHAT keys above (a "schedule" also names its IANA "timeZone"), its folder as "workdir": { "repo", "path" } (found
 //   through "repos" on each computer) or "cwd" (a full path, or one starting with ~/), "runsOn" (the runner labels it
-//   runs on: today it runs only on a runner it names), timeoutMinutes, until, describe, and "approval". Its prompt is
-//   the body. A document runs only once a person approved it: "approval" is an Ed25519 signature over its id and
-//   everything in it but the approval, by this computer's approver key (<desk home>/routines-approver.key, made with
-//   the store) or one listed in "approvers". An AI may write a proposal there (POST propose with "store": "central"),
-//   never an approval; any change after an approval makes it a proposal again. A routine placed on another runner is
-//   listed as 'elsewhere' and never run here, and one with the id of a file here is broken: the file runs. The manager
-//   keeps a copy of each document in <desk home>/routines/central/ and runs from it while the store cannot be reached.
+//   runs on), timeoutMinutes, until, describe, and "approval". Its prompt is the body. A document runs only once a person
+//   approved it: "approval" is an Ed25519 signature over its id and everything in it but the approval, by this computer's
+//   approver key (<desk home>/routines-approver.key, made with the store) or one listed in "approvers". An AI may write a
+//   proposal there (POST propose with "store": "central"), never an approval; any change after an approval makes it a
+//   proposal again. A schedule keeps its "timeZone" on every runner, and so does its "until" day.
+// WHERE IT RUNS: only on a runner that carries every label its runsOn names. When one of them is a runner's name it is
+//   pinned to that runner and runs as a local routine does. When none is, any runner carrying them may run it (a schedule
+//   routine only) and exactly one runs each slot: before a slot runs, its runner claims it on the store's run board (the
+//   CrAInium's `routine_runs` tool, under the same repo key), which grants it to the first runner that asks, with a lease
+//   of twice its timeout that the holder renews while the run lives; a lease that lapsed lets another runner take the
+//   slot, and no newer slot is granted while one runs. A board that does not answer holds back only those shared slots.
+//   Every central run, wherever it runs, is reported to the run log as CloudEvents (routine.claimed, routine.started,
+//   routine.ended), and each computer's card shows the newest run of each central routine (`latestRun`). A routine its
+//   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is
+//   broken: the file runs. The manager keeps a copy of each document in <desk home>/routines/central/ and runs from it while
+//   the store cannot be reached.
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000
@@ -130,6 +139,24 @@ export interface RoutineRunning {
   pid: number | null
   workerId: string | null
   sessionId: string | null
+  /** The schedule slot it runs for (ms), or null for a run not tied to one (a manual run, a status routine's). */
+  slot?: number | null
+}
+
+/** A central routine's newest run, wherever it ran, from the run log every computer reads. Times in ms; the facts of its
+ *  end are null while it runs (or when it never said how it ended). */
+export interface CentralRun {
+  /** The runner it ran on. */
+  runner: string
+  /** The schedule slot it ran for, or null for a run not tied to one. */
+  slot: number | null
+  startedAt: number | null
+  endedAt: number | null
+  outcome: RoutineOutcome | null
+  exitCode: number | null
+  lastLine: string | null
+  /** What it did, as an AI read it (its routine's `describe` is on). */
+  description: string | null
 }
 
 /** A status routine's modes: the options the owner picks from, and the command that takes a pick (its argv, the option
@@ -188,6 +215,10 @@ export interface RoutineStoreStatus {
   error: string | null
   /** Documents under routines/ that are not a routine, each with why (never run, never listed). */
   problems: { id: string; reason: string }[]
+  /** When the run log last answered, ms; null when it never has. */
+  runsReadAt: number | null
+  /** Why the run log did not answer, or did not take this computer's runs; null when it did. */
+  runsError: string | null
 }
 
 /** One routine, as the last look saw it. */
@@ -235,6 +266,10 @@ export interface Routine {
   source?: 'central'
   /** A central routine's runner labels: where it runs. */
   runsOn?: string[]
+  /** A central schedule routine's IANA time zone: its schedule and until day keep it, wherever it runs. */
+  timeZone?: string
+  /** A central routine's newest run, wherever it ran (the run log); null when none is known. */
+  latestRun?: CentralRun | null
 }
 
 /** GET /api/routines. */

@@ -37,6 +37,16 @@ interface Routine {
   runs: Run[]
   source?: string
   runsOn?: string[]
+  timeZone?: string
+  latestRun?: {
+    runner: string
+    slot: number | null
+    startedAt: number | null
+    endedAt: number | null
+    outcome: string | null
+    lastLine: string | null
+    description: string | null
+  } | null
 }
 interface Status {
   enabled: boolean
@@ -120,7 +130,21 @@ async function routines(args: {
       recent: r.runs
         .slice(0, RUNS_SHOWN)
         .map((x) => ({ ...x, startedAt: iso(x.startedAt), endedAt: iso(x.endedAt) })),
-      ...(r.source ? { source: r.source, runsOn: r.runsOn } : {}),
+      ...(r.source
+        ? {
+            source: r.source,
+            runsOn: r.runsOn,
+            ...(r.timeZone ? { timeZone: r.timeZone } : {}),
+            latestRun: r.latestRun
+              ? {
+                  ...r.latestRun,
+                  slot: iso(r.latestRun.slot),
+                  startedAt: iso(r.latestRun.startedAt),
+                  endedAt: iso(r.latestRun.endedAt),
+                }
+              : null,
+          }
+        : {}),
     })),
     waitingForOwner: json.proposals,
     store: json.store
@@ -132,7 +156,7 @@ async function routines(args: {
 
 const CONTRACT =
   'name, askedBy (who asked, in their words, with the date), exactly one of schedule (5-field cron, local time), status (argv) or windowsTask (a Windows task path), and for schedule or status exactly one of run (argv) or prompt (an AI run, needs cwd); optional cwd, timeoutMinutes (5-360), until (YYYY-MM-DD), describe (true: an AI describes each run once it ends). ' +
-  'For the central store (when the answer has a `store`, which every computer reading it shares): add store "central", runsOn (labels naming the computer it runs on; default this one), timeZone (IANA; a schedule routine keeps it, default this computer\'s) and, rather than cwd, workdir { repo: "owner/name", path } so a computer with that checkout finds the folder; ~/ in cwd and commands is the running computer\'s home'
+  'For the central store (when the answer has a `store`, which every computer reading it shares): add store "central", runsOn (the runner labels it runs on: naming a computer pins it there; labels alone let any computer carrying them run it, one per slot; default this one), timeZone (IANA; a schedule routine keeps it, default this computer\'s) and, rather than cwd, workdir { repo: "owner/name", path } so a computer with that checkout finds the folder; ~/ in cwd and commands is the running computer\'s home'
 
 export const ROUTINES_TOOLS: HydraTool[] = [
   {

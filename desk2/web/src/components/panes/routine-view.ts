@@ -1,6 +1,6 @@
 // What the Routines list says at a glance, as pure functions: a status from the routine's state and last run, times as
 // '2 h ago' / 'in 3 h', a schedule in plain words with its time zone, and the list's count line.
-import type { Routine, RoutineOutcome, RoutineStoreStatus } from '@shared/routines'
+import type { CentralRun, Routine, RoutineOutcome, RoutineStoreStatus } from '@shared/routines'
 
 export type RoutineStatus = 'ok' | 'failed' | 'running' | 'paused' | 'waiting' | 'new' | 'elsewhere'
 
@@ -36,7 +36,16 @@ export function storeLine(s: RoutineStoreStatus | null | undefined, now: number)
   if (!s.repo) return `Central store: ${s.error ?? 'not set up'}`
   const read = s.readAt === null ? 'not read yet' : `read ${relativeTime(s.readAt, now)}`
   const problems = s.problems.length ? `; not routines: ${s.problems.map((p) => `${p.id} (${p.reason})`).join('; ')}` : ''
-  return `Central store ${s.repo}, this computer as ${s.runner}, ${read}${s.error ? `; ${s.error}` : ''}${problems}`
+  return `Central store ${s.repo}, this computer as ${s.runner}, ${read}${s.error ? `; ${s.error}` : ''}${s.runsError ? `; ${s.runsError}` : ''}${problems}`
+}
+
+/** A central routine's newest run, wherever it ran, for its row: '2 h ago on example-pc', 'started 3 min ago on
+ *  example-pc' while it runs, 'claimed by example-pc' before it starts; null when none is known. */
+export function centralRunText(run: CentralRun | null | undefined, now: number): string | null {
+  if (!run) return null
+  if (run.endedAt !== null) return `${relativeTime(run.endedAt, now)} on ${run.runner}`
+  if (run.startedAt !== null) return `started ${relativeTime(run.startedAt, now)} on ${run.runner}`
+  return `claimed by ${run.runner}`
 }
 
 /** A result's icon family: ok, failed or busy (busy is neither a pass nor a failure). */

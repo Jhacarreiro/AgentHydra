@@ -4,7 +4,8 @@
 
 import type { RoutineRun, RoutineRunning, RoutineState } from '@shared/routines'
 import { untilEndOf, type Entry } from './manifest'
-import { nextSlot, parseCron, previousSlot } from './cron'
+import { nextSlot, parseCron, previousSlot, systemZone } from './cron'
+import type { Claim } from './runs'
 import type { TaskReading } from './wintask'
 
 /** A status-kind routine's run starts only this long after its last one ended. */
@@ -43,18 +44,35 @@ export interface Seen {
   task: TaskReading | null
 }
 
-/** A routine's memory: its last runs, newest first; the run going on, if any; the newest schedule slot it ran for; paused. */
+/** A shared central routine's claim (routines/runs.ts), as the run board last answered this computer about a slot it asked for. */
+export interface SlotClaim {
+  /** The slot this computer asked for (ms). */
+  asked: number
+  /** The routine's claim the board answered (its slot may be another one); null when it did not answer. */
+  claim: Claim | null
+  /** Whether this computer holds the slot it asked for. */
+  mine: boolean
+  /** Why the board did not answer (the ask or the last renewal); null when it did. */
+  error: string | null
+  /** When this computer last asked or renewed, by its own clock (the lease is the board's). */
+  at: number
+}
+
+/** A routine's memory: its last runs, newest first; the run going on, if any; the newest schedule slot it ran for; paused;
+ *  and a shared central routine's claim. */
 export interface Memory {
   runs: RoutineRun[]
   running: RoutineRunning | null
   lastSlot: number | null
   paused: boolean
+  claim?: SlotClaim | null
 }
 
 export interface Judged {
   state: RoutineState
   reason: string
-  /** Whether a run starts now. */
+  /** Whether a run starts now. A shared central routine's due slot starts only once the run board grants it this runner
+   *  (routines/manager-board.ts claimSlot asks). */
   start: boolean
   /** The schedule slot a started run is for (null for the other kinds and for a manual run). */
   slot: number | null
@@ -164,11 +182,15 @@ export function lastEndOf(reading: Reading | null, mem: Memory): number | null {
   return ends.length ? Math.max(...ends) : null
 }
 
+/** The time zone a routine's schedule and until day keep: a central routine's own, else this computer's. */
+const zoneOf = (entry: Entry): string => entry.central?.timeZone ?? systemZone()
+
 /** The schedule's newest slot at or before `now`, and the next one after it, for a `schedule` routine; null otherwise. */
 export function slotsOf(entry: Entry, now: number): { newest: number | null; next: number | null } | null {
   if (!entry.def?.schedule) return null
   const c = parseCron(entry.def.schedule)
-  return { newest: previousSlot(c, now), next: nextSlot(c, now) }
+  const zone = zoneOf(entry)
+  return { newest: previousSlot(c, now, zone), next: nextSlot(c, now, zone) }
 }
 
 const idle = (reason: string, nextRunAt: number | null, state: RoutineState = 'idle'): Judged => ({ state, reason, start: false, slot: null, skipSlot: null, nextRunAt })
@@ -181,11 +203,11 @@ const idle = (reason: string, nextRunAt: number | null, state: RoutineState = 'i
 export function judge(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {
   const { entry } = seen
   if (entry.broken !== null || !entry.def) return idle(entry.broken ?? 'its file does not check out', null, 'broken')
-  if (entry.central && !entry.central.placed) return idle(`it runs on ${entry.central.runsOn.join(', ')}, not on this computer`, null, 'elsewhere')
+  if (entry.central?.placement === 'elsewhere') return idle(entry.central.why ?? 'it runs on another computer', null, 'elsewhere')
   const def = entry.def
   if (mem.running) return idle('a run is running now', null, 'running')
   if (def.until !== undefined) {
-    const end = untilEndOf(def.until)
+    const end = untilEndOf(def.until, zoneOf(entry))
     if (end !== null && now >= end) return idle(`ended after ${def.until}: it never runs`, null, 'ended')
   }
   if (def.windowsTask !== undefined) return judgeTask(seen)
@@ -208,7 +230,26 @@ function judgeSchedule(seen: Seen, mem: Memory, now: number, enabled: boolean, m
   if (due === null) return waiting
   if (now - due > MISSED_MS) return { ...idle(`slot ${new Date(due).toISOString()} was missed by more than 12 hours: skipped`, next, 'idle'), skipSlot: due }
   if (!enabled) return { state: 'due', reason: 'due; the routine manager is off, so it waits', start: false, slot: null, skipSlot: null, nextRunAt: next }
+  if (seen.entry.central?.placement === 'shared') return judgeClaim(mem, due, next)
   return { state: 'due', reason: 'due; running now', start: true, slot: due, skipSlot: null, nextRunAt: next }
+}
+
+/** A shared routine's due slot: asked for on the run board at every look until it runs here, ran elsewhere or is skipped,
+ *  so a lease that lapsed is taken over. Meanwhile it says what the board last answered: another runner runs it (or an
+ *  older slot still), or the board did not answer and it waits. */
+function judgeClaim(mem: Memory, due: number, next: number | null): Judged {
+  const ask = { start: true, slot: due, skipSlot: null, nextRunAt: next }
+  const iso = (ms: number): string => new Date(ms).toISOString()
+  const c = mem.claim?.asked === due ? mem.claim : null
+  if (c?.error) return { state: 'due', reason: `due; the run board did not answer (${c.error}), so it asks again at the next look`, ...ask }
+  const held = c && !c.mine ? c.claim : null
+  if (held && held.endedAt === null && held.slot <= due)
+    return {
+      state: 'running',
+      reason: held.slot === due ? `its ${iso(due)} run is running on ${held.holder}` : `its ${iso(held.slot)} run is still running on ${held.holder}, so the ${iso(due)} one waits`,
+      ...ask,
+    }
+  return { state: 'due', reason: 'due; asking the run board for it', ...ask }
 }
 
 function judgeStatus(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {
