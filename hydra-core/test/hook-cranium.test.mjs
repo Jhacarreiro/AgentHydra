@@ -169,12 +169,17 @@ test("Stop keeps one outbox line per turn: a core walk, and a turn that handed w
     assert.equal(walked.delegated, false);
     assert.equal(walked.chat, "sess-1");
     assert.equal(walked.folder, folderKey(FOLDER));
+    assert.equal(walked.folderPath, FOLDER);
     assert.equal(delegated.called, false);
     assert.equal(delegated.delegated, true);
   }));
 
-test("Stop with stop_hook_active true keeps no line", () =>
+test("Stop keeps no line for a stop_hook_active Stop, or in a folder whose workspace has no flowchart", () =>
   withCranium(async (dir) => {
     await run(stopWith(dir, "Agent", {}, { stop_hook_active: true }), envFor(dir));
+    const head = path.join(dir, "head.json");
+    const readAt = new Date().toISOString();
+    writeFileSync(head, JSON.stringify({ v: 1, folders: { [folderKey(FOLDER)]: { status: "none", flow: "main", readAt } } }));
+    await run(stopWith(dir, "Agent", {}), envFor(dir, { AGENTHYDRA_CRANIUM_HEAD_FILE: head }));
     assert.equal(existsSync(path.join(dir, "io", "core-outbox.jsonl")), false);
   }));

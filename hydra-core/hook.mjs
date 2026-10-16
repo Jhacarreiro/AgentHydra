@@ -288,6 +288,9 @@ const DELEGATES = /^(Agent|Task|Workflow)$|(hswarm_run|climayte_run|fan_out)$/;
 function craniumLedger(input, env) {
   try {
     if (input.stop_hook_active === true) return;
+    // A folder whose workspace has no flowchart has no core to measure.
+    const entry = headEntry(input, env);
+    if (entry?.status === "none") return;
     const { tools } = lastTurn(input);
     const called = tools.some((tool) => {
       const name = String(tool.name ?? "");
@@ -305,9 +308,11 @@ function craniumLedger(input, env) {
       at: new Date().toISOString(),
       chat,
       folder: folderKey(cwdOf(input)),
+      // The server matches a folder as written, so the ledger sends this; folder is the cache key.
+      folderPath: cwdOf(input),
       called,
       delegated,
-      version: headEntry(input, env)?.version ?? null,
+      version: entry?.version ?? null,
       pc: os.hostname(),
     };
     const outbox =
