@@ -133,6 +133,8 @@ test('an actual index stops after the selected line while preserving large previ
       long + '\\n' + 'discarded body line\\n'.repeat(20000),
       'abc\\nxx',
       'abc\\nxxx',
+      'a'.repeat(4096) + '\\n' + 'tail'.repeat(3000),
+      'b'.repeat(4097) + '\\n' + 'tail'.repeat(3000),
       'Untouched single-line prompt',
     ]
     const original = String.prototype.trim
@@ -141,12 +143,17 @@ test('an actual index stops after the selected line while preserving large previ
       trimCalls++
       return Reflect.apply(original,this,args)
     })
+    const originalSplit = String.prototype.split
+    const splitGuard = spyOn(String.prototype,'split').mockImplementation(function(...args) {
+      if (args[0] === '' && String(this).length > 4096) throw Error('Unbounded preview-copy array allocation')
+      return Reflect.apply(originalSplit,this,args)
+    })
     let index
     try { index = buildTranscriptIndex(texts.map((text,i)=>({kind:'user',id:'example-'+i,ts:i,text}))) }
-    finally { spy.mockRestore() }
-    const expected = [short,long,'abc','abc',texts[4]]
+    finally { splitGuard.mockRestore(); spy.mockRestore() }
+    const expected = [short,long,'abc','abc','a'.repeat(4096),'b'.repeat(4097),texts[6]]
     if(index.userMessages.some((m,i)=>m.firstLine!==expected[i])) throw Error('Code units or previews changed')
-    if(index.lastUserText!==texts[4]) throw Error('Full latest prompt changed')
+    if(index.lastUserText!==texts[6]) throw Error('Full latest prompt changed')
     if(trimCalls>texts.length) throw Error('Discarded body lines were visited')
     process.stdout.write(JSON.stringify({trimCalls,lengths:index.userMessages.map(m=>m.firstLine.length),lastUnits:[index.userMessages[0].firstLine.charCodeAt(short.length-1),index.userMessages[1].firstLine.charCodeAt(long.length-1)]}))
   `,
@@ -161,7 +168,7 @@ test('an actual index stops after the selected line while preserving large previ
   expect(exit, stderr).toBe(0)
   expect(stderr).toBe('')
   const result = JSON.parse(stdout) as { trimCalls: number; lengths: number[]; lastUnits: number[] }
-  expect(result.trimCalls).toBeLessThanOrEqual(5)
-  expect(result.lengths).toEqual([98, 100023, 3, 3, 28])
+  expect(result.trimCalls).toBeLessThanOrEqual(7)
+  expect(result.lengths).toEqual([98, 100023, 3, 3, 4096, 4097, 28])
   expect(result.lastUnits).toEqual([0xd800, 0xdc00])
 }, 20_000)

@@ -7,6 +7,8 @@ export const RECENT_TASKS = 20
 
 type TaskItem = Extract<TranscriptItem, { kind: 'task' }>
 const TASK_STATUSES = new Set<string>(['running', 'completed', 'failed', 'stopped'])
+/** Bound optional detachment work; the preview itself is never truncated. */
+const FIRST_LINE_COPY_MAX = 4096
 
 const firstLine = (s: string): string => {
   let start = 0
@@ -15,7 +17,7 @@ const firstLine = (s: string): string => {
     const line = s.slice(start, end < 0 ? s.length : end).trim()
     // A short first line can retain a whole old pasted prompt. Copy its exact UTF-16 units only
     // when most of the source is discarded; single-line and mostly-kept text need no extra copy.
-    if (line) return s.length > 2 * line.length ? line.split('').join('') : line
+    if (line) return line.length <= FIRST_LINE_COPY_MAX && s.length > 2 * line.length ? line.split('').join('') : line
     if (end < 0) return ''
     start = end + 1
   }

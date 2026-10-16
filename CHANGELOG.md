@@ -7,7 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
-- **Message previews release the pasted text they no longer need.** Transcript indexes stop at the first nonblank line and detach short previews from large earlier prompts. Preview text, message order and the newest full prompt stay the same.
+- **Message previews release the pasted text they no longer need.** Transcript indexes stop at the first nonblank line and detach short previews from large earlier prompts with bounded copy work. Preview text, message order and the newest full prompt stay the same.
 - **Session-file searches keep filesystem work bounded.** Overlapping searches share a small queue instead of creating large bursts of retained filesystem workers. Cwd priority, newest-copy selection and fresh file discovery stay the same.
 - **Free browser cleanup releases discarded response bodies sooner.** Oversized optional snapshots are released before cookie saving and browser cleanup finish. Accepted snapshots and reply confirmation keep their existing behavior.
 - **Shared path strings expire during cache-hit-only activity too.** The sharing pool now advances its retention windows even when every lookup already exists, and clears both expired windows after a long idle gap. Existing string values and eligible sharing remain the same.
