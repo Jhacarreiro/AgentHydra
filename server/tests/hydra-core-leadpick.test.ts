@@ -33,7 +33,7 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { pickForPlace, placeChat, placeNeedsPick } from '../src/hydra-core/placement'
 import { answer, scope } from '../src/hydra-core/tree'
 import { contentWords } from '../src/mcp-find'
-import { scratch, startChat } from './hydra-core-fixture'
+import { scratch, startChat, usePeopleDoor } from './hydra-core-fixture'
 
 const T = Date.now()
 
@@ -47,6 +47,7 @@ const placed = async (d: string, req: Parameters<typeof placeChat>[1], now = new
 const CWD = 'C:/Users/me/app'
 let dir = ''
 let asked: { q: LeadQuestion; ms: number }[] = []
+let dropDoor: (() => void) | null = null
 
 /** A mock model: answers from `pick(message)` after `delayMs`, or fails when it returns null. */
 function mockModel(pick: (message: string) => string | null, delayMs = 0): void {
@@ -147,7 +148,8 @@ function fiveManagers(dir: string): void {
   writeFileSync(join(dir, 'catalog', 'hand-b2-managers.json'), JSON.stringify(entries))
 }
 
-beforeEach(() => {
+beforeEach(async () => {
+  dropDoor = await usePeopleDoor()
   dir = scratch()
   fiveManagers(dir)
   // These tests cover ASK off (no core_scope line, a model lead pick and lead shift); a chat asks by default.
@@ -155,6 +157,8 @@ beforeEach(() => {
   asked = []
 })
 afterEach(() => {
+  dropDoor?.()
+  dropDoor = null
   setDecider(null)
   delete process.env.AGENTHYDRA_DECIDE_URL
   delete process.env.AGENTHYDRA_HSWARM_TOKEN_FILE

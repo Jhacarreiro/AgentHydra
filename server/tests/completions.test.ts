@@ -189,7 +189,13 @@ describe('completion registry', () => {
 const SRC = join(import.meta.dir, '..', 'src')
 const ANSWER = /status: '(working|started)'/
 // Answers that are not wired yet: a CliMayte worker seat or consult job, whose ticket (climayte-worker) is reserved.
+// And desk-client.ts's replyWhenDone, the shared wait: each caller registers its own working answer (mcp-managers.ts
+// through tellWhenChatDone; hydra-core/use.ts's seat, above). It moved there from mcp-managers.ts on 2026-10-15.
 const UNWIRED: { file: string; line: string }[] = [
+  {
+    file: 'desk-client.ts',
+    line: "if (Date.now() >= deadline) return { chat: chat.id, title: chat.title, status: 'working' }",
+  },
   { file: 'hydra-core/use.ts', line: "status: 'working'," },
   { file: 'hydra-core/use.ts', line: ": { job, status: 'working', read: readHint(e) }" },
   {
