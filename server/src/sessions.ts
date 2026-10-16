@@ -1023,7 +1023,7 @@ export function collapseSubagents(files: TranscriptFile[]): {
 
   /** The top-level session this row belongs to, or null when it is one itself — or owned by nothing
    *  real, which is the same answer as far as this list is concerned. */
-  const ownerOf = (file: TranscriptFile): TranscriptFile | null => {
+  const uncachedOwnerOf = (file: TranscriptFile): TranscriptFile | null => {
     const seen = new Set<string>([key(file, file.session_id)])
     let parent = file.parentId ? byId.get(key(file, file.parentId)) : undefined
     while (parent) {
@@ -1036,6 +1036,55 @@ export function collapseSubagents(files: TranscriptFile[]): {
     }
     // The chain ran off the end of the index: the owner was deleted or pruned. Keep the row.
     return null
+  }
+
+  // Shared ancestors are resolved once per call, including unowned chains and cycles. Rewalking
+  // a depth-N chain for each of its children used N(N+1)/2 parent visits and one Set per child.
+  // Only the last row for a key is canonical: an earlier duplicate can have a different parent
+  // edge, so its own cycle guard must keep the original walk rather than reuse canonical answers.
+  const owners = new Map<TranscriptFile, TranscriptFile | null>()
+  const ownerOf = (file: TranscriptFile): TranscriptFile | null => {
+    const ownKey = key(file, file.session_id)
+    if (byId.get(ownKey) !== file) return uncachedOwnerOf(file)
+    const remembered = owners.get(file)
+    if (remembered !== undefined) return remembered
+    const parentId = file.parentId
+    const parent = parentId ? byId.get(key(file, parentId)) : undefined
+    // Ordinary siblings and known-unowned branches need neither a path array nor a cycle Set.
+    if (!parent || key(parent, parent.session_id) === ownKey) {
+      owners.set(file, null)
+      return null
+    }
+    const parentOwner = owners.get(parent)
+    if (parentOwner !== undefined || !parent.parentId) {
+      const owner = parentOwner !== undefined ? parentOwner : parent
+      owners.set(parent, owner)
+      owners.set(file, owner)
+      return owner
+    }
+    const path: TranscriptFile[] = []
+    const seen = new Set<string>()
+    let current: TranscriptFile | undefined = file
+    let owner: TranscriptFile | null = null
+    while (current) {
+      const id = key(current, current.session_id)
+      if (seen.has(id)) break
+      const known = owners.get(current)
+      if (known !== undefined) {
+        owner = known
+        break
+      }
+      seen.add(id)
+      path.push(current)
+      const parentId = current.parentId
+      if (!parentId) {
+        owner = current
+        break
+      }
+      current = byId.get(key(current, parentId))
+    }
+    for (const visited of path) owners.set(visited, owner)
+    return owner
   }
 
   const rows: TranscriptFile[] = []
@@ -1166,6 +1215,34 @@ function transcriptArchivedFlag(
     if (meta) return meta.archived
   }
   return false
+}
+
+/** How recently an archived chat nobody read must have worked to still count as not archived. */
+const UNREAD_ARCHIVED_WINDOW_MS = 7 * 86_400_000
+
+/**
+ * Whether `f` was put away before anyone read it: the Desktop record its row shows is archived and still
+ * unread, nothing marks it done, and it worked in the last week. The "Not archived" list keeps these
+ * (owner, 2026-10-14: a chat was archived 25 s after its account hit a usage limit, unread and
+ * unfinished, and no default filter showed it). Its row still says archived, so the list marks it as
+ * such. The week bounds it: hundreds of archived chats on one store were unread, most long dead.
+ */
+function transcriptArchivedUnread(
+  f: TranscriptFile,
+  idsOf: (f: TranscriptFile) => string[],
+  mmap: Map<string, SessionMeta>,
+  dmap: Map<string, boolean>,
+  now: number,
+): boolean {
+  if (f.remote || f.mtime_ms < now - UNREAD_ARCHIVED_WINDOW_MS) return false
+  const meta = idsOf(f)
+    .map((id) => mmap.get(id))
+    .find(Boolean)
+  if (!meta?.archived || !meta.unread) return false
+  const done =
+    dmap.get(sessionMarkKey(f.source, f.session_id, f)) ??
+    dmap.get(legacyMarkKey(f.source, f.session_id, f.tool))
+  return !done
 }
 
 /** Whether `f` (or a transcript it absorbed) has a queue row. */
@@ -1401,9 +1478,15 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
         instances.some((i) => transcriptMatchesInstance(f, i, idsOf, mmap, byOrigin)),
     )
   }
+  const dmap = doneMarkMap()
   if (archivedStates.size === 1) {
     const want = archivedStates.has('archived')
-    files = files.filter((f) => transcriptArchivedFlag(f, idsOf, mmap) === want)
+    const now = Date.now()
+    files = files.filter(
+      (f) =>
+        transcriptArchivedFlag(f, idsOf, mmap) === want ||
+        (!want && transcriptArchivedUnread(f, idsOf, mmap, dmap, now)),
+    )
   }
   if (sinceMs !== null) files = files.filter((f) => f.mtime_ms >= sinceMs)
   // No re-check after the parse, unlike sinceMs below: mtime is an UPPER bound on real activity
@@ -1445,7 +1528,6 @@ export async function listSessions(opts: ListSessionsOptions = {}): Promise<Sess
     )
   }
   files = files.sort((a, b) => b.mtime_ms - a.mtime_ms)
-  const dmap = doneMarkMap()
   await climayteEffortReady()
   const lookups = rowLookups()
 

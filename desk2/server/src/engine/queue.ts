@@ -26,7 +26,8 @@ import type {
   ServerEvent,
 } from '@shared/protocol'
 import { createMediaCache, MAX_MEDIA_BYTES, type MediaCache, MEDIA_ROUTE } from '../media/cache'
-import { ChatBusyError, ChatError, type ChatManager, checkCwd, type Json, LIVE, obj, optBool, optString, parseCreate } from './chat-manager'
+import { ChatBusyError, ChatError, type ChatManager, checkCwd, LIVE } from './chat-manager'
+import { type Json, obj, optBool, optString, parseCreate } from './chat-requests'
 import { AsyncFile } from '../async-file'
 
 /** What the queue needs of the chat manager (tests fake it). */
@@ -632,13 +633,12 @@ export class QueueManager {
    */
   private async readBack(images: ImageRef[] | undefined): Promise<ImageRef[] | undefined> {
     if (!images) return undefined
-    const out: ImageRef[] = []
-    for (const img of images) {
+    const hits = images.map((img) => {
       const hit = img.url?.startsWith(MEDIA_ROUTE) ? this.media.lookup(img.url.slice(MEDIA_ROUTE.length)) : null
       if (!hit) throw new ChatError(400, `${img.name ?? 'A picture'} is no longer in the media cache: edit the item to attach it again`)
-      out.push({ ...img, dataBase64: (await readFile(hit.path)).toString('base64') })
-    }
-    return out
+      return hit
+    })
+    return Promise.all(images.map(async (img, i) => ({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })))
   }
 
   // queue.json

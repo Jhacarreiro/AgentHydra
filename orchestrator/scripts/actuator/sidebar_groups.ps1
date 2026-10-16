@@ -1,6 +1,6 @@
 # sidebar_groups.ps1 - open the Claude desktop app's COLLAPSED sidebar project groups so the chat
 # rows inside them are rendered, and fold back exactly the groups a run opened. Dot-sourced by
-# deliver_desktop_chat.ps1 and approve_prompt.ps1 (moved here verbatim from the delivery script's
+# approve_prompt.ps1 (deliver_desktop_chat.ps1 was the other caller, deleted 2026-10-15; moved here verbatim from the delivery script's
 # inline copy on 2026-09-24, board ruling on AgentHydra to-do 5f8bde91: the approval actuator had no
 # expand step at all, so a stuck permission prompt in a chat inside a collapsed group never cleared).
 #

@@ -54,7 +54,14 @@ const runs = computed(() => {
 })
 const line = (run: { t: number; v: number }[]) =>
   run.length === 1 ? `M${x(run[0].t) - 1.5},${y(run[0].v)}L${x(run[0].t) + 1.5},${y(run[0].v)}` : run.map((p, i) => `${i ? 'L' : 'M'}${x(p.t).toFixed(2)},${y(p.v).toFixed(2)}`).join('')
-const area = (run: { t: number; v: number }[]) => `${line(run)}L${x(run[run.length - 1].t).toFixed(2)},${props.height}L${x(run[0].t).toFixed(2)},${props.height}Z`
+const area = (run: { t: number; v: number }[], d: string) => `${d}L${x(run[run.length - 1].t).toFixed(2)},${props.height}L${x(run[0].t).toFixed(2)},${props.height}Z`
+/** Each run's line and area path, built once per data change rather than on every render. */
+const paths = computed(() =>
+  runs.value.map((run) => {
+    const d = line(run)
+    return { line: d, area: area(run, d) }
+  })
+)
 const lastPoint = computed(() => {
   const r = runs.value[runs.value.length - 1]
   const p = r?.[r.length - 1]
@@ -85,9 +92,9 @@ const lastPoint = computed(() => {
         stroke-dasharray="4 3"
         vector-effect="non-scaling-stroke"
       />
-      <template v-for="(run, i) in runs" :key="i">
-        <path :d="area(run)" :fill="`url(#${id}-fill)`" />
-        <path :d="line(run)" fill="none" :stroke="color" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
+      <template v-for="(path, i) in paths" :key="i">
+        <path :d="path.area" :fill="`url(#${id}-fill)`" />
+        <path :d="path.line" fill="none" :stroke="color" stroke-width="1.5" stroke-linejoin="round" stroke-linecap="round" vector-effect="non-scaling-stroke" />
       </template>
     </svg>
     <span

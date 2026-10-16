@@ -22,7 +22,7 @@ const quiet = computed(() => isQuiet(props.glyph, !!props.selected))
     <span
       v-if="ring"
       aria-hidden="true"
-      class="pointer-events-none absolute inset-0 rounded-[4px] p-px [mask:linear-gradient(#000_0_0)_content-box_exclude,linear-gradient(#000_0_0)]"
+      class="pointer-events-none absolute inset-0 rounded-sm p-px [mask:linear-gradient(#000_0_0)_content-box_exclude,linear-gradient(#000_0_0)]"
       :class="ring"
     />
     <img

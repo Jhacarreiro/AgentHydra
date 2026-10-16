@@ -139,7 +139,7 @@ class AutomationProfileTest(unittest.TestCase):
         self._tmp = tempfile.TemporaryDirectory()
         self.addCleanup(setattr, configlib, "_CACHE", configlib._CACHE)
         configlib._CACHE = configlib.defaults()
-        self.mine = self._meta("jacob-1")
+        self.mine = self._meta("mine-1")
         self.bot = self._meta("bot-1")
         stamplib.mark_automation("bot-1", "test")
 
@@ -201,7 +201,7 @@ class AutomationProfileTest(unittest.TestCase):
         # owner, 2026-09-28: "keep my chats on extra or max, just stay off ultracode". With the
         # knob off the owner's chat is on doctrine as it is: no re-stamp, no false 'missing'.
         self.policy(**{"doctrine.stamp_ultracode": False})
-        self.mine.write_text(json.dumps({"cliSessionId": "jacob-1", "permissionMode": "bypassPermissions",
+        self.mine.write_text(json.dumps({"cliSessionId": "mine-1", "permissionMode": "bypassPermissions",
                                          "effort": "max", "sessionSettings": {"ultracode": False}}),
                              encoding="utf-8")
         self.assertTrue(stamplib.is_stamped(self.read(self.mine)))
@@ -213,7 +213,7 @@ class AutomationProfileTest(unittest.TestCase):
         stamplib.mark_automation("local_zz-9", "test")
         self.assertTrue(stamplib.is_automation({"sessionId": "local_zz-9", "cliSessionId": "other"}))
         self.assertTrue(stamplib.is_automation({"cliSessionId": "bot-1"}))
-        self.assertFalse(stamplib.is_automation({"cliSessionId": "jacob-1", "sessionId": "local_jacob-1"}))
+        self.assertFalse(stamplib.is_automation({"cliSessionId": "mine-1", "sessionId": "local_mine-1"}))
         self.assertFalse(stamplib.is_automation({}))
 
 

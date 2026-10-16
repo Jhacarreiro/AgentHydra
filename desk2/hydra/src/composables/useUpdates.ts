@@ -18,6 +18,7 @@
 import { computed, ref } from 'vue'
 import type { UpdateApplyResult, UpdateStatusWithDistribution } from '@/lib/api'
 import * as api from '@/lib/api'
+import { sameData } from '@/lib/reconcile'
 import { useSelfUpdate } from '@/lib/useSelfUpdate'
 import { visibleInterval } from '@/lib/visible-poll'
 
@@ -128,11 +129,11 @@ const progressLabel = computed(() => {
  */
 async function applyUpdateWithProgress(): Promise<UpdateApplyResult> {
   progress.value = null
-  const timer = window.setInterval(() => {
+  const stopProgress = visibleInterval(() => {
     void api
       .getUpdateProgress()
       .then((p) => {
-        progress.value = p
+        if (!sameData(progress.value, p)) progress.value = p
       })
       .catch(() => {
         // Mid-apply the daemon may be swapping its own binary and briefly refusing connections.
@@ -174,7 +175,7 @@ async function applyUpdateWithProgress(): Promise<UpdateApplyResult> {
     }
     throw e
   } finally {
-    window.clearInterval(timer)
+    stopProgress()
     // Re-read availability so a successful update clears the hint without needing a reload.
     void refreshAvailability()
   }

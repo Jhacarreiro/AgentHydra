@@ -16,11 +16,18 @@ import {
   startCliMayte,
 } from '../src/climayte'
 import { resetCpuRing } from '../src/climayte-cpu'
-import { type CliMayteAccount, dueOrder, pickAccount, rankAccounts } from '../src/climayte-lib'
+import {
+  type CliMayteAccount,
+  dueOrder,
+  fullUntilReset,
+  pickAccount,
+  rankAccounts,
+} from '../src/climayte-lib'
 import { type MachineMemory, memoryShort } from '../src/climayte-memory'
 import {
   DEFAULT_TASK_PCT,
   expectedCost,
+  type FinishedCost,
   MANAGER_WAKE_PCT,
   planFactor,
   projectedPct,
@@ -53,6 +60,36 @@ describe('projectedPct', () => {
 })
 
 describe('expectedCost', () => {
+  test('one placement record calculates a setting once without changing estimates, and the next record learns new spend', () => {
+    let reads = 0
+    const finished: FinishedCost[] = Array.from({ length: 12_000 }, (_, n) => ({
+      kind: n % 2 ? 'code' : 'docs',
+      model: n % 3 ? 'claude-sonnet-5-5' : 'claude-haiku-5-5',
+      effort: n % 2 ? 'medium' : 'low',
+      get pct() {
+        reads++
+        return (n % 20) + 1
+      },
+    }))
+    const setting = { kind: 'code', model: 'claude-sonnet-5-5', effort: 'medium' }
+    const first = expectedCost(setting, finished)
+    const once = reads
+    expect(once).toBeGreaterThan(0)
+    for (let n = 0; n < 50; n++) expect(expectedCost(setting, finished)).toEqual(first)
+    expect(reads).toBe(once)
+    // A caller's edits never leak into the next worker's estimate.
+    const changed = expectedCost(setting, finished)
+    changed.pct = -1
+    expect(expectedCost(setting, finished)).toEqual(first)
+    // Other settings keep their own estimate, with bit-identical arithmetic to a new record.
+    const other = { ...setting, effort: 'low' }
+    const low = expectedCost(other, finished)
+    expect(low).not.toEqual(first)
+    expect(low).toEqual(expectedCost(other, [...finished]))
+    const next = [...finished, { ...setting, pct: 100 }]
+    expect(expectedCost(setting, next).pct).toBeGreaterThan(first.pct)
+  })
+
   test('blends from the broadest record to the narrowest, by how many tasks each has', () => {
     const O = 'claude-opus-5-5'
     const S = 'claude-sonnet-5-5'
@@ -780,5 +817,41 @@ describe('waitsForRoom', () => {
     expect(waitsForRoom(chosen, placement, [1], true, soon, now)).toBe(false)
     // 150% fits no Pro window, so waiting would be for ever: it goes where the projection is lowest.
     expect(waitsForRoom(chosen, { ...placement, expected: 150 }, [1], false, soon, now)).toBe(false)
+  })
+})
+
+describe('fullUntilReset: no reading opens the account before its reset, so CliMayte does not read it', () => {
+  const now = Date.parse('2019-10-23T12:00:00Z')
+  const hours = (h: number) => now + h * 3_600_000
+  const days = (d: number) => hours(d * 24)
+  const at = (
+    sessionPct: number | null,
+    sessionResetsAt: number | null,
+    weekPct: number | null,
+    weekResetsAt: number | null,
+  ) => ({
+    sessionPct,
+    sessionResetsAt,
+    weekPct,
+    weekResetsAt,
+  })
+  test.each([
+    ['5-hour window at the stop line, reset ahead', at(85, hours(2), 10, days(3)), null, true],
+    ['week at the stop line, reset ahead', at(5, hours(2), 92, days(3)), null, true],
+    ['under both stop lines', at(84, hours(2), 84, days(3)), null, false],
+    ['full, but the 5-hour reset has passed', at(95, null, 10, days(3)), null, false],
+    ['full week, but its reset has passed', at(5, hours(2), 100, null), null, false],
+    ['no reading at all', at(null, null, null, null), null, false],
+    [
+      'under the fleet line, at the owner cap',
+      at(60, hours(2), 10, days(3)),
+      { maxSessionPct: 60, maxWeekPct: null },
+      true,
+    ],
+    // In a week's last five hours the weekly line is 89, so 86% can take work again and is read.
+    ['86% of a week ending in 3 hours', at(5, hours(1), 86, hours(3)), null, false],
+    ['89% of a week ending in 3 hours', at(5, hours(1), 89, hours(3)), null, true],
+  ] as const)('%s', (_, a, caps, full) => {
+    expect(fullUntilReset(a, caps, now)).toBe(full)
   })
 })

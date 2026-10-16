@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { AhCliInstance } from '../../src/bridge/client'
 import { mapExternal } from '../../src/bridge/external'
-import { canResume, configRootOf, resumeAccount, sameLogin, type ResumeData } from '../../src/bridge/resume'
+import { canResume, configRootOf, desktopAccount, resumeAccount, sameLogin, type ResumeData } from '../../src/bridge/resume'
 
 const home = mkdtempSync(join(tmpdir(), 'desk-resume-'))
 afterAll(() => rmSync(home, { recursive: true, force: true }))
@@ -16,7 +16,7 @@ const cli = (num: number, over: Partial<AhCliInstance> = {}): AhCliInstance => (
   name: `n${num}`,
   configDir: join(home, '.claude-cli', `n${num}`),
   loggedIn: true,
-  lastUsageCheck: { account: `acct${num}@example.test`, session: null, weekAll: null, capturedAt: '2026-10-04T00:00:00Z' },
+  lastUsageCheck: { account: `acct${num}@example.test`, session: null, weekAll: null, capturedAt: '2019-10-13T00:00:00Z' },
   ...over
 })
 
@@ -26,7 +26,7 @@ const data: ResumeData = {
     { num: 51, name: 'eek', label: null, dir: join(home, '.claude-instances', 'eek'), uuid: 'u-eek', email: 'eek@example.test' },
     { num: 52, name: 'other', label: 'Other', dir: join(home, '.claude-instances', 'other'), uuid: 'u-other', email: 'acct135@example.test' }
   ],
-  clis: [cli(135), cli(160, { loggedIn: false }), cli(161, { lastUsageCheck: { account: 'x@example.test', session: null, weekAll: null, capturedAt: '', signedOutAt: '2026-10-03' } })]
+  clis: [cli(135), cli(160, { loggedIn: false }), cli(161, { lastUsageCheck: { account: 'x@example.test', session: null, weekAll: null, capturedAt: '', signedOutAt: '2019-10-12' } })]
 }
 
 describe('resumeAccount: the CLI instance whose folder already holds the session', () => {
@@ -57,6 +57,15 @@ describe('resumeAccount: the CLI instance whose folder already holds the session
   })
 })
 
+test('desktopAccount: a Desktop chat is on the login linked to its app, else the CLI instance on the same login', () => {
+  const linked: ResumeData = { ...data, clis: [...data.clis, cli(170, { associatedDesktopDir: data.desktops[0]!.dir })] }
+  expect(desktopAccount('eek', linked)).toBe('cli-170')
+  expect(desktopAccount('#51', linked)).toBe('cli-170')
+  expect(desktopAccount('Other', data)).toBe('cli-135')
+  expect(desktopAccount('eek', data)).toBeNull()
+  expect(desktopAccount('unknown', data)).toBeNull()
+})
+
 test('sameLogin prefers the account uuid, else the email', () => {
   expect(sameLogin({ uuid: 'a', email: 'x@y' }, { uuid: 'b', email: 'x@y' })).toBe(false)
   expect(sameLogin({ uuid: null, email: 'X@y ' }, { uuid: 'b', email: 'x@y' })).toBe(true)
@@ -73,7 +82,7 @@ test('canResume: idle or stale there and a Claude Code session, whatever account
 })
 
 test('mapExternal derives canResume from the status and source, with or without an owning account', () => {
-  const NOW = Date.parse('2026-10-04T12:00:00Z')
+  const NOW = Date.parse('2019-10-13T12:00:00Z')
   const list = mapExternal(
     {
       agentStatus: [],

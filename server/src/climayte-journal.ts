@@ -41,6 +41,9 @@ export type CliMayteJournalEvent =
   | 'check' // the worker reported done; CliMayte runs the task's check command (`notice`: the command)
   | 'verdict' // its result was judged pass or fail (climayteVerdict); a fail names the next setting
   | 'priority' // its priority was changed (climayteSetPriority)
+  | 'refused' // a drone asked to start workers, and was refused (`notice`: the refusal's first words)
+  | 'too_big' // its report said TOO BIG: the job needs splitting, by its summoner (`notice`: the line)
+  | 'visitors' // a drone started sealed visitors, which it may (`notice`: how many)
   | 'nudged' // an idle account was sent one cheap prompt to start its 5-hour window (session-keepalive.ts); id and group 'keepalive'
   | 'done'
   | 'failed'
@@ -75,6 +78,8 @@ export interface CliMayteJournalEntry {
   tookMin?: number // done / turn-done: the minutes it really worked on it (climayte-eta.ts)
   error?: string // failed / waiting: the first line
   said?: string // turn-end: the first line of the turn's closing text
+  role?: string // dispatched / launched: the worker's role (roleOf)
+  persona?: string // dispatched: a seat's persona
   model?: string | null // dispatched / launched / follow-ups: the model asked for (null: the CLI's default)
   effort?: string | null // the same, for the effort level
   cwd?: string // dispatched / cwd-changed: the folder

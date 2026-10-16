@@ -12,7 +12,10 @@ export const STATS_DAYS = 30
  *  the unknown model is ... and remove it"). */
 export const UNRECORDED_MODEL = ''
 
-export interface StatCell { sent: number; failed: number; input: number; output: number }
+/** `why` counts the failures by their error code (`not_found`, `rate_limited` ...), so a day's failures can be explained
+ *  after the account's one-hour health (health.ts) has moved on (2026-10-14: 205 ChatGPT sends failed in a day with
+ *  nothing left to say why). Absent on a cell with no failure. */
+export interface StatCell { sent: number; failed: number; input: number; output: number; why?: Record<string, number> }
 /** By day (YYYY-MM-DD, this PC's time), then account id, then model. */
 export type StatsData = Record<string, Record<string, Record<string, StatCell>>>
 
@@ -24,11 +27,13 @@ function add(stats: StatsData, at: number, instanceId: string, model: string, ce
   const byModel = ((stats[dayOf(at)] ??= {})[instanceId] ??= {})
   const c = (byModel[model] ??= { sent: 0, failed: 0, input: 0, output: 0 })
   c.sent += cell.sent; c.failed += cell.failed; c.input += cell.input; c.output += cell.output
+  for (const [code, n] of Object.entries(cell.why ?? {})) (c.why ??= {})[code] = (c.why[code] ?? 0) + n
 }
 
 /** One message counted: sent, failed or not, with its tokens (none for a failure); days past the kept span dropped. */
-export function addStat(stats: StatsData, message: { at: number; instanceId: string; model: string | undefined; ok: boolean; input: number; output: number }): StatsData {
-  add(stats, message.at, message.instanceId, message.model || UNRECORDED_MODEL, { sent: 1, failed: message.ok ? 0 : 1, input: message.input, output: message.output })
+export function addStat(stats: StatsData, message: { at: number; instanceId: string; model: string | undefined; ok: boolean; code?: string; input: number; output: number }): StatsData {
+  const why = message.ok ? undefined : { [(message.code || 'unknown').slice(0, 60)]: 1 }
+  add(stats, message.at, message.instanceId, message.model || UNRECORDED_MODEL, { sent: 1, failed: message.ok ? 0 : 1, input: message.input, output: message.output, ...(why ? { why } : {}) })
   const oldest = oldestKept(message.at)
   for (const day of Object.keys(stats)) if (day < oldest) delete stats[day]
   return stats
@@ -60,7 +65,12 @@ export function validStats(value: unknown): StatsData | null {
     for (const [id, byModel] of Object.entries(byId as Record<string, unknown>)) {
       if (!byModel || typeof byModel !== 'object') continue
       for (const [model, cell] of Object.entries(byModel as Record<string, StatCell>))
-        if (cell && n(cell.sent) && n(cell.failed) && n(cell.input) && n(cell.output) && model.length <= 100) add(stats, Date.parse(`${day}T12:00:00`), id, model, cell)
+        if (cell && n(cell.sent) && n(cell.failed) && n(cell.input) && n(cell.output) && model.length <= 100) {
+          const why = cell.why && typeof cell.why === 'object' && !Array.isArray(cell.why)
+            ? Object.fromEntries(Object.entries(cell.why).filter(([code, k]) => code.length <= 60 && n(k)))
+            : {}
+          add(stats, Date.parse(`${day}T12:00:00`), id, model, { sent: cell.sent, failed: cell.failed, input: cell.input, output: cell.output, ...(Object.keys(why).length ? { why } : {}) })
+        }
     }
   }
   return stats

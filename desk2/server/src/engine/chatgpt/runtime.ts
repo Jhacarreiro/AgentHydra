@@ -115,10 +115,14 @@ export class ChatgptRuntime extends ServiceRuntime {
     this.turnStarted = this.now()
     this.dispatch({ type: 'activity', activity: 'Asking ChatGPT' })
     this.publish()
+    return this.deliver(sent)
+  }
+
+  /** Sends the message to the chat's ChatGPT chat, or to a new one on the account that fits, and settles it by the answer. */
+  private async deliver(sent: Sent): Promise<void> {
     try {
       const all = this.deps.free.allInstances()
-      const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
-      const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
+      const { bound, holder } = this.boundAccount(all)
       const picked = holder ?? pickChatgptAccount(all, this.avoid, this.deps.held, this.now(), this.occupied)
       if ('why' in picked) {
         if (picked.limited) return this.allLimited(picked.why)
@@ -127,49 +131,81 @@ export class ChatgptRuntime extends ServiceRuntime {
       const account = await this.whenFree(picked, !!holder, sent)
       if (!account) return
       const fresh = !holder
-      const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
-      const prompt = lead ? fit(lead.text, sent.text) : sent.text
-      if (prompt.length > PROMPT_MAX) throw new Error(`ChatGPT takes messages of up to ${PROMPT_MAX.toLocaleString()} characters.`)
+      const { prompt, lead } = this.promptFor(sent, fresh)
       if (sent.images?.length) this.line('info', 'ChatGPT here reads text only, so the pictures were not sent.')
-      const model = this.chat.model && isFreeChatgptModel(this.chat.model) ? this.chat.model : null
-      const job = this.deps.free.start({
-        requestId: randomUUID(),
-        instanceId: account.id,
-        provider: 'chatgpt',
-        prompt,
-        ...(fresh ? { command: 'chat', name: chatName(this.chat.title, this.chat.id) } : { command: 'resume', chatId: bound!.threadId }),
-        ...(model ? { model } : {}),
-      })
-      this.job = job.id
-      this.dispatch({ type: 'stateChanged', state: 'running', now: this.now() })
-      this.dispatch({ type: 'activity', activity: 'Waiting for ChatGPT' })
-      this.publish()
+      const job = this.startJob(account, prompt, fresh ? null : bound!.threadId)
       const result = await this.wait(job.id, sent)
       if (this.current !== sent || !result) return
-      if (result.ok && result.chat_id) {
-        this.bind({ accountId: account.id, label: chatgptLabel(account), threadId: result.chat_id })
-        this.movedFrom = null
-        this.gone = false
-        if (lead) {
-          this.deps.caughtUp()
-          this.line('info', `Caught up on what was said on ${lead.from}.`)
-        }
-        return this.answered(sent, job.id, result)
-      }
-      const code = result.error?.code ?? ''
-      if (code === 'rate_limited') return this.limited(sent, account)
-      if (!fresh && GONE.has(code)) {
-        // Gone from that account: the chat goes on in a new ChatGPT chat, which first reads what was said.
-        this.gone = true
-        this.movedFrom = `an earlier ChatGPT chat (${chatgptLabel(account)})`
-        return void this.run(sent)
-      }
-      const why = code === 'login_required' ? `${chatgptLabel(account)} is signed out of ChatGPT. Sign it in again on the Free page, then send again.` : result.error?.message || 'ChatGPT could not answer.'
-      this.endTurn(sent, { ok: false, error: why, durationMs: this.now() - this.turnStarted })
+      this.settle(sent, job.id, account, fresh, lead, result)
     } catch (err) {
-      if (this.current !== sent) return
-      this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
+      this.failMessage(sent, err)
     }
+  }
+
+  /** The chat's own account and thread, while the account is still there and not avoided: the thread is resumed there. */
+  private boundAccount(all: readonly FreeInstance[]) {
+    const bound = this.gone ? undefined : this.chat.serviceThreads?.chatgpt
+    const holder = bound && !this.avoid.has(bound.accountId) ? all.find((i) => i.id === bound.accountId && i.provider === 'chatgpt' && i.loggedIn) : undefined
+    return { bound, holder }
+  }
+
+  /** The prompt for the message: the handoff a new ChatGPT chat reads first, fitted in ahead of the message; too long is an error. */
+  private promptFor(sent: Sent, fresh: boolean): { prompt: string; lead: { text: string; from: string } | null } {
+    const lead = this.deps.handoff(fresh, sent.id, fresh ? (this.movedFrom ?? undefined) : undefined)
+    const prompt = lead ? fit(lead.text, sent.text) : sent.text
+    if (prompt.length > PROMPT_MAX) throw new Error(`ChatGPT takes messages of up to ${PROMPT_MAX.toLocaleString()} characters.`)
+    return { prompt, lead }
+  }
+
+  /** Ends the message with the error it failed on, unless it was already stopped or replaced. */
+  private failMessage(sent: Sent, err: unknown): void {
+    if (this.current !== sent) return
+    this.endTurn(sent, { ok: false, error: err instanceof Error ? err.message : String(err), durationMs: this.now() - this.turnStarted })
+  }
+
+  /** Starts the message as a job on the account: a new ChatGPT chat when `resumeId` is null, else a resume of that chat. */
+  private startJob(account: FreeInstance, prompt: string, resumeId: string | null): FreeJob {
+    const model = this.chat.model && isFreeChatgptModel(this.chat.model) ? this.chat.model : null
+    const job = this.deps.free.start({
+      requestId: randomUUID(),
+      instanceId: account.id,
+      provider: 'chatgpt',
+      prompt,
+      ...(resumeId === null ? { command: 'chat', name: chatName(this.chat.title, this.chat.id) } : { command: 'resume', chatId: resumeId }),
+      ...(model ? { model } : {}),
+    })
+    this.job = job.id
+    this.dispatch({ type: 'stateChanged', state: 'running', now: this.now() })
+    this.dispatch({ type: 'activity', activity: 'Waiting for ChatGPT' })
+    this.publish()
+    return job
+  }
+
+  /**
+   * Settles the message by its job's result: an answer binds the account's chat, a limit or a gone chat moves the
+   * message on, and anything else ends the turn with its error.
+   */
+  private settle(sent: Sent, jobId: string, account: FreeInstance, fresh: boolean, lead: { text: string; from: string } | null, result: FreeResult): void {
+    if (result.ok && result.chat_id) {
+      this.bind({ accountId: account.id, label: chatgptLabel(account), threadId: result.chat_id })
+      this.movedFrom = null
+      this.gone = false
+      if (lead) {
+        this.deps.caughtUp()
+        this.line('info', `Caught up on what was said on ${lead.from}.`)
+      }
+      return this.answered(sent, jobId, result)
+    }
+    const code = result.error?.code ?? ''
+    if (code === 'rate_limited') return this.limited(sent, account)
+    if (!fresh && GONE.has(code)) {
+      // Gone from that account: the chat goes on in a new ChatGPT chat, which first reads what was said.
+      this.gone = true
+      this.movedFrom = `an earlier ChatGPT chat (${chatgptLabel(account)})`
+      return void this.run(sent)
+    }
+    const why = code === 'login_required' ? `${chatgptLabel(account)} is signed out of ChatGPT. Sign it in again on the Free page, then send again.` : result.error?.message || 'ChatGPT could not answer.'
+    this.endTurn(sent, { ok: false, error: why, durationMs: this.now() - this.turnStarted })
   }
 
   private readonly occupied = (id: string): boolean => this.deps.free.occupied(id)
@@ -263,6 +299,7 @@ export class ChatgptRuntime extends ServiceRuntime {
       this.base.onFailure?.({ message: error!, durationMs: end.durationMs })
       this.notify('error', error!)
     } else this.dispatch({ type: 'stateChanged', state: 'idle', now })
+    if (end.ok) this.deps.onTurnClassified?.({ model: this.chat.model || 'default', effort: 'default', stopReason: null, text: end.text ?? '' })
     if (this.startNext()) return
     if (end.ok) this.notify('finished', end.text?.slice(0, 200) || 'ChatGPT answered.')
     this.publish()

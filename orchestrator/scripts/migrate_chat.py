@@ -45,7 +45,7 @@ Usage: python migrate_chat.py <title fragment | session id> --to <instance num|n
                 tell "waiting" from "background work" by time alone; this reads the work
                 itself (enginelib.background_work). An outstanding job, a working engine, a
                 stuck engine and a live writer all keep every rail they have.
-  --archived    move the chat even though it is ARCHIVED. Off by default (owner, Michael,
+  --archived    move the chat even though it is ARCHIVED. Off by default (owner, the other owner,
                 2026-09-05: "only move UN archived chats. Not archived ones. Make sure
                 that's the default. Unless asked"), because an archived chat is finished
                 history or a retired twin, and landing one spends a live account's headroom
@@ -788,7 +788,7 @@ def _on_screen_in(m: dict, target: dict) -> bool:
 
 
 def _check_archived_or_raise(match: dict, include_archived: bool) -> None:
-    """⛔ A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, Michael, 2026-09-05: "when I tell you
+    """⛔ A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, 2026-09-05: "when I tell you
     to move, only move UN archived chats. Not archived ones. Make sure that's the default.
     Unless asked").
 
@@ -1247,7 +1247,7 @@ def clear_resurrected_source_record(session_id: str, src_instance: str, target: 
     return _tombstone_source_session_file(session_id, src_instance, target, fleet_data)
 
 
-# The owner's usage wall (Michael, 2026-09-20: "if it's 98% or above, always kill"; 2026-09-26:
+# The owner's usage wall (the other owner, 2026-09-20: "if it's 98% or above, always kill"; 2026-09-26:
 # a move off such an account always archives the source row). migrate_batch re-exports it.
 FULL_SOURCE_PCT = 98
 

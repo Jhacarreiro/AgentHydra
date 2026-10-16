@@ -120,6 +120,9 @@ class SpawnChatTest(unittest.TestCase):
         # spawn() runs the duplicate-task double-check (hydralib.same_task_chats) before
         # anything else when force is not set - it needs a visible_chats() scan to succeed.
         self.stub.routes["/api/sessions"] = []
+        # native_configured() reads the real settings map (server/src/routes/desktop-sessions.ts);
+        # an empty map is a profile with no native control, so these tests keep the deeplink path.
+        self.stub.routes["/api/claude-native/settings"] = {}
 
     def tearDown(self):
         spawn_chat.START_WAIT_SECS = self._start_wait
@@ -417,6 +420,7 @@ class SpawnDuplicateTaskTest(unittest.TestCase):
         self.stub.routes["/api/fleet"] = {"instances": [
             {"num": 1, "name": "open1", "dir": "c:\\i\\open1", "isRunning": True, "signedIn": True}]}
         self.stub.routes["/api/sessions/live"] = {"count": 0, "sessions": []}
+        self.stub.routes["/api/claude-native/settings"] = {}
 
     def tearDown(self):
         spawn_chat.START_WAIT_SECS = self._start_wait

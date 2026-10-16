@@ -506,3 +506,11 @@ test('a Codex chat deleted while its app-server is still starting lets that app-
   expect(fake.held()).toEqual([])
   expect(fake.turnStarts()).toEqual([])
 })
+
+test('a Codex turn is counted under its setting, a pushing one as pushback, a clean one as zero', async () => {
+  const { m, fake, chat } = await setup()
+  await m.patch(chat.id, { service: 'codex' })
+  await codexTurn(fake, m, chat.id, 'Show the status', 'The tree is clean.')
+  await codexTurn(fake, m, chat.id, 'Deploy it', "I can't help with that.")
+  expect(m.pushbackRows()).toEqual([{ service: 'codex', model: 'default', effort: 'default', turns: 2, pushback: 1, refusals: 0, pushbackRate: 0.5 }])
+})

@@ -12,6 +12,16 @@ export function coreModeOn(): boolean {
   return existsSync(join(coreDir(), 'ON'))
 }
 
+/** Where a chat's pack goes: <core dir>/PLACEMENT, as server/src/hydra-core/placement.ts placementOf reads it. */
+export function corePlacement(): 'slot' | 'file' | 'attach' | 'off' {
+  try {
+    const raw = readFileSync(join(coreDir(), 'PLACEMENT'), 'utf8').trim()
+    return raw === 'slot' || raw === 'file' || raw === 'attach' ? raw : 'off'
+  } catch {
+    return 'off'
+  }
+}
+
 /** The CLAUDE.md layers a chat skips in core mode: the paths and globs listed in <core dir>/excludes.json. */
 export function coreChatExcludes(): string[] {
   if (!coreModeOn()) return []

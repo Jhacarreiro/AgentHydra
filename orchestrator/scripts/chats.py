@@ -36,7 +36,7 @@ Usage:
   python chats.py --instance temp2 --move-to work --yes --archived  # ALSO move archived ones
 
 A MOVE TOUCHES UNARCHIVED CHATS ONLY, always, unless --archived says otherwise (owner,
-Michael, 2026-09-05). --all is a LISTING word and widens only what you SEE; --archived is
+2026-09-05). --all is a LISTING word and widens only what you SEE; --archived is
 the separate word that widens what a batch MOVES. Archived rows held back by that default
 are named in the plan, never silently dropped.
 
@@ -58,10 +58,10 @@ from lib import hydralib
 
 
 def account_names() -> dict[str, str]:
-    """instance dir name -> the account's DISPLAY name ("Michael"), for matching by hand.
+    """instance dir name -> the account's DISPLAY name ("Alex"), for matching by hand.
 
-    The fleet's account block carries only an email, but people say "the Michael account", so
-    `--account Michael` has to work. The names live in the usage survey, which this reads FROM
+    The fleet's account block carries only an email, but people say "the Alex account", so
+    `--account Alex` has to work. The names live in the usage survey, which this reads FROM
     ITS CACHE ON DISK - never a fresh survey. A listing must not fire off account checks to
     render, and a missing or stale cache degrades to matching on email alone rather than
     failing: this is a convenience for the filter, never a fact anything else depends on.
@@ -126,7 +126,7 @@ def collect(include_archived: bool, account: str | None, instance: str | None,
         if console_only and row["origin"] != "console":
             continue
         # SUBSTRING, NOT EXACT (2026-09-02). `--account` used to demand the whole email, so
-        # `--account Michael` - the name a person actually uses - returned "no chats match",
+        # `--account Alex` - the name a person actually uses - returned "no chats match",
         # which is the SAME output as an account that genuinely has none. A filter typo and a
         # clean account were indistinguishable, and the false "that account is empty" is the
         # dangerous half. Matching the display name too costs nothing and removes the trap;
@@ -195,7 +195,7 @@ def move(rows: list[dict], target: str, act: bool, cap: int, idle_wait: int = 0,
         known = ", ".join(f"#{i.get('num')} {i.get('name')}" for i in fleet.get("instances", []))
         return {"error": f"unknown target {target!r}. Known: {known}", "results": []}
 
-    # ⛔ A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, Michael, 2026-09-05: "when I tell you to
+    # ⛔ A MOVE TOUCHES UNARCHIVED CHATS ONLY (owner, 2026-09-05: "when I tell you to
     # move, only move UN archived chats. Not archived ones. Make sure that's the default.
     # Unless asked"). --all is a LISTING word: it widens what you can SEE, and before this it
     # silently widened what a batch would MOVE too. That matters far more than it sounds:

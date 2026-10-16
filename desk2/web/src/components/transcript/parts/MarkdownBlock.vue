@@ -17,7 +17,9 @@ function paint() {
   const old = new Map<string, HTMLVideoElement[]>()
   for (const v of el.querySelectorAll<HTMLVideoElement>('video.md-video')) {
     const src = v.getAttribute('src') ?? ''
-    old.set(src, [...(old.get(src) ?? []), v])
+    const kept = old.get(src)
+    if (kept) kept.push(v)
+    else old.set(src, [v])
   }
   // Taken out and put back in this one task, so the browser (which pauses a video left out of the document) never sees it out.
   el.innerHTML = html.value

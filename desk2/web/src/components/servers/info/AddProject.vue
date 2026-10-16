@@ -2,7 +2,7 @@
 import type { DevWebAddResult, DevWebProposal, DevWebScanPreset, DevWebScanResult, DevWebTrigger } from '@shared/devwebui'
 import { FileCode, Folder, FolderOpen, FolderPlus, FolderSearch, GitBranch, HardDrive, LoaderCircle, ScanSearch, Search } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
-import { ref } from 'vue'
+import { computed, ref, shallowRef } from 'vue'
 import { cloneDest, cloneProject, ignoreFolder, ignoredFolders, loadProject, pickFolder, scaffoldProject, scanProjects, unignoreFolder } from '../api'
 import { useDevServers } from '../store'
 import Card from './kit/Card.vue'
@@ -30,9 +30,12 @@ const url = ref('')
 const dest = ref('')
 const destTyped = ref(false)
 
-const scan = ref<DevWebScanResult | null>(null)
+const scan = shallowRef<DevWebScanResult | null>(null)
 const scanning = ref<DevWebScanPreset | null>(null)
 const gone = ref(new Set<string>())
+// The scan's rows still to show, filtered once per change rather than on every render of the form.
+const foundFiles = computed(() => (scan.value?.files ?? []).filter((x) => !gone.value.has(x.path)))
+const foundDetected = computed(() => (scan.value?.detected ?? []).filter((x) => !gone.value.has(x.path)))
 const ignored = ref<string[] | null>(null)
 
 const PRESETS: { id: DevWebScanPreset; title: string; line: string; icon: typeof Search }[] = [
@@ -236,7 +239,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
           <p v-if="!scan.files.length && !scan.detected.length" class="text-ui leading-5 text-text-2">Nothing new was found.</p>
           <Card v-else flush>
             <ul class="divide-y divide-border">
-              <li v-for="f in scan.files.filter((x) => !gone.has(x.path))" :key="f.path" class="flex min-h-12 items-center gap-3 px-4 py-2.5">
+              <li v-for="f in foundFiles" :key="f.path" class="flex min-h-12 items-center gap-3 px-4 py-2.5">
                 <FileCode class="size-4 shrink-0 text-text-2" aria-hidden="true" />
                 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div class="flex min-w-0 flex-wrap items-center gap-1.5">
@@ -249,7 +252,7 @@ const plural = (n: number) => `${n} ${n === 1 ? 'server' : 'servers'}`
                 <button type="button" :class="BTN" :disabled="busy || !f.valid" @click="addFound(f.path)">Add</button>
                 <button type="button" :class="BTN_GHOST" :disabled="busy" @click="ignore(f.path)">Ignore</button>
               </li>
-              <li v-for="d in scan.detected.filter((x) => !gone.has(x.path))" :key="d.path" class="flex min-h-12 items-center gap-3 px-4 py-2.5">
+              <li v-for="d in foundDetected" :key="d.path" class="flex min-h-12 items-center gap-3 px-4 py-2.5">
                 <Folder class="size-4 shrink-0 text-text-2" aria-hidden="true" />
                 <div class="flex min-w-0 flex-1 flex-col gap-0.5">
                   <div class="flex min-w-0 flex-wrap items-center gap-1.5">

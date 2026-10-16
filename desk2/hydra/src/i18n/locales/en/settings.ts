@@ -8,7 +8,7 @@ export default {
     "Keep every instance's quota numbers up to date in the background, so the Instances table is never stale. Checking your quota does not use any of it, and each check takes about a third of a second, so this costs you nothing. Turn it off to only ever check when you click Refresh.",
   usageIntervalLabel: 'Refresh every',
   usageIntervalHint:
-    'How often to re-check. Quota moves over hours, not seconds, so there is little reason to go below 15 minutes.',
+    'How often to re-check while you use AgentHydra. An hour after you last looked, it re-checks every 4 hours until you look again. Quota moves over hours, not seconds, so there is little reason to go below 15 minutes.',
   usageIntervalMinutes: '{minutes} min',
   usageToastFailed: 'Failed to save usage setting.',
 

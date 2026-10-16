@@ -4,7 +4,8 @@
 
 import type { RoutineRun, RoutineRunning, RoutineState } from '@shared/routines'
 import { untilEndOf, type Entry } from './manifest'
-import { nextSlot, parseCron, previousSlot } from './cron'
+import { nextSlot, parseCron, previousSlot, systemZone } from './cron'
+import type { Claim } from './runs'
 import type { TaskReading } from './wintask'
 
 /** A status-kind routine's run starts only this long after its last one ended. */
@@ -20,6 +21,19 @@ export interface Reading {
   headline: string | null
   totals: Record<string, number> | null
   settings: Record<string, string | number | boolean> | null
+  /** The mode it says is in force (a routine with `modes`), cut to 20 characters; null when it says none. */
+  mode: string | null
+  /** Other top-level numbers the status printed (ticks, budget): at most 12. */
+  numbers: Record<string, number> | null
+  /** Groups of trend objects ({ latest, previous, best, trend }) the status printed, by group name (rsi). */
+  trends: Record<string, Record<string, TrendReading>> | null
+}
+
+export interface TrendReading {
+  latest: number
+  previous?: number
+  best?: number
+  trend?: string
 }
 
 /** One routine as the last look saw it: its entry, what its status read (or why it did not), and its Windows task. */
@@ -30,18 +44,35 @@ export interface Seen {
   task: TaskReading | null
 }
 
-/** A routine's memory: its last runs, newest first; the run going on, if any; the newest schedule slot it ran for; paused. */
+/** A shared central routine's claim (routines/runs.ts), as the run board last answered this computer about a slot it asked for. */
+export interface SlotClaim {
+  /** The slot this computer asked for (ms). */
+  asked: number
+  /** The routine's claim the board answered (its slot may be another one); null when it did not answer. */
+  claim: Claim | null
+  /** Whether this computer holds the slot it asked for. */
+  mine: boolean
+  /** Why the board did not answer (the ask or the last renewal); null when it did. */
+  error: string | null
+  /** When this computer last asked or renewed, by its own clock (the lease is the board's). */
+  at: number
+}
+
+/** A routine's memory: its last runs, newest first; the run going on, if any; the newest schedule slot it ran for; paused;
+ *  and a shared central routine's claim. */
 export interface Memory {
   runs: RoutineRun[]
   running: RoutineRunning | null
   lastSlot: number | null
   paused: boolean
+  claim?: SlotClaim | null
 }
 
 export interface Judged {
   state: RoutineState
   reason: string
-  /** Whether a run starts now. */
+  /** Whether a run starts now. A shared central routine's due slot starts only once the run board grants it this runner
+   *  (routines/manager-board.ts claimSlot asks). */
   start: boolean
   /** The schedule slot a started run is for (null for the other kinds and for a manual run). */
   slot: number | null
@@ -87,7 +118,50 @@ export function parseReading(stdout: string): Reading {
     headline: headline || null,
     totals: o.totals ? Object.fromEntries(totals) : null,
     settings: settingsOf(o.settings),
+    mode: typeof o.mode === 'string' && o.mode ? o.mode.slice(0, 20) : null,
+    ...extrasOf(o),
   }
+}
+
+const isNum = (x: unknown): x is number => typeof x === 'number' && Number.isFinite(x)
+
+/** One trend object as the details page keeps it: its latest number, and previous, best and trend when present; null without a latest number. */
+function trendOf(t: unknown): TrendReading | null {
+  const r = t as Record<string, unknown> | null
+  if (!r || typeof r !== 'object' || !isNum(r.latest)) return null
+  return {
+    latest: r.latest,
+    ...(isNum(r.previous) ? { previous: r.previous } : {}),
+    ...(isNum(r.best) ? { best: r.best } : {}),
+    ...(typeof r.trend === 'string' ? { trend: r.trend.slice(0, 20) } : {}),
+  }
+}
+
+/** One group of trend objects by name: at most 20 of them, names cut to 40 characters. */
+function trendGroupOf(v: Record<string, unknown>): Record<string, TrendReading> {
+  const group: Record<string, TrendReading> = {}
+  for (const [name, t] of Object.entries(v)) {
+    const trend = trendOf(t)
+    if (!trend || Object.keys(group).length >= 20) continue
+    group[name.slice(0, 40)] = trend
+  }
+  return group
+}
+
+/** The status's other top-level numbers and its groups of trend objects, for the routine's details page. */
+function extrasOf(o: Record<string, unknown>): Pick<Reading, 'numbers' | 'trends'> {
+  const numbers: Record<string, number> = {}
+  const trends: Record<string, Record<string, TrendReading>> = {}
+  for (const [k, v] of Object.entries(o)) {
+    if (k === 'totals' || k === 'settings') continue
+    if (isNum(v)) {
+      if (Object.keys(numbers).length < 12) numbers[k.slice(0, 40)] = v
+    } else if (v && typeof v === 'object' && !Array.isArray(v) && Object.keys(trends).length < 6) {
+      const group = trendGroupOf(v as Record<string, unknown>)
+      if (Object.keys(group).length) trends[k.slice(0, 40)] = group
+    }
+  }
+  return { numbers: Object.keys(numbers).length ? numbers : null, trends: Object.keys(trends).length ? trends : null }
 }
 
 /** The status's `settings`: scalar values only, at most 12 entries, names cut to 40 and strings to 120. Null when not an object. */
@@ -108,11 +182,15 @@ export function lastEndOf(reading: Reading | null, mem: Memory): number | null {
   return ends.length ? Math.max(...ends) : null
 }
 
+/** The time zone a routine's schedule and until day keep: a central routine's own, else this computer's. */
+const zoneOf = (entry: Entry): string => entry.central?.timeZone ?? systemZone()
+
 /** The schedule's newest slot at or before `now`, and the next one after it, for a `schedule` routine; null otherwise. */
 export function slotsOf(entry: Entry, now: number): { newest: number | null; next: number | null } | null {
   if (!entry.def?.schedule) return null
   const c = parseCron(entry.def.schedule)
-  return { newest: previousSlot(c, now), next: nextSlot(c, now) }
+  const zone = zoneOf(entry)
+  return { newest: previousSlot(c, now, zone), next: nextSlot(c, now, zone) }
 }
 
 const idle = (reason: string, nextRunAt: number | null, state: RoutineState = 'idle'): Judged => ({ state, reason, start: false, slot: null, skipSlot: null, nextRunAt })
@@ -125,10 +203,11 @@ const idle = (reason: string, nextRunAt: number | null, state: RoutineState = 'i
 export function judge(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {
   const { entry } = seen
   if (entry.broken !== null || !entry.def) return idle(entry.broken ?? 'its file does not check out', null, 'broken')
+  if (entry.central?.placement === 'elsewhere') return idle(entry.central.why ?? 'it runs on another computer', null, 'elsewhere')
   const def = entry.def
   if (mem.running) return idle('a run is running now', null, 'running')
   if (def.until !== undefined) {
-    const end = untilEndOf(def.until)
+    const end = untilEndOf(def.until, zoneOf(entry))
     if (end !== null && now >= end) return idle(`ended after ${def.until}: it never runs`, null, 'ended')
   }
   if (def.windowsTask !== undefined) return judgeTask(seen)
@@ -151,7 +230,26 @@ function judgeSchedule(seen: Seen, mem: Memory, now: number, enabled: boolean, m
   if (due === null) return waiting
   if (now - due > MISSED_MS) return { ...idle(`slot ${new Date(due).toISOString()} was missed by more than 12 hours: skipped`, next, 'idle'), skipSlot: due }
   if (!enabled) return { state: 'due', reason: 'due; the routine manager is off, so it waits', start: false, slot: null, skipSlot: null, nextRunAt: next }
+  if (seen.entry.central?.placement === 'shared') return judgeClaim(mem, due, next)
   return { state: 'due', reason: 'due; running now', start: true, slot: due, skipSlot: null, nextRunAt: next }
+}
+
+/** A shared routine's due slot: asked for on the run board at every look until it runs here, ran elsewhere or is skipped,
+ *  so a lease that lapsed is taken over. Meanwhile it says what the board last answered: another runner runs it (or an
+ *  older slot still), or the board did not answer and it waits. */
+function judgeClaim(mem: Memory, due: number, next: number | null): Judged {
+  const ask = { start: true, slot: due, skipSlot: null, nextRunAt: next }
+  const iso = (ms: number): string => new Date(ms).toISOString()
+  const c = mem.claim?.asked === due ? mem.claim : null
+  if (c?.error) return { state: 'due', reason: `due; the run board did not answer (${c.error}), so it asks again at the next look`, ...ask }
+  const held = c && !c.mine ? c.claim : null
+  if (held && held.endedAt === null && held.slot <= due)
+    return {
+      state: 'running',
+      reason: held.slot === due ? `its ${iso(due)} run is running on ${held.holder}` : `its ${iso(held.slot)} run is still running on ${held.holder}, so the ${iso(due)} one waits`,
+      ...ask,
+    }
+  return { state: 'due', reason: 'due; asking the run board for it', ...ask }
 }
 
 function judgeStatus(seen: Seen, mem: Memory, now: number, enabled: boolean, manual: boolean): Judged {

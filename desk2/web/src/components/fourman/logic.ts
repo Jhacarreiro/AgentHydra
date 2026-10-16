@@ -1,6 +1,10 @@
 // The To-do pane's decisions, kept apart from the page so they are testable: what is For you, how the tiers group and cap,
 // which projects the switcher offers, and how old a refresh is.
 import type { FourmanBoard, FourmanNote, FourmanScope, FourmanStatus, FourmanTask, FourmanTier } from '@shared/fourman'
+import { folderName } from '../composer/logic'
+
+// The last segment of a folder path is the composer's, the same rule the To-do header uses.
+export { folderName }
 
 export const TIER_CAP = 50
 
@@ -90,12 +94,6 @@ export function projectChoices(folderCwd: string, folderProject: string | null, 
 /** Every project key the tasks name, for the switcher. */
 export function projectKeysOf(board: Pick<FourmanBoard, 'ready' | 'human' | 'claimed' | 'pending'>): string[] {
   return [...board.ready, ...board.human, ...board.claimed, ...board.pending].map((t) => t.project).filter(Boolean)
-}
-
-/** The last segment of a folder path, either slash style, for a header with no project name. */
-export function folderName(cwd: string): string {
-  const parts = cwd.replace(/[\\/]+$/, '').split(/[\\/]/)
-  return parts[parts.length - 1] || cwd
 }
 
 /** The To-do entry points (a group head's button, the header's) exist only while 4MAN is installed and a folder is known. */

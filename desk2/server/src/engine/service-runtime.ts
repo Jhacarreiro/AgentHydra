@@ -18,9 +18,13 @@ export interface ServiceRuntimeDeps {
   now?: () => number
   onClosed?(): void
   onFailure?(f: { message: string; durationMs: number | null }): void
+  /** A turn ended answered: what ran it and what it ended with, for the pushback count. */
+  onTurnClassified?(t: { model: string; effort: string; stopReason: string | null; text: string }): void
 }
 
 type UserItem = Extract<TranscriptItem, { kind: 'user' }>
+/** Running tool items remembered as stored: a long-lived chat keeps the newest this many, the oldest drop first. */
+const STORED_RUNNING_CAP = 1000
 /** A message the chat sends: its id is its user item's. */
 export type Sent = { id: string; text: string; images?: ImageRef[] }
 
@@ -130,6 +134,7 @@ export abstract class ServiceRuntime {
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return
       this.storedRunning.add(item.id)
+      if (this.storedRunning.size > STORED_RUNNING_CAP) this.storedRunning.delete(this.storedRunning.values().next().value!)
     }
     this.base.store.appendItem(this.chat.id, item)
   }

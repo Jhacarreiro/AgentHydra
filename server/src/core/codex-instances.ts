@@ -16,6 +16,7 @@ import {
   type ScanDesktopProcesses,
   scanCodexDesktopProcesses,
 } from './codex-desktop'
+import { syncOwnerAgents } from './codex-owner-agents'
 import { instanceNumbers, instanceRef } from './instance-numbers'
 import {
   describeStoreRefusal,
@@ -34,7 +35,7 @@ import {
   writeCmdLauncher,
 } from './launch-options'
 import { isPathInside, normalizePath } from './paths'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, firstFreeName } from './shared'
 
 const CODEX_INSTANCES_ROOT = join(CONFIG_DIR, 'codex-instances')
 const STORE_PATH = join(CONFIG_DIR, 'codex-instances.json')
@@ -388,6 +389,13 @@ function validName(name: string): string | null {
   return null
 }
 
+/** The first `Codex <n>` no instance is called, for a create that names nothing. Not the person's own name
+ *  (`ownName`), so the row is named after its account once it signs in. */
+export function freeCodexName(): string {
+  const names = new Set(readStore().instances.map((i) => i.name.trim().toLowerCase()))
+  return firstFreeName('Codex ', (name) => names.has(name.toLowerCase()))
+}
+
 export function createCodexInstance(name: string): CMActionResult {
   const reason = validName(name)
   if (reason)
@@ -432,6 +440,7 @@ export function createCodexInstance(name: string): CMActionResult {
     }
     return refusal('codex-create', null, { name }, outcome)
   }
+  syncOwnerAgents(CODEX_HOME, codexHome)
   return {
     ok: true,
     action: 'codex-create',
@@ -692,7 +701,15 @@ function missingCodexInstance(action: string, id: string): CMActionResult {
 
 export async function openCodexDesktopInstance(id: string): Promise<CMActionResult> {
   const instance = getCodexInstance(id)
+  if (instance) syncOwnerAgents(CODEX_HOME, instance.codexHome)
   return instance ? openCodexDesktop(instance) : missingCodexInstance('codex-desktop-open', id)
+}
+
+/** Give every stored instance the owner's AGENTS.md (core/codex-owner-agents.ts), for the daemon's
+ *  start: an app already open reads it on its next chat. How many were copied. */
+export function giveCodexInstancesOwnerAgents(): number {
+  return readStore().instances.filter((i) => syncOwnerAgents(CODEX_HOME, i.codexHome) === 'copied')
+    .length
 }
 
 export async function focusCodexDesktopInstance(id: string): Promise<CMActionResult> {
@@ -730,6 +747,7 @@ export function launchCodexInstance(id: string, options: CodexLaunchOptions = {}
       data: { id },
     }
 
+  syncOwnerAgents(CODEX_HOME, instance.codexHome)
   const exe = resolveCodexExe()
   const args: string[] = options.login ? ['login'] : []
   if (!options.login && typeof options.model === 'string') args.push('--model', options.model)

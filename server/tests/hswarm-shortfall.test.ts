@@ -11,7 +11,7 @@ import {
 
 const report = (turned: number, more: number | null): ShortfallReport => ({
   days: 1,
-  since: '2026-10-12T09:00:00+00:00',
+  since: '2019-10-21T09:00:00+00:00',
   pools: [
     {
       pool: 'free',
@@ -74,7 +74,7 @@ test('a notification goes out at most once a day, and one no channel took is tri
       return delivered
     },
   }
-  const t0 = Date.parse('2026-10-13T09:00:00Z')
+  const t0 = Date.parse('2019-10-22T09:00:00Z')
   const hour = 3_600_000
   expect(await checkShortfall(deps, t0)).toBe(false)
   delivered = true

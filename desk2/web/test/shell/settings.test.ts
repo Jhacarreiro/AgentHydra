@@ -13,6 +13,7 @@ describe('settings search', () => {
     ])
     expect(settingsGroups('managers', '  ').map((g) => [g.heading, g.rows.map((r) => r.id)])).toEqual([
       ['Watching chats', ['babysitter', 'orchestrator', 'orchestratorModel']],
+      ['Watching apps', ['instanceManager']],
       ['Chat engine', ['coreEngine']],
       ['Routines', ['routines']]
     ])
@@ -54,10 +55,11 @@ describe('settings search', () => {
 describe('settings nav keys', () => {
   it('moves through the rows with the arrows, wrapping, and jumps with Home and End', () => {
     expect(SETTINGS_SECTIONS.map((s) => s.id)).toEqual([
-      'general', 'managers', 'alerts', 'hswarm', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
+      'general', 'managers', 'people', 'alerts', 'hswarm', 'connections', 'connectors', 'devservers', 'diagnostics', 'updates', 'about', 'cli', 'desktop', 'free'
     ])
     expect(stepSection('general', 'ArrowDown')).toBe('managers')
-    expect(stepSection('managers', 'ArrowDown')).toBe('alerts')
+    expect(stepSection('managers', 'ArrowDown')).toBe('people')
+    expect(stepSection('people', 'ArrowDown')).toBe('alerts')
     expect(stepSection('about', 'ArrowDown')).toBe('cli')
     expect(stepSection('general', 'ArrowUp')).toBe('free')
     expect(stepSection('free', 'ArrowRight')).toBe('general')

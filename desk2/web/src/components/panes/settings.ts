@@ -7,7 +7,7 @@
 // account menu, so Settings has no Accounts page.
 import type { DeskSettings } from '@shared/protocol'
 
-export type SettingsSection = 'general' | 'managers' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
+export type SettingsSection = 'general' | 'managers' | 'people' | 'alerts' | 'hswarm' | 'connections' | 'connectors' | 'devservers' | 'diagnostics' | 'updates' | 'about' | 'cli' | 'desktop' | 'free'
 
 // Ids a saved or linked section used before a rename. CliMayte is part of HSwarm (owner, 2026-10-10).
 export const LEGACY_SECTION: Record<string, SettingsSection> = { climayte: 'hswarm' }
@@ -21,6 +21,7 @@ export function sectionFor(id: string): SettingsSection | null {
 export const SETTINGS_SECTIONS: { id: SettingsSection; label: string; caption: string }[] = [
   { id: 'general', label: 'General', caption: 'Settings' },
   { id: 'managers', label: 'Managers', caption: 'Settings' },
+  { id: 'people', label: 'Your people', caption: 'Settings' },
   { id: 'alerts', label: 'Usage alerts', caption: 'Settings' },
   { id: 'hswarm', label: 'HSwarm', caption: 'Settings' },
   { id: 'connections', label: 'Connections', caption: 'Settings' },
@@ -43,6 +44,7 @@ export type SettingsRowId =
   | 'idle'
   | 'collapseMode'
   | 'babysitter'
+  | 'instanceManager'
   | 'orchestrator'
   | 'orchestratorModel'
   | 'routines'
@@ -190,6 +192,16 @@ export const SETTINGS_ROWS: SettingsRow[] = [
     group: 'Watching chats',
     label: 'Orchestrator model',
     description: 'The model that judges each chat the orchestrator looks at. Opus, Sonnet and Haiku are always the newest of their family.'
+  },
+  // The instance manager (shared/instance-manager.ts; owner, 2026-10-15: "if it notices a desktop instance close, it
+  // should start the next available desktop instance with room").
+  {
+    id: 'instanceManager',
+    section: 'managers',
+    group: 'Watching apps',
+    label: 'Instance manager',
+    description:
+      'When a Claude Desktop or Codex app goes down with chats working in it, open the same kind of account with the most room, move the chats there and start them again. A clean quit is left alone.'
   },
   // The new core (core/README.md) behind the window: owner, 2026-10-14, "switch it over behind the toggle with the old
   // engine kept for rollback".

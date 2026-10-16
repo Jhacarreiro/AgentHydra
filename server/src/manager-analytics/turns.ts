@@ -236,7 +236,7 @@ export function promptOf(ref: LineRef): PromptInfo | null {
 
 export interface TurnContext {
   session: string
-  managersDir: string
+  managerRoots: string[]
   deskChat: string | null
   parentChat: string | null
   /** The manager and routing decision in force when a turn starts at `promptTs`; null skips the turn. */
@@ -314,25 +314,7 @@ function addEntry(
   if (Number.isFinite(ts)) d.lastTs = Math.max(d.lastTs, ts)
   const blocks = blocksOf(e)
   if (e.type === 'user') {
-    if (textOf(blocks).includes('[Request interrupted by user')) d.cancelled = true
-    for (const b of blocks) {
-      if (b.type !== 'tool_result' || !b.tool_use_id) continue
-      const body = resultText(b.content)
-      if (body.startsWith('[Tool call interrupted')) d.cancelled = true
-      const use = uses.get(b.tool_use_id)
-      if (!use) continue
-      if (use.name === 'climayte_run' || use.name === 'climayte_manage') {
-        for (const m of body.match(WORKER_ID) ?? []) d.workers.add(m)
-      } else if (use.name === 'manager_open') {
-        const m = /"chat"\s*:\s*"([^"]+)"/.exec(body)
-        if (m) d.opened.add(m[1])
-      } else if (
-        (use.name === 'manager_read' || use.name === 'manager_ask') &&
-        /"status"\s*:\s*"done"/.test(body)
-      ) {
-        d.doneReads.push({ chat: use.chat, idx: use.idx })
-      }
-    }
+    addUserEntry(d, blocks, uses)
     return
   }
   if (e.type !== 'assistant') return
@@ -351,29 +333,82 @@ function addEntry(
     if (b.type !== 'tool_use' || !b.name) continue
     const name = b.name.includes('__') ? b.name.slice(b.name.lastIndexOf('__') + 2) : b.name
     d.tools[name] = (d.tools[name] ?? 0) + 1
-    const input = b.input
-    if (name === 'Read' && typeof input?.file_path === 'string') {
-      const fp = input.file_path.split('\\').join('/')
-      const root = ctx.managersDir.split('\\').join('/')
-      if (fp.startsWith(`${root}/`) && fp.includes('/playbook/') && fp.endsWith('.md'))
-        d.facets.add(basename(fp))
-    } else if (name === 'manager_ask') {
-      d.asks.push({ chat: chatKey(input), idx: step.n })
-      if (b.id) uses.set(b.id, { name, chat: chatKey(input), idx: step.n })
-    } else if (name === 'manager_read' && b.id) {
-      uses.set(b.id, { name, chat: chatKey(input), idx: step.n })
-    } else if (
-      (name === 'manager_open' || name === 'climayte_run' || name === 'climayte_manage') &&
-      b.id
-    ) {
-      uses.set(b.id, { name, chat: '', idx: step.n })
-    }
+    addToolUse(d, name, b, ctx, uses, step)
   }
   if (text) {
     d.finalText = text
     if (USAGE_LIMIT.test(text) && e.message?.model === '<synthetic>') d.usageLimit = true
   }
   step.n++
+}
+
+type Blocks = ReturnType<typeof blocksOf>
+
+/** A tool result's effect on the draft, by the tool call it answers. */
+const RESULT_HANDLERS: Record<string, (d: Draft, body: string, use: ToolUse) => void> = {
+  climayte_run: (d, body) => {
+    for (const m of body.match(WORKER_ID) ?? []) d.workers.add(m)
+  },
+  climayte_manage: (d, body) => {
+    for (const m of body.match(WORKER_ID) ?? []) d.workers.add(m)
+  },
+  manager_open: (d, body) => {
+    const m = /"chat"\s*:\s*"([^"]+)"/.exec(body)
+    if (m) d.opened.add(m[1])
+  },
+  manager_read: (d, body, use) => noteDoneRead(d, body, use),
+  manager_ask: (d, body, use) => noteDoneRead(d, body, use),
+}
+
+function noteDoneRead(d: Draft, body: string, use: ToolUse): void {
+  if (/"status"\s*:\s*"done"/.test(body)) d.doneReads.push({ chat: use.chat, idx: use.idx })
+}
+
+function addUserEntry(d: Draft, blocks: Blocks, uses: Map<string, ToolUse>): void {
+  if (textOf(blocks).includes('[Request interrupted by user')) d.cancelled = true
+  for (const b of blocks) {
+    if (b.type !== 'tool_result' || !b.tool_use_id) continue
+    const body = resultText(b.content)
+    if (body.startsWith('[Tool call interrupted')) d.cancelled = true
+    const use = uses.get(b.tool_use_id)
+    if (use && Object.hasOwn(RESULT_HANDLERS, use.name)) RESULT_HANDLERS[use.name](d, body, use)
+  }
+}
+
+/** A playbook file read under a manager root counts as a facet. */
+function noteFacetRead(d: Draft, filePath: string, ctx: TurnContext): void {
+  const fp = filePath.split('\\').join('/')
+  const roots = ctx.managerRoots.map((r) => r.split('\\').join('/'))
+  if (
+    roots.some((root) => fp.startsWith(`${root}/`)) &&
+    fp.includes('/playbook/') &&
+    fp.endsWith('.md')
+  )
+    d.facets.add(basename(fp))
+}
+
+/** A tool call's effect on the draft, by tool name. */
+function addToolUse(
+  d: Draft,
+  name: string,
+  b: Blocks[number],
+  ctx: TurnContext,
+  uses: Map<string, ToolUse>,
+  step: { n: number },
+): void {
+  const input = b.input
+  if (name === 'Read') {
+    if (typeof input?.file_path === 'string') noteFacetRead(d, input.file_path, ctx)
+    return
+  }
+  if (name === 'manager_ask') {
+    d.asks.push({ chat: chatKey(input), idx: step.n })
+    if (b.id) uses.set(b.id, { name, chat: chatKey(input), idx: step.n })
+  } else if (name === 'manager_read') {
+    if (b.id) uses.set(b.id, { name, chat: chatKey(input), idx: step.n })
+  } else if (name === 'manager_open' || name === 'climayte_run' || name === 'climayte_manage') {
+    if (b.id) uses.set(b.id, { name, chat: '', idx: step.n })
+  }
 }
 
 function outcomeOf(d: Draft, stuck: boolean): Outcome {

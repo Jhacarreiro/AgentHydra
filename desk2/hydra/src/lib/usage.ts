@@ -207,15 +207,6 @@ export function windowResetMs(resetsAt: string | null | undefined): number | nul
   return msUntilReset({ pct: 0, resets: '', resetsAt }, new Date(0))
 }
 
-/** When the window began: its reset instant minus its length; null without a usable reset. */
-export function windowStartMs(
-  resetsAt: string | null | undefined,
-  kind: WindowKind,
-): number | null {
-  const reset = windowResetMs(resetsAt)
-  return reset === null ? null : reset - windowLengthMs(kind)
-}
-
 /** True when the reset instant has passed (at or before `nowMs`); false when it is missing. */
 export function windowHasReset(resetsAt: string | null | undefined, nowMs: number): boolean {
   const reset = windowResetMs(resetsAt)

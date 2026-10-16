@@ -68,7 +68,7 @@ async function onPage<T>(params: Step, caller: ToolCaller, use: (link: Link) => 
   }
 }
 
-async function pageValue(link: Link, expression: string): Promise<unknown> {
+export async function pageValue(link: Link, expression: string): Promise<unknown> {
   const res = (await link.send('Runtime.evaluate', { expression, returnByValue: true })) as { result?: { value?: unknown } }
   return res.result?.value
 }

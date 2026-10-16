@@ -15,10 +15,12 @@
 // to the default login, sessions and workers to []. Writes (cancel, send) and a single transcript read
 // do throw a BridgeError.
 
-import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptItem } from '@shared/protocol'
+import { type SearchResult, searchResult } from '@shared/find'
+import { SESSION_FINISHED, type AccountInfo, type AccountRef, type CliMayteWorker, type ExternalSession, type SearchHit, type SessionTasks, type SwarmJob, type TranscriptIndex, type TranscriptItem } from '@shared/protocol'
 import { isThrowawayCwd } from '@shared/throwaway'
 import { DEFAULT_ACCOUNT, DEFAULT_ACCOUNT_INFO, mapAccounts } from './accounts'
-import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
+import { CHATS_FRESH_MS, type ChatIndex, JOBS_ASKED, jobDirs, mapRemoteJobs, mapSwarmJobs, SWARM_FRESH_MS } from './swarm'
+import { attachJobModels } from './swarm-models'
 import { activeFor, byRecency, mapRemote, mapWorkers, missingAncestors, RECENT_FINISHED, reuseWorkers, workersOfChat } from './climayte'
 import {
   BridgeError,
@@ -35,13 +37,16 @@ import {
   type HydraClient,
   type HydraClientOptions,
   type StartWorker,
+  type WorkerSendSetting,
 } from './client'
-import { type ExternalInputs, mapExternal, tailToItems, workerDetailToItems } from './external'
+import { type ExternalInputs, mapExternal, STALE_AFTER_MS, tailToItems, workerDetailToItems } from './external'
 import { mapSearch, searchResults } from './search'
-import { claudeProjectRoots, findSessionJsonlAsync, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
+import { buildTranscriptIndex } from '@shared/transcript-index'
+import { codexTurnOpen, findCodexRollout, lastCodexContext } from './codex-rollout'
+import { claudeProjectRoots, findSessionJsonlAsync, lastContextTokens, sessionJsonlItems, sessionJsonlOlder, sessionJsonlStart, workerJsonlItems } from './session-jsonl'
 import { createHomeStats } from './stats'
 import { createWorkerTokens } from './worker-tokens'
-import { resumeAccount, type ResumeData } from './resume'
+import { resumeAccount, withDesktopAccounts, type ResumeData } from './resume'
 import { stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { isAbsolute, join, relative, resolve } from 'node:path'
@@ -81,6 +86,10 @@ const SESSION_TASKS_KEPT = 20
 const OLDER_PAGES = 32
 /** At most this many search rows are kept; the oldest go first. */
 const SEARCH_ROWS_MAX = 300
+/** The Codex homes (accounts come and go rarely) are asked again after this long. */
+const CODEX_HOMES_FRESH_MS = 5 * 60_000
+/** A session with no rollout found is looked for again after this long (a Codex thread's file appears with its first turn). */
+const ROLLOUT_MISS_MS = 60_000
 /** A worker id no worker has, asked to learn whether AgentHydra has deliver-now (canDeliverNow). */
 const DELIVER_NOW_PROBE_ID = 'desk-probe-no-such-worker'
 /**
@@ -345,7 +354,7 @@ export function createBridge(opts: BridgeOptions = {}) {
       }
       const [answer, remote, chats] = await Promise.all([client.hswarmJobs(JOBS_ASKED).catch(swarmMiss), cachedRemoteQueues().catch(miss), chatsIndex()])
       const kept = missed ? keptJobs.get() : undefined
-      return kept ?? keptJobs.ok([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)])
+      return kept ?? keptJobs.ok(await attachJobModels([...mapSwarmJobs(answer, chats), ...mapRemoteJobs(remote, chats)], jobDirs(answer)))
     })()
     lastJobs = { at: now(), jobs }
     return jobs
@@ -404,7 +413,10 @@ export function createBridge(opts: BridgeOptions = {}) {
       const have = new Set(raw.map((w) => w.id))
       const up = [...new Set(raw.flatMap((w) => (w.origin?.kind === 'worker' && !have.has(w.origin.workerId) ? [w.origin.workerId] : [])))]
       const all = up.length ? [...raw, ...(await client.workersByIds(up).catch(() => []))] : raw
-      if (jobs) kept.jobs = mapSwarmJobs(jobs, chats, SESSION_FINISHED).filter((j) => j.callerSessionId === sessionId || j.callerHostSessionId === sessionId)
+      if (jobs) {
+        const mine = mapSwarmJobs(jobs, chats, SESSION_FINISHED).filter((j) => j.callerSessionId === sessionId || j.callerHostSessionId === sessionId)
+        kept.jobs = await attachJobModels(mine, jobDirs(jobs))
+      }
       return { sessionId, workers: workersOfChat(mapWorkers(all), { sessionId }), jobs: kept.jobs }
     })()
     const entry = { at: now(), answer, kept }
@@ -477,7 +489,38 @@ export function createBridge(opts: BridgeOptions = {}) {
       codexChats: got.codexChats ?? [],
       sessions: got.sessions ?? [],
       workers: got.workers ?? [],
+      codexTurns: await codexTurns(got.codexChats ?? []),
     }
+  }
+
+  /** Whether each Codex thread active in the last STALE_AFTER_MS has its last turn open (codex-rollout.ts codexTurnOpen),
+   *  kept by the rollout's size and mtime, so a file that has not changed is not read again. */
+  const turnKept = new Map<string, { key: string; open: boolean }>()
+  async function codexTurns(chats: readonly AhCodexChatRow[]): Promise<Map<string, boolean>> {
+    const out = new Map<string, boolean>()
+    const recent = chats.filter((c) => {
+      const at = c.lastActivityAt ? Date.parse(c.lastActivityAt) : Number.NaN
+      return Number.isFinite(at) && now() - at <= STALE_AFTER_MS
+    })
+    const recentIds = new Set(recent.map((c) => c.threadId))
+    for (const id of turnKept.keys()) if (!recentIds.has(id)) turnKept.delete(id)
+    await Promise.all(
+      recent.map(async (c) => {
+        const path = await codexRollout(c.threadId).catch(() => null)
+        if (!path) return
+        try {
+          const st = await stat(path)
+          const key = `${path}|${st.size}|${st.mtimeMs}`
+          const kept = turnKept.get(c.threadId)
+          const open = kept?.key === key ? kept.open : codexTurnOpen(path)
+          turnKept.set(c.threadId, { key, open })
+          out.set(c.threadId, open)
+        } catch {
+          // floor-ok: a rollout that went away between the find and the read leaves the thread to go by how recently it wrote
+        }
+      }),
+    )
+    return out
   }
 
   /** `throwaway`: also the live probe's own sessions (shared/throwaway.ts), which every other caller, the window's
@@ -491,13 +534,14 @@ export function createBridge(opts: BridgeOptions = {}) {
     // missing from it is read by id, as externalSession(id) does. One AgentHydra does not know is left out.
     // An Unassigned one too: its account's app archived it, so /api/chats no longer lists it.
     const pinned = pinnedIds()
-    for (const old of pinnedRows.keys()) if (!pinned.includes(old)) pinnedRows.delete(old)
+    const pinnedSet = new Set(pinned)
+    for (const old of pinnedRows.keys()) if (!pinnedSet.has(old)) pinnedRows.delete(old)
     const known = new Set(inp.sessions.map((s) => s.session_id))
     const extra = (await Promise.all(pinned.filter((id) => !known.has(id)).map((id) => pinnedRow(id)))).filter(
       (r): r is NonNullable<typeof r> => r !== null,
     )
     const withPinned: ExternalInputs = pinned.length ? { ...inp, sessions: [...inp.sessions, ...extra], wanted: new Set(pinned) } : inp
-    const mapped = mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who))
+    const mapped = withDesktopAccounts(mapExternal({ ...withPinned, knownTitle }, exclude, now(), (q) => resumeAccount(q, who)), who)
     const list = o.throwaway ? mapped : mapped.filter((s) => !isThrowawayCwd(s.cwd))
     rememberTitles(list)
     return sessionMeta(list, onAccountIds(inp))
@@ -531,9 +575,10 @@ export function createBridge(opts: BridgeOptions = {}) {
     const base: ExternalInputs = inp ?? { agentStatus: [], live: [], chats: [], sessions: [], workers: [] }
     const sessions = row ? [...base.sessions.filter((s) => s.session_id !== id), row] : base.sessions
     const who = await resumeData()
-    const found = mapExternal({ ...base, sessions, wanted: new Set([id]), knownTitle }, new Set(), now(), (q) => resumeAccount(q, who)).find(
-      (s) => s.id === id,
-    )
+    const found = withDesktopAccounts(
+      mapExternal({ ...base, sessions, wanted: new Set([id]), knownTitle }, new Set(), now(), (q) => resumeAccount(q, who)),
+      who,
+    ).find((s) => s.id === id)
     if (!found) throw new BridgeError('http', `AgentHydra does not know session ${id}`, 404)
     return sessionMeta([found], onAccountIds(base))[0] ?? found
   }
@@ -657,6 +702,81 @@ export function createBridge(opts: BridgeOptions = {}) {
     const items = await externalItems(sessionId, cwd, open)
     const older = open.older ? await externalOlder(sessionId, open.older, cwd) : []
     return older.length ? [...older, ...items] : items
+  }
+
+  /** The newest `limit` items of what externalOlder answers that end before item `end` (default: the last), and how many are above them. */
+  async function externalOlderPage(sessionId: string, before: number, cwd: string | null, limit: number, end?: number): Promise<{ items: TranscriptItem[]; above: number }> {
+    const all = await externalOlder(sessionId, before, cwd)
+    const to = Math.min(Math.max(end ?? all.length, 0), all.length)
+    const from = Math.max(0, to - Math.max(1, limit))
+    return { items: all.slice(from, to), above: from }
+  }
+
+  /** Where Codex keeps its threads: the default login's home and every Codex account AgentHydra lists. */
+  const codexHomes = sharedRead(CODEX_HOMES_FRESH_MS, async () => {
+    const homes = [join(home, '.codex'), ...(await client.codexInstances().catch(() => [])).map((i) => i.codexHome).filter(Boolean)]
+    return [...new Map(homes.map((h) => [h.toLowerCase(), h])).values()]
+  })
+  /** A thread's rollout once found; a miss is asked again after ROLLOUT_MISS_MS (a session with neither file is looked for again). */
+  const rollouts = new Map<string, { path: string | null; at: number }>()
+  const ROLLOUTS_KEPT = 500
+  async function codexRollout(threadId: string): Promise<string | null> {
+    const kept = rollouts.get(threadId)
+    if (kept && (kept.path || now() - kept.at < ROLLOUT_MISS_MS)) return kept.path
+    const path = await findCodexRollout(threadId, await codexHomes())
+    rollouts.set(threadId, { path, at: now() })
+    if (rollouts.size > ROLLOUTS_KEPT) rollouts.delete(rollouts.keys().next().value as string)
+    return path
+  }
+
+  /** A whole outside session's history, kept by file size and mtime (a file that grew is read again). */
+  const wholeKept = new Map<string, { key: string; items: TranscriptItem[]; index: TranscriptIndex }>()
+  const WHOLE_KEPT = 3
+  async function externalWhole(sessionId: string, cwd: string | null): Promise<{ items: TranscriptItem[]; index: TranscriptIndex }> {
+    const items = await externalHistory(sessionId, cwd)
+    const file = foundAt.get(sessionId)
+    let key = ''
+    try {
+      const st = file ? await stat(file) : null
+      if (st) key = `${st.size}|${st.mtimeMs}`
+    } catch {
+      // gone: not kept
+    }
+    const kept = wholeKept.get(sessionId)
+    if (key && kept && kept.key === key) return kept
+    // Its context comes from the file's usage lines, which no item carries: a Claude Code .jsonl's last reply (no window), or
+    // for a chat with none, a Codex rollout's last token_count (with its window).
+    let context: { tokens: number; window: number | null } | null = null
+    try {
+      if (key && file) {
+        const tokens = lastContextTokens(file)
+        context = tokens === null ? null : { tokens, window: null }
+      } else {
+        const rollout = await codexRollout(sessionId)
+        context = rollout ? lastCodexContext(rollout) : null
+      }
+    } catch {
+      // gone since it was found: no context, the rest of the index stands
+    }
+    const built = { key, items, index: { ...buildTranscriptIndex(items), contextTokens: context?.tokens ?? null, contextWindow: context?.window ?? null } }
+    if (key) {
+      wholeKept.delete(sessionId)
+      wholeKept.set(sessionId, built)
+      while (wholeKept.size > WHOLE_KEPT) wholeKept.delete(wholeKept.keys().next().value!)
+    }
+    return built
+  }
+
+  async function externalIndex(sessionId: string, cwd: string | null = null): Promise<TranscriptIndex> {
+    return (await externalWhole(sessionId, cwd)).index
+  }
+
+  async function externalSearch(sessionId: string, query: string, cwd: string | null = null): Promise<SearchResult> {
+    return searchResult((await externalWhole(sessionId, cwd)).items, query)
+  }
+
+  async function externalItem(sessionId: string, itemId: string, cwd: string | null = null): Promise<TranscriptItem | null> {
+    return (await externalWhole(sessionId, cwd)).items.find((i) => i.id === itemId) ?? null
   }
 
   const searchRows = new Map<string, { at: number; row: AhSessionRow | null }>()
@@ -809,14 +929,14 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** A worker session's part, read from the newest file that holds it; null when no file does yet (a miss is remembered). */
   async function partOf(sid: string, cwd: string | null, o: WorkerScan, ownRoot: string | null, allRoots: () => Promise<string[]>): Promise<WorkerPart | null> {
     let known = o.rescan ? null : foundAt.get(sid)
+    // The turn in flight is looked for in its own folder on every look: a new session's file is not there yet at its
+    // first poll, and a back-off here made the next look 5 s, then 10 s, later.
     if (ownRoot && sid === o.writing?.sessionId && !(known && isUnder(known, ownRoot))) {
-      const ownKey = `${ownRoot}|${sid}`
-      const own = !o.rescan && searchedLately(ownKey) ? null : await findSessionJsonlAsync(sid, [ownRoot], cwd)
+      const own = await findSessionJsonlAsync(sid, [ownRoot], cwd)
       if (own) {
-        notFound.delete(ownKey)
         rememberFile(sid, own)
         known = own
-      } else if (!o.rescan) rememberMiss(ownKey)
+      }
     }
     const part = known ? ((await unchangedPart(sid, known, cwd)) ?? (await readPart(known, cwd))) : null
     if (part) return part
@@ -869,9 +989,9 @@ export function createBridge(opts: BridgeOptions = {}) {
     return items
   }
 
-  /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). */
-  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string): Promise<boolean> {
-    const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId)
+  /** `requestId`: the message's own id, the same on every retry of it (AgentHydra queues it once). `setting`: the model and effort its turn runs on. */
+  async function sendToWorker(id: string, text: string, cwd?: string, urgent = false, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting): Promise<boolean> {
+    const r = await client.sendToWorker(id, text, cwd, urgent, desk, requestId, setting)
     if (!r.ok) throw new BridgeError('http', r.message || `AgentHydra refused the message to ${id}`, /no such worker/i.test(r.message) ? 404 : 400)
     // A follow-up can wake a finished worker.
     workersChanged()
@@ -973,7 +1093,11 @@ export function createBridge(opts: BridgeOptions = {}) {
     externalSession,
     externalItems,
     externalOlder,
+    externalOlderPage,
     externalHistory,
+    externalIndex,
+    externalSearch,
+    externalItem,
     search,
     sessionRoots,
     workers,
@@ -995,9 +1119,13 @@ export function createBridge(opts: BridgeOptions = {}) {
     canDeliverNow,
     sendToWorkerNow,
     cancelWorkerHeld,
+    completionFinished: (ticket: string, outcome: 'done' | 'failed' | 'cancelled') =>
+      client.completionFinished(ticket, outcome),
     startWorker,
     workersByIds,
     workerItems,
+    /** The session file a worker session was last found in: what a watch on a turn in flight follows. */
+    workerFileOf: (sessionId: string): string | null => foundAt.get(sessionId) ?? null,
     /** The home screen's stats card, consolidated over every source AgentHydra counts (stats.ts). */
     homeStats,
     setExtraWorkerIds(fn: () => string[]): void {

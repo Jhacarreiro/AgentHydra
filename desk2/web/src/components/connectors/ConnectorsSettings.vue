@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, shallowRef } from 'vue'
 import type { ConnectorAction, ConnectorView } from '@shared/connectors'
 import PaneSwitch from '@/components/panes/PaneSwitch.vue'
 import { Tip } from '@/components/ui/tooltip'
@@ -11,7 +11,7 @@ import { note, pollDelay, rowButtons, stateLabel, stateTone, versionLabel } from
 
 // Settings → Connectors: one row per outside app Desk hooks in (shared/connectors.ts). Polled every 3 s while
 // one installs or starts, else every 15 s, and only while this section is on screen.
-const views = ref<ConnectorView[]>([])
+const views = shallowRef<ConnectorView[]>([])
 const loaded = ref(false)
 const error = ref<string | null>(null)
 let timer: ReturnType<typeof setTimeout> | null = null
@@ -19,7 +19,9 @@ let gone = false
 
 async function load() {
   try {
-    views.value = await listConnectors()
+    const next = await listConnectors()
+    // An unchanged answer (the usual one, on every poll) must not swap the list in: every row would re-render for nothing.
+    if (JSON.stringify(next) !== JSON.stringify(views.value)) views.value = next
     error.value = null
   } catch (e) {
     error.value = e instanceof Error ? e.message : String(e)

@@ -18,7 +18,6 @@ export default {
   // The Tokens column: neither site reports tokens, so Desk estimates them (server/src/free-instances/tokens.ts).
   tokensBreakdown: '{output} output · {input} input (the thread each message continued included)',
   tokensSource: 'Estimated on this PC from the text AgentHydra sent and got back, about 4 characters a token. Messages sent before this count began, or from another PC, are not in it.',
-  noReading: 'No reading yet', noReadingHint: 'Claude shows this account’s usage only after it sends a message. Each chat here brings a fresh reading.',
   signedOut: 'Not signed in',
   // The verdict of a check someone started (lib/free-instances.ts freeCheckVerdict), as a toast and on the row.
   isAlive: 'Is it alive?', accountLabel: 'Free {num} ({name})',
@@ -38,13 +37,16 @@ export default {
   // A paid plan the site reports, beside the name (ChatGPT Go, read 2026-10-08: the same models as Free, more room).
   planLabel: '{provider} {plan}',
   planHint: 'A paid plan, as ChatGPT reports it. AgentHydra sends it the same unlimited model as a Free account, and the plan gives each chat more room.',
-  planHintClaude: 'A paid plan, as Claude reports it, so this is no longer a free account. It can run as a CLI or Desktop instance: Promote in its menu.',
+  planHintClaude: 'A paid plan, as Claude reports it, so this is no longer a free account. Promote it in its menu.',
   // Each account's plan is checked when it signs in and on every reading after (owner, 2026-10-09).
   planFree: 'Free plan', planFreeHint: '{provider} reports the Free plan: this account costs nothing.',
-  planChangedPaid: 'Now on {plan}', planChangedFree: 'Back on Free',
+  // Only a move that changes what the account can be promoted to (owner, 2026-10-14: never "Now on Go").
+  planChangedPaid: 'Now on {plan}', planChangedBack: 'Back on {plan}',
   planChangedHint: 'Since {when}; it was {from}. Promote it or dismiss this in its menu.',
   planFirstPaidHint: 'Its first check found a paid plan ({when}). Promote it or dismiss this in its menu.',
-  promoteCli: 'Promote to CLI or Desktop…', promoteCodex: 'Promote to a Codex instance…', planDismiss: 'Dismiss plan change',
+  planChangedBackHint: 'Since {when}; it was {from}. Dismiss this in its menu.',
+  promoteCli: 'Promote to a CLI instance…', promoteDesktop: 'Promote to a Desktop instance…', promoteCodex: 'Promote to a Codex instance…',
+  planDismiss: 'Dismiss plan change',
   working: 'Working…', recover: 'Check operation',
   // The account's last hour (server/src/free-instances/health.ts): a note in the name's hover, a mark only when failing.
   lastHour: 'last hour: {sent} sent, {failed} failed',
@@ -75,6 +77,13 @@ export default {
     answeredOf: 'answered of {sent} messages {span}',
     ofSent: 'of {sent}',
     messagesTip: '{sent} messages sent {span}, {failed} failed',
+    messagesWhyTip: '{sent} messages sent {span}, {failed} failed: {why}',
+    // A failure's error code in words (FreeSummary.vue WHY).
+    why: {
+      generation_error: 'reply failed', answer_not_confirmed: 'reply not confirmed', not_found: 'chat not found', rate_limited: 'limit reached', http_rejected: 'request rejected',
+      http_verification_required: 'access check', login_required: 'signed out', network_error: 'network error',
+      operation_interrupted: 'interrupted', stream_interrupted: 'reply cut off', response_pending: 'reply not confirmed', unknown: 'no reason',
+    },
     byModel: 'Answered by model {span}',
     perDay: 'Free tokens per day {span}',
     noModels: 'No messages recorded yet. Each new message counts here with the model that answered it.',

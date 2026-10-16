@@ -20,6 +20,8 @@ export interface NativeUltracodeOutcome {
   reason?: string
   before?: { effort: string | null; ultracode: boolean | null; permissionMode?: string | null }
   after?: { effort: string | null; ultracode: boolean | null; permissionMode?: string | null }
+  /** Bypass was asked and the app would not keep it, so the chat went on Auto: why. */
+  bypassRefused?: string
 }
 
 /** Land `effort` and `ultracode` on one chat in its running app. Ultracode defaults to on; a move
@@ -66,7 +68,12 @@ export async function tryNativeUltracode(
       }),
     )
     if (result?.ok === true && result.verified === true) {
-      return { ok: true, before: result.before, after: result.after }
+      return {
+        ok: true,
+        before: result.before,
+        after: result.after,
+        ...(result.bypassRefused ? { bypassRefused: String(result.bypassRefused) } : {}),
+      }
     }
     return {
       ok: false,

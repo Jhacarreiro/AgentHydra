@@ -1,6 +1,6 @@
 // server/src/tray-invariant.ts - AgentHydra must never be running without a tray icon.
 //
-// OWNER RULE (Michael, 2026-09-07): "AgentHydra can never run unless it shows up in the status
+// OWNER RULE (2026-09-07): "AgentHydra can never run unless it shows up in the status
 // bar or whatever, AKA how it is right now, not running in the status bar. Not allowed."
 //
 // index.ts already calls startTrayHostIfMissing() at boot, so the daemon starts WITH an icon.

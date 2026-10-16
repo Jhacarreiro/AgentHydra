@@ -35,11 +35,6 @@ export default {
 
   nameLabel: 'Name',
   namePlaceholder: 'work, personal, …',
-  createDialogTitle: 'New DeepSeek instance',
-  createDialogDescription:
-    'Creates an empty DSH_HOME. The harness writes its own settings, credentials and chats into it the first time you launch it.',
-  createDialogSubmit: 'Create',
-  createDialogCreating: 'Creating…',
   renameDialogTitle: 'Rename instance',
   renameDialogDescription: 'Changes the label only. The home directory keeps its name.',
   renameDialogSubmit: 'Rename',

@@ -1,10 +1,11 @@
 import { onScopeDispose, reactive, ref, shallowRef } from 'vue'
 import type { FreeCommand, FreeHealth, FreeInstance, FreeJob, FreeRequest, FreeResult, FreeThread, FreeTokens } from '@desk/shared/free-instances'
 import { FreeApiError, freeApi, freeErrorText, isTimeout, rememberedJob } from '@/lib/free-instances'
+import { sameData } from '@/lib/reconcile'
 
 // One copy survives tab changes. Only request UUIDs go into browser storage.
 const instances = ref<FreeInstance[]>([])
-const threads = ref<FreeThread[]>([])
+const threads = shallowRef<FreeThread[]>([])
 /** How many threads have a message running, from the status read. */
 const running = ref(0)
 /** The pages listing the threads that are open (CliMayte's): only they read the list. It holds every private chat
@@ -13,6 +14,7 @@ const running = ref(0)
 let threadReaders = 0
 let threadsRead = false
 let readingThreads: Promise<void> | null = null
+let threadsVersion: string | null = null
 /** Each account's token estimate by its id (server/src/free-instances/tokens.ts). */
 const tokens = shallowRef<Record<string, FreeTokens>>({})
 /** Each account's last hour of messages by its id (server/src/free-instances/health.ts). */
@@ -31,13 +33,22 @@ let refreshing: Promise<void> | null = null
 
 const busy = (id: string) => jobs[id]?.state === 'running'
 
+/** The caller owns a completed reply; the shared row cache needs only its recovery ID and status. */
+function cacheJob(job: FreeJob): void {
+  if (job.state === 'running') jobs[job.instanceId] = job
+  else {
+    const { result: _result, ...metadata } = job
+    jobs[job.instanceId] = metadata
+  }
+}
+
 /** The new list, keeping each unchanged item's own object: a row redraws only when its account changed. */
 function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
   const before = new Map(old.map(x => [x.id, x]))
   let same = old.length === next.length
   const merged = next.map((x, n) => {
     const o = before.get(x.id)
-    const keep = !!o && JSON.stringify(o) === JSON.stringify(x)
+    const keep = !!o && sameData(o, x)
     if (!keep || old[n] !== o) same = false
     return keep ? o! : x
   })
@@ -46,8 +57,11 @@ function keepUnchanged<T extends { id: string }>(old: T[], next: T[]): T[] {
 
 /** The thread list, read again; a read already running is shared. */
 function readThreads(): Promise<void> {
-  readingThreads ??= freeApi.threads()
-    .then((list) => { threads.value = keepUnchanged(threads.value, list); threadsRead = true })
+  readingThreads ??= freeApi.changedThreads(threadsVersion)
+    .then(({ threads: list, version }) => {
+      if (list) { threads.value = keepUnchanged(threads.value, list); threadsRead = true }
+      threadsVersion = version
+    })
     .finally(() => { readingThreads = null })
   return readingThreads
 }
@@ -57,9 +71,9 @@ async function snapshot(): Promise<void> {
   instances.value = keepUnchanged(instances.value, status.instances)
   running.value = status.running
   const estimate = status.tokens ?? {}
-  if (JSON.stringify(estimate) !== JSON.stringify(tokens.value)) tokens.value = estimate
+  if (!sameData(estimate, tokens.value)) tokens.value = estimate
   const hour = status.health ?? {}
-  if (JSON.stringify(hour) !== JSON.stringify(health.value)) health.value = hour
+  if (!sameData(hour, health.value)) health.value = hour
   // Desk's own reads (the rolling refresh, a keepalive nudge) show no spinner: only what someone started does.
   for (const job of status.jobs) if (job.state === 'running' && !job.auto) jobs[job.instanceId] = job
   loaded.value = true
@@ -80,12 +94,12 @@ function follow(first: FreeJob): Promise<FreeResult | null> {
   const own = mine.has(first.id) || rememberedJob(first.instanceId) === first.id
   const task = (async () => {
     let job = first
-    jobs[job.instanceId] = job
+    cacheJob(job)
     try {
       while (job.state === 'running') {
         await new Promise(resolve => setTimeout(resolve, 1000))
         job = await readJob(job.id)
-        jobs[job.instanceId] = job
+        cacheJob(job)
       }
       if (own) rememberedJob(job.instanceId, null)
       if (!job.result?.ok && own) errors[job.instanceId] = job.result?.error?.message || 'The operation did not complete. Read the chat before sending again.'
@@ -164,11 +178,20 @@ async function planSeen(instance: FreeInstance): Promise<void> {
  *  worked; the reason lands in errors[instance.id]. */
 async function remove(instance: FreeInstance): Promise<boolean> {
   if (busy(instance.id)) return false
+  const previousJob = jobs[instance.id]?.id
+  const previousRemembered = rememberedJob(instance.id)
   errors[instance.id] = ''
   try {
     await freeApi.remove(instance.id)
     instances.value = instances.value.filter(i => i.id !== instance.id)
     threads.value = threads.value.filter(t => t.instanceId !== instance.id)
+    // An operation begun while deletion was awaiting its acknowledgement keeps
+    // its own state and recovery ID; never clear another pending operation.
+    if (!busy(instance.id) && jobs[instance.id]?.id === previousJob && rememberedJob(instance.id) === previousRemembered) {
+      delete jobs[instance.id]
+      delete errors[instance.id]
+      rememberedJob(instance.id, null)
+    }
     return true
   } catch (error) {
     errors[instance.id] = freeErrorText(error, 'Could not delete. Try again.')

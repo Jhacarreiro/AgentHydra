@@ -347,10 +347,7 @@ export function startInWorker(
       // its worker is gone, and with it the handle
     }
   }
-  let ended: (code: number | null) => void = () => {}
-  const exited = new Promise<number | null>((resolve) => {
-    ended = resolve
-  })
+  const { promise: exited, resolve: ended } = Promise.withResolvers<number | null>()
   return new Promise<StartedChild>((resolve, reject) => {
     let answered = false
     const guard = setTimeout(() => {

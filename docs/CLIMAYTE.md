@@ -12,7 +12,7 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
 
 ## Owner rulings
 
-- **2026-09-30, Michael:** "give you a task in a chat ... I want this fully delegated ... delegate
+- **2026-09-30, the other owner:** "give you a task in a chat ... I want this fully delegated ... delegate
   every part of it, except for the absolute bare orchestration level ... orchestrating them only
   to CLI, not desktop instances ... a super fast way to log in to multiple CLI instances ... Ask
   for an email, I'll give it to you, then you open the login page, and then I confirm it."
@@ -21,7 +21,7 @@ instance CliMayte can use. No naming, no terminal, no `/login`.
   worker is readable live and steerable in AgentHydra (the CliMayte view, `climayte_status`), and its
   transcript is an ordinary Claude Code session in that account's folder that a person can resume
   by hand. CliMayte is the one named exemption from the headless ban; queue dispatch stays refused.
-- **2026-10-02, Michael:** "the AI in general should know about CliMayte, being a viable option ...
+- **2026-10-02, the other owner:** "the AI in general should know about CliMayte, being a viable option ...
   like how it knows Z Swarm is available ... it doesn't step on the toes of other accounts running
   ... the Agent Hydra client manager should handle all that stuff." CliMayte is a standing option
   for work that needs Claude quality HSwarm cannot give (AgentHydra's MCP instructions say so),
@@ -399,6 +399,39 @@ as `interrupted` and redid its step); `detached` is no escape (DETACHED_PROCESS 
   highest 5-hour % per window from the CLI's rate_limit_events, `attempt.peak`), `sizing` (finished
   tasks' expected against used, `ratio` used/expected), plus `usedPct`, `rereadPct`,
   `rereadShare`, `rereadByCause`. Waiting rows carry `waitUntil` (ISO, UTC) and every row `size`.
+- Ceiling-stop overlap counts use a sorted endpoint index built only when this totals call needs one.
+  Starts and ends remain inclusive, open attempts retain their existing upper bound, and each new
+  call rebuilds from current attempts. History outside `since` still participates in overlap counts.
+
+Placement keeps the same ordered immutable finished-work snapshot while its entries are unchanged,
+including a manager's completed wakes. Grouped history indexes, scaled sums and model estimates can
+then be reused across scheduling passes. A changed entry, insertion, removal or reordered history
+creates a new snapshot; an earlier pass keeps its original snapshot. Running loads and recent spend
+continue to be read live.
+
+Compact worker lists (`GET /api/corch/workers?lean=1`) use the same derived row fields as full lists,
+but read a packed worker's cached prompt preview and report character count. Its long text stays
+compressed. The count includes the earlier recap retained by `statusTurns`; reading or changing a
+packed text field discards the summary and restores ordinary fields. Full detail and report requests
+continue to read the original text, and a waiting lean list uses the same compact path when it wakes.
+
+Desk adds `bridge=1` to its lean worker lists, including ID and session lookups. This additive
+projection builds only the `AhWorker` contract directly: account moves, prior sessions, ancestry,
+chat state, tokens and total usage remain intact, without full-view spreads or unused attempt,
+verdict and launch details. Older daemons ignore the flag; ordinary lean/full lists and detail
+routes keep their shapes, and brief/report reads take precedence. Packed history remains packed.
+Finished workers skip running-attempt access, and spend settlement collects only open attempts
+instead of allocating intermediate arrays for every historical worker.
+
+Default Claude parent lookups find only the first two slash/backslash positions rather than
+splitting whole nested paths. Mixed delimiters, empty components and trailing separators retain
+their previous ownership results; named-session stores keep their prefixed-ancestor rules.
+
+Origin-title warming excludes non-chat origins and cached titles before ranking the remaining
+workers. Active-first/newest priority, stable duplicate selection, lookup caps and null-miss retry
+times are unchanged. Completed or failed lookups release their deadline timers immediately.
+The window computes Free display rows independently of local and remote workers; worker-only
+refreshes reuse those row objects, while history changes and displayed account edits refresh them.
 
 ### Model and thinking (field note 16)
 
@@ -489,6 +522,25 @@ the session registrations of every pool account last read 3 seconds ago or more
 Each pool build then judges those registrations on the thread (`liveIdsOf`: the pid, then the pipe),
 with no transcript lookups. An account not read yet counts no other sessions until its read lands.
 The tick reads every account before it places work.
+
+Registration discovery reads fresh canonical folders from the registry without hydrating account
+numbers, identities, plans or usage. It checks the refresh deadline before probing credentials;
+new or newly signed-in accounts are still discovered on the next tick. Placement continues to
+read the full account metadata when needed, with the same registration and pool intervals.
+
+CLI plan labels retain only their display string (never parsed credentials), bounded to 512 paths.
+Each read stats the credential file and re-parses on change, replacement, deletion or an unreadable
+file. The shared `StatStamp` racy-file guard also re-reads recently written files until a stable parse
+exists, so a rapid same-size rewrite cannot leave a stale label.
+
+Login sync's scalar account-email cache uses the same racy-file stamp plus device/inode checks,
+bounded to 512 paths. Each call revalidates the file; missing or unreadable metadata discards its
+entry, and the current instance name remains the fallback. Full portable-login export and landing
+checks still read the complete account block fresh.
+
+Totals also reuse one session-membership lookup per analytics database while its generation and
+the exact requested session set hold. A write on either connection or changed membership forces
+a fresh query; failures propagate instead of caching a guessed empty result.
 
 ### Pure helpers (exported; the tests pin these)
 
@@ -600,6 +652,25 @@ that folder as `ownerDir`, makes the account folder match:
   first): it goes in this machine's worker `CLAUDE.md`, not in the task prompt. Every session loads
   that file, so the step holds through retries, moves to another account and compaction with no
   special casing; the 658805b prompt-preamble setting did the same job and was taken back out.
+
+### Roles
+
+Every worker has exactly one role, stored on it, returned in climayte_status and the list and detail APIs, and logged on its `dispatched` and `launched` journal entries.
+
+- **prime**: a chat worker that is not a pinned sub-manager chat (`chat: true`, no `desk.manager`), and not a seat chat.
+- **seat**: a worker carrying a persona, dispatched with `role: 'seat'` and `persona: '<catalog id>'` (the persona must be in the hydra-core catalog, or the dispatch is refused); a chat worker with `desk.manager` set; or the worker of a Desk chat core_use opened as a seat. core_use lists every seat chat it opens in `<core>/seat-chats.json` (the seat's Desk chat id, its persona and its Prime) before the seat's first message, and climayteRun gives a chat task whose `desk.chatId` is listed there `role: 'seat'` and that persona, for every persona, manager or not. So a seat gets no Prime pack and opens no seats.
+- **drone**: everything else. A drone never starts workers: its climayte_run, climayte_manage and fan_out are refused with "This session does not start workers..." (the words never name the role: a drone is never told it is one; the journal keeps the role) and the refusal is journaled as `refused` on the drone. Its brief tells it to end its report with a `TOO BIG:` line and a suggested split when a job is too big for one session; whoever started it splits the job. A turn that ends with such a line is journaled `too_big` (`notice`: the line), and the ping to its summoner leads with that line and asks it to take the job back and re-split it (ping kind `too-big`). One exception: a drone may start sealed visitors (a climayte_run whose every task is `sealed`), since a sealed worker has only the tools it names and starts nothing itself; each such dispatch is journaled as `visitors` on the drone, with the count.
+
+Prime, seat and no-worker callers dispatch as before. Manager workers (`kind: 'manage'`) are drones; their wave tasks are dispatched by the manager (climayte-manager-mcp), with no origin, so the refusal does not reach them.
+
+#### Seats (core_use consult and hire)
+
+- **One roster per chat, keyed by its Desk chat id.** core_use binds the call to its caller (server/src/hydra-core/caller.ts): the caller's own Desk chat is its worker's `desk.chatId`, or the Desk chat whose session it is (the owner's own chat, which no worker runs, is a Prime). A `chat` given as a title, a session id or the id resolves to the same Desk chat (a title matches only chats that are no seat, since a seat's title holds its Prime's), so one chat never gets two seats of one persona. A roster filed under an earlier key (a title or session id) is read and kept under the id. A `chat` that names another Desk chat than the caller's is refused: a Prime opens seats only for its own chat.
+- **Who gets a seat.** Only a Prime: a traced session that no CliMayte worker owns is one, Desk chat or not. A seat or drone is refused ("This session cannot consult X: ask whoever started you to consult it."), journaled `refused` on its worker and logged `refused` in the Hydra Core log. A caller the daemon cannot trace to a session is refused too (logged `refused` with caller `untraced`), and so is its fan_out; the words say to call from the chat's own Claude Code session through its AgentHydra MCP server. The trace reads only the calling process, never a `session_id` argument, so no caller can stand in for another chat.
+- **A Prime with no Desk chat.** Its seat is a CliMayte worker of the persona (role `seat`), kept per persona in `<chat>/seat-workers.json` and resumed (climayte_send) with each new question or job, never a fresh worker per question.
+- **Deleting a Desk chat** removes its Hydra Core folder (`chats/<id>`), its `seat-chats.json` entry and its place in its Prime's roster.
+- **Waiting and reading back.** consult waits up to 30 s for the answer itself (the report view returns on any change, so it is called again until the job ends). A consult with no question reads the latest answer: the seat's reply, or, seatless, the last consult job of that persona in the chat (`<chat>/consults.json`); it never starts a worker. A `working` answer names how to read it back.
+- **Log.** The Hydra Core log tells `seat-opened` from `seat-resumed` (with `mode`, `id` and `seat`).
 
 ### Chat workers (`chat: true`, owner, 2026-10-04)
 
@@ -762,7 +833,8 @@ the biggest quota levers left, and the safe way to lower them is to learn from r
   edited (read from the sessions' transcripts like the uncommitted check), and one of them has
   another session's uncommitted changes (`git status` in the task's folder; `failsOnlyOnOthersFiles`,
   the note then says so), else 2, so a test the task's own change broke stays its fail; a transcript
-  that cannot be read is unknown, so 2. A wave's fail
+  that cannot be read is unknown, so 2. A shared file left with only another session's hunks no longer
+  fails the check: a dirty file counts only while its uncommitted diff still holds a line this worker wrote. A wave's fail
   (`judgeInWave`) is 1 for commits outside the brief's paths, else 2. Retries, send-backs and
   status are unchanged: only the severity is new. Scorecard rows carry `slip`, `rework`, `failed`,
   `excluded` and `score`.
@@ -920,7 +992,10 @@ sub-agents for estimating time until they can actually estimate time properly."
 - **Where it shows.** `climayte_status` rows carry `etaMin`, `etaLeftMin` (while live; negative is
   over) and `tookMin`; `climayteScorecard().estimates` has `all`, `byKind` and the current `note`.
   Desk 2's running-tasks row says "about N min left" from the latest estimate of a running worker,
-  and its Background tasks panel shows each worker's estimate beside its time.
+  and its Background tasks panel shows each worker's estimate beside its time. The view's `doing` and `doingSince`
+  (`climayte-doing.ts`) say what a worker does now and since when: its hold reason or open question while held, else its
+  newest narration line, or a Monitor/`climayte_wait.py` step marked "Waiting:". A running worker with no tool step for
+  15 min reads "no update for N min"; the running row groups waiting tasks by reason (the two longest, then "+N more waiting").
 - **Not covered.** Sub-agents a Desk 2 chat starts with the Agent tool: Desk 2 does not see their
   text, so they have no estimate.
 
@@ -1092,13 +1167,16 @@ effect. Placement weighs the accounts; this weighs the machine.
   check goes red for the machine).
 - **The gate** (startOn, every start path: the pick, a spill, a short start): a start waits while it
   would leave free RAM under 8% of the machine (`FREE_FLOOR_SHARE`, fairjob's floor) or, on Windows,
-  commit under 5% of its limit (`COMMIT_FLOOR_SHARE`). The commit check counts every worker as
+  commit under 12% of its limit (`COMMIT_FLOOR_SHARE`; 5% until 2026-10-09). The commit check counts every worker as
   `WORKER_COMMIT_BYTES` (0.75 GB private: 24.5 GB over the 33 worker trees measured that day). The
   RAM check counts working set, not private bytes (2026-10-06: about 0.45 GB a grown tree, learned
   as the median of workers older than `RAMP_MS`, re-read each minute, clamped 0.25-1.0 GB): free RAM
   already excludes what running workers hold, so a worker that started within `RAMP_MS` (2 minutes)
   reserves only what it has left to grow (its tree's working set read now, runner pid and
-  descendants), a tree that cannot be read and the start itself reserve the full amount.
+  descendants), a tree that cannot be read and the start itself reserve the full amount. A tick that
+  may start a worker reads those trees anew. One with nothing due, or a status read, reuses a reading
+  of the same runners under `GROWTH_REUSE_MS` (3 s) old, so no start is ever decided on a reused
+  reading (`growthOf`, since ff394bfc).
 - **Held, not refused:** the task stays `queued` with "Waiting for memory: ..." (journaled once, not
   every tick) and starts on the first tick with room, highest priority first (`dueOrder`). Nothing
   running is stopped or slowed. The spill and start-short journal lines are written only when the
@@ -1269,6 +1347,17 @@ keeps its origin); it answers `adopted` (how many) and a `ping` line like `clima
 on a normal install), nothing is recorded or sent, and dispatches answer `ping: "off: ..."` naming
 the file. Delete it to turn pings back on. `startCliMayte()` starts the outbox (`startCliMaytePing`
 with the real worker feed and transports) and daemon shutdown stops it (`stopCliMaytePing`).
+
+### Completion waits (`server/src/completions.ts`, `POST /api/completions/{wait,seen,finished}`)
+
+Work that outlives the call that started it reports `finished`; the call that is waiting registers a
+`waitFor` and is told once, through the outbox, with `<label> finished; read it with <read>.` A ticket is
+`<kind>:<id>`: `desk-chat:<chat id>` now (a Desk chat's turn ends, reported by the Desk chat manager), and
+`hswarm-job:` and `climayte-worker:` are reserved. The waiter comes from the request's own chat, never from
+the body. A finish nobody waits on is kept 10 minutes; a wait expires after 24 hours; `seen` drops a wait.
+`manager_open` and a `manager_ask` that answers `working` register one, and `manager_read` that answers
+`done` calls `seen`. The completion wait of a Hydra Core seat is registered the same way. Pings off
+(`ping-off`) keeps the wait for the next settle.
 
 ### Moving a worker to another folder (`climayte_send { cwd }`, owner, 2026-10-04)
 
@@ -1576,14 +1665,14 @@ then imported), where someone could go on in them and send turns back. Now:
 - A chat the two-way sync landed is taken back out once (`retire` in `core/desktop-chat-local.ts`): its
   desktop records are archived (never deleted) and every copy of its transcript moves into the viewer.
   It stays where it is if someone on this PC went on in it, and the viewer then downloads its own copy.
-  On MPC-HELL that took out Jacob's 3 chats (4 transcript files: one he had moved between folders had
+  On MPC-HELL that took out the owner's 3 chats (4 transcript files: one they had moved between folders had
   been written under both).
 
 **Hydra Desk's chats too (owner, 2026-10-07):** turning on the cloud in Desk 2's sidebar "should show me
 ... all chats between both of our computers". Only Claude Desktop chats were shared, so a PC whose owner
 works in Hydra Desk shared almost nothing: on 2026-10-07 the other PC's 23 chats that started CliMayte work
 in three days had none in the store, against its 6 desktop chats. `core/desktop-chat-local.ts` now lists
-the chats of Jacob's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
+the chats of the owner's Desk and of AgentHydra 2.0's window (`chats.json` in `~/.hydra-desk` and
 `~/.hydra-desk-2`, never a throwaway Desk's home) beside the desktop records, view only like them. A
 chat's transcript is read from its account's own folder (`account.configDir`, else the default login's config dir `~/.claude`, [CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)); a
 session a desktop record already lists goes once, as that record; one idle over a week that was never

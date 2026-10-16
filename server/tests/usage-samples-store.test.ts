@@ -11,8 +11,10 @@ import {
   lastSampleSnapshot,
   pruneUsageSamples,
   recordUsageSample,
+  usageReaderCounts,
   usageSamples,
 } from '../src/usage-history'
+import { asReader } from '../src/usage-reader'
 
 const KEY = 'test:usage-samples-store'
 const dir = mkdtempSync(join(tmpdir(), 'usage-store-'))
@@ -46,6 +48,27 @@ test('a sample written is read back, with its reset times; a replay is ignored',
     },
   ])
   expect(lastSampleSnapshot(KEY)?.weekAll?.pct).toBe(42)
+})
+
+test('a reading records the request or timer it was taken for, an inner label winning', async () => {
+  dropUsageHistory(KEY)
+  const t = Date.now()
+  const at = (n: number) => new Date(t - n * 1000).toISOString()
+  const reader = `test reader ${t}`
+  await asReader(reader, async () => {
+    await Promise.resolve()
+    recordUsageSample(KEY, snap(at(3), 1))
+    asReader(`${reader} inner`, () => recordUsageSample(KEY, snap(at(2), 2)))
+  })
+  recordUsageSample(KEY, snap(at(1), 3))
+  const mine = usageReaderCounts(t - 60_000).filter((r) => r.reader?.startsWith(reader))
+  expect(mine).toEqual([
+    { reader, kind: 'test', readings: 1, keys: 1 },
+    { reader: `${reader} inner`, kind: 'test', readings: 1, keys: 1 },
+  ])
+  expect(
+    db.query('select reader from usage_samples where key = ? and at = ?').get(KEY, at(1)),
+  ).toEqual({ reader: 'unlabelled' })
 })
 
 test('retention drops samples older than 90 days and keeps the rest', () => {

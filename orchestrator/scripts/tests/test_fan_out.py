@@ -90,10 +90,10 @@ class FanOutBase(unittest.TestCase):
         # the survey cache lives in the state dir, so a stale real one can never leak in
         self.spawned = []
 
-        def fake_spawn(folder, prompt, instance, force=False):
+        def fake_spawn(folder, prompt, instance, force=False, model=None, effort=None):
             n = len(self.spawned) + 1
             self.spawned.append({"folder": folder, "prompt": prompt, "instance": instance,
-                                 "force": force})
+                                 "force": force, "model": model, "effort": effort})
             return {"ok": True, "sessionId": f"sid-{n}", "started": "running (composer submitted)",
                     "submitted": "sent", "landedIn": "folder", "modeSet": "ok"}
 
@@ -246,10 +246,10 @@ class SpawnTest(FanOutBase):
         self.assertEqual(len(self.spawned), 3)
 
     def test_a_refused_spawn_does_not_stop_the_others_and_the_record_says_why(self):
-        def flaky(folder, prompt, instance, force=False):
+        def flaky(folder, prompt, instance, force=False, **pinned):
             if instance == "1":
                 return {"ok": False, "why": "alice's window is busy"}
-            return self.fake_spawn(folder, prompt, instance, force)
+            return self.fake_spawn(folder, prompt, instance, force, **pinned)
 
         with mock.patch.object(fan_out.spawn_chat, "spawn", side_effect=flaky):
             code, out, _ = run_cli(fan_out.main, ["--spec", self.spec(3), "--json"])
@@ -950,6 +950,52 @@ class ReceiptTest(FanOutBase):
         send.assert_not_called()
         self.assertEqual(counts, {"wrong-chat": 1})
         self.assertEqual(fan_out.spawn_exit_code(group), 4)
+
+
+class ModelEffortTest(FanOutBase):
+    """A chat is pinned to a model and effort: the task's own, else the spec's, else the default
+    claude-opus-5-5 at xhigh. Fable is never chosen by default."""
+
+    def write(self, data):
+        path = self.root / "spec-model.json"
+        path.write_text(json.dumps(data), encoding="utf-8")
+        return str(path)
+
+    def test_the_default_is_opus_at_xhigh_and_never_fable(self):
+        got = fan_out.parse_spec(self.spec(2))
+        self.assertEqual([(t["model"], t["effort"]) for t in got["tasks"]],
+                         [("claude-opus-5-5", "xhigh")] * 2)
+
+    def test_a_task_model_and_effort_beat_the_group_which_beats_the_default(self):
+        data = {"group": "g", "model": "claude-sonnet-5-5", "effort": "high", "tasks": [
+            {"folder": self.folders[0], "prompt": "a"},
+            {"folder": self.folders[1], "prompt": "b", "model": "claude-haiku-5-5",
+             "effort": "low"},
+        ]}
+        got = fan_out.parse_spec(self.write(data))
+        self.assertEqual([(t["model"], t["effort"]) for t in got["tasks"]],
+                         [("claude-sonnet-5-5", "high"), ("claude-haiku-5-5", "low")])
+
+    def test_a_bad_effort_or_model_names_its_task_and_refuses(self):
+        bad_effort = {"tasks": [{"folder": self.folders[0], "prompt": "a", "effort": "ultra"}]}
+        with self.assertRaisesRegex(ValueError, "task 0: effort 'ultra'"):
+            fan_out.parse_spec(self.write(bad_effort))
+        bad_model = {"tasks": [{"folder": self.folders[0], "prompt": "a", "model": "Fable"}]}
+        with self.assertRaisesRegex(ValueError, "task 0: model 'Fable'"):
+            fan_out.parse_spec(self.write(bad_model))
+
+    def test_each_spawn_gets_its_members_model_and_effort_and_the_record_keeps_them(self):
+        data = {"group": "pin", "effort": "high", "tasks": [
+            {"folder": self.folders[0], "prompt": "a", "model": "claude-sonnet-5-5"},
+            {"folder": self.folders[1], "prompt": "b"},
+        ]}
+        code, out, _ = run_cli(fan_out.main, ["--spec", self.write(data), "--json"])
+        self.assertEqual(code, 0, out)
+        self.assertEqual(sorted((s["model"], s["effort"]) for s in self.spawned),
+                         [("claude-opus-5-5", "high"), ("claude-sonnet-5-5", "high")])
+        saved = fan_out.find_group("pin")
+        self.assertEqual(sorted(m["model"] for m in saved["members"]),
+                         ["claude-opus-5-5", "claude-sonnet-5-5"])
 
 
 if __name__ == "__main__":

@@ -223,6 +223,22 @@ export async function api(pathname: string, init?: RequestInit): Promise<unknown
  * eagerly would open the database on every MCP start, including the (normal) case where the daemon
  * owns it and we never touch it.
  */
+/** The completion registry (completions.ts): the caller is this chat, from the request, never sent in the body. */
+export const completionsApi = {
+  waitFor: (input: { ticket: string; label: string; read: string; after: number }) =>
+    api('/api/completions/wait', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify(input),
+    }),
+  seen: (ticket: string) =>
+    api('/api/completions/seen', {
+      method: 'POST',
+      headers: JSON_HEADERS,
+      body: JSON.stringify({ ticket }),
+    }),
+}
+
 export async function apiOrLocal(
   pathname: string,
   local: () => Promise<unknown>,

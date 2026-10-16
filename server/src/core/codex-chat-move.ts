@@ -937,6 +937,144 @@ async function archiveSourceThread(
   }
 }
 
+/** Upgrade older completed receipts too: saved history alone did not make the chat visible. */
+async function ensureDesktopVisible(
+  deps: MoveDependencies,
+  to: CodexInstance,
+  key: string,
+  receipt: Receipt,
+): Promise<Receipt> {
+  if (receipt.desktopVisible) return receipt
+  await deps.showDestination(to, receipt.destinationThreadId!)
+  const visible = { ...receipt, desktopVisible: true }
+  saveReceipt(deps.journalPath, key, visible)
+  return visible
+}
+
+async function archiveMovedSource(
+  source: CodexRpc,
+  from: CodexInstance,
+  deps: MoveDependencies,
+  thread: Thread,
+  before: Stats,
+  fingerprint: string,
+  transcript: Buffer,
+): Promise<string[]> {
+  if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
+    return archiveThroughApp(source, from, deps, thread, fingerprint, transcript.length)
+  await archiveSourceThread(source, from, thread, fingerprint)
+  return []
+}
+
+async function releaseMove(
+  deps: MoveDependencies,
+  key: string,
+  receipt: Receipt | undefined,
+  source: CodexRpc | undefined,
+  target: CodexRpc | undefined,
+): Promise<void> {
+  await source?.close()
+  await target?.close()
+  if (receipt) {
+    try {
+      saveReceipt(deps.journalPath, key, { ...receipt, ownerPid: null })
+    } catch {
+      /* keep the durable receipt */
+    }
+  }
+}
+
+/** A copy drops its leftover finished record first; a move returns its earlier completed receipt, if any. */
+function resumableMove(
+  deps: MoveDependencies,
+  key: string,
+  copyOnly: boolean,
+  destination: string,
+  request: CodexMoveRequest,
+): Receipt | null {
+  if (copyOnly) dropFinishedCopy(deps.journalPath, key)
+  return copyOnly
+    ? null
+    : alreadyMovedReceipt(deps.journalPath, key, destination, request.updatedAt)
+}
+
+/** The success result of a move that was already completed earlier. */
+function alreadyMovedResult(destinationThreadId: string, already: Receipt): CodexMoveResult {
+  return {
+    ok: true,
+    destinationThreadId,
+    ...(already.verified ? { history: already.verified } : {}),
+  }
+}
+
+/** The destination chat id a completed move must carry before it can be shown. */
+function requireDestinationThreadId(already: Receipt): string {
+  if (!already.destinationThreadId)
+    throw new Error('The completed move has no destination chat identity.')
+  return already.destinationThreadId
+}
+
+/** Reads the source transcript and its whole history before anything is claimed or copied. */
+function readMoveSource(
+  thread: Thread,
+  from: CodexInstance,
+  deps: MoveDependencies,
+): { before: Stats; transcript: Buffer; fingerprint: string; history: CodexHistory } {
+  const before = statSync(thread.path!)
+  const transcript = readFileSync(thread.path!)
+  assertNoUnfinishedTurn(transcript)
+  const fingerprint = createHash('sha256').update(transcript).digest('hex')
+  // The whole history, earlier files included, is read before anything is claimed or copied.
+  const history = readCodexHistory(thread.path!, from.codexHome)
+  deps.onProgress({ step: 'read', segments: history.segments.length })
+  return { before, transcript, fingerprint, history }
+}
+
+/** Completes the destination copy and reports the repair it needed, if any. */
+function completeDestinationReported(
+  deps: MoveDependencies,
+  to: CodexInstance,
+  thread: Thread,
+  receipt: Receipt,
+  history: CodexHistory,
+  transcript: Buffer,
+): CodexMoveRepair | null {
+  const repair = completeDestination(deps, to, thread, receipt, history, transcript)
+  if (repair) deps.onProgress({ step: 'repaired', repair })
+  return repair
+}
+
+/** Passes a verified history through; a mismatch throws and the source is kept. */
+function requireMatchingHistory(verified: CodexMoveHistory | string): CodexMoveHistory {
+  if (typeof verified === 'string') throw new Error(`${verified} The source was kept.`)
+  return verified
+}
+
+/** The success result of a move, with its repair and stopped commands only when there are any. */
+function completedResult(
+  destinationThreadId: string,
+  verified: CodexMoveHistory,
+  repair: CodexMoveRepair | null,
+  stopped: string[],
+): CodexMoveResult {
+  return {
+    ok: true,
+    destinationThreadId,
+    history: verified,
+    ...(repair ? { repair } : {}),
+    ...(stopped.length ? { stoppedCommands: stopped } : {}),
+  }
+}
+
+/** The failure result of a move, carrying the destination chat a resumed move can pick up from. */
+function failedResult(error: unknown, receipt: Receipt | undefined): CodexMoveResult {
+  return {
+    ok: false,
+    destinationThreadId: receipt?.destinationThreadId,
+    error: error instanceof Error ? error.message : 'Could not move the Codex chat.',
+  }
+}
+
 /** Import into the destination's own home, verify it, then archive the source (a duplicate, `keepSource`, leaves it).
  * No turn is started, credentials are never copied, and an archive failure resumes from the saved destination id. */
 export async function moveCodexChat(
@@ -957,41 +1095,21 @@ export async function moveCodexChat(
     const copyOnly = request.keepSource === true
     const destination = destinationKey(to, request)
     key = copyOnly ? copyKey(from, request, destination) : moveKey(from, request)
-    if (copyOnly) dropFinishedCopy(deps.journalPath, key)
-    const already = copyOnly
-      ? null
-      : alreadyMovedReceipt(deps.journalPath, key, destination, request.updatedAt)
+    const already = resumableMove(deps, key, copyOnly, destination, request)
     if (already) {
       receipt = already
-      if (!already.destinationThreadId)
-        throw new Error('The completed move has no destination chat identity.')
-      // Upgrade older completed receipts too: saved history alone did not make the chat visible.
-      if (!already.desktopVisible) {
-        await deps.showDestination(to, already.destinationThreadId)
-        receipt = { ...already, desktopVisible: true }
-        saveReceipt(deps.journalPath, key, receipt)
-      }
-      return {
-        ok: true,
-        destinationThreadId: already.destinationThreadId,
-        ...(already.verified ? { history: already.verified } : {}),
-      }
+      const doneId = requireDestinationThreadId(already)
+      receipt = await ensureDesktopVisible(deps, to, key, already)
+      return alreadyMovedResult(doneId, already)
     }
 
     const thread = await findMovableThread(source, from, request)
-    const before = statSync(thread.path!)
-    const transcript = readFileSync(thread.path!)
-    assertNoUnfinishedTurn(transcript)
-    const fingerprint = createHash('sha256').update(transcript).digest('hex')
-    // The whole history, earlier files included, is read before anything is claimed or copied.
-    const history = readCodexHistory(thread.path!, from.codexHome)
-    deps.onProgress({ step: 'read', segments: history.segments.length })
+    const { before, transcript, fingerprint, history } = readMoveSource(thread, from, deps)
     receipt = claimReceipt(deps.journalPath, key, thread.updatedAt, destination, fingerprint)
     receipt = planCopy(receipt, deps, key, to)
     receipt = await ensureCopied(receipt, deps, key, to, thread, history)
     const destinationThreadId = receipt.destinationThreadId!
-    const repair = completeDestination(deps, to, thread, receipt, history, transcript)
-    if (repair) deps.onProgress({ step: 'repaired', repair })
+    const repair = completeDestinationReported(deps, to, thread, receipt, history, transcript)
 
     const sourceTurns = await displayedTurns(source, thread.id)
     target = await deps.connect(to.codexHome)
@@ -1012,7 +1130,7 @@ export async function moveCodexChat(
       await resumeAndVerifyDestination(target, to, thread, receipt, true)
       verified = compareHistory(sourceTurns, await displayedTurns(target, destinationThreadId))
     }
-    if (typeof verified === 'string') throw new Error(`${verified} The source was kept.`)
+    verified = requireMatchingHistory(verified)
     receipt = { ...receipt, verified }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'verified', history: verified })
@@ -1024,45 +1142,53 @@ export async function moveCodexChat(
     receipt = { ...receipt, desktopVisible: true }
     saveReceipt(deps.journalPath, key, receipt)
     deps.onProgress({ step: 'shown' })
-    let stopped: string[] = []
-    if (!copyOnly) {
-      if ((await assertSourceUnchanged(source, from, deps, thread, before)) === 'running')
-        stopped = await archiveThroughApp(
-          source,
-          from,
-          deps,
-          thread,
-          fingerprint,
-          transcript.length,
-        )
-      else await archiveSourceThread(source, from, thread, fingerprint)
-    }
+    const stopped = copyOnly
+      ? []
+      : await archiveMovedSource(source, from, deps, thread, before, fingerprint, transcript)
     receipt = { ...receipt, phase: 'done' }
     saveReceipt(deps.journalPath, key, receipt)
     if (!copyOnly) deps.onProgress({ step: 'archived' })
-    return {
-      ok: true,
-      destinationThreadId,
-      history: verified,
-      ...(repair ? { repair } : {}),
-      ...(stopped.length ? { stoppedCommands: stopped } : {}),
-    }
+    return completedResult(destinationThreadId, verified, repair, stopped)
   } catch (error) {
-    return {
-      ok: false,
-      destinationThreadId: receipt?.destinationThreadId,
-      error: error instanceof Error ? error.message : 'Could not move the Codex chat.',
-    }
+    return failedResult(error, receipt)
   } finally {
-    await source?.close()
-    await target?.close()
-    if (receipt) {
-      try {
-        saveReceipt(deps.journalPath, key, { ...receipt, ownerPid: null })
-      } catch {
-        /* keep the durable receipt */
-      }
-    }
+    await releaseMove(deps, key, receipt, source, target)
+  }
+}
+
+function hasUnfinishedTurnOnDisk(listed: Thread | undefined): boolean {
+  return !!(
+    listed?.path &&
+    existsSync(listed.path) &&
+    hasUnfinishedTurn(readFileSync(listed.path, 'utf8'))
+  )
+}
+
+async function setArchiveState(
+  deps: MoveDependencies,
+  inst: CodexInstance,
+  conn: CodexRpc,
+  state: 'running' | 'stopped',
+  threadId: string,
+  archived: boolean,
+): Promise<void> {
+  if (state === 'running') await deps.setArchivedInApp(inst, threadId, archived)
+  else await conn.call(archived ? 'thread/archive' : 'thread/unarchive', { threadId })
+}
+
+async function awaitArchiveState(
+  active: () => Promise<Thread | undefined>,
+  state: 'running' | 'stopped',
+  archived: boolean,
+): Promise<void> {
+  // The app archives in the background (~0.6 s, measured 2026-10-13); app-server answers once it is done.
+  const deadline = Date.now() + 15_000
+  while (!!(await active()) === archived) {
+    if (Date.now() > deadline)
+      throw new Error(
+        `Its Codex ${state === 'running' ? 'app' : 'account'} did not confirm the chat was ${archived ? 'archived' : 'restored'}.`,
+      )
+    await Bun.sleep(250)
   }
 }
 
@@ -1092,25 +1218,12 @@ export async function setCodexChatArchived(
     const active = async () => (await activeThreads(conn)).find((row) => row.id === threadId)
     const listed = await active()
     if (!!listed !== archived) return { ok: true }
-    if (
-      listed?.path &&
-      existsSync(listed.path) &&
-      hasUnfinishedTurn(readFileSync(listed.path, 'utf8'))
-    )
+    if (hasUnfinishedTurnOnDisk(listed))
       throw new Error(
         'This chat has an unfinished turn. Stop or finish it in Codex before taking it off its account.',
       )
-    if (app.state === 'running') await deps.setArchivedInApp(inst, threadId, archived)
-    else await conn.call(archived ? 'thread/archive' : 'thread/unarchive', { threadId })
-    // The app archives in the background (~0.6 s, measured 2026-10-13); app-server answers once it is done.
-    const deadline = Date.now() + 15_000
-    while (!!(await active()) === archived) {
-      if (Date.now() > deadline)
-        throw new Error(
-          `Its Codex ${app.state === 'running' ? 'app' : 'account'} did not confirm the chat was ${archived ? 'archived' : 'restored'}.`,
-        )
-      await Bun.sleep(250)
-    }
+    await setArchiveState(deps, inst, conn, app.state, threadId, archived)
+    await awaitArchiveState(active, app.state, archived)
     return { ok: true }
   } catch (error) {
     return {

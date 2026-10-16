@@ -57,6 +57,7 @@ import {
 } from './cli-instances'
 import { cliAuthStatus } from './cli-quick-add'
 import { claimInstanceNumber, instanceRef } from './instance-numbers'
+import { type StatStamp, stampOf, unchangedSince } from './stat-stamp'
 
 export const BUNDLE_FORMAT = 'agenthydra-cli-logins'
 export const BUNDLE_EXT = '.ahlogins'
@@ -119,10 +120,36 @@ const emailOfName = (name: string): string | null => {
   return m ? m[1]!.toLowerCase() : null
 }
 
+// Sync reads the same account identity several times per pass. Keep only the scalar email,
+// revalidating the file on every read; portable exports and imports still read the whole block.
+const EMAIL_CACHE_MAX = 512
+const emailCache = new Map<
+  string,
+  { stamp: StatStamp; dev: number; ino: number; email: string | null }
+>()
+function loginEmailInDir(configDir: string): string | null {
+  const path = join(configDir, '.claude.json')
+  try {
+    const readAt = Date.now()
+    const st = statSync(path)
+    const hit = emailCache.get(path)
+    if (hit && hit.dev === st.dev && hit.ino === st.ino && unchangedSince(hit.stamp, st))
+      return hit.email
+    const email = emailIn(JSON.parse(readFileSync(path, 'utf8'))?.oauthAccount)
+    emailCache.delete(path)
+    emailCache.set(path, { stamp: stampOf(st, readAt), dev: st.dev, ino: st.ino, email })
+    if (emailCache.size > EMAIL_CACHE_MAX) emailCache.delete(emailCache.keys().next().value!)
+    return email
+  } catch {
+    emailCache.delete(path)
+    return null
+  }
+}
+
 /** The account a CLI instance is signed in to (or was, by its "<email> (<plan>)" name), lowercased;
  *  null when neither says. Login sync keys its rows by it, as the import matches instances by it. */
 export const cliLoginEmail = (rec: Pick<CliInstance, 'configDir' | 'name'>): string | null =>
-  emailIn(oauthAccountOf(rec.configDir)) ?? emailOfName(rec.name)
+  loginEmailInDir(rec.configDir) ?? emailOfName(rec.name)
 
 export const readText = (path: string): string | null => {
   try {

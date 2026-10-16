@@ -1,6 +1,7 @@
 // What the session header says, worked out from AgentHydra's answers (ah.ts): the same wording and
 // rules as AgentHydra's Sessions tab (hydra/src/components/SessionsView.vue and its composables), which
 // Desk 2's header replaces. Pure, so the window and the tests share it.
+import { searchItems } from '@shared/find'
 import type { TranscriptItem } from '@shared/protocol'
 
 /** AgentHydra's SessionSummary, the fields the header reads (server/src/types.ts). */
@@ -72,15 +73,6 @@ const SOURCE_NAME: Record<string, string> = {
   dsh: 'DeepSeek',
   zswarm: 'HSwarm',
   foreign: 'Other'
-}
-/** Each product's own colour, as AgentHydra's source badge wears it. */
-export const SOURCE_TONE: Record<string, string> = {
-  claude: 'border-[#D97757]/40 bg-[#D97757]/10 text-[#E9A287]',
-  codex: 'border-[#10A37F]/40 bg-[#10A37F]/10 text-[#65D4B3]',
-  opencode: 'border-[#5B6EF5]/40 bg-[#5B6EF5]/10 text-[#9AA6FF]',
-  hermes: 'border-[#F5A623]/40 bg-[#F5A623]/10 text-[#F5C067]',
-  dsh: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]',
-  zswarm: 'border-[#4D6BFE]/40 bg-[#4D6BFE]/10 text-[#9DB0FF]'
 }
 
 /** Where the account chip takes you in AgentHydra: the row's instance by its number, on the CLI table for
@@ -231,28 +223,9 @@ export interface FindHit {
   nth: number
 }
 
-function searchable(i: TranscriptItem): string | null {
-  if (i.parentToolUseId) return null
-  if (i.kind === 'user' || i.kind === 'note' || i.kind === 'assistant_text' || i.kind === 'thinking' || i.kind === 'system') return i.text
-  return null
-}
-
 /** Every match of `query` in what the transcript says, in order; case-insensitive, nothing for a blank query. */
 export function findHits(items: readonly TranscriptItem[], query: string): FindHit[] {
-  const q = query.trim().toLowerCase()
-  if (!q) return []
-  const hits: FindHit[] = []
-  for (const i of items) {
-    const text = searchable(i)?.toLowerCase()
-    if (!text) continue
-    let at = text.indexOf(q)
-    let nth = 0
-    while (at !== -1) {
-      hits.push({ itemId: i.id, nth: nth++ })
-      at = text.indexOf(q, at + q.length)
-    }
-  }
-  return hits
+  return searchItems(items, query).map(({ itemId, nth }) => ({ itemId, nth }))
 }
 
 /** The match `n` steps along, wrapping both ways. */

@@ -1260,3 +1260,31 @@ describe('stale lines are dropped when the outbox flushes', () => {
     expect(PING_HEADER).toBe('[AgentHydra · CliMayte] Not from the user.')
   })
 })
+
+describe('TOO BIG', () => {
+  test('a worker whose last turn says TOO BIG: pings its summoner with that line first', () => {
+    const base = worker({ id: 'w-5e6f7a8b', title: 'Port the billing module' })
+    const p = snapshotOf(base, null, T0)
+    const big: PingWorker = {
+      ...base,
+      status: 'done',
+      results: ['Read it.\nTOO BIG: one part for the API, one for the UI'],
+    }
+    const events = pingEvents(p, big, T0)
+    expect(events.map((e) => e.kind)).toEqual(['too-big'])
+    expect(events[0].line).toBe(
+      'TOO BIG: one part for the API, one for the UI (w-5e6f7a8b "Port the billing module", done on #35: take the job back and re-split it.)',
+    )
+    // In a ping with other updates, the TOO BIG line leads.
+    const other = worker({ id: 'w-1', group: base.group, status: 'done' })
+    const otherEvent = pingEvents(snapshotOf(other, null, T0), other, T0)
+    const text = pingMessage(
+      [
+        { ...otherEvent[0], seq: 1, at: T0 },
+        { ...events[0], seq: 2, at: T0 },
+      ],
+      [other, big],
+    )
+    expect(text.split('\n')[1]).toStartWith('• TOO BIG: one part for the API')
+  })
+})

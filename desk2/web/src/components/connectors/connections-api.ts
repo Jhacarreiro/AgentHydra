@@ -1,6 +1,6 @@
 // The Connections chip's calls to Desk 2's server (routes in shared/connectors.ts, server plugins/56-connections.ts),
 // and its one shared read of GET /api/connectors (is the connector on and on this machine).
-import { ref } from 'vue'
+import { shallowRef } from 'vue'
 import {
   CONNECTIONS_COMPANIES,
   CONNECTIONS_DEFAULT,
@@ -16,13 +16,26 @@ import {
   type ConnectorsResponse,
   type ConnectorView
 } from '@shared/connectors'
+import { cappedDelay } from './logic'
 
-export const connectorList = ref<ConnectorView[] | null>(null)
+export const connectorList = shallowRef<ConnectorView[] | null>(null)
+
+let lastText = ''
+let lastList: ConnectorView[] | null = null
+let changedAt = Date.now()
 
 export async function refreshConnectorList(): Promise<void> {
   try {
     const res = await fetch(CONNECTORS)
-    if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) connectorList.value = ((await res.json()) as ConnectorsResponse).connectors
+    if (res.ok && (res.headers.get('content-type') ?? '').includes('json')) {
+      // An unchanged answer (the common one, a poll a second while a connector starts) must not swap the list and redraw its watchers.
+      const text = await res.text()
+      if (text === lastText && connectorList.value && connectorList.value === lastList) return
+      lastText = text
+      changedAt = Date.now()
+      connectorList.value = (JSON.parse(text) as ConnectorsResponse).connectors
+      lastList = connectorList.value
+    }
   } catch {
     /* the server is restarting: keep what was last seen */
   }
@@ -36,7 +49,7 @@ let timer: ReturnType<typeof setTimeout> | null = null
 async function tick(): Promise<void> {
   timer = null
   if (!watchers.size) return
-  timer = setTimeout(tick, Math.min(...[...watchers].map((d) => d())))
+  timer = setTimeout(tick, cappedDelay(Math.min(...[...watchers].map((d) => d())), Date.now() - changedAt))
   if (!document.hidden) await refreshConnectorList()
 }
 

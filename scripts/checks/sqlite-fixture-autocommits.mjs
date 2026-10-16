@@ -73,59 +73,73 @@ function* testFiles(dir) {
   }
 }
 
+/** A comment or string character as the `code` view sees it: a newline survives, anything else is a space. */
+const blank = (c) => (c === '\n' ? '\n' : ' ')
+
+/** Blank a `//` comment starting at `i` in both views. Returns the index where the comment ends. */
+function lineComment(text, i, code, full) {
+  while (i < text.length && text[i] !== '\n') {
+    code.push(' ')
+    full.push(' ')
+    i++
+  }
+  return i
+}
+
+/** Blank a `/* ... *\/` comment starting at `i` in both views. Returns the index just past it. */
+function blockComment(text, i, code, full) {
+  const end = text.indexOf('*/', i + 2)
+  const stop = end === -1 ? text.length : end + 2
+  for (; i < stop; i++) {
+    code.push(blank(text[i]))
+    full.push(blank(text[i]))
+  }
+  return i
+}
+
+/** Copy a quoted literal starting at `i`: its contents are blanked in `code` only. Returns the index just past it. */
+function stringLiteral(text, i, code, full) {
+  const quote = text[i]
+  // The quotes stay in both views so a literal's extent is visible; its contents differ.
+  code.push(quote)
+  full.push(quote)
+  i++
+  while (i < text.length && text[i] !== quote) {
+    if (text[i] === '\\' && i + 1 < text.length) {
+      code.push(' ', ' ')
+      full.push(text[i], text[i + 1])
+      i += 2
+      continue
+    }
+    code.push(blank(text[i]))
+    full.push(text[i])
+    i++
+  }
+  if (i < text.length) {
+    code.push(quote)
+    full.push(quote)
+    i++
+  }
+  return i
+}
+
 /** Two same-length views of `text`: `code` has comments and string contents blanked, `full` has
  *  only comments blanked. Newlines always survive, so an index means the same place in both. */
 function views(text) {
   const code = []
   const full = []
-  const blank = (c) => (c === '\n' ? '\n' : ' ')
   let i = 0
   while (i < text.length) {
     const c = text[i]
     const next = text[i + 1]
-    if (c === '/' && next === '/') {
-      while (i < text.length && text[i] !== '\n') {
-        code.push(' ')
-        full.push(' ')
-        i++
-      }
-      continue
-    }
-    if (c === '/' && next === '*') {
-      const end = text.indexOf('*/', i + 2)
-      const stop = end === -1 ? text.length : end + 2
-      for (; i < stop; i++) {
-        code.push(blank(text[i]))
-        full.push(blank(text[i]))
-      }
-      continue
-    }
-    if (c === "'" || c === '"' || c === '`') {
-      // The quotes stay in both views so a literal's extent is visible; its contents differ.
+    if (c === '/' && next === '/') i = lineComment(text, i, code, full)
+    else if (c === '/' && next === '*') i = blockComment(text, i, code, full)
+    else if (c === "'" || c === '"' || c === '`') i = stringLiteral(text, i, code, full)
+    else {
       code.push(c)
       full.push(c)
       i++
-      while (i < text.length && text[i] !== c) {
-        if (text[i] === '\\' && i + 1 < text.length) {
-          code.push(' ', ' ')
-          full.push(text[i], text[i + 1])
-          i += 2
-          continue
-        }
-        code.push(blank(text[i]))
-        full.push(text[i])
-        i++
-      }
-      if (i < text.length) {
-        code.push(c)
-        full.push(c)
-        i++
-      }
-      continue
     }
-    code.push(c)
-    full.push(c)
-    i++
   }
   return { code: code.join(''), full: full.join('') }
 }
@@ -172,6 +186,83 @@ function isWriteSql(sql) {
 /** Find every handle opened for writing in one file, and the write statements against it. Returns
  *  one entry per handle, with its declaration line and the count of writes that are NOT wrapped in
  *  a transaction. */
+/** Should this `new Database(` be left out of the scan? Read-only and in-memory handles should. */
+function isOutOfScope(full, args) {
+  // A read-only handle cannot fsync per write, so it is out of scope by definition.
+  if (/readonly\s*:\s*true/.test(full.slice(args.start, args.end))) return true
+  // An in-memory database has no journal file, so no fsync: nothing here is slow on a disk.
+  const target = full.slice(args.start, args.end).trim()
+  return target === '' || /^(['"`]):memory:\1$/.test(target)
+}
+
+/** Index in `code` where the region a handle is live in ends: from its declaration to its close, or to
+ *  the next declaration of the same name, or to the end of the file, whichever comes first. */
+function regionEnd(code, from, name) {
+  const rest = code.slice(from)
+  const closeM = new RegExp(`(?<![\\w.$])${name}\\s*\\.close\\s*\\(`).exec(rest)
+  const redeclM = new RegExp(`(?<![\\w.$])(?:const|let|var)\\s+${name}\\s*=\\s*new\\s+Database\\s*\\(`).exec(rest)
+  const candidates = [closeM, redeclM].filter(Boolean).map((m) => m.index)
+  return candidates.length ? from + Math.min(...candidates) : code.length
+}
+
+/** The transaction span, marker or write that one `handle.method(` call stands for, or null when it
+ *  stands for none. `m` is the regex match of the call's head. */
+function callEvent(code, full, m) {
+  const method = m[1]
+  const open = m.index + m[0].length - 1
+  const span = argSpan(code, open)
+  if (!span) return null
+  if (method === 'transaction') return { kind: 'tx', start: span.start, end: span.end }
+  // query / prepare count only when the statement is then `.run(`ed. `.all`, `.get` and `.values`
+  // are reads, so they never reach the SQL check below.
+  if ((method === 'query' || method === 'prepare') && !/^\s*\.run\s*\(/.test(code.slice(span.close + 1))) {
+    return null
+  }
+  // begin / commit are markers, not writes, whichever method carries them: `db.exec('begin')` and
+  // `db.run('BEGIN')` both open a transaction. Anything else is judged by its SQL.
+  const sql = sqlOf(full, span)
+  const text = sql ?? ''
+  if (/^(?:begin|savepoint)\b/i.test(text)) return { kind: 'open', at: m.index }
+  if (/^(?:commit|end|rollback|release)\b/i.test(text)) return { kind: 'close', at: m.index }
+  // One call carrying its own begin and commit is wrapped already.
+  if (/\bbegin\b/i.test(text) && /\bcommit\b/i.test(text)) return null
+  if (isWriteSql(sql)) return { kind: 'write', at: m.index, sql }
+  return null
+}
+
+/** Every call against `name` inside the region [from, to), as events, in source order. */
+function handleEvents(code, full, name, from, to) {
+  const events = []
+  const callRe = new RegExp(`(?<![\\w.$])${name}\\s*\\.(query|prepare|run|exec|transaction)\\s*\\(`, 'g')
+  callRe.lastIndex = from
+  let m
+  while ((m = callRe.exec(code)) !== null && m.index < to) {
+    const event = callEvent(code, full, m)
+    if (event) events.push(event)
+  }
+  return events
+}
+
+/** How many of `events` are autocommit writes. A write is uncounted if it sits inside a transaction( ... )
+ *  argument or between an open and a close marker. Everything else is an autocommit, and those are what
+ *  the threshold counts. */
+function countAutocommits(events) {
+  const txSpans = events.filter((e) => e.kind === 'tx')
+  let inTx = false
+  let autocommits = 0
+  for (const e of events) {
+    if (e.kind === 'open') inTx = true
+    else if (e.kind === 'close') inTx = false
+    else if (e.kind === 'write' && !inTx && !txSpans.some((t) => e.at > t.start && e.at < t.end)) {
+      autocommits += 1
+    }
+  }
+  return autocommits
+}
+
+/** Find every handle opened for writing in one file, and the write statements against it. Returns
+ *  one entry per handle, with its declaration line and the count of writes that are NOT wrapped in
+ *  a transaction. */
 function scanHandles(text) {
   const { code, full } = views(text)
   const results = []
@@ -181,76 +272,17 @@ function scanHandles(text) {
     const name = decl[1]
     const openIdx = decl.index + decl[0].length - 1
     const args = argSpan(code, openIdx)
-    if (!args) continue
-    // A read-only handle cannot fsync per write, so it is out of scope by definition.
-    if (/readonly\s*:\s*true/.test(full.slice(args.start, args.end))) continue
-    // An in-memory database has no journal file, so no fsync: nothing here is slow on a disk.
-    const target = full.slice(args.start, args.end).trim()
-    if (target === '' || /^(['"`]):memory:\1$/.test(target)) continue
+    if (!args || isOutOfScope(full, args)) continue
 
-    // The region this handle is live in: from its declaration to its close, or to the next
-    // declaration of the same name, or to the end of the file, whichever comes first.
+    // The region this handle is live in, and every call against it inside that region.
     const from = args.close + 1
-    const rest = code.slice(from)
-    const closeM = new RegExp(`(?<![\\w.$])${name}\\s*\\.close\\s*\\(`).exec(rest)
-    const redeclM = new RegExp(`(?<![\\w.$])(?:const|let|var)\\s+${name}\\s*=\\s*new\\s+Database\\s*\\(`).exec(rest)
-    const candidates = [closeM, redeclM].filter(Boolean).map((m) => m.index)
-    const to = candidates.length ? from + Math.min(...candidates) : code.length
-
-    // Collect every call against this handle inside the region, in source order.
-    const events = []
-    const callRe = new RegExp(`(?<![\\w.$])${name}\\s*\\.(query|prepare|run|exec|transaction)\\s*\\(`, 'g')
-    callRe.lastIndex = from
-    let m
-    while ((m = callRe.exec(code)) !== null && m.index < to) {
-      const method = m[1]
-      const open = m.index + m[0].length - 1
-      const span = argSpan(code, open)
-      if (!span) continue
-      if (method === 'transaction') {
-        events.push({ kind: 'tx', start: span.start, end: span.end })
-        continue
-      }
-      // query / prepare count only when the statement is then `.run(`ed. `.all`, `.get` and `.values`
-      // are reads, so they never reach the SQL check below.
-      if ((method === 'query' || method === 'prepare') && !/^\s*\.run\s*\(/.test(code.slice(span.close + 1))) {
-        continue
-      }
-      // begin / commit are markers, not writes, whichever method carries them: `db.exec('begin')` and
-      // `db.run('BEGIN')` both open a transaction. Anything else is judged by its SQL.
-      const sql = sqlOf(full, span)
-      const text = sql ?? ''
-      if (/^(?:begin|savepoint)\b/i.test(text)) {
-        events.push({ kind: 'open', at: m.index })
-      } else if (/^(?:commit|end|rollback|release)\b/i.test(text)) {
-        events.push({ kind: 'close', at: m.index })
-      } else if (/\bbegin\b/i.test(text) && /\bcommit\b/i.test(text)) {
-        // One call carrying its own begin and commit is wrapped already.
-        continue
-      } else if (isWriteSql(sql)) {
-        events.push({ kind: 'write', at: m.index, sql })
-      }
-    }
-
-    // A write is uncounted if it sits inside a transaction( ... ) argument or between an open and a
-    // close marker. Everything else is an autocommit, and those are what the threshold counts.
-    const txSpans = events.filter((e) => e.kind === 'tx')
-    let inTx = false
-    let autocommits = 0
-    for (const e of events) {
-      if (e.kind === 'open') inTx = true
-      else if (e.kind === 'close') inTx = false
-      else if (e.kind === 'write') {
-        const inside = txSpans.some((t) => e.at > t.start && e.at < t.end)
-        if (inTx || inside) continue
-        autocommits += 1
-      }
-    }
+    const to = regionEnd(code, from, name)
+    const events = handleEvents(code, full, name, from, to)
 
     results.push({
       name,
       line: lineAt(text, decl.index),
-      autocommits,
+      autocommits: countAutocommits(events),
     })
   }
   return results

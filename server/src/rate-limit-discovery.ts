@@ -9,8 +9,8 @@
 // 2026-07-16: 7 transcripts carried a genuine limit notice in the last 12h and 2 of them were still
 // stopped at it — exactly the two the owner was looking at when the list said it had nothing.
 //
-// So: read the transcripts. The signature is the same one dispatch.ts trusts live — rate-limit-
-// signal.ts's isApiErrorEvent + classifyLimit are imported here, never re-implemented or loosened,
+// So: read the transcripts. The signature is the same one dispatch.ts trusts live —
+// rate-limit-signal.ts's isApiErrorEvent + classifyLimit are imported here, never re-implemented or loosened,
 // because that gate is what keeps the 2026-07-15 false-positive class from coming back at machine
 // scale. Only a QUOTA verdict counts: a session felled by a transient 529 is not waiting on
 // anything (its wall cleared in seconds), so parking it against the next reset would be the very

@@ -266,7 +266,7 @@ describe("a task's detail carries its whole brief only when asked", () => {
 describe('a task a worker dispatches reports to that worker', () => {
   test('a caller that is a CliMayte worker becomes a worker origin; a wave task gets none', async () => {
     const mgr = climayteRun({
-      tasks: [task('manager')],
+      tasks: [{ ...task('manager'), chat: true }],
       group: 'og-mgr',
       origin: { kind: 'chat', sessionId: SID, home: HOME, transcript: TRANSCRIPT, how: 'x' },
     }).workers[0]

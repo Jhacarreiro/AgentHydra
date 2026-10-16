@@ -64,10 +64,10 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
           </TableHeader>
           <TableBody>
             <TableRow v-for="c in s.stopped" :key="c.id">
-              <TableCell class="max-w-[16rem] truncate">{{ c.title }}</TableCell>
-              <TableCell class="text-xs text-muted-foreground">{{ resetText(c.resetsAt) }}</TableCell>
-              <TableCell class="text-xs">{{ sourceName(c.source) }} · {{ c.account }}</TableCell>
-              <TableCell class="text-xs" :title="c.reason">{{ t(`hswarm.v.managers.babysitter.chatState.${c.state}`, c.state) }}</TableCell>
+              <TableCell class="max-w-[16rem]" truncate>{{ c.title }}</TableCell>
+              <TableCell size="xs" muted>{{ resetText(c.resetsAt) }}</TableCell>
+              <TableCell size="xs">{{ sourceName(c.source) }} · {{ c.account }}</TableCell>
+              <TableCell size="xs" :title="c.reason">{{ t(`hswarm.v.managers.babysitter.chatState.${c.state}`, c.state) }}</TableCell>
             </TableRow>
           </TableBody>
         </Table>
@@ -84,9 +84,9 @@ const resetText = (ms: number | null) => (ms == null ? t('hswarm.v.managers.baby
           </TableHeader>
           <TableBody>
             <TableRow v-for="a in s.acts" :key="`${a.at}-${a.id}`">
-              <TableCell class="whitespace-nowrap text-xs">{{ timeAgo(a.at) }}</TableCell>
-              <TableCell class="max-w-[16rem] truncate">{{ a.title }}</TableCell>
-              <TableCell class="text-xs">
+              <TableCell size="xs" class="whitespace-nowrap">{{ timeAgo(a.at) }}</TableCell>
+              <TableCell class="max-w-[16rem]" truncate>{{ a.title }}</TableCell>
+              <TableCell size="xs">
                 {{ t(`hswarm.v.managers.babysitter.did.${a.did}`, a.did) }}
                 <span class="text-muted-foreground">· {{ a.detail }}</span>
               </TableCell>

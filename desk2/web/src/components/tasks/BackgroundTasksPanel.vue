@@ -8,32 +8,37 @@
 // unit's active workers through AgentHydra, or stops a Desk chat's background task through the chat
 // (a CliMayte chat's worker with it: a worker takes no message to stop one command); Stop all does
 // that for every running unit listed. The trash in the header, beside Expand and Close (owner, 2026-10-08: "move
-// this here", from the Finished row), only hides finished units here.
-import { computed, effectScope, nextTick, onBeforeUnmount, ref, shallowRef, toRef, watch, type EffectScope, type Ref } from 'vue'
-import { Check, ChevronDown, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
-import type { TranscriptItem } from '@shared/protocol'
+// this here", from the Finished row), only hides finished units here. In the session rail (`back`) it lies over the rail's cards, and
+// its back arrow slides them back.
+import { computed, nextTick, ref, toRef, watch } from 'vue'
+import { Check, ChevronDown, ChevronLeft, ChevronRight, Maximize2, Minimize2, Trash2, X } from '@lucide/vue'
+import type { TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { useDesk } from '@/stores/desk'
 import { useShellSource } from '@/components/shell/source'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { Tip } from '@/components/ui/tooltip'
-import { useClock } from '@/lib/clock'
 import { openSwarmInHydra } from '@/components/hydra/api'
 import { cleared, clearFinished } from './api'
-import { canStop, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
+import { canStop, doingLine, doingOfAgent, elapsedOf, etaLeft, etaShort, formatTokens, jobIdOf, openPhase, panelLists, phaseSquares, type AgentState, type TaskAgent, type TaskPhase, type TaskUnit } from './logic'
 import { useSessionTasks } from './session'
+import { useClockWhile } from './useClockWhile'
 
 const props = defineProps<{
   sessionId: string | null | undefined
   workerIds?: readonly string[]
   items: TranscriptItem[]
+  /** The whole transcript's index (null where none was read). */
+  index?: TranscriptIndex | null
   /** The Hydra Desk chat the items are of (its tasks get Stop); null for a session outside it. */
   chatId?: string | null
   /** That chat is a CliMayte worker: stopping one of its tasks stops the worker, turn and all. */
   climayte?: boolean
   focusId?: string | null
   expanded?: boolean
+  /** It lies over the session rail's cards: a back arrow leads its header. */
+  back?: boolean
 }>()
-const emit = defineEmits<{ close: []; 'toggle-expand': [] }>()
+const emit = defineEmits<{ close: []; 'toggle-expand': []; back: [] }>()
 
 const src = useShellSource()
 const desk = useDesk()
@@ -59,7 +64,7 @@ function toggleAll() {
 // The session's own workers and jobs, read while the panel is open: they outlast the window's lists.
 const own = useSessionTasks(toRef(props, 'sessionId'))
 const lists = computed(() =>
-  panelLists({ workers: src.workers.value, items: props.items, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
+  panelLists({ workers: src.workers.value, items: props.items, index: props.index, jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value], own: own.value, sessionId: props.sessionId, workerIds: props.workerIds, all: all.value, cleared: cleared.value, chatId: props.chatId })
 )
 
 // The progress squares of every phase on show, worked out once per list change.
@@ -72,26 +77,11 @@ const squares = computed(() => {
 // The shared 1 s clock runs only while something here counts up (a running unit, or a unit with a start and no end).
 const ticking = computed(() => lists.value.running.length > 0 || lists.value.finished.some((u) => u.startedAt !== null && u.endedAt === null))
 const frozenNow = Date.now()
-const clock = shallowRef<{ now: Readonly<Ref<number>> } | null>(null)
-const now = computed(() => clock.value?.now.value ?? frozenNow)
-let clockScope: EffectScope | null = null
-watch(
-  ticking,
-  (on) => {
-    if (on && !clockScope) {
-      clockScope = effectScope()
-      const tick = clockScope.run(() => useClock(1000))
-      clock.value = tick ? { now: tick } : null
-    } else if (!on && clockScope) {
-      clockScope.stop()
-      clockScope = null
-      clock.value = null
-    }
-  },
-  { immediate: true }
-)
-onBeforeUnmount(() => clockScope?.stop())
-
+const now = useClockWhile(() => ticking.value, 1000, () => frozenNow)
+const doingText = (a: TaskAgent): string => {
+  const d = doingOfAgent(a)
+  return d ? doingLine(d, now.value) : ''
+}
 // Phases open: per unit, the first with a running agent unless the user toggled it.
 const toggled = ref(new Map<string, string | null>())
 const shownPhase = (u: TaskUnit) => (toggled.value.has(u.id) ? toggled.value.get(u.id)! : openPhase(u))
@@ -140,12 +130,13 @@ const stopText = computed(() => {
 async function confirmStop() {
   const us = stopUnits.value
   stopping.value = null
-  const failed: string[] = []
-  const why = (e: unknown) => failed.push(e instanceof Error ? e.message : String(e))
-  for (const u of us) {
-    for (const id of u.stoppable) await desk.cancelWorker(id).catch(why)
-    if (u.stopTask && props.chatId) await desk.stopTask(props.chatId, u.stopTask).catch(why)
-  }
+  const why = (e: unknown) => (e instanceof Error ? e.message : String(e))
+  const stops = us.flatMap((u) => [
+    ...u.stoppable.map((id) => desk.cancelWorker(id)),
+    ...(u.stopTask && props.chatId ? [desk.stopTask(props.chatId, u.stopTask)] : []),
+  ])
+  // Each stop is independent, so they go out together; the failures keep their order, so the first named is the first listed.
+  const failed = (await Promise.all(stops.map((s) => s.then(() => '', why)))).filter(Boolean)
   stopError.value = failed.length ? `Not stopped: ${failed[0]}` : ''
 }
 
@@ -172,7 +163,12 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
 
 <template>
   <section class="flex size-full min-h-0 flex-col overflow-hidden rounded-lg border border-(--border) bg-(--bg-panel) text-ui leading-5" aria-label="Background tasks">
-    <header class="flex h-8.5 shrink-0 items-center ps-2 pe-1">
+    <header class="flex h-8.5 shrink-0 items-center pe-1" :class="back ? 'ps-1' : 'ps-2'">
+      <Tip v-if="back" label="Back to session details" side="bottom">
+        <button type="button" :class="ICON_BTN" aria-label="Back to session details" @click="emit('back')">
+          <ChevronLeft class="size-4" :stroke-width="1.5" />
+        </button>
+      </Tip>
       <h2 class="min-w-0 flex-1 truncate font-normal text-(--text-2)">Background tasks</h2>
       <Tip v-if="lists.finished.length" label="Clear finished" side="bottom">
         <button type="button" :class="ICON_BTN" aria-label="Clear finished" @click="clearFinished(lists.finished.flatMap((u) => u.keys))">
@@ -302,6 +298,7 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
                     <td class="truncate p-0">
                       <button v-if="a.sessionId" type="button" class="max-w-full truncate text-start hover:underline" @click="openAgent(a)">{{ a.name }}</button>
                       <span v-else>{{ a.name }}</span>
+                      <span v-if="doingText(a)" class="font-normal text-(--text-muted)"> · {{ doingText(a) }}</span>
                     </td>
                     <td class="hidden truncate p-0 @sm:table-cell">{{ a.model || '–' }}</td>
                     <td class="p-0 text-end">{{ formatTokens(a.tokens) }}</td>
@@ -330,12 +327,13 @@ const ROW_BTN = 'rounded-[var(--radius-5)] px-1.5 text-ui-sm transition-colors d
         <button v-if="sessionId && !lists.running.length" type="button" :class="[ROW_BTN, all ? 'text-(--text)' : 'text-(--text-muted)']" :aria-pressed="all" @click="toggleAll">All</button>
       </div>
 
+      <!-- Rows of 24px, not 32 (owner, 2026-10-14: "make it more compact ... make some more fit in the same height"). -->
       <ul v-if="finishedOpen" class="mt-1 flex flex-col" aria-label="Finished">
         <li
           v-for="u in lists.finished"
           :key="u.id"
           :data-unit="u.id"
-          class="flex h-8 items-center gap-2 rounded-md px-2 text-(--text-muted) hover:bg-(--fill-5)"
+          class="flex h-6 items-center gap-2 rounded-(--radius-6) px-2 text-(--text-muted) hover:bg-(--fill-5)"
         >
           <Check v-if="!u.failed && u.phases.every((p) => p.agents.every((a) => a.state === 'done'))" class="size-3 shrink-0" :stroke-width="1.5" />
           <X v-else class="size-3 shrink-0 text-(--danger-text)" :stroke-width="1.5" />

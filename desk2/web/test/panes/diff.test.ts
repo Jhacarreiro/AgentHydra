@@ -95,7 +95,7 @@ describe('accounts format', () => {
   it('never shows an email and drops a plan the badge already shows', () => {
     expect(accountLabel('#71 work@example.com (Max 5x)', 'Max 5x', '71')).toBe('#71')
     expect(accountLabel('#68 eek (Max 20x)', 'Max 20x', '68')).toBe('#68 eek')
-    expect(accountLabel('jacob@example.com', null, 'default')).toBe('Default login')
+    expect(accountLabel('alex@example.com', null, 'default')).toBe('Default login')
   })
 
   it('writes reset times relative under a day', () => {

@@ -23,6 +23,8 @@ export class BridgeError extends Error {
     readonly kind: BridgeErrorKind,
     message: string,
     readonly status: number | null = null,
+    /** An HTTP refusal's own reason, without the wrapping message (the daemon's `error`, `detail` or `message`). */
+    readonly reason?: string,
   ) {
     super(message)
     this.name = 'BridgeError'
@@ -72,6 +74,8 @@ export interface AhChatRow {
   lastActivityAt: string | null // ISO
   unread: boolean // Claude Desktop's dot: a turn finished after the app last had the chat in focus
   cwd: string | null
+  /** The model the chat's record names (claude-opus-5-5 and the like); null or absent when it names none. */
+  model?: string | null
   effort?: string | null
   /** The parent chat's local id (`local_<id>`) when another chat started this one; null or absent otherwise. */
   spawnedFrom?: string | null
@@ -153,6 +157,11 @@ export interface AhCliInstance {
   movedAway?: unknown
   /** The owner's priority and caps for AgentHydra's work on this account (AgentHydra's AccountPlacement). */
   placement?: { priority: number; maxSessionPct: number | null; maxWeekPct: number | null } | null
+  /** The Claude Desktop instance this login is linked to: its folder and its name. */
+  associatedDesktopDir?: string | null
+  associatedDesktopLabel?: string | null
+  /** The name on the signed-in account (its profile name). */
+  accountName?: string | null
 }
 
 /** GET /api/instances: one isolated Claude Desktop instance (`loginUuid`: the account signed in there). */
@@ -200,9 +209,16 @@ export interface AhWorker {
   effort: string | null
   reportedModel?: string | null
   kind?: string | null
+  /** Set on the worker a Desk chat runs as. */
+  chat?: boolean
   result: string | null
   error: string | null
   lastActivity: string | null
+  /** What it is doing now, and the epoch ms that began; null or absent when it is not running or waiting. */
+  doing?: string | null
+  doingSince?: number | null
+  doingKind?: 'hold' | 'said' | 'step' | 'wait' | null
+  lastStepAt?: number | null
   /** ISO time a `waiting` worker is expected to start (AgentHydra's waitUntil); absent otherwise. */
   waitUntil?: string | null
   /** Epoch ms a retrying or queued worker is held until; null or absent when it is not. */
@@ -260,6 +276,10 @@ export interface AhRemoteWorker {
   originTitle?: string | null
   sessions?: string[]
   folder?: string | null
+  doing?: string | null
+  doingSince?: number | null
+  doingKind?: 'hold' | 'said' | 'step' | 'wait' | null
+  lastStepAt?: number | null
 }
 
 /** GET /api/corch/remote: the other PCs' queues, as the last poll of the shared store found them. */
@@ -396,6 +416,10 @@ export interface AhHswarmJob {
   caller_ids?: { session_id?: string | null; chat_id?: string | null; instance?: string | null } | null
   created?: string | null
   finished?: string | boolean | null
+  /** The job's measured tokens and dollars (HSwarm's summary), and its folder, where its results.jsonl is. */
+  tokens?: number | null
+  cost_usd?: number | null
+  dir?: string | null
 }
 export interface AhHswarmJobs {
   jobs?: AhHswarmJob[]
@@ -438,6 +462,12 @@ export interface StartWorker {
   requestId?: string
 }
 
+/** A model and effort as CliMayte's send takes them. */
+export interface WorkerSendSetting {
+  model: 'opus' | 'sonnet' | 'haiku'
+  effort: 'low' | 'medium' | 'high' | 'xhigh' | 'max'
+}
+
 export function createClient(opts: HydraClientOptions = {}) {
   const url = (opts.url ?? process.env.HYDRA_URL ?? DEFAULT_HYDRA_URL).replace(/\/+$/, '')
   const timeoutMs = opts.timeoutMs ?? REQUEST_TIMEOUT_MS
@@ -477,6 +507,7 @@ export function createClient(opts: HydraClientOptions = {}) {
         'http',
         `AgentHydra ${method} ${path} failed (${res.status}): ${typeof reason === 'string' ? reason : 'no reason given'}`,
         res.status,
+        typeof reason === 'string' ? reason : undefined,
       )
     }
     return data as T
@@ -498,6 +529,9 @@ export function createClient(opts: HydraClientOptions = {}) {
       (await get<{ rows: AhChatRow[] }>(`/api/chats?limit=1000${archived === 'include' ? '&archived=include' : ''}`)).rows,
     /** The transcript index of the last 24 hours (its default window), newest first. */
     codexChats: async () => (await get<{ rows: AhCodexChatRow[] }>('/api/codex-chats')).rows,
+    /** A Desk chat's turn ended: AgentHydra tells the chats that wait on its ticket (`desk-chat:<id>`). */
+    completionFinished: (ticket: string, outcome: 'done' | 'failed' | 'cancelled') =>
+      post<{ ok: boolean }>('/api/completions/finished', { ticket, outcome }),
     /** Every Codex account (Pin service picks one for a pinned chat's thread). */
     codexInstances: () => get<AhCodexInstance[]>('/api/codex-instances'),
     /** Its cached usage: never a fresh read, which would refresh the login beside an app-server Desk holds. */
@@ -513,6 +547,8 @@ export function createClient(opts: HydraClientOptions = {}) {
       if (q.origin?.length) query.set('origin', q.origin.join(','))
       // `lean`: the rows without the long text no list reads (result, reports, whole attempts); an older AgentHydra ignores it.
       query.set('lean', '1')
+      // The bridge contract only, without unused worker configuration/attempt detail. Old daemons ignore it.
+      query.set('bridge', '1')
       return get<AhWorker[]>(`/api/corch/workers?${query}`)
     },
     worker: (id: string) => get<AhWorkerDetail>(`/api/corch/workers/${enc(id)}`),
@@ -535,10 +571,10 @@ export function createClient(opts: HydraClientOptions = {}) {
     resolveIncidents: (scope: string, key: string) =>
       post<{ resolved: number }>('/api/incidents/resolve-by-key', { scope, key }),
     /** These workers however old (a chat's worker that finished a week ago), in one read. */
-    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1`),
+    workersByIds: (ids: string[]) => get<AhWorker[]>(`/api/corch/workers?ids=${ids.map(enc).join(',')}&lean=1&bridge=1`),
     /** The workers that ran in these sessions (current or earlier), however old, without reading every worker. */
     workersBySession: (sessionIds: string[]) =>
-      get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1`),
+      get<AhWorker[]>(`/api/corch/workers?session=${sessionIds.map(enc).join(',')}&lean=1&bridge=1`),
     /** Starts one CliMayte worker: CliMayte picks its account and moves it when that account fails. */
     startWorker: (task: StartWorker) =>
       request<{ group: string; workers: AhWorker[] }>('POST', '/api/corch/workers', {
@@ -561,10 +597,12 @@ export function createClient(opts: HydraClientOptions = {}) {
      *  `urgent`: a running worker is stopped and the same session continues at once with this message first
      *  (`urgent: true` in the answer when it stopped; every AgentHydra with CliMayte has it).
      *  `desk`: the chat's add-ons now (`chatAddOns`), which replace what AgentHydra keeps from the next launch on.
-     *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it). */
-    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string) =>
+     *  `requestId`: this message's own id; sent again, AgentHydra queues it once (an older one ignores it).
+     *  `setting`: the model and effort the worker runs on from the launch that takes this message. */
+    sendToWorker: (id: string, text: string, cwd?: string, urgent?: boolean, desk?: StartWorker['desk'], requestId?: string, setting?: WorkerSendSetting) =>
       request<{ ok: boolean; message: string; urgent?: boolean }>('POST', `/api/corch/workers/${enc(id)}/send`, {
         text,
+        ...(setting ? { model: setting.model, effort: setting.effort } : {}),
         ...(cwd ? { cwd } : {}),
         ...(desk ? { desk } : {}),
         ...(urgent ? { urgent: true } : {}),
@@ -584,6 +622,13 @@ export function createClient(opts: HydraClientOptions = {}) {
     // unset, a held note waits up to the 24 h expiry, as a person's note does.
     sendToDesktopChat: (sessionId: string, text: string, holdSecs?: number) =>
       request<{ ok: boolean; route?: string; delivered?: boolean; detail?: string }>('POST', `/api/sessions/${enc(sessionId)}/message`, { text, peer_only: true, ...(holdSecs ? { hold_secs: holdSecs } : {}) }, DELIVERY_TIMEOUT_MS),
+    /** Claude Desktop's own Stop for a working chat (the daemon's native stop); answers { ok, verified } or a BridgeError. */
+    stopDesktopChat: (sessionId: string) =>
+      request<{ ok: boolean; verified?: boolean; route?: string }>('POST', `/api/sessions/${enc(sessionId)}/stop`, {}, DELIVERY_TIMEOUT_MS),
+    /** A working Claude Desktop chat's model and effort, set in the app as its pickers set them (the daemon's native
+     *  setting); answers { ok, verified, model, effort } with what the app kept, or a BridgeError. */
+    setDesktopChatSetting: (sessionId: string, setting: { model?: string; effort?: string }) =>
+      request<{ ok: boolean; verified?: boolean; model?: string | null; effort?: string | null }>('POST', `/api/sessions/${enc(sessionId)}/setting`, setting, DELIVERY_TIMEOUT_MS),
     /** A new Claude Code session holding this one up to the reply `uuid`, titled "<title> (branch)"; the original is not touched. */
     branchSession: (sessionId: string, uuid: string, title: string) =>
       post<{ session_id: string; source: string }>(`/api/sessions/${enc(sessionId)}/branch`, { uuid, title }),

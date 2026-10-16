@@ -191,6 +191,70 @@ function mergeCounts(from: SampleCounts, into: SampleCounts): void {
     for (const [f, v] of from[k]) bump(into[k], f, v)
 }
 
+/**
+ * Every sample drained since the sampler started (GET /api/health/profile): where the daemon's JS time
+ * goes over hours, not only in the WINDOW_MS before a stall. The counts only grow, so two reads a minute
+ * apart, subtracted, are that minute's profile (2026-10-15: the daemon spent ~34 CPU-s a minute and no
+ * STALL line said where, because a steady load never blocks long enough to be logged).
+ */
+const sinceStart: { at: number; counts: SampleCounts } = {
+  at: 0,
+  counts: { n: 0, top: new Map(), inner: new Map(), outer: new Map() },
+}
+
+export interface ProfileRow {
+  frame: string
+  samples: number
+}
+
+/** The since-start counts, heaviest first, `limit` rows a list (0: every row). */
+export function profileSinceStart(limit: number): {
+  since: string | null
+  samples: number
+  top: ProfileRow[]
+  inner: ProfileRow[]
+  outer: ProfileRow[]
+} {
+  const rows = (m: Map<string, number>) => {
+    const sorted = [...m]
+      .sort((a, b) => b[1] - a[1])
+      .map(([frame, samples]) => ({ frame, samples }))
+    return limit > 0 ? sorted.slice(0, limit) : sorted
+  }
+  const c = sinceStart.counts
+  return {
+    since: sinceStart.at ? new Date(sinceStart.at).toISOString() : null,
+    samples: c.n,
+    top: rows(c.top),
+    inner: rows(c.inner),
+    outer: rows(c.outer),
+  }
+}
+
+/** The JSC heap by object type, biggest counts first: what to compare between two reads when memory grows. */
+export function heapSummary(limit: number): {
+  heapSize: number
+  heapCapacity: number
+  extraMemorySize: number
+  objectCount: number
+  types: Array<{ type: string; count: number }>
+  allocator: ReturnType<typeof jsc.memoryUsage>
+} {
+  const h = jsc.heapStats()
+  const types = Object.entries(h.objectTypeCounts)
+    .sort((a, b) => b[1] - a[1])
+    .slice(0, limit)
+    .map(([type, count]) => ({ type, count }))
+  return {
+    heapSize: h.heapSize,
+    heapCapacity: h.heapCapacity,
+    extraMemorySize: h.extraMemorySize,
+    objectCount: h.objectCount,
+    types,
+    allocator: jsc.memoryUsage(),
+  }
+}
+
 const timers = new Set<ReturnType<typeof setInterval>>()
 
 /** Stop the main-thread heartbeat timers (daemon shutdown). */
@@ -214,7 +278,9 @@ interface BeatState {
 }
 
 function drainSamples(sampler: Sampler): SampleCounts {
-  return countSamples(sampler.samplingProfilerStackTraces().traces ?? [])
+  const counts = countSamples(sampler.samplingProfilerStackTraces().traces ?? [])
+  mergeCounts(counts, sinceStart.counts)
+  return counts
 }
 
 /** One block of LONG_BLOCK_MS, on its own line with the samples taken during it. */
@@ -319,6 +385,7 @@ export function startStallSentinel(logPath: string | null): MiddlewareHandler {
   try {
     s.sampler.startSamplingProfiler()
     s.sampling = true
+    sinceStart.at = Date.now()
   } catch {
     // not this runtime: the blame stays per request
   }

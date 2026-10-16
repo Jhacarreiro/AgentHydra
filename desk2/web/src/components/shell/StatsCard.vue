@@ -11,6 +11,7 @@ const recentAnswers = new Map<StatsRange, HomeStats>()
 import { Tip } from '@/components/ui/tooltip'
 import { computed, reactive, ref, watch } from 'vue'
 import { ChevronRight } from '@lucide/vue'
+import { createReusableTemplate } from '@vueuse/core'
 import type { ChatSummary } from '@shared/protocol'
 import { computeStats } from './logic'
 import { useShellSource } from './source'
@@ -90,6 +91,7 @@ const maxModel = computed(() => Math.max(1, ...models.value.map((m) => m.session
 const modelFold = computed(() => foldModels(models.value))
 const moreModels = ref(false)
 const MODEL_ROW = 'relative flex h-7 items-center overflow-hidden rounded-[var(--radius-6)] bg-[var(--fill-secondary)] px-1.5 text-ui leading-[19px]'
+const [DefineModelRow, ReuseModelRow] = createReusableTemplate<{ m: { label: string; sessions: number } }>()
 
 const footer = computed(() => {
   if (home.value) return homeFooter(home.value)
@@ -154,11 +156,14 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
     </template>
 
     <div v-else class="mt-4.5 flex min-h-54.25 flex-col gap-1.25">
-      <div v-for="m in modelFold.shown" :key="m.label" :class="MODEL_ROW">
-        <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
-        <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
-        <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
-      </div>
+      <DefineModelRow v-slot="{ m }">
+        <div :class="MODEL_ROW">
+          <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
+          <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
+          <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
+        </div>
+      </DefineModelRow>
+      <ReuseModelRow v-for="m in modelFold.shown" :key="m.label" :m="m" />
       <template v-if="modelFold.rest.length">
         <button type="button" class="flex h-7 items-center gap-1 rounded-(--radius-6) px-1.5 text-start text-ui leading-4.75 text-text-muted hover:bg-fill-hover hover:text-text-2" :aria-expanded="moreModels" aria-controls="stats-more-models" @click="moreModels = !moreModels">
           <ChevronRight class="size-3 shrink-0 transition-transform" :class="moreModels ? 'rotate-90' : ''" aria-hidden="true" />
@@ -166,11 +171,7 @@ const chip = (on: boolean) => [CHIP, on ? 'bg-fill-hover font-semibold text-text
           <span class="tnum">{{ percent(modelFold.restShare) }}</span>
         </button>
         <div v-if="moreModels" id="stats-more-models" class="flex flex-col gap-1.25">
-          <div v-for="m in modelFold.rest" :key="m.label" :class="MODEL_ROW">
-            <span class="absolute inset-y-0 left-0 bg-[color-mix(in_srgb,var(--accent)_45%,transparent)]" :style="{ width: `${(m.sessions / maxModel) * 100}%` }" />
-            <span class="relative min-w-0 flex-1 truncate text-text">{{ m.label }}</span>
-            <span class="tnum relative text-text-2">{{ m.sessions.toLocaleString('en-US') }}</span>
-          </div>
+          <ReuseModelRow v-for="m in modelFold.rest" :key="m.label" :m="m" />
         </div>
       </template>
       <p v-if="!models.length" class="text-ui-sm leading-4 text-text-muted">No sessions in this range yet.</p>

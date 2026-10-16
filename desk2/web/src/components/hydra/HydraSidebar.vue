@@ -36,7 +36,7 @@ import { cleanSidebar } from '@/components/sidebar/clean'
 import { tellHydra } from './api'
 
 // Hydra Desk 2: the sidebar of AgentHydra's current tab (HSwarm's tree), drawn here in
-// Desk's sidebar and Desk's look while AgentHydra is open (Michael, 2026-10-04: one sidebar for
+// Desk's sidebar and Desk's look while AgentHydra is open (the other owner, 2026-10-04: one sidebar for
 // everything, beside the content). The copy describes it (shared/hydra-embed.ts) and keeps every rule of
 // what a row says; a click goes back to it. Rows are 26px like the desk list; hovers are the native
 // title, so a 300-row tree costs no tooltip per row.
@@ -214,7 +214,7 @@ const FOOT_BTN =
     >
       <span class="min-w-0 flex-1 truncate">{{ s.label }}<span v-if="s.note" class="tnum"> · {{ s.note }}</span></span>
       <span class="relative h-3.5 w-6 shrink-0 rounded-full transition-colors" :class="s.on ? 'bg-accent' : 'bg-(--fill-secondary)'">
-        <span class="absolute top-0.5 size-2.5 rounded-full bg-white transition-[left]" :class="s.on ? 'left-3' : 'left-0.5'" />
+        <span class="absolute top-0.5 left-0.5 size-2.5 rounded-full bg-white transition-transform" :class="s.on ? 'translate-x-2.5' : ''" />
       </span>
     </button>
 

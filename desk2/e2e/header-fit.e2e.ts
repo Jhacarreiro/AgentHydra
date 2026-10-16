@@ -27,7 +27,7 @@ const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 const HEADER_WIDTHS = Array.from({ length: 41 }, (_, i) => 1100 - i * 20)
 const CHAT_MIN = 300
 const SHOTS: { name: string; at: number }[] = [{ name: 'wide', at: 1300 }, { name: 'mid', at: 560 }, { name: 'narrow', at: CHAT_MIN }]
-const RIGHT_BUTTONS = ['Background tasks', 'Changes', 'Browser and servers', 'Connections', 'View options', 'Hide session details', 'Show session details']
+const RIGHT_BUTTONS = ['Changes', 'Browser and servers', 'Connections', 'View options', 'Hide session details', 'Show session details']
 // `left`: the window's width left of the title bar's content (CHROME_COLLAPSED unless given), so a header width becomes a window
 // width. Beside the sidebar at SIDEBAR_MIN the title bar starts after the chrome bar's CHROME_OPEN, plus 9px.
 const SCENES: { scene: string; shape: string; split: boolean; left?: number }[] = [
@@ -37,10 +37,10 @@ const SCENES: { scene: string; shape: string; split: boolean; left?: number }[] 
   { scene: 'header-fit-narrow-sidebar', shape: 'chat-narrow-sidebar', split: false, left: CHROME_OPEN + 9 },
 ]
 
-// Reads the header that holds the Background tasks button: its box and its column's, each visible control's whole and visible box (an
+// Reads the header that holds the Session details button: its box and its column's, each visible control's whole and visible box (an
 // ancestor's overflow cuts the visible one), what a click at the control's centre hits, and the text rules. Labels only, never a control's text.
 const MEASURE = `(() => {
-  const h = [...document.querySelectorAll('header')].find((x) => x.querySelector('button[aria-label="Background tasks"]'))
+  const h = [...document.querySelectorAll('header')].find((x) => x.querySelector('button[aria-label$="session details"]'))
   if (!h) return null
   const box = (el) => { const r = el.getBoundingClientRect(); return { l: r.left, t: r.top, r: r.right, b: r.bottom, w: r.width, h: r.height } }
   const shown = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0 && getComputedStyle(el).visibility !== 'hidden' }

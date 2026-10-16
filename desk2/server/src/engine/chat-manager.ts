@@ -7,38 +7,34 @@
 // cannot take. Loads the saved chats at start (all 'closed'), interrupts, answers the runtime's
 // permission / question / plan requests, patches, deletes, and keeps climayteActive current.
 
+import { type SearchResult, searchResult } from '@shared/find'
 import { randomUUID } from 'node:crypto'
-import { copyFileSync, existsSync, mkdirSync, readFileSync, statSync } from 'node:fs'
+import { copyFileSync, existsSync, readFileSync, statSync } from 'node:fs'
 import { basename, dirname, isAbsolute, join, resolve } from 'node:path'
-import type { McpServerConfig, Query } from '@anthropic-ai/claude-agent-sdk'
+import type { McpServerConfig } from '@anthropic-ai/claude-agent-sdk'
 import type {
   AccountInfo,
   AccountRef,
   ChatPatch,
   ChatSummary,
-  ChatWait,
+  SusLevel,
   CliMayteWorker,
   CreateChatRequest,
   DeskSettings,
   Effort,
   ElicitationAnswer,
-  ForkChatRequest,
   ImageRef,
   ImportSessionRequest,
   McpStatus,
   ModelChoice,
   PermissionDecision,
-  PermissionMode,
   PlanDecision,
   QuestionAnswer,
-  RewindChatRequest,
-  CancelQueuedRequest,
   CancelQueuedResult,
   ChatServiceInfo,
   ExternalSession,
   ChatServiceKind,
   PinnedService,
-  SendNowRequest,
   SendNowResult,
   ServerEvent,
   ServiceThread,
@@ -47,90 +43,57 @@ import type {
   SlashCommandInfo,
   TranscriptItem,
 } from '@shared/protocol'
-import { NOTE_MAX } from '@shared/protocol'
+import { type ChatItemsPage, type TranscriptIndex, type TranscriptItem as IndexedItem } from '@shared/protocol'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import { NEW_TITLE, newChatTitle, titleFrom } from '@shared/chat-title'
 import { type Bridge, DEFAULT_ACCOUNT } from '../bridge'
-import { hasRoom } from '../bridge/accounts'
-import type { AhWorker } from '../bridge/client'
-import { isActiveWorkerStatus, workerAccountLabel, workersOfChat } from '../bridge/climayte'
+import type { AhWorker, WorkerSendSetting } from '../bridge/client'
 import { isLongLived } from './long-lived'
+import { copyMedia, endedTask, settled, TASK_SESSION_ENDED } from './chat-items'
+import { climayteSetting, restoreSetting, SUS_WHY, workerTurnSetting } from './chat-worker-status'
 import { cutsBefore, forkPoint, placeInCwd, projectsRoot, seedSession } from '../bridge/seed-session'
-import { findSessionJsonl, firstCwdFrom, lastCwd } from '../bridge/session-jsonl'
-import { askedToMove, isUncOrDevicePath, movedOutOf } from './cwd-move'
+import { findSessionJsonl } from '../bridge/session-jsonl'
 import { chatQueryImpl, claimHosts, openHosts, releaseHosts } from '../host/client'
 import { connectorsPending } from '../connectors/registry'
 import { chatAddOns } from './desk-prompt'
+import { classifyTurn, PushbackStore, type PushbackRow, workerTurnKey } from './pushback'
 import { claudeCodeBinaryFor } from './claude-code-binary'
-import { ChatRuntime, chatDiffers, type QueryImpl } from './chat-runtime'
+import { ChatRuntime, type QueryImpl } from './chat-runtime'
 import { commandInfosFrom, modelChoicesFrom, normalizeModel, STATIC_COMMANDS, STATIC_MODELS } from './models'
 import { answersWithPictures, ElicitationAnswerError, QuestionPictureError } from './requests'
-import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, retryItemsOf, SERVER_ERROR_TRIES, sleep } from './send-retry'
+import { NOT_SENT_AGAIN, RETRY_DELAYS, type RetryDelays, type RetryItem, retryable, SERVER_ERROR_TRIES, sleep } from './send-retry'
 import { mediaCache, toStoredImage } from '../media/cache'
-import { withNamedFiles, withoutNamedLines } from './system-text'
+import { withNamedFiles } from './system-text'
 import { SessionMetaStore } from './session-meta'
 import { ChatStore, fromStored, type StoredChat } from './store'
 import { classifyFailure, FailureLedger, type FailureInput } from './failures'
 import { sdkTitleGenerator, type TitleGenerator } from './chat-title'
 import { Timings } from './timings'
-import { ANSWER_NOW, buildHandoff, CONTINUE_TEXT, FRESH_TOKENS, GROWN, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
+import { ANSWER_NOW, buildHandoff, FRESH_TOKENS, HANDOFF_TOKENS, PINNED, sessionTokens } from './handoff'
 import type { QueuedInput } from './input-queue'
-import { currentManager, forgetManager, MANAGER_SLUG } from './managers'
+import { forgetChat } from '../../../../server/src/hydra-core/seat-chats'
+import { chatFace, forgetCoreFaces } from './core-lead'
+import { coreDir } from './hydra-core-mode'
+import { MANAGER_SLUG } from '../../../../server/src/manager-folders'
+import { forgetManager } from './managers'
 import { type CodexDirectory, codexAccount, pickCodexAccount } from './codex/accounts'
 import { closeAppServers, type OpenAppServer } from './codex/app-server'
 import { CodexRuntime } from './codex/runtime'
 import { ChatgptRuntime, type FreeChats } from './chatgpt/runtime'
 import type { ServiceRuntime } from './service-runtime'
-
-export type ManagerBridge = Pick<Bridge, 'startWorker' | 'sendToWorker' | 'takesRequestIds' | 'canDeliverNow' | 'sendToWorkerNow' | 'cancelWorkerHeld' | 'cancelWorker' | 'workersByIds' | 'workerItems' | 'listAccounts' | 'externalSessions' | 'externalSession' | 'externalHistory' | 'sessionRoots' | 'lastWorkers' | 'setExtraWorkerIds' | 'setExcludeSessionIds' | 'setSessionMeta'>
-
-export interface ChatManagerOptions {
-  home: string
-  /** The home folder whose .claude a chat with no account folder is seeded into (default: the user's own). Tests pass a temp folder so they never write into the real Claude config. */
-  claudeHome?: string
-  /** A move to another account starts a fresh session from a condensed handoff above this many tokens of
-   *  session (SPEC "Account failover"). Default HYDRA_DESK_HANDOFF_TOKENS, else HANDOFF_TOKENS. */
-  handoffTokens?: number
-  /** A message to an idle chat whose session has grown past this many tokens starts a fresh session from a condensed
-   *  handoff on the same account. Default HYDRA_DESK_FRESH_TOKENS, else FRESH_TOKENS. */
-  freshTokens?: number
-  /** Hydra Desk's own address, which a handoff names for the full transcript and each chat's move line. */
-  deskUrl?: () => string
-  emit(event: ServerEvent): void
-  settings: () => DeskSettings
-  bridge: ManagerBridge
-  /** Called with a chat's session ids when the chat is deleted or archived; must not throw. */
-  onChatEnd?: (sessions: string[]) => void
-  /** Default: chats run in chat hosts (SPEC "Chat hosts"), or in this process with HYDRA_DESK_HOSTS=0. */
-  queryImpl?: QueryImpl
-  env?: Record<string, string | undefined>
-  /** undefined = each runtime reads ~/.claude.json; null = none. */
-  agentHydraMcp?: McpServerConfig | null
-  /** See ChatRuntimeDeps.mainClaudeJson. */
-  mainClaudeJson?: string | null
-  now?: () => number
-  storeDebounceMs?: number
-  /** How long supportedCommands() / supportedModels() may take before the static list answers. */
-  liveListTimeoutMs?: number
-  /** What a new chat is: a CliMayte worker (the default, and the only one the app uses), or 'sdk', a
-   *  ChatRuntime on the default login, which the runtime's own tests start chats with. */
-  newChats?: 'climayte' | 'sdk'
-  /** Names a new chat from its first message; null = never. Default: a Sonnet query (none when queryImpl is faked). */
-  titleGenerator?: TitleGenerator | null
-  /** How long a CliMayte chat's message AgentHydra did not take waits before it is sent again (send-retry.ts). */
-  retryDelays?: RetryDelays
-  /** AgentHydra's Codex accounts, for chats pinned to Codex (Pin service); absent, Codex is not offered. */
-  codex?: CodexDirectory
-  /** Default: one shared app-server per Codex home (codex/app-server.ts); tests give a fake. */
-  openCodex?: OpenAppServer
-  /** Desk's Free instances, for chats pinned to ChatGPT (read at each use: the Free plugin starts after this one); absent, ChatGPT is not offered. */
-  free?: () => FreeChats | undefined
-}
-
-/** What answers a chat's open requests: its Claude runtime, or its Codex one. */
-type RequestAnswerer = Pick<ChatRuntime, 'respondPermission' | 'answerQuestion' | 'respondPlan' | 'answerElicitation'>
-
-/** The names Pin service gives each service, in the chat's lines and in a handoff. */
-const SERVICE_LABEL: Record<ChatServiceKind, string> = { claude: 'Claude', codex: 'Codex', chatgpt: 'ChatGPT' }
+import {
+  CLIMAYTE_ACCOUNT, CUT_NOT_FOUND, ITEMS_BODY_BYTES, LIVE, READ_ONLY_SOURCES, SERVICE_LABEL, TITLE_TRIES, UNDO_NOT_FOUND,
+  WORKER_GROUP, WORKER_MODEL,
+  type ChatManagerOptions, type Cut, type Entry, type ManagerBridge, type QueueCreated, type RequestAnswerer, type ResolvedAccount, type RetryPace, type SendOptions, type StoredRecord, type UserItem,
+} from './chat-manager-types'
+import {
+  accountName, accountRef, busy, entryOf, forkTitle, importTitle, pickHealthy, ranInOf, retryLater, signature, squash, workersKey,
+} from './chat-manager-helpers'
+import { WorkerSync } from './chat-manager-workers'
+import { ChatMoves } from './chat-manager-moves'
+export type { ChatManagerOptions, ManagerBridge, QueueCreated, SendOptions } from './chat-manager-types'
+export { CLIMAYTE_ACCOUNT, LIVE, WORKER_GROUP, WORKER_MODEL } from './chat-manager-types'
+export { pickHealthy } from './chat-manager-helpers'
 
 /** A request the manager refuses, with the HTTP status the route answers. */
 export class ChatError extends Error {
@@ -149,180 +112,6 @@ export class ChatBusyError extends ChatError {
   }
 }
 
-/** What the send queue's dispatch asks of a send (SPEC "Send queue"). */
-export interface SendOptions {
-  /** Refuse with 409 while a turn runs or is about to, instead of joining the CLI's own queue (which nothing can edit or recall). */
-  onlyIfReady?: boolean
-  /** The SDK message uuid, which is also the user item's id: a send the queue made is found in the transcript by it. */
-  messageId?: string
-  /**
-   * A person's plain send (Enter in "Send immediately", or Send now on a queue row): to a running CliMayte worker it
-   * goes now, as Send now on its bubble does, not after the worker's whole task. An SDK chat's CLI takes it into the
-   * running turn anyway.
-   */
-  now?: boolean
-  /** An automatic note (AgentHydra's CliMayte ping), not the owner's words: it never names a chat that has no title yet. */
-  noTitle?: boolean
-}
-
-/** createFromQueue's answer: the chat and how its first message went (its error, or null). `waiting` is
- *  never answered now that CliMayte queues a worker until an account has room; the queue still reads it. */
-export type QueueCreated = { waiting: 'no-room' | 'unreachable' } | { chat: ChatSummary; firstSend: Promise<string | null> }
-
-/** How many accounts a generated title is asked of: the first, and one retry. */
-const TITLE_TRIES = 2
-/** A chat with a turn under way (the send queue waits on these). */
-export const LIVE = new Set<ChatSummary['status']>(['starting', 'working', 'needs_you'])
-const EFFORTS: Effort[] = ['low', 'medium', 'high', 'xhigh', 'max']
-const MODES: PermissionMode[] = ['default', 'acceptEdits', 'plan', 'bypassPermissions']
-const IMPORT_TITLE = 'Claude Code session'
-/** Outside sessions that cannot be continued here, as their refusal names them. */
-const READ_ONLY_SOURCES: Record<'climayte' | 'other', string> = { climayte: 'CliMayte worker', other: 'outside' }
-/** The CliMayte group Hydra Desk's chats run in. */
-export const WORKER_GROUP = 'hydra-desk'
-/** What a worker chat shows as its model: AgentHydra's chat mode launches it on Opus (xhigh), and Desk forces nothing. */
-export const WORKER_MODEL = 'opus'
-/** The account a chat shows before CliMayte has placed its worker. */
-export const CLIMAYTE_ACCOUNT: AccountRef = { id: 'climayte', label: 'CliMayte', configDir: null }
-
-/** A turn runs or is about to: ChatRuntime.send queues a message behind it (the same test). */
-const busy = (c: ChatSummary): boolean => c.status === 'working' || c.status === 'needs_you' || (c.status === 'starting' && c.turnStartedAt !== null)
-
-/** The items JSON kept across chats (characters, about bytes): the least recently answered goes first. */
-const ITEMS_BODY_BYTES = 64 * 1024 * 1024
-
-/** What an item is remembered as in Entry.emitted: a 64-bit hash of its JSON, not the JSON itself. */
-const signature = (item: TranscriptItem): string => String(Bun.hash(JSON.stringify(item)))
-
-/** A short hash of what matching workers to chats reads from the worker list (workersOfChat, activeness). */
-function workersKey(workers: readonly CliMayteWorker[]): string {
-  const hit = workerKeys.get(workers)
-  if (hit !== undefined) return hit
-  let text = ''
-  for (const w of workers) text += `${w.id},${w.pc ?? ''},${w.active ? 1 : 0},${w.sessionId ?? ''},${w.originSessionId ?? ''},${w.originWorkerId ?? ''},${w.sessions?.join('+') ?? ''};`
-  const key = String(Bun.hash(text))
-  workerKeys.set(workers, key)
-  return key
-}
-/** The bridge answers the very same array while the worker list did not change, so its key is worked out once. */
-const workerKeys = new WeakMap<readonly CliMayteWorker[], string>()
-
-interface Entry {
-  chat: ChatSummary
-  runtime: ChatRuntime | null
-  /** The runtime of the service the chat is pinned to (Pin service), once it has run there; kept while it winds down after the pin moved on. */
-  pinned?: ServiceRuntime | null
-  /** Messages sent after the pin moved while the old service was still replying: they wait, shown queued, and go to the new one once that reply ends. */
-  crossing?: { item: UserItem; text: string; images?: ImageRef[]; opts: SendOptions }[]
-  /** The query the runtime runs now (for supportedCommands / supportedModels). */
-  query: Query | null
-  /** Set while the chat's worker is being started: a second send waits for it instead of starting another. */
-  starting?: Promise<void>
-  /** A CliMayte chat: a short hash of what each item of its Desk file looked like when last written or emitted (the file is the record, the worker's session JSONL the live source). Dropped once its worker is finished; the Desk file seeds it again. */
-  emitted?: Map<string, string>
-  /** What matchWorkers last matched the chat on (the worker list and the chat's own ids): the same input is not matched again. */
-  matchKey?: string
-  /** A CliMayte chat: the worker's session file and the account it was found under, so a poll does not search the session folders again. */
-  cwdFile?: { sessionId: string; account: string | null; file: string }
-  /** The worker's items as the last poll went through them: the bridge answers the same array while nothing changed. */
-  workerSeen?: TranscriptItem[]
-  /** The account the worker's JSONL was last read under: a change means the live file may have moved, so it is looked for again. */
-  readAccount?: string | null
-  /** False once its worker was seen finished: the poll stops reading it until the next send. */
-  workerLive?: boolean
-  /** A fork not started yet: the uuid of the source session's last entry when it was forked (its cut). */
-  forkAt?: string
-  /** The config folder the chat's last process ran under (null = the default login), kept across restarts:
-   *  its copy of the session has the latest turns. Undefined: Hydra Desk never ran it. */
-  ranIn?: string | null
-  /** The sessions this chat ran before a move started a fresh one (oldest first, Hydra Desk's handoff): still its own, never "Elsewhere". */
-  pastSessions?: string[]
-  /** The accounts the message in flight has failed on or moved through (carryToAnotherAccount); cleared by the next send. */
-  moved?: string[]
-  /** Set while carryToAnotherAccount moves the chat: a send waits for it (then it goes to the new account, after the replay). */
-  moving?: Promise<void>
-  /** The session copy under way (seedResume): a second start waits for it instead of copying onto the same file. */
-  seeding?: Promise<string | null>
-  /** The owner named this chat (or it was named once already): the generated title never replaces it. */
-  titled?: boolean
-  /** The ids of its own background tasks still running that count toward backgroundActive (long-lived ones do not). */
-  bgTasks?: Set<string>
-  /** A CliMayte chat: the task items Hydra Desk settled because their session ended (endTasks). The worker's own
-   *  JSONL still says 'running' for them, which never replaces the settled item; a real notice still does. */
-  ended?: Set<string>
-  /** A folder the session ended its last turn in, outside the chat's own (cwd-move): the move happens only if the next turn begins and ends there. `offset` is the transcript's size at that turn end. */
-  cwdPending?: { target: string; file: string; offset: number }
-  /** The owner's latest message (cwd-move: a move it asked for needs no second turn). */
-  lastAsk?: string
-  /** The folder the chat's worker was last started or sent into; a different chat.cwd is a move to pass on. */
-  workerCwd?: string
-  /** A CliMayte chat: the messages sent that its worker's JSONL does not show yet, shown meanwhile; kept with the chat record, never in the Desk's items file. */
-  sent?: UserItem[]
-  /** A CliMayte chat: when its worker first read done while its JSONL did not show what was sent yet (applyWorker). */
-  endHeldSince?: number
-  /** A CliMayte chat: the messages AgentHydra has not taken yet (it did not answer), oldest first, each sent again
-   *  with its own request id until it is (retryHeld); a later message waits behind them. Kept with the chat record. */
-  retrying?: RetryItem[]
-  /** The one loop sending `retrying`, while it runs. */
-  retryLoop?: Promise<void>
-  /** The held message that loop is sending right now: Cancel waits for its answer. */
-  retrySending?: RetryItem
-  /** The ledger id of the chat's latest failure: a move to another account marks it recovered. */
-  lastFailure?: string
-  /** A CliMayte chat: the worker error already in the ledger, so a re-read of the same failure adds no row. */
-  workerErrorSeen?: string | null
-}
-
-type UserItem = Extract<TranscriptItem, { kind: 'user' }>
-const squash = (s: string): string => s.replace(/\s+/g, ' ').trim()
-
-/** The stand-in a worker's own copy of a sent message replaces: the one with its text, else the oldest sent before it
- *  that is not `held` (still being sent again: AgentHydra may not have it, so another message's copy is not its own). */
-function standInFor(sent: UserItem[], real: UserItem, held?: ReadonlySet<string>): number {
-  const text = squash(real.text)
-  const same = sent.findIndex((s) => text.includes(squash(withoutNamedLines(s.text))))
-  return same >= 0 ? same : sent.findIndex((s) => s.ts <= real.ts + 60_000 && !held?.has(s.id))
-}
-
-/** An imported session's title. One nobody named (no title, or only its first words) is named from its first message, as a new chat is. */
-function importTitle(req: ImportSessionRequest, items: TranscriptItem[], kept: string | null | undefined, listed: string | undefined): { title: string; generate: boolean; firstAsk: string | undefined } {
-  const firstAsk = items.find((i): i is UserItem => i.kind === 'user' && !!i.text.trim())?.text
-  const named = !!req.title?.trim() || !!kept?.trim()
-  const words = firstAsk ? titleFrom(firstAsk) : null
-  const generate = !req.fork && !named && !!firstAsk && (!listed?.trim() || listed.trim() === words)
-  const title = req.title?.trim() || listed?.trim() || words || IMPORT_TITLE
-  return { title, generate, firstAsk }
-}
-
-/** How many accounts one message is tried on (the first and the ones it moves to). */
-const MAX_MOVES = 4
-
-/** How long placement skips an account whose sign-in failed (CliMayte's identity wall retries every 6 hours). */
-const SIGN_IN_HOLD_MS = 6 * 60 * 60 * 1000
-/** How long a worker that read done stays busy while its JSONL does not show what was sent yet (applyWorker). */
-const WORKER_END_GRACE_MS = 15_000
-
-/** '#126' for a numbered account, else its label. */
-const accountName = (a: AccountRef): string => (a.number !== undefined ? `#${a.number}` : a.label)
-
-/** The healthiest account not tried yet: one with room (hasRoom), the owner's highest priority first, then the least
- *  used; the default login last. */
-export function pickHealthy(accounts: AccountInfo[], tried: string[]): AccountInfo | null {
-  const ok = accounts.filter((a) => !tried.includes(a.id) && hasRoom(a))
-  const load = (a: AccountInfo): number => (a.id === DEFAULT_ACCOUNT.id ? 1000 : Math.max(a.fiveHourPct ?? 0, a.weeklyPct ?? 0))
-  return ok.sort((a, b) => (b.priority ?? 0) - (a.priority ?? 0) || load(a) - load(b))[0] ?? null
-}
-
-/** The account a chat gets (resolveAccount). */
-interface ResolvedAccount {
-  account: AccountRef
-  auto: boolean
-  note: string | null
-}
-
-/** The stored chat record: a fork's cut and the folder the chat last ran in ride along, kept out of ChatSummary and so off the wire. */
-type StoredRecord = ChatSummary & { forkAt?: unknown; ranIn?: unknown; pastSessions?: unknown; workerCwd?: unknown; sent?: unknown; retrying?: unknown }
-
 export class ChatManager {
   readonly store: ChatStore
   /** Hydra Desk's marks on outside sessions (pin, archive, unread, title, group). */
@@ -336,6 +125,7 @@ export class ChatManager {
   private readonly signInHeld = new Map<string, number>()
   private readonly emitEvent: (event: ServerEvent) => void
   private readonly settingsOf: () => DeskSettings
+  private readonly pushback: PushbackStore
   private readonly bridge: ManagerBridge
   private readonly onChatEnd: ((sessions: string[]) => void) | undefined
   private readonly claudeHome: string | undefined
@@ -350,9 +140,10 @@ export class ChatManager {
   private readonly liveListTimeoutMs: number
   private liveModels: ModelChoice[] | null = null
   private readonly newChats: 'climayte' | 'sdk'
-  private syncing: Promise<void> | null = null
-  private workerRows = new Map<string, AhWorker>()
+  private readonly workers: WorkerSync
+  private readonly moves: ChatMoves
   /** The JSON of each chat's items as last answered, while its file and media stand as they were (see itemsBody). */
+  private readonly itemIndexes = new Map<string, { stamp: string; index: TranscriptIndex }>()
   private readonly itemsBodies = new Map<string, { stamp: string; body: string; count: number }>()
   private itemsBodyBytes = 0
   /** closeAll ran: the pass over the workers stops at the next worker instead of saving into a folder that may be gone. */
@@ -374,10 +165,15 @@ export class ChatManager {
 
   constructor(o: ChatManagerOptions) {
     this.store = new ChatStore(o.home, { debounceMs: o.storeDebounceMs })
+    this.pushback = new PushbackStore(o.home)
     this.failures = new FailureLedger(o.home, o.now)
     this.timings = Timings.for(o.home, o.now)
     this.sessionMeta = new SessionMetaStore(o.home, o.now)
-    this.emitEvent = o.emit
+    // Every transcript item that goes out is the chat's last action when it is newer (the row menu's Last action line).
+    this.emitEvent = (event) => {
+      if (event.type === 'item.upsert') this.noteAction(event.chatId, event.item.ts)
+      o.emit(event)
+    }
     this.settingsOf = o.settings
     this.bridge = o.bridge
     this.onChatEnd = o.onChatEnd
@@ -399,6 +195,18 @@ export class ChatManager {
     this.codexDir = o.codex ?? null
     this.openCodex = o.openCodex
     this.free = o.free ?? (() => undefined)
+    this.workers = new WorkerSync({
+      chats: this.chats, bridge: this.bridge, store: this.store, timings: this.timings, failures: this.failures, emitEvent: this.emitEvent,
+      now: () => this.now(), isClosing: () => this.closing, stored: this.stored.bind(this), changed: this.changed.bind(this), systemLine: this.systemLine.bind(this),
+      fail: this.fail.bind(this), endTasks: this.endTasks.bind(this), noteTask: this.noteTask.bind(this), dropStandIn: this.dropStandIn.bind(this),
+      deskItems: this.deskItems.bind(this), countWorkerTurn: this.countWorkerTurn.bind(this), undelivered: this.undelivered.bind(this),
+      markQueued: this.markQueued.bind(this), noteCwd: (e, file) => this.moves.noteCwd(e, file),
+    })
+    this.moves = new ChatMoves({
+      chats: this.chats, bridge: this.bridge, store: this.store, failures: this.failures, emitEvent: this.emitEvent, signInHeld: this.signInHeld,
+      deskUrl: () => this.deskUrl(), root: this.root.bind(this), placeable: this.placeable.bind(this), bigSession: this.bigSession.bind(this),
+      seedResume: this.seedResume.bind(this), changed: this.changed.bind(this), systemLine: this.systemLine.bind(this), fail: this.fail.bind(this),
+    })
     for (const stored of this.store.loadChats()) {
       const e = entryOf(stored as StoredRecord)
       this.chats.set(e.chat.id, e)
@@ -452,7 +260,42 @@ export class ChatManager {
     return { body, count: items.length }
   }
 
+  /** One page of the chat's items ending before `before` (default: the newest page). Never stored in the whole-chat body cache. */
+  itemsPage(id: string, before: number | undefined, limit: number): ChatItemsPage {
+    const all = this.listItems(id)
+    const end = before === undefined ? all.length : Math.min(all.length, Math.max(0, Math.floor(before)))
+    const start = Math.max(0, end - Math.max(1, Math.floor(limit)))
+    return { items: all.slice(start, end), total: all.length, olderBefore: start }
+  }
+
+  /** The chat's TranscriptIndex, rebuilt when its file or media stamp changes (or while a turn runs / stand-ins exist). */
+  transcriptIndex(id: string): TranscriptIndex {
+    const e = this.entry(id)
+    const reusable = e.runtime?.running !== true && !e.sent?.length
+    const hit = this.itemIndexes.get(id)
+    if (hit && reusable && hit.stamp === this.store.itemsStamp(id)) return hit.index
+    const index = buildTranscriptIndex(this.listItems(id))
+    const stamp = reusable ? this.store.itemsStamp(id) : ''
+    this.itemIndexes.delete(id)
+    if (stamp) {
+      this.itemIndexes.set(id, { stamp, index })
+      while (this.itemIndexes.size > 50) this.itemIndexes.delete(this.itemIndexes.keys().next().value as string)
+    }
+    return index
+  }
+
+  /** Find over the whole chat: the hits (capped) and the total, over the text the window's Find matches. */
+  search(id: string, query: string): SearchResult {
+    return searchResult(this.listItems(id), query)
+  }
+
+  /** One item of the chat by id, or null. */
+  itemById(id: string, itemId: string): IndexedItem | null {
+    return this.listItems(id).find((i) => i.id === itemId) ?? null
+  }
+
   private dropItemsBody(id: string): void {
+    this.itemIndexes.delete(id)
     const hit = this.itemsBodies.get(id)
     if (!hit) return
     this.itemsBodies.delete(id)
@@ -609,6 +452,69 @@ export class ChatManager {
     return live ? commandInfosFrom(live) : STATIC_COMMANDS
   }
 
+  /** Every finished turn on any service is counted under its setting; the chat's sus pick is read again. */
+  private countTurn(chatId: string, service: ChatServiceKind, t: { model: string; effort: string; stopReason: string | null; text: string }): void {
+    const v = classifyTurn(t.stopReason, t.text)
+    this.pushback.record({ service, model: t.model, effort: t.effort }, v.cls, { chat: chatId, label: v.label })
+    const cur = this.chats.get(chatId)
+    if (cur) this.refreshSusPick(cur.chat)
+  }
+
+  /** GET /api/pushback: what each setting has done so far. */
+  pushbackRows(): PushbackRow[] {
+    return this.pushback.rows().sort((a, b) => a.pushbackRate - b.pushbackRate || b.turns - a.turns)
+  }
+
+  /** Seeds the pushback counts once from the transcripts of the chats this Desk knows; a second run adds nothing. */
+  backfillPushback(): { chats: number; turns: number } {
+    const chats = [...this.chats.values()].filter((e) => !e.chat.service)
+    return this.pushback.backfill(
+      chats.map((e) => {
+        if (e.chat.workerId === undefined) return { id: e.chat.id, model: e.chat.model, effort: e.chat.effort, items: () => this.store.loadItems(e.chat.id) }
+        const w = e.chat.workerId ? this.workers.workerRows.get(e.chat.workerId) : undefined
+        const ran = w ? workerTurnSetting(w) : { model: e.chat.model, effort: e.chat.effort }
+        return { id: e.chat.id, ...ran, items: () => this.store.loadItems(e.chat.id), worker: { busy: busy(e.chat) } }
+      }),
+    )
+  }
+
+  /** A worker chat's turn that just ended, counted once under the setting its attempt ran on (no stop reason reaches the Desk). */
+  private countWorkerTurn(e: Entry, w: AhWorker, items: TranscriptItem[]): void {
+    const opened = items.findLastIndex((i) => i.kind === 'user' && !i.queued)
+    const reply = items.slice(opened + 1).findLast((i) => i.kind === 'assistant_text')
+    const turn = reply?.id ?? items[opened]?.id
+    if (!turn) return
+    const v = classifyTurn(null, reply?.kind === 'assistant_text' ? reply.text : '')
+    const ran = workerTurnSetting(w)
+    this.pushback.recordOnce(workerTurnKey(e.chat.id, turn), { service: 'claude', model: ran.model, effort: ran.effort }, v.cls, { chat: e.chat.id, label: v.label })
+    this.refreshSusPick(e.chat)
+  }
+
+  /** What 'sus' sends a worker chat's next message with, as CliMayte's send takes it; null for no override. */
+  private workerSusSetting(chat: ChatSummary): WorkerSendSetting | null {
+    if (chat.sus !== 'sus') return null
+    const pick = this.pushback.pick()
+    return pick ? climayteSetting(pick.model, pick.effort) : null
+  }
+
+  /** What 'sus' runs a chat's next Claude turn on: the least-pushing setting with enough turns, else the chat's own. */
+  private susTurnOf(chat: ChatSummary): { model: string | null; effort: Effort | null } | null {
+    if (chat.sus !== 'sus') return null
+    const pick = this.pushback.pick()
+    if (!pick) return { model: chat.model, effort: chat.effort }
+    return { model: pick.model === 'default' ? null : pick.model, effort: pick.effort === 'default' ? null : (pick.effort as Effort) }
+  }
+
+  /** The summary's susPick: what 'sus' resolves to now, null when no setting qualifies yet; absent off 'sus'. */
+  private refreshSusPick(chat: ChatSummary): void {
+    if (chat.sus !== 'sus') {
+      delete chat.susPick
+      return
+    }
+    const pick = this.pushback.pick()
+    chat.susPick = pick ? { model: pick.model, effort: pick.effort === 'default' ? null : (pick.effort as Effort), pushbackRate: pick.pushbackRate, turns: pick.turns } : null
+  }
+
   /** A live runtime's model list (remembered once read), else the static menu. */
   async models(): Promise<ModelChoice[]> {
     const live = [...this.chats.values()].find((e) => e.runtime?.running && e.query)
@@ -675,6 +581,7 @@ export class ChatManager {
   private async openNew(req: CreateChatRequest, messageId?: string): Promise<{ chat: ChatSummary; firstSend: Promise<string | null> }> {
     const cwd = checkCwd(req.cwd)
     if (req.parentId && !this.chats.has(req.parentId)) throw new ChatError(400, 'parentId names no Desk chat')
+    if (req.sus === 'bad' && !this.codexDir) throw new ChatError(409, 'Codex is not set up in this Desk.')
     if (this.newChats === 'climayte') return this.open(req, cwd, { account: { ...CLIMAYTE_ACCOUNT }, auto: true, note: null }, messageId, true)
     return this.open(req, cwd, await this.resolveAccount(req.accountId ?? this.settingsOf().defaultAccountId), messageId)
   }
@@ -695,10 +602,14 @@ export class ChatManager {
       cwd,
       account,
       accountAuto: auto,
+      ...(req.accountPinned ? { accountPinned: true } : {}),
       model: worker ? WORKER_MODEL : req.model === undefined ? normalizeModel(settings.defaultModel) : normalizeModel(req.model),
       effort: req.effort === undefined ? settings.defaultEffort : req.effort,
       permissionMode: req.permissionMode ?? settings.defaultPermissionMode,
       delegateToCliMayte: req.delegateToCliMayte ?? settings.delegateToCliMayte,
+      ...(req.sus && req.sus !== 'fine' ? { sus: req.sus } : {}),
+      // Born on 'bad': pinned to Codex from the first message, with nothing to catch up on.
+      ...(req.sus === 'bad' ? { service: 'codex' as const } : {}),
       ...(req.parentId ? { parentId: req.parentId } : {}),
       ...(req.managerSlug ? { managerSlug: req.managerSlug } : {}),
       status: 'closed',
@@ -720,6 +631,7 @@ export class ChatManager {
       climayteActive: 0,
       ...(worker ? { workerId: null } : {}),
     }
+    this.refreshSusPick(chat)
     const entry: Entry = { chat, runtime: null, query: null, ...(req.title?.trim() ? { titled: true } : {}) }
     this.chats.set(chat.id, entry)
     this.changed(chat)
@@ -813,41 +725,17 @@ export class ChatManager {
       if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
       return this.pinnedOf(e).send(text, images?.length ? images : undefined, opts.messageId)
     }
-    // Back on Claude after its pin moved it elsewhere: the message first carries what was said there. A worker's
-    // copy of it reads back as the message and a muted line (userTurns); a runtime's shows what was typed.
-    const lead = e.chat.serviceLeftAt?.claude !== undefined ? this.serviceHandoff(e, 'claude', !e.chat.sessionId && !e.chat.workerId, null) : null
-    if (e.chat.serviceLeftAt?.claude !== undefined) this.clearLeftAt(e, 'claude')
-    e.chat.serviceRanOn = undefined
+    const lead = this.claudeHandoff(e)
     if (e.chat.workerId !== undefined) return this.sendToWorker(e, lead ? `${lead.text}${ANSWER_NOW}${text}` : text, images, opts, text)
     // Awaited only when there is something to wait for: a new chat's first send starts its process at once.
-    if (e.moving) {
-      while (e.moving) await e.moving
-      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
-    }
+    if (e.moving) await this.awaitMove(e, id)
     // Sent again by hand while the move was sending it already (the owner saw the limit line): once is enough.
     if (e.runtime?.takeReplayed(text, images)) {
       this.systemLine(id, 'move-dup', 'info', `That message is already being sent again on ${accountName(e.chat.account)} after the move, so it was not sent twice.`)
       return { queued: false }
     }
-    // What the SDK is sent, when it is more than the owner's own words (a takeover's handoff around them).
-    let sdk: QueuedInput | null = null
-    // A session grown past freshTokens is not re-read by every later call: an idle chat's message starts a fresh
-    // session from the condensed handoff of its full record, on the same account (owner, 2026-10-11).
-    // Awaited only when it applies: a new chat's first send starts its process at once.
-    const grown = busy(e.chat) ? null : this.bigSession(e, this.freshTokens)
-    if (grown) {
-      sdk = await this.freshFrom(e, grown, { text, images })
-      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
-    }
-    if (!e.runtime?.running) {
-      // A cold start is a new process: the tasks the last one started ended with it.
-      if (this.endTasks(e)) this.changed(e.chat)
-      const seeding = this.seedResume(e)
-      const cannot = seeding ? await seeding : null
-      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
-      // A session that cannot be reopened here is taken over by a fresh one, not refused (takeOver).
-      if (cannot && !sdk) sdk = this.takeOver(e, cannot, { text, images })
-    }
+    const input = this.sdkInput(e, id, text, images)
+    const sdk = input instanceof Promise ? await input : input
     if (opts.onlyIfReady && busy(e.chat)) throw new ChatBusyError()
     e.moved = undefined // a new message starts its own tries
     this.timings.sdkSent(e.chat, e.runtime?.running === true)
@@ -856,6 +744,51 @@ export class ChatManager {
     const sent = this.runtimeOf(e).send(`${lead.text}${ANSWER_NOW}${text}`, images?.length ? images : undefined, opts.messageId, text)
     this.systemLine(id, 'caught-up', 'info', `Caught up on what was said on ${lead.from}.`)
     return sent
+  }
+
+  /** Back on Claude after its pin moved it elsewhere: the message first carries what was said there. A worker's
+   *  copy of it reads back as the message and a muted line (userTurns); a runtime's shows what was typed. */
+  private claudeHandoff(e: Entry): { text: string; from: string } | null {
+    const lead = e.chat.serviceLeftAt?.claude !== undefined ? this.serviceHandoff(e, 'claude', !e.chat.sessionId && !e.chat.workerId, null) : null
+    if (e.chat.serviceLeftAt?.claude !== undefined) this.clearLeftAt(e, 'claude')
+    e.chat.serviceRanOn = undefined
+    return lead
+  }
+
+  /** Waits out a move under way, then checks the chat is still this one. */
+  private async awaitMove(e: Entry, id: string): Promise<void> {
+    while (e.moving) await e.moving
+    if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+  }
+
+  /**
+   * What the SDK is sent, when it is more than the owner's own words (a takeover's handoff around them). A promise only
+   * when there is something to wait for (a grown session's fresh start, a resume to seed): a new chat's first send starts
+   * its process at once, before `send` hands back to the create that called it (2026-10-15: an always-awaited version
+   * left every new chat 'closed' in create's answer).
+   */
+  private sdkInput(e: Entry, id: string, text: string, images: ImageRef[] | undefined): QueuedInput | null | Promise<QueuedInput | null> {
+    // A session grown past freshTokens is not re-read by every later call: an idle chat's message starts a fresh
+    // session from the condensed handoff of its full record, on the same account (owner, 2026-10-11).
+    const grown = busy(e.chat) ? null : this.bigSession(e, this.freshTokens)
+    if (!grown) return this.coldStartInput(e, id, text, images, null)
+    return this.freshFrom(e, grown, { text, images }).then((sdk) => {
+      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+      return this.coldStartInput(e, id, text, images, sdk)
+    })
+  }
+
+  /** A cold start is a new process: the tasks the last one started ended with it, and a session that cannot be reopened
+   *  here is taken over by a fresh one, not refused (takeOver). Synchronous unless a resume has to be seeded first. */
+  private coldStartInput(e: Entry, id: string, text: string, images: ImageRef[] | undefined, sdk: QueuedInput | null): QueuedInput | null | Promise<QueuedInput | null> {
+    if (e.runtime?.running) return sdk
+    if (this.endTasks(e)) this.changed(e.chat)
+    const settle = (cannot: string | null): QueuedInput | null => {
+      if (this.chats.get(id) !== e) throw new ChatError(404, `no chat ${id}`)
+      return cannot && !sdk ? this.takeOver(e, cannot, { text, images }) : sdk
+    }
+    const seeding = this.seedResume(e)
+    return seeding ? seeding.then(settle) : settle(null)
   }
 
   /** A reply is running on a service the chat is no longer pinned to (Claude's, or another pinned runtime's). */
@@ -1043,62 +976,76 @@ export class ChatManager {
   private async retryLoopOf(e: Entry): Promise<void> {
     const { firstMs, maxMs } = this.retryDelays
     const live = () => !this.closing && this.chats.get(e.chat.id) === e
-    let wait = firstMs
-    let serverErrors = 0
-    const later = () => {
-      wait = Math.min(Math.max(wait * 2, firstMs), maxMs)
-    }
+    const pace: RetryPace = { wait: firstMs, serverErrors: 0, firstMs, maxMs }
     for (;;) {
-      await sleep(wait)
+      await sleep(pace.wait)
       const item = live() ? e.retrying?.[0] : undefined
       if (!item) return
-      const takes = await this.bridge.takesRequestIds()
-      if (!live()) return
-      // Taken back meanwhile (cancelRetrying).
-      if (e.retrying?.[0] !== item) {
-        wait = 0
-        continue
-      }
-      if (takes === null) {
-        later()
-        continue
-      }
-      if (!takes) {
-        // Its stand-in already gone: the worker's own copy arrived, so it did go through.
-        this.retryEnded(e, item, e.sent?.some((s) => s.id === item.itemId) ? NOT_SENT_AGAIN : null)
-        wait = 0
-        continue
-      }
-      // A new worker runs it as its first turn; a worker's running turn holds it.
-      const queued = !!e.chat.workerId && busy(e.chat)
-      if (!item.tried) {
-        item.tried = true
-        this.store.saveChats(this.stored())
-      }
-      e.retrySending = item
-      try {
-        await this.dispatchToWorker(e, item.text, queued, {}, item.requestId)
-      } catch (err) {
-        e.retrySending = undefined
-        if (!live()) return
-        if (retryable(err) && (err.unreachable || ++serverErrors < SERVER_ERROR_TRIES)) {
-          later()
-          continue
-        }
-        this.retryEnded(e, item, `Your message was not sent: CliMayte did not take it: ${err instanceof Error ? err.message : String(err)}`)
-        wait = 0
-        continue
-      }
-      e.retrySending = undefined
-      if (!live()) return
-      this.retryEnded(e, item, null)
-      wait = 0
-      serverErrors = 0
-      // Its stand-in stays until the worker's own copy arrives; it runs now unless a turn or a wait holds it.
-      const standIn = e.sent?.find((s) => s.id === item.itemId)
-      if (!(queued || e.chat.waiting)) this.unqueue(e, standIn)
-      e.workerLive = true
-      this.tookMessage(e, queued)
+      if (!(await this.retryOnce(e, item, live, pace))) return
+    }
+  }
+
+  /** One pass over the held message at the front of the chat's queue: false when the loop ends. */
+  private async retryOnce(e: Entry, item: RetryItem, live: () => boolean, pace: RetryPace): Promise<boolean> {
+    const takes = await this.bridge.takesRequestIds()
+    if (!live()) return false
+    // Taken back meanwhile (cancelRetrying).
+    if (e.retrying?.[0] !== item) {
+      pace.wait = 0
+      return true
+    }
+    if (takes === null) {
+      retryLater(pace)
+      return true
+    }
+    if (!takes) {
+      // Its stand-in already gone: the worker's own copy arrived, so it did go through.
+      this.retryEnded(e, item, e.sent?.some((s) => s.id === item.itemId) ? NOT_SENT_AGAIN : null)
+      pace.wait = 0
+      return true
+    }
+    // A new worker runs it as its first turn; a worker's running turn holds it.
+    const queued = !!e.chat.workerId && busy(e.chat)
+    if (!item.tried) {
+      item.tried = true
+      this.store.saveChats(this.stored())
+    }
+    e.retrySending = item
+    const failure = await this.dispatchHeld(e, item, queued)
+    e.retrySending = undefined
+    if (!live()) return false
+    if (failure) {
+      this.retryFailed(e, item, failure.err, pace)
+      return true
+    }
+    this.retryEnded(e, item, null)
+    pace.wait = 0
+    pace.serverErrors = 0
+    // Its stand-in stays until the worker's own copy arrives; it runs now unless a turn or a wait holds it.
+    const standIn = e.sent?.find((s) => s.id === item.itemId)
+    if (!(queued || e.chat.waiting)) this.unqueue(e, standIn)
+    e.workerLive = true
+    this.tookMessage(e, queued)
+    return true
+  }
+
+  /** A send AgentHydra threw: its own errors are tried again (SERVER_ERROR_TRIES); a refusal ends the message. */
+  private retryFailed(e: Entry, item: RetryItem, err: unknown, pace: RetryPace): void {
+    if (retryable(err) && (err.unreachable || ++pace.serverErrors < SERVER_ERROR_TRIES)) {
+      retryLater(pace)
+      return
+    }
+    this.retryEnded(e, item, `Your message was not sent: CliMayte did not take it: ${err instanceof Error ? err.message : String(err)}`)
+    pace.wait = 0
+  }
+
+  /** Sends one held message to the worker under its own request id: the error it threw, or null when the worker took it. */
+  private async dispatchHeld(e: Entry, item: RetryItem, queued: boolean): Promise<{ err: unknown } | null> {
+    try {
+      await this.dispatchToWorker(e, item.text, queued, {}, item.requestId)
+      return null
+    } catch (err) {
+      return { err }
     }
   }
 
@@ -1142,7 +1089,13 @@ export class ChatManager {
     // A worker started before the connectors' first probe pass lands would run without their MCP servers.
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId)
+    const sus = this.workerSusSetting(chat)
+    const restore = !sus && chat.susRestore ? restoreSetting(chat.susRestore) : null
+    const had = sus && !chat.susRestore ? this.workers.workerRows.get(chat.workerId) : undefined
+    const stoppedFor = await this.bridge.sendToWorker(chat.workerId, text, moved ? chat.cwd : undefined, urgent, chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), requestId, sus ?? restore ?? undefined)
+    if (sus && !chat.susRestore) chat.susRestore = { model: had?.model ?? null, effort: had?.effort ?? null }
+    else if (restore) delete chat.susRestore
+    if (sus || restore) this.changed(chat)
     this.setWorkerCwd(e, chat.cwd)
     return { urgent, stoppedFor }
   }
@@ -1152,8 +1105,19 @@ export class ChatManager {
     const chat = e.chat
     const connectors = connectorsPending()
     if (connectors) await connectors
-    const w = await this.bridge.startWorker({ prompt: text, cwd: chat.cwd, title: chat.title, group: WORKER_GROUP, desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug), ...(requestId ? { requestId } : {}) })
+    const sus = this.workerSusSetting(chat)
+    const w = await this.bridge.startWorker({
+      prompt: text,
+      cwd: chat.cwd,
+      title: chat.title,
+      group: WORKER_GROUP,
+      desk: chatAddOns(chat.cwd, chat.delegateToCliMayte, { id: chat.id, base: this.deskUrl() }, chat.managerSlug),
+      ...(requestId ? { requestId } : {}),
+      ...(sus ? { ...sus, modelWhy: SUS_WHY } : {}),
+    })
     e.workerCwd = chat.cwd
+    // Started on a Sus pick: what it goes back to is CliMayte's own launch setting.
+    if (sus) chat.susRestore = { model: null, effort: null }
     chat.workerId = w.id
     chat.sessionId = w.sessionId
     started?.()
@@ -1161,7 +1125,7 @@ export class ChatManager {
 
   /**
    * A worker takes nothing mid-turn, so CliMayte held it until the whole task ends; a plain send goes now, as Send now
-   * on its bubble would (Jacob, 2026-10-05: "every single message, even if I don't have add to queue, always does
+   * on its bubble would (the owner, 2026-10-05: "every single message, even if I don't have add to queue, always does
    * stinking add to queue"). If that fails it stays held, and the bubble's Send now can try again. `gone`: the chat
    * was deleted meanwhile.
    */
@@ -1380,6 +1344,7 @@ export class ChatManager {
     if (chat.workerId !== undefined) p = { ...p, accountId: undefined, model: undefined, effort: undefined, permissionMode: undefined }
     const resolved = p.accountId !== undefined ? await this.resolveAccount(p.accountId) : null
     const live = e.runtime?.running ? e.runtime : null
+    if (p.sus !== undefined) await this.applySus(e, p.sus)
     if (p.service !== undefined) await this.pinService(e, p.service)
     const relocated = this.applyMarks(id, e, p, resolved)
     await this.applyRuntimeSettings(e, live, p)
@@ -1389,7 +1354,27 @@ export class ChatManager {
     chat.updatedAt = this.now()
     this.changed(chat)
     this.accountNote(id, resolved?.note ?? null)
+    // Its sub-chats (seats, sub-managers it opened) are archived and brought back with it; one already there is
+    // skipped, which also ends a parent chain that loops back on itself.
+    if (p.archived !== undefined) {
+      for (const c of [...this.chats.values()]) if (c.chat.parentId === id && c.chat.archived !== p.archived) await this.patch(c.chat.id, { archived: p.archived })
+    }
     return { ...chat }
+  }
+
+  /**
+   * The sus level (SPEC "Sus meter"). 'bad' pins the chat to Codex (the existing pin, which makes the next turn catch up);
+   * leaving 'bad' unpins it. 'sus' is read at the next turn.
+   */
+  private async applySus(e: Entry, to: SusLevel): Promise<void> {
+    const chat = e.chat
+    const was: SusLevel = chat.sus ?? 'fine'
+    if (to === was) return
+    if (to === 'bad') await this.pinService(e, 'codex')
+    else if (was === 'bad') await this.pinService(e, null)
+    if (to === 'fine') delete chat.sus
+    else chat.sus = to
+    this.refreshSusPick(chat)
   }
 
   /** The chat's own fields a patch sets at once; true when it was put in another folder by hand. */
@@ -1412,6 +1397,8 @@ export class ChatManager {
       e.cwdPending = undefined
     }
     if (p.delegateToCliMayte !== undefined) chat.delegateToCliMayte = p.delegateToCliMayte
+    if (p.accountPinned === true) chat.accountPinned = true
+    else if (p.accountPinned === false) delete chat.accountPinned
     // An account takes effect at the next runtime start (buildOptions reads chat.account); see below.
     if (resolved) {
       chat.account = resolved.account
@@ -1447,6 +1434,7 @@ export class ChatManager {
     this.onChatEnd?.(this.browserSessions(id))
     this.sessionMeta.tombstone(this.browserSessions(id))
     this.chats.delete(id)
+    e.turnWatch?.stop()
     const rt = e.runtime
     e.runtime = null
     if (rt) await rt.close().catch(() => {})
@@ -1455,6 +1443,12 @@ export class ChatManager {
     if (e.chat.workerId && e.workerLive !== false) await this.bridge.cancelWorker(e.chat.workerId).catch(() => {})
     this.store.deleteChat(id)
     this.dropItemsBody(id)
+    // Hydra Core keyed this chat's folder, and its seat entry if it is one, by its id (HYDRA_DESK_CHAT_ID).
+    try {
+      forgetChat(coreDir(), id)
+    } catch {
+      // floor-ok: a core folder still held open stays behind; the chat itself is gone either way
+    }
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.removed', chatId: id })
   }
@@ -1808,200 +1802,33 @@ export class ChatManager {
     return { cut, items: items.slice(0, index) }
   }
 
-  /**
-   * Reads the CliMayte chats' workers again (every live one, or only `only`): status, account and
-   * transcript. One read at a time; a read that fails (AgentHydra down) leaves the chats as they were.
-   */
+  /** Reads the CliMayte chats' workers again (every live one, or only `only`): chat-manager-workers.ts. */
   syncWorkers(only?: string): Promise<void> {
-    const run = (this.syncing ?? Promise.resolve())
-      .then(() => this.syncWorkersNow(only))
-      .catch((err) => console.warn(`[desk] could not read the chats' workers: ${err instanceof Error ? err.message : String(err)}`))
-    this.syncing = run
-    void run.then(() => {
-      if (this.syncing === run) this.syncing = null
-    })
-    return run
+    return this.workers.syncWorkers(only)
   }
 
-  private async syncWorkersNow(only?: string): Promise<void> {
-    const entries = [...this.chats.values()].filter((e) => e.chat.workerId && (only ? e.chat.id === only : e.workerLive !== false))
-    if (!entries.length) return
-    const from = this.now()
-    const ids = entries.map((e) => e.chat.workerId as string)
-    let raw: AhWorker[]
-    try {
-      raw = await this.bridge.workersByIds(ids)
-      this.workerRows = new Map(raw.map((w) => [w.id, w]))
-    } catch (err) {
-      console.warn(`[desk] could not read the chats' workers this round: ${err instanceof Error ? err.message : String(err)}`)
-      raw = ids.flatMap((id) => this.workerRows.get(id) ?? [])
-    }
-    const byId = new Map(raw.map((w) => [w.id, w]))
-    for (const e of entries) {
-      const w = byId.get(e.chat.workerId as string)
-      if (w && this.chats.get(e.chat.id) === e) await this.applyWorker(e, w)
-      // One worker's read at a time: a click's request and the timers run between two workers, not after the whole pass.
-      await new Promise((done) => setImmediate(done))
-      if (this.closing) return
-    }
-    this.timings.poll(this.now() - from)
-  }
-
-  /** The chat as its worker stands: status, account (a move is said in the transcript), model, transcript. */
-  private async applyWorker(e: Entry, w: AhWorker): Promise<void> {
-    const chat = e.chat
-    const before = { ...chat }
-    const was = chat.status
-    // Moved to another account, or continued in a fresh session: the process that ran the old session is gone,
-    // and the background tasks it started with it (their notices never come).
-    const moved = !!w.accountId && w.accountId !== chat.account.id && chat.account.id !== CLIMAYTE_ACCOUNT.id
-    const freshSession = !!before.sessionId && !!w.sessionId && w.sessionId !== before.sessionId
-    if (moved || freshSession) this.endTasks(e)
-    if (w.accountId && w.accountId !== chat.account.id) this.applyWorkerAccount(e, w)
-
-    // Read the live JSONL(s), then append to the Desk file only what is new or changed; push just those. The
-    // Desk file is read once, for what it already holds (emitted), not on every poll.
-    if (!e.emitted) this.deskItems(e)
-    // The turn ended: its JSONL is looked for afresh. A new session's file is missing when its first poll looks, and
-    // the bridge leaves a missed file 5 s, then 10, before looking again, so a short first turn was never read while
-    // it ran and its done came in before its reply (live, 2026-10-14: idle at 11.4 s, the reply read at 12.4 s).
-    const ending = LIVE_STATUSES.has(was) && workerChatStatus(w).status === 'idle'
-    const rescan = e.readAccount !== w.accountId || ending
-    const writing = w.sessionId && w.accountId ? { sessionId: w.sessionId, accountId: w.accountId } : undefined
-    const items = await this.bridge.workerItems([...(w.sessions ?? []), ...(w.sessionId ? [w.sessionId] : [])], chat.cwd, { rescan, writing })
-    // Deleted meanwhile, or Undo let this worker go.
-    if (this.chats.get(chat.id) !== e || chat.workerId !== w.id) return
-    e.readAccount = w.accountId
-    const newReply = this.syncWorkerItems(e, items)
-    // The status after the transcript: a chat never reads done before its reply is in. A message waiting for that
-    // reply goes once the chat is not busy, and a status set before the read let any change during it send the
-    // message without the reply (live, 2026-10-14: Codex was asked 'What code word did I give you?' bare). A JSONL
-    // that does not show what was sent yet is behind the worker: the chat stays busy, at most WORKER_END_GRACE_MS.
-    if (ending && e.sent?.length && this.now() - (e.endHeldSince ??= this.now()) < WORKER_END_GRACE_MS) {
-      if (chatDiffers(before, chat)) this.changed(chat)
-      return
-    }
-    e.endHeldSince = undefined
-    const next = this.applyWorkerStatus(e, w, was)
-    if (next.status === 'error') this.undelivered(e)
-    else if (next.waiting) this.markQueued(e)
-    this.timings.workerSeen(chat, { running: w.status === 'running' || w.status === 'checking', active: e.workerLive === true, newReply, ok: next.status !== 'error' })
-    // A finished worker's process is gone, and every background task it started with it.
-    if (!e.workerLive) this.endTasks(e)
-    this.adoptWorkerCwd(e, w)
-    // A worker's turn ended in another folder: the sidebar follows once the move holds (the next send passes the new folder to the worker, see SPEC "A chat moves folders").
-    if (w.sessionId && LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) {
-      this.noteCwd(e, this.workerFile(e, w.sessionId, w.accountId ?? null))
-    }
-    // A finished worker is not polled again: what remembers its items is let go (the Desk file seeds it again).
-    if (!e.workerLive) {
-      e.emitted = undefined
-      e.workerSeen = undefined
-      e.cwdFile = undefined
-    }
-    if (!chatDiffers(before, chat)) return
-    chat.updatedAt = Math.max(chat.updatedAt, w.updatedAt || 0)
-    this.changed(chat)
-  }
-
-  /**
-   * The folder AgentHydra has for the worker (its pending one, else where it runs) moves the chat, at once, when the
-   * chat still sits where the worker was last started or sent. A folder the Desk side set first is passed to the
-   * worker by the next send instead, so it is never undone here.
-   */
-  private adoptWorkerCwd(e: Entry, w: AhWorker): void {
-    const chat = e.chat
-    const known = e.workerCwd ?? w.cwd
-    if (!sameFolder(chat.cwd, known)) return
-    const reported = w.pendingCwd ?? w.cwd
-    if (!reported || !isAbsolute(reported) || isUncOrDevicePath(reported) || sameFolder(reported, known)) return
-    const target = resolve(reported)
-    if (!isFolder(target)) return
-    chat.cwd = target
-    this.setWorkerCwd(e, target)
-    this.systemLine(chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
-    this.changed(chat)
+  /** Sets climayteActive and the chat's workerIds from the worker list (chat-manager-workers.ts). */
+  private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
+    return this.workers.matchWorkers(chat, workers)
   }
 
   private setWorkerCwd(e: Entry, cwd: string): void {
-    if (e.workerCwd !== undefined && sameFolder(e.workerCwd, cwd)) return
-    e.workerCwd = cwd
+    this.workers.setWorkerCwd(e, cwd)
+  }
+
+  /** A sub-chat changed: its parent counts it again, and a parent that replied turns unread when its last one finishes. */
+  private settleParent(child: ChatSummary): void {
+    const e = child.parentId ? this.chats.get(child.parentId) : undefined
+    if (!e) return
+    const parent = e.chat
+    const before = parent.climayteActive
+    const grew = this.matchWorkers(parent, this.bridge.lastWorkers())
+    const n = parent.climayteActive
+    if (n === before && !grew) return
+    if (n !== before && n === 0 && (parent.status === 'idle' || parent.status === 'stopped' || parent.status === 'closed')) parent.unread = true
     this.store.saveChats(this.stored())
-  }
-
-  /** The worker runs on another account than the chat says: the chat follows, and a move is said in the transcript. */
-  private applyWorkerAccount(e: Entry, w: AhWorker): void {
-    const chat = e.chat
-    const from = chat.account.id === CLIMAYTE_ACCOUNT.id ? null : chat.account
-    chat.account = workerAccount(w)
-    if (!from) return
-    this.timings.workerMoved(chat, `${accountName(from)}>${accountName(chat.account)}`)
-    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
-    this.systemLine(chat.id, 'moved', 'info', `CliMayte moved this chat from ${from.label} to ${chat.account.label}.`)
-  }
-
-  private applyWorkerStatus(e: Entry, w: AhWorker, was: ChatSummary['status']): ReturnType<typeof workerChatStatus> {
-    const chat = e.chat
-    const next = workerChatStatus(w)
-    chat.status = next.status
-    chat.activity = next.activity
-    chat.waiting = next.waiting
-    chat.lastError = next.status === 'error' ? (w.error ?? 'The worker failed.') : null
-    if (chat.lastError && (was !== 'error' || chat.lastError !== e.workerErrorSeen)) this.fail(e, { message: chat.lastError, fallback: 'worker_failed' })
-    e.workerErrorSeen = chat.lastError
-    if (LIVE_STATUSES.has(next.status)) chat.turnStartedAt ??= this.now()
-    else chat.turnStartedAt = null
-    if (LIVE_STATUSES.has(was) && !LIVE_STATUSES.has(next.status)) chat.unread = true
-    chat.model = w.reportedModel ?? w.model ?? chat.model
-    if (w.sessionId) chat.sessionId = w.sessionId
-    e.workerLive = isActiveWorkerStatus(w.status)
-    return next
-  }
-
-  /** The worker's items that are new or changed go to the Desk file and the windows; true when one is a new reply. */
-  private syncWorkerItems(e: Entry, items: TranscriptItem[]): boolean {
-    const chat = e.chat
-    const emitted = e.emitted!
-    let newReply = false
-    // The same array as last time: nothing in the worker's files changed, so nothing in it is new.
-    const unchanged = items === e.workerSeen
-    e.workerSeen = items
-    for (const item of unchanged ? [] : items) {
-      const sig = signature(item)
-      if (emitted.get(item.id) === sig) continue
-      // The ended session's JSONL still says 'running' or answers its old notice: the settled item stays.
-      if (item.kind === 'task' && e.ended?.has(item.id)) continue
-      if (!emitted.has(item.id) && (item.kind === 'assistant_text' || item.kind === 'thinking' || item.kind === 'tool_use')) newReply = true
-      emitted.set(item.id, sig)
-      if (item.kind === 'user' && e.sent?.length) {
-        const i = standInFor(e.sent, item, new Set(e.retrying?.map((r) => r.itemId)))
-        if (i >= 0) this.dropStandIn(e, e.sent[i]!)
-      }
-      this.store.appendItem(chat.id, item)
-      this.emitEvent({ type: 'item.upsert', chatId: chat.id, item })
-      this.noteTask(e, item)
-    }
-    return newReply
-  }
-
-  /** The worker's session file: the one found last time while the session and account are the same and it is still there, else searched for. */
-  private workerFile(e: Entry, sessionId: string, account: string | null): string | null {
-    const hit = e.cwdFile
-    if (hit && hit.sessionId === sessionId && hit.account === account && existsSync(hit.file)) return hit.file
-    const file = findSessionJsonl(sessionId, this.bridge.sessionRoots(), e.chat.cwd)
-    e.cwdFile = file ? { sessionId, account, file } : undefined
-    return file
-  }
-
-  /** Sets climayteActive and adds the workers now matched to the chat to workerIds; true when workerIds grew. */
-  private matchWorkers(chat: ChatSummary, workers: CliMayteWorker[]): boolean {
-    const mine = workersOfChat(workers, chat)
-    chat.climayteActive = mine.filter((w) => w.active).length
-    const ids = chat.workerIds ?? []
-    const fresh = mine.map((w) => w.id).filter((id) => !ids.includes(id))
-    if (!fresh.length) return false
-    chat.workerIds = [...ids, ...fresh]
-    return true
+    this.emitEvent({ type: 'chat.upsert', chat: this.view(parent) })
+    this.settleParent(parent)
   }
 
   /** Every worker id any chat has matched: the bridge keeps these listed after AgentHydra's recent window drops them. */
@@ -2076,7 +1903,7 @@ export class ChatManager {
    */
   async closeAll(o: { chats?: boolean } = {}): Promise<void> {
     this.closing = true
-    await this.syncing?.catch(() => {})
+    await this.workers.syncing?.catch(() => {})
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.runtime?.close() : e.runtime?.shutdown())?.catch(() => {})))
     await Promise.all([...this.chats.values()].map((e) => (o.chats ? e.pinned?.close() : e.pinned?.shutdown())?.catch(() => {})))
     closeAppServers()
@@ -2195,6 +2022,7 @@ export class ChatManager {
       free,
       held: this.chatgptHeld,
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'chatgpt', fresh, sentId, movedFrom),
+      onTurnClassified: (t) => this.countTurn(e.chat.id, 'chatgpt', t),
       caughtUp: () => this.clearLeftAt(e, 'chatgpt'),
     })
   }
@@ -2214,6 +2042,7 @@ export class ChatManager {
         return found ? codexAccount(found) : null
       },
       handoff: (fresh, sentId, movedFrom) => this.turnOn(e, 'codex', fresh, sentId, movedFrom),
+      onTurnClassified: (t) => this.countTurn(e.chat.id, 'codex', t),
       caughtUp: () => this.clearLeftAt(e, 'codex'),
       hold: (accountId, until) => this.codexHeld.set(accountId, until),
     })
@@ -2247,6 +2076,14 @@ export class ChatManager {
       },
       forkAt: () => this.chats.get(chatId)?.forkAt ?? null,
       onTurnEnd: () => this.checkMoved(chatId),
+      susTurn: () => {
+        const cur = this.chats.get(chatId)
+        if (!cur) return null
+        this.refreshSusPick(cur.chat)
+        return this.susTurnOf(cur.chat)
+      },
+      // A refusal is counted and nothing more: the message is never sent again on another setting or service.
+      onTurnClassified: (t) => this.countTurn(chatId, 'claude', t),
       onFailure: (f) => {
         const cur = this.chats.get(chatId)
         if (cur) this.fail(cur, f)
@@ -2256,121 +2093,14 @@ export class ChatManager {
     return e.runtime
   }
 
-  /**
-   * An SDK chat's turn ended: if its session's own transcript says the process is now in another folder
-   * (the model cd'd out), the chat moves there. The process runs in the old folder, so it ends at once (the
-   * chat is idle) and the next send starts in the new one, resuming the same session (seedResume puts the
-   * transcript under the new folder).
-   */
+  /** A turn ended in another folder: chat-manager-moves.ts. */
   private checkMoved(chatId: string): void {
-    const e = this.chats.get(chatId)
-    if (!e?.chat.sessionId || e.chat.workerId !== undefined) return
-    const root = this.root((e.runtime?.startedAs ?? e.chat.account).configDir)
-    if (this.noteCwd(e, findSessionJsonl(e.chat.sessionId, [root, ...this.bridge.sessionRoots()], e.chat.cwd))) void e.runtime?.closeWhenIdle()
+    this.moves.checkMoved(chatId)
   }
 
-  /**
-   * A turn ended: moves the chat to the folder `file` (its session's transcript) says it ended in, when that
-   * is a folder a chat can live in outside its own (movedOutOf) AND either the owner's message asked for that
-   * move or the previous turn also ended there and this one began there (its first line's cwd). Otherwise the
-   * folder is only remembered as pending. Moving: stored cwd, one muted line, the sidebar update.
-   */
-  private noteCwd(e: Entry, file: string | null): boolean {
-    const pending = e.cwdPending
-    const ask = e.lastAsk
-    e.cwdPending = undefined
-    e.lastAsk = undefined
-    if (!file) return false
-    let observed: string | null
-    let size: number
-    try {
-      observed = lastCwd(file)
-      size = statSync(file).size
-    } catch {
-      return false
-    }
-    const target = movedOutOf(e.chat.cwd, observed)
-    if (!target) return false
-    let held = false
-    if (pending && pending.file === file && pending.target.toLowerCase() === target.toLowerCase()) {
-      try {
-        const began = firstCwdFrom(file, pending.offset)
-        held = began !== null && resolve(began).toLowerCase() === target.toLowerCase()
-      } catch {
-        held = false
-      }
-    }
-    if (!held && !askedToMove(ask, target)) {
-      e.cwdPending = { target, file, offset: size }
-      return false
-    }
-    e.chat.cwd = target
-    this.systemLine(e.chat.id, 'cwd', 'info', `Moved this chat to ${target}.`)
-    this.changed(e.chat)
-    return true
-  }
-
-  /**
-   * An SDK chat's turn failed on its account (login dead or usage limit): the session is copied into
-   * another healthy account's folder and the unanswered messages are sent again there, once, with a muted
-   * line saying so. At most MAX_MOVES accounts per message; then the runtime's own error stays. Answers
-   * synchronously whether a move was taken on (the runtime then does not notify a stop); the move itself
-   * runs after. Accounts and their health are AgentHydra's word (listAccounts), never a token or credential.
-   */
+  /** A turn failed on its account (limit or sign-in): chat-manager-moves.ts. */
   private carryToAnotherAccount(chatId: string, signIn: boolean, window: string | null): boolean {
-    const e = this.chats.get(chatId)
-    const rt = e?.runtime
-    if (!e || !rt || e.chat.workerId !== undefined) return false
-    const tried = (e.moved ??= [e.chat.account.id])
-    if (!tried.includes(e.chat.account.id)) tried.push(e.chat.account.id)
-    if (signIn) this.signInHeld.set(e.chat.account.id, Date.now() + SIGN_IN_HOLD_MS)
-    if (tried.length > MAX_MOVES) return false
-    let done!: () => void
-    e.moving = new Promise<void>((r) => (done = r))
-    void this.moveChat(e, rt, signIn, window)
-      .catch((err) => this.moveFailed(e, rt, `Could not move this chat to another account: ${err instanceof Error ? err.message : String(err)}`))
-      .finally(() => {
-        e.moving = undefined
-        done()
-      })
-    return true
-  }
-
-  private async moveChat(e: Entry, rt: ChatRuntime, signIn: boolean, window: string | null): Promise<void> {
-    const chat = e.chat
-    const tried = e.moved ?? []
-    const from = chat.account
-    const accounts = await this.bridge.listAccounts().catch(() => [])
-    const next = pickHealthy(this.placeable(accounts), tried)
-    if (!next) {
-      this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
-      return
-    }
-    const { cut, sends } = rt.carrySends()
-    const big = this.bigSession(e)
-    tried.push(next.id)
-    chat.account = accountRef(next)
-    chat.accountAuto = true
-    // A big session is not copied: the chat starts a fresh one from the handoff, so there is nothing slow to wait for.
-    const out: QueuedInput[] = big ? [this.handoffSend(e, big, signIn ? 'signed out' : window ? `${window} limit` : 'usage limit', sends)] : []
-    // Said before the session copy, which can take a while on a long chat.
-    this.systemLine(chat.id, 'moved', 'info', `Moved from ${accountName(from)} (${signIn ? 'signed out' : window ? `${window} limit` : 'limit reached'}) to ${accountName(chat.account)}.`)
-    if (big) this.systemLine(chat.id, 'handoff', 'info', `The session had grown to about ${Math.round(big.tokens / 1000)}k tokens, so it continues as a fresh session from a condensed handoff instead of a copy. This chat keeps the whole record.`)
-    this.changed(chat)
-    if (!big) {
-      const cannot = await this.seedResume(e)
-      if (cannot) {
-        this.moveFailed(e, rt, cannot)
-        return
-      }
-      // A turn that had replied is told to go on, once; its message would only ask it to start over.
-      out.push(...(cut ? [{ text: CONTINUE_TEXT }, ...sends] : sends))
-    }
-    if (e.lastFailure) this.failures.recovered(e.lastFailure, chat.account.id)
-    await rt.close()
-    if (this.chats.get(chat.id) !== e) return
-    this.changed(chat)
-    rt.replay(out)
+    return this.moves.carryToAnotherAccount(chatId, signIn, window)
   }
 
   /** The session the chat leaves and its size, when it is past `limit` (by default too big to copy and resume on
@@ -2384,73 +2114,14 @@ export class ChatManager {
     return tokens !== null && tokens > limit ? { sessionId, tokens } : null
   }
 
-  /**
-   * An idle chat whose session has grown past freshTokens (bigSession): its process (if any) is closed and the
-   * message becomes the first of a fresh session, the condensed handoff of the chat's record with the message at its
-   * end (handoffSend). The chat keeps its whole record and the old session joins pastSessions.
-   */
-  private async freshFrom(e: Entry, grown: { sessionId: string; tokens: number }, send: QueuedInput): Promise<QueuedInput> {
-    await e.runtime?.close()
-    const out = this.handoffSend(e, grown, GROWN, [send])
-    this.systemLine(e.chat.id, 'fresh', 'info', `The session had grown to about ${Math.round(grown.tokens / 1000)}k tokens, so this message starts a fresh session from a condensed handoff of the chat. This chat keeps the whole record.`)
-    this.changed(e.chat)
-    return out
+  /** An idle chat whose session has grown past freshTokens starts fresh: chat-manager-moves.ts. */
+  private freshFrom(e: Entry, grown: { sessionId: string; tokens: number }, send: QueuedInput): Promise<QueuedInput> {
+    return this.moves.freshFrom(e, grown, send)
   }
 
-  /**
-   * The chat leaves its big session for a fresh one (no resume): the old session joins pastSessions and the
-   * first message is the condensed handoff built from the chat file, with the sends the old session had not
-   * answered after it.
-   */
-  private handoffSend(e: Entry, left: { sessionId: string; tokens: number | null }, why: string, sends: QueuedInput[]): QueuedInput {
-    const chat = e.chat
-    const text = buildHandoff({
-      chatId: chat.id,
-      title: chat.title,
-      cwd: chat.cwd,
-      items: this.store.loadItems(chat.id),
-      sessions: [left.sessionId, ...(e.pastSessions ?? []).slice().reverse()],
-      tokens: left.tokens,
-      why,
-      deskUrl: this.deskUrl(),
-    })
-    e.pastSessions = [...(e.pastSessions ?? []), left.sessionId]
-    chat.sessionId = null
-    chat.forkedFrom = null
-    e.forkAt = undefined
-    const images = sends.flatMap((s) => s.images ?? [])
-    const heading = left.tokens === null || why === GROWN ? "The owner's message to answer now" : "The owner's messages the old session had not answered yet"
-    const pending = sends.length ? `\n\n## ${heading}\n${sends.map((s) => s.text).join('\n\n')}` : ''
-    return images.length ? { text: text + pending, images } : { text: text + pending }
-  }
-
-  /**
-   * The saved session cannot be reopened on this machine (seedResume's reason): the chat leaves it for a fresh
-   * session, whose first message is a condensed handoff of its record with the owner's message in it. Without this
-   * every later send is refused with the same 409 and the chat is stuck. One message, not the handoff and then the
-   * owner's: a handoff alone says to carry on where the old session stopped, and the fresh session would do that
-   * before it read what the owner just asked. Idea from stablyai/orca's ACP "reopen takeover" (MIT); written fresh
-   * here. The old session joins pastSessions (handoffSend), the chat keeps its record. Null with no session to leave.
-   */
+  /** The saved session cannot be reopened: a fresh session from a handoff: chat-manager-moves.ts. */
   private takeOver(e: Entry, why: string, send: QueuedInput): QueuedInput | null {
-    const chat = e.chat
-    const sessionId = chat.sessionId ?? chat.forkedFrom
-    if (!sessionId) return null
-    const handoff = this.handoffSend(e, { sessionId, tokens: null }, why, [send])
-    this.systemLine(chat.id, 'takeover', 'warn', 'The saved session could not be reopened on this machine, so this chat continues in a fresh session from a condensed handoff of its record. The chat keeps its whole record.')
-    this.changed(chat)
-    return handoff
-  }
-
-  /** The move could not be made: the chat keeps the error state, said once and notified. */
-  private moveFailed(e: Entry, rt: ChatRuntime, text: string): void {
-    const chat = e.chat
-    this.systemLine(chat.id, 'move-failed', 'warn', text)
-    this.fail(e, { message: text, cause: 'move_failed' })
-    rt.rearmLimit()
-    chat.lastError = text
-    this.emitEvent({ type: 'notify', chatId: chat.id, reason: 'error', title: chat.title, body: text })
-    this.changed(chat)
+    return this.moves.takeOver(e, why, send)
   }
 
   private onRuntimeEvent(event: ServerEvent): void {
@@ -2464,9 +2135,11 @@ export class ChatManager {
       // A closed runtime took its background tasks with it: their items say so, and stop counting.
       if (e.chat.status === 'closed' && e.bgTasks?.size) this.endTasks(e, this.now())
       this.sendWaiting(e)
-      this.store.saveChats(this.stored())
       this.matchWorkers(e.chat, this.bridge.lastWorkers())
+      this.store.saveChats(this.stored())
       this.emitEvent({ type: 'chat.upsert', chat: this.view(e.chat) })
+      this.settleParent(e.chat)
+      this.turnEnded(e)
       return
     }
     if ((event.type === 'item.upsert' || event.type === 'item.delta' || event.type === 'notify') && !this.chats.has(event.chatId)) return
@@ -2529,16 +2202,38 @@ export class ChatManager {
     }
   }
 
+  /** An item went out: it is the chat's last action when it is newer. No upsert of its own, as items stream: the chat's next one carries it. */
+  private noteAction(chatId: string, at: number): void {
+    const chat = this.chats.get(chatId)?.chat
+    if (chat && Number.isFinite(at) && at > (chat.lastActionAt ?? 0)) chat.lastActionAt = at
+  }
+
   private changed(chat: ChatSummary): void {
     this.store.saveChats(this.stored())
     this.emitEvent({ type: 'chat.upsert', chat: this.view(chat) })
     // A CliMayte worker's status arrives here, not as a runtime event.
     this.sendWaiting(this.chats.get(chat.id))
+    this.settleParent(chat)
+    const e = this.chats.get(chat.id)
+    if (e) this.turnEnded(e)
+  }
+
+  /** A chat that was live and no longer is ends its turn once: AgentHydra tells the chats waiting on it (completions.ts). */
+  private turnEnded(e: Entry): void {
+    if (LIVE.has(e.chat.status)) {
+      e.turnLive = true
+      return
+    }
+    if (!e.turnLive) return
+    e.turnLive = false
+    const outcome = e.chat.status === 'error' ? 'failed' : e.chat.status === 'stopped' ? 'cancelled' : 'done'
+    this.bridge.completionFinished(`desk-chat:${e.chat.id}`, outcome).catch(() => {})
   }
 
   /** A manager's photo or persona changed: every chat on it is sent again with the new label. */
   managerChanged(slug: string): void {
     forgetManager(slug)
+    forgetCoreFaces()
     for (const e of this.chats.values()) {
       const chat = this.view(e.chat)
       if (chat.manager?.slug === slug) this.emitEvent({ type: 'chat.upsert', chat })
@@ -2546,7 +2241,7 @@ export class ChatManager {
   }
 
   private view(chat: ChatSummary): ChatSummary {
-    return { ...chat, manager: currentManager(chat.managerSlug, chat.sessionId) }
+    return { ...chat, manager: chatFace(chat) }
   }
 
   private stored(): ChatSummary[] {
@@ -2694,420 +2389,9 @@ export class ChatManager {
   }
 }
 
-/** The config folder the chat's process last ran under: the runtime's this run, else the stored one. */
-function ranInOf(e: Entry): string | null | undefined {
-  const last = e.runtime?.startedAs
-  return last ? last.configDir : e.ranIn
-}
-
-function accountRef(a: AccountRef): AccountRef {
-  const ref: AccountRef = { id: a.id, label: a.label, configDir: a.configDir }
-  if (a.number !== undefined) ref.number = a.number
-  return ref
-}
-
-const LIVE_STATUSES = new Set<ChatSummary['status']>(['starting', 'working', 'needs_you'])
-
-/** The account a worker runs on now, as a chat shows it ('#68'). */
-function workerAccount(w: AhWorker): AccountRef {
-  const label = workerAccountLabel(w) ?? (w.accountId as string)
-  const num = /^#(\d+)$/.exec(label)
-  return { id: w.accountId as string, label, configDir: null, ...(num ? { number: Number(num[1]) } : {}) }
-}
-
-/** A CliMayte worker's status as a chat's: queued and waiting are starting, running and checking are working. A waiting
- *  worker's activity is CliMayte's reason ("Every eligible account is at its usage limit ...; the first frees up at
- *  ..."), so the chat says what it waits for instead of "Starting…" for half an hour. */
-export function workerChatStatus(w: Pick<AhWorker, 'status' | 'lastActivity' | 'waitUntil' | 'notBefore'> & { error?: string | null }): {
-  status: ChatSummary['status']
-  activity: string | null
-  waiting: ChatWait | null
-} {
-  switch (w.status) {
-    case 'queued': {
-      // In line, not started yet: the chat is waiting, not booting. A hold time, when AgentHydra gives one, is when.
-      const until = typeof w.notBefore === 'number' && w.notBefore > 0 ? w.notBefore : null
-      return { status: 'starting', activity: 'Queued', waiting: { reason: plainReason(w.error) || 'In line for an account.', until } }
-    }
-    case 'waiting': {
-      const reason = plainReason(w.error) || 'Waiting for an account.'
-      const until = w.waitUntil ? Date.parse(w.waitUntil) : Number.NaN
-      return {
-        status: 'starting',
-        activity: !w.error ? 'Waiting for an account' : /^waiting\b/i.test(w.error) ? w.error : `Waiting for an account: ${w.error}`,
-        waiting: { reason, until: Number.isFinite(until) ? until : null },
-      }
-    }
-    case 'running':
-      return { status: 'working', activity: w.lastActivity, waiting: null }
-    case 'checking':
-      return { status: 'working', activity: 'Running its check', waiting: null }
-    case 'failed':
-      return { status: 'error', activity: null, waiting: null }
-    case 'cancelled':
-      return { status: 'stopped', activity: null, waiting: null }
-    default:
-      return { status: 'idle', activity: null, waiting: null }
-  }
-}
-
-/** CliMayte's reason for a wait as the window shows it: one line, no account addresses. */
-function plainReason(error: string | null | undefined): string {
-  return (error ?? '').replace(/[^\s@]+@[^\s@]+\.[^\s@]+/g, 'an account').replace(/\s+/g, ' ').trim()
-}
-
-const forkTitle = (title: string): string => `${title} (fork)`
-
-/** Where a fork at one of the owner's messages resumes (findCut). */
-interface Cut {
-  sessionId: string
-  /** The entry before the message; null when it opened the session (the fork starts fresh). */
-  cut: string | null
-  /** The config folder of the file it was found in (null = the default ~/.claude): the fork's first start copies the session from there. */
-  configDir: string | null
-}
-
-const CUT_NOT_FOUND = 'Could not find this message in its session file, so there is no telling where the fork would start.'
-const UNDO_NOT_FOUND = 'Could not find this message in its session file, so there is no telling where the chat would go back to.'
-
-/** A saved record as the manager holds it: a fork's cut, the folder it last ran in and its past sessions off the summary. */
-function entryOf(stored: StoredRecord): Entry {
-  const { forkAt, ranIn, pastSessions, workerCwd, sent, retrying, ...chat } = stored
-  return {
-    chat,
-    runtime: null,
-    query: null,
-    forkAt: typeof forkAt === 'string' ? forkAt : undefined,
-    ranIn: typeof ranIn === 'string' || ranIn === null ? ranIn : undefined,
-    pastSessions: Array.isArray(pastSessions) ? pastSessions.filter((x): x is string => typeof x === 'string') : undefined,
-    workerCwd: typeof workerCwd === 'string' ? workerCwd : undefined,
-    sent: Array.isArray(sent) && sent.length ? (sent as UserItem[]) : undefined,
-    retrying: retryItemsOf(retrying),
-  }
-}
-
-/** Copies the pictures a Desk file names (/api/media/<sha256>.<ext>, content-addressed) that `to` does not have. */
-function copyMedia(text: string, from: string, to: string): void {
-  const names = new Set([...text.matchAll(/\/api\/media\/([0-9a-f]{64}\.[a-z0-9]+)/g)].map((m) => m[1]!))
-  if (!names.size) return
-  mkdirSync(to, { recursive: true })
-  for (const name of names) {
-    const src = join(from, name)
-    if (existsSync(src) && !existsSync(join(to, name))) copyFileSync(src, join(to, name))
-  }
-}
-
-/** A request item no runtime can answer any more (copied into a fork, or left by a dead process) is expired. */
-function settled(item: TranscriptItem): TranscriptItem {
-  if ((item.kind === 'permission' || item.kind === 'question' || item.kind === 'plan' || item.kind === 'elicitation') && item.state === 'pending') return { ...item, state: 'expired' }
-  return item
-}
-
-/** What a task item settled by Hydra Desk says: the session that ran it is gone, so is the task. */
-export const TASK_SESSION_ENDED = 'Stopped: the session that started it ended.'
-
-/**
- * A task still 'running' whose session ended, settled 'stopped' with TASK_SESSION_ENDED; `at` (when the end was
- * seen) gives its duration. A long-lived one (a local server, long-lived.ts) is left as it is, and so is the rest.
- */
-export function endedTask(item: TranscriptItem, at?: number): TranscriptItem {
-  if (item.kind !== 'task' || item.status !== 'running' || isLongLived(item)) return item
-  return { ...item, status: 'stopped', summary: TASK_SESSION_ENDED, ...(at !== undefined ? { durationMs: Math.max(0, at - item.ts) } : {}) }
-}
-
-const sameFolder = (a: string, b: string): boolean => resolve(a).toLowerCase() === resolve(b).toLowerCase()
-
-const isFolder = (p: string): boolean => statSync(p, { throwIfNoEntry: false })?.isDirectory() ?? false
-
 export function checkCwd(cwd: string): string {
   if (!isAbsolute(cwd)) throw new ChatError(400, `cwd must be an absolute path, got ${JSON.stringify(cwd)}`)
   const full = resolve(cwd)
   if (!statSync(full, { throwIfNoEntry: false })?.isDirectory()) throw new ChatError(400, `the folder ${full} does not exist`)
   return full
-}
-
-// Input validation for the routes: each returns the parsed body or throws ChatError(400) with the reason.
-
-export type Json = Record<string, unknown>
-
-export function obj(body: unknown): Json {
-  if (!body || typeof body !== 'object' || Array.isArray(body)) throw new ChatError(400, 'the body must be a JSON object')
-  return body as Json
-}
-
-export function optString(b: Json, key: string): string | undefined {
-  const v = b[key]
-  if (v === undefined) return undefined
-  if (typeof v !== 'string') throw new ChatError(400, `${key} must be a string`)
-  return v
-}
-
-export function optBool(b: Json, key: string): boolean | undefined {
-  const v = b[key]
-  if (v === undefined) return undefined
-  if (typeof v !== 'boolean') throw new ChatError(400, `${key} must be true or false`)
-  return v
-}
-
-function optNullableString(b: Json, key: string): string | null | undefined {
-  const v = b[key]
-  if (v === undefined || v === null) return v as null | undefined
-  if (typeof v !== 'string') throw new ChatError(400, `${key} must be a string or null`)
-  return v
-}
-
-function optEffort(b: Json): Effort | null | undefined {
-  const v = b.effort
-  if (v === undefined || v === null) return v as null | undefined
-  if (!EFFORTS.includes(v as Effort)) throw new ChatError(400, `effort must be one of ${EFFORTS.join(', ')} or null`)
-  return v as Effort
-}
-
-function optMode(b: Json): PermissionMode | undefined {
-  const v = b.permissionMode
-  if (v === undefined) return undefined
-  if (!MODES.includes(v as PermissionMode)) throw new ChatError(400, `permissionMode must be one of ${MODES.join(', ')}`)
-  return v as PermissionMode
-}
-
-function optImages(b: Json): ImageRef[] | undefined {
-  const v = b.images
-  if (v === undefined) return undefined
-  if (!Array.isArray(v)) throw new ChatError(400, 'images must be an array')
-  return v.map((img, i) => {
-    if (!img || typeof img !== 'object') throw new ChatError(400, `images[${i}] must be an object`)
-    const o = img as Json
-    if (typeof o.mediaType !== 'string' || !/^image\/(png|jpeg|gif|webp)$/.test(o.mediaType))
-      throw new ChatError(400, `images[${i}].mediaType must be image/png, image/jpeg, image/gif or image/webp`)
-    if (o.dataBase64 !== undefined && typeof o.dataBase64 !== 'string') throw new ChatError(400, `images[${i}].dataBase64 must be a string`)
-    const ref: ImageRef = { mediaType: o.mediaType }
-    if (typeof o.dataBase64 === 'string') ref.dataBase64 = o.dataBase64
-    if (typeof o.name === 'string') ref.name = o.name
-    return ref
-  })
-}
-
-export function parseCreate(body: unknown): CreateChatRequest {
-  const b = obj(body)
-  const cwd = optString(b, 'cwd')
-  if (!cwd?.trim()) throw new ChatError(400, 'cwd is required')
-  const req: CreateChatRequest = { cwd }
-  const prompt = optString(b, 'prompt')
-  if (prompt !== undefined) req.prompt = prompt
-  const images = optImages(b)
-  if (images) req.images = images
-  const title = optString(b, 'title')
-  if (title !== undefined) req.title = title
-  const accountId = optString(b, 'accountId')
-  if (accountId !== undefined) req.accountId = accountId
-  const model = optNullableString(b, 'model')
-  if (model !== undefined) req.model = model
-  const effort = optEffort(b)
-  if (effort !== undefined) req.effort = effort
-  const mode = optMode(b)
-  if (mode) req.permissionMode = mode
-  const delegate = optBool(b, 'delegateToCliMayte')
-  if (delegate !== undefined) req.delegateToCliMayte = delegate
-  const parentId = optString(b, 'parentId')
-  if (parentId !== undefined) req.parentId = parentId
-  const managerSlug = optString(b, 'managerSlug')
-  if (managerSlug !== undefined) {
-    if (!MANAGER_SLUG.test(managerSlug)) throw new ChatError(400, 'managerSlug is not a manager slug')
-    req.managerSlug = managerSlug
-  }
-  return req
-}
-
-export function parseSend(body: unknown): { text: string; images?: ImageRef[] } {
-  const b = obj(body)
-  const text = optString(b, 'text') ?? ''
-  const images = optImages(b)
-  if (!text.trim() && !images?.length) throw new ChatError(400, 'text is required')
-  return images ? { text, images } : { text }
-}
-
-export function parsePermission(body: unknown): PermissionDecision {
-  const b = obj(body)
-  if (b.decision !== 'allow' && b.decision !== 'session' && b.decision !== 'always' && b.decision !== 'deny')
-    throw new ChatError(400, 'decision must be allow, session, always or deny')
-  const d: PermissionDecision = { decision: b.decision }
-  const message = optString(b, 'message')
-  if (message !== undefined) d.message = message
-  return d
-}
-
-export function parseQuestion(body: unknown): QuestionAnswer {
-  const b = obj(body)
-  const skip = optBool(b, 'skip')
-  if (skip) return { skip: true }
-  const answers = b.answers
-  if (!answers || typeof answers !== 'object' || Array.isArray(answers)) throw new ChatError(400, 'answers (question -> answer) or skip: true is required')
-  for (const [k, v] of Object.entries(answers)) if (typeof v !== 'string') throw new ChatError(400, `the answer to ${JSON.stringify(k)} must be a string`)
-  const out: QuestionAnswer = { answers: answers as Record<string, string> }
-  const pictures = b.images
-  if (pictures !== undefined) {
-    if (!pictures || typeof pictures !== 'object' || Array.isArray(pictures)) throw new ChatError(400, 'images (question -> pictures) must be an object')
-    out.images = {}
-    for (const [k, v] of Object.entries(pictures)) out.images[k] = optImages({ images: v }) ?? []
-  }
-  return out
-}
-
-export function parsePlan(body: unknown): PlanDecision {
-  const b = obj(body)
-  const approve = optBool(b, 'approve')
-  if (approve === undefined) throw new ChatError(400, 'approve (true or false) is required')
-  const d: PlanDecision = { approve }
-  const feedback = optString(b, 'feedback')
-  if (feedback !== undefined) d.feedback = feedback
-  const mode = optMode(b)
-  if (mode) d.mode = mode
-  return d
-}
-
-/** The shape only: the values are checked against the request's own form fields when it is answered. */
-export function parseElicitation(body: unknown): ElicitationAnswer {
-  const b = obj(body)
-  if (b.action !== 'accept' && b.action !== 'decline') throw new ChatError(400, 'action must be accept or decline')
-  const a: ElicitationAnswer = { action: b.action }
-  if (b.values === undefined) return a
-  if (!b.values || typeof b.values !== 'object' || Array.isArray(b.values)) throw new ChatError(400, 'values must be an object (field name -> value)')
-  a.values = b.values as ElicitationAnswer['values']
-  return a
-}
-
-const GROUP_MAX = 60
-
-/** A sidebar group name: trimmed, 1-60 chars, or null (back to the folder's group). */
-function optGroup(b: Json): string | null | undefined {
-  const v = optNullableString(b, 'group')
-  if (v === undefined || v === null) return v
-  const name = v.trim()
-  if (!name || name.length > GROUP_MAX) throw new ChatError(400, `group must be 1-${GROUP_MAX} characters or null`)
-  return name
-}
-
-const PATCH_KEYS = ['title', 'pinned', 'archived', 'unread', 'model', 'effort', 'permissionMode', 'delegateToCliMayte', 'accountId', 'group', 'cwd', 'note', 'service']
-const PINNABLE: PinnedService[] = ['codex', 'chatgpt']
-
-/** POST /api/chats/import-desk: `ids`, the chats to copy (every one when absent). */
-export function parseImportDesk(body: unknown): { ids?: string[] } {
-  const b = body === undefined || body === null ? {} : obj(body)
-  if (b.ids === undefined) return {}
-  if (!Array.isArray(b.ids) || b.ids.some((x) => typeof x !== 'string')) throw new ChatError(400, 'ids must be a list of chat ids')
-  return { ids: b.ids as string[] }
-}
-
-export function parsePatch(body: unknown): ChatPatch {
-  const b = obj(body)
-  const unknown = Object.keys(b).filter((k) => !PATCH_KEYS.includes(k))
-  if (unknown.length) throw new ChatError(400, `cannot change ${unknown.join(', ')}; a patch takes ${PATCH_KEYS.join(', ')}`)
-  const p: ChatPatch = {}
-  const title = optString(b, 'title')
-  if (title !== undefined) {
-    if (!title.trim()) throw new ChatError(400, 'title cannot be empty')
-    p.title = title
-  }
-  for (const k of ['pinned', 'archived', 'unread', 'delegateToCliMayte'] as const) {
-    const v = optBool(b, k)
-    if (v !== undefined) p[k] = v
-  }
-  const model = optNullableString(b, 'model')
-  if (model !== undefined) p.model = model
-  const effort = optEffort(b)
-  if (effort !== undefined) p.effort = effort
-  const mode = optMode(b)
-  if (mode) p.permissionMode = mode
-  const accountId = optString(b, 'accountId')
-  if (accountId !== undefined) {
-    if (!accountId.trim()) throw new ChatError(400, 'accountId cannot be empty')
-    p.accountId = accountId
-  }
-  const group = optGroup(b)
-  if (group !== undefined) p.group = group
-  const cwd = optString(b, 'cwd')
-  if (cwd !== undefined) {
-    if (isUncOrDevicePath(cwd)) throw new ChatError(400, `cwd must be a local folder, not a share or device path: ${JSON.stringify(cwd)}`)
-    p.cwd = checkCwd(cwd)
-  }
-  const note = optNote(b)
-  if (note !== undefined) p.note = note
-  if (b.service !== undefined) {
-    if (b.service !== null && !PINNABLE.includes(b.service as PinnedService)) throw new ChatError(400, `service is one of ${PINNABLE.join(', ')}, or null for Claude`)
-    p.service = b.service as PinnedService | null
-  }
-  return p
-}
-
-/** A chat's note (the row menu's Add note…): trimmed, at most NOTE_MAX characters; null or empty is no note. */
-function optNote(b: Record<string, unknown>): string | null | undefined {
-  const note = optNullableString(b, 'note')
-  if (note === undefined) return undefined
-  const t = note?.trim() ?? ''
-  if (t.length > NOTE_MAX) throw new ChatError(400, `a note is at most ${NOTE_MAX} characters`)
-  return t || null
-}
-
-const META_KEYS = ['title', 'pinned', 'archived', 'unread', 'group', 'note', 'unassigned']
-
-/** The marks on an outside session; a null or empty title goes back to the session's own. */
-export function parseSessionMeta(body: unknown): SessionMetaPatch {
-  const b = obj(body)
-  const unknown = Object.keys(b).filter((k) => !META_KEYS.includes(k))
-  if (unknown.length) throw new ChatError(400, `cannot change ${unknown.join(', ')}; the marks are ${META_KEYS.join(', ')}`)
-  const p: SessionMetaPatch = {}
-  const title = optNullableString(b, 'title')
-  if (title !== undefined) p.title = title?.trim().slice(0, 200) || null
-  for (const k of ['pinned', 'archived', 'unread', 'unassigned'] as const) {
-    const v = optBool(b, k)
-    if (v !== undefined) p[k] = v
-  }
-  const group = optGroup(b)
-  if (group !== undefined) p.group = group
-  const note = optNote(b)
-  if (note !== undefined) p.note = note
-  return p
-}
-
-export function parseImport(body: unknown): ImportSessionRequest {
-  const b = obj(body)
-  const sessionId = optString(b, 'sessionId')
-  if (!sessionId?.trim()) throw new ChatError(400, 'sessionId is required')
-  const req: ImportSessionRequest = { sessionId: sessionId.trim() }
-  const cwd = optString(b, 'cwd')
-  if (cwd !== undefined) req.cwd = cwd
-  const configDir = optNullableString(b, 'configDir')
-  if (configDir !== undefined) req.configDir = configDir
-  const title = optString(b, 'title')
-  if (title !== undefined) req.title = title
-  const fork = optBool(b, 'fork')
-  if (fork !== undefined) req.fork = fork
-  const at = optString(b, 'at')
-  if (at?.trim()) req.at = at.trim()
-  return req
-}
-
-/** Send now's request: the bubble's item id, when one is given. */
-export function parseSendNow(body: unknown): SendNowRequest {
-  const itemId = optString(obj(body), 'itemId')
-  return itemId?.trim() ? { itemId: itemId.trim() } : {}
-}
-
-export function parseCancelQueued(body: unknown): CancelQueuedRequest {
-  const itemId = optString(obj(body), 'itemId')
-  if (!itemId?.trim()) throw new ChatError(400, 'itemId is required')
-  return { itemId: itemId.trim() }
-}
-
-/** A fork's request: an empty body forks the whole chat. */
-export function parseFork(body: unknown): ForkChatRequest {
-  const at = optString(obj(body), 'at')
-  return at?.trim() ? { at: at.trim() } : {}
-}
-
-/** Undo's request: the owner's message the chat goes back to before. */
-export function parseRewind(body: unknown): RewindChatRequest {
-  const at = optString(obj(body), 'at')?.trim()
-  if (!at) throw new ChatError(400, 'at (the id of your message to undo) is required')
-  return { at }
 }

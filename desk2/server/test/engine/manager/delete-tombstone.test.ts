@@ -2,7 +2,7 @@
 // without a tombstone they came back as "Elsewhere" sessions, and a restart forgot even the live exclusion.
 
 import { afterEach, expect, test } from 'bun:test'
-import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { ChatManager } from '../../../src/engine/chat-manager'
@@ -83,4 +83,21 @@ test("a deleted chat's Claude sessions stay out of the outside list, also after 
   const second = fakeBridge()
   boot(home, second)
   expect(await excluded(second)).toEqual(expect.arrayContaining(['session-gone', 'session-gone-old']))
+})
+
+test("a deleted chat's Hydra Core folder and seat entry go with it", async () => {
+  const home = temp('desk-tomb-core-')
+  const core = process.env.AGENTHYDRA_CORE_DIR as string
+  expect(core).toBeTruthy()
+  writeFileSync(join(home, 'chats.json'), JSON.stringify([row('prime'), row('seat', { parentId: 'prime' })]))
+  for (const id of ['prime', 'seat']) mkdirSync(join(core, 'chats', id), { recursive: true })
+  writeFileSync(join(core, 'chats', 'prime', 'seats.json'), JSON.stringify({ 'person:iris-ui': { chat: 'seat', title: 'Iris' } }))
+  writeFileSync(join(core, 'seat-chats.json'), JSON.stringify({ seat: { persona: 'person:iris-ui', parent: 'prime' } }))
+  const m = boot(home, fakeBridge())
+  await m.delete('seat')
+  expect(existsSync(join(core, 'chats', 'seat'))).toBe(false)
+  expect(JSON.parse(readFileSync(join(core, 'seat-chats.json'), 'utf8'))).toEqual({})
+  expect(JSON.parse(readFileSync(join(core, 'chats', 'prime', 'seats.json'), 'utf8'))).toEqual({})
+  await m.delete('prime')
+  expect(existsSync(join(core, 'chats', 'prime'))).toBe(false)
 })

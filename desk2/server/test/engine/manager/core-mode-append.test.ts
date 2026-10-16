@@ -40,7 +40,7 @@ describe('Desk append in core mode', () => {
   test('flag on keeps the first sentence, the media sentence and the move line only', () => {
     setFlag(true)
     const { append, mcpServers } = chatAddOns(CWD, true, self)
-    expect(append.startsWith("You are running inside Hydra Desk, Jacob's own desktop for Claude Code. To show the person a picture")).toBe(true)
+    expect(append.startsWith("You are running inside Hydra Desk, the owner's own desktop for Claude Code. To show the person a picture")).toBe(true)
     expect(append).toContain('This is Desk chat chat-1.')
     expect(append).not.toContain('climayte_run')
     expect(append).not.toContain('browser_navigate')

@@ -46,7 +46,7 @@ function log(_level: 'info' | 'warn' | 'error', _message: string): void {
 }
 
 /** `planLabel` — NOT the raw pretty tier. Passing the tier here leaked the unmapped generic value
- *  into the Quick view's one-liner ("Michael <owner@example.com> · default_claude_ai") for every
+ *  into the Quick view's one-liner ("Alex <owner@example.com> · default_claude_ai") for every
  *  account whose tier is `default_claude_ai`; the label must show what the Plan column shows. */
 function buildLabel(name: string | null, email: string | null, planLabel: string | null): string {
   let namePart: string | null = null
@@ -371,10 +371,11 @@ function buildGrant(grantKey: string, value: RawGrantValue, expiresAt: number): 
 // Profile API
 // ----------------------------------------------------------------------------
 
-interface ProfileResponse {
+export interface ProfileResponse {
   account?: {
     email?: string
     full_name?: string
+    display_name?: string
     uuid?: string
     has_claude_max?: boolean
     has_claude_pro?: boolean
@@ -400,7 +401,7 @@ interface ProfileResponse {
  *  (401/403) - the one failure another grant of the same profile can still get past. */
 type ProfileResult = { ok: true; profile: ProfileResponse } | { ok: false; refused: boolean }
 
-async function fetchProfile(token: string): Promise<ProfileResult> {
+export async function fetchProfile(token: string): Promise<ProfileResult> {
   try {
     const controller = new AbortController()
     const timeout = setTimeout(() => controller.abort(), 10_000)

@@ -11,7 +11,9 @@ import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { writeJsonStoreAtomic } from './core/json-store'
+import { mapPool } from './core/map-pool'
 import { desk2Present, desk2Url } from './desk2'
+import { freeBatchLifecycle } from './free-batch-lifecycle'
 import { type HydraTool, MCP_WAIT_MAX_MS, S, str } from './mcp-client'
 import type { McpEngineTool } from './mcp-stdio.mjs'
 
@@ -59,6 +61,13 @@ interface FreeJob {
   state: 'running' | 'done'
   result?: FreeResult
 }
+interface FreeStatus {
+  ready: boolean
+  instances: FreeInstance[]
+  jobs: FreeJob[]
+  health?: Record<string, { sent: number; failed: number; failing: boolean }>
+  threadCounts?: Record<string, number>
+}
 interface FreeThread {
   instanceId: string
   provider: Provider
@@ -68,6 +77,16 @@ interface FreeThread {
   createdAt: number
   updatedAt: number
   error: string | null
+}
+interface FreeThreadPage {
+  total: number
+  threads: FreeThread[]
+}
+
+function threadLookupPath(chatIds: readonly string[]): string {
+  const query = new URLSearchParams({ view: 'lookup' })
+  for (const chatId of new Set(chatIds)) query.append('chat_id', chatId)
+  return `/threads?${query}`
 }
 
 /** Desk 2's server, read at each call (HYDRA_DESK_PORT, see desk2.ts), or null where this install has
@@ -108,6 +127,16 @@ async function desk<T>(method: string, path: string, body?: unknown): Promise<T>
   const json = (await res.json().catch(() => null)) as { error?: string } | null
   if (!res.ok) throw new DeskError(res.status, json?.error ?? `HTTP ${res.status}`)
   return json as T
+}
+
+/** Overlapping batches and status callers share only the read already in flight, never a cached
+ *  answer: a send made after it settles must see the account's new busy state. */
+let statusRead: Promise<FreeStatus> | null = null
+function readStatus(): Promise<FreeStatus> {
+  statusRead ??= desk<FreeStatus>('GET', '/status').finally(() => {
+    statusRead = null
+  })
+  return statusRead
 }
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
@@ -189,6 +218,60 @@ export function noteFreeOutcome(
 export function restingFor(instanceId: string, now = Date.now()): Rest | null {
   const rest = rests.get(instanceId)
   return rest && rest.until > now ? rest : null
+}
+
+/** A whole provider down: PROVIDER_STREAK sends in a row failed on it, across its accounts, whatever the code
+ *  (2026-10-15: chatgpt.com answered every send 404 "Model not found", code not_found, 421 of 421 in a day; no
+ *  account rested, since the code is not an account's, so 49 ChatGPT accounts kept taking work Claude Free would
+ *  have answered). While down its accounts take no new thread unless one is named; when the rest ends ONE send
+ *  probes it, a success clears it and a failure rests it twice as long. */
+interface ProviderRest {
+  streak: number
+  until: number
+  strikes: number
+  /** When the probe after a rest was sent; another may go once it is PROBE_STALE_MS old with no outcome. */
+  probing?: number
+  code?: string
+}
+const providerRests = new Map<Provider, ProviderRest>()
+const PROVIDER_STREAK = 5
+const PROVIDER_REST_MS = 10 * 60_000
+const PROVIDER_MAX_REST_MS = 2 * 60 * 60_000
+const PROBE_STALE_MS = 10 * 60_000
+
+export function noteProviderOutcome(
+  provider: Provider | undefined,
+  code: string | null,
+  now = Date.now(),
+): void {
+  if (!provider) return
+  if (code == null) {
+    providerRests.delete(provider)
+    return
+  }
+  const r = providerRests.get(provider) ?? { streak: 0, until: 0, strikes: 0 }
+  r.streak++
+  r.code = code
+  delete r.probing
+  if (r.streak >= PROVIDER_STREAK) {
+    r.strikes++
+    r.until = now + Math.min(PROVIDER_REST_MS * 2 ** (r.strikes - 1), PROVIDER_MAX_REST_MS)
+  }
+  providerRests.set(provider, r)
+}
+
+/** The provider's rest while it is down, or while its one probe is out; null when it may take new threads. */
+export function providerDown(provider: Provider, now = Date.now()): ProviderRest | null {
+  const r = providerRests.get(provider)
+  if (!r || r.streak < PROVIDER_STREAK) return null
+  if (r.until > now) return r
+  return r.probing != null && now - r.probing < PROBE_STALE_MS ? r : null
+}
+
+/** A pick of a down provider's account after its rest is the probe: no other goes until it ends. */
+function notePicked(i: FreeInstance, now: number): void {
+  const r = providerRests.get(i.provider)
+  if (r && r.streak >= PROVIDER_STREAK && r.until <= now) r.probing = now
 }
 
 // ChatGPT Free answered about 75 new chats in half an hour and then refused every send for 30-60 minutes (owner,
@@ -281,7 +364,7 @@ function paceLockout(id: string, now: number): void {
 let seeded = false
 const BOOTED = Date.now() // a send this daemon made is in `sends` already
 function seedSends(threads: readonly FreeThread[], now = Date.now()): void {
-  if (seeded || !threads.length) return
+  if (seeded) return
   seeded = true
   for (const t of threads)
     if (now - t.createdAt < PACE_WINDOW_MS && t.createdAt < BOOTED)
@@ -296,6 +379,7 @@ function pacedUntil(id: string, now: number): number {
 /** For tests: forget every rest, pick, send and learned cap. */
 export function resetFreeHealth(): void {
   rests.clear()
+  providerRests.clear()
   lastPicked.clear()
   sends.clear()
   paces = {}
@@ -315,7 +399,7 @@ export function eligibleAccounts(
       i.loggedIn &&
       (!want.provider || i.provider === want.provider) &&
       (want.account == null
-        ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id)
+        ? (windowOf(i, 'seven_day') ?? 0) < 90 && !restingFor(i.id) && !providerDown(i.provider)
         : i.num === want.account),
   )
 }
@@ -349,6 +433,7 @@ export function pickFreeAccount(
       (a.provider === b.provider ? 0 : a.provider === 'claude' ? -1 : 1) ||
       a.num - b.num,
   )
+  if (free[0] && want.account == null) notePicked(free[0], Date.now())
   return free[0] ?? null
 }
 
@@ -435,6 +520,22 @@ function finish(it: Item, result: FreeResult | undefined, account: FreeInstance 
 const pending = (b: Batch) =>
   b.items.some((it) => it.s.state === 'queued' || it.s.state === 'running')
 
+/** Restart guards protect queued work as well as a provider operation already running. */
+export function freeBatchPendingCount(): number {
+  return freeBatchLifecycle.activeCount()
+}
+
+/** Polling ended without a final acknowledgement; this says nothing about provider success or failure. */
+export function markUnconfirmedFreeOperations(items: readonly Pick<Item, 's'>[]): void {
+  for (const it of items)
+    if (it.s.state === 'running')
+      Object.assign(it.s, {
+        state: 'failed',
+        error:
+          'operation_unconfirmed: Desk remained unavailable after the polling deadline. The final status is unknown; the provider operation may have finished. Check free_threads and free_read before sending again. No automatic resend was made.',
+      })
+}
+
 function failQueued(b: Batch, error: string) {
   for (const it of b.items)
     if (it.s.state === 'queued') Object.assign(it.s, { state: 'failed', error })
@@ -465,18 +566,19 @@ function retryElsewhere(it: Item, code: string | undefined): boolean {
   return true
 }
 
-async function pollRunning(it: Item, tick: Tick) {
-  try {
-    const job = await desk<FreeJob>('GET', `/jobs/${it.requestId}`)
+function pollRunning(it: Item, tick: Tick, reply: { job?: FreeJob; error?: unknown }) {
+  if (reply.job) {
+    const job = reply.job
     if (job.state === 'done') {
       const inst = tick.byId.get(it.instanceId ?? '')
       finish(it, job.result, inst)
       const code = job.result?.ok ? null : (job.result?.error?.code ?? 'unknown')
       if (it.instanceId) noteFreeOutcome(it.instanceId, code, Date.now(), windowResetAt(inst))
+      noteProviderOutcome(inst?.provider, code)
       if (code) retryElsewhere(it, code)
     }
-  } catch (e) {
-    if ((e as DeskError).status === 404)
+  } else {
+    if ((reply.error as DeskError)?.status === 404)
       finish(
         it,
         {
@@ -489,6 +591,60 @@ async function pollRunning(it: Item, tick: Tick) {
         undefined,
       )
   }
+}
+
+type JobReply = { job?: FreeJob; error?: unknown }
+type BatchReads = { threads: FreeThread[] | null; bulkJobs?: boolean; chatIds?: string[] }
+
+/** Results stay available for six hours; the original terminal inputs are never read again. */
+export function releaseFreeBatchInputs(
+  items: readonly Pick<Item, 'task' | 's'>[],
+  cache?: Pick<BatchReads, 'threads'>,
+): void {
+  for (const it of items) if (it.s.state === 'done' || it.s.state === 'failed') it.task.prompt = ''
+  // Continuations never retry elsewhere. Once each has started or failed, no
+  // future tick needs this batch's full history lookup again.
+  if (cache && !items.some((it) => it.s.state === 'queued' && it.task.chat_id)) cache.threads = null
+}
+
+/** One result lookup for up to 32 running jobs. Older windows retain the same
+ * eight-way reads; capability detection never caches a job's result or resends it. */
+async function readJobs(items: Item[], cache: BatchReads): Promise<JobReply[]> {
+  if (!items.length) return []
+  if (cache.bulkJobs !== false) {
+    const chunks: Item[][] = []
+    for (let i = 0; i < items.length; i += 32) chunks.push(items.slice(i, i + 32))
+    try {
+      const replies = await mapPool(chunks, 8, async (chunk) => {
+        const ids = chunk.map((it) => it.requestId!)
+        const response = await desk<{ jobs: Record<string, FreeJob | null> }>(
+          'GET',
+          `/jobs?ids=${ids.join(',')}`,
+        )
+        if (!response?.jobs || typeof response.jobs !== 'object' || Array.isArray(response.jobs))
+          throw new DeskError(503, 'Desk returned an invalid operation lookup.')
+        return ids.map((id) => {
+          const job = response.jobs[id]
+          if (job === null) return { error: new DeskError(404, 'Operation expired.') }
+          if (!job || job.id !== id || (job.state !== 'running' && job.state !== 'done'))
+            throw new DeskError(503, 'Desk returned a different operation.')
+          return { job }
+        })
+      })
+      cache.bulkJobs = true
+      return replies.flat()
+    } catch (error) {
+      if (![404, 405].includes((error as DeskError).status)) return items.map(() => ({ error }))
+      cache.bulkJobs = false
+    }
+  }
+  return mapPool(items, 8, async (it) => {
+    try {
+      return { job: await desk<FreeJob>('GET', `/jobs/${it.requestId}`) }
+    } catch (error) {
+      return { error }
+    }
+  })
 }
 
 function noAccountError(task: FreeTask): string {
@@ -506,10 +662,13 @@ function noAccountError(task: FreeTask): string {
 async function accountFor(
   it: Item,
   tick: Tick,
-  cache: { threads: FreeThread[] | null },
+  cache: BatchReads,
 ): Promise<FreeInstance | undefined> {
   if (it.task.chat_id) {
-    cache.threads ??= await desk<FreeThread[]>('GET', '/threads').catch(() => null)
+    cache.threads ??= await desk<FreeThread[]>(
+      'GET',
+      threadLookupPath(cache.chatIds ?? [it.task.chat_id]),
+    ).catch(() => null)
     const thread = cache.threads?.find((t) => t.chatId === it.task.chat_id)
     const account = thread ? tick.byId.get(thread.instanceId) : undefined
     if (!account) {
@@ -594,32 +753,48 @@ async function startTask(it: Item, account: FreeInstance, busy: Set<string>) {
  *  each running one is read until done. Runs on after the tool call returns; free_results reads it. */
 async function runBatch(b: Batch): Promise<void> {
   const until = Date.now() + QUEUE_LIMIT_MS
-  const cache: { threads: FreeThread[] | null } = { threads: null }
+  const cache: BatchReads = {
+    threads: null,
+    chatIds: b.items.flatMap((it) => (it.task.chat_id ? [it.task.chat_id] : [])),
+  }
   await seedOnce()
   while (pending(b)) {
-    let status: { instances: FreeInstance[]; jobs: FreeJob[] }
+    let status: FreeStatus
     try {
-      status = await desk('GET', '/status')
+      status = await readStatus()
     } catch (e) {
       // Desk 2 away: a running send may still land, so only the tasks not yet started are given up.
       if (Date.now() > until || (e as DeskError).status !== 0)
         failQueued(b, String((e as Error).message))
+      releaseFreeBatchInputs(b.items, cache)
       await sleep(TICK_MS * 2)
-      if (Date.now() > until) break
+      if (Date.now() > until) {
+        failQueued(b, String((e as Error).message))
+        markUnconfirmedFreeOperations(b.items)
+        releaseFreeBatchInputs(b.items, cache)
+        break
+      }
       continue
     }
     const tick = readTick(b, status)
-    for (const it of b.items.filter((x) => x.s.state === 'running')) await pollRunning(it, tick)
+    const running = b.items.filter((x) => x.s.state === 'running')
+    // These reads are independent. Keep health, retries and provider probe accounting in the same
+    // task order as before, even when Desk answers them in a different order.
+    const replies = await readJobs(running, cache)
+    for (const [i, it] of running.entries()) pollRunning(it, tick, replies[i]!)
     for (const it of b.items.filter((x) => x.s.state === 'queued')) {
       const account = await accountFor(it, tick, cache)
       if (account) await startTask(it, account, tick.busy)
     }
     if (Date.now() > until) failQueued(b, 'No Free account was idle within 30 minutes.')
+    // Retry decisions and queued starts are settled before any input is released.
+    releaseFreeBatchInputs(b.items, cache)
     if (pending(b)) await sleep(TICK_MS)
   }
 }
 
 function snapshot(b: Batch) {
+  releaseFreeBatchInputs(b.items)
   const done = b.items.filter((it) => it.s.state === 'done' || it.s.state === 'failed').length
   const finished = done === b.items.length
   return {
@@ -674,32 +849,34 @@ function readTask(raw: unknown, index: number): FreeTask {
 /** The pacing's sends from before this process started, read once: the threads started in the last window, not
  *  the whole list (8 MB at ~22,000 threads, 2026-10-10), which HSwarm's free_status before every task read each minute.
  *  The status carries each account's thread count. An older Desk ignores `since` and sends every thread. */
+let seedRead: Promise<void> | null = null
 async function seedOnce(): Promise<void> {
   if (seeded) return
-  seedSends(
-    await desk<FreeThread[]>('GET', `/threads?since=${Date.now() - PACE_WINDOW_MS}`).catch(
-      () => [],
-    ),
-  )
+  seedRead ??= desk<FreeThread[]>('GET', `/threads?since=${Date.now() - PACE_WINDOW_MS}`)
+    .then((threads) => seedSends(threads))
+    .catch(() => {
+      /* An unavailable history is retried, unlike a successful empty history. */
+    })
+    .finally(() => {
+      seedRead = null
+    })
+  await seedRead
 }
 
 async function freeStatus() {
-  const [status] = await Promise.all([
-    desk<{
-      ready: boolean
-      instances: FreeInstance[]
-      jobs: FreeJob[]
-      health?: Record<string, { sent: number; failed: number; failing: boolean }>
-      threadCounts?: Record<string, number>
-    }>('GET', '/status'),
-    seedOnce(),
-  ])
+  const [status] = await Promise.all([readStatus(), seedOnce()])
   const busy = new Set(status.jobs.filter((j) => j.state === 'running').map((j) => j.instanceId))
   const now = Date.now()
   return {
     ready: status.ready,
     accounts: status.instances.map((i) => {
-      const rest = restingFor(i.id)
+      const own = restingFor(i.id)
+      const down = own ? null : providerDown(i.provider, now)
+      const rest =
+        own ??
+        (down
+          ? { until: down.until, code: `${i.provider} down: ${down.code}`, strikes: down.strikes }
+          : null)
       const cap = paceCap(i, now)
       const paced = cap != null && pacedOut(i, now)
       return {
@@ -806,24 +983,34 @@ export const FREE_TOOLS: HydraTool[] = [
         task: readTask(t, i),
         s: { task: i, state: 'queued' },
       }))
-      // Fail before anything is queued when Desk 2 cannot be reached at all.
-      await desk('GET', '/status')
-      for (const [id, b] of batches)
-        if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
-      const b: Batch = {
-        id: randomUUID().slice(0, 8),
-        items,
-        createdAt: Date.now(),
-        done: Promise.resolve(),
+      const release = freeBatchLifecycle.acquire()
+      let transferred = false
+      try {
+        // Fail before anything is queued when Desk 2 cannot be reached at all.
+        await readStatus()
+        for (const [id, b] of batches)
+          if (Date.now() - b.createdAt > KEEP_BATCH_MS) batches.delete(id)
+        const b: Batch = {
+          id: randomUUID().slice(0, 8),
+          items,
+          createdAt: Date.now(),
+          done: Promise.resolve(),
+        }
+        b.done = runBatch(b)
+          .catch((e) => {
+            for (const it of b.items)
+              if (it.s.state === 'queued' || it.s.state === 'running')
+                Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
+            releaseFreeBatchInputs(b.items)
+          })
+          .finally(release)
+        transferred = true
+        batches.set(b.id, b)
+        await Promise.race([b.done, sleep(waitMs(a))])
+        return snapshot(b)
+      } finally {
+        if (!transferred) release()
       }
-      b.done = runBatch(b).catch((e) => {
-        for (const it of b.items)
-          if (it.s.state === 'queued' || it.s.state === 'running')
-            Object.assign(it.s, { state: 'failed', error: String((e as Error).message) })
-      })
-      batches.set(b.id, b)
-      await Promise.race([b.done, sleep(waitMs(a))])
-      return snapshot(b)
     },
   },
   {
@@ -859,16 +1046,32 @@ export const FREE_TOOLS: HydraTool[] = [
       limit: { type: 'number', description: 'At most this many (default 30).' },
     }),
     run: async (a) => {
-      const [status, threads] = await Promise.all([
+      const limit = Math.max(1, Math.min(Number(a.limit) || 30, 500))
+      const query = new URLSearchParams({ view: 'recent', limit: String(limit) })
+      if (a.account != null) query.set('account', String(Number(a.account)))
+      const [status, history] = await Promise.all([
         desk<{ instances: FreeInstance[] }>('GET', '/status'),
-        desk<FreeThread[]>('GET', '/threads'),
+        desk<FreeThread[] | FreeThreadPage>('GET', `/threads?${query}`),
       ])
       const byId = new Map(status.instances.map((i) => [i.id, i]))
-      const limit = Math.max(1, Math.min(Number(a.limit) || 30, 500))
-      const mine = threads
-        .filter((t) => a.account == null || byId.get(t.instanceId)?.num === Number(a.account))
-        .sort((x, y) => y.updatedAt - x.updatedAt)
-      const shown = mine.slice(0, limit).map((t) => {
+      // Older windows ignore the selector and return the same full array they
+      // always did. Reuse that response; never download it a second time.
+      const page = Array.isArray(history)
+        ? (() => {
+            const mine = history
+              .filter((t) => a.account == null || byId.get(t.instanceId)?.num === Number(a.account))
+              .sort((x, y) => y.updatedAt - x.updatedAt)
+            return { total: mine.length, threads: mine }
+          })()
+        : history
+      if (
+        !page ||
+        !Array.isArray(page.threads) ||
+        !Number.isInteger(page.total) ||
+        page.total < page.threads.length
+      )
+        throw new DeskError(503, 'Desk returned an invalid history selection.')
+      const shown = page.threads.slice(0, limit).map((t) => {
         const i = byId.get(t.instanceId)
         return {
           chat_id: t.chatId,
@@ -880,11 +1083,11 @@ export const FREE_TOOLS: HydraTool[] = [
         }
       })
       return {
-        total: mine.length,
+        total: page.total,
         threads: shown,
-        ...(mine.length > shown.length
+        ...(page.total > shown.length
           ? {
-              more: `${mine.length - shown.length} older: raise limit (at most 500) or pass account`,
+              more: `${page.total - shown.length} older: raise limit (at most 500) or pass account`,
             }
           : {}),
       }
@@ -905,7 +1108,7 @@ export const FREE_TOOLS: HydraTool[] = [
       const chatId = str(a.chat_id)
       const [status, threads] = await Promise.all([
         desk<{ instances: FreeInstance[] }>('GET', '/status'),
-        desk<FreeThread[]>('GET', '/threads'),
+        desk<FreeThread[]>('GET', threadLookupPath([chatId])),
       ])
       const thread = threads.find((t) => t.chatId === chatId)
       const account = thread && status.instances.find((i) => i.id === thread.instanceId)

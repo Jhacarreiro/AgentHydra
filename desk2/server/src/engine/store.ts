@@ -11,7 +11,7 @@ import { appendFile, open, rm, stat } from 'node:fs/promises'
 import { renameOver, renameOverAsync, writeFlushed, writeFlushedAsync } from '../write-flushed'
 
 /** Live-only fields: never saved, reset on load (every chat starts 'closed'). */
-const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive'] as const
+const VOLATILE = ['status', 'activity', 'turnStartedAt', 'pendingCount', 'queuedCount', 'climayteActive', 'backgroundActive', 'susPick'] as const
 /** Chats whose raw transcript lines stay in memory; the least recently read goes first. */
 const LINE_CACHE_MAX = 20
 
@@ -89,9 +89,19 @@ export class ChatStore {
     try {
       const list = JSON.parse(raw) as unknown
       if (!Array.isArray(list)) return []
-      return (list as StoredChat[]).filter((c) => c && typeof c.id === 'string').map(fromStored)
+      return (list as StoredChat[]).filter((c) => c && typeof c.id === 'string').map((c) => this.withLastAction(fromStored(c)))
     } catch {
       return []
+    }
+  }
+
+  /** A chat saved before lastActionAt existed: its transcript file was last written at its last action. */
+  private withLastAction(chat: ChatSummary): ChatSummary {
+    if (chat.lastActionAt !== undefined) return chat
+    try {
+      return { ...chat, lastActionAt: Math.round(statSync(this.itemsFile(chat.id)).mtimeMs) }
+    } catch {
+      return chat
     }
   }
 

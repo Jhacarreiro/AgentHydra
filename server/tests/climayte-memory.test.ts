@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, test } from 'bun:test'
 import {
   DEFAULT_GROWN_BYTES,
+  GROWTH_REUSE_MS,
   growthOf,
   MAX_GROWN_BYTES,
   type MachineMemory,
@@ -100,5 +101,22 @@ describe('growthOf: the expected grown size is learned from workers past the ram
     ).toBe(gib(0.5))
     resetLearnedGrownBytes()
     expect(growthOf([old(1)], now, reader({ 1: gib(3) })).expectedBytes).toBe(MAX_GROWN_BYTES)
+  })
+
+  test('a reading is reused only for the same runners, under maxAgeMs; 0 always reads; each call gets a copy', () => {
+    const reads: (number | null)[][] = []
+    const counting = (pids: (number | null)[]) => {
+      reads.push(pids)
+      return pids.map(() => gib(0.1))
+    }
+    const soon = now + GROWTH_REUSE_MS - 1
+    const first = growthOf([young(5)], now, counting, GROWTH_REUSE_MS)
+    first.sets.push(null) // a tick adds its starts to its own copy
+    expect(growthOf([young(5)], soon, counting, GROWTH_REUSE_MS).sets).toEqual([gib(0.1)])
+    expect(reads).toEqual([[5]])
+    growthOf([young(5)], soon, counting, 0) // a tick that may start one
+    growthOf([young(5), young(6)], soon, counting, GROWTH_REUSE_MS) // another runner
+    growthOf([young(5), young(6)], soon + GROWTH_REUSE_MS, counting, GROWTH_REUSE_MS) // too old
+    expect(reads).toEqual([[5], [5], [5, 6], [5, 6]])
   })
 })

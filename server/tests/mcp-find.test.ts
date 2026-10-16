@@ -1,4 +1,5 @@
 import { describe, expect, test } from 'bun:test'
+import { resolve } from 'node:path'
 import { LISTED_TOOLS, TOOLS, UNLISTED_TOOLS, withUnlistedTools } from '../src/mcp'
 import { deskChatPatch, findTools, pickDeskChat, rankTools, withDeskChat } from '../src/mcp-find'
 
@@ -119,7 +120,8 @@ describe('desk_chat', () => {
     expect(() => pickDeskChat(chats, '  ')).toThrow(/chat is required/)
   })
   test('moves to a real folder and/or renames; refuses a missing folder or an empty change', () => {
-    expect(deskChatPatch({ cwd: process.cwd() })).toEqual({ cwd: process.cwd() })
+    const cwd = resolve(import.meta.dir, '../..')
+    expect(deskChatPatch({ cwd })).toEqual({ cwd })
     expect(deskChatPatch({ title: ' New name ' })).toEqual({ title: 'New name' })
     expect(() => deskChatPatch({ cwd: 'C:/Users/me/no-such-folder-here' })).toThrow(/no folder/)
     expect(() => deskChatPatch({})).toThrow(/pass cwd/)

@@ -220,7 +220,9 @@ describe('AH-03: a delete whose directory survives keeps the record and says so'
       const result = await deleteCodexInstance(id, name, {
         ...NO_PROCESSES,
         removeDir: (dir) => {
-          rmSync(join(dir, 'auth.json'), { force: true })
+          for (const entry of readdirSync(dir))
+            if (!entry.endsWith('.guard'))
+              rmSync(join(dir, entry), { recursive: true, force: true })
           throw new Error('EBUSY: resource busy or locked (injected)')
         },
       })

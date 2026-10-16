@@ -27,6 +27,10 @@ export function accountTitle(a: { id: string; label: string; plan?: string | nul
   return plan ? `${name} · ${plan}` : name
 }
 
+// Built once: toLocale*String makes a new formatter per call, which with a hundred accounts' resets cost ~10 ms a redraw.
+let dayFormat: Intl.DateTimeFormat | undefined
+let timeFormat: Intl.DateTimeFormat | undefined
+
 /** "resets in 2h 14m" (under a day) or "resets Mon 14:00" (later), from epoch ms. */
 export function resetText(at: number | null, now: number = Date.now()): string {
   if (at == null) return ''
@@ -40,9 +44,7 @@ export function resetText(at: number | null, now: number = Date.now()): string {
     return m ? `resets in ${h}h ${m}m` : `resets in ${h}h`
   }
   const d = new Date(at)
-  const day = d.toLocaleDateString(undefined, { weekday: 'short' })
-  const time = d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })
-  return `resets ${day} ${time}`
+  return `resets ${(dayFormat ??= new Intl.DateTimeFormat(undefined, { weekday: 'short' })).format(d)} ${(timeFormat ??= new Intl.DateTimeFormat(undefined, { hour: '2-digit', minute: '2-digit', hour12: false })).format(d)}`
 }
 
 /** How full a usage window reads: green under 60, amber 60-85, red over 85, unknown without a reading. */

@@ -7,7 +7,7 @@
 
 import { statSync } from 'node:fs'
 import type { TranscriptItem } from '@shared/protocol'
-import { readTail } from '../bridge/session-jsonl'
+import { readTail } from '../bridge/session-tail'
 
 /** Above this many tokens of context a move starts a fresh session from a handoff (HYDRA_DESK_HANDOFF_TOKENS overrides). */
 export const HANDOFF_TOKENS = 150_000

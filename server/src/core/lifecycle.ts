@@ -24,7 +24,7 @@ import { deleteInstanceMeta } from './instance-meta'
 import { isDefaultClaudeDir, openInstance } from './instances'
 import { instancesRoot, isPathInside, normalizePath } from './paths'
 import { type ClaudeProcessScan, scanClaudeProcesses } from './process'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, firstFreeName } from './shared'
 
 // ----------------------------------------------------------------------------
 // Name sanitization
@@ -187,11 +187,15 @@ export interface CreateInstanceOptions {
   launch?: boolean
 }
 
+/** The first `instance-<n>` folder free under `instancesRoot()`, for a create that names nothing. */
+export function freeInstanceName(): string {
+  const root = instancesRoot()
+  return firstFreeName('instance-', (name) => existsSync(normalizePath(`${root}/${name}`)))
+}
+
 /**
  * Creates a new isolated Claude instance data directory under `instancesRoot()`.
  * Sanitizes the name, refuses collisions, and optionally launches it afterward.
- * Always flags `needsBrowserDance: true` in the result data — the UI hint that
- * other instances should be quit before first login ("Browser Dance").
  */
 export async function createInstance(
   name: string,
@@ -287,7 +291,6 @@ export async function createInstance(
       name: sanitizedName,
       launched,
     },
-    needsBrowserDance: true,
   }
 }
 

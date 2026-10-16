@@ -34,3 +34,31 @@ export function nextMessageStep(
   }
   return null
 }
+
+/**
+ * The sent messages over the whole transcript, in order: the ones above the loaded rows come from the index
+ * (`userMessages`, position order) with their top estimated at `base + position * avgRow`; the loaded rows' own
+ * ids and measured tops follow. A message the index lists that a loaded row already holds is not counted twice.
+ */
+export function sentOverIndex(
+  loaded: { ids: readonly string[]; tops: readonly number[] },
+  userMessages: readonly { id: string; position: number }[] | undefined,
+  avgRow: number,
+  base: number,
+): { ids: string[]; tops: number[] } {
+  const have = new Set(loaded.ids)
+  const ids: string[] = []
+  const tops: number[] = []
+  for (const m of userMessages ?? []) {
+    if (have.has(m.id)) continue
+    ids.push(m.id)
+    tops.push(base + m.position * avgRow)
+  }
+  // Only what sits above the first loaded message belongs in front of it; a gap-free list keeps the order.
+  const keep = tops.length && loaded.tops.length ? tops.findIndex((t) => t >= loaded.tops[0]!) : -1
+  if (keep >= 0) {
+    ids.length = keep
+    tops.length = keep
+  }
+  return { ids: [...ids, ...loaded.ids], tops: [...tops, ...loaded.tops] }
+}

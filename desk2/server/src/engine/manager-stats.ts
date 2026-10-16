@@ -2,7 +2,7 @@
 
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
-import { MANAGER_SLUG, managersDir } from './managers'
+import { MANAGER_SLUG, managersDir } from '../../../../server/src/manager-folders'
 
 export type ManagerStats = {
   turns: number

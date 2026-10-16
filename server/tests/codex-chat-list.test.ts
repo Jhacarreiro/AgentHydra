@@ -22,15 +22,15 @@ afterAll(async () => {
 })
 
 function rollout(dir: string, id: string): string {
-  const target = join(HOME, dir, '2026', '10', '13')
+  const target = join(HOME, dir, '2019', '10', '22')
   mkdirSync(target, { recursive: true })
-  const path = join(target, `rollout-2026-10-13T10-00-00-${id}.jsonl`)
+  const path = join(target, `rollout-2019-10-22T10-00-00-${id}.jsonl`)
   writeFileSync(path, '{}\n')
   return path
 }
 
 const DAY = 24 * 3600_000
-const OLD = Date.parse('2026-10-06T10:00:00.000Z')
+const OLD = Date.parse('2019-10-15T10:00:00.000Z')
 const id = () => crypto.randomUUID()
 const named = id()
 const untitled = id()

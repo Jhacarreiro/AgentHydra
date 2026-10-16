@@ -70,16 +70,20 @@ const providersSortBy = ref<'name' | 'state'>('state')
 const providersSortDir = ref<SortDirection>(null)
 
 // Derived data
+// The order the status column sorts by: ready first, then resting, disabled and no keys.
+const PROVIDER_STATUS_ORDER = { ready: 0, resting: 1, disabled: 2, nokeys: 3 }
+
+function providerStatusDiff(a: any, b: any): number {
+  const aRank = PROVIDER_STATUS_ORDER[getProviderStatus(a) as keyof typeof PROVIDER_STATUS_ORDER] ?? 3
+  const bRank = PROVIDER_STATUS_ORDER[getProviderStatus(b) as keyof typeof PROVIDER_STATUS_ORDER] ?? 3
+  return aRank - bRank
+}
+
 const sortedProviders = computed(() => {
   if (!apiState.value?.providers) return []
   let sorted = [...apiState.value.providers].sort((a, b) => {
     // Default sort: by state (ready first), then by name
-    const aStatus = getProviderStatus(a)
-    const bStatus = getProviderStatus(b)
-    const statusOrder = { ready: 0, resting: 1, disabled: 2, nokeys: 3 }
-    const statusDiff =
-      (statusOrder[aStatus as keyof typeof statusOrder] ?? 3) -
-      (statusOrder[bStatus as keyof typeof statusOrder] ?? 3)
+    const statusDiff = providerStatusDiff(a, b)
     if (statusDiff !== 0) return statusDiff
     return a.name.localeCompare(b.name)
   })
@@ -92,12 +96,7 @@ const sortedProviders = computed(() => {
     })
   } else if (providersSortBy.value === 'state' && providersSortDir.value !== null) {
     sorted = sorted.sort((a, b) => {
-      const aStatus = getProviderStatus(a)
-      const bStatus = getProviderStatus(b)
-      const statusOrder = { ready: 0, resting: 1, disabled: 2, nokeys: 3 }
-      const statusDiff =
-        (statusOrder[aStatus as keyof typeof statusOrder] ?? 3) -
-        (statusOrder[bStatus as keyof typeof statusOrder] ?? 3)
+      const statusDiff = providerStatusDiff(a, b)
       return providersSortDir.value === 'asc' ? statusDiff : -statusDiff
     })
   }

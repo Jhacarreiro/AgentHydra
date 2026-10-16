@@ -59,7 +59,10 @@ export class TabScope {
 
   private classify(tabs: BrowserTab[]): { tab: BrowserTab; state: 'mine' | 'none' | 'other'; at: number }[] {
     const mem = deskPages.get(this.dir)
-    if (mem) for (const id of [...mem.keys()]) if (!tabs.some((t) => t.id === id)) mem.delete(id)
+    if (mem) {
+      const open = new Set(tabs.map((t) => t.id))
+      for (const id of [...mem.keys()]) if (!open.has(id)) mem.delete(id)
+    }
     const ledger = readLedger(this.dir)
     return tabs.map((tab) => {
       const desk = mem?.get(tab.id)

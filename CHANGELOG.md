@@ -10,6 +10,101 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 - **The window can sit behind a sign-in proxy.** List the proxy's address in `HYDRA_DESK_PUBLIC_ORIGINS` and the
   window answers there too, so you can reach it from your phone through Cloudflare Access or a similar sign-in. Other
   sites and names are still refused.
+- **Free continuations skip historical display formatting before sending.** Model selection and message identity checks read the same validated branch without rebuilding code blocks or citations. Completed replies still include their full display data.
+- **Transcript parent lookups create fewer temporary objects.** Ordinary Claude paths identify their owning session without splitting every nested path component. Named-session layouts keep their existing rules.
+- **Completed Free operations release their cached reply data.** Open chats keep their returned messages, while account rows retain only operation metadata and recovery IDs. Successful account deletion also clears its unused page state.
+- **Nested subagent lists reuse their shared ancestry.** Deep chains avoid repeatedly walking the same parents, with unchanged ownership, ordering and orphan handling.
+- **Source updates no longer race their own update checks.** Checks and applies take turns through the complete operation, preventing a background fetch from interfering with an update's Git pull.
+- **Large Free histories stay quieter while workers update.** The list reuses its Free rows until their history or displayed account details change, instead of rebuilding them on every worker refresh.
+- **History refreshes skip unnecessary work on unchanged data.** Cached chat titles are excluded before ranking, and quiet transcripts skip asynchronous stat callbacks. Existing file-freshness checks and lookup priorities stay the same.
+- **Login sync stops parsing unchanged account identities repeatedly.** Account emails are reused after checking the file, with replacements, removals and fresh sign-ins detected as before.
+- **CliMayte sends Desk smaller worker lists.** Desk gets the fields it uses without constructing and discarding extra worker details. Session checks and finished-work bookkeeping also create fewer temporary objects.
+- **Free authentication and refreshes avoid duplicate history saves.** Early recovery checkpoints and final metadata, quota readings and backups are still saved.
+- **Free thread lookups stop downloading the whole history.** Recent lists and chat lookups ask for only the rows they need, with the same account routing and older-window compatibility.
+- **CliMayte totals reuse unchanged session lookups.** A changed session set or a database write refreshes the lookup immediately.
+- **Updates wait for unfinished Free batches.** Preparing, queued and running batches are protected from restart, and new batches wait until the handoff reconnects. A restart deferred during a build retries after the work finishes.
+- **CliMayte skips placement bookkeeping when no task is ready.** Running work, cleanup and CPU monitoring continue as before, while idle checks avoid rebuilding finished-work estimates. Unchanged CLI plan labels also stop rereading saved sign-ins.
+- **Finished Free batches release their original prompts.** Results remain available, and work waiting to run or retry keeps the input it needs.
+- **Unchanged Free history stops downloading and redrawing itself.** The page reuses its current history when the server confirms nothing changed. New results and edits still appear on the next reading.
+- **CliMayte reuses unchanged placement estimates.** Its scheduling passes keep the same finished-work snapshot until that history changes. ChatGPT's reply polling also refreshes cookies without creating extra HTTP sessions or duplicating cookie objects.
+- **Free work spends less CPU on bookkeeping and keeps fewer large buffers.** Unchanged status polls reuse thread counts, completed operations save their final metadata once, and finished file writes release their JSON buffers. ChatGPT's reply checks skip display formatting until a completed answer is ready.
+- **CliMayte's compact lists keep old reports compressed.** Listing history no longer unpacks text the list immediately hides, and ceiling statistics use an index instead of rescanning account history for each event. Full reports remain available on request.
+- **ChatGPT's background helper stays out of the Windows desktop.** Its detached Python helper uses the matching windowless interpreter, preventing the virtual-environment launcher from opening a console.
+- **Free batches spend less time checking their running work.** A single request reads several operations at once, while older windows keep their existing polling. ChatGPT also reuses the completed reply its browser already verified instead of fetching it again.
+- **Brief CliMayte lists skip finished history sooner.** Already-reviewed workers no longer build detailed rows that the brief list immediately discards. Explicit history requests and workers with new results still appear as before.
+- **AgentHydra uses about half the CPU while CliMayte work runs.** Its once-a-second CliMayte check no longer re-reads every finished worker, and a check that starts nothing reuses its memory reading for a few seconds.
+- **Routines can live in one central place that every PC reads.** With a `routines-store.json` in Desk's folder, the Routines page also lists the routines kept in a central store (today the CrAInium), beside the ones on this PC. A routine there runs only after you approve it on one of your PCs, stops again if anything in it changes, and runs where its labels say: on one named PC, or on any PC that matches, never two at once. Each card shows the newest run wherever it ran, and a PC goes on running its routines from its own copy while the store is unreachable. Without the file nothing changes.
+- **A routine's card can switch its mode.** A routine that offers modes (for example Idle, Adaptive and Aggressive) shows a Mode row on its Routines card. A pick runs the routine's own command, and the card then shows the mode the routine reports. Only you can change it; an agent cannot.
+
+- **ChatGPT Free work runs without browser pop-ups and reuses one browser.** Each message gets an isolated context that is cleared afterward, while the shared headless browser closes after a minute idle. Saved sign-ins, Temporary Chat privacy and single-send verification stay intact.
+- **Free batches and CliMayte placement do less repeated work.** Independent progress reads run together, overlapping status reads share one request, and repeated placement estimates are calculated once per pass. Model choices, account limits and fallback rules stay the same.
+- **Sue, Dredd and the price check are a private add-on again.** AgentHydra no longer carries their code; its tools start them from their own sue-dredd checkout when that is on this PC (SUE_DREDD_HOME points at it). Without the checkout, those tools say they are not installed.
+- **People are a private add-on.** Managers, leads and seats come only from CrAInium, the owners' private add-on. Without it AgentHydra has no people: no "Your people" page, no People settings, no manager tools and no lead question.
+- **Your people can follow you to other PCs through CrAInium.** On a PC with the add-on, Settings → Your people syncs with CrAInium, the owners' private persona store. The newer copy of a person wins, the older one is kept in a backup folder, and nothing is ever deleted there.
+- **Managers can live in your people folder.** Desk's manager face and photo, seat pinning and the router read a manager from `people/manager` first and the old managers folder second, so a manager pulled from CrAInium works everywhere.
+- **Fan-out chats start without touching your Claude window, on the model you choose.** On an account with native control, the Claude app starts the chat itself, so no window is raised and nothing is clicked. A chat runs on Opus 5.5 at xhigh effort unless the task names another model or effort, and never on Fable unless asked. An account without native control still opens its chat through its window.
+- **The Delegation panel is easier to read.** Each service is its own card: its runs, tasks, tokens and cost as labelled figures, a line saying how its runs ended, then a model table whose headings no longer run into each other.
+- **AgentHydra is now free for noncommercial use.** From this release it is licensed under PolyForm
+  Noncommercial 1.0.0; commercial use needs a separate license. Versions released before it stay MIT.
+- **The connector list stops polling fast when nothing changes.** A connector stuck installing or starting is asked about every second; after a minute with the same answer the poll falls back to every 5 seconds. A Desk window at rest asks once every 5 seconds (7 requests in 30 s).
+- **When a Claude Desktop or Codex app goes down with chats running, the Instance manager moves them and starts them
+  again.** If the app crashed, was signed out, or its plan or organization stopped working (even with the app left
+  open), it opens the same kind of app on the signed-in account with the most room left, moves the chats it cut off mid-work
+  there (one inside a long command or waiting on its background jobs counts; one that had finished stays) and checks
+  that they run. An app a person quit is left alone, and moved Codex chats are continued from the Codex app (Settings >
+  Managers > Instance manager).
+- **AgentHydra no longer types into your Claude windows by itself.** Starting a moved chat again, steering a
+  fan-out member and other automatic messages go through the app's own message delivery, without the window.
+  Before, a chat with nothing running could make AgentHydra raise the window full screen, click through its
+  sidebar and type. Only what you type into AgentHydra's own chat box is still typed into the app.
+- **The Instances list shows an app that signed itself out.** Claude Desktop sometimes signs itself out, for
+  example on its first start after an update, while its stored login still names the account. Such an app is
+  marked Signed out and no longer counts as signed in when a chat, move or fan-out picks an app.
+- **A fresh ChatGPT Free sign-in is no longer undone by Login sync.** Since 2026-10-14 ChatGPT answers sends only
+  from a login a browser sign-in made, and sync used to keep whichever copy expired later, often an older one from
+  the other PC. A freshly signed-in login now wins and reaches the other PCs. A refused ChatGPT call also names the
+  call and ChatGPT's own reason ("Model not found").
+- **The accounts list opens faster, and pushes that change nothing no longer redraw the sidebar's lists.** Reset times in the accounts list cost 13 ms a redraw and now cost 3 ms; a CliMayte or HSwarm push that changed only the other PCs' rows, or a connector poll that came back the same, keeps the lists it left alone.
+- **Critical and code read work goes to Claude Free when ChatGPT cannot take it.** It still asks a ChatGPT thinking
+  model first. With none available, it now asks Sonnet 5.5 on a Claude Free account before falling back to a paid
+  flash model, which took 235 such tasks on a day ChatGPT Free was down.
+- **Free work stops going to a provider that is failing every send.** After five failed sends in a row, its accounts
+  take no new work for 10 minutes (doubling up to 2 hours), and HSwarm sees them as resting. When the rest ends, one
+  send tests the provider. Before, ChatGPT Free failed 421 of 421 sends in a day while Claude Free accounts sat idle.
+- **A routine has a details view with every run and its stats.** Settings > Managers > Routines > All runs & stats shows how many runs it has had, how many succeeded or failed, its average time, what its runs added up to (Archangel: fixes landed and the rest), and the whole run list a page at a time.
+- **The model's name under the message box is now the model menu.** Click it to pick a model; the name changes with
+  the pick. The three-dot button is gone. A Claude Desktop chat shows the model it really runs on (it said Sonnet 5.5
+  on chats running Opus 5.5), and Fine, Sus and Bad each explain themselves on hover.
+- **A chat's Delegation card shows what it sent to HSwarm and CliMayte.** Its rail card lists each service's runs and
+  failures; a click opens the runs by model, with their tokens marked as estimates.
+- **A moved chat the open app will not put on Bypass goes on Auto.** Before, it stayed on that app's asking default
+  until the app restarted. The move's note says when this happened.
+- **A sidebar folder with no project icon shows its first letter.** "Desktop" gets a small D, so every heading lines
+  up. Unassigned stays without one.
+- **Move to account names each account by who is signed in.** The list showed each account's folder name; it now
+  shows the signed-in account's name beside its number, as the Instances page does. A name you gave an account still
+  wins.
+- **Moving a chat no longer turns into a copy by a slip of the mouse.** In a chat's menu, Duplicate to account now
+  sits beside Fork instead of right under Move to account, whose account list looks the same. A Codex copy is named
+  "<title> (copy)" in the sidebar, as a desktop copy already was, so it never looks like the move went wrong.
+- **A chat you move to an open account keeps its settings.** Move to account now puts the chat on Bypass
+  permissions at the effort it had before, in the app that is already running, instead of leaving it on that
+  app's defaults until it restarts. If that app does not take them, the move's note says so.
+- **Pick several chats in the sidebar and act on them at once.** Hold Ctrl and click to pick chats one by one, or
+  hold Shift and click to pick a run of them. Right-click any picked chat for one menu that pins, marks, archives,
+  moves to a group or moves to another account all of them. Esc or a plain click lets them go.
+- **A chat's menu says how long ago it last did something.** Right-click a chat (or open its three-dot menu) and
+  the line under its ID reads "Last action" and how long ago, in minutes, hours, days, weeks, months or years.
+  Hover it for the exact time. Opening, renaming or pinning a chat does not count as an action.
+- **Unassign works on a chat left under an old login.** Move to account > Unassigned refused a chat filed under an account its app was signed into before, with "Expected one exact native session match, found 0". The app never loads such a chat, so AgentHydra now archives it by its flag on disk, the way a move already did.
+- **A new instance is made in one click, with no name asked.** The plus on the Desktop, Codex and DeepSeek tables creates the instance at once and gives it the next free name. The sign-in note that came with the create dialog is gone, and you can still rename an instance from its row menu.
+- **AgentHydra reads usage less when nobody is looking.** An hour after you last had AgentHydra on screen, it checks your accounts at most every 4 hours instead of at your set interval, and it catches up as soon as you look again. CliMayte no longer re-reads an account that is full until its reset.
+- **An open menu closes when you click into AgentHydra's pane.** A menu, popover or dropdown in Desk used to stay open when the click landed in AgentHydra's pane. AgentHydra's own menus now close on a click on Desk too, and clicking into another app leaves them as they are.
+- **An outside chat at work keeps its message box.** A Codex, Claude Code or Claude Desktop chat that is working elsewhere keeps the same composer it shows when idle. Its working line sits at the bottom of the transcript, as in a Desk chat.
+- **A Desktop row shows its CLI login's newer usage.** On the Instances page, a Desktop row shows the 5-hour and weekly figures of its linked CLI login when those are newer. This happens only while both are signed in to the same account, so a signed-out login never lends its figures.
+- **Find for an outside chat sits in the title bar.** Find moved from the session rail to the title bar, just left of Session details, whether the rail is open or shut. The step arrows at the chat's right edge no longer cover the text.
+- **A source copy picks up a push from this PC in about 20 seconds.** A copy run from source takes a push made on the same PC about 20 seconds after it lands, instead of waiting for its next check. A push from another PC still waits for that check unless this PC fetches it first.
+- **AgentHydra records who takes each usage reading.** Every reading now notes the request or timer that took it. A readers list shows which of them have been reading, counted by source and account kind, so an unexpected reader is easy to spot.
 - **A routine that fails or breaks now tells you.** When a scheduled routine's run fails or times out, or its file
   stops checking out, AgentHydra opens an incident and pings you the way other incidents do. The next good run, or the
   fixed file, clears it.

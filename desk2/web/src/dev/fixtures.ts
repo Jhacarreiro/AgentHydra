@@ -16,7 +16,7 @@ export const accountFixtures: AccountInfo[] = [
     id: 'default',
     label: 'Default (Pro)',
     configDir: null,
-    email: 'jacob@example.com',
+    email: 'alex@example.com',
     plan: 'Pro',
     signedIn: true,
     fiveHourPct: 45,
@@ -594,7 +594,7 @@ export const settingsFixtures: DeskSettings = {
   projectRoots: [],
   hiddenProjects: [],
   pinnedProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false
+  babysitter: true, instanceManager: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false
 }
 
 export const routinesFixtures: RoutinesStatus = {
@@ -622,6 +622,8 @@ export const routinesFixtures: RoutinesStatus = {
       until: '2026-10-23',
       paused: false,
       describe: false,
+      modes: null,
+      mode: null,
       headline: null,
       totals: null,
       settings: null,
@@ -648,9 +650,11 @@ export const routinesFixtures: RoutinesStatus = {
       until: null,
       paused: false,
       describe: true,
+      modes: ['idle', 'adaptive', 'aggressive'],
+      mode: 'adaptive',
       headline: 'Checked 3 items, 1 needs a look',
       totals: { items: 3, flagged: 1 },
-      settings: { mode: 'example', every: '2 h', dryRun: false, limit: 12 },
+      settings: { every: '2 h', dryRun: false, limit: 12 },
       lastRunAt: now - 3_600_000,
       nextRunAt: now + 3_600_000,
       running: null,
@@ -677,6 +681,8 @@ export const routinesFixtures: RoutinesStatus = {
       until: null,
       paused: true,
       describe: false,
+      modes: null,
+      mode: null,
       headline: null,
       totals: null,
       settings: null,

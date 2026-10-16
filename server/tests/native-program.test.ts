@@ -14,6 +14,13 @@ interface ArchiveOptions {
 interface HtmlPreview {
   cwd: string
 }
+interface StartSessionOptions {
+  cwd: string
+  model: string
+  effort: string
+  message: string
+  permissionMode?: 'bypassPermissions'
+}
 
 // Tests the generated program's own guards in an inert runtime against stand-in managers;
 // this suite needs no installed app.
@@ -115,7 +122,15 @@ function harness() {
         },
       }
     if (name === 'node:path') return path
-    if (name === 'node:fs') return { readFileSync: (filename: string) => filename }
+    if (name === 'node:fs')
+      return {
+        readFileSync: (filename: string) => filename,
+        // Only the new-chat folder check reads this: folders under C:\Users exist, anything else does not.
+        statSync: (folder: string) => {
+          if (!folder.startsWith('C:\\Users\\')) throw Error('ENOENT')
+          return { isDirectory: () => true }
+        },
+      }
     if (name === 'node:crypto')
       return {
         createHash: () => ({
@@ -698,6 +713,32 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
       verified: false,
     })
   })
+  // Owner, 2026-10-15: "If the app doesn't accept bypass or whatever, it should just be auto."
+  test('ultracode with bypass falls back to Auto when the app will not keep Bypass', async () => {
+    const h = harness()
+    const modes: string[] = []
+    h.manager.applyFlagSettings = async (
+      id: string,
+      flags: { ultracode: boolean; effortLevel: NativeRequest['effort'] },
+    ) => {
+      const s = h.manager.sessions.get(id)
+      s.sessionSettings = { ...s.sessionSettings, ultracode: flags.ultracode }
+      s.effort = flags.effortLevel
+    }
+    h.manager.setPermissionMode = async (id: string, mode: string) => {
+      modes.push(mode)
+      if (mode === 'bypassPermissions') throw new Error('Bypass is not available for this chat')
+      h.manager.sessions.get(id).permissionMode = mode
+      return true
+    }
+    expect(await h.run({ action: 'ultracode', effort: 'xhigh', bypass: true })).toMatchObject({
+      ok: true,
+      verified: true,
+      after: { permissionMode: 'auto' },
+      bypassRefused: 'Bypass is not available for this chat',
+    })
+    expect(modes).toEqual(['bypassPermissions', 'auto'])
+  })
   // 2026-10-09: each import started a second claude.exe only to hand over a claude://resume link.
   test('import makes the deep link call directly and reads the landing back', async () => {
     const h = harness()
@@ -784,5 +825,139 @@ describe('native inspector program guards (inert runtime, no connection)', () =>
     expect(await h.run({ sessionId: value })).toMatchObject({ ok: false, dispatch: 'not-sent' })
     expect(h.calls).toEqual([])
     expect(() => nativeProgram({ ...h.request, action: 'delete' as any })).toThrow('Unsupported')
+  })
+})
+
+describe('native new chat guards (inert runtime, no connection)', () => {
+  const newRequest: any = {
+    action: 'new',
+    cwd: 'C:\\Users\\example\\repo',
+    prompt: 'Survey the repo',
+    model: 'claude-opus-5-5',
+    effort: 'xhigh',
+  }
+
+  test('a bad new-chat request is refused while the program is built, before any call', () => {
+    const h = harness()
+    const build = (patch: Record<string, unknown>) => () =>
+      nativeProgram({ ...h.request, ...newRequest, ...patch } as any)
+    expect(build({ model: 'Fable' })).toThrow('New chat requires a model id')
+    expect(build({ effort: 'ultra' })).toThrow('New chat requires an effort')
+    expect(build({ cwd: 'repo\\relative' })).toThrow('New chat requires an absolute folder')
+    expect(build({ prompt: '   ' })).toThrow('New chat requires a prompt')
+    expect(build({ bypass: 'yes' })).toThrow('bypass must be a boolean')
+    expect(h.calls).toEqual([])
+  })
+  test('a new chat is refused before dispatch when the app has no start call', async () => {
+    const h = harness()
+    expect(await h.run(newRequest)).toMatchObject({ ok: false, dispatch: 'not-sent' })
+    expect(h.calls).toEqual([])
+  })
+  test('a new chat is refused before dispatch when its folder is not a directory', async () => {
+    const h = harness()
+    h.manager.startSession = async (options: StartSessionOptions) => {
+      h.calls.push({ startSession: options })
+      return 'local_new'
+    }
+    expect(await h.run({ ...newRequest, cwd: 'C:\\missing\\repo' })).toMatchObject({
+      ok: false,
+      dispatch: 'not-sent',
+    })
+    expect(h.calls).toEqual([])
+  })
+  test('a new chat starts once on the pinned model and effort and is read back by its CLI id', async () => {
+    const h = harness()
+    h.manager.startSession = async (
+      options: StartSessionOptions,
+      context: { userInitiated: boolean },
+    ) => {
+      h.calls.push({ startSession: options, context })
+      h.manager.sessions.set('local_new', {
+        sessionId: 'local_new',
+        cwd: options.cwd,
+        model: options.model,
+        effort: options.effort,
+        permissionMode: options.permissionMode,
+        cliSessionId: 'cli-new-1',
+        isRunning: true,
+        isArchived: false,
+      })
+      return 'local_new'
+    }
+    expect(await h.run({ ...newRequest, bypass: true })).toMatchObject({
+      ok: true,
+      verified: true,
+      dispatch: 'sent',
+      action: 'new',
+      sessionId: 'local_new',
+      cliSessionId: 'cli-new-1',
+      model: 'claude-opus-5-5',
+      effort: 'xhigh',
+      permissionMode: 'bypassPermissions',
+    })
+    expect(h.calls).toEqual([
+      {
+        startSession: {
+          cwd: 'C:\\Users\\example\\repo',
+          model: 'claude-opus-5-5',
+          effort: 'xhigh',
+          message: 'Survey the repo',
+          permissionMode: 'bypassPermissions',
+        },
+        context: { userInitiated: true },
+      },
+    ])
+  })
+  test('a chat the app started on another model or effort is reported, not verified', async () => {
+    const h = harness()
+    h.manager.startSession = async (options: StartSessionOptions) => {
+      h.calls.push({ startSession: options })
+      h.manager.sessions.set('local_new', {
+        sessionId: 'local_new',
+        cwd: options.cwd,
+        model: 'claude-sonnet-5-5[1m]',
+        effort: options.effort,
+        cliSessionId: 'cli-new-1',
+        isRunning: true,
+      })
+      return 'local_new'
+    }
+    expect(await h.run(newRequest)).toMatchObject({
+      ok: false,
+      verified: false,
+      dispatch: 'sent',
+      sessionId: 'local_new',
+      cliSessionId: 'cli-new-1',
+      started: true,
+      modelPinned: false,
+      effortPinned: true,
+      reason: 'the app started the chat on claude-sonnet-5-5[1m] at xhigh',
+    })
+    expect(h.calls).toHaveLength(1)
+  })
+  test('a start that returns no id never adopts another new chat', async () => {
+    const h = harness()
+    h.manager.startSession = async (options: StartSessionOptions) => {
+      h.calls.push({ startSession: options })
+      // A chat a person opened in the same moment, on the same folder and model.
+      h.manager.sessions.set('local_person', {
+        sessionId: 'local_person',
+        cwd: options.cwd,
+        model: options.model,
+        effort: options.effort,
+        cliSessionId: 'cli-person',
+        isRunning: true,
+      })
+      return undefined
+    }
+    expect(await h.run(newRequest)).toMatchObject({
+      ok: false,
+      verified: false,
+      dispatch: 'sent',
+      sessionId: null,
+      cliSessionId: null,
+      started: false,
+      reason: "the app's startSession returned no chat id (undefined)",
+    })
   })
 })

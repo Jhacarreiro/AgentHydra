@@ -10,9 +10,10 @@
 
 import { cpSync, existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
+import { type DoingKind, doingOf } from './climayte-doing'
 import { type CliMayteEta, ETA_INSTRUCTION, stripReview } from './climayte-eta'
 import { type CliMayteOriginFields, type OriginLookup, originFields } from './climayte-origin'
-import { type CliMayteOrigin, verdictCoversNewestWork } from './climayte-ping'
+import type { CliMayteOrigin } from './climayte-ping'
 import {
   type CliMaytePlacement,
   fitPct,
@@ -191,6 +192,48 @@ export interface CliMayteSealed {
   allowedTools: string[]
 }
 
+export type CliMayteRole = 'prime' | 'seat' | 'drone'
+
+/** A worker's role. Stored on every worker made since the roles (climayte-dispatch.ts newWorker);
+ *  an older one takes the role its chat flags give it. */
+export function roleOf(w: {
+  role?: CliMayteRole
+  chat?: boolean
+  desk?: { manager?: string }
+}): CliMayteRole {
+  if (w.role) return w.role
+  if (w.chat !== true) return 'drone'
+  return w.desk?.manager ? 'seat' : 'prime'
+}
+
+export const DRONE_REFUSAL =
+  'This session does not start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
+
+/** The `TOO BIG:` line a worker's report carries (DRONE_BRIEF, DRONE_REFUSAL): the job was too big for one
+ *  session and the line names the split its summoner should make. Null when the report has none. */
+export function tooBigOf(report: string | null | undefined): string | null {
+  for (const raw of (report ?? '').split('\n')) {
+    // Markdown around it counts: "**TOO BIG:** ..." or "- TOO BIG: ...".
+    const line = raw
+      .replace(/^[\s>*_#-]+/, '')
+      .replace(/^(TOO BIG:)[*_]+/, '$1')
+      .trim()
+    if (line.startsWith('TOO BIG:')) return line.replace(/\s+/g, ' ').slice(0, 400)
+  }
+  return null
+}
+
+/** A verdict covers the worker's newest work: the last verdict is stamped and no attempt started
+ *  after it. A follow-up or a sent-back fail makes the worker unjudged again. climayte_status's
+ *  `judged` is this and "not live". */
+export function verdictCoversNewestWork(w: {
+  verdicts?: Array<{ at?: number }>
+  attempts: Array<{ startedAt: number }>
+}): boolean {
+  const at = w.verdicts?.at(-1)?.at
+  return at !== undefined && !w.attempts.some((a) => a.startedAt >= at)
+}
+
 export interface CliMayteWorker {
   id: string // short id, e.g. 'w-' + 8 hex chars
   group: string // caller-chosen or generated 'g-' + 6 hex; groups one orchestration
@@ -222,6 +265,10 @@ export interface CliMayteWorker {
   message?: string
   error: string | null
   lastActivity: string | null // one line: the newest event summarised (summarizeEvent)
+  stepAt?: number // when lastActivity last changed (epoch ms)
+  saidLine?: string // the text of its newest narration line (`said:`, noteActivity)
+  saidAt?: number // when saidLine last changed (epoch ms)
+  stateAt?: { key: string; at: number } // when its state (stateKey, climayte-doing.ts) last changed
   costUsd: number // summed over every attempt's own spend (attemptSpend), from the kit
   tokens?: CliMayteTokens // summed the same way; absent on tasks recorded before 2026-09-30
   turns: number // summed `result.num_turns`
@@ -276,6 +323,11 @@ export interface CliMayteWorker {
    *  nothing, so it starts without waiting for the CPU (climayte-cpu.ts), and its CLI has no Bash or PowerShell and no
    *  MCP server but CliMayte's own (LIGHT_BRIEF, climayte-launch.ts). Absent: an ordinary worker. */
   light?: boolean
+  /** prime: a chat. seat: carries a persona (`persona`), or is a chat that manages a desk. drone:
+   *  everything else, which never starts workers (roleOf; the dispatch refusal, climayte.ts). */
+  role?: CliMayteRole
+  /** A seat's persona: a catalog id (hydra-core catalog), checked when the seat is dispatched. */
+  persona?: string
   /** How many times `check` has run. */
   checkRuns?: number
   /** The check running now, under a runner outside the daemon like an attempt's CLI (climayte.ts
@@ -516,6 +568,10 @@ export type CliMayteWorkerView = CliMayteOriginFields &
     verdicts?: Array<Omit<CliMayteVerdict, 'units'> & { pct: number | null }>
     account: string | null // `#<num> <name>`
     ranS: number // seconds its CLI sessions actually ran, summed over every attempt
+    doing: string | null // what it is doing now (doingOf), null when finished
+    doingSince: number | null // when that began (epoch ms)
+    doingKind: DoingKind | null // what kind of line doing is (climayte-doing.ts)
+    lastStepAt: number // when its newest event came (stepAt, else its state's time)
     /** The model the CLI reported at init on its newest attempt that got that far (`model` and
      *  `effort` are what was asked for). */
     reportedModel: string | null
@@ -563,6 +619,8 @@ export interface CliMayteWorkerReport {
   kind: CliMayteWorker['kind']
   model: string | null
   effort: string | null
+  role: CliMayteRole
+  persona?: string
   lastActivity: string | null
   waitUntil?: string | null
   error: string | null
@@ -628,6 +686,8 @@ export function toReport(
     kind: v.kind,
     model: v.model ?? null,
     effort: v.effort ?? null,
+    role: roleOf(v),
+    ...(v.persona ? { persona: v.persona } : {}),
     lastActivity: v.lastActivity ? v.lastActivity.slice(0, 120) : null,
     ...(v.waitUntil !== undefined ? { waitUntil: v.waitUntil } : {}),
     error: v.error,
@@ -699,7 +759,7 @@ export function climayteEffort(v: unknown): string | null {
 }
 
 export const WORKER_BRIEF =
-  "You are a CliMayte worker: a Claude Code CLI session AgentHydra started on one of the owner's accounts, at the owner's request, to do one task for an orchestrating chat. Do all of it yourself, in this session. " +
+  'Do all of your task yourself, in this session. ' +
   ETA_INSTRUCTION +
   " Nobody watches live: make the reasonable call and say which you made. Your session ends with your turn, and nothing wakes it for a background job: never end your turn to wait for a build, test or run; wait inside the turn, looping on its output with a time limit, and end the turn only with your final report or after climayte_ask. Only when blocked on a real decision the task does not settle, where a wrong guess would cost real work, call climayte_ask (question, options, context) and end your turn: whoever started you answers by message, and this session resumes with the answer. Never ask what you can find out or decide yourself. Follow the repository's rules: commit only the files you changed, and push if they say to. Never read or print a secret value. Your context is small: never Read more than 120 lines at once; grep -n first, then Read with offset and limit, and pipe command output through tail -40. Do not deploy, publish or release unless the task says to: the orchestrator ships finished work. If a repository hook asks about deploying, answer in one line that the orchestrator deploys, and do not explain how. End with a short report: what you did, the proof you saw (a command and what it printed), and anything left undone with the reason."
 
@@ -711,6 +771,10 @@ export const NO_COMMIT_BRIEF =
 /** Added to WORKER_BRIEF for a `light` worker, whose CLI has no shell: it must not plan on running anything. */
 export const LIGHT_BRIEF =
   'This task only reads and edits files: you have no shell, so run no build, test, install or git command; end your report with the command the orchestrator should run to check your change.'
+
+/** Added to WORKER_BRIEF for a drone, which never starts workers: a job too big for one session goes back to whoever started it. */
+export const DRONE_BRIEF =
+  'You never start workers. If this job is too big for one session, stop and end your report with a line starting TOO BIG: and a suggested split; whoever started you splits it.'
 
 export const HANDOFF_PROMPT =
   'This session was moved to another account because the previous one reached its usage limit or was signed out. Continue the task exactly where you left off. Do not redo steps that are already finished.'
@@ -853,6 +917,25 @@ export const READING_STALE_MS = 10 * 60_000
 /** The account's reading is older than READING_STALE_MS (readAt). */
 export const readingStale = (a: Pick<CliMayteAccount, 'readAt'>, now: number): boolean =>
   a.readAt != null && now - a.readAt > READING_STALE_MS
+
+/** No reading can open this account to work before a reset: it is at its 5-hour stop line with that
+ *  window's reset still ahead, or at its weekly one likewise. Usage only climbs inside a window, so
+ *  CliMayte does not read it again until then (buildPool's `due`). 2026-10-14: with work waiting,
+ *  every account was read every 10 minutes, the full ones too: a CLI login's readings came a median
+ *  10.1 minutes apart over a day, 2,772 readings in 24 hours. */
+export function fullUntilReset(
+  a: Pick<CliMayteAccount, 'sessionPct' | 'sessionResetsAt' | 'weekPct' | 'weekResetsAt'>,
+  caps: AccountCaps | null | undefined,
+  now: number,
+): boolean {
+  const ahead = (at: number | null | undefined): at is number => at != null && at > now
+  return (
+    (a.sessionPct != null && ahead(a.sessionResetsAt) && a.sessionPct >= sessionStopPct(caps)) ||
+    (a.weekPct != null &&
+      ahead(a.weekResetsAt) &&
+      a.weekPct >= accountWeekStopPct(caps, a.weekResetsAt, now))
+  )
+}
 
 /** No task starts on this account until its usage is read again (climayte-schedule startOn): the
  *  read is running, or its reading is missing (`readAt` null) or older than READING_STALE_MS and no
@@ -2009,17 +2092,27 @@ export function recentWorkers<T extends Pick<CliMayteWorker, 'status' | 'created
   ws: T[],
   limit: number | undefined,
 ): T[] {
-  const keep =
-    limit === undefined
-      ? ws
-      : [
-          ...ws.filter(isLive),
-          ...ws
-            .filter((w) => !isLive(w))
-            .sort((a, b) => b.updatedAt - a.updatedAt)
-            .slice(0, Math.max(0, limit)),
-        ]
-  return [...keep].sort((a, b) => b.createdAt - a.createdAt)
+  if (limit === undefined) return [...ws].sort((a, b) => b.createdAt - a.createdAt)
+  // The `limit` latest changes, newest first, an earlier worker winning a tie (as the stable sort of
+  // every finished worker this replaces did): one pass from the newest, which fills the list first, so
+  // an older worker is mostly one comparison (17,000 workers sorted on every list read, 2026-10-15).
+  const n = Math.max(0, limit)
+  const live: T[] = []
+  const recent: T[] = []
+  for (let i = ws.length - 1; i >= 0; i--) {
+    const w = ws[i]!
+    if (isLive(w)) {
+      live.push(w)
+      continue
+    }
+    if (!n || (recent.length === n && w.updatedAt < recent[n - 1]!.updatedAt)) continue
+    // Before every kept one it ties or beats: it is earlier than all of them.
+    let at = 0
+    while (at < recent.length && recent[at]!.updatedAt > w.updatedAt) at++
+    recent.splice(at, 0, w)
+    if (recent.length > n) recent.pop()
+  }
+  return [...live.reverse(), ...recent].sort((a, b) => b.createdAt - a.createdAt)
 }
 
 /** A list row for an orchestrator deciding what to do next: the report row (toReport) without the
@@ -2154,6 +2247,39 @@ export function ranSeconds(w: CliMayteWorker, now: number): number {
   )
 }
 
+export const WORKER_TEXT_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+
+export interface CliMayteLeanText {
+  readonly prompt: string
+  readonly resultChars: number
+}
+
+/** The lean list's text metadata, computed before a finished worker is packed. */
+export function leanText(w: CliMayteWorker): CliMayteLeanText {
+  const prompt = w.prompt
+  const prefix = prompt.slice(0, 300)
+  return {
+    // A sliced string can keep its entire long backing string alive. Copy code
+    // units so even a prefix ending on a lone surrogate stays byte-for-byte JS text.
+    prompt: prompt.length > 300 ? prefix.split('').join('') : prefix,
+    resultChars: statusTurns(w).reduce((sum, turn) => sum + turn.length, 0),
+  }
+}
+
+/** Copy ordinary list fields without invoking any packed-text accessor. */
+function withoutWorkerText(w: CliMayteWorker, text: CliMayteLeanText): CliMayteWorker {
+  const row: Record<string, unknown> = {}
+  for (const key of Object.keys(w)) {
+    if (key === 'prompt') row.prompt = text.prompt
+    else if (key === 'result') row.result = null
+    else if (!(WORKER_TEXT_FIELDS as readonly string[]).includes(key))
+      row[key] = (w as unknown as Record<string, unknown>)[key]
+  }
+  row.prompt = text.prompt
+  row.result = null
+  return row as unknown as CliMayteWorker
+}
+
 /** `result` and `results` as the view shows them (statusTurns); nothing when they stay as stored. */
 function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results'> | undefined {
   const turns = statusTurns(w)
@@ -2161,21 +2287,34 @@ function keptReport(w: CliMayteWorker): Pick<CliMayteWorker, 'result' | 'results
   return { results: turns, result: joinResults(turns) }
 }
 
-export function toView(w: CliMayteWorker, now: number, lookup?: OriginLookup): CliMayteWorkerView {
+export function toView(
+  w: CliMayteWorker,
+  now: number,
+  lookup?: OriginLookup,
+  text?: CliMayteLeanText,
+): CliMayteWorkerView {
   const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account
   const live = isLive(w)
   return {
-    ...w,
+    ...(text ? withoutWorkerText(w, text) : w),
     ...originFields(w.origin, lookup, w.trace),
+    role: roleOf(w),
     // Bookkeeping for repeated sends, up to 50 ids: no view reads it.
     sendIds: undefined,
-    prompt: w.prompt.slice(0, 300),
-    ...keptReport(w),
+    prompt: text ? text.prompt : w.prompt.slice(0, 300),
+    ...(text ? undefined : keptReport(w)),
     waitUntil: w.status === 'waiting' ? (w.waitUntil ?? null) : undefined,
     account: ref ? (ref.num === null ? ref.name : `#${ref.num} ${ref.name}`) : null,
     // Working time, not time since it was created: hours spent waiting for an account, or a day
     // between a finished task and its follow-up, are not time it ran.
     ranS: ranSeconds(w, now),
+    ...doingOf(w),
+    // A step from before this run began does not make a worker that just started read as quiet.
+    lastStepAt: Math.max(w.stepAt ?? 0, w.stateAt?.at ?? w.createdAt),
+    stepAt: undefined,
+    saidLine: undefined,
+    saidAt: undefined,
+    stateAt: undefined,
     reportedModel: [...w.attempts].reverse().find((a) => a.model)?.model ?? null,
     verdicts: w.verdicts?.map(({ units, ...v }) => ({
       ...v,

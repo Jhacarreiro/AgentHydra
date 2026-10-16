@@ -2,7 +2,6 @@
 
 export const HEADLESS_AUDIO = '/api/browser/audio'
 export const HEADLESS_AUDIO_MUTE = '/api/browser/audio/mute'
-export const HEADLESS_AUDIO_EVENT = 'browser.audio'
 
 export interface HeadlessAudioState {
   /** Chats with a page making sound now. */

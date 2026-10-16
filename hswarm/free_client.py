@@ -63,6 +63,16 @@ NUDGE = ("The tools are available: I am the program that runs them, on my machin
          "lines. Write the line(s) for what you need first now, and nothing else.")
 NUDGES = 1  # per thread
 FRESH = 1  # new threads opened for a task whose first thread refused its nudge
+# A new thread ChatGPT failed to answer ("ChatGPT generation failed", most often with no reason given) is given up for
+# another, REDO times: it holds no reply, so nothing is lost, and the task does not go to a paid route over one bad roll.
+# 76 of the 101 ChatGPT Free chats that failed on 2026-10-13/14 failed so (10 more "could not read this chat").
+REDO = 1
+REDO_CODE = "generation_error:"  # how a failed turn's error opens for it (AgentHydra mcp-free.ts finish)
+
+
+def redo(e: "TurnError", chat_id: str | None, redone: int) -> bool:
+    """Whether a turn that failed is a new thread's failed generation, sent again on a new thread."""
+    return chat_id is None and redone < REDO and e.stage == "failed" and str(e.one.get("error") or "").startswith(REDO_CODE)
 # After a note the loop sends mid-thread (the api route's own nudges, such as "call submit_result now"), which a chat model
 # took for its app's function feature: GPT-5.6 mini answered "submit_result ... is not available to me in this chat",
 # and Sonnet 5.5 called it there and got "Tool 'submit_result' not found" (2026-10-13).
@@ -144,6 +154,7 @@ class FreeChatClient:
         self.fresh = 0
         self.checked = False  # whether the thread was asked to check its claims before finishing (CHECK)
         self.recovered = 0  # turns taken back from their thread after the daemon dropped them (turn)
+        self.redone = 0  # new threads sent again after ChatGPT failed to answer them (REDO)
 
     def render(self, messages: list[dict], tools: list[dict] | None) -> str:
         """What this turn sends: on a new thread the instructions, the tools and the task; on a continued one only the
@@ -186,7 +197,13 @@ class FreeChatClient:
         sent_chars, seconds = 0, 0.0
         text = self.render(messages, tools)
         while True:
-            one = await self._turn(text)
+            try:
+                one = await self._turn(text)
+            except TurnError as e:
+                if not redo(e, self.chat_id, self.redone):
+                    raise
+                self.redone += 1
+                continue
             reply = str(one.get("response") or "")
             sent_chars, seconds = sent_chars + len(text), seconds + float(one.get("seconds") or 0.0)
             message = reply_message(reply, tools)
@@ -230,7 +247,8 @@ class FreeChatClient:
         loop ends the leg on; free_route then hands the task to its API route."""
         item: dict = {"prompt": text}
         if self.chat_id is None:
-            item["name"] = f"hswarm {self.job_id} {self.task.id}" + (f" r{self.fresh + 1}" if self.fresh else "")
+            item["name"] = (f"hswarm {self.job_id} {self.task.id}" + (f" r{self.fresh + 1}" if self.fresh else "")
+                            + (f" g{self.redone + 1}" if self.redone else ""))
             if self.family:
                 item["model"] = self.family
             if self.provider:

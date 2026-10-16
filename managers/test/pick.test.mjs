@@ -4,11 +4,11 @@ import os from "node:os";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { test } from "node:test";
-import { buildInjection, isContinuation, loadPersonas, pick } from "../router.mjs";
+import { buildInjection, isContinuation, loadPersonas, managerRoots, pick } from "../router.mjs";
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const fixtures = path.join(here, "fixtures");
-const { personas } = loadPersonas(fixtures);
+const { personas } = loadPersonas([fixtures]);
 const UI = "alpha-ui";
 const BACKEND = "beta-backend";
 const FLOOR = "floor-quick";
@@ -17,7 +17,7 @@ const COORD = "coord-big";
 const scores = ({ big = 0, domains = {} } = {}) => ({ big, quick: 0, domains: { [UI]: 0, [BACKEND]: 0, ...domains } });
 
 test("fixtures load as four managers with no skipped folders", () => {
-  const loaded = loadPersonas(fixtures);
+  const loaded = loadPersonas([fixtures]);
   assert.deepEqual(loaded.personas.map((p) => p.slug), [UI, BACKEND, COORD, FLOOR]);
   assert.deepEqual(loaded.skipped, []);
 });
@@ -98,11 +98,64 @@ test("a folder without a valid persona.json is ignored, an invalid one is named 
     mkdirSync(path.join(root, "bad-role"));
     writeFileSync(path.join(root, "bad-role", "persona.json"), JSON.stringify({ slug: "bad-role", name: "B", title: "T", role: "boss", brief: "brief.md" }));
     writeFileSync(path.join(root, "bad-role", "brief.md"), "x");
-    const loaded = loadPersonas(root);
+    const loaded = loadPersonas([root]);
     assert.deepEqual(loaded.personas, []);
     assert.deepEqual(loaded.skipped.map((s) => s.folder), ["bad-role", "broken"]);
     assert.match(loaded.skipped[1].reason, /persona\.json/);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }
+});
+
+// The people folder and the legacy managers folder under one scratch root: `build` fills them, `check` reads them, and the
+// root goes whatever the outcome.
+function withTwoHomes(build, check) {
+  const root = mkdtempSync(path.join(os.tmpdir(), "managers-homes-"));
+  try {
+    const homes = { people: path.join(root, "people", "manager"), legacy: path.join(root, "managers") };
+    build(homes);
+    check(homes);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
+function writeManager(home, slug, name) {
+  mkdirSync(path.join(home, slug), { recursive: true });
+  writeFileSync(path.join(home, slug, "persona.json"), JSON.stringify({ slug, name, title: "T", role: "floor", brief: "brief.md" }));
+  writeFileSync(path.join(home, slug, "brief.md"), name);
+}
+
+test("a manager in both homes loads once, from the people folder", () => {
+  withTwoHomes(
+    ({ people, legacy }) => {
+      writeManager(people, "both", "People Copy");
+      writeManager(legacy, "both", "Legacy Copy");
+    },
+    ({ people, legacy }) => {
+      const loaded = loadPersonas([people, legacy]);
+      assert.deepEqual(loaded.personas.map((p) => p.name), ["People Copy"]);
+      assert.equal(loaded.personas[0].dir, path.join(people, "both"));
+      assert.equal(loaded.personas[0].briefPath, path.join(people, "both", "brief.md"));
+      assert.deepEqual(loaded.skipped, []);
+    },
+  );
+});
+
+test("a manager only in the legacy folder still loads from it", () => {
+  withTwoHomes(
+    ({ people, legacy }) => {
+      mkdirSync(people, { recursive: true });
+      writeManager(legacy, "old-one", "Legacy Only");
+    },
+    ({ people, legacy }) => {
+      const loaded = loadPersonas([people, legacy]);
+      assert.deepEqual(loaded.personas.map((p) => [p.slug, p.dir]), [["old-one", path.join(legacy, "old-one")]]);
+    },
+  );
+});
+
+test("managerRoots reads AGENTHYDRA_PEOPLE_DIR and AGENTHYDRA_MANAGERS_DIR", () => {
+  const roots = managerRoots({ AGENTHYDRA_PEOPLE_DIR: "/scratch/people", AGENTHYDRA_MANAGERS_DIR: "/scratch/managers" });
+  assert.deepEqual(roots, [path.join("/scratch/people", "manager"), "/scratch/managers"]);
 });

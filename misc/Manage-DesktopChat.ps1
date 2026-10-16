@@ -30,7 +30,7 @@
 # virtualization or locale bug. -List is still passive and never activates anything.
 # If you are here to restore the no-focus promise: it costs correctness. Do not.
 #
-# WHY THIS EXISTS (owner directive, Michael, 2026-08-29): a running Electron app holds its chat
+# WHY THIS EXISTS (owner directive, 2026-08-29): a running Electron app holds its chat
 # list in memory, so a flag flipped on DISK stays on screen until the app restarts - and
 # restarting is not an option. The app's OWN archive action is the one channel that is both
 # immediate AND durable (the app makes the write, so its later memory->disk re-saves cannot undo

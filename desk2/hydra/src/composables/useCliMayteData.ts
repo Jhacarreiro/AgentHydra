@@ -35,11 +35,11 @@ const remote = shallowRef<{ enabled: boolean; pcs: CliMayteRemotePc[] } | null>(
 /** The running count both the page's Running filter and the tree's node show (both PCs when sharing is on). */
 const runningCount = computed(() => climayteRunningCount(workers.value, remote.value))
 /** What CliMayte has offloaded so far. */
-const totals = ref<CliMayteTotals | null>(null)
+const totals = shallowRef<CliMayteTotals | null>(null)
 /** What passed per kind of task (GET /api/corch/scorecard); shown in the stats card. */
-const scorecard = ref<CliMayteScorecard | null>(null)
+const scorecard = shallowRef<CliMayteScorecard | null>(null)
 /** Manager waves (GET /api/corch/waves; none when the route is missing). */
-const waves = ref<CliMayteWave[]>([])
+const waves = shallowRef<CliMayteWave[]>([])
 const loading = ref(false)
 const loaded = ref(false)
 /** The last read failed. Before anything loaded that is an error state; after, a banner over the last list. */

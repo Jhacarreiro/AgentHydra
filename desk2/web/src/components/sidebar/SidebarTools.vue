@@ -1,10 +1,9 @@
 <script setup lang="ts">
-import { computed, ref } from 'vue'
+import { computed, defineAsyncComponent, ref } from 'vue'
 import { Activity } from '@lucide/vue'
 import { icons, shellGlyphs } from '@/lib/icons'
 import { DropdownMenu, DropdownMenuContent, DropdownMenuItem, DropdownMenuSeparator, DropdownMenuTrigger } from '@/components/ui/dropdown-menu'
 import { Tip } from '@/components/ui/tooltip'
-import FilterMenuItems from '@/components/cloud/FilterMenuItems.vue'
 import { scopesNarrowed } from '@/components/cloud/logic'
 import { useCloud } from '@/components/cloud/store'
 import type { SidebarFilter } from './logic'
@@ -28,6 +27,8 @@ const BTN_SHAPE = 'flex size-6 shrink-0 items-center justify-center rounded-[var
 const HEADER_BTN = `${BTN_SHAPE} text-text-2 hover:text-text`
 
 const menuOpen = ref(false)
+// The Filter menu's items mount only when the menu opens, so its code loads then rather than with the sidebar.
+const FilterMenuItems = defineAsyncComponent(() => import('@/components/cloud/FilterMenuItems.vue'))
 </script>
 
 <template>

@@ -1,7 +1,7 @@
 """Every use of the swarm, costed and compared: one row per hswarm_run job and per hswarm_ask in a
 small SQLite database (~/.hswarm/hswarm.sqlite), with what the same work would have cost as Claude
 sub-agents on the ORCHESTRATOR's model at the time it asked, and a running total across every
-machine (owner ask, Michael, 2026-09-15 evening).
+machine (owner ask, 2026-09-15 evening).
 
 The estimate is measured, never assumed. A sub-agent PROFILE is the median token buckets of one real
 Claude sub-agent on this machine over the last 14 recorded days (Sonnet ones when there are enough),
@@ -141,12 +141,12 @@ def _backfill_days(c: sqlite3.Connection, batch: int = 500) -> None:
 
 
 def _migrate(c: sqlite3.Connection) -> None:
-    """Run numbers (Michael, 2026-09-16: "number each run so I can refer to one"): `seq` counts up per machine in
+    """Run numbers (the other owner, 2026-09-16: "number each run so I can refer to one"): `seq` counts up per machine in
     time order and never changes, so "run 196" means the same row next month. Added to DBs from before it."""
     cols = {r[1] for r in c.execute("PRAGMA table_info(utilizations)")}
     if "seq" not in cols:
         c.execute("ALTER TABLE utilizations ADD COLUMN seq INTEGER")
-    if "caller_account" not in cols:  # Michael, 2026-09-17: which ACCOUNT ordered this run, by its stable hashed id
+    if "caller_account" not in cols:  # The other owner, 2026-09-17: which ACCOUNT ordered this run, by its stable hashed id
         c.execute("ALTER TABLE utilizations ADD COLUMN caller_account TEXT")
     if "task_tokens" not in cols:  # each answered task's own [cache hits, cache misses, output]: caps its estimate at its size
         c.execute("ALTER TABLE utilizations ADD COLUMN task_tokens TEXT")
@@ -158,7 +158,7 @@ def _migrate(c: sqlite3.Connection) -> None:
                 if "duplicate column" not in str(e).lower():
                     raise
     day_cols = {r[1] for r in c.execute("PRAGMA table_info(claude_days)")}
-    for col in ("by_model", "rules"):  # Michael, 2026-09-16: which models did the Claude work, and were the rulings followed
+    for col in ("by_model", "rules"):  # The other owner, 2026-09-16: which models did the Claude work, and were the rulings followed
         if col not in day_cols:
             c.execute(f"ALTER TABLE claude_days ADD COLUMN {col} TEXT")
     if "tokens" not in day_cols:  # the day's own token buckets: the page's token view, beside the dollar one
@@ -946,7 +946,7 @@ def totals(c: sqlite3.Connection, machine: str | None = None) -> dict:
     """The running total: every machine's rows in this DB (imported shards included), or one machine's, with
     the Claude work done beside it on the same days and the share the swarm's estimate is of the two.
 
-    Three units, because a list-price dollar is not what a subscription charges (owner ask, Michael, 2026-09-17):
+    Three units, because a list-price dollar is not what a subscription charges (owner ask, 2026-09-17):
     `*_usd` is Anthropic's list price, `*_tokens` is the same work in tokens, and the plan figures convert a
     list dollar at what this fleet's plans actually cost per list dollar (see plan_rates)."""
     args = (machine,) if machine else ()
@@ -985,7 +985,7 @@ def plan_rates(c: sqlite3.Connection) -> dict:
 
     rate = (the plans of the accounts that DID work, charged per day they worked) / (the list-price value of the
     work they did on those days). On a subscription that is the honest conversion: list price is what the API
-    would have billed, the rate is what the plan billed instead (owner ask, Michael, 2026-09-17: count the
+    would have billed, the rate is what the plan billed instead (owner ask, 2026-09-17: count the
     accounts actually used, not every account that is open). Only complete days with a plan cost count; a
     machine with none of its own is priced at the fleet rate and flagged `estimated`. Nothing measured -> None."""
     rows = [dict(r) for r in c.execute(

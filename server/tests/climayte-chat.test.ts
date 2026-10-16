@@ -18,8 +18,14 @@ import {
   setCliMayteOwnerDir,
 } from '../src/climayte'
 import { workers } from '../src/climayte-core'
-import { CHAT_NOTE, cliArgv, writeWorkerMcp, writeWorkerSettings } from '../src/climayte-launch'
-import { type CliMayteAccount, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
+import {
+  CHAT_NOTE,
+  cliArgv,
+  workerEnv,
+  writeWorkerMcp,
+  writeWorkerSettings,
+} from '../src/climayte-launch'
+import { type CliMayteAccount, DRONE_BRIEF, LIGHT_BRIEF, WORKER_BRIEF } from '../src/climayte-lib'
 
 const scratch = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
 // The owner's `.claude` sits in a home of its own; the chat's folder is outside it, so the CLI's
@@ -67,6 +73,20 @@ const valueAfter = (argv: string[], flag: string): string | undefined =>
   argv[argv.indexOf(flag) + 1]
 
 describe('chat workers', () => {
+  test('every worker launches with its role, so the Hydra Core hook can skip seats and drones', () => {
+    const chat = dispatch({ title: 'a chat', chat: true })
+    const prime = workerEnv(chat, 'C:/Users/me/.claude')
+    expect(prime.AGENTHYDRA_ROLE).toBe('prime')
+    expect(prime.AGENTHYDRA_CLIMAYTE_CHAT).toBe('1')
+    expect(
+      workerEnv({ ...chat, role: 'seat', persona: 'person:example' }, 'C:/Users/me/.claude')
+        .AGENTHYDRA_ROLE,
+    ).toBe('seat')
+    expect(workerEnv(dispatch({ title: 'a drone' }), 'C:/Users/me/.claude').AGENTHYDRA_ROLE).toBe(
+      'drone',
+    )
+  })
+
   test('a chat gets no worker brief, the owner instructions and skills, and Opus xhigh', () => {
     const w = dispatch({ title: 'a chat', chat: true })
     expect(w).toMatchObject({ chat: true, effort: 'xhigh' })
@@ -192,7 +212,7 @@ describe('chat workers', () => {
       '--settings',
       'hooks.json',
       '--append-system-prompt',
-      WORKER_BRIEF,
+      `${WORKER_BRIEF} ${DRONE_BRIEF}`,
     ])
   })
 
@@ -221,8 +241,30 @@ describe('chat workers', () => {
   })
 
   // 2026-10-13: Manager Hydra's router (a UserPromptSubmit hook in the owner's settings) never ran in a CliMayte chat: its
-  // account folder has settings of its own, and the launch carried only the guards.
-  test("a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
+  // account folder has settings of its own, and the launch carried only the guards. Since 2026-10-15 the router rides
+  // only with the CrAInium people add-on (people-addon.ts), so the home is pointed at one whose settings name a door, as
+  // the add-on's own tests do: on a PC without the add-on the chat had no router and this failed.
+  test("with the people add-on, a chat carries the owner's Manager Hydra router hook; a worker does not", () => {
+    const saved = { USERPROFILE: process.env.USERPROFILE, HOME: process.env.HOME }
+    mkdirSync(join(HOME, '.agenthydra'), { recursive: true })
+    writeFileSync(
+      join(HOME, '.agenthydra', 'people-store.json'),
+      JSON.stringify({ crainium: { command: ['node', 'fake-people-door.mjs'] } }),
+    )
+    process.env.USERPROFILE = HOME
+    process.env.HOME = HOME
+    try {
+      routedChatCarriesTheRouter()
+    } finally {
+      for (const [key, value] of Object.entries(saved)) {
+        if (value === undefined) delete process.env[key]
+        else process.env[key] = value
+      }
+      rmSync(join(HOME, '.agenthydra'), { recursive: true, force: true })
+    }
+  })
+
+  function routedChatCarriesTheRouter(): void {
     // As managers/install.mjs writes it on Windows.
     const router = { type: 'command', command: 'node "C:\\x\\managers\\router.mjs"' }
     writeFileSync(
@@ -246,7 +288,7 @@ describe('chat workers', () => {
     rmSync(join(OWNER, 'settings.json'))
     const unrouted = dispatch({ title: 'a chat, no router installed', chat: true })
     expect(prompts(writeWorkerSettings(unrouted, acct))).toBeUndefined()
-  })
+  }
 
   // 2026-10-13: core mode leaves every CLAUDE.md holding only the Hydra Core line, which orders a core_scope call a
   // worker (no AgentHydra MCP, no chat key) cannot make; its settings leave both files out.
@@ -287,6 +329,35 @@ describe('chat workers', () => {
     expect(workerStops.some(isCore)).toBe(false)
     expect(workerStops.map((g) => g.hooks[0]?.type)).toEqual(['http'])
     rmSync(join(CORE, 'ON'))
+  })
+
+  // 2026-10-15: a PC on the CrAInium flowchart has a CRANIUM file and no ON (ON is the local core mode: no owner
+  // CLAUDE.md, manager tools refused). Its terminal sessions walked the flowchart through the owner's own hooks; its
+  // chats got the Hydra Core hook only while ON was there, so they never did. 2026-10-16: the hook keeps a turn's ledger
+  // line at Stop, so a chat's Stop runs it too; without it no CliMayte chat turn reached the ledger.
+  test('with a CRANIUM file and no ON, a chat runs the Hydra Core hook and keeps the owner instructions', () => {
+    writeFileSync(join(CORE, 'CRANIUM'), '')
+    const acct = { configDir: join(scratch, 'acct') } as CliMayteAccount
+    const hooks = (file: string) =>
+      JSON.parse(readFileSync(file, 'utf8')).hooks as Record<
+        string,
+        Array<{ hooks: Array<{ command?: string }> }> | undefined
+      >
+    const isCore = (g: { hooks: Array<{ command?: string }> }) =>
+      g.hooks.some((h) => h.command?.endsWith('hydra-core/hook.mjs"'))
+    const chat = dispatch({ title: 'a cranium chat', chat: true })
+    const chatHooks = hooks(writeWorkerSettings(chat, acct))
+    expect(chatHooks.UserPromptSubmit?.some(isCore)).toBe(true)
+    expect(chatHooks.SessionStart?.some(isCore)).toBe(true)
+    expect(chatHooks.Stop?.some(isCore)).toBe(true)
+    const argv = cliArgv(chat, 'sid', false, 'hooks.json', null)
+    const prompt = readFileSync(valueAfter(argv, '--append-system-prompt-file') ?? '', 'utf8')
+    expect(prompt).toContain(OWNER_RULES)
+    const worker = hooks(writeWorkerSettings(dispatch({ title: 'a cranium worker task' }), acct))
+    expect(worker.UserPromptSubmit).toBeUndefined()
+    expect(worker.SessionStart).toBeUndefined()
+    expect(worker.Stop?.some(isCore) ?? false).toBe(false)
+    rmSync(join(CORE, 'CRANIUM'))
   })
 
   // 2026-10-13: HSwarm's edit-only builders waited behind the CPU gate with the build-and-test workers; a light

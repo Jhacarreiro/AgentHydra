@@ -38,6 +38,7 @@ import {
 import { repointClaudeStartShortcut } from '../claude-start-shortcut'
 import { buildDetachedSpawn } from '../detached-spawn.mjs'
 import { pathKey } from '../path-key'
+import { readAppSignedOut } from './app-sign-in-log'
 import { detectDesktopInstall } from './desktop-install'
 import { recordInstanceLaunches, recordInstanceRunning } from './instance-launches'
 import { readInstanceMetaMap } from './instance-meta'
@@ -344,6 +345,7 @@ async function buildInstanceRow(
     memoryBytes,
     account,
     loginUuid: readLoginUuid(meta.dir),
+    appSignedOut: running ? readAppSignedOut(meta.dir) : null,
     isExternal: meta.isExternal,
     isDefault: isDefaultClaudeDir(meta.dir),
     label: ui?.label ?? null,

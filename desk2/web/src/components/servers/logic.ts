@@ -3,6 +3,7 @@
 // input, and the pane's width.
 import { BROWSER_LIVE, type BrowserLiveIn, type BrowserOpenRequest, type BrowserProfiles, type BrowserTab, isRealPage } from '@shared/browser'
 import { DW_PROXY, type DevWebCompany, type DevWebFoundRow, type DevWebProcess, type DevWebProcessStatus, type DevWebProject, type DevWebStatus, type LocalServer, processAddress, projectForCwd } from '@shared/devwebui'
+import { ago } from './info/format'
 import { shortName } from './names'
 
 /** What the pane draws. */
@@ -274,11 +275,7 @@ export function liveSocketUrl(loc: { protocol: string; host: string }, cwd: stri
 export function formatAgo(iso: string | null, now = Date.now()): string {
   const t = iso ? Date.parse(iso) : Number.NaN
   if (Number.isNaN(t)) return 'never used'
-  const s = Math.max(0, Math.round((now - t) / 1000))
-  if (s < 60) return 'just now'
-  if (s < 3600) return `${Math.floor(s / 60)} min ago`
-  if (s < 86400) return `${Math.floor(s / 3600)} h ago`
-  return `${Math.floor(s / 86400)} d ago`
+  return ago(t, now)
 }
 
 export interface ProfileRow {
@@ -482,7 +479,7 @@ export function syncPages(s: TabsState, profile: string, pages: BrowserTab[] | n
     if (have.has(p.id) || !isRealPage(p.url)) continue
     const holder = tabs.findIndex((t) => t.kind === 'saved' && t.target === profile && !t.page)
     if (holder >= 0) tabs = tabs.map((t, i) => (i === holder ? { ...t, page: p.id, url: p.url } : t))
-    else tabs = [...tabs, { id: mkId(), kind: 'saved', target: profile, proc: null, page: p.id, url: p.url }]
+    else tabs.push({ id: mkId(), kind: 'saved', target: profile, proc: null, page: p.id, url: p.url })
   }
   const same = tabs.length === s.tabs.length && tabs.every((t, i) => t === s.tabs[i])
   if (same && next === s) return s

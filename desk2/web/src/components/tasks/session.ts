@@ -58,6 +58,7 @@ async function tick(id: string): Promise<void> {
 
 // A hidden window reads nothing; showing it again reads every session on screen at once.
 if (typeof document !== 'undefined' && typeof document.addEventListener === 'function') {
+  // arkitect-allow: side-effect-teardown the one module-level listener, for the window's life; the readers it pauses are per view
   document.addEventListener('visibilitychange', () => {
     for (const [id, r] of readers) {
       if (document.hidden) halt(r)

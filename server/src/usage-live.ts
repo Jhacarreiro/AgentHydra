@@ -49,6 +49,29 @@ export function withLiveReading(
   } as UsageSnapshot
 }
 
+/** A desktop profile's reading with its linked CLI login's laid over it when that one is newer. The two are one
+ *  Anthropic account signed in twice (the link), so the login's check, keepalive read-back, CliMayte stream reading
+ *  or limit wall is the desktop row's quota too. Owner, 2026-10-14: "all the claude 5 hour stats seem broke"; the
+ *  desktop rows' 5-hour figures were 50 minutes old (one past its reset, so a dash) while the same accounts' CLI
+ *  rows were current. The desktop row keeps its own account line and the hints only its running app gives. */
+export function withLinkedReading(
+  desktop: UsageSnapshot | null,
+  cli: UsageSnapshot | null,
+): UsageSnapshot | null {
+  if (!cli) return desktop
+  if (desktop && (Date.parse(cli.capturedAt) || 0) <= (Date.parse(desktop.capturedAt) || 0))
+    return desktop
+  if (!desktop) return cli
+  return {
+    ...desktop,
+    session: cli.session,
+    weekAll: cli.weekAll,
+    weekModel: cli.weekModel ?? desktop.weekModel,
+    capturedAt: cli.capturedAt,
+    source: cli.source,
+  }
+}
+
 /** The snapshot with a CliMayte limit wall laid over it: an account CliMayte saw hit its 5-hour (or
  *  weekly) limit shows that window at its limit, at least 100%, until the wall ends. Field note 19
  *  (2026-09-30): five accounts walled until 11:20pm-12:10am still read 43-50% from snapshots taken

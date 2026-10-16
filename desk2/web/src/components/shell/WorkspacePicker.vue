@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { computed, nextTick, onMounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, ref, shallowRef, watch } from 'vue'
 import type { ChatSummary, ProjectEntry } from '@shared/protocol'
 import { Check, ChevronDown, Folder } from '@lucide/vue'
 import { Popover, PopoverContent, PopoverTrigger } from '@/components/ui/popover'
@@ -15,9 +15,9 @@ const props = defineProps<{ chat: ChatSummary }>()
 const src = useShellSource()
 
 const PILL =
-  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[498px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
+  'ms-1 flex h-5 min-w-16 shrink-100 items-center @max-[553px]:hidden rounded-(--radius-6) bg-(--fill-secondary) px-1.25 text-ui-sm leading-4 text-text-2'
 
-const projects = ref<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
+const projects = shallowRef<ProjectEntry[]>(src.cachedProjects?.()?.projects ?? [])
 const open = ref(false)
 const query = ref('')
 const active = ref(0)
@@ -106,7 +106,7 @@ function onKey(e: KeyboardEvent) {
         <button
           type="button"
           data-fit="folder"
-          :class="[PILL, 'cursor-default gap-0.5 transition-colors duration-[60ms] hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent data-[state=open]:bg-fill-hover data-[state=open]:text-text']"
+          :class="[PILL, 'cursor-default gap-0.5 transition-colors duration-60 hover:bg-fill-hover hover:text-text focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-accent data-[state=open]:bg-fill-hover data-[state=open]:text-text']"
           :aria-label="`Project ${label}, change project`"
         >
           <span class="truncate">{{ label }}</span>
@@ -132,7 +132,7 @@ function onKey(e: KeyboardEvent) {
           role="option"
           :aria-selected="r.current"
           :title="r.project.path"
-          :class="[MENU_ITEM, 'w-full justify-start text-left', active === i && 'bg-fill-hover']"
+          :class="[MENU_ITEM, 'w-full justify-start text-start', active === i &&'bg-fill-hover']"
           @mouseenter="active = i"
           @click="move(r.project.path)"
         >
@@ -146,7 +146,7 @@ function onKey(e: KeyboardEvent) {
       <div role="separator" :class="MENU_SEPARATOR" />
       <button
         type="button"
-        :class="[MENU_ITEM, 'w-full justify-start text-left', active === chooseRow && 'bg-fill-hover']"
+        :class="[MENU_ITEM, 'w-full justify-start text-start', active === chooseRow && 'bg-fill-hover']"
         @mouseenter="active = chooseRow"
         @click="chooseFolder"
       >

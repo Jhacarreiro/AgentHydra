@@ -4,7 +4,7 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
 import { historyToItems, parseJsonl } from '../../src/engine/normalize'
-import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, readTail, sessionJsonlItems, sessionJsonlOlder, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
+import { claudeProjectRoots, createJsonlReader, encodeProjectDir, findSessionJsonl, lastContextTokens, readTail, sessionJsonlItems, sessionJsonlOlder, sessionJsonlWork, workerJsonlItems } from '../../src/bridge/session-jsonl'
 
 const temps: string[] = []
 const temp = () => {
@@ -79,6 +79,24 @@ describe('outside session .jsonl', () => {
     const items = sessionJsonlItems(f)
     expect(items.length).toBe(2)
     expect(readTail(f, lastTwo.length + 5).endsWith(lastTwo)).toBe(true)
+  })
+
+  test("its context is the last main-thread reply's prompt and answer, not a subagent's or a synthetic one, and none without usage", () => {
+    const dir = temp()
+    const f = join(dir, 's.jsonl')
+    const reply = (n: number, usage: object, extra: object = {}) =>
+      JSON.stringify({ type: 'assistant', uuid: `a${n}`, timestamp: at(n), message: { id: `msg_${n}`, role: 'assistant', model: 'claude-opus-5-5', content: [{ type: 'text', text: 'ok' }], usage }, ...extra })
+    writeFileSync(f, lines())
+    expect(lastContextTokens(f)).toBeNull()
+    appendFileSync(f, '\n' + [
+      reply(3, { input_tokens: 10, cache_read_input_tokens: 1000, cache_creation_input_tokens: 200, output_tokens: 50 }),
+      reply(4, { input_tokens: 900_000, output_tokens: 1 }, { isSidechain: true }),
+      userRec(5, 'and now?'),
+      reply(6, { input_tokens: 4, cache_read_input_tokens: 1250, cache_creation_input_tokens: 30, output_tokens: 80 }),
+      JSON.stringify({ type: 'assistant', uuid: 'a7', timestamp: at(7), message: { id: 'msg_7', role: 'assistant', model: '<synthetic>', content: [{ type: 'text', text: 'No response requested.' }], usage: { input_tokens: 0, output_tokens: 0 } } }),
+      reply(8, { input_tokens: 0, output_tokens: 0 }, { isSidechain: true }),
+    ].join('\n'))
+    expect(lastContextTokens(f)).toBe(4 + 1250 + 30 + 80)
   })
 
   test('reads on from where it stopped: an appended line, a line finished later, a byte that is not UTF-8', () => {
@@ -256,6 +274,30 @@ describe('outside session .jsonl', () => {
     read(f)
     expect(read.startOf(f)).toBeGreaterThan(start)
     expect(await both()).toEqual(whole())
+  })
+
+  test("shows the pictures a tool returned and the person's own, from the media cache", () => {
+    const dir = temp()
+    const f = join(dir, `${SID}.jsonl`)
+    const png = 'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNk+M9QDwADhgGAWjR9awAAAABJRU5ErkJggg=='
+    const picture = { type: 'image', source: { type: 'base64', media_type: 'image/png', data: png } }
+    writeFileSync(f, [
+      { type: 'user', uuid: 'u1', timestamp: at(0), message: { role: 'user', content: [{ type: 'text', text: 'what is on this?' }, picture] } },
+      { type: 'assistant', uuid: 'a1', timestamp: at(1), message: { id: 'msg_1', role: 'assistant', content: [{ type: 'tool_use', id: 'tu1', name: 'Read', input: { file_path: 'C:/Users/me/shot.png' } }] } },
+      { type: 'user', uuid: 'u2', timestamp: at(2), message: { role: 'user', content: [{ type: 'tool_result', tool_use_id: 'tu1', content: [picture] }] } },
+    ].map((r) => JSON.stringify(r)).join('\n') + '\n')
+    const home = process.env.HYDRA_DESK_HOME
+    process.env.HYDRA_DESK_HOME = join(dir, 'home')
+    try {
+      const items = sessionJsonlItems(f)
+      const user = items.find((i) => i.kind === 'user') as Extract<TranscriptItem, { kind: 'user' }>
+      const read = items.find((i) => i.kind === 'tool_use') as Extract<TranscriptItem, { kind: 'tool_use' }>
+      expect(user.images?.map((i) => i.url)).toEqual([expect.stringMatching(/^\/api\/media\/[0-9a-f]{64}\.png$/)])
+      expect(read.result?.images?.map((i) => i.url)).toEqual(user.images!.map((i) => i.url))
+    } finally {
+      if (home === undefined) delete process.env.HYDRA_DESK_HOME
+      else process.env.HYDRA_DESK_HOME = home
+    }
   })
 
   test('keeps the full text of an answer: newlines, lists, headings and fences', () => {

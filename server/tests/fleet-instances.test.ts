@@ -62,6 +62,36 @@ test('identity joins: email/plan attach, signedIn reflects loginUuid, ref is bui
   expect(r?.account?.planLabel).toBe('Max 20x')
 })
 
+test('a running app that signed itself out is not signed in, though its stored login names an account', async () => {
+  // Landing, moves and fan-outs choose an app by signedIn; one on its sign-in page cannot run a chat.
+  const line = '[account] Navigated to /logout, synthesizing logged-out'
+  const rows = await fleetInstances({
+    list: async () => [
+      inst({
+        num: 7,
+        dir: 'C:\\i\\work',
+        loginUuid: 'uuid-1',
+        isRunning: true,
+        pid: 42,
+        appSignedOut: line,
+      }),
+      inst({
+        num: 8,
+        dir: 'C:\\i\\home',
+        loginUuid: 'uuid-2',
+        isRunning: true,
+        pid: 43,
+        appSignedOut: null,
+      }),
+    ],
+    account: async () => acct({ accountUuid: 'uuid-1' }),
+  })
+  expect(rows.map((r) => [r.num, r.signedIn, r.appSignedOut])).toEqual([
+    [7, false, line],
+    [8, true, null],
+  ])
+})
+
 test('unknown identity is null, and a throwing resolver does not sink the list', async () => {
   const rows = await fleetInstances({
     list: async () => [

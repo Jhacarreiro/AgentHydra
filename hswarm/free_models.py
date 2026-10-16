@@ -56,9 +56,8 @@ def _default(a: dict) -> str | None:
     return DEFAULT_TEXT if DEFAULT_TEXT in {x for x in map(_slug, a.get("offers") or []) if x} else None
 
 
-def analyse(status: dict, previous: dict, now: str) -> dict:
-    """The report for one free_status read against the stored state (no I/O)."""
-    accounts = _accounts(status)
+def _tally(accounts: list[dict]) -> tuple[dict[str, int], dict[str, set[str]], bool]:
+    """How many accounts list each slug, the slugs each role resolves to, and whether any account reported roles."""
     offers: dict[str, int] = {}
     roles: dict[str, set[str]] = {r: set() for r in ROLES}
     reported = False
@@ -70,33 +69,41 @@ def analyse(status: dict, previous: dict, now: str) -> dict:
             for r in ROLES:
                 if a["roles"].get(r):
                     roles[r].add(a["roles"][r])
-    seen = previous.get("slugs") or {}
-    first = not seen  # the first scan records what is listed; only a later one calls a model new, as Desk does
+    return offers, roles, reported
+
+
+def _changes(offers: dict[str, int], seen: dict, first: bool) -> tuple[list[str], list[str]]:
+    """The slugs listed now that no earlier scan saw, and the ones it saw that no account lists now."""
     # A slug listed again after a scan saw it gone is new again, as Desk's notice treats it.
     new = [] if first else sorted(s for s in offers if s not in seen or (seen[s] or {}).get("gone"))
     gone = sorted(s for s, v in seen.items() if s not in offers and not (v or {}).get("gone"))
-    resolves = {r: sorted(roles[r]) if reported else NOT_REPORTED for r in ROLES}
-    asks = {}
-    for profile, entries in config.ROUTE_VIA_FREE_TOOL_ASKS.items():
-        rows = []
-        for ask in entries:
-            model, _, provider = ask.partition("@")
-            if provider and provider != "chatgpt":
-                means = f"{provider} account"
-            elif not model:
-                defaults = sorted({d for d in map(_default, accounts) if d})
-                means = ", ".join(defaults) + " (each account's default)" if defaults else "each account's default text model"
-            elif model in resolves:
-                v = resolves[model]
-                means = v if isinstance(v, str) else (", ".join(v) or "no account lists one")
-            elif model in PINNED:
-                n = offers.get(PINNED[model], 0)
-                means = f"{PINNED[model]} (pinned; {n} of {len(accounts)} accounts list it)"
-            else:
-                n = offers.get(model, 0)
-                means = f"{model} ({n} of {len(accounts)} accounts list it)"
-            rows.append({"ask": ask, "means": means})
-        asks[profile] = rows
+    return new, gone
+
+
+def _means(ask: str, accounts: list[dict], offers: dict[str, int], resolves: dict) -> str:
+    """What one route_via_free_tool_asks entry means today."""
+    model, _, provider = ask.partition("@")
+    if provider and provider != "chatgpt":
+        return f"{provider} account"
+    if not model:
+        defaults = sorted({d for d in map(_default, accounts) if d})
+        return ", ".join(defaults) + " (each account's default)" if defaults else "each account's default text model"
+    if model in resolves:
+        v = resolves[model]
+        return v if isinstance(v, str) else (", ".join(v) or "no account lists one")
+    if model in PINNED:
+        n = offers.get(PINNED[model], 0)
+        return f"{PINNED[model]} (pinned; {n} of {len(accounts)} accounts list it)"
+    n = offers.get(model, 0)
+    return f"{model} ({n} of {len(accounts)} accounts list it)"
+
+
+def _asks(accounts: list[dict], offers: dict[str, int], resolves: dict) -> dict[str, list[dict]]:
+    return {profile: [{"ask": ask, "means": _means(ask, accounts, offers, resolves)} for ask in entries]
+            for profile, entries in config.ROUTE_VIA_FREE_TOOL_ASKS.items()}
+
+
+def _slugs(offers: dict[str, int], seen: dict, now: str) -> dict:
     slugs = {}
     for s, n in offers.items():
         old = seen.get(s) or {}
@@ -104,9 +111,20 @@ def analyse(status: dict, previous: dict, now: str) -> dict:
     for s, old in seen.items():
         if s not in offers:
             slugs[s] = {**old, "gone": True}
+    return slugs
+
+
+def analyse(status: dict, previous: dict, now: str) -> dict:
+    """The report for one free_status read against the stored state (no I/O)."""
+    accounts = _accounts(status)
+    offers, roles, reported = _tally(accounts)
+    seen = previous.get("slugs") or {}
+    first = not seen  # the first scan records what is listed; only a later one calls a model new, as Desk does
+    new, gone = _changes(offers, seen, first)
+    resolves = {r: sorted(roles[r]) if reported else NOT_REPORTED for r in ROLES}
     return {"scanned_at": now, "first": first, "accounts": len(accounts), "offers": offers, "roles": resolves,
             "default_moved": [a.get("account") for a in accounts if a.get("default_moved")],
-            "new": new, "gone": gone, "asks": asks, "slugs": slugs}
+            "new": new, "gone": gone, "asks": _asks(accounts, offers, resolves), "slugs": _slugs(offers, seen, now)}
 
 
 async def scan() -> dict:

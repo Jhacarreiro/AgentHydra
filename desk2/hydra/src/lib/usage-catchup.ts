@@ -27,7 +27,7 @@ import type { UsageSnapshot } from '@/lib/api'
 /**
  * How old a cached reading may be before an opening window re-checks it.
  *
- * ⛔ OWNER RULE (Michael, 2026-09-07): *"I don't want AgentHydra constantly checking for updates on
+ * ⛔ OWNER RULE (2026-09-07): *"I don't want AgentHydra constantly checking for updates on
  * the instances. I only want it to do it when I tell it to, like when I click the refresh button.
  * Or maybe at best, every 30 minutes. It seems to do it when I refresh the page, or way more
  * often."* Thirty minutes is therefore a CEILING on how often anything checks by itself, not a

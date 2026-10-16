@@ -58,8 +58,13 @@ right-click menus, pop-ups or developer-menu toggles.
   transcript bytes, title/model/effort/permissions and bystander state checks.
 
 Production native coverage is **archive and migration-source cleanup**, plus the
-**native send** that delivers a `peer_only` message into a chat (see the runbook). General
-destination import/settings restoration, unarchive, new-chat/start/stop/resume
+**native send** that delivers a `peer_only` message into a chat (see the runbook), and
+the moved chat's effort and Bypass on a move into a running app
+(`server/src/move-settings-in-app.ts`, one verified `tryNativeUltracode` call), and
+the **native start** of a new chat in a folder on a pinned model and effort
+(`POST /api/instances/:dir/native-new`, `server/src/claude-native-new.ts`), which
+fan_out's `spawn_chat.py` uses on every profile with native control. General
+destination import/settings restoration, unarchive, stop/resume
 have not all been converted. Use their existing guarded workflows; do not claim
 an entire migration is native or substitute a one-off POC for production tooling.
 Other message delivery (the peer pipe, the composer) is a separate feature.
@@ -72,9 +77,21 @@ The old window (`web/`) was removed in 2.0.0; `orchestrator/web/` is a separate 
 the current compiler compatibility note are in the native-control runbook.
 
 The root suite's preload (`tests/setup.ts`, `tests/real-home-guard.ts`) refuses a test's write into the developer's
-real agent homes (`~/.claude`, `~/.claude-instances`, `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
+real agent homes (`~/.claude` and `~/.claude-instances`, docs/CLAUDE-CONFIG-LAYOUT.md; `~/.codex`, `~/.hswarm`, `~/.hydra-desk-2`, and the
 `CLAUDE_CONFIG_DIR` / `CODEX_HOME` the shell started with) and a remove of the working folder; point a test at its
-scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md).
+scratch folder instead. desk2's suites have their own preload (desk2/AGENTS.md). A test that reads people (a lead, a
+manager, a seat's persona) brings its own people door with `usePeopleDoor()` (`server/tests/hydra-core-fixture.ts`): the
+real one is this PC's, so without it a test passes or fails by machine (docs/REFERENCE.md, "Checks").
+
+The docs in `docs/` live in git: `.crainium.json` says docs home `git` (the owner, 2026-10-15), so edit them here with
+Edit or Write. Never put an AgentHydra doc to the CrAInium with the docs tool expecting it to stay: git's text replaces
+the CrAInium copy on its next docs push.
+
+Hydra Core lives in `hydra-core/` and `server/src/hydra-core/` (see `hydra-core/README.md`).
+People sync to CrAInium, the owners' private persona store, through the private sue-dredd checkout's people door
+(docs/PEOPLE.md); AgentHydra's own API (`cloud/agenthydra-api/`) was retired on 2026-10-15. People and persona text never
+enter the repo (the pre-commit people guard, `.githooks/check-people.mjs`), and repo files never
+carry the real API host or server address: write `api.agenthydra.example.com`.
 
 ## Releases, CHANGELOG and READMEs (owner, 2026-10-06)
 
