@@ -7,6 +7,7 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Queued ChatGPT requests stop repeatedly probing the disk on Windows.** They wait for an available browser slot through the operating system, with the same three-request ceiling, deadlines and cancellation behavior. Existing file locks keep older helpers compatible.
 - **Finished Free batch replies expire while Hydra is idle.** The documented six-hour retention no longer depends on starting another batch. Active batches remain available until their work settles.
 - **Free browser responses avoid unnecessary background threads.** Lightweight network status callbacks run on the browser's existing event loop, preserving message verification and single-send behavior.
 - **CliMayte saves skip a redundant history scan.** Each checkpoint keeps its existing persistence order while checking only revived or removed files for cleanup. Cancelled attempts also release their parsed logs if spend calculation fails.

@@ -992,6 +992,12 @@ ChatGPT's small network-response status callback runs on Zendriver's event loop 
 dispatching each response to Python's executor. Blocking HTTP readback stays off the loop;
 account checks, Temporary Chat verification and the single-send guard remain unchanged.
 
+On Windows, browser-slot waiters block on three named kernel mutexes instead of probing three
+files every 100 ms. The same file locks remain authoritative across old helpers and aliased
+paths: native API failure or legacy file contention returns to the original scan with its
+remaining deadline. File ownership releases before mutex ownership; abandoned mutexes recover
+after a process exits. Other platforms keep the existing file-lock queue.
+
 AgentHydra's MCP batch replies are retained for six hours from batch creation. One idle expiry
 timer releases finished batches even when no later tool call arrives; pending work remains
 available until it settles. This releases daemon memory while keeping stored account/thread metadata intact.
