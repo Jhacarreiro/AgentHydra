@@ -1545,7 +1545,11 @@ setAutoUpdateHooks({
   // Don't auto-update (which relaunches the daemon) while dispatch runs or CliMayte workers are in
   // flight, for up to an hour; then it installs past them (auto-update.ts AUTO_UPDATE_MAX_DEFER_S).
   hasActiveRuns: () => activeCount() + climayteRunningCount() > 0,
-  hasUnsafeWork: () => freeBatchLifecycle.activeCount() > 0,
+  // Work a restart would LOSE holds the update for as long as it runs, as restartRefusal does for a
+  // person's restart: a Free batch, and a chat move, which a restart leaves half-done (orchestrator.ts
+  // moveRestartRefusal). Until 2026-10-16 only the Free batch held it, so an unattended update could
+  // relaunch straight through a migrate_batch.
+  hasUnsafeWork: () => freeBatchLifecycle.activeCount() > 0 || moveRestartRefusal(false) !== null,
   relaunch: () => relaunchDaemon(),
 })
 

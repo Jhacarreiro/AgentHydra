@@ -364,7 +364,8 @@ def routing_rows(hours: float) -> list[dict]:
     since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=hours)
     rows = []
     if config.ROUTING.exists():
-        with config.ROUTING.open(encoding="utf-8") as f:
+        with config.ROUTING.open("rb") as f:
+            f.seek(_window_start(f, since))
             for line in f:
                 try:
                     r = json.loads(line)

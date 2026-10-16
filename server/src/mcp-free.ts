@@ -668,16 +668,27 @@ async function accountFor(
   cache: BatchReads,
 ): Promise<FreeInstance | undefined> {
   if (it.task.chat_id) {
-    cache.threads ??= await desk<FreeThread[]>(
-      'GET',
-      threadLookupPath(cache.chatIds ?? [it.task.chat_id]),
-    ).catch(() => null)
+    // A transient read error (Desk away, 5xx, timeout) is not "no such thread": the item stays queued and
+    // the next tick retries the lookup (2026-10-16). Only a definitive answer fails it.
+    let reason = ''
+    if (!cache.threads) {
+      try {
+        cache.threads = await desk<FreeThread[]>(
+          'GET',
+          threadLookupPath(cache.chatIds ?? [it.task.chat_id]),
+        )
+      } catch (e) {
+        const status = (e as DeskError).status
+        if (status === 0 || status >= 500) return undefined
+        reason = ` (${(e as Error).message})`
+      }
+    }
     const thread = cache.threads?.find((t) => t.chatId === it.task.chat_id)
     const account = thread ? tick.byId.get(thread.instanceId) : undefined
     if (!account) {
       Object.assign(it.s, {
         state: 'failed',
-        error: `No Free thread has chat_id ${it.task.chat_id} (free_threads lists them).`,
+        error: `No Free thread has chat_id ${it.task.chat_id}${reason} (free_threads lists them).`,
       })
       return undefined
     }

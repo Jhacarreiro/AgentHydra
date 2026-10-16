@@ -588,21 +588,36 @@ def backfill(jobs_dir: Path | None = None, ledger: Path | None = None) -> dict:
     try:
         have = {r[0] for r in c.execute("SELECT id FROM utilizations")}
         prof = current_profile(c)
-        from . import archive
+        from . import archive, history
         from .job import fold_journal
 
         models: dict[str, str] = {}
+
+        def store(job_id: str) -> None:
+            doc = archive.read_json(job_id, "job.json")
+            if not isinstance(doc, dict):
+                return
+            row = _job_row_from_doc(job_id, fold_journal(job_id, doc), models)  # a finished record's results are in its journal
+            if row is None:
+                return
+            _store_priced(c, row, prof)
+            added["jobs"] += 1
+
+        cold = history.cold_jobs()
+        by_day: dict[str, set[str]] = {}
         for job_id in archive.job_ids():  # folders and archives alike
             if job_id in have:
                 continue
-            doc = archive.read_json(job_id, "job.json")
-            if not isinstance(doc, dict):
-                continue
-            row = _job_row_from_doc(job_id, fold_journal(job_id, doc), models)  # a finished record's results are in its journal
-            if row is None:
-                continue
-            _store_priced(c, row, prof)
-            added["jobs"] += 1
+            if job_id in cold and not archive.job_dir(job_id).is_dir() and not archive.archive_path(job_id).is_file():
+                by_day.setdefault(cold[job_id], set()).add(job_id)  # read a day at a time below, not one pass each
+            else:
+                store(job_id)
+        for day in sorted(by_day, reverse=True):
+            try:
+                for job_id in history.each_cold_job(day, by_day[day]):  # one pass of the day's archive (taskstore.index_jobs)
+                    store(job_id)  # each job is in the cold cache as it is yielded, so its reads answer from memory
+            except history.READ_ERRORS:
+                continue  # a day that will not read is left out, as before
         if ledger.exists() or ledgerstore.archives(ledger):
             # Archives first, then the live file: a line keeps the index it had before the months were rotated out.
             for i, line in enumerate(ledgerstore.iter_lines(None, ledger)):

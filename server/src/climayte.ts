@@ -213,6 +213,7 @@ import {
   releaseStuckManager,
   settledWaves,
   settleKeyOfWorker,
+  unwrittenWaves,
   WAVE_MIN_TASKS,
   waveDirs,
 } from './climayte-wave-ops'
@@ -603,13 +604,23 @@ ${code === null ? '' : output.trim()}${sev.others ? "\nThe failing files are not
 /** When the tick last looked for attempts whose spend the kit had not caught up with (every 5 s). */
 let lastSettle = 0
 
+/** The next tick's wait: 1 s while a worker runs, 3 s while one is queued or waiting, else 15 s. One
+ *  pass over the store and no copy of it: this runs after every tick, and the store keeps every
+ *  finished worker. */
+function idleDelay(): number {
+  let active = false
+  for (const w of workers.values()) {
+    if (w.status === 'running') return 1_000
+    if (!active && isActive(w)) active = true
+  }
+  return active ? 3_000 : 15_000
+}
+
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   // poll() runs every tick, so the overage stop is only as fast as the tick, and each second of
   // overage bills the owner: 1 s while a worker runs, 3 s while one is queued or waiting.
-  const all = [...workers.values()]
-  const next =
-    delay ?? (all.some((w) => w.status === 'running') ? 1_000 : all.some(isActive) ? 3_000 : 15_000)
+  const next = delay ?? idleDelay()
   timer = setTimeout(
     () => void tick().catch((err) => console.error('[climayte] tick failed:', err)),
     next,
@@ -1089,6 +1100,9 @@ export function journalTooBig(w: CliMayteWorker): void {
 /** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide
  * whether to wake their managers with a batch report. Clear the modified waves map at the end. */
 function processBatchWakes(now: number): void {
+  // Waves an earlier tick could not write, unchanged since: written now, their wake already decided.
+  for (const [id, { wave, configDir }] of unwrittenWaves)
+    if (!modifiedWaves.has(id)) saveWave(wave, configDir)
   for (const [, { wave, configDir }] of modifiedWaves) {
     const manager = workers.get(wave.managerId)
     // A wave no longer running (reported, decided) wakes no manager: there is nothing left to manage.
@@ -1099,11 +1113,7 @@ function processBatchWakes(now: number): void {
       wave.status !== 'running'
     ) {
       // No manager to wake; keep what changed in the wave.
-      try {
-        writeWave(configDir, wave)
-      } catch {
-        // The next change writes it again.
-      }
+      saveWave(wave, configDir)
       continue
     }
 
@@ -1134,14 +1144,22 @@ function processBatchWakes(now: number): void {
     }
 
     // Write the updated wave back to disk.
-    try {
-      writeWave(configDir, wave)
-    } catch {
-      // If write fails, the batch will be picked up on the next tick.
-    }
+    saveWave(wave, configDir)
   }
 
   modifiedWaves.clear()
+}
+
+/** Write a wave the tick changed; one that cannot be written is kept (unwrittenWaves) and written
+ *  again next tick, never dropped. */
+function saveWave(wave: CliMayteWave, configDir: string): void {
+  try {
+    writeWave(configDir, wave)
+    unwrittenWaves.delete(wave.id)
+  } catch (err) {
+    unwrittenWaves.set(wave.id, { wave, configDir })
+    console.error(`[climayte] wave ${wave.id} could not be written; trying again next tick:`, err)
+  }
 }
 
 /** Store a dispatch's new workers, journal each and start them (climayteRun): a wave's carry the
@@ -2373,15 +2391,18 @@ const desk: NonNullable<CliMaytePingDeps['desk']> = {
         signal: AbortSignal.timeout(5_000),
       })
       if (res.status === 404) return { ok: false, reason: 'not a Desk 2 chat', notDesk: true }
-      return { ok: res.ok, reason: res.ok ? 'sent' : `desk ${res.status}` }
+      // A 5xx can come after the route sent the message; a 4xx is a refusal before it.
+      return {
+        ok: res.ok,
+        reason: res.ok ? 'sent' : `desk ${res.status}`,
+        uncertain: res.status >= 500,
+      }
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       const code = (err as { code?: string }).code ?? ''
-      return {
-        ok: false,
-        reason: why,
-        notDesk: /ECONNREFUSED|Unable to connect/i.test(`${why} ${code}`),
-      }
+      // Refused: nothing reached Desk 2. Any other failure (the 5 s timeout above all) may have.
+      const refused = /ECONNREFUSED|Unable to connect/i.test(`${why} ${code}`)
+      return { ok: false, reason: why, notDesk: refused, uncertain: !refused }
     }
   },
 }
@@ -2396,6 +2417,8 @@ function startPing(): void {
   ping = startCliMaytePing({
     dir: PING_DIR,
     workers: () => [...workers.values()],
+    // A test that stands in its own workers() is read through it, not the store.
+    workerById: pingOverrides?.workers ? undefined : (id) => workers.get(id),
     subscribe: onCliMayteChange,
     climayteSend: (id, text, opts) => climayteSend(id, text, opts),
     composer,
@@ -2492,9 +2515,13 @@ export function climayteSeen(
 ): { seen: number } {
   load()
   let seen = 0
-  for (const w of workers.values()) {
-    const inScope =
-      (scope.ids?.includes(w.id) ?? false) || (!!scope.group && w.group === scope.group)
+  // A list of ids reads just those workers; a group still walks the store, testing ids by Set.
+  const ids = scope.ids?.length ? new Set(scope.ids) : null
+  const pool = scope.group
+    ? workers.values()
+    : [...(ids ?? [])].flatMap((id) => workers.get(id) ?? [])
+  for (const w of pool) {
+    const inScope = (ids?.has(w.id) ?? false) || (!!scope.group && w.group === scope.group)
     if (!inScope || w.origin?.kind !== 'chat' || w.origin.sessionId !== sessionId) continue
     if ((w.seenAt ?? 0) >= at) continue
     w.seenAt = at

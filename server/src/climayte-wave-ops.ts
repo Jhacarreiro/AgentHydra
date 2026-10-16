@@ -15,6 +15,12 @@ import { readWave, reportWave, waveDone, waveHeadNow, writeWave } from './climay
 // Waves modified during this tick: waveId -> { wave, configDir }. Cleared at the end of the tick.
 export const modifiedWaves = new Map<string, { wave: CliMayteWave; configDir: string }>()
 
+/** Waves whose write failed at the end of a tick (processBatchWakes): the copy in memory is the true
+ *  one, so findWave reads it before the stale file, and the next tick writes it again without
+ *  deciding its wake a second time. Until 2026-10-16 a failed write was simply dropped: the file still
+ *  held the tasks the tick had woken its manager for, and the next read woke him for them again. */
+export const unwrittenWaves = new Map<string, { wave: CliMayteWave; configDir: string }>()
+
 /** A manager whose turn ended done on wave `waveId` (settleWorker): held while the wave has live
  *  tasks and no report, nudged once to report or dispatch, failed after that; a finished wave with
  *  no report takes the manager's answer as one (reportForManager). */
@@ -205,6 +211,8 @@ export function waveDirs(): string[] {
 
 /** A wave by id, with the directory it is stored in, or null. */
 function findWave(id: string): { wave: CliMayteWave; configDir: string } | null {
+  const kept = unwrittenWaves.get(id)
+  if (kept) return kept
   for (const configDir of waveDirs()) {
     const wave = readWave(configDir, id)
     if (wave) return { wave, configDir }

@@ -559,6 +559,28 @@ ${line('assistant', 2, 'first answer')}
     const again = await b.workerItems([SESSION], CWD, { writing })
     expect(again.filter((i) => i.kind === 'assistant_text')).toHaveLength(1)
   })
+
+  test("a failed read of the CLI instances is not kept: the next look finds the worker's own folder", async () => {
+    const home = mkdtempSync(join(tmpdir(), 'desk-dirs-failed-'))
+    temps.push(home)
+    const dir = join(home, 'old')
+    const folder = join(dir, 'projects', encodeProjectDir(CWD))
+    mkdirSync(folder, { recursive: true })
+    const f = await fake()
+    f.state.instances = [{ num: 1, id: 'old-acct', name: 'Example 1', configDir: dir, loggedIn: true, lastUsageCheck: null }]
+    f.state.instancesError = 'instances unavailable'
+    const b = createBridge({ url: f.url, now: () => NOW, home, projectRoots: () => [join(dir, 'projects')] })
+    const writing = { sessionId: SESSION, accountId: 'old-acct' }
+    expect(await b.workerItems([SESSION], CWD, { writing })).toEqual([])
+    f.state.instancesError = undefined
+    writeFileSync(join(folder, `${SESSION}.jsonl`), `${line('user', 1, 'first question')}
+${line('assistant', 2, 'first answer')}
+`)
+    // The same instant: an empty map kept from the failed read leaves the account's folder unknown for 30 s,
+    // and the miss back-off hides the file.
+    const again = await b.workerItems([SESSION], CWD, { writing })
+    expect(again.filter((i) => i.kind === 'assistant_text')).toHaveLength(1)
+  })
 })
 
 describe('a chat with more session data than the settled cache holds', () => {

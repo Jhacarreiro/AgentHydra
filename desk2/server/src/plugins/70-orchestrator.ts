@@ -352,12 +352,18 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
    *  one nudge for it. A chat whose job still runs, or whose transcript could not be read, is left (never blind). */
   async function waitingCandidates(now: number, look: Looked, skip: ReadonlySet<string>): Promise<Candidate[]> {
     const out: Candidate[] = []
+    // One GET per path for the whole pass: a row on a live worker is reprocessed every tick, and each one used to fetch the whole worker list again (2026-10-16).
+    const pass = new Map<string, Promise<unknown>>()
+    const passGet = <T>(path: string) => {
+      if (!pass.has(path)) pass.set(path, get<T>(path))
+      return pass.get(path) as Promise<T | null>
+    }
     for (const r of look.blind ? [] : look.rows) {
       if (r.move !== 'waiting' || !r.waitingOn || skip.has(r.id)) continue
       if (nudged.get(r.id)?.has(r.waitingOn.join('|'))) continue
       const last = judgments.get(r.id)?.at
       if (last !== undefined && now - last < PEEK_MS) continue
-      const facts = await factsOf(r.waitingOn, now, hswarmHome, get)
+      const facts = await factsOf(r.waitingOn, now, hswarmHome, passGet)
       if (facts.some((f) => f.running)) continue
       out.push({
         id: r.id,

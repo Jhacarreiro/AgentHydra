@@ -38,6 +38,7 @@ backend's vault file (HSWARM_HOME/vault-request.pin) and `accept` joins only a c
 from __future__ import annotations
 
 import base64
+import calendar
 import contextlib
 import hashlib
 import json
@@ -130,6 +131,14 @@ def zswarm_paired() -> bool:
 
 def _now_ms() -> int:
     return int(time.time() * 1000)
+
+
+def _hours_old(stamp: str | None) -> float:
+    """How old a base file's `at` stamp is, in hours; a missing or unparsable one counts as old."""
+    try:
+        return max(0.0, (time.time() - calendar.timegm(time.strptime(stamp, "%Y-%m-%dT%H:%M:%SZ"))) / 3600)
+    except (TypeError, ValueError):
+        return float("inf")
 
 
 def _read_json(path: Path) -> dict | None:
@@ -513,6 +522,7 @@ def _apply_local(merged: dict, local: dict[str, list[str]]) -> dict:
     Returns the new base lists and the counts."""
     folder = config.SECRETS_DIR
     added = removed = 0
+    rewrote = False
     for name, entries in merged["lists"].items():
         if not LIST_RX.fullmatch(name):
             continue  # a name that is not a list is never a path
@@ -520,9 +530,11 @@ def _apply_local(merged: dict, local: dict[str, list[str]]) -> dict:
         drop = {kid for kid, e in entries.items() if e["k"] is None and kid in have}
         add = [e["k"] for kid, e in sorted(entries.items()) if e["k"] is not None and kid not in have]
         if drop or add:
-            _rewrite(folder / name, drop, add)
+            rewrote = _rewrite(folder / name, drop, add) or rewrote
             added, removed = added + len(add), removed + len(drop)
-    after = scan()
+    # Nothing rewritten means the files are byte-for-byte what the caller scanned, so its scan is still the truth and a
+    # second full read of secrets/ buys nothing (2026-10-16: the autosync round ran it every 120 s).
+    after = scan() if rewrote else local
     base = {name: sorted(kid for kid in map(key_id, keys) if merged["lists"].get(name, {}).get(kid, {}).get("k") is not None)
             for name, keys in after.items()}
     return {"lists": base, "added": added, "removed": removed}
@@ -600,7 +612,11 @@ def _sync_locked(*, rebase: bool = False, allow_removals: bool = False, dry_run:
         return {"backend": be.label, "dry_run": True, "pushed": False, "rev": remote["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
                 "to_here": local_add, "keys": live_count(merged)}
     applied = _apply_local(merged, local)
-    _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
+    # The base only matters for its rev and lists, so skip the rewrite when neither changed (every 120 s otherwise,
+    # 2026-10-16); still stamp `at` hourly so status's last_sync does not freeze at the last real change.
+    same = base is not None and base.get("rev") == merged["rev"] and base.get("lists") == applied["lists"]
+    if not same or _hours_old(base.get("at")) >= 1:
+        _write_json(base_file(), {"rev": merged["rev"], "at": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()), "lists": applied["lists"]})
     return {"backend": be.label, "dry_run": False, "pushed": pushed, "rev": merged["rev"], "to_vault": into_vault, "from_vault": out_of_vault,
             "added_here": applied["added"], "removed_here": applied["removed"], "keys": live_count(merged), "lists": len(applied["lists"])}
 

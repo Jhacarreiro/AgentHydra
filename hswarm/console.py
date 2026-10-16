@@ -204,7 +204,27 @@ def _caller_ids(job_id: str, live) -> dict:
     return ids
 
 
+def _warm_caller_ids(rows: list[dict], live: dict) -> None:
+    """Read the stamps of the cold jobs in `rows` a day at a time: alone, each stamp streamed its day's archive up to
+    the job (history.each_cold_job), so a list of many cold jobs of one day paid a pass per job (2026-10-16)."""
+    from . import archive, history
+
+    cold = history.cold_jobs()
+    by_day: dict[str, set[str]] = {}
+    for r in rows:
+        job_id = r["job_id"]
+        if job_id in cold and job_id not in live and job_id not in _CALLER_IDS and not archive.job_dir(job_id).is_dir() and not archive.archive_path(job_id).is_file():
+            by_day.setdefault(cold[job_id], set()).add(job_id)
+    for day, wanted in by_day.items():
+        try:
+            for job_id in history.each_cold_job(day, wanted):
+                _caller_ids(job_id, None)  # its job is in the cold cache now, so its stamp answers from memory
+        except history.READ_ERRORS:
+            continue
+
+
 def _with_caller_ids(rows: list[dict], live: dict) -> list[dict]:
+    _warm_caller_ids(rows, live)
     return [{**r, "caller_ids": _caller_ids(r["job_id"], live.get(r["job_id"]))} for r in rows]
 
 
@@ -217,11 +237,14 @@ def _called_by(rows: list[dict], callers: set[str], live: dict) -> list[dict]:
     """The rows whose caller's session or chat id is one of `callers`. The summary's key carries 8 characters of the
     caller (caller.key), so only a row they match has its full stamp read."""
     short = {c[:8] for c in callers}
-    out = []
+    hits = []
     for r in rows:
         part = str(r.get("caller") or "").split(" / ")
-        if len(part) < 2 or part[1] not in short:
-            continue
+        if len(part) > 1 and part[1] in short:
+            hits.append(r)
+    _warm_caller_ids(hits, live)
+    out = []
+    for r in hits:
         ids = _caller_ids(r["job_id"], live.get(r["job_id"]))
         if ids["session_id"] in callers or ids["chat_id"] in callers:
             out.append(r)

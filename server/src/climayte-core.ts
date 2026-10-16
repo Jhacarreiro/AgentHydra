@@ -813,8 +813,22 @@ async function readDoneAhead(): Promise<void> {
   } finally {
     preloading = false
     // A read that failed part way: done/ the blocking way, once, rather than never.
-    if (donePending) mergeDone(readDone())
+    if (donePending) retryDone()
   }
+}
+
+/** When a failed done/ read was last tried again (retryDone). */
+let doneRetryAt = 0
+
+/** done/'s workers into the store, if a read of it is still owed (donePending) and done/ can be read
+ *  now. A folder that could not be listed is not an empty one: until 2026-10-16 such a read merged
+ *  nothing and cleared the flag, and every finished worker stayed out of the store until a restart.
+ *  load() asks again, at most every 30 s, until a read succeeds. */
+function retryDone(now = Date.now()): void {
+  if (!donePending || preloading) return
+  doneRetryAt = now
+  const found = readDone()
+  if (found) mergeDone(found)
 }
 
 /** done/'s workers into a store load() began without them. The copy already in memory wins (it is
@@ -839,7 +853,7 @@ function mergeDone(found: CliMayteWorker[]): void {
 
 /** Every readable worker file under done/. One that cannot be read, or that names another worker
  *  than its file, is left as found and said: an unreadable record is not an absent one. */
-function readDone(): CliMayteWorker[] {
+function readDone(): CliMayteWorker[] | null {
   if (preloadedDone) {
     const found = preloadedDone
     preloadedDone = null
@@ -848,8 +862,12 @@ function readDone(): CliMayteWorker[] {
   let names: string[] = []
   try {
     names = readdirSync(DONE)
-  } catch {
-    return []
+  } catch (err) {
+    const code = (err as NodeJS.ErrnoException)?.code
+    // No done/ yet is a store with no finished workers; any other failure is a read still owed.
+    if (code === 'ENOENT' || code === 'ENOTDIR') return []
+    console.error(`[climayte] ${DONE} could not be listed; its workers are read again later:`, err)
+    return null
   }
   const found: CliMayteWorker[] = []
   for (const name of names) {
@@ -870,9 +888,12 @@ function readDone(): CliMayteWorker[] {
  *  layout, which load's save then carries over. */
 function loadWorkers(hot: CliMayteWorker[]): void {
   const all = new Map<string, CliMayteWorker>()
-  if (preloading) donePending = true
-  else
-    for (const w of readDone()) {
+  const done = preloading ? null : readDone()
+  if (!done) {
+    donePending = true
+    doneRetryAt = Date.now()
+  } else
+    for (const w of done) {
       all.set(w.id, w)
       filed.add(w.id)
     }
@@ -884,7 +905,11 @@ function loadWorkers(hot: CliMayteWorker[]): void {
 }
 
 export function load(): void {
-  if (loaded) return
+  if (loaded) {
+    const now = Date.now()
+    if (donePending && now - doneRetryAt >= 30_000) retryDone(now)
+    return
+  }
   loaded = true
   const read = readJsonStore(STORE_SPEC)
   if (read.status === 'ok') {

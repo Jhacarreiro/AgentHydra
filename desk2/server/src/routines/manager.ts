@@ -6,7 +6,7 @@ import { emptyMemory, parseReading, slotsOf, type Memory, type Reading, type See
 import type { Describer } from './describe'
 import type { Entry } from './manifest'
 import { routineBrokenMessage, routineIncidentAction } from './incident'
-import { appendRows, descriptionRow, readHistory, syncHistory } from './history'
+import { appendRows, descriptionRow, syncHistory } from './history'
 import { LINE_CHARS, message, runArgv } from './proc'
 import { RUNS_KEPT, STATUS_MS, type RoutineIncidents, type RoutineTasks, type RoutineWorkers } from './manager-config'
 import type { Central } from './manager-central'
@@ -71,8 +71,7 @@ export function historyFile(m: Manager, id: string): string {
 /** Writes what the memory holds that the routine's full history does not (a new run; the first time, all of them). Best effort. */
 export function keepHistory(m: Manager, id: string, mem: Memory): void {
   try {
-    syncHistory(historyFile(m, id), mem.runs)
-    m.runCounts.set(id, readHistory(historyFile(m, id)).length)
+    m.runCounts.set(id, syncHistory(historyFile(m, id), mem.runs))
   } catch (err) {
     console.error('[routines] history did not save:', message(err))
   }

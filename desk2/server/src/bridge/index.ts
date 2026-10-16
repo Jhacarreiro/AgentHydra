@@ -201,10 +201,18 @@ export function createBridge(opts: BridgeOptions = {}) {
   /** Who is signed in where (desktop instances, CLI instances), for resumeAccount. */
   async function resumeData(): Promise<ResumeData> {
     if (logins && now() - logins.at < INSTANCES_FRESH_MS) return logins.data
+    // A failed read answers this call with what it has, but is not kept: a cached empty list would
+    // leave every chat without its account for the next 30 s, though the next read may succeed. A 404
+    // is an AgentHydra without the route, a lasting answer, and is kept.
+    let failed = false
+    const none = (err: unknown) => {
+      if (!(err instanceof BridgeError && err.kind === 'http' && err.status === 404)) failed = true
+      return []
+    }
     const [desktops, numbers, clis] = await Promise.all([
-      client.desktopInstances().catch(() => []),
-      client.instanceNumbers().catch(() => []),
-      cliInstances().catch(() => []),
+      client.desktopInstances().catch(none),
+      client.instanceNumbers().catch(none),
+      cliInstances().catch(none),
     ])
     const key = (p: string) => resolve(p).toLowerCase()
     const emailOf = new Map(numbers.filter((n) => n.kind === 'desktop').map((n) => [key(n.handle), n.email]))
@@ -212,13 +220,19 @@ export function createBridge(opts: BridgeOptions = {}) {
       desktops: desktops.map((d) => ({ num: d.num, name: d.name, label: d.label, dir: d.dir, uuid: d.loginUuid ?? null, email: emailOf.get(key(d.dir)) ?? null })),
       clis,
     }
-    logins = { at: now(), data }
+    if (!failed) logins = { at: now(), data }
     return data
   }
 
   async function instanceDirs(): Promise<Map<string, string>> {
     if (configDirs && now() - configDirs.at < INSTANCES_FRESH_MS) return configDirs.byId
-    const list = await cliInstances().catch(() => [])
+    let list: AhCliInstance[]
+    try {
+      list = await cliInstances()
+    } catch {
+      // Not kept: the last good map stands (or an empty one this once), and the next call reads again.
+      return configDirs?.byId ?? new Map()
+    }
     configDirs = { at: now(), byId: new Map(list.map((i) => [i.id, i.configDir])) }
     return configDirs.byId
   }

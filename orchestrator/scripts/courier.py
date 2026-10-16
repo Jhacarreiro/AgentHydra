@@ -269,6 +269,13 @@ def _is_transient(err: "hydralib.DaemonError") -> bool:
     ))
 
 
+def _dropped_mid_call(err: "hydralib.DaemonError") -> bool:
+    """Did the connection drop after the request may have reached the daemon? A refused connection
+    proves nothing was sent; a reset or an abort does not."""
+    blob = f"{err} {getattr(err, 'detail', '') or ''}".casefold()
+    return any(s in blob for s in ("winerror 10054", "winerror 10053", "connection reset", "connection aborted"))
+
+
 def deliverable(entry: dict, session_lookup=None, _holds=None, _ledger_rows=None,
                 _bands=None, _per_instance=None, _share=None,
                 idle_after_secs: int | None = None) -> tuple[bool, str, dict | None]:
@@ -585,6 +592,21 @@ def _send_via_daemon(entry: dict, match: dict, sid: str, before: _BeforeState,
             return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
                     "outcome": "the send was cut short and may have landed - not sending it again",
                     "detail": (err.detail or str(err))[:200]}
+        # ⛔ A SOCKET DROPPED MID-CALL MAY HAVE LANDED TOO (2026-10-16, the sibling of the timeout
+        # above). A reset or aborted connection after the POST went out does not say whether the
+        # route typed; the transcript does. It grew since T-0: the send may have taken, and it is
+        # not sent again. It did not: nothing landed, and the row stays staged as before.
+        if err.status is None and _dropped_mid_call(err):
+            _, size_now = _activity_of(sid, before.tpath)
+            if size_now > before.size:
+                deliverylib.mark_failed(
+                    entry["id"],
+                    f"daemon message endpoint: {err} - the connection dropped mid-call and the "
+                    "transcript grew, so the send may have landed; not sending it again "
+                    "(check the chat before re-staging)")
+                return {"id": entry["id"], "ok": False, "mayHaveLanded": True,
+                        "outcome": "the connection dropped and the chat moved - not sending it again",
+                        "detail": (err.detail or str(err))[:200]}
         if err.status != 404 and _is_transient(err):
             # NOT NOW IS NOT NO (2026-09-10). The row stays STAGED and is retried on the next
             # 5-minute cycle, which is what "the target app is closed" actually calls for; the

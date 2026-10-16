@@ -471,6 +471,8 @@ def _flush_live_pools() -> None:
         _last_flush = time.time()
     target = keystate.db_path()
     batches = [(pool, ops) for pool in list(_LIVE_POOLS) if (ops := pool._take_pending(target))]
+    for pool in list(_LIVE_POOLS):  # a pool whose queue is empty now is dropped; a failed write re-queues and re-registers it
+        _unregister(pool)
     if not batches:
         return
     done = False
@@ -485,6 +487,25 @@ def _flush_live_pools() -> None:
     if not done:  # the lock was not taken or the write failed: every op waits for the next one, not lost
         for pool, ops in batches:
             pool._put_back(ops, target)
+
+
+def _register(pool) -> None:
+    """Put a pool on the flush list while it has queued ops. Callers set the queue first, then register, so a flush
+    either sees the ops or the pool registers after it. (2026-10-16: the list kept every pool ever built.)"""
+    with _FLUSH_GATE:
+        if not pool._registered:
+            pool._registered = True
+            _LIVE_POOLS.append(pool)
+
+
+def _unregister(pool) -> None:
+    """Take a pool with nothing queued off the flush list. The check and the removal run under the queue's lock, so
+    an op queued meanwhile keeps the pool registered."""
+    with _FLUSH_GATE, pool._pending_lock:
+        if pool._registered and not pool._pending:
+            if pool in _LIVE_POOLS:  # a test may have swapped the list out (hswarm/tests/conftest.py)
+                _LIVE_POOLS.remove(pool)
+            pool._registered = False
 
 
 class KeyPool:
@@ -523,7 +544,7 @@ class KeyPool:
         self._pending_lock = threading.Lock()
         self._pending_path = None  # the state file the queued ops belong to
         self._zero_quota: set[str] = set()  # keys that answered a zero quota since this pool's last 200 (ZERO_QUOTA_POOL_KEYS)
-        _LIVE_POOLS.append(self)
+        self._registered = False  # on _LIVE_POOLS only while ops are queued (_register / _unregister)
         if state is None:
             self._load(force=True)
         else:
@@ -579,6 +600,7 @@ class KeyPool:
         with self._pending_lock:
             self._pending = {**ops, **self._pending}
             self._pending_path = self._pending_path or target
+        _register(self)
 
     def _locked(self):
         """One write transaction on the shared key state (keystate.txn); it yields None when the lock was not taken."""
@@ -771,6 +793,7 @@ class KeyPool:
         with self._pending_lock:
             self._pending_path = keystate.db_path()
             self._pending[fp] = op  # the latest op for a key wins: a rest then a 200 is a recovery, and back again
+        _register(self)
         _schedule_flush()
 
     def _reapply_pending(self) -> None:

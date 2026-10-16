@@ -508,6 +508,64 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
        })`,
     ],
   },
+  'reversed-copy-to-search.mjs': {
+    broken: [
+      // climayte-queue-sync.ts as it stood after c8adea42 fixed the same line in climayte-lib.ts only.
+      `const ref = [...w.attempts].reverse().find((a) => a.account.id === w.accountId)?.account`,
+      // The Desk orchestrator's waitingQuestion: a whole transcript copied per chat on every plan read.
+      `const call = card ? undefined : [...items].reverse().find((i) => i.kind === 'tool_use' && i.status === 'running')`,
+      `const at = rows.slice().reverse().findIndex((r) => r.done)`,
+      `if (list.toReversed().some((x) => x.bad)) return`,
+    ],
+    fixed: [
+      `const ref = w.attempts.findLast((a) => a.account.id === w.accountId)?.account`,
+      // A reversed copy that is kept or iterated needs the order: not a search.
+      `const verdictsNewestFirst = computed(() => [...verdicts.value].reverse())`,
+      `for (const r of [...(w.reports ?? [])].reverse()) out.push(r)`,
+      // Named in a comment or a string, never called.
+      `// was: [...w.attempts].reverse().find((a) => a.model)
+       const hint = 'use findLast, not [...xs].reverse().find(p)'`,
+      `/* [...xs].reverse().find(p) */ const x = xs.findLast(p)`,
+    ],
+  },
+  'fs-fanout-unbounded.mjs': {
+    broken: [
+      // desk2 engine/queue.ts readBack as e5382243 put it back, two days after 44429d00 took it out.
+      `import { readFileSync, renameSync } from 'node:fs'
+       import { readFile } from 'node:fs/promises'
+       return Promise.all(images.map(async (img, i) => ({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })))`,
+      // The bridge's codexTurns before 49487e5a: a stat per recent chat, all in flight.
+      `import { stat } from 'node:fs/promises'
+       await Promise.all(
+         recent.map(async (c) => {
+           const st = await stat(path)
+         }),
+       )`,
+      `import * as fsp from 'node:fs/promises'
+       const all = await Promise.allSettled(dirs.map((d) => fsp.readdir(d)))`,
+      `const texts = await Promise.all(files.map((f) => Bun.file(f).text()))`,
+    ],
+    fixed: [
+      // One at a time, or one slot each from the shared ceiling.
+      `import { readFile } from 'node:fs/promises'
+       for (const [i, img] of images.entries()) out.push({ ...img, dataBase64: (await readFile(hits[i].path)).toString('base64') })`,
+      `import { stat } from 'node:fs/promises'
+       const stats = await Promise.all(paths.map((p) => fsSlot(() => stat(p))))`,
+      // A fixed list is bounded by the code, not the data.
+      `import { readFile, stat } from 'node:fs/promises'
+       const [a, b] = await Promise.all([readFile(one), stat(two)])`,
+      // Not an fs call: a fetch per item is not the I/O pool.
+      `import { readFile } from 'node:fs/promises'
+       const answers = await Promise.all(urls.map((u) => fetch(u)))`,
+      // Bounded by construction, and said so.
+      `import { readFile } from 'node:fs/promises'
+       // fanout-ok: the two halves of one record
+       const [head, tail] = await Promise.all(halves.map((h) => readFile(h)))`,
+      // Named in a comment, never called.
+      `// was: Promise.all(xs.map((x) => readFile(x)))
+       const x = 1`,
+    ],
+  },
   'timer-callback-can-kill-the-daemon.mjs': {
     broken: [
       // scheduler.ts as it shipped until 2026-08-30: a bare named callback whose function has no

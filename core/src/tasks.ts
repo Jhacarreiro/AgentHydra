@@ -71,6 +71,8 @@ const backends: Record<Service, Backend> = {
   chatgpt: chatgptBackend(),
 }
 const tasks = new Map<string, Live>()
+// Settled tasks kept in memory; the list route reads at most 500. tasks.jsonl keeps every row, and a restart never loads them back anyway.
+const SETTLED_CAP = 1000
 
 function save(row: TaskRow): void {
   mkdirSync(CORE_HOME, { recursive: true })
@@ -87,6 +89,11 @@ function finish(t: Live, status: Status, patch: Partial<TaskRow>): void {
   if (t.row.endedAt !== null) return
   update(t, { status, endedAt: Date.now(), ...patch })
   t.settle()
+  // Map iterates in insertion order, so the oldest settled entries go first; running and queued ones are never evicted.
+  for (const [id, old] of tasks) {
+    if (tasks.size <= SETTLED_CAP) break
+    if (old.row.endedAt !== null) tasks.delete(id)
+  }
 }
 
 /** Plan for read, acceptEdits for edit, bypassPermissions for all (the Claude and Codex permission modes). */

@@ -166,6 +166,8 @@ describe('free_chat through a stand-in Desk 2', () => {
   let threadDelay = 0
   let emptyThreads = false
   let threadFailures = 0
+  /** A continuation's lookup by chat id (`view=lookup`) answers 503 this many more times. */
+  let lookupFailures = 0
   let statusFailures = 0
   let jobReadDelay = 0
   let activeJobReads = 0
@@ -197,6 +199,8 @@ describe('free_chat through a stand-in Desk 2', () => {
           if (threadDelay) await Bun.sleep(threadDelay)
           if (threadFailures-- > 0)
             return Response.json({ error: 'history unavailable' }, { status: 503 })
+          if (url.searchParams.get('view') === 'lookup' && lookupFailures-- > 0)
+            return Response.json({ error: 'Desk is busy' }, { status: 503 })
           if (emptyThreads) return Response.json([])
           return Response.json([
             {
@@ -481,6 +485,18 @@ describe('free_chat through a stand-in Desk 2', () => {
     const batch = await run('free_results', { batch: out.batch, wait_s: 0 })
     expect(batch.done).toBe('4 of 4')
     expect(bulkReads - beforeBulk).toBe(1)
+  }, 30_000)
+
+  // 2026-10-16: a thread lookup Desk could not answer (a 503) failed the continuation as "No Free thread has
+  // chat_id", though the thread was there; it stays queued and the next tick finds it.
+  test('a continuation whose thread lookup Desk cannot answer now goes to its thread on a later tick', async () => {
+    lookupFailures = 1
+    try {
+      const out = await run('free_chat', { tasks: [{ prompt: 'later', chat_id: THREAD }] })
+      expect(out.tasks[0]).toMatchObject({ state: 'done', chat_id: THREAD, response: 're: later' })
+    } finally {
+      lookupFailures = 0
+    }
   }, 30_000)
 
   // 2026-10-08: the GPT-6 trial asks a Free ChatGPT account for GPT-6 by name.

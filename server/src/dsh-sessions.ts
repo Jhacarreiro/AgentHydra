@@ -253,6 +253,32 @@ function listSubdirNames(dir: string): string[] {
   }
 }
 
+/**
+ * Memo of the first record (the session header) of logs the projection does not answer for, keyed on
+ * the log's path plus its mtimeMs and size. Decoding a whole multi-megabyte log to read one line was
+ * the cost of listing every such session on every sweep; an idle log never changes, so its header
+ * never needs re-reading, and an appending one moves its size and simply re-decodes — no worse than
+ * without the memo. Oldest out past 512 so a huge home cannot grow it unboundedly. (2026-10-16)
+ */
+const headerMemo = new Map<
+  string,
+  { mtimeMs: number; size: number; header: DshEvent | undefined }
+>()
+const HEADER_MEMO_MAX = 512
+
+function sessionHeader(path: string, size: number, mtimeMs: number): DshEvent | undefined {
+  const hit = headerMemo.get(path)
+  if (hit && hit.mtimeMs === mtimeMs && hit.size === size) return hit.header
+  const header = readDshLog(path)[0]
+  headerMemo.delete(path)
+  if (headerMemo.size >= HEADER_MEMO_MAX) {
+    const oldest = headerMemo.keys().next()
+    if (!oldest.done) headerMemo.delete(oldest.value)
+  }
+  headerMemo.set(path, { mtimeMs, size, header })
+  return header
+}
+
 /** One session's record, or `null` when its log has vanished or its size cannot be read. */
 function buildDshSessionRecord(
   sessionsRoot: string,
@@ -283,8 +309,9 @@ function buildDshSessionRecord(
   if (!cwd || !created) {
     // No projection (or an incomplete one): the log's first record is the session header and
     // carries both. One decode of a session that is usually small, and only for the sessions
-    // the cache does not already answer for.
-    const header = readDshLog(log.path)[0]
+    // the cache does not already answer for — memoised on the stat taken above, since the sweep
+    // re-lists every projection-less session seconds apart and an idle log never changes.
+    const header = sessionHeader(log.path, size, mtime)
     if (header?.type === 'session') {
       if (!cwd && typeof header.cwd === 'string') cwd = header.cwd
       if (!created && typeof header.createdAt === 'number') created = header.createdAt

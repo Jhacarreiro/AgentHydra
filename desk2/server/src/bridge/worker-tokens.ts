@@ -63,7 +63,10 @@ export function createWorkerTokens(o: { chunkBytes?: number; now?: () => number 
 
   async function locate(sessionId: string, dirs: Iterable<string>): Promise<string | null> {
     const roots = [...dirs].map((dir) => join(dir, 'projects'))
-    const listed = await Promise.all(roots.map((root) => readdir(root).catch(() => null)))
+    // One folder at a time: there is one per CLI account, and a readdir of each in flight at once starts
+    // a Bun I/O thread per account, held for the server's life (scripts/checks/fs-fanout-unbounded.mjs).
+    const listed: (string[] | null)[] = []
+    for (const root of roots) listed.push(await readdir(root).catch(() => null))
     for (const [i, subs] of listed.entries()) {
       if (!subs) continue
       const root = roots[i]!

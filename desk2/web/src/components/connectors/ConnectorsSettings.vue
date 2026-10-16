@@ -10,12 +10,19 @@ import { listConnectors, runConnectorAction } from './api'
 import { note, pollDelay, rowButtons, stateLabel, stateTone, versionLabel } from './settings-logic'
 
 // Settings → Connectors: one row per outside app Desk hooks in (shared/connectors.ts). Polled every 3 s while
-// one installs or starts, else every 15 s, and only while this section is on screen.
+// one installs or starts, else every 15 s, and only while this section is on screen and the window shown.
 const views = shallowRef<ConnectorView[]>([])
 const loaded = ref(false)
 const error = ref<string | null>(null)
 let timer: ReturnType<typeof setTimeout> | null = null
 let gone = false
+
+// One timer at a time: every path that re-arms clears the old one first, and never while the window is hidden.
+function arm() {
+  if (timer) clearTimeout(timer)
+  timer = null
+  if (!gone && !document.hidden) timer = setTimeout(load, pollDelay(views.value))
+}
 
 async function load() {
   try {
@@ -27,7 +34,7 @@ async function load() {
     error.value = e instanceof Error ? e.message : String(e)
   }
   loaded.value = true
-  if (!gone) timer = setTimeout(load, pollDelay(views.value))
+  arm()
 }
 
 const acting = ref<string[]>([])
@@ -47,8 +54,7 @@ async function act(v: ConnectorView, action: ConnectorAction) {
     acting.value = acting.value.filter((k) => k !== key)
   }
   // An install or start is now under way: look again soon, not in 15 s.
-  if (timer) clearTimeout(timer)
-  if (!gone) timer = setTimeout(load, pollDelay(views.value))
+  arm()
 }
 
 // The dev-servers row also shows the service itself (GET /dw/status, through the shared client that polls only while
@@ -73,13 +79,23 @@ async function devService(action: 'restart' | 'stop') {
 const open = (v: ConnectorView) => v.url && window.open(v.url, '_blank', 'noopener')
 const dot = { ok: 'var(--success)', busy: 'var(--warning, var(--text-muted))', bad: 'var(--danger)', idle: 'var(--text-muted)' }
 
+// A hidden window polls nothing; coming back looks at once rather than serving a stale view.
+function onVisibility() {
+  if (document.hidden) {
+    if (timer) clearTimeout(timer)
+    timer = null
+  } else void load()
+}
+
 onMounted(() => {
   releaseDev = dev.use({ quiet: true })
+  document.addEventListener('visibilitychange', onVisibility)
   void load()
 })
 onBeforeUnmount(() => {
   gone = true
   releaseDev?.()
+  document.removeEventListener('visibilitychange', onVisibility)
   if (timer) clearTimeout(timer)
 })
 </script>
