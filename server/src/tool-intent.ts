@@ -59,6 +59,11 @@ export function toolHead(t: McpEngineTool): string {
 export type Combine = 'max' | 'sum' | 'head'
 export const COMBINE: Combine = 'max'
 
+/** How much of a text's mean closeness to every other tool is taken off its closeness to an ask. A short, generic
+ *  text sits near everything (a hub) and won asks it had nothing to do with: add_queue_item, which refuses every call,
+ *  came first for "is this signup screen too cluttered". A quarter off took the bench from 29 to 31 of 35 in the top 3. */
+export const HUB = 0.25
+
 /** Each tool's head then its whole text, in tool order: the texts embedded for `tools`. */
 const toolTexts = (tools: McpEngineTool[]) => tools.flatMap((t) => [toolHead(t), toolText(t)])
 
@@ -168,6 +173,28 @@ export class ToolIntent {
     return keys.map((k) => cache.get(k) ?? [])
   }
 
+  private hubKey: number[][] | null = null
+  private hubValues: number[] = []
+
+  /** Each text's mean closeness to the other tools' texts of its kind (heads to heads, whole texts to whole texts),
+   *  worked out once per set of vectors. */
+  private hubness(vectors: number[][]): number[] {
+    if (this.hubKey?.length === vectors.length && this.hubKey.every((v, i) => v === vectors[i]))
+      return this.hubValues
+    this.hubKey = vectors
+    this.hubValues = vectors.map((v, i) => {
+      let sum = 0
+      let n = 0
+      for (let j = i % 2; j < vectors.length; j += 2)
+        if (j !== i) {
+          sum += cosine(v, vectors[j])
+          n++
+        }
+      return n ? sum / n : 0
+    })
+    return this.hubValues
+  }
+
   private async rank(
     tools: McpEngineTool[],
     query: string,
@@ -176,12 +203,13 @@ export class ToolIntent {
     if ('unavailable' in loaded) return { reason: loaded.unavailable }
     try {
       const vectors = await this.textVectors(loaded, toolTexts(tools))
+      const hub = this.hubness(vectors)
       const [q] = await loaded.embed([query], 'query')
       const combine = this.opts.combine ?? COMBINE
       const hits = tools
         .map((t, i) => {
-          const head = cosine(q, vectors[2 * i])
-          const whole = cosine(q, vectors[2 * i + 1])
+          const head = cosine(q, vectors[2 * i]) - HUB * hub[2 * i]
+          const whole = cosine(q, vectors[2 * i + 1]) - HUB * hub[2 * i + 1]
           const c =
             combine === 'head' ? head : combine === 'sum' ? head + whole : Math.max(head, whole)
           return { name: t.name, cosine: Math.round(c * 1e4) / 1e4 }
