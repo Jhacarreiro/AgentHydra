@@ -6,7 +6,7 @@ from ..errors import ClaudeError
 from ..http import valid_uuid
 from ..results import brief_result
 from .api import ChatGPTClient
-from .http import ChatGPTHttp, continuation_summary
+from .http import ChatGPTHttp, bounded_confirmed_conversation, continuation_summary
 
 
 AUTH_HEADERS = frozenset({'authorization', 'user-agent', 'oai-language', 'oai-did', 'chatgpt-account-id'})
@@ -21,6 +21,21 @@ class ReadOnlyChatGPTHttp(ChatGPTHttp):
             raise ClaudeError('This request phase permits only GET. No additional message was sent.',
                 code='phase_mutation_refused')
         return super()._request(method, path, **kwargs)
+
+
+class _ConfirmedReadbackHttp(ReadOnlyChatGPTHttp):
+    """Render captured evidence locally, deferring any GET to an owned child."""
+
+    def __init__(self, *args, **kwargs):
+        self.needs_http = False
+        super().__init__(*args, **kwargs)
+
+    def _request(self, method, path, **kwargs):
+        if method == 'GET':
+            self.needs_http = True
+            raise ClaudeError('The captured reply requires the owned HTTP phase.', code='phase_http_required')
+        raise ClaudeError('This request phase permits only GET. No additional message was sent.',
+            code='phase_mutation_refused')
 
 
 def _invalid(message):
@@ -180,3 +195,29 @@ def readback(saved_state, *, headers, branch, previous_ids, model, prompt, prepa
     if not reply['ok']:
         reply['result'] = {'ok': False, 'error': reply['error']}
     return reply
+
+
+def readback_if_confirmed(saved_state, **arguments):
+    """Return the ordinary readback envelope without network, or None for the owned phase.
+
+    The coordinator calls this on its account thread only after browser cleanup.
+    Only the existing bounded snapshot is eligible; validation, cookies, errors and
+    rendering use readback unchanged. A tentative HTTP-required envelope is discarded.
+    """
+    prepared = arguments.get('prepared')
+    if not isinstance(prepared, dict):
+        return None
+    try:
+        if bounded_confirmed_conversation(prepared.get('confirmed_conversation')) is None:
+            return None
+    except (RecursionError, OverflowError):
+        return None
+    client = None
+
+    def factory(snapshot, *, timeout):
+        nonlocal client
+        client = _ConfirmedReadbackHttp(snapshot, timeout=timeout)
+        return client
+
+    reply = readback(saved_state, http_factory=factory, **arguments)
+    return None if client is not None and client.needs_http else reply

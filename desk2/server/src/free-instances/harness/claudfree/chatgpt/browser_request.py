@@ -48,14 +48,33 @@ READY = r'''(async()=>{
  login:[...document.querySelectorAll('input[type="email"],input[type="password"]')].some(visible),
  challenge:[...document.querySelectorAll('iframe[src*="hcaptcha.com"][title*="challenge"],iframe[src*="recaptcha"][title*="challenge"]')].some(visible)||
   [...document.querySelectorAll('h1,h2,[role="alert"]')].some(e=>visible(e)&&/verify you are human|complete the captcha|verification required/i.test(e.innerText))});
+ const proof=(dom,session,status,s)=>{
+  const state=document.readyState;
+  const email=typeof s?.user?.email==='string'?s.user.email:undefined;
+  return {email,ready:state==='complete'&&session==='ok'&&!!s?.accessToken&&!!dom.composer,
+   login:dom.login,challenge:dom.challenge,diagnostic:{
+    document_state:['loading','interactive','complete'].includes(state)?state:'unknown',
+    composer:!!dom.composer,session,
+    ...(Number.isInteger(status)&&status>=100&&status<=599?{http_status:status}:{}),
+    ...(session==='ok'?{authorized:!!s?.accessToken,identity:!!email}:{})}};
+ };
  const before=cues();
- if(!before.composer&&!before.login&&!before.challenge)return {ready:false,login:false,challenge:false};
- const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});
- if(!r.ok)return null;const s=await r.json();
- // Refresh the DOM after the request, as before: it can change while session lookup waits.
- const {composer,login,challenge}=cues();
- return {email:s.user?.email,ready:document.readyState==='complete'&&!!s.accessToken&&!!composer,
- login,challenge};
+ if(!before.composer&&!before.login&&!before.challenge)return proof(before,'skipped');
+ let session='fetch_error',status,s;
+ try{
+  const r=await fetch('/api/auth/session',{signal:AbortSignal.timeout(3000)});status=r.status;
+  if(!r.ok)session='http_error';
+  else{
+   session='invalid_json';
+   try{s=await r.json();if(s&&typeof s==='object'&&!Array.isArray(s))session='ok';}
+   catch(error){
+    if(['TimeoutError','AbortError'].includes(error?.name))session='fetch_timeout';
+    else if(error?.name!=='SyntaxError')session='fetch_error';
+   }
+  }
+ }catch(error){if(['TimeoutError','AbortError'].includes(error?.name))session='fetch_timeout';}
+ // Refresh visible cues even when session lookup fails; never infer a challenge from an HTTP error.
+ return proof(cues(),session,status,s);
 })()'''
 
 FOCUS = r'''(()=>{const e=[...document.querySelectorAll('[role="textbox"],[contenteditable="true"],textarea')]
@@ -124,16 +143,65 @@ def _refuse_unready_proof(http, proof):
 async def _wait_for_composer(http, tab):
     deadline = time.monotonic() + min(30, http.timeout)
     proof = None
+    diagnostic = None
+    proof_poll = polls = evaluation_timeouts = evaluation_errors = 0
+    last_evaluation = 'none'
     while time.monotonic() < deadline:
+        polls += 1
         try:
             proof = await asyncio.wait_for(tab.evaluate(READY, await_promise=True), 5)
+        except asyncio.TimeoutError:
+            proof = None
+            evaluation_timeouts += 1
+            last_evaluation = 'timeout'
         except Exception:
             proof = None
+            evaluation_errors += 1
+            last_evaluation = 'error'
+        else:
+            observed = _readiness_diagnostic(proof)
+            last_evaluation = 'proof' if observed is not None else 'no proof'
+            if observed is not None:
+                diagnostic, proof_poll = observed, polls
         _refuse_unready_proof(http, proof)
         if proof and proof.get('ready') and proof.get('email'):
             return
         await asyncio.sleep(.3)
-    raise ClaudeError('The saved browser did not reach its composer. No login or message was submitted.', code='browser_preparation_timeout')
+    if diagnostic is None:
+        observed = 'No DOM proof was obtained.'
+    else:
+        fields = [f"state={diagnostic['document_state']}",
+            f"composer={'present' if diagnostic['composer'] else 'missing'}",
+            f"session={diagnostic['session']}"]
+        if 'http_status' in diagnostic:
+            fields.append(f"session HTTP={diagnostic['http_status']}")
+        for name in ('authorized', 'identity'):
+            if name in diagnostic:
+                fields.append(f"{name}={'present' if diagnostic[name] else 'missing'}")
+        observed = f"Last DOM proof (poll {proof_poll}): {', '.join(fields)}."
+    raise ClaudeError('The saved browser did not reach its composer. '
+        f'{observed} Polls={polls}; evaluation timeouts={evaluation_timeouts}; '
+        f'evaluation errors={evaluation_errors}; last evaluation={last_evaluation}. '
+        'No login or message was submitted.', code='browser_preparation_timeout')
+
+
+def _readiness_diagnostic(proof):
+    """Keep only bounded readiness facts, never provider text, URLs or account values."""
+    raw = proof.get('diagnostic') if isinstance(proof, dict) else None
+    if not isinstance(raw, dict):
+        return None
+    states = ('loading', 'interactive', 'complete', 'unknown')
+    sessions = ('skipped', 'ok', 'http_error', 'fetch_error', 'fetch_timeout', 'invalid_json')
+    if raw.get('document_state') not in states or raw.get('session') not in sessions or type(raw.get('composer')) is not bool:
+        return None
+    safe = {key: raw[key] for key in ('document_state', 'composer', 'session')}
+    status = raw.get('http_status')
+    if type(status) is int and 100 <= status <= 599:
+        safe['http_status'] = status
+    for key in ('authorized', 'identity'):
+        if type(raw.get(key)) is bool:
+            safe[key] = raw[key]
+    return safe
 
 
 async def _select_temporary_chat(tab, temporary, existing):

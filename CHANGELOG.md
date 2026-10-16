@@ -8,6 +8,10 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 ## [Unreleased]
 
 - **Free Claude accounts confirm a chat is private before sending anything.** A new chat is created first, and its message goes out only after Claude confirms the chat is Incognito; otherwise nothing is sent. The unused option for ordinary, non-private chats is gone, so Free accounts can only ever use private chats.
+- **Confirmed Free replies avoid another Python process.** Small browser-confirmed replies use the same validation in the existing account worker after browser cleanup. Replies needing HTTP keep their owned process, and account locks, cancellation, cookie saving and output limits remain enforced.
+- **Unfinished links no longer stall Free reply rendering.** Incomplete link tokens stay unchanged without repeatedly scanning the same text. Completed links, citations and code blocks keep their existing output.
+- **Windows caller tracing reuses its native buffer.** Each request still reads fresh connection ownership, while warm reads avoid a redundant table-size lookup. Failed or malformed reads never return an old identity.
+- **Free page timeouts explain what was observed.** Safe readiness details distinguish loading, missing composers and session lookup failures. Visible login and verification prompts remain detectable when a session lookup fails, without treating the lookup failure itself as a request for human help.
 - **Unchanged Claude folders reuse their transcript paths.** Refreshes avoid rebuilding the same absolute path strings while retaining directory relists, file checks and new or removed transcript detection.
 - **Large scoped CliMayte reads avoid repeated membership searches.** Account-history filters build their membership once per read and skip temporary session arrays. Ordering, live changes and waiting reads keep their existing behavior.
 - **CliMayte's compact history builds only the details it displays.** Large lists avoid constructing discarded attempt fields and copying attempt arrays, while full reports and fresh status reads keep their existing behavior.

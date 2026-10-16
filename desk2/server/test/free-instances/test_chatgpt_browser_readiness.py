@@ -46,7 +46,7 @@ async function evaluate(source,fixture){
   calls++;
   if(fixture.fetchError)throw new Error('Synthetic session unavailable');
   if(fixture.afterFetch)Object.assign(state,fixture.afterFetch);
-  return {ok:fixture.ok!==false,json:async()=>fixture.session??{
+  return {ok:fixture.ok!==false,status:fixture.status??(fixture.ok===false?503:200),json:async()=>fixture.session??{
    user:{email:'owner@example.test'},accessToken:'synthetic-session'
   }};
  };
@@ -112,17 +112,30 @@ class BrowserReadinessTests(unittest.TestCase):
         for name in ('loading', 'blank_complete', 'hidden', 'ordinary_heading'):
             with self.subTest(name=name):
                 self.assertEqual(self.results[name]['current'], {
-                    'proof': {'ready': False, 'login': False, 'challenge': False},
+                    'proof': {'ready': False, 'login': False, 'challenge': False,
+                        'diagnostic': {'document_state': self.cases[name]['dom'].get('readyState', 'complete'),
+                            'composer': False, 'session': 'skipped'}},
                     'calls': 0, 'timeouts': []})
                 self.assertEqual(self.results[name]['legacy']['calls'], 1)
 
     def test_visible_cues_preserve_session_proof_and_timeout(self):
         for name in ('ready', 'incomplete_composer', 'login', 'iframe_challenge',
-                'heading_challenge', 'no_token', 'no_email', 'non_ok', 'fetch_error',
+                'heading_challenge', 'no_token', 'no_email',
                 'dom_changed', 'mismatch', 'challenge_and_login'):
             with self.subTest(name=name):
                 current = self.results[name]['current']
-                self.assertEqual(current, self.results[name]['legacy'])
+                proof = dict(current['proof'])
+                diagnostic = proof.pop('diagnostic')
+                self.assertEqual({**current, 'proof': proof}, self.results[name]['legacy'])
+                fixture = self.cases[name]
+                dom = {**fixture['dom'], **fixture.get('afterFetch', {})}
+                session = fixture.get('session', {
+                    'user': {'email': 'owner@example.test'}, 'accessToken': 'synthetic-session'})
+                self.assertEqual(diagnostic, {
+                    'document_state': dom.get('readyState', 'complete'),
+                    'composer': dom.get('composer') is True, 'session': 'ok', 'http_status': 200,
+                    'authorized': bool(session.get('accessToken')),
+                    'identity': bool(session.get('user', {}).get('email'))})
                 self.assertEqual(current['calls'], 1)
                 self.assertEqual(current['timeouts'], [3000])
 
@@ -130,7 +143,9 @@ class BrowserReadinessTests(unittest.TestCase):
         sequence = self.results['loading_sequence']
         self.assertEqual(sequence['current']['calls'], 1)
         self.assertEqual(sequence['legacy']['calls'], 21)
-        self.assertEqual(sequence['current']['proof'], sequence['legacy']['proof'])
+        proof = dict(sequence['current']['proof'])
+        proof.pop('diagnostic')
+        self.assertEqual(proof, sequence['legacy']['proof'])
 
     def test_dom_is_read_again_after_session_request(self):
         proof = self.results['dom_changed']['current']['proof']
@@ -150,10 +165,15 @@ class BrowserReadinessTests(unittest.TestCase):
                         self.results[name]['current']['proof'])
                 self.assertEqual(raised.exception.code, code)
 
-    def test_unavailable_session_retains_original_result_without_new_classification(self):
-        self.assertIsNone(self.results['non_ok']['current']['proof'])
-        self.assertEqual(self.results['fetch_error']['current']['error'],
-            'Synthetic session unavailable')
+    def test_unavailable_session_keeps_observed_cues_without_inventing_identity(self):
+        self.assertEqual(self.results['non_ok']['current']['proof'], {
+            'ready': False, 'login': True, 'challenge': True,
+            'diagnostic': {'document_state': 'complete', 'composer': False,
+                'session': 'http_error', 'http_status': 503}})
+        self.assertEqual(self.results['fetch_error']['current']['proof'], {
+            'ready': False, 'login': False, 'challenge': False,
+            'diagnostic': {'document_state': 'complete', 'composer': True,
+                'session': 'fetch_error'}})
         self.assertFalse(self.results['no_token']['current']['proof']['ready'])
         self.assertNotIn('email', self.results['no_email']['current']['proof'])
 

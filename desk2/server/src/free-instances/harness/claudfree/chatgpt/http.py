@@ -38,6 +38,19 @@ _VERSION = re.compile(r"gpt-(\d+)(?:[.-](\d+))?(?=-|$)")
 PER_CHAT_COOKIE = re.compile(r"(conv_key|history_off)_[0-9a-fA-F-]{36}")
 PER_CHAT_COOKIES_KEPT = 20  # of each family
 CONFIRMED_CONVERSATION_MAX_BYTES = 512 * 1024
+_LINK_TOKEN = re.compile(r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201")
+
+
+def _render_links(text):
+    # No match can end after the last closing delimiter. Exclude that unfinished
+    # suffix before matching: repeated open URL tokens otherwise rescan it for
+    # every opener, making even a bounded browser snapshot quadratic to render.
+    end = text.rfind("\ue201")
+    if end < 0:
+        return text
+    prefix = text if end == len(text) - 1 else text[:end + 1]
+    rendered = _LINK_TOKEN.sub(r"[\1](\2)", prefix)
+    return rendered if end == len(text) - 1 else rendered + text[end + 1:]
 
 
 def bounded_confirmed_conversation(body):
@@ -233,11 +246,7 @@ def _visible_message(message, *, rich=True):
         return None
     # The web app's visible link token is rendered as an ordinary Markdown
     # link. Its private-use delimiters must not become part of a source URL.
-    text = re.sub(
-        r"\ue200url\ue202([^\ue202]+)\ue202(https?://[^\ue201]+)\ue201",
-        r"[\1](\2)",
-        text,
-    )
+    text = _render_links(text)
     result = {
         "id": message.get("id"),
         "role": role,
