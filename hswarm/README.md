@@ -216,6 +216,10 @@ from a 0.86 s max (p99 572 ms) to 0.31 s (p99 127 ms):
   list of every pool built grew the server to 1.25 GB.
 - **A session the account cache does not know** reads AgentHydra's tables again at most once a minute
   (`utilization.SESSION_RECHECK_S`), not on every ledger line.
+- **Booking never waits on AgentHydra.** Booking an ask or a decide (`booking.book_asks`) runs on a worker thread, and
+  the plan prices every account lookup reads are fetched on one: an expired copy is answered at once while a thread
+  fetches the next (`accounts._agenthydra_prices`), and the server makes a process's first fetch on a start-up thread.
+  The fetch held `/health` for up to its 2 s timeout once every 5 minutes, and each finished job task looks an account up.
 
 A new call that does file, git, SQLite or network work synchronously belongs on a thread as well. When `/health` is
 slow, `py-spy dump --nonblocking --pid <server pid>` shows what holds the loop.
@@ -331,7 +335,8 @@ opt-out on this machine. Two more settings bound it: `route_via_climayte_max` (d
 the routed tasks running at once, and `route_via_climayte_start_s`
 (default 90) cancels a routed worker that has not started and falls back to the API. A CliMayte worker's own calls
 are never routed (header `x-hswarm-climayte-worker`). The plan prices behind the monthly cost figures are read from
-AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes); the built-in list prices and
+AgentHydra's Routing page when it answers (2 s timeout, cached a few minutes, an expired copy answered while a thread
+fetches the next); the built-in list prices and
 `~/.hswarm/plan.json` are the offline fallback and the override.
 
 **A give-up steps up one level, once** (owner, 2026-10-13). When an auto task's API leg gives up (`FAILED:`, a turn
