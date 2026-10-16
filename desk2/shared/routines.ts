@@ -80,9 +80,9 @@
 //   slot, and no newer slot is granted while one runs. A board that does not answer holds back only those shared slots.
 //   Every central run, wherever it runs, is reported to the run log as CloudEvents (routine.claimed, routine.started,
 //   routine.ended), and each computer's card shows the newest run of each central routine (`latestRun`). A routine its
-//   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is
-//   broken: the file runs. The manager keeps a copy of each document in <desk home>/routines/central/ and runs from it while
-//   the store cannot be reached.
+//   labels place on another runner is listed as 'elsewhere' and never run here, and one with the id of a file here is not
+//   listed (the store's `problems` name it): the file runs. The manager keeps a copy of each document in
+//   <desk home>/routines/central/ and runs from it while the store cannot be reached.
 
 /** How often the manager looks at its routines. */
 export const ROUTINES_EVERY_MS = 5 * 60_000

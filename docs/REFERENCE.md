@@ -218,6 +218,38 @@ The `routines` MCP tool (`server/src/mcp-routines.ts`) reads the same answer (`f
 each marked MUTATES. It cannot resume, approve, discard or switch the manager, and its description tells the agent to propose
 a routine rather than add one, and to prefer a temporary background task it manages itself.
 
+**Central routines** (the owner, 2026-10-15: one place for the routines, which other people can use too). When
+`<desk home>/routines-store.json` names a store, the manager also lists the routines kept there, which every computer reading
+that store sees; without the file none of this runs. The file's shape and the document format are in `desk2/shared/routines.ts`
+("CENTRAL ROUTINES"). Today the store is the CrAInium: each routine is one document, `routines/<id>.md` (format `routine/1`:
+a JSON front matter holding the contract's keys, plus `title`, `why`, `timeZone`, `workdir`, `runsOn` and `approval`, and the
+prompt as its body), under one docs repo key, read and written through the person's own Connections `docs` tool
+(`desk2/server/src/routines/store-crainium.ts`). Nothing in a document is a machine path: `workdir` is a repo plus a folder in
+it, found through the file's `repos`, and `~/` is the running computer's home.
+
+- **Approval.** A document runs only with an Ed25519 signature, by a key this computer trusts (its own
+  `<desk home>/routines-approver.key`, made with the store, or one the file's `approvers` lists), over its id and the sha of
+  everything in it but `approval` and `description` (`routines/central.ts`). Any other change makes it a proposal again. Approve
+  signs with this computer's key and writes the document back with the sha it read; an edit is signed again the same way, and
+  answers 409 when the document moved on in the store. An agent may propose (`propose` with `store: "central"`, here or through
+  the MCP tool), never approve.
+- **Where it runs.** On a runner that carries every label its `runsOn` names. When one label is this runner's name it is
+  pinned here and runs as a local routine does. When none is, any runner carrying the labels may run it (schedule routines
+  only), one per slot: the runner claims the slot on the store's run board (the Connections tool `routine_runs`) with a lease
+  of twice its timeout, renewed while the run lives (`routines/manager-board.ts`, `routines/runs.ts`). Anything else is state
+  `elsewhere`, listed and never run, read or paused here. A schedule keeps its own `timeZone` on every runner.
+- **Runs.** Every central run is reported to the run log as CloudEvents (`routine.claimed`, `routine.started`,
+  `routine.ended`), and each card shows the newest run of each central routine, wherever it ran.
+- **When the store is down.** The manager keeps a copy of each document in `<desk home>/routines/central/`, reads the store
+  again at most every 5 minutes (at once with `?fresh=1`), and runs approved pinned routines from the copy. A board that does
+  not answer holds back only the shared slots.
+- **Same id as a file here.** The file is listed and runs; the document is named under the store's `problems` in
+  `GET /api/routines` `store` (Settings shows that line), never listed.
+
+The design, the standards it borrows from (cron with an IANA zone as Kubernetes CronJob does, GitHub-style runner labels,
+Temporal's overlap names, CloudEvents, lease semantics) and the open decisions are in the CrAInium: `docs get`, repo
+`lunarwerx/connections`, path `docs/architecture/ai/ROUTINES.md`.
+
 Asking the owner for help. A routine whose run ends `failed` or `timed-out` opens an incident (scope `routine`, key = the
 routine id, the routine's name and the run's last line as its text), and so does a routine that turns `broken` (once while it
 stays broken; that memory is in-process, so a Desk restart reports a still-broken routine again). An `ok` run resolves it,
