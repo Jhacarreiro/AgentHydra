@@ -61,5 +61,11 @@ watch(headerOpen, (open) => {
   peekTimer = null
 })
 
+// Find in session from the title bar's search button, beside Session details (owner, 2026-10-14: "move the search here"; it
+// was on the rail's Environment card, gone with the rail): the button asks, the session header opens or closes its Find bar
+// and says whether it is open.
+export const findAsk = ref(0)
+export const findShown = ref(false)
+
 export const displayPrefs = ref<DisplayPrefs>(readDisplay())
 watch(displayPrefs, (v) => storage?.setItem(DISPLAY_KEY, JSON.stringify(v)), { deep: true })

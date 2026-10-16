@@ -110,6 +110,38 @@ class FinalSourceSweepTest(unittest.TestCase):
         self.assertTrue(payload["ok"])
         self.assertIn("Past the limit", payload["report"])
 
+    def test_an_engine_the_source_app_restarted_after_the_kill_is_killed_then_settled(self):
+        # The 2026-10-15 #187 -> #215 shape: --terminate-live killed the engine, the chat landed,
+        # the still-open source app started a new engine for it, and the app refuses to archive
+        # a running chat - so the settle only takes once that engine is gone.
+        items = [_landed("dealflow", "Dealflow app Google Look styling")]
+        row = {**_row("dealflow", "Dealflow app Google Look styling"), "live": True, "livePid": 90400}
+        self.rows = [row]
+        killed = []
+
+        def taskkill(argv, timeout=None):
+            killed.append(argv[2])
+            row["live"] = False
+            self.settle_works = True  # the app's refusal was the running engine
+
+        parsed = _args()
+        parsed.terminate_live = True
+        with mock.patch.object(migrate_batch.clilib, "run_text", taskkill), \
+                mock.patch.object(migrate_batch.ledgerlib, "note", lambda *a, **k: None):
+            payload = self._run(items, parsed)
+        self.assertEqual(["90400"], killed)
+        self.assertTrue(payload["ok"])
+        self.assertEqual(["dealflow"], payload["sourceSweep"]["repaired"])
+
+    def test_a_restarted_source_engine_is_never_killed_without_a_kill_word(self):
+        items = [_landed("dealflow", "Dealflow app Google Look styling")]
+        self.rows = [{**_row("dealflow", "Dealflow app Google Look styling"),
+                      "live": True, "livePid": 90400}]
+        with mock.patch.object(migrate_batch.clilib, "run_text",
+                               lambda *a, **k: self.fail("killed without --terminate-live")):
+            payload = self._run(items, _args())
+        self.assertFalse(payload["ok"])
+
     def test_an_unreadable_source_is_not_called_clean(self):
         def boom(*a, **k):
             raise hydralib.DaemonError("/api/chats", None, "daemon down")

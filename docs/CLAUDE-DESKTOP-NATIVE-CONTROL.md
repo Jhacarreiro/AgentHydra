@@ -11,7 +11,9 @@ values the code looks for. What replaced the pins is structural, in
 
 Scope: moving, archiving and migrating **Code** chats between desktop instances.
 Message delivery has one native action of its own, the native send
-([Sending a message into a chat](#sending-a-message-into-a-chat-native-send)).
+([Sending a message into a chat](#sending-a-message-into-a-chat-native-send)), and so does
+starting a chat, the native start
+([Starting a new chat](#starting-a-new-chat-native-start)).
 
 ## Operating instructions for agents
 
@@ -35,8 +37,12 @@ considering Lua, sidebar menus or UIA. The archive and migration scripts already
    `POST /api/sessions/<exact session ID>/desktop-archive`, with
    `{"archived":true,"instance_ref":"desktop:<full profile path>"}`. For moves, use
    `move_chat` / `move_chats` or the migration scripts; they verify destination landing
-   before native source cleanup. General destination import/settings, unarchive and
-   new/start/stop/resume are not fully converted to native control.
+   before native source cleanup. A new chat for fan_out starts natively (the native start).
+   General destination import/settings, unarchive and stop/resume are not fully converted
+   to native control. Native stop is the exception for one
+   chat: `POST /api/sessions/:id/stop` runs the app's own Stop (`interruptSession(id, 'user')`) once, and
+   refuses an idle, archived or already-stopping chat, a chat no running app holds, or several matches; it
+   never retries, and it answers `verified` only when the app's own state shows the turn stopping or stopped.
 5. Verify the returned result. Native success has `route:"native"`, `ok:true` and
    `verified:true`; the desktop route also has an empty `uiArchive` list. `native-only`
    never falls back to disk/UI, even if the profile is closed or its inspector unavailable.
@@ -263,12 +269,17 @@ response, or lost mutation reply is terminal: no retry through disk or UI. Since
 pending, or transitioning work (parked, moveInFlight)`, so a person can tell real
 work from leftover bookkeeping; it still ends the attempt.
 
-A migration source row filed under a previous login of its profile (`staleLogin`)
-is outside native control's reach: the running app loads only its signed-in
-account's folder, so no inspection can match that row, and nothing in the app can
-write it back. Migration settles such a row the way it settles a closed profile's,
-by its disk flag with a read-back, before any native attempt. That is a routing
-decision made from the record itself, not a fallback after a native refusal.
+A row filed under a previous login of its profile (`staleLogin`) is outside
+native control's reach: the running app loads only its signed-in account's
+folder, so no inspection can match that row ("Expected one exact native session
+match, found 0"), and nothing in the app can write it back. Migration, the
+`desktop-archive` route (Desk's Move to account > Unassigned) and the local chat
+retire path all settle such a row the way they settle a closed profile's, by its
+disk flag with a read-back, before any native attempt. The test is the record
+itself: on disk in the profile (`findChatMetaPath`) but not in the signed-in
+account's folder (`findVisibleChatMetaPath`). That is a routing decision, not a
+fallback after a native refusal. Until 2026-10-15 only migration did this, so
+Unassign refused every stale-login chat.
 
 Connections are configured centrally through `GET` / `PUT
 /api/claude-native/settings`. A PUT body is:
@@ -490,8 +501,13 @@ journal, so messages held by an earlier daemon go out once their chats are idle.
 - `expired`: held 24 hours without the chat going idle. Never sent.
 
 A `queued` answer is never repeated while the transcript is unchecked, and a send the app took is never
-sent from `held`. `POST /api/sessions/:id/message` uses `sendOrHold` first for a `peer_only` caller, the
-ones that must never type (Desk's bridge, so the babysitter and the orchestrator): before, the only
+sent from `held`. `POST /api/sessions/:id/message` uses `sendOrHold` first for every caller that must
+never type. Since d7d5a817 (2026-10-15) that is every caller except one that sends `allow_typing: true`,
+which only AgentHydra's own chat box does (a person's own send): the courier's resumes and replies,
+fan_out_send, archive's preserve prompt, CliMayte's ping and spawn's fallback starter are all
+never-type, and with no native send and no peer pipe the route answers 409 `never types` instead of
+falling to the composer. A move's resume had taken the composer that day, and the owner watched his
+Claude window go full screen, minimize, and have its menus clicked. Before 2026-10-09 the only
 routes were the peer pipe, which exists only while an engine is live and whose note waits unread in an
 idle engine's queue, and the composer, which types. On 2026-10-09 the babysitter's 44 overnight
 continues for seven chats a usage limit stopped all ended that way (`no peer pipe`, or
@@ -499,10 +515,66 @@ continues for seven chats a usage limit stopped all ended that way (`no peer pip
 answers `held: true` with `queued: true` for a held message, and `delivered` stays false until the
 transcript or the app's `delivered` confirms it.
 
-CliMayte's pings and HSwarm job pings to a chat Desk 2 does not run do NOT use the hold (since 64963163, 2026-10-13): `server/src/climayte.ts` passes `tryNativeSendToChat` as the ping's `native` step, after Desk's route and before the peer pipe, so a busy chat answers busy and the ping waits in its own outbox, to go out as one batch of what is still news (`server/src/climayte-ping.ts`). Held, each ping went out as written, one per idle moment, hours late. A ping knows its chat by the engine's config home, which for a desktop chat is the default `~/.claude`, while native control is set per desktop profile, so `tryNativeSendToChat` sends to the profile whose app holds the chat (`desktopHomeFor`, the app's chat index, as the message route finds it) and answers unavailable for a chat no desktop holds. Until 2026-10-12 the ping passed the config home, every desktop ping was refused as "not configured", and the pipe's note sat unread in the idle chat. The orchestrator's nudge to an outside session posts
+CliMayte's pings and HSwarm job pings to a chat Desk 2 does not run do NOT use the hold (since 64963163, 2026-10-13): `server/src/climayte.ts` passes `tryNativeSendToChat` as the ping's `native` step, after Desk's route and before the peer pipe, so a busy chat answers busy and the ping waits in its own outbox, to go out as one batch of what is still news (`server/src/climayte-ping.ts`). Held, each ping went out as written, one per idle moment, hours late. A ping knows its chat by the engine's config home, which for a desktop chat is the default `~/.claude` ([CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)), while native control is set per desktop profile, so `tryNativeSendToChat` sends to the profile whose app holds the chat (`desktopHomeFor`, the app's chat index, as the message route finds it) and answers unavailable for a chat no desktop holds. Until 2026-10-12 the ping passed the config home, every desktop ping was refused as "not configured", and the pipe's note sat unread in the idle chat. The orchestrator's nudge to an outside session posts
 `/api/external/sessions/:id/message`, which the bridge sends as `peer_only`, so it reaches the same
 native-first route. A native send the app took and refused is journalled and surfaced in the chat's
 next `climayte_status`, never sent again. Nothing here types into the window.
+
+## Starting a new chat (native start)
+
+`nativeProgram({ action: 'new', pid, profileDir, cwd, prompt, model, effort, bypass })` starts a
+chat the way the app's own New chat does: the session manager's `startSession(options, context)`
+with `{ cwd, model, effort, message: prompt, permissionMode: 'bypassPermissions' (when bypass) }`
+and `{ userInitiated: true }`. With a message, `startSession` returns the new chat's `local_` id once
+that first message is delivered (it awaits the app's `sendMessage`), so the first turn is the prompt
+and nothing is typed. No window is raised, no `claude://code/new` deep link is fired, and nothing
+is clicked. Found 2026-10-15 with `inspect` and `methodProbe: true`, which lists the manager's
+method names and the source head of those that could start a chat, read-only.
+
+- Refused before the call, nothing sent: no `startSession` on the manager, a folder that is not an
+  existing directory, or a bad request (a non-absolute folder, an empty prompt or one over 20,000
+  characters, a model that is not a `claude-...` id, an effort outside low..max).
+- Only the id `startSession` returned is the chat. The program never takes "the new key in the
+  session map", which could be a chat a person opened in the same moment.
+- It then waits up to 25 s for the chat's CLI session id, and is `verified` only when the app kept
+  the model (compared without a `[1m]`-style suffix) and the effort asked for. A chat the app started
+  on something else answers `started: true`, `modelPinned` / `effortPinned` false and what it kept.
+- Once `startSession` is called, a throw or a lost reply is `dispatch: 'sent'`: the chat may exist,
+  so nothing retries it, and it is never sent down the deep link.
+
+`server/src/claude-native-new.ts` (`tryNativeNew`, over `withAppClient` and the inspector's 60 s call
+ceiling) runs it; `POST /api/instances/:dir/native-new` with `{cwd, prompt, model, effort, bypass}`
+exposes it. fan_out's `spawn_chat.py` uses it on every profile whose `launchDebugger` is true (since
+e61b3dba): each chat is pinned to claude-opus-5-5 at xhigh unless the task or the group names another
+model or effort (never Fable unless named; owner, 2026-10-15). The member's `sessionId` is the CLI
+session id, which transcripts, receipts, `fan_out_status` and `fan_out_delete` read; the `local_` id
+rides beside it as `desktopSessionId`. A profile without native control keeps the deep link and the
+composer actuator, which cannot pin a model and do drive the window.
+
+Live, 2026-10-15, on a running profile: 18 s, claude-sonnet-5-5 at low kept and answering, Bypass on,
+first turn the prompt; the app's window kept its handle and rect and never came to the foreground.
+The probe chat was archived through `desktop-archive` (native, ok, verified).
+
+## A Desktop chat's model, effort and account in Desk 2
+
+Since 458caf09 (2026-10-15) Desk 2's model and effort pickers work on a chat Claude Desktop runs.
+`nativeProgram({ action: 'setting', pid, profileDir, cliSessionId, model?, effort? })` calls the
+app's own `manager.setModel` and `setEffort`, the calls its pickers make, so a turn running now keeps
+going and the next one runs on the new values. `server/src/claude-native-send.ts` (`tryNativeSetting`)
+runs it, and `POST /api/sessions/:id/setting {model?, effort?}` exposes it on the RUNNING instance whose
+app holds the chat, found the way the message route finds it. Desk 2 reaches it through
+`POST /api/external/sessions/:id/setting` (`plugins/10-bridge.ts`). The answer is what the app kept,
+read back from its own session state. 200 means the app shows the change. A refusal answers 409, an
+unreachable app 503, and a call that may have gone out unconfirmed 502. Nothing is retried, and a change
+the app did not keep is reported with what it kept. A closed instance answers 409 `open it first`.
+
+The account picker on such a chat shows the account signed in to that Desktop app, never "Default
+login" (6dab48b1). The engine's config home for a desktop chat is the default `~/.claude` ([CLAUDE-CONFIG-LAYOUT.md](CLAUDE-CONFIG-LAYOUT.md)), so the
+picker used to show that. Now the desk server's bridge sets `desktopAccountId` on each outside session
+whose source is `desktop` (`bridge/resume.ts` `withDesktopAccounts`). The CLI instance linked to the
+chat's Desktop profile (`associatedDesktopDir`) wins; otherwise it is the CLI instance on the same
+login. With neither, the picker says "Claude Desktop" (`web/src/components/external/logic.ts`
+`desktopAccountRef`).
 
 ## Remaining migration work
 
@@ -532,5 +604,6 @@ failed is never retried through the deep link.
 
 The live proof establishes import, selected settings restoration, archive and
 passive capture on this installed build. It does not establish a completely
-native new/start/stop/move/resume sequence or arbitrary migration settings parity.
+native stop/move/resume sequence or arbitrary migration settings parity (a new chat's
+start is native since 2026-10-15; see the native start).
 The earlier UI demo remains separately documented rather than relabeled native.

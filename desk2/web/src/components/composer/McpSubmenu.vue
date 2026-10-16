@@ -27,7 +27,7 @@ const DOT: Record<McpDot, string> = {
 }
 
 const servers = shallowRef<McpServerInfo[] | null>(null)
-const status = ref<McpStatus | null>(null)
+const status = shallowRef<McpStatus | null>(null)
 const failed = ref(false)
 const rows = computed(() => mcpRows(servers.value ?? [], status.value))
 const dots = computed(() => rows.value.some((r) => r.dot))

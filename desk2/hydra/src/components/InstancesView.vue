@@ -36,7 +36,6 @@ import { toast } from 'vue-sonner'
 import CliInstanceRows from '@/components/CliInstanceRows.vue'
 import CliQuickAdd from '@/components/CliQuickAdd.vue'
 import CodexInstanceRows from '@/components/CodexInstanceRows.vue'
-import CreateInstanceDialog from '@/components/CreateInstanceDialog.vue'
 import DeleteInstanceDialog from '@/components/DeleteInstanceDialog.vue'
 import DshInstanceRows from '@/components/DshInstanceRows.vue'
 import EditInstanceDialog from '@/components/EditInstanceDialog.vue'
@@ -219,8 +218,9 @@ const filterFacts = (inst: CMInstance): InstanceFacts => ({
   plan: inst.account?.planLabel ?? null,
   // `loginUuid`, not `account`: account is resolved lazily and is null for a second after every
   // refresh, which would make signed-in rows flicker out of a filtered table. loginUuid is read
-  // straight off config.json with every list.
-  signedIn: inst.loginUuid != null,
+  // straight off config.json with every list. It is the stored login, which outlives the app's own
+  // sign-out, so a running app whose log says it signed itself out (`appSignedOut`) is not signed in.
+  signedIn: inst.loginUuid != null && !inst.appSignedOut,
   search: searchText(
     inst.num,
     inst.name,
@@ -373,9 +373,7 @@ const presentPlans = computed(() => [
   ...codexInstances.value.map((i) => i.account?.planLabel),
 ])
 
-const createOpen = ref(false)
 const creating = ref(false)
-const createError = ref<string | null>(null)
 
 const deleteOpen = ref(false)
 const deleteTarget = ref<CMInstance | null>(null)
@@ -773,7 +771,12 @@ function rowModel(inst: CMInstance): InstanceRowModel {
         ),
       copy: accountEmail(inst.account),
     },
-    badge: inst.isExternal ? { label: t('instances.external') } : undefined,
+    // Signed out comes first: it is the one a person has to act on (sign in again in that window).
+    badge: inst.appSignedOut
+      ? { label: t('instances.signedOutInApp'), title: t('instances.signedOutInAppHint', { line: inst.appSignedOut }) }
+      : inst.isExternal
+        ? { label: t('instances.external') }
+        : undefined,
     // No "Resolve" button: every instance resolves itself (useInstances.autoResolveAccounts), so a
     // missing account is a moment, not a state you act on.
     account: accountName
@@ -896,7 +899,7 @@ async function onCreateFor(id: string) {
   showKind('desktop')
   showProvider(provider)
   if (provider === 'claude') {
-    openCreateDialog()
+    void createNow()
     return
   }
   await nextTick()
@@ -1229,24 +1232,18 @@ async function onCreateShortcut(inst: CMInstance) {
   else toast.error(result?.message ?? t('instances.toastShortcutFailed'))
 }
 
-function openCreateDialog() {
-  createError.value = null
-  createOpen.value = true
-}
-async function onCreateSubmit(name: string) {
+// A new instance is made at once, its folder named by the daemon: nobody is asked for a name
+// (owner, 2026-10-14: "stop asking me for names. I absolutely don't ... give a shit what the folder names are"). The row shows the account once it signs in.
+async function createNow() {
+  if (creating.value) return
   creating.value = true
-  createError.value = null
   try {
-    const result = await create(name)
+    const result = await create()
     if (result?.ok) {
       toast.success(t('instances.toastCreated'))
-      createOpen.value = false
-      if (result.needsBrowserDance) toast.info(t('instances.browserDanceBody'))
       // Same self-heal as onOpen: a successful create disproves a stale "not manageable" verdict.
       if (desktopWarning.value) void refreshDesktopInstall(true)
-    } else {
-      createError.value = result?.message ?? t('instances.toastCreateFailed')
-    }
+    } else toast.error(result?.message ?? t('instances.toastCreateFailed'))
   } finally {
     creating.value = false
   }
@@ -1671,7 +1668,8 @@ onUnmounted(() => {
             :key="inst.dir"
             :columns="columns"
             :row="rowModels.get(inst.dir)!"
-            :style="orderStyle(inst)"
+            class="order-(--row-order)"
+            :style="{ '--row-order': orderStyle(inst)?.order }"
             :menu-open="rowMenuOpen === inst.dir"
             @update:menu-open="(v: boolean) => (rowMenuOpen = v ? inst.dir : null)"
           >
@@ -1996,7 +1994,7 @@ onUnmounted(() => {
           v-if="freeShown"
           ref="freeRows"
           :columns="columns"
-          @promote="(p) => onCreateFor(p === 'claude' ? CLI_CREATE_ID : 'codex')"
+          @promote="(to) => onCreateFor(to === 'cli' ? CLI_CREATE_ID : to === 'desktop' ? 'claude' : 'codex')"
         />
       </InstanceTable>
     </InstanceCard>
@@ -2058,12 +2056,6 @@ onUnmounted(() => {
         </DialogFooter>
       </DialogContent>
     </Dialog>
-    <CreateInstanceDialog
-      v-model:open="createOpen"
-      :submitting="creating"
-      :error-message="createError"
-      @submit="onCreateSubmit"
-    />
     <DeleteInstanceDialog
       v-model:open="deleteOpen"
       :instance-name="deleteTarget?.name ?? null"

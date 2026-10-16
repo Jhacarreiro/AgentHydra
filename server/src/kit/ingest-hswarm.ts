@@ -148,6 +148,26 @@ export function hswarmArchivePaths(path: string = hswarmLedgerPath()): string[] 
     .map((m) => join(dirname(path), m[0]))
 }
 
+/** The YYYYMM months that have an archive beside the live ledger. */
+const hswarmArchivedMonths = (path: string): Set<string> =>
+  new Set(hswarmArchivePaths(path).map((p) => ARCHIVE.exec(basename(p))?.[2] ?? ''))
+
+/** true when a file's cursor was made by this ingest version and its size and mtime have not moved since. */
+const hswarmCursorMatches = (
+  cur: ReturnType<KitStore['getCursor']>,
+  size: number,
+  mtime: number,
+): boolean =>
+  !!cur && cur.version === HSWARM_INGEST_VERSION && cur.size === size && cur.mtime === mtime
+
+/** What one sweep shares between the archives and the live file. */
+interface HswarmSweep {
+  seen: Map<string, number>
+  pc: string | null
+  migrating: boolean
+  skipBefore: number | null
+}
+
 /**
  * Reads the ledger's new bytes, and each month archive (ledger-YYYYMM.jsonl.gz) once: HSwarm rotates a finished
  * month out of the live file, and lines appended since the last sweep would otherwise vanish with it. An archive
@@ -162,108 +182,36 @@ export async function ingestHswarm(
   path: string = hswarmLedgerPath(),
   opts: { pc?: string | null } = {},
 ): Promise<number | null> {
-  const seen = new Map<string, number>()
   const migrating = store.getMeta(HSWARM_DROPPED) !== String(HSWARM_INGEST_VERSION)
-  let skipBefore: number | null = null
-  if (migrating) {
-    // The raw cut of the FIRST drop, saved before it runs: lines under it were settled under the old ordinal ids. A
-    // sweep that died after its drop comes back here with its cursors already at this version and raw_cut maybe
-    // raised by a prune since; it drops again and must re-read every file from byte 0 with the first cut, or the
-    // archives it had read are skipped and their rows stay deleted (hswarm_review, 2026-10-13). Lines it settled
-    // under the new ids in between are kept from counting twice by settleOld's first claim.
-    const cutKey = `${HSWARM_DROP_CUT}_v${HSWARM_INGEST_VERSION}`
-    if (store.getMeta(cutKey) === null) store.setMeta(cutKey, String(store.rawCut() ?? ''))
-    await dropHswarmRows(store)
-    const first = store.getMeta(cutKey)
-    skipBefore = first ? Number(first) : null
+  const skipBefore = migrating ? await migrateHswarmRows(store) : null
+  const sweep: HswarmSweep = {
+    seen: new Map<string, number>(),
+    pc: opts.pc ?? null,
+    migrating,
+    skipBefore,
   }
-  const archived = new Set(
-    hswarmArchivePaths(path).map((p) => ARCHIVE.exec(basename(p))?.[2] ?? ''),
-  )
-  let written = 0
-  let changed = false
-  let archivesRead = false
-  for (const ap of hswarmArchivePaths(path)) {
-    let st: ReturnType<typeof statSync>
-    try {
-      st = statSync(ap)
-    } catch {
-      continue
-    }
-    const mtime = Math.floor(st.mtimeMs)
-    const cur = store.getCursor(ap)
-    if (
-      !migrating &&
-      cur &&
-      cur.version === HSWARM_INGEST_VERSION &&
-      cur.size === st.size &&
-      cur.mtime === mtime
-    )
-      continue
-    let data: Buffer
-    try {
-      data = await gunzipAsync(await readFile(ap))
-    } catch {
-      continue // unreadable now (being replaced); the cursor is not set, so the next sweep reads it
-    }
-    const r = await consume(store, data, seen, opts.pc ?? null, null, skipBefore)
-    written += r.written
-    store.setCursor({
-      path: ap,
-      size: st.size,
-      mtime,
-      offset: st.size,
-      version: HSWARM_INGEST_VERSION,
-    })
-    changed = true
-    archivesRead = true
-  }
+  const archived = hswarmArchivedMonths(path)
+  const archives = await readArchives(store, path, sweep)
+  const live = await readLive(store, path, sweep, archived, archives.read)
+  if (live === null) return archives.read ? archives.written : null
+  return archives.written + live
+}
 
-  let size: number
-  let mtime: number
-  try {
-    const s = statSync(path)
-    size = s.size
-    mtime = Math.floor(s.mtimeMs)
-  } catch {
-    if (migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
-    return changed ? written : null
-  }
-  const cur = store.getCursor(path)
-  if (
-    !migrating &&
-    !archivesRead &&
-    cur &&
-    cur.version === HSWARM_INGEST_VERSION &&
-    cur.size === size &&
-    cur.mtime === mtime
-  )
-    return changed ? written : null
-  let offset = cur && cur.version === HSWARM_INGEST_VERSION ? cur.offset : 0
-  if (offset > size || archivesRead || migrating) offset = 0 // shrank (rotated), an archive just changed, or the drop
-
-  let end = offset
-  const fh = await open(path, 'r')
-  try {
-    const buf = Buffer.allocUnsafe(CHUNK)
-    let carry: Buffer = Buffer.alloc(0)
-    let pos = offset
-    for (;;) {
-      const { bytesRead: n } = await fh.read(buf, 0, CHUNK, pos)
-      if (n === 0) break
-      pos += n
-      const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
-      const r = await consume(store, data, seen, opts.pc ?? null, archived, skipBefore)
-      written += r.written
-      end += r.consumed
-      carry = Buffer.from(data.subarray(r.consumed)) // a line still being written waits for the next sweep
-    }
-  } finally {
-    await fh.close()
-  }
-  store.setCursor({ path, size, mtime, offset: end, version: HSWARM_INGEST_VERSION })
-  if (migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
-  return written
+/**
+ * One-time (per ingest version) clear of the stored raw hswarm rows, whose ordinal ids the line ids replace. Returns
+ * the first drop's raw cut: the lines under it are settled already and the re-read must skip them.
+ */
+async function migrateHswarmRows(store: KitStore): Promise<number | null> {
+  // The raw cut of the FIRST drop, saved before it runs: lines under it were settled under the old ordinal ids. A
+  // sweep that died after its drop comes back here with its cursors already at this version and raw_cut maybe
+  // raised by a prune since; it drops again and must re-read every file from byte 0 with the first cut, or the
+  // archives it had read are skipped and their rows stay deleted (hswarm_review, 2026-10-13). Lines it settled
+  // under the new ids in between are kept from counting twice by settleOld's first claim.
+  const cutKey = `${HSWARM_DROP_CUT}_v${HSWARM_INGEST_VERSION}`
+  if (store.getMeta(cutKey) === null) store.setMeta(cutKey, String(store.rawCut() ?? ''))
+  await dropHswarmRows(store)
+  const first = store.getMeta(cutKey)
+  return first ? Number(first) : null
 }
 
 /**
@@ -294,6 +242,142 @@ async function dropHswarmRows(store: KitStore): Promise<void> {
   }
 }
 
+/** Reads each month archive that is new or changed since its cursor, oldest month first. */
+async function readArchives(
+  store: KitStore,
+  path: string,
+  sweep: HswarmSweep,
+): Promise<{ written: number; read: boolean }> {
+  let written = 0
+  let read = false
+  for (const ap of hswarmArchivePaths(path)) {
+    let st: ReturnType<typeof statSync>
+    try {
+      st = statSync(ap)
+    } catch {
+      continue
+    }
+    const mtime = Math.floor(st.mtimeMs)
+    const cur = store.getCursor(ap)
+    if (!sweep.migrating && hswarmCursorMatches(cur, st.size, mtime)) continue
+    let data: Buffer
+    try {
+      data = await gunzipAsync(await readFile(ap))
+    } catch {
+      continue // unreadable now (being replaced); the cursor is not set, so the next sweep reads it
+    }
+    const r = await consume(store, data, sweep.seen, sweep.pc, null, sweep.skipBefore)
+    written += r.written
+    store.setCursor({
+      path: ap,
+      size: st.size,
+      mtime,
+      offset: st.size,
+      version: HSWARM_INGEST_VERSION,
+    })
+    read = true
+  }
+  return { written, read }
+}
+
+/**
+ * Reads the live ledger from its cursor. Null when there is nothing new: the file is unchanged, or it is gone.
+ */
+async function readLive(
+  store: KitStore,
+  path: string,
+  sweep: HswarmSweep,
+  archived: Set<string>,
+  archivesRead: boolean,
+): Promise<number | null> {
+  let size: number
+  let mtime: number
+  try {
+    const s = statSync(path)
+    size = s.size
+    mtime = Math.floor(s.mtimeMs)
+  } catch {
+    if (sweep.migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
+    return null
+  }
+  const cur = store.getCursor(path)
+  if (!sweep.migrating && !archivesRead && hswarmCursorMatches(cur, size, mtime)) return null
+  let offset = cur && cur.version === HSWARM_INGEST_VERSION ? cur.offset : 0
+  if (offset > size || archivesRead || sweep.migrating) offset = 0 // shrank (rotated), an archive just changed, or the drop
+
+  const { written, end } = await readLiveBytes(store, path, offset, sweep, archived)
+  store.setCursor({ path, size, mtime, offset: end, version: HSWARM_INGEST_VERSION })
+  if (sweep.migrating) store.setMeta(HSWARM_DROPPED, String(HSWARM_INGEST_VERSION))
+  return written
+}
+
+/** Feeds the live file from `offset` to consume in chunks, keeping a partial last line for the next chunk. */
+async function readLiveBytes(
+  store: KitStore,
+  path: string,
+  offset: number,
+  sweep: HswarmSweep,
+  archived: Set<string>,
+): Promise<{ written: number; end: number }> {
+  let written = 0
+  let end = offset
+  const fh = await open(path, 'r')
+  try {
+    const buf = Buffer.allocUnsafe(CHUNK)
+    let carry: Buffer = Buffer.alloc(0)
+    let pos = offset
+    for (;;) {
+      const { bytesRead: n } = await fh.read(buf, 0, CHUNK, pos)
+      if (n === 0) break
+      pos += n
+      const data = carry.length ? Buffer.concat([carry, buf.subarray(0, n)]) : buf.subarray(0, n)
+      const r = await consume(store, data, sweep.seen, sweep.pc, archived, sweep.skipBefore)
+      written += r.written
+      end += r.consumed
+      carry = Buffer.from(data.subarray(r.consumed)) // a line still being written waits for the next sweep
+    }
+  } finally {
+    await fh.close()
+  }
+  return { written, end }
+}
+
+/** A ledger line parsed to an object; null for a line that does not parse or is not an object. */
+function parseLedgerLine(text: string): LedgerLine | null {
+  let r: LedgerLine
+  try {
+    r = JSON.parse(text) as LedgerLine
+  } catch {
+    return null
+  }
+  return r && typeof r === 'object' ? r : null
+}
+
+/** True for a line that is not a counted call, or that the archives or an earlier settle already cover. */
+function skipLedgerLine(
+  r: LedgerLine,
+  skipMonths: Set<string> | null,
+  skipBefore: number | null,
+): boolean {
+  if (r.cached || r.job == null || r.task == null) return true
+  // A month with an archive is final there: a live line of it is a rotation whose file swap has not gone
+  // through yet (the archive is written first). Reading it too would give it a second ordinal, a second id.
+  if (skipMonths?.size && skipMonths.has(lineMonth(r) ?? '')) return true
+  if (skipBefore !== null) {
+    const t = typeof r.ts === 'string' ? Date.parse(r.ts) : Number.NaN
+    if (Number.isFinite(t) && t < skipBefore) return true // settled already; counting it again would double it
+  }
+  return false
+}
+
+/** The `dup` of a line: how many byte-identical lines came before it in this read. Counts this one for the next. */
+function ledgerDup(r: LedgerLine, seen: Map<string, number>): number {
+  const key = r.id ? '' : JSON.stringify(r)
+  const dup = key ? (seen.get(key) ?? 0) : 0
+  if (key) seen.set(key, dup + 1)
+  return dup
+}
+
 /** Parses the whole lines of `data` into usage events. `consumed` is the bytes up to the last newline. */
 async function consume(
   store: KitStore,
@@ -321,25 +405,9 @@ async function consume(
     nl = data.indexOf(0x0a, from)
     if (!text) continue
     if (++lines % 1000 === 0) await yieldLoop()
-    let r: LedgerLine
-    try {
-      r = JSON.parse(text) as LedgerLine
-    } catch {
-      continue
-    }
-    if (!r || typeof r !== 'object' || r.cached) continue
-    if (r.job == null || r.task == null) continue
-    // A month with an archive is final there: a live line of it is a rotation whose file swap has not gone
-    // through yet (the archive is written first). Reading it too would give it a second ordinal, a second id.
-    if (skipMonths?.size && skipMonths.has(lineMonth(r) ?? '')) continue
-    if (skipBefore !== null) {
-      const t = typeof r.ts === 'string' ? Date.parse(r.ts) : Number.NaN
-      if (Number.isFinite(t) && t < skipBefore) continue // settled already; counting it again would double it
-    }
-    const key = r.id ? '' : JSON.stringify(r)
-    const dup = key ? (seen.get(key) ?? 0) : 0
-    if (key) seen.set(key, dup + 1)
-    const ev = ledgerEvent(r, dup, pc)
+    const r = parseLedgerLine(text)
+    if (!r || skipLedgerLine(r, skipMonths, skipBefore)) continue
+    const ev = ledgerEvent(r, ledgerDup(r, seen), pc)
     if (ev) batch.push(ev)
     if (batch.length >= BATCH) await flush()
   }

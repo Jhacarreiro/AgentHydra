@@ -26,6 +26,7 @@ import { basename, join } from 'node:path'
 import { constants as zlibConstants, zstdCompressSync, zstdDecompressSync } from 'node:zlib'
 import { closeWorkerTabs } from './climayte-browser-tabs'
 import { type CpuCounters, readCpuCounters } from './climayte-cpu'
+import { stateKey } from './climayte-doing'
 import { type EtaReview, etaFullOfEvent, reviewOfEvent } from './climayte-eta'
 import {
   appendJournal,
@@ -39,12 +40,15 @@ import {
   addTokens,
   attemptSpend,
   type CliMayteAccount,
+  type CliMayteLeanText,
   type CliMayteLiveUsage,
   type CliMayteWalls,
   type CliMayteWorker,
   freshestPct,
+  fullUntilReset,
   isOrgDisabled,
   isWalledNow,
+  leanText,
   liveUsage,
   noTokens,
   ORG_DISABLED_WALL,
@@ -52,6 +56,7 @@ import {
   pastOnArrival,
   READING_STALE_MS,
   summarizeEvent,
+  WORKER_TEXT_FIELDS,
 } from './climayte-lib'
 import { type MachineMemory, readMachineMemory } from './climayte-memory'
 import {
@@ -67,7 +72,12 @@ import { attemptUnits, ladderModel, rereadUnits, UNITS_PER_PRO_PERCENT } from '.
 import { queueSideWrite, queueStoreWrite } from './climayte-store-writer'
 import { readTarEntry } from './climayte-tar'
 import { resolveClaudeExe } from './config'
-import { getCliInstance, listCliInstances } from './core/cli-instances'
+import {
+  getCliInstance,
+  isLoggedIn,
+  listCliConfigDirs,
+  listCliInstances,
+} from './core/cli-instances'
 import { loginExpiryState } from './core/desktop-cli-renew'
 import { fsSlot } from './core/fs-slots'
 import { handsOnAgoMs } from './core/hands-on'
@@ -81,6 +91,7 @@ import { getProviderSettings } from './provider-settings'
 import type { CliInstance, UsageSnapshot } from './types'
 import { resetTimeIso } from './usage'
 import { allCachedUsage } from './usage-cache'
+import { asReader } from './usage-reader'
 
 // POINTER_DIR is CONFIG_DIR for the primary install and a side-run's own data dir otherwise, so
 // two daemons never tick and overwrite the same workers.json.
@@ -198,12 +209,16 @@ export const workers = new Map<string, CliMayteWorker>()
 // accessors. Reading any of them (a spread, JSON.stringify and every caller included) puts all four
 // back as plain fields first, so readers and writers see exactly what they always saw; packColdWorkers
 // packs a worker again once it has been left alone for COLD_AFTER_MS.
-const PACKED_FIELDS = ['prompt', 'result', 'results', 'reports'] as const
+const PACKED_FIELDS = WORKER_TEXT_FIELDS
 type PackedField = (typeof PACKED_FIELDS)[number]
 const packedFields = new WeakMap<CliMayteWorker, Uint8Array>()
+const packedLeanText = new WeakMap<CliMayteWorker, CliMayteLeanText>()
 /** When a worker's fields were last unpacked: it stays plain while something is reading it. */
 const unpackedAt = new WeakMap<CliMayteWorker, number>()
 const COLD_AFTER_MS = 5 * 60_000
+/** How often packColdWorkers walks every worker: a walk each tick found nothing new to pack. */
+const PACK_WALK_EVERY_MS = 10_000
+let packWalkAt = Number.NEGATIVE_INFINITY
 /** The most a tick spends packing, so a pass after a full-list read never holds a request up. */
 const PACK_SLICE_MS = 8
 /** Level 1: 64 us a worker against level 3's 115, for 3% more bytes (3,000 real workers, 2026-10-12). */
@@ -214,6 +229,7 @@ function unpackWorker(w: CliMayteWorker): void {
   if (!blob) return
   const vals = JSON.parse(zstdDecompressSync(blob).toString('utf8')) as Record<string, unknown>
   packedFields.delete(w)
+  packedLeanText.delete(w)
   unpackedAt.set(w, Date.now())
   for (const k of PACKED_FIELDS)
     if (Object.getOwnPropertyDescriptor(w, k)?.get)
@@ -258,13 +274,32 @@ function packRead(w: CliMayteWorker): void {
   if (!keys.length) return
   const vals: Partial<Record<PackedField, unknown>> = {}
   for (const k of keys) vals[k] = w[k]
+  let preview: CliMayteLeanText | undefined
+  try {
+    preview = leanText(w)
+  } catch {
+    // Older files may have malformed text. Preserve their original packed data;
+    // interpreting those fields still fails only when a reader asks for them.
+  }
   packedFields.set(w, zstdCompressSync(Buffer.from(JSON.stringify(vals)), PACK_LEVEL))
+  if (preview) packedLeanText.set(w, preview)
   for (const k of keys) Object.defineProperty(w, k, packedAccessors[k])
+}
+
+/** A packed worker's tiny list preview never reads its long-text accessors. */
+export function leanTextOf(w: CliMayteWorker): CliMayteLeanText {
+  const preview = packedLeanText.get(w)
+  if (preview) return preview
+  unpackWorker(w)
+  return leanText(w)
 }
 
 /** Pack the finished workers nothing has changed or read for COLD_AFTER_MS, within PACK_SLICE_MS (the
  *  tick). The packed count. */
 export function packColdWorkers(now = Date.now()): number {
+  // A worker is packed only after COLD_AFTER_MS untouched, so a walk every tick finds nothing new.
+  if (now - packWalkAt < PACK_WALK_EVERY_MS) return 0
+  packWalkAt = now
   const t0 = performance.now()
   let n = 0
   for (const w of workers.values()) {
@@ -385,12 +420,11 @@ const registrations = new Map<string, { at: number; regs: Registration[] }>()
 /** Read again, off the thread, the registrations of every pool account last read POOL_MS ago or
  *  more; a pool built after it judges the new reads. The tick awaits it before it places work. */
 export async function refreshPoolSessions(now = Date.now()): Promise<void> {
-  const dirs = listCliInstances()
-    .filter(
-      (i) =>
-        (i.loggedIn || !!i.loginNote) && now - (registrations.get(i.configDir)?.at ?? 0) >= POOL_MS,
-    )
-    .map((i) => i.configDir)
+  // Session discovery needs only fresh registry paths and credential presence. Hydrating every
+  // account here also read numbers, plans, identities and usage on ticks with no session read due.
+  const dirs = listCliConfigDirs().filter(
+    (dir) => now - (registrations.get(dir)?.at ?? 0) >= POOL_MS && isLoggedIn(dir),
+  )
   if (!dirs.length) return
   const read = await mapPool(dirs, 8, readRegistrationsAsync)
   for (const [k, dir] of dirs.entries())
@@ -460,7 +494,7 @@ function refreshReading(id: string, now: number): void {
   refreshRunning.set(id, now)
   // Loaded only when a reading is due, so a daemon (or a test) that never places loads none of it.
   void import('./usage-service')
-    .then((m) => m.checkUsageForCliInstance(id))
+    .then((m) => asReader('climayte placement', () => m.checkUsageForCliInstance(id)))
     .catch((err) => console.error(`[climayte] could not read usage of ${id}:`, err))
     .finally(() => {
       refreshRunning.delete(id)
@@ -545,8 +579,21 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
   const sessionPct = freshestPct(u?.session, snapshotAt, live.session, now)
   const weekPct = freshestPct(u?.weekAll, snapshotAt, live.week, now)
   const readAt = sessionReadAt(sessionPct, live.session, snapshotAt)
-  // A walled account takes no work until its wall ends, so its reading waits too.
-  const due = readAt === null || now - readAt > READING_STALE_MS
+  const sessionResetsAt = upcomingReset(
+    sessionPct,
+    limitReset(live.session, snapshotAt, u?.session),
+    now,
+  )
+  const weekResetsAt = upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now)
+  const caps = {
+    maxSessionPct: i.placement?.maxSessionPct ?? null,
+    maxWeekPct: i.placement?.maxWeekPct ?? null,
+  }
+  // A walled account takes no work until its wall ends, and a full one none until its reset, so
+  // their readings wait too.
+  const due =
+    (readAt === null || now - readAt > READING_STALE_MS) &&
+    !fullUntilReset({ sessionPct, sessionResetsAt, weekPct, weekResetsAt }, caps, now)
   const asked = refreshAsked.get(i.id)
   const untried = asked === undefined || now - asked >= READING_STALE_MS
   if (b.toPlace && due && untried && !isWalledNow(walls[i.id], now)) b.due.push(i.id)
@@ -558,13 +605,9 @@ function poolAccount(i: CliInstance, b: PoolBuild): CliMayteAccount {
     configDir: i.configDir,
     planFactor: planFactor(i.planLabel),
     sessionPct,
-    sessionResetsAt: upcomingReset(
-      sessionPct,
-      limitReset(live.session, snapshotAt, u?.session),
-      now,
-    ),
+    sessionResetsAt,
     weekPct,
-    weekResetsAt: upcomingReset(weekPct, limitReset(live.week, snapshotAt, u?.weekAll), now),
+    weekResetsAt,
     readAt,
     refreshing: refreshStarted !== undefined && now - refreshStarted < REFRESH_HOLD_MS,
     readTriedAt: asked ?? null,
@@ -909,6 +952,8 @@ export function notify(w: CliMayteWorker): void {
 
 export function changed(w: CliMayteWorker): void {
   w.updatedAt = Date.now()
+  const key = stateKey(w)
+  if (w.stateAt?.key !== key) w.stateAt = { key, at: w.updatedAt }
   dirty.add(w.id)
   save()
   notify(w)
@@ -947,6 +992,74 @@ export function voidSpec(log: string): boolean {
   return true
 }
 
+/** A done task's or manager's placement entries, kept while finishedFingerprint is unchanged. */
+const finishedMemo = new WeakMap<CliMayteWorker, { fp: unknown[]; entries: FinishedCost[] }>()
+
+/** The last ordered placement history. Its entries are immutable scalar snapshots, so an unchanged
+ *  pass can reuse the grouped index, scaled sums and estimates keyed by this exact array. */
+let finishedHistory: FinishedCost[] = []
+
+/** Every field finishedEntries reads, in a fixed order. Tokens and reread are replaced whole, never
+ *  edited in place (climayte-core's spend writes and climayte-stops' model writes); updatedAt is not
+ *  used, since it is not set on every change to these fields. */
+function finishedFingerprint(w: CliMayteWorker): unknown[] {
+  const fp: unknown[] = [w.status, w.kind, w.model, w.effort, w.chat, w.tokens, w.attempts.length]
+  for (const a of w.attempts) fp.push(a.tokens, a.spend?.reread, a.model, a.cacheTtl)
+  return fp
+}
+
+/** Whether `w` still reads as `fp` (finishedFingerprint's order), checked in place: an unchanged
+ *  worker, nearly every one on a tick, allocates nothing. */
+function fingerprintHolds(fp: readonly unknown[], w: CliMayteWorker): boolean {
+  const n = w.attempts.length
+  if (
+    fp.length !== 7 + 4 * n ||
+    !Object.is(fp[0], w.status) ||
+    !Object.is(fp[1], w.kind) ||
+    !Object.is(fp[2], w.model) ||
+    !Object.is(fp[3], w.effort) ||
+    !Object.is(fp[4], w.chat) ||
+    !Object.is(fp[5], w.tokens) ||
+    !Object.is(fp[6], n)
+  )
+    return false
+  for (let i = 0, j = 7; i < n; i++, j += 4) {
+    const a = w.attempts[i]!
+    if (
+      !Object.is(fp[j], a.tokens) ||
+      !Object.is(fp[j + 1], a.spend?.reread) ||
+      !Object.is(fp[j + 2], a.model) ||
+      !Object.is(fp[j + 3], a.cacheTtl)
+    )
+      return false
+  }
+  return true
+}
+
+/** What a worker adds to the placement's finished work (placementState). */
+function finishedEntries(w: CliMayteWorker): FinishedCost[] {
+  const model = ladderModel(w.model ?? w.attempts.at(-1)?.model)
+  const work = (a: CliMayteWorker['attempts'][number]): number =>
+    (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model)) /
+    UNITS_PER_PRO_PERCENT
+  // A manager is priced per wake (an attempt), however long its wave keeps it open (piece 6).
+  if (w.kind === 'manage')
+    return w.attempts
+      .filter((a) => a.tokens)
+      .map((a): FinishedCost => ({ kind: 'manage', model, effort: w.effort, pct: work(a) }))
+  // The work only: a move's re-read is what the move cost, not what the task costs.
+  if (w.status === 'done' && w.tokens && !w.chat)
+    return [
+      {
+        kind: w.kind ?? null,
+        model,
+        effort: w.effort,
+        pct: w.attempts.reduce((s, a) => s + work(a), 0),
+      },
+    ]
+  return []
+}
+
 /** Placement inputs (climayte-placement.ts): what a task is expected to cost, what is running on
  *  each account and what it is expected to cost, and what attempts that ended since an account's
  *  first running worker started spent there (part of the meter's rise that is not the running
@@ -956,26 +1069,29 @@ export function placementState(): {
   running: Map<string, RunningLoad[]>
   finishedSince: Map<string, number>
 } {
-  const finished: FinishedCost[] = []
+  const previous = finishedHistory
+  let next: FinishedCost[] | null = null
+  let count = 0
   for (const w of workers.values()) {
-    const model = ladderModel(w.model ?? w.attempts.at(-1)?.model)
-    const work = (a: CliMayteWorker['attempts'][number]): number =>
-      (attemptUnits(a.tokens, a.model ?? w.model, a.cacheTtl) - rereadUnits(a, w.model)) /
-      UNITS_PER_PRO_PERCENT
-    // A manager is priced per wake (an attempt), however long its wave keeps it open (piece 6).
-    if (w.kind === 'manage') {
-      for (const a of w.attempts)
-        if (a.tokens) finished.push({ kind: 'manage', model, effort: w.effort, pct: work(a) })
-    } else if (w.status === 'done' && w.tokens && !w.chat) {
-      // The work only: a move's re-read is what the move cost, not what the task costs.
-      finished.push({
-        kind: w.kind ?? null,
-        model,
-        effort: w.effort,
-        pct: w.attempts.reduce((s, a) => s + work(a), 0),
-      })
+    // Managers contribute each wake while still open; other tasks contribute only once done.
+    // Both depend only on the complete finishedFingerprint, not on the pass's clock.
+    if (w.kind !== 'manage' && w.status !== 'done') continue
+    const kept = finishedMemo.get(w)
+    let entries = kept?.entries
+    if (!kept || !fingerprintHolds(kept.fp, w)) {
+      entries = finishedEntries(w)
+      finishedMemo.set(w, { fp: finishedFingerprint(w), entries })
+    }
+    for (const e of entries!) {
+      if (next) next.push(e)
+      else if (previous[count] !== e) next = [...previous.slice(0, count), e]
+      count++
     }
   }
+  // No array allocation or re-indexing while history is unchanged. Once it changes, preserve the
+  // exact new order in a new array: costOf closures from an earlier pass must keep their snapshot.
+  const finished = next ?? (count === previous.length ? previous : previous.slice(0, count))
+  finishedHistory = finished
   // A chat is the owner's conversation, not a sized task: it has no estimate, so nothing holds it
   // for room and no overrun cap applies (notConverging).
   const costOf = (w: Pick<CliMayteWorker, 'kind' | 'model' | 'effort' | 'chat'>): CostEstimate =>
@@ -1309,9 +1425,9 @@ export function chargeAttempt(
  *  to its task, so the task's totals end equal to what the transcripts hold. Does nothing, and
  *  reads nothing, with no open attempt. True when any record changed. */
 export function settleSpends(now: number = Date.now()): boolean {
-  const open = [...workers.values()].flatMap((w) =>
-    w.attempts.filter((a) => a.spendOpen !== undefined).map((a) => ({ w, a })),
-  )
+  const open: Array<{ w: CliMayteWorker; a: CliMayteWorker['attempts'][number] }> = []
+  for (const w of workers.values())
+    for (const a of w.attempts) if (a.spendOpen !== undefined) open.push({ w, a })
   if (!open.length) return false
   let any = false
   for (const { w, a } of open) {

@@ -694,24 +694,31 @@ function claudeSessionId(rel: string, store: ClaudeStore): string {
  * row rather than a sibling of itself.
  */
 export function claudeParentId(rel: string, store: ClaudeStore): string | null {
+  if (!store.sessionFile) {
+    // Ordinary layouts need only the directory below the project. Avoid splitting all of a
+    // nested subagent's components on every history sweep; two separators decide its owner.
+    const projectEnd = nextPathSeparator(rel, 0)
+    const sessionEnd = projectEnd < 0 ? -1 : nextPathSeparator(rel, projectEnd + 1)
+    return sessionEnd < 0 ? null : rel.slice(projectEnd + 1, sessionEnd)
+  }
   const parts = rel.split(/[\\/]/)
   const name = parts[parts.length - 1] ?? ''
 
   // A store that NAMES its session file (Cowork) decides by name, not by depth: its runs sit at
   // several depths, and each run directory also contains a whole Claude Code home of its own —
   // the CLI's transcript and that session's subagents/ tree, which are the same run's spend.
-  if (store.sessionFile) {
-    const owner = lastIndexStartingWith(parts, store.idPrefix)
-    if (owner < 0) return null
-    // The session file, directly inside the run's own directory, IS the session.
-    if (name === store.sessionFile && owner === parts.length - 2) return null
-    const raw = parts[owner] as string
-    return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
-  }
+  const owner = lastIndexStartingWith(parts, store.idPrefix)
+  if (owner < 0) return null
+  // The session file, directly inside the run's own directory, IS the session.
+  if (name === store.sessionFile && owner === parts.length - 2) return null
+  const raw = parts[owner] as string
+  return raw.startsWith(store.idPrefix) ? raw.slice(store.idPrefix.length) : raw
+}
 
-  // `<project>/<session>.jsonl` is a session; anything deeper is a subagent of parts[1].
-  if (parts.length <= 2) return null
-  return parts[1] ?? null
+function nextPathSeparator(path: string, start: number): number {
+  const slash = path.indexOf('/', start)
+  const backslash = path.indexOf('\\', start)
+  return slash < 0 ? backslash : backslash < 0 ? slash : Math.min(slash, backslash)
 }
 
 /** Index of the last path segment beginning with `prefix`, or -1. An empty prefix matches nothing,
@@ -1370,19 +1377,33 @@ async function buildClaudeRecordsAsync(
 ): Promise<void> {
   for (const store of claudeStores()) {
     const claudeRels = await scanRootAsync(store.glob, store.root)
-    const scanned = await mapPool(claudeRels, INDEX_SCAN_WIDTH, async (rel) => {
+    const scanned = new Array<{ rel: string; mtimeMs: number; size: number } | null>(
+      claudeRels.length,
+    )
+    const needsStat: Array<{ index: number; rel: string; path: string }> = []
+    // A quiet cache hit needs no asynchronous work. Pooling it still created and awaited one
+    // resolved callback promise per historical file on every sweep (tens of thousands of them).
+    // Keep the exact freshness test and input order, yielding while inspecting cached entries;
+    // only new, active or full-restat files enter the existing bounded filesystem pool.
+    const cachedSlice = timeSlice()
+    for (let index = 0; index < claudeRels.length; index++) {
+      if (cachedSlice.due()) await cachedSlice.pause()
+      const rel = claudeRels[index] as string
       const path = join(store.root, rel)
       statSeen.add(path)
       const known = claudeStatCache.get(path)
       if (known && !restatCold && statNow - known.mtimeMs > COLD_AFTER_MS)
-        return { rel, mtimeMs: known.mtimeMs, size: known.size }
+        scanned[index] = { rel, mtimeMs: known.mtimeMs, size: known.size }
+      else needsStat.push({ index, rel, path })
+    }
+    await mapPool(needsStat, INDEX_SCAN_WIDTH, async ({ index, rel, path }) => {
       try {
         const st = await fsSlot(() => statAsync(path))
         claudeStatCache.set(intern(path), { mtimeMs: st.mtimeMs, size: st.size })
-        return { rel, mtimeMs: st.mtimeMs, size: st.size }
+        scanned[index] = { rel, mtimeMs: st.mtimeMs, size: st.size }
       } catch {
         claudeStatCache.delete(path)
-        return null
+        scanned[index] = null
       }
     })
     const tops: Array<{ record: TranscriptFile; mtimeMs: number; size: number }> = []

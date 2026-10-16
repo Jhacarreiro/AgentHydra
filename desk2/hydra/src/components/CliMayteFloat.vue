@@ -6,6 +6,7 @@ import SideListRow from '@/components/side-list/SideListRow.vue'
 import { useCliMayteData } from '@/composables/useCliMayteData'
 import type { CliMayteWorkerView } from '@/lib/api'
 import { isCliMayteActive, modelName } from '@/lib/climayte-status'
+import { activeSeconds, activeTime } from '@/lib/climayte-rows'
 
 const props = withDefaults(
   defineProps<{
@@ -33,19 +34,18 @@ const queued = computed(() =>
   ),
 )
 
+const listed = computed(() => [...running.value, ...queued.value])
+
 const totalActive = computed(() => running.value.length + queued.value.length)
 
-const activeS = (w: CliMayteWorkerView): number => {
-  return w.ranS + (w.status === 'running' ? Math.max(0, (props.now - listedAt.value) / 1000) : 0)
-}
+// One tag per row, built once per poll instead of once per call in the template.
+const runTags = computed(() => new Map(props.workers.map((w) => [w.id, runTag(w)])))
+
+const activeS = (w: CliMayteWorkerView): number => activeSeconds(w, props.now, listedAt.value)
 
 function activeLabel(totalS: number): string {
-  const m = Math.floor(totalS / 60)
-  if (m < 1) return t('climayte.activeSeconds', { s: Math.floor(totalS) })
-  if (m < 60) return t('climayte.activeMinutes', { m })
-  const h = Math.floor(m / 60)
-  if (h < 24) return t('climayte.activeHours', { h, m: m % 60 })
-  return t('climayte.activeDays', { d: Math.floor(h / 24), h: h % 24 })
+  const { key, values } = activeTime(totalS)
+  return t(key, values)
 }
 
 function runTag(w: CliMayteWorkerView): { text: string } | null {
@@ -72,8 +72,8 @@ function handleRowClick(workerId: string) {
     <!-- Task list -->
     <div class="scroll-slim flex-1 overflow-y-auto divide-y border-border">
       <template v-if="totalActive > 0">
-        <!-- Running tasks -->
-        <template v-for="w in running" :key="w.id">
+        <!-- Running tasks, then queued ones -->
+        <template v-for="w in listed" :key="w.id">
           <button
             type="button"
             class="flex w-full min-w-0 items-center gap-2 border-b border-border px-3 py-1.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
@@ -83,28 +83,8 @@ function handleRowClick(workerId: string) {
             <span class="flex min-w-0 flex-1 items-center gap-1">
               <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
             </span>
-            <span v-if="runTag(w)" class="shrink-0 truncate text-2xs text-muted-foreground">
-              {{ runTag(w)?.text }}
-            </span>
-            <span class="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground tabular-nums">
-              {{ activeLabel(activeS(w)) }}
-            </span>
-          </button>
-        </template>
-
-        <!-- Queued tasks -->
-        <template v-for="w in queued" :key="w.id">
-          <button
-            type="button"
-            class="flex w-full min-w-0 items-center gap-2 border-b border-border px-3 py-1.5 text-start text-xs transition-colors hover:bg-accent/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-ring"
-            @click="handleRowClick(w.id)"
-          >
-            <CliMayteStatusBadge :status="w.status" icon-only :task="w" :tasks="workers" />
-            <span class="flex min-w-0 flex-1 items-center gap-1">
-              <span class="min-w-0 truncate font-medium">{{ w.title }}</span>
-            </span>
-            <span v-if="runTag(w)" class="shrink-0 truncate text-2xs text-muted-foreground">
-              {{ runTag(w)?.text }}
+            <span v-if="runTags.get(w.id)" class="shrink-0 truncate text-2xs text-muted-foreground">
+              {{ runTags.get(w.id)?.text }}
             </span>
             <span class="inline-flex shrink-0 items-center gap-1 text-2xs text-muted-foreground tabular-nums">
               {{ activeLabel(activeS(w)) }}

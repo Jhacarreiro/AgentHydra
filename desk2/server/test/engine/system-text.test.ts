@@ -8,7 +8,7 @@ import { tailToItems } from '../../src/bridge/external'
 import { historyToItems } from '../../src/engine/normalize'
 import { classifyUserText, continuationOf, noteOf, taskItemFrom, userTurn, userTurns, type InjectedPart } from '../../src/engine/system-text'
 
-// Real samples, from Jacob's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
+// Real samples, from the owner's session jsonl (02b95209-..., the screenshot ours-transcript-task-notification.png)
 // and other local transcripts; ids and paths kept, long blobs shortened.
 const WORKFLOW_DONE = `<task-notification>
 <task-id>w5ahe9hto</task-id>
@@ -237,6 +237,25 @@ describe('every path uses the classifier', () => {
     expect(task).toMatchObject({ id: 'task:w5ahe9hto', status: 'completed', taskKind: 'workflow', agents: 3, tokens: 539600 })
   })
 
+  test('history: what the person sent while a turn ran (a queued_command, its prompt a string or blocks) is their message', () => {
+    const queued = (prompt: unknown, origin: Record<string, unknown>, commandMode = 'prompt') => ({
+      type: 'attachment',
+      uuid: `q${Math.random().toString(36).slice(2)}`,
+      timestamp: '2020-10-03T10:00:05.000Z',
+      attachment: { type: 'queued_command', prompt, commandMode, origin, humanTurn: origin.kind === 'human' },
+    })
+    const items = historyToItems([
+      rec('user', 'start the parity run'),
+      queued('also check the sidebar', { kind: 'human' }),
+      queued([{ type: 'text', text: 'here is what I see' }, { type: 'image', source: { type: 'base64', media_type: 'image/png', data: 'iVBORw0KGgo=' } }], { kind: 'human' }),
+      queued('from another program', { kind: 'peer' }),
+      queued(BASH_DONE, { kind: 'task-notification', producer: 'session-task' }, 'task-notification'),
+    ])
+    const users = items.filter((i): i is Extract<TranscriptItem, { kind: 'user' }> => i.kind === 'user').map((u) => u.text)
+    expect(users).toEqual(['start the parity run', 'also check the sidebar', 'here is what I see'])
+    expect(items.filter((i) => i.kind === 'task')).toHaveLength(1)
+  })
+
   test("AgentHydra's tail: the flattened notification is a task, the same id merges", () => {
     const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ')
     const items = tailToItems({
@@ -284,6 +303,36 @@ describe("a background task the file shows launched and never settled", () => {
     const tasks = historyToItems(bash, { now: () => Date.parse("2020-10-03T10:06:00.000Z") }).filter((i) => i.kind === "task")
     expect(tasks).toHaveLength(1)
     expect(tasks[0]).toMatchObject({ id: "task:bk1", status: "completed", taskKind: "bash", description: "bun test ./server/test" })
+  })
+
+  test("a TaskStop that worked stops it, and a Monitor's last event (expired, timed out, stopped) settles it", () => {
+    const bg = (id: string) => [
+      rec("assistant", [{ type: "tool_use", id: "tu-" + id, name: "Bash", input: { command: "bun run dev", run_in_background: true } }]),
+      rec("user", [{ type: "tool_result", tool_use_id: "tu-" + id, content: `Command running in background with ID: ${id}. Output is being written to: C:\\x\\${id}.output` }]),
+    ]
+    const stop = (id: string, ok: boolean) => [
+      rec("assistant", [{ type: "tool_use", id: "ts-" + id, name: "TaskStop", input: { task_id: id } }]),
+      rec("user", [{ type: "tool_result", tool_use_id: "ts-" + id, is_error: !ok, content: ok ? `{"message":"Successfully stopped task: ${id} (bun run dev)"}` : `<tool_use_error>No task found with ID: ${id}</tool_use_error>` }]),
+    ]
+    const monitor = (id: string, event: string) => ({
+      type: "attachment",
+      uuid: `m-${id}-${event.length}`,
+      timestamp: "2020-10-03T10:05:00.000Z",
+      attachment: { type: "queued_command", prompt: `<task-notification>\n<task-id>${id}</task-id>\n<summary>Monitor event: "Watch the deploy"</summary>\n<event>${event}</event>\n</task-notification>` },
+    })
+    const items = historyToItems(
+      [
+        ...bg("bstop"), ...stop("bstop", true),
+        ...bg("bkept"), ...stop("bkept", false),
+        monitor("mexp", "PASS build"), monitor("mexp", "[Monitor expired after 3600s]"),
+        monitor("mto", "[Monitor timed out after 600s]"),
+        monitor("mstop", "[Monitor stopped by the user]"),
+        monitor("mlive", "PASS build"),
+      ],
+      { now: () => Date.parse("2020-10-03T10:06:00.000Z") },
+    )
+    const status = Object.fromEntries(items.flatMap((i) => (i.kind === "task" ? [[i.taskId, i.status]] : [])))
+    expect(status).toEqual({ bstop: "stopped", bkept: "running", mexp: "completed", mto: "completed", mstop: "stopped", mlive: "running" })
   })
 
   test("is taken as stopped once a day has passed with no notification", () => {

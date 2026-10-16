@@ -26,6 +26,7 @@ import {
   climayteModel,
   climaytePriority,
   isWalledNow,
+  roleOf,
   toView,
 } from './climayte-lib'
 import { fitPct, projectedPct, sizeTask } from './climayte-placement'
@@ -398,6 +399,8 @@ export function newWorker(
     ...(t.check?.trim() ? { check: t.check.trim() } : {}),
     ...(typeof t.commit === 'boolean' ? { commit: t.commit } : {}),
     ...(t.light === true ? { light: true } : {}),
+    role: roleOf(t),
+    ...(t.persona ? { persona: t.persona } : {}),
     ...(size ? { size } : {}),
     priority: setting?.priority ?? 0,
     accounts: accounts?.length ? accounts : null,

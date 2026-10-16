@@ -5,7 +5,7 @@
  *
  * ⛔ ONLY when the owner has said to sweep the tree. The standing rule is path-scoped adds; this
  * script is the one legitimate sweep, and it exists so that when the owner does say "commit and
- * sync as we go, including the entirety of the dirty work tree" (Michael, 2026-09-12), the peer
+ * sync as we go, including the entirety of the dirty work tree" (the other owner, 2026-09-12), the peer
  * whose half-finished files get published can find them by reading the log. The commit-msg hook
  * (.githooks/check-bundle-message.mjs) refuses a bundle whose message and contents disagree, and
  * this script never passes --no-verify: a bundle that needed to dodge a gate is a bundle that

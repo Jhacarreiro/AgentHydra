@@ -715,7 +715,8 @@ defineExpose({
     <InstanceRow
       v-for="inst in visibleRows"
       :key="inst.id"
-      :style="orderStyle(inst)"
+      class="order-(--row-order)"
+      :style="{ '--row-order': orderStyle(inst)?.order }"
       :columns="columns"
       :row="rowModels.get(inst.id)!"
     >
@@ -870,7 +871,6 @@ defineExpose({
   <!-- The dialogs teleport to <body>, so sitting beside the rows puts nothing inside the table. -->
   <CliInstanceNameDialog
     v-model:open="renameOpen"
-    mode="rename"
     :current-name="renameTarget?.name ?? null"
     :submitting="renaming"
     :error-message="renameError"

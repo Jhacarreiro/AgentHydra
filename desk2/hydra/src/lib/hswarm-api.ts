@@ -192,7 +192,7 @@ export async function fetchAccountNames(): Promise<Record<string, HswarmAccountN
 }
 
 /** The shared copy of fetchAccountNames, read by every page that names an HSwarm account. */
-const accountNames = ref<Record<string, HswarmAccountName>>({})
+const accountNames = shallowRef<Record<string, HswarmAccountName>>({})
 async function refreshAccountNames(): Promise<void> {
   const names = await fetchAccountNames()
   // An unreachable daemon answers {}: keep the names already known.
@@ -207,8 +207,8 @@ async function refresh() {
 }
 
 // The tree's two lists, one shared copy beside the state (null until first read).
-const clients = ref<{ client: string; registered: boolean | null }[] | null>(null)
-const jobs = ref<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
+const clients = shallowRef<{ client: string; registered: boolean | null }[] | null>(null)
+const jobs = shallowRef<{ job_id: string; label?: string; state: string; created?: string }[] | null>(null)
 
 async function loadClients() {
   try {

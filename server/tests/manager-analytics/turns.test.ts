@@ -24,7 +24,7 @@ afterAll(() => {
   delete process.env.AGENTHYDRA_MANAGERS_DIR
 })
 
-const T0 = Date.parse('2026-10-01T09:00:00.000Z')
+const T0 = Date.parse('2019-10-10T09:00:00.000Z')
 const iso = (ms: number) => new Date(ms).toISOString()
 
 function prompt(uuid: string, text: string, at: number, offset: number): LineRef {
@@ -55,7 +55,7 @@ function reply(
 
 const ctx = (over: Partial<TurnContext> = {}): TurnContext => ({
   session: 's1',
-  managersDir: scratch,
+  managerRoots: [scratch],
   deskChat: 'chat-1',
   parentChat: null,
   pick: () => ({
@@ -308,7 +308,7 @@ describe('mergeTurns', () => {
 describe('parseRouterLog', () => {
   test('reads a SWAP line into a route with its source and confidence', () => {
     const text =
-      '2026-10-01T09:00:00.000Z session=abc manager=alpha SWAP (keywords p=0.82) source=keywords message=1\n'
+      '2019-10-10T09:00:00.000Z session=abc manager=alpha SWAP (keywords p=0.82) source=keywords message=1\n'
     expect(parseRouterLog(text)).toEqual([
       {
         at: T0,

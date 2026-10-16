@@ -112,10 +112,19 @@ const median = (xs: number[]): number => {
 }
 
 let learned: { at: number; bytes: number } | null = null
+/** The last reading of the ramping workers' trees: when, whose runners, and what each held. */
+let lastSets: { at: number; key: string; sets: (number | null)[] } | null = null
 
-/** Tests: forget the learned size. */
+/** How long a tick that starts nothing, or a status read, reuses the ramping workers' reading while
+ *  the same runners are ramping. A tick that may start a worker always reads them anew. Before
+ *  2026-10-15 every tick read them, once a second while any worker runs, though most ticks start
+ *  nothing. */
+export const GROWTH_REUSE_MS = 3_000
+
+/** Tests: forget the learned size and the last reading. */
 export function resetLearnedGrownBytes(): void {
   learned = null
+  lastSets = null
 }
 
 /** Working sets of the process trees rooted at `pids` (runner and descendants), null where a tree
@@ -128,13 +137,16 @@ export interface RunningWorker {
   startedAt: number
 }
 
-/** The Growth the gate reasons on at `now`. Workers within RAMP_MS are measured every tick; the
- *  expected grown size is the median over workers older than that, re-measured at most every
- *  LEARN_EVERY_MS and clamped to MIN..MAX_GROWN_BYTES (DEFAULT_GROWN_BYTES until any is read). */
+/** The Growth the gate reasons on at `now`. Workers within RAMP_MS are measured on every call, or,
+ *  with `maxAgeMs`, the last reading is reused while it is younger than that and of the same runners
+ *  (each call gets its own copy: a tick adds its starts to it). The expected grown size is the median
+ *  over workers older than RAMP_MS, re-measured at most every LEARN_EVERY_MS and clamped to
+ *  MIN..MAX_GROWN_BYTES (DEFAULT_GROWN_BYTES until any is read). */
 export function growthOf(
   running: RunningWorker[],
   now: number,
   read: TreeReader = readTreeWorkingSets,
+  maxAgeMs = 0,
 ): Growth {
   const recent = running.filter((w) => w.startedAt > now - RAMP_MS)
   if (!learned || now - learned.at >= LEARN_EVERY_MS) {
@@ -148,10 +160,13 @@ export function growthOf(
       : (learned?.bytes ?? DEFAULT_GROWN_BYTES)
     learned = { at: now, bytes }
   }
-  return {
-    expectedBytes: learned.bytes,
-    sets: recent.length ? read(recent.map((w) => w.runnerPid)) : [],
-  }
+  if (!recent.length) return { expectedBytes: learned.bytes, sets: [] }
+  const pids = recent.map((w) => w.runnerPid)
+  const key = pids.join(',')
+  const fresh =
+    lastSets && lastSets.key === key && now >= lastSets.at && now - lastSets.at < maxAgeMs
+  if (!lastSets || !fresh) lastSets = { at: now, key, sets: read(pids) }
+  return { expectedBytes: learned.bytes, sets: [...lastSets.sets] }
 }
 
 /** Sum the working set of each pid's tree from a process table (pid, parent, working set). */

@@ -135,8 +135,10 @@ export const livePages: PageAccess = {
   async sound(port, id): Promise<PageSound> {
     const page = await openPage(port, id)
     try {
-      const audible = await countOn(page.call, await instancesOf(page.call, 'HTMLMediaElement.prototype'), PLAYING)
-      const contexts = await countOn(page.call, await instancesOf(page.call, 'AudioContext.prototype'), RUNNING)
+      const [audible, contexts] = await Promise.all([
+        instancesOf(page.call, 'HTMLMediaElement.prototype').then((objects) => countOn(page.call, objects, PLAYING)),
+        instancesOf(page.call, 'AudioContext.prototype').then((objects) => countOn(page.call, objects, RUNNING)),
+      ])
       return { audible, contexts }
     } finally {
       await page.call('Runtime.releaseObjectGroup', { objectGroup: GROUP }).catch(() => undefined)

@@ -59,7 +59,7 @@ def _shield_hook() -> dict:
     prompt-injection screen at all - the operator's own sessions have had one since 2026-09-14. Absent on a machine with no shared
     home layer, in which case the worker simply has no hooks, as before.
 
-    Exec form (`command` + `args`), never one shell string: on Jacob's PC the worker's Claude Code ran
+    Exec form (`command` + `args`), never one shell string: on the owner's PC the worker's Claude Code ran
     the old `"python.exe" "agent_shield.py" --hook` through PowerShell, which cannot parse a quoted exe
     followed by arguments, so every call was a hook_non_blocking_error and the shield never ran
     (job 20260925-102241-d995). Exec form reaches no shell at all."""
@@ -73,7 +73,7 @@ def _shield_hook() -> dict:
 
 
 # How long Claude Code keeps a worker's own session transcripts (settings.json `cleanupPeriodDays`). Its default is
-# 30 days. They are history to learn from, so Claude Code never deletes one (owner, Michael, 2026-10-02: "Ideally, we
+# 30 days. They are history to learn from, so Claude Code never deletes one (owner, 2026-10-02: "Ideally, we
 # would keep all of it, and you would just figure out a way to properly compress"); `hswarm maintain` packs the ones
 # past a day into the history store instead (history.py). hswarm itself reads them only to --resume a run on the
 # next key inside ONE task (cc.saved_session).

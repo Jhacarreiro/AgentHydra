@@ -45,6 +45,18 @@ describe('a Free reading in the instance tables', () => {
     expect(snap?.capturedAt).toBe('2020-10-06T00:00:00Z')
   })
 
+  it("reads a Claude account's missing or since-reset window as 0% used, with no reset to count down", () => {
+    const before = new Date('2020-10-06T01:00:00Z')
+    const after = new Date('2020-10-06T06:00:00Z')
+    const idleFiveHour = freeUsageSnapshot(reading([win('seven_day', 40, 60)]), 'claude', before)
+    expect(idleFiveHour?.session).toEqual({ pct: 0, resets: '', resetsAt: null })
+    expect(idleFiveHour?.weekAll?.pct).toBe(40)
+    expect(freeUsageSnapshot(reading([win('five_hour', 30, null)]), 'claude', before)?.session?.pct).toBe(30)
+    expect(freeUsageSnapshot(reading([win('five_hour', 30, null)]), 'claude', after)?.session?.pct).toBe(0)
+    const neverUsed = freeUsageSnapshot(reading([win('five_hour', null, null)]), 'claude', before)
+    expect([neverUsed?.session?.pct, neverUsed?.weekAll?.pct]).toEqual([0, 0])
+  })
+
   it('offers a check instead of a number when no window has one', () => {
     expect(freeUsageSnapshot(null)).toBeNull()
     expect(freeUsageSnapshot(reading([win('five_hour', null, null)]))).toBeNull()

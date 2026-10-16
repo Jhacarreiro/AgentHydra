@@ -2,10 +2,12 @@
 // reference images, crops and viewports is docs/reference/real/scenes.json; its routes point here.
 import { ref } from 'vue'
 import type { Dashboard } from '@shared/dashboards'
-import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptItem } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, CliMayteWorker, DeskSettings, ExternalSession, GitStatus, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import { FREE_SETTINGS_DEFAULTS } from '@shared/free-instances'
+import { buildTranscriptIndex } from '@shared/transcript-index'
 import type { HeadlessAudioState } from '@shared/headless-audio'
 import { routinesFixtures, cliMayteWorkerFixtures, settingsFixtures } from '@/dev/fixtures'
+import { routineDetailsFixture } from '@/dev/routine-details-fixture'
 import type { ShellSource } from '@/components/shell/source'
 import type { View } from '@/components/shell/logic'
 import type { ComposerApi } from '@/components/composer/api'
@@ -66,6 +68,8 @@ export interface ParityScene {
   sidebarWidth?: number
   /** The headless Chrome audio the Desk has (applied before the first render, as the server's fetch would). */
   audio?: HeadlessAudioState
+  /** Only the newest this many items start loaded; the rest are served a page of 200 at a time as the transcript asks (loadOlder). */
+  windowed?: number
 }
 
 const whole: ParityScene = {
@@ -103,6 +107,25 @@ const headlessAudio: ParityScene = {
     unattributedMuted: false
   }
 }
+
+/** 1,000 invented items (500 questions and answers of varied length) for the lazy-loading transcript: ids lazy-0 ... lazy-999. */
+function lazyItems(): TranscriptItem[] {
+  const out: TranscriptItem[] = []
+  for (let i = 0; i < 500; i++) {
+    const ts = PARITY_NOW - (500 - i) * 60_000
+    out.push({ id: `lazy-${2 * i}`, ts, kind: 'user', text: `Question ${i}: how does the sample ledger handle batch ${i}?` })
+    out.push({
+      id: `lazy-${2 * i + 1}`,
+      ts: ts + 1000,
+      kind: 'assistant_text',
+      text: `Batch ${i} is posted once and then checked. `.repeat(1 + ((i * 7) % 11))
+    })
+  }
+  return out
+}
+
+// Lazy loading: 1,000 items, the newest 200 loaded, the rest a page of 200 at a time as the transcript is scrolled up.
+const lazy: ParityScene = { ...whole, items: lazyItems, windowed: 200 }
 
 export const PARITY_SCENES: Record<string, ParityScene> = {
   dashboard: { ...whole, dashboard: dashboardFixture },
@@ -199,7 +222,12 @@ const scenePick = (scene: ParityScene) => sceneAccounts(scene).find((a) => a.id 
 /** A ShellSource over local refs, like the Gallery's demo source but holding exactly the scene's data. */
 export function sceneSource(scene: ParityScene): ShellSource {
   const chats = ref(scene.chats())
-  const items = ref(new Map<string, TranscriptItem[]>([['ccd', scene.items()]]))
+  const all = scene.items()
+  let start = scene.windowed ? Math.max(0, all.length - scene.windowed) : 0
+  const items = ref(new Map<string, TranscriptItem[]>([['ccd', all.slice(start)]]))
+  const indexByChat = ref(new Map<string, TranscriptIndex>())
+  if (scene.windowed)
+    indexByChat.value.set('ccd', { total: all.length, userMessages: [], latestTodos: null, runningTasks: [], recentTasks: [], lastUserText: '' })
   const selected = ref<View>(scene.view)
   const settings = ref<DeskSettings>({ ...settingsFixtures, defaultAccountId: scene.defaultAccountId ?? '68' })
   const patch = (id: string, p: Partial<ChatSummary>) => {
@@ -208,6 +236,16 @@ export function sceneSource(scene: ParityScene): ShellSource {
   return {
     chats,
     itemsByChat: items,
+    indexByChat,
+    hasOlder: () => start > 0,
+    loadOlder: async (id: string) => {
+      const from = Math.max(0, start - 200)
+      await new Promise((r) => setTimeout(r, 300)) // a server's answer takes a moment; the spinner shows
+      const page = all.slice(from, start)
+      start = from
+      items.value = new Map(items.value).set(id, [...page, ...(items.value.get(id) ?? [])])
+      return page.length
+    },
     workers: ref(scene.workers?.() ?? cliMayteWorkerFixtures),
     external: ref(scene.external ?? []),
     accounts: ref(sceneAccounts(scene)),
@@ -228,7 +266,7 @@ export function sceneSource(scene: ParityScene): ShellSource {
     pickFolder: async () => null,
     changeProjectChoice: async () => {},
     search: async () => []
-  }
+  } as ShellSource
 }
 
 const MODELS = [
@@ -281,8 +319,10 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     health: async () => ({ ok: true, version: '0.1.0' }),
     bridgeStatus: async () => ({ up: true, url: 'http://127.0.0.1:7787' }),
     babysitter: async () => ({ enabled: true, everyMs: 300_000, checkedAt: null, nextCheckAt: null, stopped: [], accounts: [], acts: [], error: null }),
+    instanceManager: async () => ({ enabled: true, everyMs: 20_000, checkedAt: null, nextCheckAt: null, instances: [], recoveries: [], error: null }),
     routines: async () => routinesFixtures,
     routinesAct: async () => routinesFixtures,
+    routineDetails: async (_id, before = null, limit = 50) => routineDetailsFixture(before, limit),
     orchestratorModel: async () => ({ setting: 'opus', resolved: null }),
     getSettings: async () => ({ ...settingsFixtures, defaultAccountId: '68' }),
     putSettings: async (p) => ({ ...settingsFixtures, ...p }),
@@ -290,6 +330,8 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
     pickAccount: async () => scenePick(scene),
     externalItems: async () => ({ items: scene.items(), olderBefore: 0 }),
     externalOlder: async () => [],
+    // The context a session's file would give (bridge lastContextTokens), so the rail's Context card has its row.
+    externalIndex: async () => ({ ...buildTranscriptIndex(scene.items()), contextTokens: 84_300 }),
     diagnostics: async () => ({ rows: [], total: 0, byCause: {}, byAccount: {}, byDay: {} }) as never,
     agentHydra: async () => {
       throw new Error('AgentHydra is not running')
@@ -299,4 +341,10 @@ export function scenePaneApi(scene: ParityScene): PaneApi {
   }
 }
 
+PARITY_SCENES.lazy = lazy
 PARITY_SCENES['header-fit-external'] = { ...PARITY_SCENES['external-session']!, sidebarHidden: true }
+// The same session as a Codex chat at work in Codex: its composer and working line are a Claude chat's (owner, 2026-10-14).
+PARITY_SCENES['external-codex'] = {
+  ...PARITY_SCENES['external-session']!,
+  external: PARITY_SCENES['external-session']!.external!.map((s) => ({ ...s, source: 'codex' as const, instance: '#7 alpha', accountId: null, codexAccountId: 'codex-7', activity: 'Using exec' }))
+}

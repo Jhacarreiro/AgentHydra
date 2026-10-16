@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'bun:test'
 import type { AccountInfo, ChatSummary } from '@shared/protocol'
-import { CHAT_MIN, NavHistory, SIDE_MIN, UnreadHold, computeStats, matchShortcut, modelName, splitChat, splitColumns } from '@/components/shell/logic'
+import { CHAT_MIN, NavHistory, RAIL_GAP, RAIL_INSET, SIDE_MIN, TEXT_COLUMN, UnreadHold, computeStats, matchShortcut, modelName, railReserve, splitChat, splitColumns } from '@/components/shell/logic'
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { AUTO_LABEL, accountRows, chooseAccount, headroom, rowTip } from '@/components/accounts/rows'
@@ -283,6 +283,29 @@ describe('the frame and the open view', () => {
   it('an outside session the list lacks is fetched on its own and titled Loading session… meanwhile', () => {
     expect(frame).toContain('await src.ensureExternal(id)')
     expect(frame).toContain("(fetchingSession.value === v.id ? 'Loading session…' : 'Session')")
+  })
+})
+
+describe('the session rail beside the chat', () => {
+  const rail = 320
+  const railLeft = (stage: number) => stage - rail - RAIL_INSET
+  /** Where the text column ends: centred on what the rail leaves the chat, as wide as that allows. */
+  const columnRight = (stage: number) => {
+    const chat = stage - railReserve(rail, stage)
+    return (chat + Math.min(chat, TEXT_COLUMN)) / 2
+  }
+  it('lies over the empty margin of a wide stage, the column centred on the whole of it', () => {
+    // 2000 wide: the column runs 616 to 1384, the rail starts at 1672.
+    expect(railReserve(rail, 2000)).toBe(0)
+  })
+  it('keeps the column RAIL_GAP clear of it at every width, taking no more of the chat than that needs', () => {
+    for (let stage = 900; stage <= 2400; stage += 10) {
+      expect(columnRight(stage) + RAIL_GAP).toBeLessThanOrEqual(railLeft(stage) + 1)
+      if (railReserve(rail, stage) > 0) expect(columnRight(stage) + RAIL_GAP).toBeGreaterThanOrEqual(railLeft(stage) - 1)
+    }
+  })
+  it('takes its whole width once the stage is too narrow for both side by side', () => {
+    expect(railReserve(rail, 1000)).toBe(rail + RAIL_INSET + RAIL_GAP)
   })
 })
 

@@ -3,21 +3,6 @@
 
 import type { InstanceColumn } from '@/lib/instance-table'
 
-export type HSwarmProviderColumn = Extract<
-  InstanceColumn,
-  { key: 'providerState' | 'providerName' | 'readyCount' | 'restingCount' | 'disabledCount' | 'keyCount' | 'enabled' | 'actions' }
->
-
-export type HSwarmKeyColumn = Extract<
-  InstanceColumn,
-  { key: 'keyMasked' | 'keyFingerprint' | 'keyPriority' | 'keyState' | 'actions' }
->
-
-export type HSwarmModelColumn = Extract<
-  InstanceColumn,
-  { key: 'modelEnabled' | 'modelPriority' | 'modelName' | 'modelProvider' | 'modelKind' | 'modelPrice' | 'modelContext' | 'actions' }
->
-
 export const hswarmProviderColumns: InstanceColumn[] = [
   {
     key: 'providerState',

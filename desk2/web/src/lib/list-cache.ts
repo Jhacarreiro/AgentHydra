@@ -1,6 +1,6 @@
 // The last copy of a list the sidebar draws (outside sessions, CliMayte workers, the cloud list), kept in
 // this browser so a reload paints the sidebar at once instead of empty until the server answers
-// (Michael, 2026-10-04: "population of the left sidebar seems first laggy ... should do better with
+// (the other owner, 2026-10-04: "population of the left sidebar seems first laggy ... should do better with
 // caching"). The server's own copy replaces it a moment later; nothing here is ever sent anywhere.
 
 const PREFIX = 'hydra-desk.cache.'

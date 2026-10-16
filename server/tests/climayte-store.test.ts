@@ -300,14 +300,19 @@ test('a finished worker held packed reads, takes a write and saves back exactly 
     results: done.results,
     reports,
   })
-  // Byte for byte what an unpacked worker writes: every field, in the file's own key order.
+  // Byte for byte what an unpacked worker writes: every field, in the file's own key order, then the
+  // stateAt that changed() stamps on a worker whose file had none (climayte-core.ts).
   const changedAt = JSON.parse(seen.afterChange).updatedAt
   expect(seen.afterChange).toBe(
-    JSON.stringify({ ...done, error: 'judged', updatedAt: changedAt }, null, 2),
+    JSON.stringify(
+      { ...done, error: 'judged', updatedAt: changedAt, stateAt: { key: 'done', at: changedAt } },
+      null,
+      2,
+    ),
   )
   const written = JSON.parse(seen.afterWrite)
   expect(written.results).toEqual(['one', 'two', 'three'])
-  expect(Object.keys(written)).toEqual(Object.keys(done))
+  expect(Object.keys(written)).toEqual([...Object.keys(done), 'stateAt'])
   expect(written.prompt).toBe(prompt)
 }, 60_000)
 

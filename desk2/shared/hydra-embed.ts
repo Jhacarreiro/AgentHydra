@@ -1,5 +1,5 @@
 // What Hydra Desk 2 and its copy of AgentHydra's window (hydra/, in a frame at /ah/?embed=desk) say to each
-// other, as postMessage on the one origin. Desk owns the sidebar (Michael, 2026-10-04: "the left sidebar
+// other, as postMessage on the one origin. Desk owns the sidebar (the other owner, 2026-10-04: "the left sidebar
 // needs to essentially be the sidebar that exists for everything ... we only have two things, the sidebar
 // and the content"): a tab of the copy that had a sidebar of its own (HSwarm's tree, CliMayte and Routing
 // among its nodes) describes it as a SidebarModel instead, Desk draws it in its own sidebar in its own

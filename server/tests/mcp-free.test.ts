@@ -7,8 +7,10 @@ import {
   type FreeInstance,
   noteFreeOutcome,
   noteFreeSend,
+  noteProviderOutcome,
   paceCap,
   pickFreeAccount,
+  providerDown,
   resetFreeHealth,
   restingFor,
   windowResetAt,
@@ -112,6 +114,32 @@ describe('pickFreeAccount', () => {
     expect(paceCap(gpt, now)).toBe(54)
     resetFreeHealth()
   })
+
+  test('a provider failing five sends in a row takes no new thread; after its rest one probe goes, a failure rests it longer', () => {
+    // 2026-10-15: chatgpt.com answered 421 of 421 sends 404 not_found; no account rested, so ChatGPT kept taking work.
+    resetFreeHealth()
+    const now = Date.now()
+    for (let n = 0; n < 4; n++) noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)).toBeNull()
+    noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)?.until).toBe(now + 10 * 60_000)
+    const gptOnly = INSTANCES.filter((i) => i.id === 'b')
+    expect(pickFreeAccount(gptOnly, new Set(), {})).toBeNull()
+    expect(pickFreeAccount(INSTANCES, new Set(), {})?.provider).toBe('claude')
+    expect(pickFreeAccount(gptOnly, new Set(), { account: 2 })?.num).toBe(2) // a named account is never held back
+    // The rest over: one probe, and nothing else until it ends.
+    resetFreeHealth()
+    const past = now - 11 * 60_000
+    for (let n = 0; n < 5; n++) noteProviderOutcome('chatgpt', 'not_found', past)
+    const two = [INSTANCES[1], { ...INSTANCES[1], id: 'e', num: 5 }]
+    expect(pickFreeAccount(two, new Set(), {})?.provider).toBe('chatgpt')
+    expect(pickFreeAccount(two, new Set(['b']), {})).toBeNull()
+    noteProviderOutcome('chatgpt', 'not_found', now)
+    expect(providerDown('chatgpt', now)?.until).toBe(now + 20 * 60_000)
+    noteProviderOutcome('chatgpt', null, now)
+    expect(providerDown('chatgpt', now)).toBeNull()
+    resetFreeHealth()
+  })
 })
 
 describe('free_chat through a stand-in Desk 2', () => {
@@ -132,6 +160,19 @@ describe('free_chat through a stand-in Desk 2', () => {
     model?: string
   }[] = []
   let overlap = 0
+  let statusReads = 0
+  let threadReads = 0
+  let statusDelay = 0
+  let threadDelay = 0
+  let emptyThreads = false
+  let threadFailures = 0
+  let statusFailures = 0
+  let jobReadDelay = 0
+  let activeJobReads = 0
+  let peakJobReads = 0
+  let bulkSupported = false
+  let bulkReads = 0
+  let individualJobReads = 0
   let server: ReturnType<typeof Bun.serve>
   let port: string | undefined
 
@@ -142,10 +183,21 @@ describe('free_chat through a stand-in Desk 2', () => {
     server = Bun.serve({
       port: 0,
       async fetch(req) {
-        const path = new URL(req.url).pathname.replace('/api/free', '')
-        if (path === '/status')
+        const url = new URL(req.url)
+        const path = url.pathname.replace('/api/free', '')
+        if (path === '/status') {
+          statusReads++
+          if (statusDelay) await Bun.sleep(statusDelay)
+          if (statusFailures-- > 0)
+            return Response.json({ error: 'status unavailable' }, { status: 503 })
           return Response.json({ ready: true, instances: INSTANCES, jobs: [...jobs.values()] })
-        if (path === '/threads')
+        }
+        if (path === '/threads') {
+          threadReads++
+          if (threadDelay) await Bun.sleep(threadDelay)
+          if (threadFailures-- > 0)
+            return Response.json({ error: 'history unavailable' }, { status: 503 })
+          if (emptyThreads) return Response.json([])
           return Response.json([
             {
               instanceId: 'b',
@@ -158,6 +210,7 @@ describe('free_chat through a stand-in Desk 2', () => {
               error: null,
             },
           ])
+        }
         if (path === '/jobs' && req.method === 'POST') {
           const r = (await req.json()) as {
             requestId: string
@@ -195,6 +248,10 @@ describe('free_chat through a stand-in Desk 2', () => {
             model: r.model,
           })
           setTimeout(() => {
+            if (r.prompt === 'missing-operation') {
+              jobs.delete(job.id)
+              return
+            }
             job.state = 'done'
             job.result = refuse
               ? {
@@ -211,8 +268,24 @@ describe('free_chat through a stand-in Desk 2', () => {
           }, 100)
           return Response.json(job, { status: 202 })
         }
-        const job = jobs.get(path.replace('/jobs/', ''))
-        return job ? Response.json(job) : Response.json({ error: 'gone' }, { status: 404 })
+        if (path === '/jobs' && req.method === 'GET') {
+          bulkReads++
+          if (!bulkSupported) return Response.json({ error: 'unknown route' }, { status: 404 })
+          const ids = (url.searchParams.get('ids') ?? '').split(',')
+          return Response.json({
+            jobs: Object.fromEntries(ids.map((id) => [id, jobs.get(id) ?? null])),
+          })
+        }
+        individualJobReads++
+        activeJobReads++
+        peakJobReads = Math.max(peakJobReads, activeJobReads)
+        try {
+          if (jobReadDelay) await Bun.sleep(jobReadDelay)
+          const job = jobs.get(path.replace('/jobs/', ''))
+          return job ? Response.json(job) : Response.json({ error: 'gone' }, { status: 404 })
+        } finally {
+          activeJobReads--
+        }
       },
     })
     port = process.env.HYDRA_DESK_PORT
@@ -226,7 +299,157 @@ describe('free_chat through a stand-in Desk 2', () => {
   const run = (name: string, args: Record<string, unknown>) =>
     FREE_TOOLS.find((t) => t.name === name)!.run(args) as Promise<any>
 
+  test('overlapping Free callers share in-flight reads, then read fresh status without rereading empty history', async () => {
+    resetFreeHealth()
+    statusDelay = threadDelay = 50
+    emptyThreads = true
+    const before = { statusReads, threadReads }
+    try {
+      const replies = await Promise.all(Array.from({ length: 12 }, () => run('free_status', {})))
+      expect(replies.every((s) => s.ready)).toBe(true)
+      expect(statusReads - before.statusReads).toBe(1)
+      expect(threadReads - before.threadReads).toBe(1)
+      const prior = INSTANCES[0]!.loggedIn
+      INSTANCES[0]!.loggedIn = false
+      try {
+        const fresh = await run('free_status', {})
+        expect(fresh.accounts.find((a: { num: number }) => a.num === 1).signedIn).toBe(false)
+        expect(statusReads - before.statusReads).toBe(2)
+        expect(threadReads - before.threadReads).toBe(1)
+      } finally {
+        INSTANCES[0]!.loggedIn = prior
+      }
+    } finally {
+      statusDelay = threadDelay = 0
+      emptyThreads = false
+      resetFreeHealth()
+    }
+  })
+
+  test('failed shared status and history reads are retried on the next Free call', async () => {
+    resetFreeHealth()
+    statusDelay = 75
+    threadDelay = 25
+    statusFailures = threadFailures = 1
+    emptyThreads = true
+    const before = { statusReads, threadReads }
+    try {
+      const failed = await Promise.allSettled(
+        Array.from({ length: 12 }, () => run('free_status', {})),
+      )
+      expect(failed.every((r) => r.status === 'rejected')).toBe(true)
+      expect(statusReads - before.statusReads).toBe(1)
+      expect(threadReads - before.threadReads).toBe(1)
+      expect((await run('free_status', {})).ready).toBe(true)
+      expect(statusReads - before.statusReads).toBe(2)
+      expect(threadReads - before.threadReads).toBe(2)
+      await run('free_status', {})
+      expect(threadReads - before.threadReads).toBe(2)
+    } finally {
+      statusDelay = threadDelay = 0
+      statusFailures = threadFailures = 0
+      emptyThreads = false
+      resetFreeHealth()
+    }
+  })
+
+  test('Free job reads run at a bounded eight-way concurrency while task results retain their order', async () => {
+    resetFreeHealth()
+    const original = [...INSTANCES]
+    const priorJobs = new Set(jobs.keys())
+    const priorRan = ran.length
+    INSTANCES.splice(
+      0,
+      INSTANCES.length,
+      ...Array.from({ length: 24 }, (_, n) => ({
+        id: `parallel-${n}`,
+        num: n + 1,
+        provider: 'claude' as const,
+        name: `account-${n}`,
+        loggedIn: true,
+        usage: usage(10, 10),
+      })),
+    )
+    jobReadDelay = 50
+    peakJobReads = 0
+    try {
+      const prompts = Array.from({ length: 24 }, (_, n) => `parallel prompt ${n}`)
+      const out = await run('free_chat', { tasks: prompts.map((prompt) => ({ prompt })) })
+      expect(out.finished).toBe(true)
+      expect(out.tasks.map((t: { response: string }) => t.response)).toEqual(
+        prompts.map((p) => `re: ${p}`),
+      )
+      expect(peakJobReads).toBe(8)
+      expect(overlap).toBe(0)
+    } finally {
+      jobReadDelay = 0
+      INSTANCES.splice(0, INSTANCES.length, ...original)
+      ran.splice(priorRan)
+      for (const id of jobs.keys()) if (!priorJobs.has(id)) jobs.delete(id)
+      resetFreeHealth()
+    }
+  }, 15_000)
+
+  test('one Free bulk read replaces 24 individual job requests without changing ordered replies', async () => {
+    resetFreeHealth()
+    const original = [...INSTANCES]
+    const priorJobs = new Set(jobs.keys())
+    const priorRan = ran.length
+    const before = { bulkReads, individualJobReads }
+    bulkSupported = true
+    INSTANCES.splice(
+      0,
+      INSTANCES.length,
+      ...Array.from({ length: 24 }, (_, n) => ({
+        id: `bulk-${n}`,
+        num: n + 1,
+        provider: 'claude' as const,
+        name: `bulk account ${n}`,
+        loggedIn: true,
+        usage: usage(10, 10),
+      })),
+    )
+    try {
+      const prompts = Array.from({ length: 24 }, (_, n) => `bulk prompt ${n}`)
+      const out = await run('free_chat', { tasks: prompts.map((prompt) => ({ prompt })) })
+      expect(out.finished).toBe(true)
+      expect(out.tasks.map((t: { response: string }) => t.response)).toEqual(
+        prompts.map((p) => `re: ${p}`),
+      )
+      expect(bulkReads - before.bulkReads).toBe(1)
+      expect(individualJobReads - before.individualJobReads).toBe(0)
+      expect(ran.length - priorRan).toBe(24)
+      expect(overlap).toBe(0)
+    } finally {
+      bulkSupported = false
+      INSTANCES.splice(0, INSTANCES.length, ...original)
+      ran.splice(priorRan)
+      for (const id of jobs.keys()) if (!priorJobs.has(id)) jobs.delete(id)
+      resetFreeHealth()
+    }
+  }, 15_000)
+
+  test('an expired bulk operation fails only its task and never repeats either send', async () => {
+    resetFreeHealth()
+    const before = ran.length
+    bulkSupported = true
+    try {
+      const out = await run('free_chat', {
+        tasks: [{ prompt: 'missing-operation' }, { prompt: 'bulk sibling' }],
+      })
+      expect(out.finished).toBe(true)
+      expect(out.tasks[0].state).toBe('failed')
+      expect(out.tasks[0].error).toContain('no longer holds this operation')
+      expect(out.tasks[1]).toMatchObject({ state: 'done', response: 're: bulk sibling' })
+      expect(ran.length - before).toBe(2)
+    } finally {
+      bulkSupported = false
+      resetFreeHealth()
+    }
+  }, 15_000)
+
   test('more tasks than idle accounts all finish, one operation per account at a time; a continuation goes to its thread', async () => {
+    const beforeBulk = bulkReads
     const out = await run('free_chat', {
       tasks: [
         { prompt: 'p1' },
@@ -257,6 +480,7 @@ describe('free_chat through a stand-in Desk 2', () => {
     expect(overlap).toBe(0)
     const batch = await run('free_results', { batch: out.batch, wait_s: 0 })
     expect(batch.done).toBe('4 of 4')
+    expect(bulkReads - beforeBulk).toBe(1)
   }, 30_000)
 
   // 2026-10-08: the GPT-6 trial asks a Free ChatGPT account for GPT-6 by name.

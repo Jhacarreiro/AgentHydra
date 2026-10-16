@@ -3,7 +3,7 @@
   Register (or remove) the scheduled task that keeps the AgentHydra daemon alive.
 
 .DESCRIPTION
-  WHY THIS EXISTS (owner directive, Michael, 2026-08-30, after a fleet pass found the
+  WHY THIS EXISTS (owner directive, 2026-08-30, after a fleet pass found the
   hole): every piece needed to keep the daemon up already existed - Ensure-Daemon.ps1 is a proper
   idempotent preflight, Restart-Daemon.ps1 kills stale code, Wait-Daemon.ps1 proves recovery -
   and NOTHING EVER CALLED THEM ON A SCHEDULE. The daemon was alive only because a person had

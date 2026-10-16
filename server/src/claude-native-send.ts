@@ -43,7 +43,7 @@ export interface NativeSendOutcome {
 const SEND_CALL_TIMEOUT_MS = 60_000
 
 /** Runs one inspector expression against the profile's running app; `unavailable` says nothing ran. */
-async function withAppClient<T>(
+export async function withAppClient<T>(
   profileDir: string,
   run: (app: {
     pid: number
@@ -218,4 +218,99 @@ export async function tryNativeSendToChat(
   if (!profileDir)
     return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
   return tryNativeSend(profileDir, cliSessionId, text, fromName)
+}
+
+export interface NativeStopOutcome {
+  ok: boolean
+  /** True when nothing was called in the app (not configured, not running, no connection, refused
+   *  before the stop): the caller reports it as unavailable and tries nothing else. */
+  unavailable: boolean
+  /** The app's own state shows the turn stopping or stopped. */
+  verified?: boolean
+  /** The app refused the stop before calling its Stop (no running turn, archived, several chats). */
+  refused?: boolean
+  reason?: string
+}
+
+/** The app's own Stop for one chat in a profile's RUNNING app (native-program.ts nativeStop). One call:
+ *  a stop the app did not confirm is reported, never sent again. */
+export async function tryNativeStop(
+  profileDir: string,
+  cliSessionId: string,
+): Promise<NativeStopOutcome> {
+  const profile = normalizeClaudeNativeProfile(profileDir)
+  const connected = await withAppClient(profileDir, ({ pid, evaluate }) =>
+    evaluate(nativeProgram({ action: 'stop', pid, profileDir: profile, cliSessionId })),
+  )
+  if (!connected.ok) return { ok: false, unavailable: true, reason: connected.reason }
+  try {
+    const result = connected.value
+    if (result?.ok === true && result.verified === true)
+      return { ok: true, unavailable: false, verified: true }
+    return {
+      ok: false,
+      unavailable: result?.dispatch === 'not-sent',
+      verified: result?.verified === true,
+      ...(result?.refused === true ? { refused: true } : {}),
+      reason: String(result?.reason ?? 'the app did not confirm the stop'),
+    }
+  } catch (error) {
+    // The stop may have been called: nothing else is tried, and the caller is told it is unknown.
+    return {
+      ok: false,
+      unavailable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
+}
+
+/** tryNativeStop for a chat known only by its CLI session id, in the desktop profile whose app holds it. */
+export async function tryNativeStopChat(cliSessionId: string): Promise<NativeStopOutcome> {
+  const profileDir = await desktopProfileOf(cliSessionId)
+  if (!profileDir)
+    return { ok: false, unavailable: true, reason: 'no desktop chat holds this session' }
+  return tryNativeStop(profileDir, cliSessionId)
+}
+
+export interface NativeSettingOutcome extends NativeStopOutcome {
+  /** What the app shows after the call: the model and effort it kept. */
+  model?: string | null
+  effort?: string | null
+}
+
+/** The app's own setModel / setEffort for one chat in a profile's RUNNING app (native-program.ts nativeSetting), the
+ *  calls its pickers make. One call: a change the app did not keep is reported with what it kept, never sent again. */
+export async function tryNativeSetting(
+  profileDir: string,
+  cliSessionId: string,
+  setting: { model?: string; effort?: string },
+): Promise<NativeSettingOutcome> {
+  const profile = normalizeClaudeNativeProfile(profileDir)
+  const connected = await withAppClient(profileDir, ({ pid, evaluate }) =>
+    evaluate(
+      nativeProgram({ action: 'setting', pid, profileDir: profile, cliSessionId, ...setting }),
+    ),
+  )
+  if (!connected.ok) return { ok: false, unavailable: true, reason: connected.reason }
+  try {
+    const result = connected.value
+    const kept = { model: result?.after?.model ?? null, effort: result?.after?.effort ?? null }
+    if (result?.ok === true && result.verified === true)
+      return { ok: true, unavailable: false, verified: true, ...kept }
+    return {
+      ok: false,
+      unavailable: result?.dispatch === 'not-sent',
+      verified: false,
+      ...(result?.refused === true ? { refused: true } : {}),
+      reason: String(result?.reason ?? 'the app did not show the change'),
+      ...kept,
+    }
+  } catch (error) {
+    // The call may have been made: nothing else is tried, and the caller is told it is unknown.
+    return {
+      ok: false,
+      unavailable: false,
+      reason: error instanceof Error ? error.message : String(error),
+    }
+  }
 }

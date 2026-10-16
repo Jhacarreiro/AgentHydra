@@ -82,7 +82,7 @@ plus the CLAUDE.md files it loads (defect 2), plus the MCP tool lists.
    model obeyed "Do not use any tools", but on a normal prompt it can follow the worker rules.
    Separately, a cwd under `C:\Users\me` also loads `C:\Users\me\.claude\CLAUDE.md` as an
    ancestor project file (the same `settingSources` in `server/src/engine/chat-runtime.ts`). **Not fixed:** this is a design call (which instructions a Desk chat should
-   get, and whether to drop `'user'` or point to Jacob's own user-level Claude settings, the `settingSources` in `server/src/engine/chat-runtime.ts`), and it is too
+   get, and whether to drop `'user'` or point to the owner's own user-level Claude settings, the `settingSources` in `server/src/engine/chat-runtime.ts`), and it is too
    big for this piece.
 3. **A process from the chat holds the work folder after `server.stop()`** (seen in e2e cleanup). In
    run 1, deleting the temp folder failed for 5 s after stop and only worked later by hand; in run 2 it

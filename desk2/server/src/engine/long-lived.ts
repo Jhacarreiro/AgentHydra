@@ -1,6 +1,6 @@
 // Background tasks that never finish by themselves, like a local server. A chat whose turn ended with
 // other background work running is still working (the work wakes it when it ends), so its sidebar dot
-// stays orange; these would hold it orange forever, so they do not count (Jacob, 2026-10-04). The list
+// stays orange; these would hold it orange forever, so they do not count (the owner, 2026-10-04). The list
 // holds one pattern per long-lived kind of task; when another kind keeps a finished chat orange, its
 // pattern is added here. Each pattern is tried on the task's command and on its description.
 import type { TranscriptItem } from '@shared/protocol'

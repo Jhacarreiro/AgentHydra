@@ -2,7 +2,7 @@
 
 Providers are OpenAI-compatible chat endpoints, one TOML file each: the shipped ones in hswarm/providers/, a
 person's own in ~/.hswarm/providers/ (docs/PROVIDERS.md). Adding a provider, a model or a key is a file, never a
-code change (owner asks, Michael, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
+code change (owner asks, 2026-09-15 and 2026-09-26: "configurable expandable easy files ... so they aren't
 spread all over"). ROLES map a kind of work to a model, so a task can say role: "search" and get whatever is wired
 for it on this machine (~/.hswarm/settings.toml).
 
@@ -264,7 +264,7 @@ PANEL: list[str] = []
 # Peak windows, UTC, Monday-Friday: 01:00-04:00 and 06:00-10:00.
 PEAK_WINDOWS = prices.peak_windows()  # DeepSeek's full-rate hours, written once in data/prices.json
 
-# ---- routing (owner ask, Michael, 2026-09-17: take the cheaper path to a model, per call) ----
+# ---- routing (owner ask, 2026-09-17: take the cheaper path to a model, per call) ----
 #
 # One logical model, several paths to it (a model's `route` in its provider file), in two TIERS. Price orders paths
 # WITHIN a tier and never across (route_plan): a path marked `fallback` serves only when no primary path has a key
@@ -333,9 +333,14 @@ ROUTE_VIA_FREE_TOOL_PROFILES = _ROUTE_VIA_FREE_TOOL_PROFILES_DEFAULT
 # half its time (2026-10-13). About a third of its threads fail at once (generation_error) and take their API route.
 # Code read work (reviews, investigations with read tools only) goes there too: 7 to 5 over 12 real code read tasks,
 # mean 5.9 vs 5.0, 16 judged errors to the API's 53, where GPT-5.6 mini with the claim check drew 7 to 7, mean 4.4 vs 4.9.
+# With no ChatGPT account to take them (2026-10-15: every ChatGPT send failed 404 for a day, and the daemon now rests a
+# failing provider), critical and code read work asks Sonnet 5.5 on a Claude account next, not its API route at once:
+# that route is a flash model (glm-5-3-flash took 235 such tasks that day), and Sonnet beat the API answers 10 to 0 on
+# decision read above. Not yet measured on these two profiles; free_ab can.
 _ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT: dict[str, tuple[str, ...]] = {"decision": ("sonnet@claude",),
                                                                  "research": ("sonnet@claude", "@chatgpt"),
-                                                                 "critical": ("luna-thinking",), "code": ("luna-thinking",)}
+                                                                 "critical": ("luna-thinking", "sonnet@claude"),
+                                                                 "code": ("luna-thinking", "sonnet@claude")}
 ROUTE_VIA_FREE_TOOL_ASKS: dict[str, tuple[str, ...]] = dict(_ROUTE_VIA_FREE_TOOL_ASKS_DEFAULT)
 # `route_via_free_check_profiles`: the profiles whose tool tasks on a ChatGPT thread are asked once, before they finish
 # on fewer than free_client.CHECK_READS tool results, to check their claims with their tools (free_client.CHECK). A
@@ -344,7 +349,7 @@ _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT = ("decision", "research")
 ROUTE_VIA_FREE_CHECK_PROFILES = _ROUTE_VIA_FREE_CHECK_PROFILES_DEFAULT
 
 _CORES = os.cpu_count() or 4
-# Process discipline (owner, Michael, 2026-09-15: "make sure we don't end up spinning up a billion sub
+# Process discipline (owner, 2026-09-15: "make sure we don't end up spinning up a billion sub
 # processes and murdering my cpu"). `api` workers are HTTP calls and cost no process; what costs CPU is the
 # children the sandbox spawns (ripgrep, bash, git) and the headless Claude Code `cc` workers. Every child
 # goes through procgate: at most MAX_TOOL_PROCS per server process, MACHINE_MAX_PROCS across every hswarm
@@ -528,46 +533,81 @@ def _inherit() -> None:
         MODELS[name] = resolved(name, ())
 
 
+def _is_int(value) -> bool:
+    return isinstance(value, int) and not isinstance(value, bool)
+
+
+def _is_number(value) -> bool:
+    return isinstance(value, (int, float)) and not isinstance(value, bool)
+
+
+def _is_str_list(value) -> bool:
+    return isinstance(value, list) and all(isinstance(p, str) for p in value)
+
+
 def _apply_settings(doc: dict) -> None:
-    global PRICE_ROUTING, LOAD_BIAS, DAILY_CAP_USD, ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
-    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES, ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES
-    global ROUTE_VIA_FREE_TOOL_ASKS, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    _apply_cap_and_routing(doc)
+    _apply_climayte_settings(doc)
+    _apply_free_settings(doc)
+    _apply_free_lists(doc)
+    _apply_load_roles_panel(doc)
+
+
+def _apply_cap_and_routing(doc: dict) -> None:
+    global PRICE_ROUTING, DAILY_CAP_USD
     cap = doc.get("daily_cap_usd")
-    if isinstance(cap, (int, float)) and not isinstance(cap, bool) and cap > 0:
+    if _is_number(cap) and cap > 0:
         DAILY_CAP_USD = float(cap)
     if isinstance(doc.get("routing"), bool):
         PRICE_ROUTING = doc["routing"]
+
+
+def _apply_climayte_settings(doc: dict) -> None:
+    global ROUTE_VIA_CLIMAYTE, ROUTE_VIA_CLIMAYTE_MAX, ROUTE_VIA_CLIMAYTE_START_S
     if isinstance(doc.get("route_via_climayte"), bool):
         ROUTE_VIA_CLIMAYTE = doc["route_via_climayte"]
     mx, st = doc.get("route_via_climayte_max"), doc.get("route_via_climayte_start_s")
-    if isinstance(mx, int) and not isinstance(mx, bool) and mx >= 0:
+    if _is_int(mx) and mx >= 0:
         ROUTE_VIA_CLIMAYTE_MAX = mx
-    if isinstance(st, (int, float)) and not isinstance(st, bool) and st > 0:
+    if _is_number(st) and st > 0:
         ROUTE_VIA_CLIMAYTE_START_S = float(st)
+
+
+def _apply_free_settings(doc: dict) -> None:
+    global ROUTE_VIA_FREE, ROUTE_VIA_FREE_MAX, ROUTE_VIA_FREE_PROFILES
     if isinstance(doc.get("route_via_free"), bool):
         ROUTE_VIA_FREE = doc["route_via_free"]
     fmx, fpr = doc.get("route_via_free_max"), doc.get("route_via_free_profiles")
-    if isinstance(fmx, int) and not isinstance(fmx, bool) and fmx >= 0:
+    if _is_int(fmx) and fmx >= 0:
         ROUTE_VIA_FREE_MAX = fmx
-    if isinstance(fpr, list) and all(isinstance(p, str) for p in fpr):
+    if _is_str_list(fpr):
         ROUTE_VIA_FREE_PROFILES = tuple(p.strip().lower() for p in fpr)
+
+
+def _apply_free_lists(doc: dict) -> None:
+    global ROUTE_VIA_FREE_TOOLS, ROUTE_VIA_FREE_TOOL_PROFILES, ROUTE_VIA_FREE_WEB_PROFILES, ROUTE_VIA_FREE_CHECK_PROFILES
+    global ROUTE_VIA_FREE_TOOL_ASKS
     ftl, ftp = doc.get("route_via_free_tools"), doc.get("route_via_free_tool_profiles")
-    if isinstance(ftl, list) and all(isinstance(t, str) for t in ftl):
+    if _is_str_list(ftl):
         ROUTE_VIA_FREE_TOOLS = tuple(t.strip() for t in ftl)
-    if isinstance(ftp, list) and all(isinstance(p, str) for p in ftp):
+    if _is_str_list(ftp):
         ROUTE_VIA_FREE_TOOL_PROFILES = tuple(p.strip().lower() for p in ftp)
     fwp = doc.get("route_via_free_web_profiles")
-    if isinstance(fwp, list) and all(isinstance(p, str) for p in fwp):
+    if _is_str_list(fwp):
         ROUTE_VIA_FREE_WEB_PROFILES = tuple(p.strip().lower() for p in fwp)
     fcp = doc.get("route_via_free_check_profiles")
-    if isinstance(fcp, list) and all(isinstance(p, str) for p in fcp):
+    if _is_str_list(fcp):
         ROUTE_VIA_FREE_CHECK_PROFILES = tuple(p.strip().lower() for p in fcp)
     fta = doc.get("route_via_free_tool_asks")
     if isinstance(fta, dict):
         ROUTE_VIA_FREE_TOOL_ASKS = {str(p).strip().lower(): tuple(a.strip() for a in asks) for p, asks in fta.items()
                                     if isinstance(asks, list) and asks and all(isinstance(a, str) and a.strip() for a in asks)}
+
+
+def _apply_load_roles_panel(doc: dict) -> None:
+    global LOAD_BIAS
     bias = doc.get("load_bias")
-    if isinstance(bias, (int, float)) and not isinstance(bias, bool) and bias >= 0:
+    if _is_number(bias) and bias >= 0:
         LOAD_BIAS = float(bias)
     ROLES.update({str(k).lower(): (str(v).lower() if v else None) for k, v in (doc.get("roles") or {}).items()})
     if isinstance(doc.get("panel"), list) and len(doc["panel"]) >= 2:

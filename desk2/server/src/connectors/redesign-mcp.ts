@@ -521,14 +521,12 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       }
     }
     const pollRuns = async (): Promise<void> => {
-      for (const r of runs) {
-        if (r.ended) continue
-        let m: Manifest
-        try {
-          m = await api<Manifest>(`/api/runs/${encodeURIComponent(r.id)}`)
-        } catch {
-          continue // one missed poll is not a failure
-        }
+      const live = runs.filter((r) => !r.ended)
+      // Every run's manifest is asked for at once; the jobs are still seen in run order, so options are numbered as before.
+      const manifests = await Promise.all(live.map((r) => api<Manifest>(`/api/runs/${encodeURIComponent(r.id)}`).catch(() => null)))
+      for (const [i, r] of live.entries()) {
+        const m = manifests[i]
+        if (!m) continue // one missed poll is not a failure
         for (const job of m.jobs ?? []) await seeJob(r, job)
         if (m.status !== 'queued' && m.status !== 'running') r.ended = true
       }
@@ -563,7 +561,7 @@ export function createRedesignMcp(o: RedesignMcpOptions) {
       progress(options.length, count, `ReDesign is making options (${options.length}/${count})`)
       await sleep(o.pollMs ?? 1500)
     }
-    for (const r of runs) if (!r.ended) await post(`/api/runs/${encodeURIComponent(r.id)}/cancel`, {}).catch(() => {})
+    await Promise.all(runs.filter((r) => !r.ended).map((r) => post(`/api/runs/${encodeURIComponent(r.id)}/cancel`, {}).catch(() => {})))
     saveHealth(healthFile, health)
     return { options, failedJobs, why, primary, started }
   }

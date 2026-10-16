@@ -2,7 +2,7 @@
 // row menu's first line and Move to account (sidebar/logic.ts). Read when one of them opens, at most every 15 s
 // unless asked to; the address an instance was resolved to (ah.instanceAccount) is kept across reads, which do not
 // carry it. AgentHydra's Codex accounts are read with them, for a Codex chat's row menu.
-import { computed, ref, shallowRef } from 'vue'
+import { computed, shallowRef } from 'vue'
 import type { AccountChoice } from '@/components/sidebar/logic'
 import { ah } from './ah'
 import { instanceName, type AhCodexInstance, type AhInstance } from './logic'
@@ -10,7 +10,7 @@ import { instanceName, type AhCodexInstance, type AhInstance } from './logic'
 const FRESH_MS = 15_000
 
 /** null until AgentHydra first answers. */
-export const ahInstances = ref<AhInstance[] | null>(null)
+export const ahInstances = shallowRef<AhInstance[] | null>(null)
 /** AgentHydra's Codex accounts; null until it first answers. */
 export const ahCodexInstances = shallowRef<AhCodexInstance[] | null>(null)
 let reading: Promise<void> | null = null
@@ -20,10 +20,20 @@ let readAt = 0
 export function refreshAhInstances(force = false): Promise<void> {
   if (reading) return reading
   if (!force && ahInstances.value && Date.now() - readAt < FRESH_MS) return Promise.resolve()
-  const desktop = ah.instances().then(
-    (list) => {
+  // /instances sends no account, so a menu named each by its folder ("aaa", "ccc"; owner, 2026-10-15: "it should
+  // show the account name"): the fleet numbering carries who each is signed into, read off disk in one call.
+  const named = ah.instanceNumbers().then(
+    (list) => new Map(list.filter((x) => x.kind === 'desktop' && (x.name || x.email)).map((x) => [x.handle.toLowerCase(), { name: x.name, email: x.email }])),
+    () => new Map<string, NonNullable<AhInstance['account']>>()
+  )
+  const desktop = Promise.all([ah.instances(), named]).then(
+    ([list, signedIn]) => {
       const known = new Map((ahInstances.value ?? []).map((x) => [x.dir, x.account]))
-      ahInstances.value = list.map((x) => (x.account?.email || !known.get(x.dir) ? x : { ...x, account: known.get(x.dir) ?? null }))
+      ahInstances.value = list.map((x) => {
+        if (x.account?.email) return x
+        const account = known.get(x.dir) ?? signedIn.get(x.dir.toLowerCase()) ?? null
+        return account ? { ...x, account } : x
+      })
       readAt = Date.now()
     },
     () => {}

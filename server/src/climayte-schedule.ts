@@ -22,7 +22,7 @@ import {
 } from './climayte-core'
 import { cpuShort, recordCpu } from './climayte-cpu'
 import { firstLine } from './climayte-journal'
-import { launch } from './climayte-launch'
+import { launch, leadPickPending } from './climayte-launch'
 import {
   accountInUse,
   accountWeekStopPct,
@@ -113,10 +113,16 @@ function groupCounts(byGroup: Map<string, Map<string, number>>, g: string): Map<
   return m
 }
 
+/** Keep the CPU window warm even on ticks with nothing to place. */
+function sampleTickCpu(now: number): number | null {
+  return recordCpu(now, cpuReader?.() ?? null)
+}
+
 export function tickState(
   accounts: CliMayteAccount[],
   now: number,
   install: InstallState | null = null,
+  growthMaxAgeMs = 0,
 ): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
@@ -133,12 +139,13 @@ export function tickState(
   for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
   const memory = memoryReader?.() ?? null
-  // Process trees are read only when the gate is on.
+  // Process trees are read only when the gate is on, and anew only when the caller may start a
+  // worker on them (growthMaxAgeMs 0); otherwise a reading of the same runners under that age stands.
   const growing: Growth = memory
-    ? growthOf(live, now)
+    ? growthOf(live, now, undefined, growthMaxAgeMs)
     : { expectedBytes: DEFAULT_GROWN_BYTES, sets: [] }
   // Sampled every tick, so the window fills whether or not a start is waiting (climayte-cpu.ts).
-  const cpu = recordCpu(now, cpuReader?.() ?? null)
+  const cpu = sampleTickCpu(now)
   return {
     now,
     accounts,
@@ -601,6 +608,35 @@ export function scheduleDue(s: TickState, due: CliMayteWorker[]): void {
   }
 }
 
+/** The scheduler portion of a tick. No due worker means no account placement, history scan or
+ *  process-tree reservation is needed; CPU counters still sample at the normal cadence. Return
+ *  synchronously when idle, so the caller does not introduce another yield into that tick. */
+export function scheduleTick(accounts: CliMayteAccount[], now: number): Promise<void> | void {
+  const isDue = (w: CliMayteWorker): boolean =>
+    (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
+  let anyDue = false
+  for (const w of workers.values())
+    if (isDue(w)) {
+      anyDue = true
+      break
+    }
+  if (!anyDue) {
+    sampleTickCpu(now)
+    return
+  }
+  // The probe yields. Re-read the due workers after it settles: a route can cancel, hold, remove
+  // or enqueue them while it runs. Only a non-empty current list builds fresh placement state.
+  return installForTick().then((install) => {
+    const due: CliMayteWorker[] = []
+    for (const w of workers.values()) if (isDue(w)) due.push(w)
+    if (due.length) scheduleDue(tickState(accounts, now, install), due)
+    else sampleTickCpu(now)
+  })
+}
+
+/** Prime chats holding the launch slot they took while their lead pick runs (startOn). */
+const pickSlots = new Set<string>()
+
 /** Start the task on the picked account, and count it there for the rest of this tick; first its
  *  usage is read again if that is due (holdForReading), and the machine must have the memory for it
  *  (holdForMemory). */
@@ -626,8 +662,16 @@ function startOn(
     holdForCpu(w, busy)
     return
   }
+  // A Prime chat's lead pick is made off the launch (it may take seconds): due again next tick. It keeps the launch
+  // slot it took while it waits, so work ranked after it never starts in its place, and launches without another.
+  const picking = leadPickPending(w)
   // No slot: the task stays as it is, due again next tick (never failed or dropped).
-  if (!takeLaunchSlot(s.now)) return
+  if (!pickSlots.has(w.id) && !takeLaunchSlot(s.now)) return
+  if (picking) {
+    pickSlots.add(w.id)
+    return
+  }
+  pickSlots.delete(w.id)
   const expected = cost.pct
   // The row's size says what this start was placed on, not the estimate at dispatch.
   if (w.size)

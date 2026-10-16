@@ -1,6 +1,6 @@
 <script setup lang="ts">
-import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect } from 'vue'
-import type { ChatSummary } from '@shared/protocol'
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, watchEffect, type Ref } from 'vue'
+import type { ChatSummary, TranscriptIndex, TranscriptItem } from '@shared/protocol'
 import Sidebar from '@/components/sidebar/Sidebar.vue'
 import { accountFace, groupChoices, type RowMenuItem } from '@/components/sidebar/logic'
 import TranscriptView from '@/components/transcript/TranscriptView.vue'
@@ -40,6 +40,10 @@ import { OPEN_TASKS_EVENT, cleared, outsideTasks, type OpenTasksDetail } from '@
 import { panelLists } from '@/components/tasks/logic'
 import { sessionTasks } from '@/components/tasks/session'
 import { useDesk } from '@/stores/desk'
+import { PUT_BACK_EVENT, type PutBack } from '@/components/composer/draft-images'
+import { putBackDraft } from '@/components/composer/change-project'
+import { loadDraft, saveDraft } from '@/components/composer/logic'
+import { readOnlyChild, LOCKED_TITLE } from './readonly-child'
 import ChromeBar from './ChromeBar.vue'
 import WindowControls from './WindowControls.vue'
 import { CAPTION_W, appFocused, canCollapse, collapseWindow, collapsed, expandWindow, ownFrame, startOwnFrame } from '@/lib/host-window'
@@ -47,13 +51,18 @@ import { chatAction, focusAction, modeAction } from '@/components/sidebar/collap
 import { setSidebarSide, sidebarSide, type SidebarSide } from '@/components/sidebar/side'
 import ShellHeader, { type RightPane } from './ShellHeader.vue'
 import WhatsNewDialog from './WhatsNewDialog.vue'
+import PeopleFirstRun from '@/components/people/PeopleFirstRun.vue'
 import { changesTabFor } from '@/components/connectors/logic'
 import { changesTab, repoYeti, setChangesTab } from '@/components/connectors/repoyeti-state'
 import NewSessionScreen from './NewSessionScreen.vue'
-import { CHAT_DEFAULT, CHAT_MIN, NavHistory, TASKS_DEFAULT, TASKS_MAX, TASKS_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, splitChat, splitColumns, tasksPanelWidth, unreadHold, viewUnder, type View } from './logic'
+import { CHAT_DEFAULT, CHAT_MIN, NavHistory, RAIL_INSET, RAIL_MAX, RAIL_MIN, archivedNotice, SidebarPeek, chatViewOf, matchShortcut, railReserve, railWidthIn, splitChat, splitColumns, unreadHold, viewUnder, type View } from './logic'
+const SessionRail = lazyPanel(() => import('@/components/rail/SessionRail.vue'))
+import { railOpen, railWidth, saveRailWidth } from '@/components/rail/state'
+import { headerPeek } from '@/components/session-header/state'
 import { useElementSize } from '@vueuse/core'
 import { rememberScreen, restoreScreen, type ScreenMemory } from '@/lib/view-memory'
 import { useShellSource } from './source'
+import { externalIndexBySession } from '@/components/external/paging'
 import { restartServer, updateOffer } from '@/lib/server-update'
 import { lazyPanel, prefetchPanels } from '@/lib/lazy-panel'
 import { waitForNextPaint } from '@/lib/wait-for-next-paint'
@@ -70,7 +79,13 @@ const props = defineProps<{
   /** Gallery and parity only: views visited before the current one, so Alt + Left has somewhere to go. */ history?: View[]
 }>()
 
-const src = useShellSource()
+// The lazy-loading members the store (and the parity scene's source) carry beyond ShellSource.
+type LazyMembers = {
+  indexByChat?: Readonly<Ref<ReadonlyMap<string, TranscriptIndex>>>
+  loadOlder?(id: string): Promise<number>
+  hasOlder?(id: string): boolean
+}
+const src = useShellSource() as ReturnType<typeof useShellSource> & LazyMembers
 // A reload (a right-click Refresh, a new build) comes back to the same screen: the store keeps Desk's view,
 // and the rest is kept here (lib/view-memory.ts): the view under Settings, the AgentHydra pane, the Settings
 // page. The demo window starts from its props.
@@ -128,12 +143,42 @@ const chat = computed<ChatSummary | null>(() => {
 // A chat view whose chat is gone (deleted, or nothing picked yet) is the new-session screen.
 const isNew = computed(() => view.value.kind === 'new' || (view.value.kind === 'chat' && !chat.value))
 const items = computed(() => (chat.value ? (src.itemsByChat.value.get(chat.value.id) ?? []) : []))
+// Items the server holds above the loaded ones (the index's total less what is loaded): counted in the transcript's
+// scrollbar, and the page above is fetched as the view nears them. A fetch that adds nothing is not asked again until
+// the loaded items change, so a failing route is not hit in a loop.
+const loadingOlder = ref(false)
+const olderStalledAt = ref<{ id: string; n: number } | null>(null)
+const olderCount = computed(() => {
+  const id = chat.value?.id
+  if (!id || !src.hasOlder?.(id)) return 0
+  if (olderStalledAt.value?.id === id && olderStalledAt.value.n === items.value.length) return 0
+  return Math.max(0, (src.indexByChat?.value.get(id)?.total ?? 0) - items.value.length)
+})
+const fetchChatItem = async (id: string): Promise<TranscriptItem | null> => {
+  if (!chat.value) return null
+  const res = await fetch(`/api/chats/${encodeURIComponent(chat.value.id)}/items/${encodeURIComponent(id)}`)
+  return res.ok ? ((await res.json()) as TranscriptItem) : null
+}
+async function loadOlder() {
+  const id = chat.value?.id
+  if (!id || loadingOlder.value || !src.loadOlder) return
+  loadingOlder.value = true
+  const had = items.value.length
+  try {
+    if ((await src.loadOlder(id)) <= 0) olderStalledAt.value = { id, n: had }
+  } catch {
+    olderStalledAt.value = { id, n: had } // floor-ok: the rows show as they are; the next change of them asks again
+  } finally {
+    loadingOlder.value = false
+  }
+}
 // The Background tasks panel for an outside session: its id, and the transcript its view published.
 const outsideId = computed(() => (view.value.kind === 'external' ? view.value.id : null))
 const tasksSessionId = computed(() => outsideId.value ?? chat.value?.sessionId)
 const tasksItems = computed(() =>
   outsideId.value ? (outsideTasks.value?.sessionId === outsideId.value ? outsideTasks.value.items : []) : items.value
 )
+const tasksIndex = computed(() => (outsideId.value ? externalIndexBySession.get(outsideId.value) : chat.value ? src.indexByChat?.value.get(chat.value.id) : null) ?? null)
 const tasksWorkerIds = computed(() => (outsideId.value ? undefined : chat.value?.workerIds))
 
 // The list of outside sessions holds the last 24 hours; a search hit can open an older one, which is
@@ -449,7 +494,7 @@ function toggleTasks() {
   if (!showTasks.value) return
   toggleSidebar(true)
   // An AgentHydra tab with a list of its own (HSwarm's tree) has the sidebar while it is open, so the
-  // tasks would not show: slide back to the desk, as showSessions does (Michael, 2026-10-04: "toggling ...
+  // tasks would not show: slide back to the desk, as showSessions does (the other owner, 2026-10-04: "toggling ...
   // does nothing in the sidebar").
   if (hydraOpen.value && hydraShown.value) toggleHydra(false)
 }
@@ -632,8 +677,9 @@ const onOpenBrowser = () => {
   // The card's browser is the chat's: the pane leaves a project the Dev servers list showed.
   if (chat.value) serversCwd.value = null
 }
-// Background tasks (the inline row, a workflow card, desk.openBackgroundTasks()) takes the right pane's place.
-// Open or closed (and expanded) is remembered per chat: switching chats shows each one's own state.
+// Background tasks (the inline row, a workflow card, desk.openBackgroundTasks(), a task in the session rail) slides the session
+// rail over to its panel, or, expanded, takes the chat's place. Which (and on which task) is remembered per chat: switching chats
+// shows each one's own.
 type TasksState = { focus: string | null; expanded: boolean }
 const tasksByView = ref(new Map<string, TasksState>())
 const tasks = computed<TasksState | null>({
@@ -645,14 +691,15 @@ const tasks = computed<TasksState | null>({
     tasksByView.value = next
   }
 })
-// The title bar's Background tasks button: the panel for the session on view, open or shut (a chat, or an outside session),
-// with the session's own lists when the panel or the tasks line has them read (never asked for here).
+// The running count on the title bar's Session details button: the session on view's, with its own lists when the rail or the
+// tasks line has them read (never asked for here).
 const desk = useDesk()
 const tasksRunningCount = computed(
   () =>
     panelLists({
       workers: src.workers.value,
       items: tasksItems.value,
+      index: tasksIndex.value,
       jobs: [...desk.swarmJobs.value, ...desk.remoteSwarmJobs.value],
       own: tasksSessionId.value ? sessionTasks.value.get(tasksSessionId.value) : null,
       sessionId: tasksSessionId.value,
@@ -660,14 +707,6 @@ const tasksRunningCount = computed(
       cleared: cleared.value
     }).running.length
 )
-function toggleTasksPanel() {
-  if (tasks.value) {
-    tasks.value = null
-    return
-  }
-  pane.value = null
-  tasks.value = { focus: null, expanded: false }
-}
 function onOpenTasks(e: Event) {
   pane.value = null
   devServers.closePage()
@@ -676,61 +715,90 @@ function onOpenTasks(e: Event) {
 watch(pane, (p) => {
   if (p) tasks.value = null
 })
-// Docked, the panel slides in from the right and back out (owner, 2026-10-08: "still snaps open, ZERO nice
-// animations") on transforms alone, as the sidebar does: the chat takes its new width once, as the panel starts in or
-// once it has gone, and is drawn half the panel's width off its place meanwhile, so its centred column glides there
-// with the panel instead of jumping. Another chat, a pane taking the panel's place, or the expanded panel show at once.
-const TASKS_KEY = 'hydra-desk.tasks.width'
-const tasksWidth = ref(Number(storage?.getItem(TASKS_KEY)) || TASKS_DEFAULT)
-const tasksAt = computed(() => tasksPanelWidth(tasksWidth.value, stageWidth.value))
-const tasksSlide = ref<{ open: boolean; at: 'from' | 'to' } | null>(null)
-/** The panel on its way out, drawn with the state it closed with until the slide ends. */
-const tasksLeaving = ref<TasksState | null>(null)
-const tasksShown = computed(() => tasks.value ?? tasksLeaving.value)
-/** The slide's out end: the panel past the window's right edge, the chat where it was before the panel came. */
-const tasksOut = computed(() => !!tasksSlide.value && tasksSlide.value.open === (tasksSlide.value.at === 'from'))
-let tasksTimer: ReturnType<typeof setTimeout> | undefined
-function endTasksSlide() {
-  clearTimeout(tasksTimer)
-  tasksSlide.value = null
-  tasksLeaving.value = null
+
+// The session rail (components/rail, owner 2026-10-14) in place of the session header's bar and the docked Background tasks
+// panel: shown for a chat or an outside session while no right pane takes its place, open or shut for the window (the title
+// bar's Session details button), and always while Background tasks is on it. A session opened from a search peeks it for a
+// moment (session-header/state.ts), lying over the chat. It takes from the chat only the room the centred text column needs
+// (railReserve), so on a wide window it lies over the empty margin and the column stays where it was.
+const railFloats = computed(() => !railOpen.value && !tasks.value && !!outsideId.value && headerPeek.value)
+const railShown = computed(
+  () => (!!chat.value || !!outsideId.value) && !isNew.value && !asideOpen.value && !tasks.value?.expanded && (railOpen.value || !!tasks.value || railFloats.value)
+)
+const railAt = computed(() => railWidthIn(railWidth.value, stageWidth.value))
+const railRoom = computed(() => (railFloats.value ? 0 : railReserve(railAt.value, stageWidth.value)))
+// How far the open rail lies over the chat (its width past the room it takes), as --rail-over on the chat: the transcript's step
+// arrows and peek keep that far in from its right edge (owner, 2026-10-14: the rail "hides the peek and previous message buttons").
+// Not while it only peeks for a moment: the arrows would jump out and back.
+const railOver = computed(() => (railShown.value && !railFloats.value ? Math.max(0, railAt.value + RAIL_INSET - railRoom.value) : 0))
+function toggleRail() {
+  if (railShown.value && !railFloats.value) {
+    tasks.value = null
+    railOpen.value = false
+    return
+  }
+  pane.value = null
+  if (tasks.value?.expanded) tasks.value = null
+  railOpen.value = true
 }
-watch([tasks, viewKey], ([t, key], [was, wasKey]) => {
-  if (!t === !was && key === wasKey) return
-  endTasksSlide()
-  if (key !== wasKey || (t ?? was)?.expanded || (!t && pane.value)) return
-  tasksLeaving.value = t ? null : was
-  tasksSlide.value = { open: !!t, at: 'from' }
+/** Background tasks leaves the rail: back to its cards, or (its Close) the rail shut with it. */
+function closeRailTasks(shut: boolean) {
+  tasks.value = null
+  railOpen.value = !shut
+}
+// It slides in from the right and back out (owner, 2026-10-08, of the panel before it: "still snaps open, ZERO nice
+// animations") on transforms alone, as the sidebar does. The chat takes its new width the moment the rail is asked for or
+// shut, both ways (owner, 2026-10-14: closing, the text "waits until the sidebar closes to snap open"), and is drawn
+// half the room that changed off its new place, from where its column was, gliding there with the rail. Another chat, a
+// pane taking its place, or Background tasks expanding show at once.
+const railSlide = ref<{ open: boolean; at: 'from' | 'to'; room: number } | null>(null)
+/** The rail on its way out, drawn over the chat until the slide ends. */
+const railLeaving = ref(false)
+/** The slide's out end: the rail past the window's right edge, the chat where it was before the rail came. */
+const railOut = computed(() => !!railSlide.value && railSlide.value.open === (railSlide.value.at === 'from'))
+let railTimer: ReturnType<typeof setTimeout> | undefined
+function endRailSlide() {
+  clearTimeout(railTimer)
+  railSlide.value = null
+  railLeaving.value = false
+}
+/** Where the chat is drawn off its place: from where its column was, to its place. */
+const railShift = computed(() => (railSlide.value?.at === 'from' ? (railSlide.value.open ? 1 : -1) * (railSlide.value.room / 2) : 0))
+watch([railShown, viewKey, railRoom], ([on, key, room], [was, wasKey, wasRoom]) => {
+  if (on === was && key === wasKey) return
+  endRailSlide()
+  if (key !== wasKey || on === was || (!on && (pane.value || tasks.value?.expanded))) return
+  railLeaving.value = !on
+  railSlide.value = { open: on, at: 'from', room: on ? room : wasRoom }
   void nextTick(() => {
     // The 'from' places must be laid out before 'to' changes them, or there is nothing to animate from.
     void splitEl.value?.offsetWidth
-    if (tasksSlide.value?.at === 'from') tasksSlide.value = { ...tasksSlide.value, at: 'to' }
+    if (railSlide.value?.at === 'from') railSlide.value = { ...railSlide.value, at: 'to' }
   })
-  tasksTimer = setTimeout(endTasksSlide, 340)
+  railTimer = setTimeout(endRailSlide, 340)
 })
-// The divider on the panel's left edge drags its width, or arrow keys move it; the width is the window's, saved once it rests.
-function setTasksWidth(want: number) {
-  tasksWidth.value = tasksPanelWidth(want, stageWidth.value)
+// The divider on the rail's left edge drags its width, or arrow keys move it; the width is the window's, saved once it rests.
+function setRailWidth(want: number) {
+  railWidth.value = railWidthIn(want, stageWidth.value)
 }
-const saveTasksWidth = () => storage?.setItem(TASKS_KEY, String(tasksWidth.value))
-function onTasksResizeDown(e: PointerEvent) {
+function onRailResizeDown(e: PointerEvent) {
   const el = e.currentTarget as HTMLElement
   el.setPointerCapture(e.pointerId)
   const right = el.parentElement?.getBoundingClientRect().right ?? 0
-  const move = (ev: PointerEvent) => setTasksWidth(right - ev.clientX)
+  const move = (ev: PointerEvent) => setRailWidth(right - RAIL_INSET - ev.clientX)
   const up = () => {
     el.removeEventListener('pointermove', move)
     el.removeEventListener('pointerup', up)
-    saveTasksWidth()
+    saveRailWidth()
   }
   el.addEventListener('pointermove', move)
   el.addEventListener('pointerup', up)
 }
-function onTasksResizeKey(e: KeyboardEvent) {
-  if (e.key === 'ArrowLeft') setTasksWidth(tasksAt.value + 16)
-  else if (e.key === 'ArrowRight') setTasksWidth(tasksAt.value - 16)
+function onRailResizeKey(e: KeyboardEvent) {
+  if (e.key === 'ArrowLeft') setRailWidth(railAt.value + 16)
+  else if (e.key === 'ArrowRight') setRailWidth(railAt.value - 16)
   else return
-  saveTasksWidth()
+  saveRailWidth()
 }
 
 // A session running elsewhere. One the composer can carry on has a stand-in chat until its first
@@ -749,6 +817,25 @@ function unarchive() {
   void run.catch((err: unknown) => (actionError.value = `The change failed: ${err instanceof Error ? err.message : String(err)}`))
 }
 const standIn = computed(() => (external.value && src.standInOf?.(external.value.id)) || null)
+// A chat another chat opened is run by that parent: the person reads it here and talks to the parent.
+const lockedChild = computed(() => (chat.value ? readOnlyChild(chat.value, src.chats.value) : null))
+const lockedParentFound = computed(() => !!lockedChild.value && src.chats.value.some((c) => c.id === lockedChild.value?.parentId))
+function tellParent() {
+  const locked = lockedChild.value
+  if (!locked) return
+  desk.select({ kind: 'chat', id: locked.parentId })
+  void nextTick(() => {
+    const put: PutBack = { chatId: locked.parentId, text: locked.draft, images: [] }
+    window.dispatchEvent(new CustomEvent<PutBack>(PUT_BACK_EVENT, { detail: put }))
+    if (!put.taken) saveDraft(storage, locked.parentId, putBackDraft(locked.draft, loadDraft(storage, locked.parentId)))
+  })
+}
+// Composer owns the window file-drop listeners and is unmounted for a locked chat, so refuse file drops here.
+function refuseFileDrop(e: DragEvent) {
+  if (!lockedChild.value || !e.dataTransfer?.types.includes('Files')) return
+  e.preventDefault()
+  e.dataTransfer.dropEffect = 'none'
+}
 
 // The title bar's Account menu: a chat's next start, or where a stand-in continues.
 function pickAccount(id: string) {
@@ -829,6 +916,8 @@ onMounted(() => {
   window.addEventListener('pointerup', releasePointer)
   window.addEventListener('pointercancel', releasePointer)
   window.addEventListener('blur', releasePointer)
+  window.addEventListener('dragover', refuseFileDrop)
+  window.addEventListener('drop', refuseFileDrop)
 })
 function holdPointer() {
   pointerHeld.value = true
@@ -840,6 +929,8 @@ onBeforeUnmount(() => {
   window.removeEventListener('pointerup', releasePointer)
   window.removeEventListener('pointercancel', releasePointer)
   window.removeEventListener('blur', releasePointer)
+  window.removeEventListener('dragover', refuseFileDrop)
+  window.removeEventListener('drop', refuseFileDrop)
   window.removeEventListener('keydown', onKey)
   window.removeEventListener(OPEN_DIFF_EVENT, onOpenDiff)
   window.removeEventListener(OPEN_CLIMAYTE_EVENT, onOpenCliMayte)
@@ -940,8 +1031,8 @@ function moveSidebar(side: SidebarSide) {
     <!-- Sliding, it lies over the stage at its full width and moves by transform (slideX); at rest it is the grid's first column. -->
     <div
       class="h-full overflow-hidden"
-      :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? [sidebarSide === 'right' ? 'absolute right-0 top-0 z-10' : 'absolute left-0 top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
-      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)` } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
+      :class="collapsed ? 'col-span-full row-span-2 row-start-1' : slideX ? ['absolute top-0 z-10', slide?.at === 'to' && SLIDE_EASE] : [sidebarSide === 'right' ? 'col-start-2' : 'col-start-1', 'row-span-2 row-start-1']"
+      :style="collapsed ? { width: '100%' } : slideX ? { width: `${sidebarWidth}px`, transform: `translateX(${slideX.sidebar}px)`, [sidebarSide === 'right' ? 'right' : 'left']: '0px' } : { width: sidebarOpen ? `${sidebarWidth}px` : '0px' }"
       :inert="!collapsed && !sidebarOpen && !peekOpen"
       data-testid="sidebar-slot"
     >
@@ -1011,7 +1102,7 @@ function moveSidebar(side: SidebarSide) {
         >
           <div
             class="title-drag col-start-1 row-start-1 flex min-w-0 items-start pt-0.5"
-            :class="[ownFrame && 'col-end-3', sliding && 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)']"
+            :class="[(ownFrame || railShown || railLeaving) && 'col-end-3', sliding && 'transition-[padding] duration-(--dur-slow) ease-(--ease-snap)']"
             :style="{ paddingInlineStart: `${titleStart}px`, paddingInlineEnd: sidebarSide === 'right' ? `${titlePadEnd}px` : undefined }"
           >
             <ShellHeader
@@ -1028,24 +1119,24 @@ function moveSidebar(side: SidebarSide) {
               @rename="rename"
               @toggle-pane="togglePane"
               @account="pickAccount"
-              :tasks-open="!!tasks"
+              :rail-open="railShown && !railFloats"
               :tasks-running="tasksRunningCount"
               :alert="actionError && (!sidebarOpen || cloud.on.value) ? actionError : ''"
-              @toggle-tasks="toggleTasksPanel"
+              @toggle-rail="toggleRail"
               @update:show-thinking="setShowThinking"
             />
           </div>
 
           <main
             class="col-start-1 row-start-2 flex min-h-0 min-w-0"
-            :class="tasksSlide && ['will-change-transform', tasksSlide.at === 'to' && SLIDE_EASE]"
-            :style="tasksSlide ? { transform: `translateX(${tasksOut ? tasksAt / 2 : 0}px)` } : undefined"
+            :class="railSlide && ['will-change-transform', railSlide.at === 'to' && SLIDE_EASE]"
+            :style="{ '--rail-over': `${railOver}px`, ...(railSlide ? { transform: `translateX(${railShift}px)` } : {}) }"
           >
             <!-- data-file-drop: a file dropped anywhere on the chat attaches to its composer -->
             <div v-show="!tasks?.expanded" class="flex min-w-0 flex-1 flex-col" data-file-drop>
               <NewSessionScreen v-if="isNew" :name="greetingName" :chats="src.chats.value" />
               <div v-else-if="chat" class="min-h-0 flex-1 overflow-hidden">
-                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" />
+                <TranscriptView :key="`${chat.id}:${showThinking}`" :chat-id="chat.id" :items="items" :chat="chat" :read-only="!!lockedChild" :expanded-ids="openThinking" :unfold-thinking="showThinking" :loading="!src.itemsByChat.value.has(chat.id)" :load-error="src.itemsError?.value.get(chat.id) ?? null" :older-count="olderCount" :loading-older="loadingOlder" :index="src.indexByChat?.value.get(chat.id) ?? null" :fetch-item="fetchChatItem" @load-older="loadOlder" />
               </div>
               <div v-else-if="view.kind === 'external'" class="min-h-0 flex-1 overflow-auto">
                 <ExternalSessionView :key="view.id" :session-id="view.id" :paused="pageOpen" />
@@ -1058,9 +1149,16 @@ function moveSidebar(side: SidebarSide) {
                 </p>
               </div>
 
+              <div v-if="lockedChild" role="status" data-testid="readonly-child-notice" class="shrink-0 bg-(--bg-page) px-4 pb-1.5 pt-1">
+                <p class="mx-auto flex w-full max-w-3xl flex-wrap items-center justify-center gap-x-2 text-center text-ui leading-4.75 text-text-muted">
+                  <span>{{ lockedChild.parentTitle }} runs this chat. To change anything, tell it.</span>
+                  <button type="button" class="rounded-(--radius-6) text-text-2 underline-offset-2 transition-colors duration-60 hover:text-(--accent-text) hover:underline focus-visible:underline disabled:cursor-default disabled:opacity-50 disabled:no-underline" :disabled="!lockedParentFound" :title="lockedParentFound ? undefined : LOCKED_TITLE" @click="tellParent">Tell {{ lockedChild.parentTitle }}</button>
+                </p>
+              </div>
+
               <Composer
                 ref="composer"
-                v-if="chat || isNew"
+                v-if="(chat || isNew) && !lockedChild"
                 :chat="isNew ? null : chat"
                 :demo="props.demo ? { cwd: view.kind === 'new' ? view.cwd : undefined } : undefined"
               />
@@ -1096,42 +1194,63 @@ function moveSidebar(side: SidebarSide) {
             <CliMaytePanel v-else :origin-session-id="chat?.sessionId" :worker-ids="chat?.workerIds" />
           </aside>
 
-          <!-- Docked, the panel is a full-height third column: the title bar's buttons end left of it instead of
-               sitting over it. Expanded, it takes the pane under the title bar (the same cell as main, whose content hides). -->
-          <aside
-            v-if="tasksShown"
-            class="relative flex min-w-0 pb-2 pe-2"
-            :class="
-              tasksShown.expanded
-                ? 'col-start-1 row-start-2 ps-2 pt-0.5'
-                : [ownFrame ? 'col-start-2 row-start-2 pt-0.5' : 'col-start-2 row-span-2 row-start-1 pt-2', tasksSlide?.at === 'to' && SLIDE_EASE]
-            "
-            :style="tasksShown.expanded ? undefined : { width: `${tasksAt}px`, transform: tasksSlide ? `translateX(${tasksOut ? '100%' : '0'})` : undefined }"
-          >
-            <div
-              v-if="!tasksShown.expanded"
-              role="separator"
-              aria-orientation="vertical"
-              aria-label="Resize Background tasks"
-              tabindex="0"
-              :aria-valuenow="tasksAt"
-              :aria-valuemin="TASKS_MIN"
-              :aria-valuemax="TASKS_MAX"
-              class="absolute -left-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
-              @pointerdown.prevent="onTasksResizeDown"
-              @keydown="onTasksResizeKey"
-            />
+          <!-- Expanded, Background tasks takes the chat's place under the title bar (the same cell as main, whose content hides). -->
+          <aside v-if="tasks?.expanded" class="relative col-start-1 row-start-2 flex min-w-0 pb-2 pe-2 ps-2 pt-0.5">
             <BackgroundTasksPanel
               :session-id="tasksSessionId"
               :worker-ids="tasksWorkerIds"
               :items="tasksItems"
+              :index="tasksIndex"
               :chat-id="outsideId ? null : chat?.id"
               :climayte="!outsideId && chat?.workerId !== undefined"
-              :focus-id="tasksShown.focus"
-              :expanded="tasksShown.expanded"
+              :focus-id="tasks.focus"
+              expanded
               @close="tasks = null"
-              @toggle-expand="tasks && (tasks = { ...tasks, expanded: !tasks.expanded })"
+              @toggle-expand="tasks && (tasks = { ...tasks, expanded: false })"
             />
+          </aside>
+
+          <!-- The session rail: a column under the title bar only as wide as the room it takes from the chat (railRoom), the rail
+               itself right-aligned in it, lying over the chat's empty margin when it is wider than that. -->
+          <aside
+            v-if="railShown || railLeaving"
+            class="pointer-events-none relative z-11 col-start-2 row-start-2 min-h-0"
+            :style="{ width: `${railShown ? railRoom : 0}px` }"
+            aria-label="Session details"
+          >
+            <div
+              class="absolute inset-y-0 right-0 pe-2 pt-0.5"
+              :class="railSlide?.at === 'to' && SLIDE_EASE"
+              :style="{ width: `${railAt + RAIL_INSET}px`, transform: railSlide ? `translateX(${railOut ? '100%' : '0'})` : undefined }"
+            >
+              <div
+                role="separator"
+                aria-orientation="vertical"
+                aria-label="Resize session details"
+                tabindex="0"
+                :aria-valuenow="railAt"
+                :aria-valuemin="RAIL_MIN"
+                :aria-valuemax="RAIL_MAX"
+                class="pointer-events-auto absolute -left-1.5 top-0 z-22 h-full w-3 cursor-col-resize touch-none focus-visible:shadow-(--focus-ring) focus-visible:outline-none"
+                @pointerdown.prevent="onRailResizeDown"
+                @keydown="onRailResizeKey"
+              />
+              <SessionRail
+                :chat="outsideId ? null : chat"
+                :outside="!!outsideId"
+                :items="tasksItems"
+                :index="tasksIndex"
+                :session-id="tasksSessionId"
+                :worker-ids="tasksWorkerIds"
+                :chat-id="outsideId ? null : chat?.id"
+                :climayte="!outsideId && chat?.workerId !== undefined"
+                :tasks="tasks"
+                @open-tasks="(focus: string | null) => (tasks = { focus, expanded: false })"
+                @back="closeRailTasks(false)"
+                @close="closeRailTasks(true)"
+                @toggle-expand="tasks = { focus: tasks?.focus ?? null, expanded: true }"
+              />
+            </div>
           </aside>
         </div>
         <!-- The page side: AgentHydra and the Dev servers page are layers of it, the one on screen at 0, one being pushed
@@ -1172,6 +1291,7 @@ function moveSidebar(side: SidebarSide) {
     </Dialog>
 
     <WhatsNewDialog />
+    <PeopleFirstRun />
     <WindowControls v-if="ownFrame && !collapsed" />
   </div>
 </template>

@@ -10,7 +10,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync, statSync } from 'node
 import { copyFile, open, rename, rm } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { basename, dirname, join, resolve } from 'node:path'
-import { encodeProjectDir, findSessionJsonl, readTail, TAIL_BYTES } from './session-jsonl'
+import { encodeProjectDir, findSessionJsonl, findSessionJsonlAsync, readTail, TAIL_BYTES } from './session-jsonl'
 
 export type SeedResult =
   | { status: 'present' } // the account's folder already has the session
@@ -36,15 +36,15 @@ export function projectsRoot(configDir: string | null, home = homedir()): string
  */
 export async function seedSession(sessionId: string, cwd: string | null, configDir: string | null, roots: string[], home = homedir(), prefer: string | null = null): Promise<SeedResult> {
   const target = projectsRoot(configDir, home)
-  const preferred = prefer && !same(prefer, target) ? findSessionJsonl(sessionId, [prefer], cwd) : null
+  const preferred = prefer && !same(prefer, target) ? await findSessionJsonlAsync(sessionId, [prefer], cwd) : null
   const source =
     preferred ??
-    findSessionJsonl(
+    (await findSessionJsonlAsync(
       sessionId,
       roots.filter((r) => !same(r, target)),
       cwd,
-    )
-  const have = findSessionJsonl(sessionId, [target], cwd)
+    ))
+  const have = await findSessionJsonlAsync(sessionId, [target], cwd)
   // The sidecar goes first and the transcript last, so a transcript in the target marks a copy that
   // finished. A sidecar left short (a copy that failed partway, or one made before sidecars went along)
   // is finished on a later call: copySidecar never overwrites, so running it again is safe.
@@ -75,7 +75,7 @@ export async function placeInCwd(sessionId: string, cwd: string, configDir: stri
   const root = projectsRoot(configDir, home)
   const dir = join(root, encodeProjectDir(cwd))
   const to = join(dir, `${sessionId}.jsonl`)
-  const elsewhere = findSessionJsonl(sessionId, [root], null)
+  const elsewhere = await findSessionJsonlAsync(sessionId, [root], null)
   const have = existsSync(to) ? to : null
   const source = elsewhere && !same(elsewhere, to) ? elsewhere : null
   if (have) {
@@ -141,8 +141,7 @@ async function olderVersionOf(older: string, newer: string): Promise<boolean> {
       const bufB = Buffer.alloc(bufA.length)
       for (let pos = 0; pos < a.size; ) {
         const want = Math.min(bufA.length, a.size - pos)
-        const { bytesRead: na } = await fa.read(bufA, 0, want, pos)
-        const { bytesRead: nb } = await fb.read(bufB, 0, want, pos)
+        const [{ bytesRead: na }, { bytesRead: nb }] = await Promise.all([fa.read(bufA, 0, want, pos), fb.read(bufB, 0, want, pos)])
         if (na <= 0 || na !== nb || !bufA.subarray(0, na).equals(bufB.subarray(0, nb))) return false
         pos += na
       }

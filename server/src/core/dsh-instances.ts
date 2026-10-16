@@ -50,7 +50,7 @@ import {
 } from './json-store'
 import { isPathInside } from './paths'
 import { spawnCaptured } from './process.ts'
-import type { CMActionResult } from './shared'
+import { type CMActionResult, firstFreeName } from './shared'
 
 /** Asking the OS who owns a port is a table read. Ten seconds is generous. */
 const PORT_LOOKUP_TIMEOUT_MS = 10_000
@@ -303,6 +303,12 @@ function nameError(name: string): string | null {
  * session store on first run, and a half-made home written by us would be a second source of truth
  * for a layout the harness owns. So this makes the folder and gets out of the way.
  */
+/** The first `DeepSeek <n>` no instance is called, for a create that names nothing. */
+export function freeDshName(): string {
+  const names = new Set(readStore().instances.map((i) => i.name.trim().toLowerCase()))
+  return firstFreeName('DeepSeek ', (name) => names.has(name.toLowerCase()))
+}
+
 export function createDshInstance(name: string): CMActionResult {
   const problem = nameError(name)
   if (problem) return fail('dsh-create', problem, null, { name })

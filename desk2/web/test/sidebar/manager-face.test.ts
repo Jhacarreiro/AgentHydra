@@ -29,6 +29,23 @@ test('the hover label leaves the title out when the persona has none', () => {
   expect(managerFace(manager({ title: null })).label).toBe('Manager: Ada')
 })
 
+test("a chat's Hydra Core lead and a seat's persona say so, and a persona who is no manager is read from the personas route", () => {
+  const lead = managerFace(manager({ slug: 'cy-layout', name: 'Cy', title: 'Layout designer', photo: 1760000000999, role: 'lead', persona: true }))
+  expect(lead.label).toBe('Lead: Cy, Layout designer')
+  expect(lead.src).toBe('/api/personas/cy-layout/avatar?v=1760000000999')
+  expect(lead.canChangePhoto).toBe(false)
+  const seat = managerFace(manager({ slug: 'bo-copy', name: 'Bo', title: null, role: 'seat', persona: true }))
+  expect(seat.label).toBe('Seat: Bo')
+  expect(seat.src).toBeNull()
+  expect(seat.initial).toBe('B')
+  // A lead who is a manager keeps the manager's photo, which Desk can change.
+  const managerLead = managerFace(manager({ photo: 1760000000123, role: 'lead' }))
+  expect(managerLead.label).toBe('Lead: Ada, Head of Design')
+  expect(managerLead.src).toBe('/api/managers/ada-design/avatar?v=1760000000123')
+  expect(managerLead.canChangePhoto).toBe(true)
+  expect(managerFace(manager()).canChangePhoto).toBe(true)
+})
+
 test('a photo must be a PNG, JPG, WebP or GIF of at most 2 MB', () => {
   expect(photoProblem({ type: 'image/png', size: 1000 })).toBeNull()
   expect(photoProblem({ type: 'image/gif', size: 2 * 1024 * 1024 })).toBeNull()

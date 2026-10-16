@@ -6,6 +6,7 @@ import { installImeCompositionGuard } from './lib/ime-composition-guard'
 import { pauseMotionWhenAway } from './lib/pause-motion'
 import { migrateLegacyStorageKeys } from './lib/storage-rebrand'
 import { migrateLegacyUsageFilterScope } from './lib/usage-filter'
+import { reportLooks } from './lib/usage-seen'
 import './style.css'
 
 // Keep input-method (IME) composition keystrokes away from every @keydown.enter handler: on
@@ -15,6 +16,9 @@ installImeCompositionGuard()
 
 // Hold animation still while the window is unfocused or hidden (idle GPU). Framed in Desk, Desk's focus counts.
 pauseMotionWhenAway()
+
+// While this page is on screen the daemon keeps its usage sweep at the set interval; an hour unseen, it slows down.
+reportLooks()
 
 // Before any component setup runs — useStorage reads its key once and keeps it.
 migrateLegacyStorageKeys()

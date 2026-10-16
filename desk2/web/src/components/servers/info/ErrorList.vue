@@ -6,7 +6,7 @@ const cache = memo<Entry[]>()
 </script>
 
 <script setup lang="ts">
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import { CheckCircle2, ChevronRight, Clock, ExternalLink, FileCode } from '@lucide/vue'
 import type { DevWebErrorEntry, DevWebErrorSource, DevWebSourceFrame } from '@shared/devwebui'
 import { useClock } from '@/lib/clock'
@@ -25,7 +25,7 @@ const props = defineProps<{ processId: string }>()
 const servers = useDevServers()
 const now = useClock(30_000)
 
-const list = ref<DevWebErrorEntry[]>(cache.get(props.processId) ?? [])
+const list = shallowRef<DevWebErrorEntry[]>(cache.get(props.processId) ?? [])
 const failure = ref<string | null>(null)
 const confirming = ref(false)
 

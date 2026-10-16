@@ -115,19 +115,44 @@ export const PRIOR_WEIGHT = 2
  *  add in the same order as a filter per lookup. One placement pass asks it once per queued worker
  *  against one list: 461 stalls and 175 s of the tick's modelFamily calls (2026-10-11) were that
  *  filter, re-run per worker. A list must not change once it has been asked about (placementState
- *  builds a new one per pass). */
+ *  reuses it across passes only while every ordered entry is unchanged). */
 interface FinishedIndex {
   byFamily: Map<string, FinishedCost[]>
   byKind: Map<string, FinishedCost[]>
   byKindFamily: Map<string, FinishedCost[]>
+  estimates: Map<string, CostEstimate>
 }
 
 const indexes = new WeakMap<FinishedCost[], FinishedIndex>()
 
+/** A level's scaled sum per task multiplier, added in the list's order exactly as a map then a reduce
+ *  would: a pass asks the same few models for every queued worker, and each ask walked every finished
+ *  task through modelMultiplier (5% of the daemon's samples, 2026-10-15). */
+const scaledSums = new WeakMap<FinishedCost[], Map<number, number>>()
+
+function scaledSum(list: FinishedCost[], own: number): number {
+  let sums = scaledSums.get(list)
+  const have = sums?.get(own)
+  if (have !== undefined) return have
+  let sum = 0
+  for (const f of list) sum += (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
+  if (!sums) {
+    sums = new Map()
+    scaledSums.set(list, sums)
+  }
+  sums.set(own, sum)
+  return sum
+}
+
 function indexOf(finished: FinishedCost[]): FinishedIndex {
   const have = indexes.get(finished)
   if (have) return have
-  const ix: FinishedIndex = { byFamily: new Map(), byKind: new Map(), byKindFamily: new Map() }
+  const ix: FinishedIndex = {
+    byFamily: new Map(),
+    byKind: new Map(),
+    byKindFamily: new Map(),
+    estimates: new Map(),
+  }
   const push = (m: Map<string, FinishedCost[]>, key: string, f: FinishedCost): void => {
     const list = m.get(key)
     if (list) list.push(f)
@@ -157,46 +182,53 @@ export function expectedCost(
   task: { kind?: string | null; model: string | null; effort: string | null },
   finished: FinishedCost[],
 ): CostEstimate {
+  // Running and queued workers often share a setting. The immutable record is already indexed
+  // once per placement pass; its estimate is unchanged too. Return a copy so no caller can alter
+  // the next task's result, and a new finished list always learns the next pass's new spend.
+  const ix = indexOf(finished)
+  const key = JSON.stringify([task.kind ?? null, task.model, task.effort])
+  const cached = ix.estimates.get(key)
+  if (cached) return { ...cached }
   // A manager's cost is per wake: the average of the kind's wake attempts (they arrive as one
   // FinishedCost each), else MANAGER_WAKE_PCT. Never the whole-task default, never a whole task.
   if (task.kind === 'manage') {
-    const wakes = finished.filter((f) => f.kind === 'manage')
-    return wakes.length
+    const wakes = ix.byKind.get('manage') ?? []
+    const estimate: CostEstimate = wakes.length
       ? {
           pct: wakes.reduce((s, f) => s + f.pct, 0) / wakes.length,
           basis: 'kind',
           samples: wakes.length,
         }
       : { pct: MANAGER_WAKE_PCT, basis: 'default', samples: 0 }
+    ix.estimates.set(key, estimate)
+    return { ...estimate }
   }
   const own = modelMultiplier(task.model ?? 'claude-opus-5-5')
-  const scaled = (f: FinishedCost): number =>
-    (f.pct * own) / modelMultiplier(f.model ?? 'claude-opus-5-5')
-  const ix = indexOf(finished)
   const family = ix.byFamily.get(modelFamily(task.model)) ?? []
   const kind = task.kind ? (ix.byKind.get(task.kind) ?? []) : []
   const kindFamily = task.kind
     ? (ix.byKindFamily.get(`${task.kind}|${modelFamily(task.model)}`) ?? [])
     : []
   const exact = kindFamily.filter((f) => f.model === task.model && f.effort === task.effort)
-  const levels: Array<[CostEstimate['basis'], number[]]> = [
-    // Scaled at every family level too: Haiku 4.5 (0.5x) and Haiku 5.5 (0.14x) share the family.
-    ['model', family.map(scaled)],
-    ['kind', kind.map(scaled)],
-    ['kind-model', kindFamily.map(scaled)],
-    ['setting', exact.map((f) => f.pct)],
+  // Each level: its tasks and the sum of their cost. Scaled at every family level too: Haiku 4.5
+  // (0.5x) and Haiku 5.5 (0.14x) share the family.
+  const levels: Array<[CostEstimate['basis'], FinishedCost[], () => number]> = [
+    ['model', family, () => scaledSum(family, own)],
+    ['kind', kind, () => scaledSum(kind, own)],
+    ['kind-model', kindFamily, () => scaledSum(kindFamily, own)],
+    ['setting', exact, () => exact.reduce((s, f) => s + f.pct, 0)],
   ]
   let est: CostEstimate = { pct: DEFAULT_TASK_PCT, basis: 'default', samples: 0 }
-  for (const [basis, pcts] of levels) {
-    if (!pcts.length) continue
-    const sum = pcts.reduce((s, p) => s + p, 0)
+  for (const [basis, list, sumOf] of levels) {
+    if (!list.length) continue
     est = {
-      pct: (sum + PRIOR_WEIGHT * est.pct) / (pcts.length + PRIOR_WEIGHT),
+      pct: (sumOf() + PRIOR_WEIGHT * est.pct) / (list.length + PRIOR_WEIGHT),
       basis,
-      samples: pcts.length,
+      samples: list.length,
     }
   }
-  return est
+  ix.estimates.set(key, est)
+  return { ...est }
 }
 
 export function expectedPct(

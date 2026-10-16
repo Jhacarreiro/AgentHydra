@@ -2,7 +2,7 @@
 // The items of a project group header's right-click menu: a read-only stats block (loaded when the menu opens, a quiet
 // "Loading..." until then), Open project folder, Collapse or Expand, Auto-categorize on a scratch group, and Hide.
 // Rendered inside the header's ContextMenuContent; the sidebar owns the collapsed set and the hidden groups.
-import { computed, onMounted, ref } from 'vue'
+import { computed, onMounted, shallowRef } from 'vue'
 import type { ProjectStats } from '@shared/protocol'
 import { ContextMenuItem } from '@/components/ui/context-menu'
 import { useShellSource } from '@/components/shell/source'
@@ -23,7 +23,7 @@ const emit = defineEmits<{ toggle: []; hide: [] }>()
 
 const src = useShellSource()
 /** undefined while loading; null when the stats cannot be read (nothing shows). */
-const stats = ref<ProjectStats | null | undefined>(undefined)
+const stats = shallowRef<ProjectStats | null | undefined>(undefined)
 const lines = computed(() => (stats.value ? statsLines(stats.value) : []))
 const showStats = computed(() => stats.value === undefined || lines.value.length > 0)
 const scratch = computed(() => isScratch(props.label))

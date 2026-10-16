@@ -9,6 +9,7 @@ import { useDesk } from '@/stores/desk'
 import { useTranscript } from '../context'
 import { canSendReply, composeRedesignReply, landedNames, optionLabel, parseDesignOptions, parseReplyChip, pickedOption, redesignSetup, replyFor, RETRY_MESSAGE, type DesignOption, type RedesignChoice } from '../lib/redesign'
 import { listConnectors } from '@/components/connectors/api'
+import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { Tip } from '@/components/ui/tooltip'
 import { openLightbox } from '../lib/media'
 
@@ -101,7 +102,7 @@ function open(o: DesignOption) {
   if (o.src) openLightbox(o.src, optionLabel(o), view.value.options.filter((x) => x.src).map((x) => ({ src: x.src!, alt: optionLabel(x) })))
 }
 async function post(message: string) {
-  if (busy.value) return
+  if (busy.value || ctx.readOnly.value) return
   busy.value = true
   err.value = ''
   try {
@@ -245,13 +246,13 @@ const moreCount = computed(() => view.value.options.length || expected.value)
         />
         <div class="flex items-center gap-2">
           <Tip :label="`${moreCount} new designs, different directions`">
-            <button type="button" class="tx-btn" :disabled="busy" @click="sendMore">
+            <button type="button" class="tx-btn" :disabled="busy || ctx.readOnly.value" :title="ctx.readOnly.value ? LOCKED_TITLE : undefined" @click="sendMore">
               More options <span class="text-text-muted">· {{ moreCount }} new</span>
             </button>
           </Tip>
           <button type="button" class="tx-btn" :class="choice === 'other' && 'border-accent text-text'" :aria-pressed="choice === 'other'" @click="choose('other')">Other</button>
           <span v-if="err" class="min-w-0 truncate text-ui-sm text-danger-text">{{ err }}</span>
-          <button type="button" class="tx-btn tx-btn-primary ms-auto" :disabled="!ready || busy" @click="send">Send</button>
+          <button type="button" class="tx-btn tx-btn-primary ms-auto" :disabled="!ready || busy || ctx.readOnly.value" :title="ctx.readOnly.value ? LOCKED_TITLE : undefined" @click="send">Send</button>
         </div>
       </div>
       <p v-else-if="sent" class="flex items-center gap-1.5 border-t border-border px-3 py-2 text-ui-sm text-text-muted">

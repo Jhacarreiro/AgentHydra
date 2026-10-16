@@ -229,6 +229,7 @@ function rowOf(it: Item): Row {
   if (it.job) {
     const job = it.job
     const finished = typeof job.finished === 'string' && job.finished ? Date.parse(job.finished) : NaN
+    const counts = tallyText(job.counts)
     return {
       item: it,
       jobId: job.job_id,
@@ -237,8 +238,8 @@ function rowOf(it: Item): Row {
       kind,
       account: callerOf(job),
       time: elapsed(it.at, it.running ? now.value : finished || it.at),
-      tag: { text: `${tallyText(job.counts)} · ${costText(job.cost_usd)}`, differs: false },
-      hint: [job.label || job.job_id, kind, tallyText(job.counts)].join('\n'),
+      tag: { text: `${counts} · ${costText(job.cost_usd)}`, differs: false },
+      hint: [job.label || job.job_id, kind, counts].join('\n'),
       dot: jobDot(job.state),
     }
   }
@@ -297,7 +298,7 @@ function showOlder() {
   void refreshCliMayte()
 }
 
-const jobs = ref<Job[]>([])
+const jobs = shallowRef<Job[]>([])
 const selectedJobId = ref<string | null>(null)
 const jobDetail = shallowRef<JobDetail | null>(null)
 const isLoading = ref(true)

@@ -1,4 +1,4 @@
-// A chat gets the MCP servers plain `claude` would get in its folder under Jacob's main .claude.json, and
+// A chat gets the MCP servers plain `claude` would get in its folder under the owner's main .claude.json, and
 // skips AgentHydra's worker-rules CLAUDE.md copy. Every config here is fake.
 
 import { afterEach, describe, expect, test } from 'bun:test'
@@ -73,7 +73,7 @@ describe('a chat\'s MCP servers from the main config', () => {
 })
 
 describe('the worker-rules CLAUDE.md copy', () => {
-  test('is excluded and Jacob\'s real CLAUDE.md is appended; a hand-written account CLAUDE.md is left alone', () => {
+  test('is excluded and the owner\'s real CLAUDE.md is appended; a hand-written account CLAUDE.md is left alone', () => {
     const root = temp()
     mkdirSync(join(root, '.claude'))
     writeFileSync(join(root, '.claude', 'CLAUDE.md'), 'REAL pointer instructions')

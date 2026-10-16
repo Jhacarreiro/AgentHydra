@@ -1,19 +1,23 @@
-import { afterEach, describe, expect, test } from 'bun:test'
-import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
+import { appendFileSync, existsSync, mkdtempSync, readdirSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ChatSummary, TranscriptItem } from '@shared/protocol'
 import { ChatStore } from '../../src/engine/store'
 import { renameOverAsync } from '../../src/write-flushed'
 
+const ROOT = mkdtempSync(join(tmpdir(), 'desk-store-'))
 const temps: string[] = []
 function home(): string {
-  const d = mkdtempSync(join(tmpdir(), 'desk-store-'))
+  const d = mkdtempSync(join(ROOT, 'home-'))
   temps.push(d)
   return d
 }
 afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
+})
+afterAll(() => {
+  rmSync(ROOT, { recursive: true, force: true })
 })
 
 function chat(id: string, over: Partial<ChatSummary> = {}): ChatSummary {
@@ -73,6 +77,19 @@ describe('ChatStore chats.json', () => {
     const { accountAuto: _a, ...old } = chat('a')
     writeFileSync(join(h, 'chats.json'), JSON.stringify([old]))
     expect(new ChatStore(h).loadChats()[0]).toMatchObject({ id: 'a', accountAuto: false })
+  })
+
+  test('a chat saved before lastActionAt existed takes its transcript file\'s last write; one with no transcript has none', () => {
+    const h = home()
+    const store = new ChatStore(h)
+    writeFileSync(join(h, 'chats.json'), JSON.stringify([chat('a'), chat('b'), chat('c', { lastActionAt: 42 })]))
+    writeFileSync(store.itemsFile('a'), '{}\n')
+    const written = new Date('2019-09-10T12:00:00Z')
+    utimesSync(store.itemsFile('a'), written, written)
+    const [a, b, c] = new ChatStore(h).loadChats()
+    expect(a!.lastActionAt).toBe(written.getTime())
+    expect(b!.lastActionAt).toBeUndefined()
+    expect(c!.lastActionAt).toBe(42)
   })
 
   test('debounce writes the latest list once', async () => {

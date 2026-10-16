@@ -20,6 +20,11 @@ export type PermissionMode = 'default' | 'acceptEdits' | 'plan' | 'bypassPermiss
 export type CollapseMode = 'off' | 'button' | 'auto'
 export type Effort = 'low' | 'medium' | 'high' | 'xhigh' | 'max'
 
+/** What a Claude turn runs on when the chat names no model or effort (owner, 2026-10-15: "it should default to Opus
+ *  5.5"). Xhigh is how Desk chats ran as CliMayte workers before the new core. The window names these for a null. */
+export const DEFAULT_MODEL = 'claude-opus-5-5'
+export const DEFAULT_EFFORT: Effort = 'xhigh'
+
 /** Which Claude login a chat runs under. configDir null = the machine's default ~/.claude login. */
 export interface AccountRef {
   id: string // 'default' or the AgentHydra CLI instance id
@@ -31,6 +36,14 @@ export interface AccountRef {
 /** A service a chat's own turns can run on (the row menu's Pin service). Claude, through the chat's account, is every chat's own. */
 export type ChatServiceKind = 'claude' | 'codex' | 'chatgpt'
 /** A service a chat can be pinned to instead of Claude. */
+export type SusLevel = 'fine' | 'sus' | 'bad'
+export const SUS_LEVELS: readonly SusLevel[] = ['fine', 'sus', 'bad']
+export interface SusPick {
+  model: string
+  effort: Effort | null
+  pushbackRate: number
+  turns: number
+}
 export type PinnedService = Exclude<ChatServiceKind, 'claude'>
 
 /** Where a pinned chat's conversation goes on in a service: the account Desk picked there and the thread on it. */
@@ -65,7 +78,10 @@ export interface ChatSummary {
   account: AccountRef
   /** The account was placed by 'auto' (not named): a usage limit moves the chat to another account. */
   accountAuto: boolean
-  model: string | null // null = the account's default model
+  /** Auto off (the account menu's Auto switch): when its account runs out, the chat waits for the reset there instead
+   *  of moving to the next account with room. Absent = it moves. */
+  accountPinned?: boolean
+  model: string | null // none named runs DEFAULT_MODEL
   effort: Effort | null
   permissionMode: PermissionMode
   delegateToCliMayte: boolean // sub-agents go to CliMayte (Agent/Task tools disallowed)
@@ -85,6 +101,12 @@ export interface ChatSummary {
   note?: string | null
   /** Pin service: Codex or ChatGPT runs the chat's own turns instead of Claude. Absent or null = Claude, on `account`. */
   service?: PinnedService | null
+  /** The sus level (SPEC "Sus meter"): absent = 'fine'. */
+  sus?: SusLevel
+  /** What 'sus' runs the next Claude turn on (the setting that pushes back least); null when none qualifies yet, absent off 'sus'. Never saved. */
+  susPick?: SusPick | null
+  /** A worker chat's own model and effort before its first Sus override (CliMayte keeps a sent setting): sent back once when Sus stops applying. */
+  susRestore?: { model: string | null; effort: string | null }
   /** The chat's thread on each service it ran on, kept when the pin moves on: pinned there again, it goes on in that thread. */
   serviceThreads?: Partial<Record<PinnedService, ServiceThread>>
   /** When the pin last left each service (epoch ms): the next turn there first reads what was said since, then this is cleared. */
@@ -94,11 +116,14 @@ export interface ChatSummary {
   forkedFrom: string | null // the session it was forked from: until it has its own, its next message resumes a fork of that one
   createdAt: number
   updatedAt: number // last activity of any kind
+  /** When its newest transcript item happened (a message sent, a reply, a tool call), epoch ms: opening, renaming or
+   *  pinning the chat leaves it alone, unlike updatedAt. Absent until it has one. */
+  lastActionAt?: number
   costUsd: number // running total reported by the SDK's result messages
   contextPct: number | null // 0..100, share of the context window used after the last turn
   pendingCount: number // open permission / question / plan requests
   queuedCount: number // user messages sent while a turn was running, not yet taken up
-  climayteActive: number // CliMayte workers this chat dispatched that are still queued/running/waiting
+  climayteActive: number // CliMayte workers this chat dispatched that are still queued/running/waiting, and its sub-chats (seats) still at work
   /** The chat's own background tasks still running (commands, sub-agents, workflows), less the long-lived
    *  ones (dev servers, watchers: server/src/engine/long-lived.ts). Absent = none. */
   backgroundActive?: number
@@ -114,8 +139,21 @@ export interface ChatSummary {
    * The manager the chat is on now: its pin, else the one its Claude session's state names. Left out when neither has a persona.
    * title and oneLiner come from its persona.json; photo is its avatar file's mtime in whole ms (a cache-buster), null with no avatar.
    * statsLine is the manager's analytics in one line to show as is ('41 turns · 98% answered'), absent or null before there is data.
+   * With no manager, Hydra Core's persona for the chat (server/src/engine/core-lead.ts): role 'lead' for the chat's lead,
+   * 'seat' for the persona a seat sits as. persona is set for one who is no manager: its photo is GET
+   * /api/personas/:slug/avatar, read from wherever its portrait lives, and is not changed from Desk.
    */
-  manager?: { slug: string; name: string; title: string | null; oneLiner: string | null; photo: number | null; statsLine?: string | null } | null
+  manager?: {
+    slug: string
+    name: string
+    title: string | null
+    oneLiner: string | null
+    photo: number | null
+    photoUrl?: string | null
+    statsLine?: string | null
+    role?: 'lead' | 'seat'
+    persona?: true
+  } | null
 }
 
 // Transcript items: the normalized form of the SDK's message stream (and of AgentHydra transcripts)
@@ -277,6 +315,44 @@ export type TranscriptItem =
       error?: string
     })
 
+/** `GET /api/chats/:id/items?before=<position>&limit=<n>`: one page of a chat's items, oldest first. `position` is an
+ *  index in the whole list; `olderBefore` is where this page's first item sits (0 = nothing older), `total` the whole count. */
+export interface ChatItemsPage {
+  items: TranscriptItem[]
+  total: number
+  olderBefore: number
+}
+
+/** A whole transcript in brief (`GET /api/external/sessions/:id/index`): a window holding only the newest page still has every
+ *  user message (`position` is its place among all `total` items), the newest checklist and the background tasks. */
+export interface TranscriptIndex {
+  total: number
+  userMessages: { id: string; position: number; firstLine: string; images: number }[]
+  latestTodos: TranscriptItem | null
+  runningTasks: TranscriptItem[]
+  /** The last 20 finished tasks, oldest first. */
+  recentTasks: TranscriptItem[]
+  lastUserText: string
+  /** An outside session's: the tokens in context after its last reply, from its Claude Code .jsonl or Codex rollout; null when
+   *  its file has none, absent on a Desk chat (whose ChatSummary.contextPct is the share). */
+  contextTokens?: number | null
+  /** The model's context window, where the file names it (a Codex rollout's token_count does, a Claude Code .jsonl never). */
+  contextWindow?: number | null
+  /** How often each tool was called over the whole transcript, the most called first (the rail's Tools and Connectors). */
+  tools?: ToolTally[]
+}
+
+/** One tool's calls in a transcript (a tool_use item each) and how many of them failed. */
+export interface ToolTally {
+  name: string
+  calls: number
+  errors: number
+}
+
+/** `GET /api/external/sessions/:id/older?before=<offset>&limit=<n>` answers the newest n items before the offset and this
+ *  header: how many items are still above that page. Pass it as `&end=<it>` for the next page; 0 or absent: that was the first. */
+export const OLDER_END_HEADER = 'x-older-end'
+
 export const MAX_TOOL_RESULT_CHARS = 20_000
 
 /** `GET /api/external/sessions/:id/items` answers a long session's newest part; this header says where in its file
@@ -305,6 +381,9 @@ export interface ExternalSession {
   accountId: string | null
   /** A Codex chat's: the Codex account (AgentHydra's instance id) whose folder holds it, where it continues in place. */
   codexAccountId?: string
+  /** A Claude Desktop chat's: the CLI instance on the account signed in to the app that runs it (resume.ts desktopAccount).
+   *  Left out when none is known. */
+  desktopAccountId?: string
   /** Idle in someone else's window, and a Claude Code session or a Codex chat whose account is known: the composer can carry it on. */
   canResume: boolean
   /** The other PC's name for a Desktop chat AgentHydra's chat sync took from it (AgentHydra's `from_pc`); null for this PC's. */
@@ -346,6 +425,24 @@ export interface DesktopMessageResult {
   route: string
   delivered: true
   detail: string
+}
+
+/** POST /api/external/sessions/:id/stop: Claude Desktop's own Stop for a working chat. 200 { ok: true } once the app
+ *  shows the turn stopping or stopped; otherwise a non-2xx answer with { error }. */
+export interface DesktopStopResult {
+  ok: boolean
+  reason?: string
+}
+
+/** POST /api/external/sessions/:id/setting: the model and effort of a chat Claude Desktop runs, set in that app as its
+ *  own pickers set them (owner, 2026-10-15: "I want to ... change it inside Agent Hydra"). 200 { ok: true } once the
+ *  app shows them; otherwise a non-2xx answer with { error } saying what the app kept. */
+export interface DesktopSettingRequest {
+  model?: string
+  effort?: Effort
+}
+export interface DesktopSettingResult {
+  ok: boolean
 }
 
 /**
@@ -448,6 +545,7 @@ export interface CliMayteWorker {
   sessionId: string | null // the worker's current Claude Code session, for its live transcript
   originSessionId: string | null // the session id of the chat that dispatched it, when known
   originWorkerId?: string | null // the worker that dispatched it, when a worker did
+  chat?: boolean // the worker a Desk chat runs as (its own chat's, or another's): never another chat's dispatch
   originTitle?: string | null // the title of the chat that dispatched it, as its own PC knows it (another PC's only)
   sessions?: string[] // every session the worker has had (a handoff gives it a new sessionId and keeps the old ones here)
   folder?: string | null // another PC's only: the last name of the folder it runs in, never the path (its `cwd` stays null)
@@ -455,6 +553,10 @@ export interface CliMayteWorker {
   endedAt: number | null // when it settled; null while active
   lastActivityAt: number | null
   lastActivity: string | null // its latest event line, short
+  doing?: string | null // what it is doing now: its hold reason or question while held, else its newest narration or step (null when finished)
+  doingSince?: number | null // when that began (epoch ms)
+  doingKind?: 'hold' | 'said' | 'step' | 'wait' | null // hold: waiting on the scheduler or its manager; said: its narration; step: a tool step; wait: a step blocked on a background job
+  lastStepAt?: number | null // when its newest event came (epoch ms)
   usedPct: number | null // % of a Pro 5-hour window it has used
   tokens: number | null // tokens it has spent, when AgentHydra or its transcript says
   verdict: string | null
@@ -505,6 +607,21 @@ export interface SwarmJob {
   pc: string | null
   /** Another PC's only: the last name of its caller's folder, never the path; absent or null when not shared. */
   folder?: string | null
+  /** Tokens the job moved (HSwarm's own count: input cached or not, plus output); null when HSwarm gave none (another PC's). */
+  tokens: number | null
+  /** Dollars the job cost (HSwarm's own figure); null when HSwarm gave none. */
+  costUsd: number | null
+  /** Per model, from the job's results.jsonl (the server reads it, each finished job once); null when the file is not there. */
+  models: SwarmJobModel[] | null
+}
+
+/** One model's tasks in a HSwarm job: the model without its `rank:` prefix or `:provider` suffix, and its results. */
+export interface SwarmJobModel {
+  model: string
+  tasks: number
+  ok: number
+  failed: number
+  tokens: number
 }
 
 /** How many finished workers and jobs of one session GET /api/session-tasks/:sessionId keeps: the Background tasks panel's
@@ -537,6 +654,12 @@ export interface AccountInfo extends AccountRef {
   /** The owner's caps (1-84): this account's line in place of the fleet's 85%. Absent or null: the fleet's. */
   maxFiveHourPct?: number | null
   maxWeeklyPct?: number | null
+  /** The name on the account (its profile name, e.g. 'kai'); null when AgentHydra has read none. The one name an
+   *  account goes by on screen, never a folder's (owner, 2026-10-15: "the account folder name is useless"). */
+  name?: string | null
+  /** The Claude Desktop instance this login is linked to (that instance's folder label, never shown); absent or null
+   *  when it has none. */
+  desktop?: string | null
 }
 
 // Git (the bar above the composer, and the diff pane)
@@ -596,6 +719,8 @@ export interface DeskSettings {
   pinnedProjects: string[]
   /** The babysitter continues chats a usage limit stopped once the limit resets (shared/babysitter.ts). */
   babysitter: boolean
+  /** The instance manager moves the chats of a Claude Desktop or Codex app that went down to the same-kind account with the most room, and starts them again (shared/instance-manager.ts). On by default. */
+  instanceManager: boolean
   /** The orchestrator, armed: it continues chats an error stopped and its foreman peeks at running ones (shared/orchestrator.ts). Off by default. */
   orchestrator: boolean
   /** The model the orchestrator's judge asks: an alias (opus, sonnet, haiku: the newest of each) or a full model id (shared/orchestrator.ts). */
@@ -616,11 +741,13 @@ export interface CreateChatRequest {
   images?: ImageRef[]
   title?: string
   accountId?: string // 'auto' (default) or an AccountRef id
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   model?: string | null
   effort?: Effort | null
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
   parentId?: string // the Desk chat this one sits under (a sub-manager chat)
+  sus?: SusLevel // the sus level the chat starts on (default 'fine')
   managerSlug?: string // the manager this chat runs as: its Claude process gets AGENTHYDRA_MANAGER
 }
 
@@ -662,9 +789,11 @@ export interface ChatPatch {
   permissionMode?: PermissionMode
   delegateToCliMayte?: boolean
   accountId?: string // takes effect at the next runtime start
+  accountPinned?: boolean // true = Auto off: the chat stays on its account when it runs out
   group?: string | null // 1-60 chars after trimming; null = back to its folder's group
   cwd?: string // put the chat in another folder (an existing local directory); its next turn resumes there
   note?: string | null // at most NOTE_MAX characters after trimming; null or empty = no note
+  sus?: SusLevel // fine = the chat's own setting; sus = the setting that pushes back least + owner context; bad = pinned to Codex
   service?: PinnedService | null // Pin service; null = back to Claude. A running turn ends where it is; the next one runs there
 }
 

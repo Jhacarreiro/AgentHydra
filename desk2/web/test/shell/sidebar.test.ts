@@ -4,6 +4,7 @@ import {
   accountFace,
   chatRow,
   elapsedLabel,
+  timeAgo,
   childrenByRow,
   entryKey,
   entryRunning,
@@ -319,15 +320,18 @@ describe('status glyph language', () => {
     expect(statusGlyph({ status: 'needs_you', unread: true })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'pulse' })
   })
 
-  it('a replied chat whose background tasks still run has the running look, read or not, never the calm ring', () => {
+  it('a replied chat whose background tasks still run is solid orange, read or not, never green or the calm ring', () => {
+    // Owner, 2026-10-14: done speaking with workers still running is orange; green is done with nothing running.
     for (const status of ['idle', 'stopped', 'closed'] as const)
-      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
-    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'muted', label: 'Sub-tasks running' })
+      expect(statusGlyph({ status, unread: false, climayteActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' })
+    expect(statusGlyph({ status: 'idle', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'warning', motion: 'none', label: 'Replied, workers still running' })
+    // A question pulses; the replied-with-workers dot does not, so the two oranges differ.
+    expect(statusGlyph({ status: 'needs_you', unread: true, climayteActive: 1 })).toMatchObject({ tone: 'warning', motion: 'pulse' })
   })
 
   it("a replied chat whose own background commands still run has the running look, with no CliMayte worker", () => {
     // The NexusCode chat, 2026-10-04: read, deploy still building, a gray ring; it must never look done while it runs.
-    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink' })
+    expect(statusGlyph({ status: 'idle', unread: false, climayteActive: 0, backgroundActive: 2 })).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none' })
   })
 
   it('once read, a finished chat is the calm idle ring again', () => {
@@ -352,18 +356,21 @@ describe('status glyph language', () => {
       expect(dimText(g, false)).toBe('')
   })
 
-  it('an idle row whose sub-tasks run has the running look and is not dimmed; a row with none keeps its ring', () => {
+  it('an idle row whose sub-tasks run is solid orange and is not dimmed; a row with none keeps its ring', () => {
     // The sub-tasks are CliMayte tasks, HSwarm jobs or nested rows; Sidebar.vue counts them and passes the count here.
     const idle = statusGlyph({ status: 'idle', unread: false })
     expect(withThreads(idle, 0)).toBe(idle)
-    expect(withThreads(idle, 2)).toMatchObject({ shape: 'dot', tone: 'muted', motion: 'blink', active: true, label: 'Sub-tasks running' })
+    expect(withThreads(idle, 2)).toMatchObject({ shape: 'dot', tone: 'warning', motion: 'none', active: true, label: 'Replied, workers still running' })
     expect(dimText(withThreads(idle, 1), false)).toBe('')
   })
 
-  it('sub-tasks never take a question its yellow or an error its red; a green unread row with sub-tasks runs', () => {
+  it('sub-tasks never take a question its pulse or an error its red; a green unread row with sub-tasks turns orange', () => {
     expect(withThreads(statusGlyph({ status: 'needs_you', unread: false }), 2)).toMatchObject({ tone: 'warning', motion: 'pulse' })
     expect(withThreads(statusGlyph({ status: 'error', unread: false }), 2)).toMatchObject({ tone: 'danger' })
-    expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ label: 'Sub-tasks running' })
+    // A Prime on a usage limit keeps its pink ring while its threads run: the limit is its own row in the rulebook.
+    expect(withThreads(statusGlyph({ status: 'limited', unread: false }), 2)).toMatchObject({ shape: 'ring', tone: 'limited', label: 'Usage limit' })
+    expect(withThreads(statusGlyph({ status: 'idle', unread: true }), 1)).toMatchObject({ tone: 'warning', motion: 'none', label: 'Replied, workers still running' })
+    expect(withThreads(statusGlyph({ status: 'working', unread: false }), 1)).toMatchObject({ tone: 'muted', motion: 'blink' })
   })
 
   it('a usage limit is its own pink ring, unread or not; error stays red', () => {
@@ -373,7 +380,7 @@ describe('status glyph language', () => {
 
   it('draws each glyph with its own token', () => {
     expect(glyphDotClass(statusGlyph({ status: 'idle', unread: true }))).toBe('bg-[var(--status-done)]')
-    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-working)] run-pulse')
+    expect(glyphDotClass(statusGlyph({ status: 'idle', unread: false, climayteActive: 1 }))).toBe('bg-[var(--status-needs-you)]')
     expect(glyphDotClass(statusGlyph({ status: 'needs_you', unread: true }))).toBe('bg-[var(--status-needs-you)] animate-dot-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'working', unread: false }))).toBe('bg-[var(--status-working)] run-pulse')
     expect(glyphDotClass(statusGlyph({ status: 'limited', unread: true }))).toBe('border-[1.5px] border-[var(--status-limited)]')
@@ -396,6 +403,44 @@ describe('status glyph language', () => {
     expect(elapsedLabel(0, 4 * 60_000 + 5000)).toBe('4m')
     expect(elapsedLabel(0, 65 * 60_000)).toBe('1h 5m')
     expect(elapsedLabel(null)).toBe('')
+  })
+
+  it('says how long ago in its largest whole unit, minutes to years', () => {
+    const now = Date.UTC(2026, 9, 14)
+    const ago = (ms: number) => timeAgo(now - ms, now)
+    const MIN = 60_000
+    const DAY = 1440 * MIN
+    expect([
+      ago(59_000),
+      ago(MIN),
+      ago(59 * MIN),
+      ago(60 * MIN),
+      ago(23 * 60 * MIN),
+      ago(DAY),
+      ago(6 * DAY),
+      ago(7 * DAY),
+      ago(29 * DAY),
+      ago(31 * DAY),
+      ago(364 * DAY),
+      ago(365 * DAY),
+      ago(800 * DAY)
+    ]).toEqual([
+      'just now',
+      '1 minute ago',
+      '59 minutes ago',
+      '1 hour ago',
+      '23 hours ago',
+      '1 day ago',
+      '6 days ago',
+      '1 week ago',
+      '4 weeks ago',
+      '1 month ago',
+      '11 months ago',
+      '1 year ago',
+      '2 years ago'
+    ])
+    // a clock a little behind the stamp is "just now", never a negative age
+    expect(timeAgo(now + 5000, now)).toBe('just now')
   })
 })
 
@@ -470,6 +515,10 @@ describe('row menu', () => {
     expect(sub(rowMenu(chatRow(chat('a', { sessionId: 's1' }))), 'Open in')).toEqual(['File Explorer', 'Copy resume command', 'Copy session ID'])
     // a chat with a note offers to edit it
     expect(show(rowMenu(chatRow(chat('a', { sessionId: 's1', note: 'Ask about the release' }))))).toContain('Edit note… N')
+    // one that has done something says when under its first line
+    const acted = rowMenu(chatRow(chat('a', { sessionId: 's1', lastActionAt: 1234 })))
+    expect(show(acted).slice(0, 3)).toEqual(['s1', 'Last action', '-'])
+    expect(acted[1]).toMatchObject({ action: 'lastAction', since: 1234 })
   })
 
   it('follows the state: Stop above Pin while working, Unpin, Mark as read, Unarchive', () => {
@@ -502,7 +551,8 @@ describe('row menu', () => {
 
   it('an outside session has the same menu without Delete, with Move to account and Duplicate to account, and Archive says why', () => {
     const entries = rowMenu(externalRow(ext()))
-    expect(show(entries)).toEqual(['sess-1', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', '-', 'Move to group >', 'Move to account >', 'Duplicate to account >', '-', 'Archive A'])
+    expect(show(entries)).toEqual(['sess-1', 'Last action', '-', 'Open in >', '-', 'Pin P', 'Mark as unread U', 'Rename R', 'Add note… N', 'Fork F', 'Duplicate to account >', '-', 'Move to group >', 'Move to account >', '-', 'Archive A'])
+    expect(entries[1]).toMatchObject({ since: 1 }) // the session's lastActivityAt
     const archive = entries.find((e) => e !== 'separator' && !('items' in e) && e.action === 'archive') as RowMenuItem
     expect(archive.title).toMatch(/never deleted here/)
     expect(sub(entries, 'Open in')).toEqual(['File Explorer', 'Copy resume command', 'Copy session ID'])
@@ -713,7 +763,7 @@ describe('footer account', () => {
 })
 
 describe('sidebar order', () => {
-  // Jacob, 2026-10-04: sending into Connections shot it to the top; rows keep their place. Owner, 2026-10-09: folder
+  // The owner, 2026-10-04: sending into Connections shot it to the top; rows keep their place. Owner, 2026-10-09: folder
   // groups are never saved, they are listed A-Z by label whatever the order of their rows.
   it('a message sent later moves no row; a new folder joins in its A-Z place; a row drag reorders inside its group', () => {
     const before = [chat('a1', { cwd: 'C:/work/alpha', updatedAt: 30 }), chat('a2', { cwd: 'C:/work/alpha', updatedAt: 20 }), chat('c1', { cwd: 'C:/work/conn', updatedAt: 10 })]

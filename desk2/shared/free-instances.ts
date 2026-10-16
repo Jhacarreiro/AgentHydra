@@ -106,13 +106,24 @@ export interface FreeInstance {
   /** The plan the account last reported ("free", "go", "pro", "max" ...), kept across readings that report none, so a
    *  change can be noticed; null once logged out (the next sign-in may be another account). Absent on older records. */
   plan?: string | null
-  /** The last move between free and paid (owner, 2026-10-09: "If they change to not free ... let me know", to promote
-   *  it to CLI or Desktop): shown on the row until dismissed. `from` is null when the first reading was already paid. */
+  /** The last move that changed what the account can be promoted to (promotionFor; owner, 2026-10-09: "If they change
+   *  to not free ... let me know"): shown on the row until dismissed. `from` is null when the first reading was already
+   *  promotable. */
   planChange?: { from: string | null; to: string; at: number } | null
 }
 /** A plan the provider bills for: anything reported that is not its Free plan. */
 export function isPaidPlan(plan: string | null | undefined): boolean {
   return !!plan && plan !== 'free'
+}
+export type FreePromotion = 'codex' | 'cli' | 'desktop'
+/** What an account on this plan can be promoted to (owner, 2026-10-14: "don't show that badge ... unless it is higher
+ *  than go ... If it's a pro, it can suggest upgrade to a CLI, and if it's a 5X or higher ... a desktop"): a ChatGPT
+ *  plan above Go a Codex instance, Claude's Max (5x and 20x, which Claude reports as one plan) a Desktop one and its
+ *  other paid plans (Pro, Team, Enterprise) a CLI one; null on Free, on Go, or with no plan known. */
+export function promotionFor(provider: FreeProvider, plan: string | null | undefined): FreePromotion | null {
+  if (!isPaidPlan(plan)) return null
+  if (provider === 'chatgpt') return plan === 'go' ? null : 'codex'
+  return plan === 'max' ? 'desktop' : 'cli'
 }
 /** What a deleted account leaves behind until the login sync has told the store (sync.ts). */
 export type FreeDeleted = Pick<FreeInstance, 'id' | 'num' | 'provider' | 'name'>
@@ -167,7 +178,8 @@ export interface FreeHealth {
 /** One day's messages on one account and model (stats.ts). `model` is what the provider answered with ('unknown' when
  *  a failure came before it was chosen); '' holds the tokens of messages from before Desk recorded models, with no
  *  messages counted (`sent` 0), so they count in no success rate. */
-export interface FreeStatRow { day: string; instanceId: string; model: string; sent: number; failed: number; input: number; output: number }
+/** `why`: the failures by error code (server/src/free-instances/stats.ts), absent when none failed. */
+export interface FreeStatRow { day: string; instanceId: string; model: string; sent: number; failed: number; input: number; output: number; why?: Record<string, number> }
 export interface FreeStatus {
   ready: boolean
   /** Each account's estimate by its id (tokens.ts); an account that never chatted here has none. */

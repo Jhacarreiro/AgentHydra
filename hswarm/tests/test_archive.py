@@ -2,7 +2,7 @@
 
 After the blob rewrite the job folders were still 115 MiB in 14,665 files plus 30 MiB of filesystem slack,
 and all of it is text that compresses to about a fifth. A finished job never changes again, so past a few
-hours it is packed into `<id>.zip` and the folder goes away (Michael, 2026-09-16)."""
+hours it is packed into `<id>.zip` and the folder goes away (the other owner, 2026-09-16)."""
 from __future__ import annotations
 
 import datetime as dt

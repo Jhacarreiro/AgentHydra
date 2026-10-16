@@ -8,10 +8,10 @@ import { defaultHookPath, install, uninstall } from "../install.mjs";
 
 const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT"];
 
-function withCore(fn) {
+async function withCore(fn) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-stop-"));
   try {
-    return fn(dir);
+    return await fn(dir);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -53,13 +53,13 @@ const OWNERS = [
   { kind: "person", id: "person:someone", tier: "employee" },
 ];
 
-const fire = (input, env) => handle(JSON.stringify(input), env) ?? null;
+const fire = async (input, env) => (await handle(JSON.stringify(input), env)) ?? null;
 
 test("blocks a trailing question with no owner consult and logs the block", () =>
-  withCore((dir) => {
-    turnOn(dir);
+  withCore(async (dir) => {
+    turnOn(dir, OWNERS);
     const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
-    const out = fire(input, envFor(dir));
+    const out = await fire(input, envFor(dir));
     assert.equal(out.decision, "block");
     assert.match(out.reason, /ask the owner tier/);
     assert.match(out.reason, /person:creaitor/);
@@ -69,8 +69,15 @@ test("blocks a trailing question with no owner consult and logs the block", () =
     assert.equal(logged.chat, "sess-stop");
   }));
 
+test("no block without an owner-tier person in the catalog", () =>
+  withCore(async (dir) => {
+    turnOn(dir, [{ kind: "person", id: "person:someone", tier: "employee" }]);
+    const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
+    assert.equal(await fire(input, envFor(dir)), null);
+  }));
+
 test("allows after a core_use consult of an owner-tier person", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir, OWNERS);
     const input = stop(dir, [
       prompt("fix it"),
@@ -78,11 +85,11 @@ test("allows after a core_use consult of an owner-tier person", () =>
       result(),
       says("Should I delete the old folder?"),
     ]);
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("a consult of a non-owner person does not count", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir, OWNERS);
     const input = stop(dir, [
       prompt("fix it"),
@@ -90,11 +97,11 @@ test("a consult of a non-owner person does not count", () =>
       result(),
       says("Should I delete the old folder?"),
     ]);
-    assert.equal(fire(input, envFor(dir)).decision, "block");
+    assert.equal((await fire(input, envFor(dir))).decision, "block");
   }));
 
 test("allows after a Bash creaitor.py ask", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const input = stop(dir, [
       prompt("fix it"),
@@ -102,49 +109,49 @@ test("allows after a Bash creaitor.py ask", () =>
       result(),
       says("Should I delete the old folder?"),
     ]);
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("never blocks twice in a row", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")], { stop_hook_active: true });
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("allows for a CliMayte worker", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const input = stop(dir, [prompt("fix it"), says("Should I delete the old folder?")]);
-    assert.equal(fire(input, envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1" })), null);
+    assert.equal(await fire(input, envFor(dir, { AGENTHYDRA_CLIMAYTE_WORKER: "1" })), null);
   }));
 
 test("allows when the final message has no question", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const input = stop(dir, [prompt("fix it"), says("Deleted the old folder.")]);
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("allows when the only question mark is inside a code block", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const input = stop(dir, [prompt("fix it"), says("Done.\n\n```js\nconst ok = x ? 1 : 2;\n```")]);
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("allows on a broken transcript (fail open)", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     turnOn(dir);
     const transcript = path.join(dir, "broken.jsonl");
     writeFileSync(transcript, "{not json\n");
     const input = { hook_event_name: "Stop", session_id: "sess-stop", stop_hook_active: false, transcript_path: transcript };
-    assert.equal(fire(input, envFor(dir)), null);
+    assert.equal(await fire(input, envFor(dir)), null);
   }));
 
 test("decides from the last turn alone: a broken line before it changes nothing, and a turn over a chunk parses whole", () =>
-  withCore((dir) => {
-    turnOn(dir);
+  withCore(async (dir) => {
+    turnOn(dir, OWNERS);
     const transcript = path.join(dir, "long.jsonl");
     const big = { type: "user", message: { role: "user", content: [{ type: "tool_result", tool_use_id: "t1", content: "é".repeat(600_000) }] } };
     const lines = [
@@ -158,11 +165,11 @@ test("decides from the last turn alone: a broken line before it changes nothing,
     ].map((entry) => (typeof entry === "string" ? entry : JSON.stringify(entry)));
     writeFileSync(transcript, lines.join("\n"));
     const input = { hook_event_name: "Stop", session_id: "sess-stop", stop_hook_active: false, transcript_path: transcript };
-    assert.equal(fire(input, envFor(dir)).decision, "block");
+    assert.equal((await fire(input, envFor(dir))).decision, "block");
   }));
 
 test("install adds Stop beside an existing Stop hook and uninstall removes only ours", () =>
-  withCore((dir) => {
+  withCore(async (dir) => {
     const settingsPath = path.join(dir, "settings.json");
     const coreDir = path.join(dir, "core");
     const other = { hooks: [{ type: "command", command: "node C:/Example/other-stop.mjs" }] };

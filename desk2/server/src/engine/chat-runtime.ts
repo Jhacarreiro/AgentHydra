@@ -38,8 +38,10 @@ import type {
   ServerEvent,
   TranscriptItem,
 } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL } from '@shared/protocol'
 import { contextPct } from './describe'
 import { connectorsPending } from '../connectors/registry'
+import { coreSlot, coreSlotDue } from './core-slot'
 import { chatAddOns } from './desk-prompt'
 import { coreChatExcludes } from './hydra-core-mode'
 import { pinHaikuModel, withoutOldHaiku } from './haiku-pin'
@@ -53,6 +55,12 @@ import { userTurns } from './system-text'
 import { isUsageLimitText } from './usage-limit'
 import { hostedOf, type HostConnection, type HostedParams, type HostedQuery } from '../host/client'
 import { mediaCache, toStoredImage } from '../media/cache'
+
+/** The setting a chat's own turns run on: a model or effort it does not name is Desk's default (DEFAULT_MODEL, DEFAULT_EFFORT),
+ *  so the window's label is what runs (owner, 2026-10-15: "it should default to Opus 5.5"). */
+function ownSetting(chat: ChatSummary): { model: string | null; effort: Effort | null } {
+  return { model: withoutOldHaiku(chat.model) ?? DEFAULT_MODEL, effort: chat.effort ?? DEFAULT_EFFORT }
+}
 
 /** query()'s own parameters, plus what a chat host needs (SPEC "Chat hosts"); the SDK's query() reads prompt and options. */
 export type QueryImpl = (params: HostedParams) => Query
@@ -73,7 +81,7 @@ export interface ChatRuntimeDeps {
    * Passed to the SDK verbatim and never logged.
    */
   agentHydraMcp?: McpServerConfig | null
-  /** Jacob's main .claude.json whose user-level and folder-local MCP servers every chat gets. undefined = ~/.claude.json, unless agentHydraMcp was injected (then none); null = none. */
+  /** The owner's main .claude.json whose user-level and folder-local MCP servers every chat gets. undefined = ~/.claude.json, unless agentHydraMcp was injected (then none); null = none. */
   mainClaudeJson?: string | null
   now?: () => number
   /** Called once the runtime has closed (idle timer or close()). */
@@ -97,6 +105,16 @@ export interface ChatRuntimeDeps {
   onMessage?(msg: SDKMessage): void
   /** The Desk base URL this chat's move line names; without it the line is left out. */
   deskUrl?(): string
+  /** The sus level's setting for the next turn (SPEC "Sus meter"): null on a chat that is not on 'sus'. */
+  susTurn?(): SusTurn | null
+  /** A Claude turn ended: what ran it and what it ended with, for the pushback count. Never for a replayed turn. */
+  onTurnClassified?(t: { model: string; effort: string; stopReason: string | null; text: string }): void
+}
+
+/** What a 'sus' chat's next turn runs on: the setting that pushes back least, or the chat's own. */
+export interface SusTurn {
+  model: string | null
+  effort: Effort | null
 }
 
 type PermissionItem = Extract<TranscriptItem, { kind: 'permission' }>
@@ -158,6 +176,8 @@ export const INTERRUPT_GRACE_MS = 1500
 const STDERR_TAIL_LINES = 20
 /** Images larger than this (base64 chars) are kept out of the stored transcript. */
 const MAX_STORED_IMAGE_CHARS = 200_000
+/** The running tool ids remembered as written; past it the oldest is forgotten. */
+const MAX_STORED_RUNNING = 1000
 
 /** The account's login is broken (AgentHydra climayte-lib.ts AUTH_RE): no turn on it can work until it is signed in again. */
 const SIGN_IN_TEXT =
@@ -213,8 +233,17 @@ export function mainConfigFile(given: string | null | undefined, agentHydraMcp: 
 /**
  * AgentHydra copies its worker-only 'Rules for a CliMayte worker' CLAUDE.md into every CLI instance dir, where an
  * interactive chat would load it as user memory. When the instance's CLAUDE.md is that copy, returns the flag
- * setting that skips it and Jacob's real ~/.claude/CLAUDE.md text to put in the system prompt instead.
+ * setting that skips it and the owner's real ~/.claude/CLAUDE.md text to put in the system prompt instead.
  */
+/** The owner's rules as the appended prompt carries them when the account's own CLAUDE.md is swapped out. */
+function rulesText(swap: { real: string } | null): string {
+  return swap ? `
+
+# User instructions (~/.claude/CLAUDE.md)
+
+${swap.real}` : ''
+}
+
 export function workerRulesSwap(configDir: string | null, mainFile: string | null): { excludes: string[]; real: string } | null {
   if (!configDir || !mainFile) return null
   const copy = join(configDir, 'CLAUDE.md')
@@ -259,6 +288,12 @@ export class ChatRuntime {
   private readonly onFailure?: (f: { message: string; durationMs: number | null }) => void
   private readonly forkAt?: () => string | null
   private readonly onTurnEnd?: () => void
+  private readonly susTurn?: () => SusTurn | null
+  private readonly onTurnClassified?: ChatRuntimeDeps['onTurnClassified']
+  /** The model and effort the live process runs its next turn on; the last assistant text and model of the turn running. */
+  private applied: SusTurn = { model: null, effort: null }
+  private turnText = ''
+  private turnModel = ''
   private readonly onMessage?: (msg: SDKMessage) => void
   private readonly deskUrl?: () => string
 
@@ -267,6 +302,10 @@ export class ChatRuntime {
   private ranAs: AccountRef | null = null
   /** The folder the process was started in: a chat whose cwd changed ends it at the next quiet point, and the next start runs in the new folder. */
   private ranCwd: string | null = null
+  /** The message a start was made for: a chat's first one is what Hydra Core's slot picks its lead from (core-slot.ts). */
+  private launchText: string | null = null
+  /** Hydra Core's slot for this start, placed before the launch by placeSlot, and the session it was placed for. */
+  private slotPlaced: { session: string; text: string | null } | null = null
   /** A turn ended and the folder the session says it is in has not been looked at since. */
   private cwdCheckDue = false
   /** The chat's account changed under a running turn: the runtime ends once the turn is over. */
@@ -345,6 +384,8 @@ export class ChatRuntime {
     this.onFailure = deps.onFailure
     this.forkAt = deps.forkAt
     this.onTurnEnd = deps.onTurnEnd
+    this.susTurn = deps.susTurn
+    this.onTurnClassified = deps.onTurnClassified
     this.onMessage = deps.onMessage
     this.deskUrl = deps.deskUrl
   }
@@ -367,16 +408,27 @@ export class ChatRuntime {
     return join(this.store.home, 'logs', `${this.chat.id}.log`)
   }
 
-  /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
-  buildOptions(): Options {
+  /** The environment the SDK process starts with: the base env, then this chat's account, manager and id. */
+  private buildEnv(): Record<string, string | undefined> {
     const chat = this.chat
     const env: Record<string, string | undefined> = { ...this.baseEnv, ...SESSION_STATE_ENV }
     if (chat.account.configDir) env.CLAUDE_CONFIG_DIR = chat.account.configDir
     else delete env.CLAUDE_CONFIG_DIR
     if (chat.managerSlug) env.AGENTHYDRA_MANAGER = chat.managerSlug
     else delete env.AGENTHYDRA_MANAGER
+    // The hook keys this chat's messages by it (hydra-core/hook.mjs), as it does a CliMayte chat's.
+    env.HYDRA_DESK_CHAT_ID = chat.id
     pinHaikuModel(env)
+    return env
+  }
+
+  /** The options query() gets (SPEC "Start"). Public so tests can check them without a run. */
+  buildOptions(): Options {
+    const chat = this.chat
+    const env = this.buildEnv()
     const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
+    const sus = this.susTurn?.() ?? null
+    this.applied = sus ? { ...sus } : ownSetting(chat)
     const options: Options = {
       cwd: chat.cwd,
       env,
@@ -391,17 +443,42 @@ export class ChatRuntime {
       onElicitation: this.onElicitation,
       stderr: (data: string) => this.onStderr(data),
     }
+    this.applyLaunchChoices(options)
+    // A fresh session under Hydra Core's slot starts with an id Desk picks, so placement.json names it as launched with its pack.
+    const session = chat.sessionId ?? this.slotPlaced?.session ?? (coreSlotDue(chat.id, chat.parentId) ? randomUUID() : null)
+    this.applySession(options, session)
+    const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
+    this.applySettings(options, swap)
+    const rules = rulesText(swap)
+    // Built before the launch (placeSlot), so this synchronous build never waits on Hydra Core's placement.
+    const slot = session && this.slotPlaced?.session === session ? this.slotPlaced.text : null
+    if (slot || swap) options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}${slot ? `
+
+${slot}` : ''}${rules}` }
+    this.applyMcpServers(options, addOns.mcpServers)
+    return options
+  }
+
+  /** The binary, permission mode, model and effort a start passes to the SDK, and the tools a CliMayte-delegating chat drops. */
+  private applyLaunchChoices(options: Options): void {
+    const chat = this.chat
     // Always the binary Desk resolved: the SDK would look for its own platform package, which a release does not ship.
     const binary = this.binaryPath ?? this.claudeCode.path()
     if (binary) options.pathToClaudeCodeExecutable = binary
     // A Bypass chat in plan mode goes back to Bypass when the plan is approved, and the CLI refuses Bypass
     // to a process not launched for it (a process restarted mid-plan included).
     if (chat.permissionMode === 'bypassPermissions' || this.beforePlan === 'bypassPermissions') options.allowDangerouslySkipPermissions = true
-    if (chat.model) options.model = withoutOldHaiku(chat.model) ?? undefined
-    if (chat.effort) options.effort = chat.effort
+    if (this.applied.model) options.model = withoutOldHaiku(this.applied.model) ?? undefined
+    if (this.applied.effort) options.effort = this.applied.effort
     if (chat.delegateToCliMayte) options.disallowedTools = ['Agent', 'Task']
+  }
+
+  /** Resumes the chat's own session, or starts the given one; a fork's first start copies its source under a new id. */
+  private applySession(options: Options, session: string | null): void {
+    const chat = this.chat
     if (chat.sessionId) options.resume = chat.sessionId
-    else if (chat.forkedFrom) {
+    else if (session) options.sessionId = session
+    if (!chat.sessionId && chat.forkedFrom) {
       // A fork's first start: the SDK copies the session under a new id (system/init brings it).
       options.resume = chat.forkedFrom
       options.forkSession = true
@@ -409,23 +486,24 @@ export class ChatRuntime {
       const at = this.forkAt?.()
       if (at) options.resumeSessionAt = at
     }
-    const swap = workerRulesSwap(chat.account.configDir, this.mainClaudeJson)
+  }
+
+  /** The settings a start passes: the worker-rules swap's excludes, Hydra Core's, and the owner's hooks for an extra account. */
+  private applySettings(options: Options, swap: { excludes: string[] } | null): void {
+    const chat = this.chat
     const hooks = ownerHooks(chat.account.configDir, this.mainClaudeJson)
     const claudeMdExcludes = [...(swap?.excludes ?? []), ...coreChatExcludes()]
     if (claudeMdExcludes.length || hooks) options.settings = { ...(claudeMdExcludes.length ? { claudeMdExcludes } : {}), ...(hooks ? { hooks } : {}) }
-    if (swap) {
-      options.systemPrompt = { type: 'preset', preset: 'claude_code', append: `${addOns.append}
+  }
 
-# User instructions (~/.claude/CLAUDE.md)
-
-${swap.real}` }
-    }
+  /** The MCP servers a start passes: the add-ons', what plain `claude` gets in this folder, and Desk's own agenthydra. */
+  private applyMcpServers(options: Options, addOnServers: ReturnType<typeof chatAddOns>['mcpServers']): void {
+    const chat = this.chat
     const mcp = this.agentHydraMcp === undefined ? readAgentHydraMcp() : this.agentHydraMcp
     // What plain `claude` gets in this folder under the main config, on whatever account the chat runs; Hydra Desk's own agenthydra wins.
     // A running connector's servers sit under the person's own config of the same name.
-    const servers = { ...addOns.mcpServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: withDeskChatId(mcp, chat.id) } : {}) }
+    const servers = { ...addOnServers, ...(this.mainClaudeJson ? mainMcpOption(chat.cwd, this.mainClaudeJson) : {}), ...(mcp ? { agenthydra: withDeskChatId(mcp, chat.id) } : {}) }
     if (Object.keys(servers).length) options.mcpServers = servers
-    return options
   }
 
   /**
@@ -442,6 +520,7 @@ ${swap.real}` }
     this.closeOnIdle = false
     this.ranAs = attach ? { ...attach.hello.account } : { ...this.chat.account }
     this.ranCwd = this.chat.cwd
+    this.slotPlaced = null
     this.sawSessionState = false
     this.liveTasks = null
     this.stopping = false
@@ -480,15 +559,33 @@ ${swap.real}` }
   }
 
   /**
+   * Places Hydra Core's slot for this start (core-slot.ts runs placeChat in a child, awaited, and its lead pick may
+   * wait seconds on a model), so the Desk server keeps serving meanwhile. Null when the chat gets no slot.
+   */
+  private placeSlot(): Promise<void> | null {
+    this.slotPlaced = null
+    const chat = this.chat
+    if (!coreSlotDue(chat.id, chat.parentId)) return null
+    const session = chat.sessionId ?? randomUUID()
+    const addOns = chatAddOns(chat.cwd, chat.delegateToCliMayte, this.deskUrl ? { id: chat.id, base: this.deskUrl() } : undefined)
+    const rest = addOns.append.length + rulesText(workerRulesSwap(chat.account.configDir, this.mainClaudeJson)).length
+    return coreSlot({ chat: chat.id, parentId: chat.parentId, session, fresh: !chat.sessionId, cwd: chat.cwd, prompt: this.launchText ?? chat.title ?? '', rest })
+      .then((text) => {
+        this.slotPlaced = { session, text }
+      })
+  }
+
+  /**
    * Launches now, or once the connectors' first probe pass has landed (a process started before it would run without
    * their MCP servers); meanwhile the chat stays 'starting' with its sends held, as while the binary downloads.
    */
   private launchSoon(): void {
     const pending = connectorsPending()
-    if (!pending) return this.launch()
+    const slot = this.placeSlot()
+    if (!pending && !slot) return this.launch()
     const wait: { phase: 'waiting' } = { phase: 'waiting' }
     this.binary = wait
-    void pending.then(() => {
+    void Promise.all([pending, slot]).then(() => {
       if (this.binary !== wait) return
       this.binary = null
       this.launch()
@@ -647,7 +744,7 @@ ${swap.real}` }
     for (const item of replayed.values()) {
       const prev = stored.get(item.id)
       if (prev && sameItem(prev, item)) {
-        if (item.kind === 'tool_use' && item.status === 'running') this.storedRunning.add(item.id)
+        if (item.kind === 'tool_use' && item.status === 'running') this.rememberRunning(item.id)
       } else this.upsert(item)
     }
   }
@@ -716,9 +813,13 @@ ${swap.real}` }
    */
   send(text: string, images?: ImageRef[], messageId?: string, shown?: string): { queued: boolean } {
     this.clearIdleTimer()
-    if (!this.q) this.start()
+    if (!this.q) {
+      this.launchText = text
+      this.start()
+    }
     const before = this.chat
     const busy = before.status === 'working' || before.status === 'needs_you' || (before.status === 'starting' && before.turnStartedAt !== null)
+    if (!busy) void this.applySetting()
     this.limitAnnounced = false
     if (!busy) this.replied = false
     const msg = this.input!.push({ text, images }, messageId)
@@ -752,7 +853,10 @@ ${swap.real}` }
   /** Sends them again on a fresh start (the chat moved to another account); the transcript already has them. */
   replay(sends: QueuedInput[]): void {
     this.clearIdleTimer()
-    if (!this.q) this.start()
+    if (!this.q) {
+      this.launchText = sends[0]?.text ?? null
+      this.start()
+    }
     this.limitAnnounced = false
     for (const s of sends) {
       const msg = this.input!.push(s)
@@ -881,10 +985,28 @@ ${swap.real}` }
     }
   }
 
+  /** Before a turn: a live process takes the setting the sus level (or the chat itself) now asks for. The chat's own fields stay. */
+  private async applySetting(): Promise<void> {
+    const q = this.q
+    if (!q || this.susTurn === undefined) return
+    const sus = this.susTurn()
+    const want: SusTurn = sus ?? ownSetting(this.chat)
+    const had = this.applied
+    if (want.model === had.model && want.effort === had.effort) return
+    this.applied = { ...want }
+    try {
+      if (want.model !== had.model) await q.setModel(want.model ?? undefined)
+      if (want.effort !== had.effort) await q.applyFlagSettings({ effortLevel: want.effort })
+    } catch {
+      this.applied = had
+    }
+  }
+
   async setModel(picked: string | null): Promise<void> {
     const model = withoutOldHaiku(picked)
     const was = this.chat.model
     this.chat.model = model
+    this.applied = { ...this.applied, model }
     this.touch()
     this.publishChat()
     const q = this.q
@@ -901,6 +1023,7 @@ ${swap.real}` }
   async setEffort(effort: Effort | null): Promise<void> {
     const was = this.chat.effort
     this.chat.effort = effort
+    this.applied = { ...this.applied, effort }
     this.touch()
     this.publishChat()
     const q = this.q
@@ -997,13 +1120,13 @@ ${swap.real}` }
     this.finishRequest({ ...item, state: 'accepted', values }, () => p.resolve({ action: 'accept', content: values }))
   }
 
-  /** The chat goes into plan mode (Jacob's switch, or Claude's own EnterPlanMode): remember the mode it leaves. Leaving plan mode forgets it. */
+  /** The chat goes into plan mode (the owner's switch, or Claude's own EnterPlanMode): remember the mode it leaves. Leaving plan mode forgets it. */
   private notePlanEntry(mode: PermissionMode): void {
     if (mode !== 'plan') this.beforePlan = null
     else if (this.chat.permissionMode !== 'plan') this.beforePlan = this.chat.permissionMode
   }
 
-  /** Jacob looked at the chat. */
+  /** The owner looked at the chat. */
   markViewed(): void {
     this.dispatch({ type: 'viewed' })
     this.publishChat()
@@ -1122,6 +1245,9 @@ ${swap.real}` }
     this.takeUp(msg)
     if (m.type === 'assistant' && !(msg as { error?: unknown }).error && !(msg as { parent_tool_use_id?: unknown }).parent_tool_use_id) {
       const said = assistantText(msg)
+      if (said.trim()) this.turnText = said
+      const ranOn = (msg as { message?: { model?: unknown } }).message?.model
+      if (typeof ranOn === 'string' && ranOn) this.turnModel = ranOn
       if (!isUsageLimitText(said) && !isSignInFailureText(said)) this.replied = true
     }
 
@@ -1173,7 +1299,7 @@ ${swap.real}` }
       e = { type: 'usageLimit', resetsAt: null }
       news.limitFromResult = true
     }
-    // A login that failed holds the account out like a limit, so the turn moves on (Jacob, 2026-10-04:
+    // A login that failed holds the account out like a limit, so the turn moves on (the owner, 2026-10-04:
     // sending again into an account whose OAuth expired is the failure).
     if (e.type === 'turnError' && isSignInFailureText(e.message) && this.chat.status !== 'stopped') {
       e = { type: 'usageLimit', resetsAt: null }
@@ -1215,10 +1341,21 @@ ${swap.real}` }
     if (!carried) this.notify('limited', text)
   }
 
+  /** A finished turn into the pushback count: a result that is an error with no refusal answered nothing and counts nowhere. */
+  private classifyTurn(msg: SDKMessage): void {
+    const r = msg as { is_error?: unknown; stop_reason?: unknown }
+    const stopReason = typeof r.stop_reason === 'string' ? r.stop_reason : null
+    if (this.chat.status === 'limited' || (r.is_error === true && stopReason !== 'refusal')) return
+    this.onTurnClassified?.({ model: this.turnModel || this.applied.model || 'default', effort: this.applied.effort ?? 'default', stopReason, text: this.turnText })
+  }
+
   private onResult(msg: SDKMessage, reportedQueued: number | undefined, now: number): void {
     const total = (msg as { total_cost_usd?: unknown }).total_cost_usd
     if (typeof total === 'number') this.totalCost = total
     this.turns++
+    if (!this.replaying) this.classifyTurn(msg)
+    this.turnText = ''
+    this.turnModel = ''
     this.stopping = false
     this.resultSinceAck = true
     if (!this.replaying) this.cwdCheckDue = true
@@ -1304,12 +1441,18 @@ ${swap.real}` }
     if ((item.kind === 'assistant_text' || item.kind === 'thinking') && item.streaming) return
     if (item.kind === 'tool_use' && item.status === 'running') {
       if (this.storedRunning.has(item.id)) return
-      this.storedRunning.add(item.id)
+      this.rememberRunning(item.id)
     }
     // A request re-opened after a restart is on disk as it was.
     const prev = this.reopened?.stored.get(item.id)
     if (prev && sameItem(prev, item)) return
     this.store.appendItem(this.chat.id, forStore(item))
+  }
+
+  /** Notes a running tool as written; a Set keeps insertion order, so the first id is the oldest. */
+  private rememberRunning(id: string): void {
+    this.storedRunning.add(id)
+    if (this.storedRunning.size > MAX_STORED_RUNNING) this.storedRunning.delete(this.storedRunning.values().next().value as string)
   }
 
   private notify(reason: Extract<ServerEvent, { type: 'notify' }>['reason'], body: string): void {

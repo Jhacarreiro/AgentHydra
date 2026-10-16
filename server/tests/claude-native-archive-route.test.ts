@@ -14,6 +14,7 @@ let globallyLive: boolean
 // The route's fresh process scan: true/false answers, an Error is a scan that could not tell.
 let running: boolean | Error
 let appHeldFlag: boolean
+let staleRecord: boolean
 
 // A read, not a side effect, so it stays out of `calls`. Without it every test saw the fake
 // profile as closed and never reached the native adapter (the CI red since b3ba491).
@@ -45,7 +46,10 @@ mock.module('../src/session-launch', () => ({
     calls.push('watcher')
   },
   cancelChatArchiveReassert: () => false,
-  findChatMetaPath: () => null,
+  // staleRecord: the record sits on disk under a previous login, outside the folder the app renders.
+  findChatMetaPath: () =>
+    staleRecord ? `${profile}\\claude-code-sessions\\old\\org\\local_${sid}.json` : null,
+  findVisibleChatMetaPath: () => null,
 }))
 mock.module('../src/ui-archive', () => ({
   ...realUi,
@@ -70,6 +74,7 @@ beforeEach(() => {
   globallyLive = false
   running = true
   appHeldFlag = true
+  staleRecord = false
   result = {
     kind: 'result',
     route: 'native',
@@ -140,6 +145,24 @@ test('a profile the scan shows closed is flagged on disk without asking the app 
   const response = await post('desktop-archive')
   expect(response.status).toBe(200)
   expect(calls).toEqual(['disk-write'])
+})
+
+test('a record under a previous login of a running app is flagged without asking the app, which never loaded it', async () => {
+  // Desk's Unassign on such a chat answered "Expected one exact native session match, found 0".
+  staleRecord = true
+  result = {
+    ...result,
+    ok: false,
+    verified: false,
+    changed: false,
+    reason: 'Expected one exact native session match, found 0',
+  }
+  globallyLive = true
+  const response = await post('desktop-archive')
+  expect(response.status).toBe(200)
+  expect(calls).not.toContain(`native:${profile}:${sid}`)
+  expect(calls).not.toContain('global-live-check')
+  expect(calls[0]).toBe('disk-write')
 })
 
 test('a scan that cannot tell still takes the native route and keeps its refusal', async () => {

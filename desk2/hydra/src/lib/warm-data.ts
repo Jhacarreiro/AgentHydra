@@ -114,10 +114,3 @@ export function startWarm(): void {
   timer = window.setInterval(refreshDue, TICK_MS)
   document.addEventListener('visibilitychange', refreshDue)
 }
-
-export function stopWarm(): void {
-  if (timer !== null) window.clearInterval(timer)
-  timer = null
-  started = false
-  document.removeEventListener('visibilitychange', refreshDue)
-}

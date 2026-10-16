@@ -286,6 +286,17 @@ def _median(xs: list) -> float | None:
     return xs[len(xs) // 2] if xs else None
 
 
+def _who(d: dict, fa: bool) -> str:
+    """Which side the judge picked: the tie, the free arm (labelled A when fa), or the API arm."""
+    w = d["winner"]
+    return "tie" if w == "tie" else ("free" if (w == "A") == fa else "api")
+
+
+def _free_misses(arm_rows: list[dict]) -> list[tuple]:
+    return [((r.get("note") or {}).get("free_kind"), ((r.get("note") or {}).get("error") or "")[:90])
+            for r in arm_rows if "free" not in r]
+
+
 def report(arm_rows: list[dict], key: dict, judge_doc: dict) -> dict:
     rows = {r["i"]: r for r in arm_rows}
     results = judge_doc.get("results") or {}
@@ -300,21 +311,20 @@ def report(arm_rows: list[dict], key: dict, judge_doc: dict) -> dict:
             continue
         judge_models[res.get("model")] = judge_models.get(res.get("model"), 0) + 1
         fa = k["free_is"] == "A"
-        w = d["winner"]
-        who = "tie" if w == "tie" else ("free" if (w == "A") == fa else "api")
+        who = _who(d, fa)
         tally[who] += 1
         r = rows[k["i"]]
         by_stratum.setdefault(f"{r['profile']}/{r['tools']}", {"free": 0, "api": 0, "tie": 0})[who] += 1
-        fs += d["a_score"] if fa else d["b_score"]
-        aps += d["b_score"] if fa else d["a_score"]
-        fe += d["a_errors"] if fa else d["b_errors"]
-        ae += d["b_errors"] if fa else d["a_errors"]
+        free, api = ("a", "b") if fa else ("b", "a")
+        fs += d[f"{free}_score"]
+        aps += d[f"{api}_score"]
+        fe += d[f"{free}_errors"]
+        ae += d[f"{api}_errors"]
         n += 1
     served = [r for r in arm_rows if "free" in r]
     return {
         "sampled": len(arm_rows), "served_on_free": len(served),
-        "free_misses": [((r.get("note") or {}).get("free_kind"), ((r.get("note") or {}).get("error") or "")[:90])
-                        for r in arm_rows if "free" not in r],
+        "free_misses": _free_misses(arm_rows),
         "judged": n, "tally": tally, "by_stratum": by_stratum, "judge_models": judge_models,
         "mean_score": {"free": round(fs / max(n, 1), 2), "api": round(aps / max(n, 1), 2)},
         "errors": {"free": fe, "api": ae},

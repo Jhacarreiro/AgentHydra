@@ -1,7 +1,7 @@
 # misc/Deliver-DesktopChat.ps1 - DELIVER a prompt INTO a specific chat of a RUNNING Claude
 # desktop app, focus-free, by driving the app's own composer through UI Automation.
 #
-# WHY THIS EXISTS (owner directive, Michael, 2026-08-30, after being told the delivery gap
+# WHY THIS EXISTS (owner directive, 2026-08-30, after being told the delivery gap
 # would need an app update: "this is unacceptable and you will find a way around this. End of
 # story."). Every other unattended channel was measured DEAD on app-1.40609.0:
 #   - Writing the app's scheduled-tasks store DOES fire a task (fireAt one-shot, SKILL at

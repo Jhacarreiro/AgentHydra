@@ -32,7 +32,7 @@ export type StatusEvent =
   /** A result arrived; queued = result.queued_turn_count (sends still waiting, each starts a turn). */
   | { type: 'turnEnded'; queued?: number; now: number }
   | { type: 'activity'; activity: string | null }
-  /** Jacob looked at the chat. */
+  /** The owner looked at the chat. */
   | { type: 'viewed' }
 
 export function initialStatus(status: ChatStatus = 'closed'): StatusState {

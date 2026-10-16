@@ -1,6 +1,6 @@
 """Offline: a free tier whose cap is DAILY (Cerebras) gives a spent key back at the reset, not a day after the 402.
 
-Seen 2026-10-02 on Jacob's PC: 416 of 419 Cerebras keys sat in the disabled slot as "out of credit (402)",
+Seen 2026-10-02 on the owner's PC: 416 of 419 Cerebras keys sat in the disabled slot as "out of credit (402)",
 parked between 01:15 and 12:19 UTC, and a `hswarm keys probe` that evening found every one of them serving.
 They were never out of money: the free tier's tokens for that day were spent. A 402 disables a key with no
 date, and probation then lets it out 24 h after the 402, whenever the cap actually came back. A provider whose

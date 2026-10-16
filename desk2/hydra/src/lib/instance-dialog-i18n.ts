@@ -14,10 +14,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
   dshInstances: {
     nameLabel: 'dshInstances.nameLabel',
     namePlaceholder: 'dshInstances.namePlaceholder',
-    createDialogTitle: 'dshInstances.createDialogTitle',
-    createDialogDescription: 'dshInstances.createDialogDescription',
-    createDialogSubmit: 'dshInstances.createDialogSubmit',
-    createDialogCreating: 'dshInstances.createDialogCreating',
     renameDialogTitle: 'dshInstances.renameDialogTitle',
     renameDialogDescription: 'dshInstances.renameDialogDescription',
     renameDialogSubmit: 'dshInstances.renameDialogSubmit',
@@ -26,10 +22,6 @@ export const CLI_INSTANCE_DIALOG_KEYS = {
   codexInstances: {
     nameLabel: 'codexInstances.nameLabel',
     namePlaceholder: 'codexInstances.namePlaceholder',
-    createDialogTitle: 'codexInstances.createDialogTitle',
-    createDialogDescription: 'codexInstances.createDialogDescription',
-    createDialogSubmit: 'codexInstances.createDialogSubmit',
-    createDialogCreating: 'codexInstances.createDialogCreating',
     renameDialogTitle: 'codexInstances.renameDialogTitle',
     renameDialogDescription: 'codexInstances.renameDialogDescription',
     renameDialogSubmit: 'codexInstances.renameDialogSubmit',

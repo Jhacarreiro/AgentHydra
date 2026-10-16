@@ -4,7 +4,7 @@ import { formAnswer, initialForm, limitHint, linkOf, togglePick } from '../../sr
 
 // The MCP elicitation form: what its inputs start with, and the answer it sends.
 const fields: ElicitationField[] = [
-  { name: 'name', label: 'Name', type: 'text', required: true, default: 'Jacob' },
+  { name: 'name', label: 'Name', type: 'text', required: true, default: 'Alex' },
   { name: 'seats', label: 'Seats', type: 'number', required: false, default: 2 },
   { name: 'notify', label: 'Notify', type: 'boolean', required: false },
   { name: 'plan', label: 'Plan', type: 'choice', required: true, options: [{ value: 'pro', label: 'Pro' }, { value: 'max', label: 'Max' }] },
@@ -13,14 +13,14 @@ const fields: ElicitationField[] = [
 
 describe('initialForm', () => {
   it('starts each input from the field default, as the input holds it', () => {
-    expect(initialForm(fields)).toEqual({ name: 'Jacob', seats: '2', notify: false, plan: '', tags: ['a'] })
+    expect(initialForm(fields)).toEqual({ name: 'Alex', seats: '2', notify: false, plan: '', tags: ['a'] })
   })
 })
 
 describe('formAnswer', () => {
   it('sends numbers as numbers, a checkbox always, and leaves empty inputs out', () => {
     const form = { ...initialForm(fields), plan: 'max', tags: [] }
-    expect(formAnswer(fields, form)).toEqual({ values: { name: 'Jacob', seats: 2, notify: false, plan: 'max' }, missing: [], invalid: [] })
+    expect(formAnswer(fields, form)).toEqual({ values: { name: 'Alex', seats: 2, notify: false, plan: 'max' }, missing: [], invalid: [] })
   })
 
   it('names the required fields still empty and says what is wrong with a filled-in one', () => {

@@ -28,6 +28,8 @@ import { CAPTION_W } from '@/lib/host-window'
 // Restart to update (or, for a server the launcher did not start, how to restart it).
 defineProps<{ sidebarOpen: boolean; width: number; side?: SidebarSide; sliding?: boolean; hydraOpen?: boolean; cloudOn?: boolean; tasksOn?: boolean; devOn?: boolean; cleanOn?: boolean; compactOn?: boolean; update?: UpdateOffer | null }>()
 const emit = defineEmits<{ new: []; search: []; 'toggle-sidebar': []; settings: []; hydra: []; 'hydra-intent': []; cloud: []; tasks: []; dev: []; clean: []; compact: []; restart: [] }>()
+// arkitect-allow: account-scoped-storage-keys - 'hydra-intent' is this bar's event (the pointer or focus is on the AgentHydra button), not a storage key
+const hydraIntent = () => emit('hydra-intent')
 
 // The colour is apart so the cloud's blue replaces it: two colour utilities on one button resolve by
 // stylesheet order, not by which came last.
@@ -120,7 +122,7 @@ const BTN = `${BTN_SHAPE} text-text`
     <!-- AgentHydra and Dev servers sit at the bar's right end, after a thin divider (owner, 2026-10-07), with 8px on its right (owner, 2026-10-10). -->
     <span class="ms-auto me-1 h-4 w-px shrink-0 bg-border" aria-hidden="true" />
     <Tip :label="hydraOpen ? 'Back to chats' : 'Open AgentHydra'">
-      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')" @pointerenter="emit('hydra-intent')" @focus="emit('hydra-intent')">
+      <button type="button" :class="[BTN, hydraOpen ? 'bg-fill-selected' : '']" aria-label="AgentHydra" :aria-pressed="!!hydraOpen" @click="emit('hydra')" @pointerenter="hydraIntent" @focus="hydraIntent">
         <component :is="agentHydraIcon" class="size-4" />
       </button>
     </Tip>

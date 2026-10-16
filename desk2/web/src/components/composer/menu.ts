@@ -15,9 +15,6 @@ export const SUB_TRIGGER = '[&>svg:last-child]:!size-4 [&>svg:last-child]:-mr-[5
 /** Menu glyph: 14px drawn in the 16px slot, strokes about 1.5px like the real glyphs (menu-plus.png at 8x). */
 export const MENU_GLYPH = '!size-3.5 mx-px [stroke-width:2.5]'
 
-/** Item with a description line under the label: 40.5px high. */
-export const ITEM_TALL = 'h-[40.5px] items-center'
-
 /** Header ("Mode"): 13px/500 muted, 23 high. */
 export const HEADER = 'flex h-[23px] items-center px-2 py-1 text-ui font-medium text-[var(--text-muted)]'
 
@@ -36,12 +33,13 @@ const TOOL_TEXT =
 /** Toolbar text button below the box: h20, r5, px6, 12px #c3c2b7 (the mode). */
 export const TOOL_BUTTON = `${TOOL_TEXT} text-[var(--text-2)]`
 
-/** Toolbar value button (model, effort): the same button in #f0efec. */
-export const TOOL_VALUE = `${TOOL_TEXT} text-[var(--text)]`
-
 /** Toolbar icon button: 20x20, r5, 16px icon. */
 export const TOOL_ICON =
   'flex size-5 shrink-0 items-center justify-center rounded-[var(--radius-5)] text-[var(--text-2)] [&>svg]:[stroke-width:2.5] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] data-[state=open]:bg-[var(--fill-hover)] data-[state=open]:text-[var(--text)] disabled:opacity-50 disabled:hover:bg-transparent'
+
+/** Icon button inside the box (+ at its left, the mic at its right, owner 2026-10-14 after Claude Desktop): 24x24, r6, as Send. */
+export const BOX_ICON =
+  'flex size-6 shrink-0 items-center justify-center rounded-[var(--radius-6)] text-[var(--text-2)] transition-colors duration-[60ms] hover:bg-[var(--fill-hover)] hover:text-[var(--text)] data-[state=open]:bg-[var(--fill-hover)] data-[state=open]:text-[var(--text)] disabled:opacity-50 disabled:hover:bg-transparent'
 
 /** Repo strip button: h24, r6, px5. */
 export const STRIP_BUTTON =

@@ -16,6 +16,7 @@ import {
   createDshInstance,
   deleteDshInstance,
   dshInstanceStores,
+  freeDshName,
   listDshInstances,
   renameDshInstance,
   resolveDshEntry,
@@ -70,6 +71,20 @@ describe('createDshInstance: a home, a number, and a registry entry', () => {
     expect(dup.ok).toBe(false)
     // Case-insensitively, because "twin" and "TWIN" are the same instance to a person.
     expect(dup.message).toContain('already exists')
+  })
+
+  // Owner, 2026-10-14: "stop asking me for names". A create that names nothing takes the first free one.
+  test('a create that names nothing takes the first name no instance has', () => {
+    clearRegistry()
+    expect(createDshInstance('deepseek 2').ok).toBe(true)
+    const first = createDshInstance(freeDshName())
+    const second = createDshInstance(freeDshName())
+    expect([first.ok, second.ok]).toEqual([true, true])
+    expect(readRegistry().instances.map((i) => i.name)).toEqual([
+      'deepseek 2',
+      'DeepSeek 1',
+      'DeepSeek 3',
+    ])
   })
 })
 

@@ -57,12 +57,83 @@ const chatName = (title: string, id: string): string =>
       .slice(0, 91) || 'Desk chat'
   } ${id.slice(0, 8)}`
 
+/** The job's request: a resume of the chat's thread when this account holds it, else a new named chat. */
+function requestFor(task: Task, account: Account): FreeRequest {
+  const model = task.model && isFreeChatgptModel(task.model) ? task.model : null
+  // A thread from another account cannot be continued here: the chat starts a new ChatGPT chat on this one.
+  const bound = task.thread?.accountId === account.id ? task.thread.threadId : null
+  return {
+    requestId: randomUUID(),
+    instanceId: account.home,
+    provider: 'chatgpt',
+    prompt: task.text,
+    ...(bound
+      ? { command: 'resume', chatId: bound }
+      : { command: 'chat', name: chatName(task.title, task.chatId) }),
+    ...(model ? { model } : {}),
+  } as FreeRequest
+}
+
+/** Posts the job, waiting out a busy account (409) for up to BUSY_WAIT_MS. Null when the turn ended first. */
+async function postJob(
+  body: FreeRequest,
+  sink: TurnSink,
+  isOver: () => boolean,
+): Promise<FreeJob | null> {
+  let job: FreeJob | null = null
+  for (const until = Date.now() + BUSY_WAIT_MS; !job; ) {
+    try {
+      job = await desk<FreeJob>('POST', '/jobs', { ...body, requestId: randomUUID() })
+    } catch (err) {
+      if (!(err instanceof DeskError) || err.status !== 409 || Date.now() > until) throw err
+      sink.activity('Waiting for this ChatGPT account to finish another job')
+      await new Promise((resolve) => setTimeout(resolve, BUSY_POLL_MS))
+      if (isOver()) return null
+    }
+  }
+  return job
+}
+
+/** Polls the posted job until Desk marks it done. Null when the turn ended during the wait. */
+async function pollJob(
+  jobId: string,
+  job: FreeJob,
+  isOver: () => boolean,
+): Promise<FreeJob | null> {
+  let current = job
+  while (current.state !== 'done') {
+    await new Promise((resolve) => setTimeout(resolve, POLL_MS))
+    if (isOver()) return null
+    current = await desk<FreeJob>('GET', `/jobs/${jobId}`)
+  }
+  return current
+}
+
+/** How a job that gave no answer ends the turn: a limit holds the account, a sign-out asks for a new sign-in. */
+function failureOf(result: FreeResult, account: Account, durationMs: number): TurnEnd {
+  const code = result.error?.code ?? ''
+  if (code === 'rate_limited') {
+    return {
+      ok: false,
+      error: result.error?.message || 'ChatGPT hit its limit.',
+      durationMs,
+      limitedUntil: Date.now() + LIMIT_HOLD_MS,
+    }
+  }
+  const why =
+    code === 'login_required'
+      ? `${account.label} is signed out of ChatGPT. Sign it in again on the Free page, then send again.`
+      : result.error?.message || 'ChatGPT could not answer.'
+  return { ok: false, error: why, durationMs }
+}
+
 function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
   const started = Date.now()
   let jobId: string | null = null
   let over = false
   let settle!: (end: TurnEnd) => void
   const done = new Promise<TurnEnd>((resolve) => (settle = resolve))
+  const isOver = (): boolean => over
 
   const end = (e: TurnEnd): void => {
     if (over) return
@@ -88,40 +159,14 @@ function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
           level: 'info',
           text: NO_PICTURES,
         })
-      const model = task.model && isFreeChatgptModel(task.model) ? task.model : null
-      // A thread from another account cannot be continued here: the chat starts a new ChatGPT chat on this one.
-      const bound = task.thread?.accountId === account.id ? task.thread.threadId : null
-      const body: FreeRequest = {
-        requestId: randomUUID(),
-        instanceId: account.home,
-        provider: 'chatgpt',
-        prompt: task.text,
-        ...(bound
-          ? { command: 'resume', chatId: bound }
-          : { command: 'chat', name: chatName(task.title, task.chatId) }),
-        ...(model ? { model } : {}),
-      } as FreeRequest
       sink.activity('Asking ChatGPT')
-      let job: FreeJob | null = null
-      for (const until = Date.now() + BUSY_WAIT_MS; !job; ) {
-        try {
-          job = await desk<FreeJob>('POST', '/jobs', { ...body, requestId: randomUUID() })
-        } catch (err) {
-          if (!(err instanceof DeskError) || err.status !== 409 || Date.now() > until) throw err
-          sink.activity('Waiting for this ChatGPT account to finish another job')
-          await new Promise((resolve) => setTimeout(resolve, BUSY_POLL_MS))
-          if (over) return
-        }
-      }
-      jobId = job.id
+      const posted = await postJob(requestFor(task, account), sink, isOver)
+      if (!posted) return
+      jobId = posted.id
       sink.activity('Waiting for ChatGPT')
-      while (job.state !== 'done') {
-        await new Promise((resolve) => setTimeout(resolve, POLL_MS))
-        if (over) return
-        job = await desk<FreeJob>('GET', `/jobs/${jobId}`)
-      }
-      if (over) return
-      const result: FreeResult = job.result ?? {
+      const finished = await pollJob(jobId, posted, isOver)
+      if (!finished || over) return
+      const result: FreeResult = finished.result ?? {
         ok: false,
         error: { code: 'no_result', message: 'ChatGPT gave no answer.' },
       }
@@ -133,20 +178,7 @@ function startTurn(task: Task, account: Account, sink: TurnSink): Turn {
           sink.item({ kind: 'assistant_text', id: `chatgpt:${jobId}`, ts: Date.now(), text })
         return end({ ok: true, durationMs })
       }
-      const code = result.error?.code ?? ''
-      if (code === 'rate_limited') {
-        return end({
-          ok: false,
-          error: result.error?.message || 'ChatGPT hit its limit.',
-          durationMs,
-          limitedUntil: Date.now() + LIMIT_HOLD_MS,
-        })
-      }
-      const why =
-        code === 'login_required'
-          ? `${account.label} is signed out of ChatGPT. Sign it in again on the Free page, then send again.`
-          : result.error?.message || 'ChatGPT could not answer.'
-      end({ ok: false, error: why, durationMs })
+      return end(failureOf(result, account, durationMs))
     } catch (err) {
       end({
         ok: false,

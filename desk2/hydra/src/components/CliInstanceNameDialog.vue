@@ -1,8 +1,6 @@
 <script setup lang="ts">
-// A single small text-input dialog reused for both "New instance" (create) and "Rename",
-// the same shape as CreateInstanceDialog.vue, just parameterized on `mode` so both actions
-// don't need near-duplicate components. The Codex and DeepSeek tables use both modes; the Claude
-// CLI table only renames (its plus opens Quick add), so its namespace has no create wording.
+// The one small text-input dialog every instance table renames with; `namespace` points it at the
+// table's own wording. Nothing is named on create any more: the daemon names a new instance.
 import { computed, ref, watch } from 'vue'
 import { Button } from '@/components/ui/button'
 import {
@@ -19,7 +17,6 @@ import { CLI_INSTANCE_DIALOG_KEYS, type CliDialogNamespace } from '@/lib/instanc
 const open = defineModel<boolean>('open', { default: false })
 
 const props = defineProps<{
-  mode: 'create' | 'rename'
   namespace?: CliDialogNamespace
   currentName?: string | null
   submitting?: boolean
@@ -32,27 +29,16 @@ const emit = defineEmits<{
 
 const name = ref('')
 
-// Rename starts from the current name; create from a suggested one when the table passes it.
+// Rename starts from the current name.
 watch(open, (isOpen) => {
   if (isOpen) name.value = props.currentName ?? ''
 })
 
 const keys = computed(() => CLI_INSTANCE_DIALOG_KEYS[props.namespace ?? 'cliInstances'])
-/** The create wording, in create mode under a namespace that has one. */
-const createKeys = computed(() => {
-  const k = keys.value
-  return props.mode === 'create' && 'createDialogTitle' in k ? k : null
-})
-const titleKey = computed(() => createKeys.value?.createDialogTitle ?? keys.value.renameDialogTitle)
-const descriptionKey = computed(
-  () => createKeys.value?.createDialogDescription ?? keys.value.renameDialogDescription,
-)
-const submitKey = computed(
-  () => createKeys.value?.createDialogSubmit ?? keys.value.renameDialogSubmit,
-)
-const submittingKey = computed(
-  () => createKeys.value?.createDialogCreating ?? keys.value.renameDialogRenaming,
-)
+const titleKey = computed(() => keys.value.renameDialogTitle)
+const descriptionKey = computed(() => keys.value.renameDialogDescription)
+const submitKey = computed(() => keys.value.renameDialogSubmit)
+const submittingKey = computed(() => keys.value.renameDialogRenaming)
 
 function handleSubmit() {
   const trimmed = name.value.trim()

@@ -41,8 +41,8 @@ function startPolling() {
   void refresh()
 }
 
-async function create(name: string) {
-  const result = await guard(api.createCodexInstance(name))
+async function create() {
+  const result = await guard(api.createCodexInstance())
   if (result?.ok) await refresh({ silent: true })
   return result
 }

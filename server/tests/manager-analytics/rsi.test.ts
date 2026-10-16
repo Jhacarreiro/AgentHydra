@@ -13,7 +13,7 @@ import {
   status,
 } from '../../src/manager-analytics/rsi'
 
-const NOW = Date.parse('2026-10-10T12:00:00.000Z')
+const NOW = Date.parse('2019-10-19T12:00:00.000Z')
 const HOUR = 3_600_000
 const DAY = 86_400_000
 const SLUG = 'example-mgr'

@@ -6,7 +6,7 @@
 // back as "resetisn'tavailablerightnow.◐ medium · /effort" and was shown to the owner verbatim.
 // These pin that such text still maps to the right outcome, a clean sentence and a readable date.
 import { afterAll, beforeAll, expect, test } from 'bun:test'
-import { chmodSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync } from 'node:fs'
+import { chmodSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { classifyLimitResetScreen, dateAfter, runCliLimitReset } from '../src/core/cli-limit-reset'
@@ -103,6 +103,7 @@ beforeAll(async () => {
 afterAll(() => {
   if (claudeWas === undefined) delete process.env.AGENTHYDRA_CLAUDE_PATH
   else process.env.AGENTHYDRA_CLAUDE_PATH = claudeWas
+  rmSync(root, { recursive: true, force: true })
 })
 
 let accounts = 0

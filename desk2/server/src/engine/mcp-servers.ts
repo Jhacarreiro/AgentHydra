@@ -51,7 +51,7 @@ function localServersOf(json: unknown, cwd: string): Record<string, unknown> {
 }
 
 /**
- * What plain `claude` would load in `cwd` under Jacob's main .claude.json whatever account the chat runs on:
+ * What plain `claude` would load in `cwd` under the owner's main .claude.json whatever account the chat runs on:
  * its user-level servers and the folder's local-scope ones (Claude Code looks the folder up by its own key
  * only, never a parent's). A user-level name the folder's .mcp.json also defines is left to the project, as
  * Claude Code ranks project over user. A missing or unreadable file gives nothing and one log line (path only).

@@ -16,6 +16,9 @@ import {
   filterSlashCommands,
   folderName,
   loadDraft,
+  accountShownName,
+  menuAccounts,
+  modelTriggerLabel,
   prAsk,
   saveDraft,
   slashQuery,
@@ -164,6 +167,37 @@ describe('labels', () => {
       expect(ask.includes('draft pull request')).toBe(draft)
     }
   })
+
+  it('the model trigger names a full Claude id that is not in the menu by its friendly name', () => {
+    const menu = [{ value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }]
+    expect(modelTriggerLabel('claude-opus-5-5', menu)).toBe('Opus 5.5')
+    expect(modelTriggerLabel('claude-haiku-5-5', menu)).toBe('Haiku 5.5')
+    expect(modelTriggerLabel('claude-fable-5-1', menu)).toBe('Fable 5.1')
+    expect(modelTriggerLabel('claude-sonnet-5-5', menu)).toBe('Sonnet 5.5')
+  })
+
+  it('the model trigger shows an id it cannot name as given, and a menu value with its menu label', () => {
+    expect(modelTriggerLabel('some-custom-model', [])).toBe('some-custom-model')
+    expect(modelTriggerLabel('claude-opus-5-5', [{ value: 'claude-opus-5-5', label: 'Opus 5.5 (1M)' }])).toBe('Opus 5.5 (1M)')
+  })
+
+  // CliMayte names a Desk chat's model by its family; the chip showed the bare word "opus".
+  it('the model trigger names a bare family by its model in the menu', () => {
+    const menu = [{ value: 'claude-opus-5-5', label: 'Opus 5.5' }, { value: 'claude-sonnet-5-5', label: 'Sonnet 5.5' }]
+    expect(modelTriggerLabel('opus', menu)).toBe('Opus 5.5')
+    expect(modelTriggerLabel('sonnet', menu)).toBe('Sonnet 5.5')
+    expect(modelTriggerLabel('opus', [])).toBe('Opus')
+  })
+
+  // Owner, 2026-10-15: "only show desktop instances"; the chat's own account stays visible when it is not one. Each goes
+  // by the name on the account, never its Desktop folder's ("the account folder name is useless").
+  it('the account menu lists the logins linked to a Desktop instance by account name, then the current one if it is not', () => {
+    const acct = (id: string, desktop: string | null, name: string | null) => ({ id, label: `#${id.length} x@example.com (Max 5x)`, configDir: null, email: null, plan: 'Max 5x', signedIn: true, fiveHourPct: null, weeklyPct: null, fiveHourResetsAt: null, weeklyResetsAt: null, inUse: false, desktop, name })
+    const all = [acct('a', null, 'Ann'), acct('b', 'zeta', 'Alpha'), acct('cc', 'Alpha', 'zed'), acct('ddd', null, null)]
+    expect(menuAccounts(all, null).map(accountShownName)).toEqual(['Alpha', 'zed'])
+    expect(menuAccounts(all, 'ddd').map(accountShownName)).toEqual(['Alpha', 'zed', '#3'])
+    expect(menuAccounts(all, 'b').map((a) => a.id)).toEqual(['b', 'cc'])
+  })
 })
 
 describe('keys', () => {
@@ -211,7 +245,7 @@ describe('mentions', () => {
   it('finds the @word at the caret, not an email address', () => {
     expect(mentionQuery('look at @web/sr', 15)).toEqual({ start: 8, query: 'web/sr' })
     expect(mentionQuery('@', 1)).toEqual({ start: 0, query: '' })
-    expect(mentionQuery('mail jacob@example.com', 22)).toBeNull()
+    expect(mentionQuery('mail alex@example.com', 22)).toBeNull()
     expect(mentionQuery('@done and more', 14)).toBeNull()
   })
   it('ranks basename prefix before path substring', () => {

@@ -1,13 +1,20 @@
+import { callerAndChat } from './hydra-core/caller'
+import { loadCatalog } from './hydra-core/catalog'
+import { movers, readFeedback } from './hydra-core/feedback'
 import { statsOf } from './hydra-core/log'
 import { coreDir } from './hydra-core/paths'
-import { reportRun } from './hydra-core/report-row'
+import { OUTCOMES, reportRun } from './hydra-core/report-row'
 import { trackSummary } from './hydra-core/track'
 import { answer, findTool, scope } from './hydra-core/tree'
 import { defaultDaemon, use } from './hydra-core/use'
 import { api, type HydraTool, S, str } from './mcp-client'
 
+/** The chat a call names, or the Desk chat this server runs in. */
+const rawChat = (a: Record<string, unknown>): string =>
+  str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
+
 function chatOf(a: Record<string, unknown>): string {
-  const chat = str(a.chat).trim() || process.env.HYDRA_DESK_CHAT_ID?.trim() || ''
+  const chat = rawChat(a)
   if (!chat) throw new Error('no chat: pass chat, or run inside a Desk chat (HYDRA_DESK_CHAT_ID)')
   return chat
 }
@@ -16,7 +23,6 @@ const stringList = (v: unknown): string[] | undefined =>
   Array.isArray(v) ? v.map((x) => str(x).trim()).filter(Boolean) : undefined
 
 const MODES = ['become', 'consult', 'hire', 'load']
-const OUTCOMES = ['done', 'partial', 'failed']
 
 export const CORE_TOOLS: HydraTool[] = [
   {
@@ -69,7 +75,7 @@ export const CORE_TOOLS: HydraTool[] = [
     name: 'core_use',
     listed: true,
     description:
-      'MUTATES: use a catalog entry: become (take the lead), consult (ask it a question through a worker), hire (add it under you), or load (read its text).',
+      'MUTATES: use a catalog entry: become (take the lead), consult (ask it a question), hire (give it a job), or load (read its text). From a Desk chat, consult and hire open one seat per persona in this chat (a sub-chat, reused), only for the calling chat: consult answers within 30 seconds, or says it is working; call consult again with no question to read the latest answer (it never starts a new one). From a chat with no Desk row, consult runs one worker per question and the same no-question call reads it back. Hire returns the seat at once. A seat or a worker started for one job is refused.',
     inputSchema: S(
       {
         chat: { type: 'string' },
@@ -77,21 +83,40 @@ export const CORE_TOOLS: HydraTool[] = [
         mode: { type: 'string', enum: MODES },
         question: { type: 'string' },
         job: { type: 'string' },
+        cwd: {
+          type: 'string',
+          description: "The folder a new seat or consult works in. Default: this chat's folder.",
+        },
       },
       ['id', 'mode'],
     ),
-    run: async (a: Record<string, unknown>) =>
-      use(
+    run: async (a: Record<string, unknown>) => {
+      const mode = str(a.mode)
+      // Consult and hire: the caller's role, and its own chat as the key (a Prime opens seats only for itself).
+      const bound =
+        mode === 'consult' || mode === 'hire' ? await callerAndChat(a, rawChat(a)) : null
+      return use(
         coreDir(),
         {
-          chat: chatOf(a),
+          chat: bound ? bound.chat.key : chatOf(a),
           id: str(a.id).trim(),
-          mode: str(a.mode) as 'become' | 'consult' | 'hire' | 'load',
+          mode: mode as 'become' | 'consult' | 'hire' | 'load',
           question: str(a.question).trim() || undefined,
           job: str(a.job).trim() || undefined,
+          cwd: str(a.cwd).trim() || undefined,
+          ...(bound
+            ? {
+                caller: bound.caller.role,
+                who: bound.caller,
+                desk: bound.chat.desk,
+                aliases: bound.chat.aliases,
+                why: bound.caller.why ?? undefined,
+              }
+            : {}),
         },
         defaultDaemon(api),
-      ),
+      )
+    },
   },
   {
     name: 'core_report',
@@ -101,7 +126,7 @@ export const CORE_TOOLS: HydraTool[] = [
     inputSchema: S(
       {
         chat: { type: 'string' },
-        outcome: { type: 'string', enum: OUTCOMES },
+        outcome: { type: 'string', enum: [...OUTCOMES] },
         note: { type: 'string' },
         overruled: { type: 'array', items: { type: 'string' } },
         score: { type: 'integer', minimum: 1, maximum: 5 },
@@ -130,8 +155,16 @@ export const CORE_TOOLS: HydraTool[] = [
   {
     name: 'core_stats',
     listed: false,
-    description: 'Hydra Core log stats: misses per entry, overruled counts, report count.',
-    inputSchema: S({}),
-    run: async () => statsOf(coreDir()),
+    description:
+      'Hydra Core log stats over the last `days` (default 31): misses per entry (and the `none` rejections), overruled counts, reports and the report rate, per-question asked and defaulted counts, pushback by chat, finds, and `learned`: the entries the last feedback fold moves most, up and down.',
+    inputSchema: S({ days: { type: 'integer', minimum: 1 } }),
+    run: async (a: Record<string, unknown>) => {
+      const days = typeof a.days === 'number' && a.days >= 1 ? a.days : 31
+      const dir = coreDir()
+      return {
+        ...statsOf(dir, new Date(Date.now() - days * 24 * 60 * 60 * 1000)),
+        learned: movers(readFeedback(dir), loadCatalog(dir).entries),
+      }
+    },
   },
 ]

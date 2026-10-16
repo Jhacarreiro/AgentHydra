@@ -102,6 +102,7 @@ import {
   sizeTasks,
   taskSettings,
 } from './climayte-dispatch'
+import { newestSaid } from './climayte-doing'
 import { ETA_PROMPT_VERSION, etaTookSeconds } from './climayte-eta'
 import { appendEtaRow, reviewRow, saidRow, settledRow } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
@@ -114,7 +115,10 @@ import {
   classifyAttempt,
   climaytePriority,
   contextTokens,
+  DRONE_REFUSAL,
   RUNNER_NEVER_STARTED_NOTICE,
+  roleOf,
+  tooBigOf,
 } from './climayte-lib'
 import { archiveLogsWhenDue } from './climayte-log-archive'
 import {
@@ -124,7 +128,7 @@ import {
   startCliMaytePing,
 } from './climayte-ping'
 import { launchRunner, readRunnerExit, readRunnerPids } from './climayte-runner'
-import { installForTick, scheduleDue, tickAccounts, tickState } from './climayte-schedule'
+import { scheduleTick, tickAccounts } from './climayte-schedule'
 import { type CliMayteVerdict, climayteKind, nextRung } from './climayte-scorecard'
 import {
   charge,
@@ -210,6 +214,9 @@ import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
 import { cliAuthStatus } from './core/cli-quick-add'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
+import { loadCatalog } from './hydra-core/catalog'
+import { coreDir } from './hydra-core/paths'
+import { seatChatOf } from './hydra-core/seat-chats'
 import { POINTER_DIR } from './instance'
 import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
 
@@ -661,14 +668,8 @@ async function tick(): Promise<void> {
     // A stop's kill runs off the daemon's thread (killRunners): nothing launches beside a CLI still
     // being killed, as the next turn of a worker stopped to deliver an urgent message would.
     await killsLanded()
-    const isDue = (w: CliMayteWorker): boolean =>
-      (w.status === 'queued' || w.status === 'waiting') && (w.notBefore ?? 0) <= now && !w.hold
-    // The install guard is asked before the state is read, and only with work to place: its probe
-    // runs off the daemon's thread, and what is due is read after it answers.
-    const install = [...workers.values()].some(isDue) ? await installForTick() : null
-    const state = tickState(accounts, now, install)
-    const due = [...workers.values()].filter(isDue)
-    scheduleDue(state, due)
+    const placing = scheduleTick(accounts, now)
+    if (placing) await placing
     // Piece 3: Process wave batch wakes.
     reconcileWaves(now)
     processBatchWakes(now)
@@ -712,7 +713,13 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
   const latest = r.recent[r.recent.length - 1] ?? null
   if (latest && latest !== w.lastActivity) {
     w.lastActivity = latest
-    w.updatedAt = Date.now()
+    w.stepAt = Date.now()
+    w.updatedAt = w.stepAt
+  }
+  const said = newestSaid(r.recent)
+  if (said !== null && said !== w.saidLine) {
+    w.saidLine = said
+    w.saidAt = Date.now()
   }
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
   // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.
@@ -947,37 +954,35 @@ function lookAtInstall(w: CliMayteWorker, at: Attempt, events: unknown[], end: E
     })
 }
 
-function finish(w: CliMayteWorker, events: unknown[]): void {
-  const at = w.attempts[w.attempts.length - 1]
-  if (at?.outcome !== 'running') return
+/** The attempt's end read off its log and events, or null while an install look is pending (or has
+ *  just started, and settles the attempt when it ends). */
+function attemptEnd(w: CliMayteWorker, at: Attempt, events: unknown[]): EndRead | null {
   let end = installLooks.get(at.log)
-  if (end === null) return
-  if (end) installLooks.delete(at.log)
-  else {
-    const hadRunnerPid =
-      !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
-    const stderr = tailText(at.errLog, 4_000)
-    const read = withStops(
-      at,
-      classifyAttempt(events, stderr, at.started === true),
-      w.chat === true,
-    )
-    end = { v: read, stderr, hadRunnerPid }
-    if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
-      lookAtInstall(w, at, events, end)
-      return
-    }
+  if (end === null) return null
+  if (end) {
+    installLooks.delete(at.log)
+    return end
   }
-  const { stderr, hadRunnerPid } = end
-  cleanUpRunner(w, at)
-  const v =
-    end.v.outcome === 'interrupted' && at.runner && !hadRunnerPid
-      ? { ...end.v, notice: RUNNER_NEVER_STARTED_NOTICE }
-      : end.v
-  rmSync(signalPath(w.id), { force: true })
-  removeWorkerFiles(w.id)
-  forgetRead(at.log)
-  const now = Date.now()
+  const hadRunnerPid =
+    !!at.runner && (at.runner.pid !== null || readRunnerPids(at.runner.pidFile) !== null)
+  const stderr = tailText(at.errLog, 4_000)
+  const read = withStops(at, classifyAttempt(events, stderr, at.started === true), w.chat === true)
+  end = { v: read, stderr, hadRunnerPid }
+  if (installLookDue(at, read, events, stderr, hadRunnerPid)) {
+    lookAtInstall(w, at, events, end)
+    return null
+  }
+  return end
+}
+
+/** Records how the attempt ended on the attempt, the worker's turn count and its results. */
+function recordAttemptEnd(
+  w: CliMayteWorker,
+  at: Attempt,
+  v: EndRead['v'],
+  events: unknown[],
+  now: number,
+): number {
   if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
   at.outcome = v.outcome
   at.notice = v.notice
@@ -990,6 +995,55 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   const spent = charge(w, at)
   w.turns += v.turns
   keepResults(w, at, v)
+  return spent
+}
+
+/** The message's estimate settles when its turn ends done, not to ask: the working time since the
+ *  `ETA:` line is the sample the next briefs are calibrated on (climayte-eta.ts). */
+function settleEta(w: CliMayteWorker, v: EndRead['v'], asking: boolean, now: number): void {
+  if (
+    v.outcome !== 'done' ||
+    asking ||
+    w.status === 'failed' ||
+    !w.eta ||
+    w.eta.tookS !== undefined
+  )
+    return
+  w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
+  w.eta.doneAt = now
+  void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+}
+
+/** Where a settled turn goes next. A wave task with no check is judged now, off the main thread, and
+ *  batched once judged (or at once when it is no wave task after all); with one, when its check ends
+ *  (gatherAndJudgeCheck). */
+function routeSettled(w: CliMayteWorker, now: number, asking: boolean): void {
+  const judging = !asking && w.status === 'done' && !w.check && waveTaskOf(w) !== null
+  if (judging)
+    judgeWave(w, null, () => addToWaveBatch(w, now)).catch((err) =>
+      console.error(`[climayte] ${w.id}: its wave task could not be judged:`, err),
+    )
+  if (!asking && w.status === 'done' && w.check) startCheck(w)
+  if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
+  if (asking) escalateAsking(w, now)
+}
+
+function finish(w: CliMayteWorker, events: unknown[]): void {
+  const at = w.attempts[w.attempts.length - 1]
+  if (at?.outcome !== 'running') return
+  const end = attemptEnd(w, at, events)
+  if (!end) return
+  const { stderr, hadRunnerPid } = end
+  cleanUpRunner(w, at)
+  const v =
+    end.v.outcome === 'interrupted' && at.runner && !hadRunnerPid
+      ? { ...end.v, notice: RUNNER_NEVER_STARTED_NOTICE }
+      : end.v
+  rmSync(signalPath(w.id), { force: true })
+  removeWorkerFiles(w.id)
+  forgetRead(at.log)
+  const now = Date.now()
+  const spent = recordAttemptEnd(w, at, v, events, now)
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -1000,38 +1054,26 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
   // check runs and no wave batch is woken until the answer resumes it. A question left when the
   // turn went on (a message was already queued) is answered.
   const asking = w.status === 'done' && !!w.question
-  // The message's estimate settles when its turn ends done, not to ask: the working time since the
-  // `ETA:` line is the sample the next briefs are calibrated on (climayte-eta.ts).
-  if (
-    v.outcome === 'done' &&
-    !asking &&
-    w.status !== 'failed' &&
-    w.eta &&
-    w.eta.tookS === undefined
-  ) {
-    w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
-    w.eta.doneAt = now
-    void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
-  }
+  settleEta(w, v, asking, now)
   // climayteSend told the caller a queued message would be delivered; say that it was not.
   if (w.status === 'failed' && w.pending.length)
     w.error =
       `${w.error ?? ''} ${w.pending.length} queued message(s) were not delivered; send one again to retry.`.trim()
   journalFinish(w, at, v, spent)
+  if (v.outcome === 'done' && !asking) journalTooBig(w)
   if (w.question && !asking) delete w.question
-  // A wave task with no check is judged now, off the main thread, and batched once judged (or at once
-  // when it is no wave task after all); with one, when its check ends (gatherAndJudgeCheck).
-  const judging = !asking && w.status === 'done' && !w.check && waveTaskOf(w) !== null
-  if (judging)
-    judgeWave(w, null, () => addToWaveBatch(w, now)).catch((err) =>
-      console.error(`[climayte] ${w.id}: its wave task could not be judged:`, err),
-    )
-  if (!asking && w.status === 'done' && w.check) startCheck(w)
-  if (!asking && !judging && w.status !== 'checking') addToWaveBatch(w, now)
-  if (asking) escalateAsking(w, now)
+  routeSettled(w, now, asking)
 
   changed(w)
   schedule(50)
+}
+
+/** A turn that ended on a `TOO BIG:` line (tooBigOf) is journaled `too_big`: its summoner takes the job back and
+ *  re-splits it (ROLES.md), and the ping leads with the line (climayte-ping.ts). */
+export function journalTooBig(w: CliMayteWorker): void {
+  // This turn's text only: a chat's earlier turn that said it is no report on this one.
+  const line = tooBigOf(w.results?.at(-1) ?? w.result)
+  if (line) journal(w, 'too_big', { notice: line })
 }
 
 /** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide
@@ -1111,6 +1153,8 @@ function enlistWorkers(
     workers.set(w.id, w)
     journal(w, 'dispatched', {
       cwd: w.cwd,
+      role: w.role,
+      persona: w.persona,
       trace: trace ? (trace.label ?? (trace.sessionId ? 'a chat' : 'a worker')) : undefined,
       accounts: w.accounts?.length,
       model: w.model,
@@ -1157,6 +1201,10 @@ export function climayteRun(input: {
     commit?: boolean
     /** An edit-only worker: no shell, no MCP server but CliMayte's, and no wait for the CPU (CliMayteWorker.light). */
     light?: boolean
+    /** 'seat': the worker carries `persona` (CliMayteWorker.role). Absent: a prime chat, a seat of a desk, or a drone. */
+    role?: 'seat'
+    /** A catalog id, with role 'seat' (CliMayteWorker.persona). */
+    persona?: string
     priority?: number
     size?: string
     /** One of the owner's own chats, not a delegated task (CliMayteWorker.chat). */
@@ -1195,7 +1243,9 @@ export function climayteRun(input: {
   load()
   if (!Array.isArray(input.tasks) || !input.tasks.length)
     throw new Error('tasks must be a non-empty array')
-  input = { ...input, tasks: input.tasks.map(sealedTask) }
+  refuseDrone(input.origin, input.tasks.every((t) => t.sealed) ? input.tasks.length : 0)
+  input.tasks.forEach(checkRole)
+  input = { ...input, tasks: input.tasks.map((t, i) => sealedTask(seatTask(t), i)) }
   const defaults = runDefaultsOf(input)
   const settings = taskSettings(input.tasks, defaults)
   const cap = input.perAccount ?? 2
@@ -1230,6 +1280,41 @@ export function climayteRun(input: {
   )
   enlistWorkers(made, settings, fresh, input)
   return runReply(group, repeats, fresh, made, now)
+}
+
+/** A drone never starts workers (roleOf): its dispatch is refused, and the refusal is logged on the drone.
+ *  Sealed visitors are the exception (`visitors`: how many, when every task is sealed): one has only the
+ *  tools it names and starts nothing itself, and a drone's check may need a wave of them. */
+function refuseDrone(origin: CliMayteOrigin | undefined, visitors = 0): void {
+  const caller = originFor(origin)
+  if (caller?.kind !== 'worker') return
+  const w = workers.get(caller.workerId)
+  if (!w || roleOf(w) !== 'drone') return
+  if (visitors > 0) {
+    journal(w, 'visitors', { notice: String(visitors) })
+    return
+  }
+  journal(w, 'refused', { notice: DRONE_REFUSAL })
+  throw new Error(DRONE_REFUSAL)
+}
+
+/** A Desk chat core_use opened as a seat (hydra-core seats.ts, seat-chats.json) runs as a seat of its persona,
+ *  whatever its first message says: Desk forwards only the chat's id, never its parent. */
+function seatTask<T extends RunTask>(t: T): T {
+  const chatId = t.chat === true && !t.role ? t.desk?.chatId : undefined
+  const seat = chatId ? seatChatOf(coreDir(), chatId) : undefined
+  return seat ? { ...t, role: 'seat', persona: seat.persona } : t
+}
+
+/** The role a task names: only a seat, which needs a persona that is in the catalog. */
+function checkRole(t: { role?: unknown; persona?: unknown }): void {
+  if (t.role === undefined && t.persona === undefined) return
+  if (t.role !== 'seat')
+    throw new Error('a task names only the role "seat"; without one it is a drone')
+  if (typeof t.persona !== 'string' || !t.persona)
+    throw new Error('a seat needs a persona: the id of a catalog entry')
+  if (!loadCatalog(coreDir()).entries.has(t.persona))
+    throw new Error(`persona "${t.persona}" is not in the catalog`)
 }
 
 /** One verdict for several finished workers (the same `verdict`, `note` and `kind` for each), in
@@ -1598,37 +1683,54 @@ function reconcileWaveTask(id: string, task: CliMayteWave['tasks'][number], now:
   const w = workers.get(task.workerId)
   if (!w || w.wave !== id) return
   try {
-    if (w.status === 'done') {
-      // With a check, only its own latest pass settles the task (a fail sends the worker back).
-      const last = w.verdicts?.at(-1)
-      if (w.question) {
-        escalateAsking(w, now)
-        return
-      }
-      // A fail by check or wave that sent nothing back (refused, or the top rung) ends the key.
-      if (
-        last?.verdict === 'fail' &&
-        (last.by === 'check' || last.by === 'wave') &&
-        !w.pending.length
-      ) {
-        failStuckTask(w, last.note ?? 'failed with no send-back', now)
-        return
-      }
-      if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
-      judgeWave(w, w.check ? true : null).catch((err) =>
-        console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
-      )
-    } else if (w.status === 'failed' || w.status === 'cancelled') {
-      const found = liveWave(id)
-      const t = found?.wave.tasks.find((x) => x.key === task.key)
-      if (!found || !t) return
-      t.state = 'failed'
-      modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
-      addToWaveBatch(w, now, true)
-    }
+    if (w.status === 'done') judgeFinishedWaveTask(id, task, w, now)
+    else if (w.status === 'failed' || w.status === 'cancelled') failWaveTask(id, task, w, now)
   } catch (err) {
     console.error(`[climayte] wave ${id}: could not reconcile ${task.key}:`, err)
   }
+}
+
+/** A finished worker's wave task: judged on its check and commits (judgeWave). */
+function judgeFinishedWaveTask(
+  id: string,
+  task: CliMayteWave['tasks'][number],
+  w: CliMayteWorker,
+  now: number,
+): void {
+  // With a check, only its own latest pass settles the task (a fail sends the worker back).
+  const last = w.verdicts?.at(-1)
+  if (w.question) {
+    escalateAsking(w, now)
+    return
+  }
+  // A fail by check or wave that sent nothing back (refused, or the top rung) ends the key.
+  if (
+    last?.verdict === 'fail' &&
+    (last.by === 'check' || last.by === 'wave') &&
+    !w.pending.length
+  ) {
+    failStuckTask(w, last.note ?? 'failed with no send-back', now)
+    return
+  }
+  if (w.check && !(last?.by === 'check' && last.verdict === 'pass')) return
+  judgeWave(w, w.check ? true : null).catch((err) =>
+    console.error(`[climayte] wave ${id}: could not judge ${task.key}:`, err),
+  )
+}
+
+/** A failed or cancelled worker's wave task ends `failed`. */
+function failWaveTask(
+  id: string,
+  task: CliMayteWave['tasks'][number],
+  w: CliMayteWorker,
+  now: number,
+): void {
+  const found = liveWave(id)
+  const t = found?.wave.tasks.find((x) => x.key === task.key)
+  if (!found || !t) return
+  t.state = 'failed'
+  modifiedWaves.set(id, { wave: found.wave, configDir: found.configDir })
+  addToWaveBatch(w, now, true)
 }
 
 /** Judge the tasks of a wave its finished workers name; a wave past `running` is settled. */
@@ -1678,6 +1780,7 @@ export async function climayteWaveStart(input: {
   trace?: CliMayteTrace
 }): Promise<{ wave: string; managerId: string; waiter: string }> {
   load()
+  refuseDrone(input.origin)
   const str = (v: unknown): string => (typeof v === 'string' ? v.trim() : '')
   const plan = str(input.plan)
   const cwd = str(input.cwd)
@@ -1781,8 +1884,9 @@ export async function climayteWaveStart(input: {
 
 /** The attempt a stop kills: a running worker's last; null when the worker is not running. */
 const runningAttempt = (w: CliMayteWorker): Attempt | null => {
+  if (w.status !== 'running') return null
   const at = w.attempts[w.attempts.length - 1]
-  return w.status === 'running' && at ? at : null
+  return at ? at : null
 }
 
 /** Before a stop: a CLI that finished just now has that turn's result, cost and turns recorded
@@ -2020,7 +2124,7 @@ let pingOverrides: Partial<CliMaytePingDeps> | null = null
 
 /** A chat origin naming a CliMayte worker's own session is that worker: a manager (or any worker)
  *  that dispatches work hears of it through climayteSend, not its transcript. */
-function originFor(o: CliMayteOrigin | undefined): CliMayteOrigin | undefined {
+export function originFor(o: CliMayteOrigin | undefined): CliMayteOrigin | undefined {
   if (o?.kind !== 'chat') return o
   for (const w of workers.values())
     if (w.sessionId === o.sessionId || w.sessions?.includes(o.sessionId))

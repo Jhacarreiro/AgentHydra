@@ -559,6 +559,14 @@ if ((db.query<{ user_version: number }, []>('pragma user_version').get()?.user_v
     db.exec(`pragma user_version = ${SCHEMA_VERSION}`)
   })()
 }
+// The request or timer each reading was taken for (usage-reader.ts); null on rows from before it.
+if (
+  !db
+    .query<{ name: string }, []>('pragma table_info(usage_samples)')
+    .all()
+    .some((c) => c.name === 'reader')
+)
+  db.exec('alter table usage_samples add column reader text')
 
 // A file created before auto_vacuum was set holds its free pages forever. One VACUUM converts it,
 // but it rewrites the whole file, so it runs only when the free list is worth it (over 25%). The

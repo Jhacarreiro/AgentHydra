@@ -4,7 +4,10 @@
 This is the same gate every act script runs before touching anything; running it by hand shows
 exactly what automation would decide and why, without acting on it.
 
-Usage: python gate_chat.py <title fragment | session id> [--json]
+Usage: python gate_chat.py <title fragment | session id> [--json] [--background [--engine-started MS]]
+       --background adds `background` to the verdict: the background jobs it launched and that never
+       reported back (enginelib.background_work). A chat whose engine has died has no live start, so
+       --engine-started (epoch ms, the engine's start as last seen) leaves out an earlier engine's jobs.
 Exit:  0 gated - 3 chat not resolvable / no transcript (deterministic) - 1 daemon failure.
 """
 
@@ -13,7 +16,7 @@ from __future__ import annotations
 import json
 import sys
 
-from lib import clilib, gatelib
+from lib import clilib, enginelib, gatelib
 from lib import hydralib
 
 
@@ -62,7 +65,17 @@ def main(argv: list[str]) -> int:
         print(__doc__.strip())
         return 0
     as_json = "--json" in argv
-    args = [a for a in argv if not a.startswith("--")]
+    started = None
+    rest = list(argv)
+    if "--engine-started" in rest:
+        at = rest.index("--engine-started")
+        value = rest[at + 1] if at + 1 < len(rest) else ""
+        if not value.isdigit():
+            print("--engine-started takes the engine's start in epoch milliseconds", file=sys.stderr)
+            return 3
+        started = int(value)
+        del rest[at:at + 2]
+    args = [a for a in rest if not a.startswith("--")]
     if len(args) != 1:
         print(__doc__.strip(), file=sys.stderr)
         return 3
@@ -82,6 +95,9 @@ def main(argv: list[str]) -> int:
             file=sys.stderr,
         )
         return 3
+    if "--background" in rest:
+        live = match.get("live") or ({"startedAt": started} if started is not None else None)
+        verdict["background"] = enginelib.background_work({**match, "live": live})
     print(json.dumps(verdict, indent=2) if as_json else render(verdict))
     return 0
 

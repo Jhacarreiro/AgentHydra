@@ -53,6 +53,9 @@ export interface ExternalInputs {
   wanted?: ReadonlySet<string>
   /** A title the bridge knows for a session when neither its chat record nor its index row has one (index.ts knownTitle). */
   knownTitle?: (id: string) => string | undefined
+  /** Whether a Codex thread's last turn is open, read from its rollout (codex-rollout.ts codexTurnOpen), for the threads
+   *  active lately; a thread missing here goes by how recently it wrote. */
+  codexTurns?: ReadonlyMap<string, boolean>
 }
 
 const STATUS_ORDER: Record<ExternalSession['status'], number> = { needs_you: 0, working: 1, idle: 2, stale: 3 }
@@ -80,6 +83,18 @@ function recencyStatus(last: number | null, now: number): ExternalSession['statu
   return 'idle'
 }
 
+/** An open Codex turn that has written nothing for this long is taken as ended (an app closed mid-turn writes no end). */
+export const OPEN_TURN_QUIET_MS = 30 * 60 * 1000
+
+/** A Codex thread by its turn marks, not by how recently it wrote: a command running for a minute writes nothing, and read by
+ *  recency the chat went idle after 30 s and its composer came back until the next write took it away (owner, 2026-10-14: "the
+ *  input bar ... keeps disappearing. And reappearing"). Null when the rollout was not read. */
+function turnStatus(open: boolean | undefined, last: number | null, now: number): ExternalSession['status'] | null {
+  if (open === undefined) return null
+  if (open && last !== null && now - last <= OPEN_TURN_QUIET_MS) return 'working'
+  return last === null || now - last > STALE_AFTER_MS ? 'stale' : 'idle'
+}
+
 function hookStatus(
   h: AhAgentStatus | undefined,
   last: number | null,
@@ -104,6 +119,160 @@ export const sessionSource = (s: string | undefined): ExternalSession['source'] 
 /** Hydra Desk's marks as AgentHydra's list has them: none (the engine's session-meta store adds its own). */
 const UNMARKED = { pinned: false, archived: false, unread: false, group: null }
 
+/** What a listed session takes from its index row, its hook row and its record; fromIndex lists it. */
+interface IndexedBase {
+  title?: string | null
+  cwd?: string | null
+  instance?: string | null
+  last?: number | null
+  root?: string | null
+  unread?: boolean
+  parentId?: string
+  codexAccountId?: string
+  model?: string | null
+}
+
+/** What the mapping reads while it runs: the inputs, the clock, the resume lookup, the rows by session id and the list it fills. */
+interface MapState {
+  inp: ExternalInputs
+  now: number
+  resume: (q: ResumeQuery) => string | null
+  hooks: Map<string, AhAgentStatus>
+  index: Map<string, AhSessionRow>
+  add: (s: ExternalSession) => void
+}
+
+/** A worker's own label while it is queued, waiting or checking; any other worker shows its last activity. */
+const WORKER_WAIT_ACTIVITY: Partial<Record<string, string>> = {
+  queued: 'Queued',
+  waiting: 'Waiting for an account',
+  checking: 'Running its check',
+}
+
+function workerSession(w: AhWorker, id: string, hooks: Map<string, AhAgentStatus>, now: number): ExternalSession {
+  const h = hooks.get(id)
+  const running = w.status === 'running' || w.status === 'checking'
+  const last = maxOf(w.updatedAt, iso(h?.at))
+  return {
+    id,
+    title: w.title,
+    cwd: w.cwd || null,
+    source: 'climayte',
+    instance: workerAccountLabel(w),
+    status: hookStatus(h, last, now) ?? (running ? 'working' : 'idle'),
+    activity: hookActivity(h) ?? WORKER_WAIT_ACTIVITY[w.status] ?? w.lastActivity,
+    lastActivityAt: last,
+    model: w.reportedModel ?? w.model ?? null,
+    accountId: w.accountId,
+    canResume: false,
+    fromPc: null, // a worker runs on this PC's CLI accounts
+    ...UNMARKED,
+  }
+}
+
+function addWorkers(st: MapState): void {
+  for (const w of st.inp.workers) {
+    if (!w.sessionId || !isActiveWorkerStatus(w.status)) continue
+    st.add(workerSession(w, w.sessionId, st.hooks, st.now))
+  }
+}
+
+function indexedStatus(
+  st: MapState,
+  id: string,
+  source: ExternalSession['source'],
+  h: AhAgentStatus | undefined,
+  last: number | null,
+): ExternalSession['status'] {
+  return (
+    hookStatus(h, last, st.now) ??
+    (source === 'codex' ? turnStatus(st.inp.codexTurns?.get(id), last, st.now) : null) ??
+    recencyStatus(last, st.now)
+  )
+}
+
+// The id only when nothing ever titled it: a chat whose record is untitled for a moment (a move to another
+// account) or missing from one read showed its id in place of the title it had (owner, 2026-10-09).
+function indexedTitle(st: MapState, id: string, base: IndexedBase, row: AhSessionRow | undefined): string {
+  return base.title || row?.title || st.inp.knownTitle?.(id) || id.slice(0, 8)
+}
+
+function fromIndex(st: MapState, id: string, source: ExternalSession['source'], base: IndexedBase): void {
+  const row = st.index.get(id)
+  const h = st.hooks.get(id)
+  const last = maxOf(base.last, row?.last_activity_at, iso(h?.at))
+  const status = indexedStatus(st, id, source, h, last)
+  const accountId = st.resume({
+    source,
+    instance: base.instance ?? row?.instance ?? null,
+    instanceNum: row?.instance_num ?? null,
+    configRoot: base.root ?? null,
+  })
+  st.add({
+    id,
+    title: indexedTitle(st, id, base, row),
+    cwd: base.cwd || row?.cwd || h?.cwd || null,
+    source,
+    // A cloud Claude Code session comes through AgentHydra's foreign reader, but the Apps filter counts it as Claude's.
+    ...(row?.source === 'foreign' && row.tool === 'claude-cloud' ? { app: 'claude' } : {}),
+    instance: base.instance ?? row?.instance ?? (row?.instance_num ? `#${row.instance_num}` : null),
+    status,
+    activity: hookActivity(h),
+    lastActivityAt: last,
+    // The model the chat's record names, so the composer says what the chat runs on (owner, 2026-10-15: it said
+    // Sonnet 5.5 on a chat running Opus 5.5, because this was always null and null reads as the default).
+    model: base.model ?? null,
+    accountId,
+    ...(base.codexAccountId ? { codexAccountId: base.codexAccountId } : {}),
+    canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
+    // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
+    fromPc: row?.from_pc || null,
+    ...(base.parentId ? { parentId: base.parentId } : {}),
+    ...limitOf(row),
+    ...UNMARKED,
+    unread: base.unread ?? false,
+  })
+}
+
+// A chat's parent is the listed chat whose local id its spawnedFrom names: same instance first, else any.
+function parentIdOf(c: AhChatRow, byLocalId: Map<string, AhChatRow[]>): string | undefined {
+  if (!c.spawnedFrom || c.spawnedFrom === c.chatId) return undefined
+  const named = (byLocalId.get(c.spawnedFrom) ?? []).filter((p) => p.sessionId !== c.sessionId)
+  return (named.find((p) => p.instance === c.instance) ?? named[0])?.sessionId
+}
+
+function addDesktopChats(st: MapState, chats: Map<string, AhChatRow>): void {
+  const byLocalId = new Map<string, AhChatRow[]>()
+  for (const c of chats.values()) {
+    const same = byLocalId.get(c.chatId)
+    if (same) same.push(c)
+    else byLocalId.set(c.chatId, [c])
+  }
+  for (const c of chats.values())
+    fromIndex(st, c.sessionId, 'desktop', {
+      title: c.title,
+      cwd: c.cwd,
+      instance: c.instance,
+      last: iso(c.lastActivityAt),
+      unread: c.unread,
+      parentId: parentIdOf(c, byLocalId),
+      model: c.model ?? null,
+    })
+}
+
+function addLiveSessions(st: MapState): void {
+  // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript
+  // whose chat runs as another session is a spare one Claude Desktop left running, nothing to show (owner, 2026-10-10:
+  // "ddc6fc99 ... shows nothing, like cannot load"; a second engine of a listed chat, started with no prompt, was a row
+  // titled with its id that opened onto "no transcript").
+  const runsAs = new Map(st.inp.chats.filter((c) => c.sessionId).map((c) => [c.chatId, c.sessionId]))
+  for (const l of st.inp.live) {
+    const chatSession = l.hostSessionId ? runsAs.get(l.hostSessionId) : undefined
+    if (!l.transcriptPath && chatSession && chatSession !== l.sessionId) continue
+    fromIndex(st, l.sessionId, l.hostSessionId ? 'desktop' : 'cli', { cwd: l.cwd, last: l.startedAt, root: configRootOf(l.transcriptPath) })
+  }
+}
+
 /**
  * `resume` names the CLI instance whose folder already holds a session (resume.ts resumeAccount), or
  * null: an idle Claude Code session then continues as a copy under the account the window lands it on.
@@ -117,104 +286,23 @@ export function mapExternal(
   const hooks = new Map(inp.agentStatus.filter((h) => !h.restoredUnconfirmed).map((h) => [h.sessionId, h]))
   const index = new Map(inp.sessions.map((s) => [s.session_id, s]))
   const chats = new Map(inp.chats.filter((c) => c.sessionId && !c.archived).map((c) => [c.sessionId, c]))
-  // A chat's parent is the listed chat whose local id its spawnedFrom names: same instance first, else any.
-  const byLocalId = new Map<string, AhChatRow[]>()
-  for (const c of chats.values()) byLocalId.set(c.chatId, [...(byLocalId.get(c.chatId) ?? []), c])
-  const parentIdOf = (c: AhChatRow): string | undefined => {
-    if (!c.spawnedFrom || c.spawnedFrom === c.chatId) return undefined
-    const named = (byLocalId.get(c.spawnedFrom) ?? []).filter((p) => p.sessionId !== c.sessionId)
-    return (named.find((p) => p.instance === c.instance) ?? named[0])?.sessionId
-  }
   const out = new Map<string, ExternalSession>()
   const add = (s: ExternalSession) => {
     if (!s.id || exclude.has(s.id) || out.has(s.id)) return
     out.set(s.id, s)
   }
+  const st: MapState = { inp, now, resume, hooks, index, add }
 
-  for (const w of inp.workers) {
-    if (!w.sessionId || !isActiveWorkerStatus(w.status)) continue
-    const h = hooks.get(w.sessionId)
-    const running = w.status === 'running' || w.status === 'checking'
-    const last = maxOf(w.updatedAt, iso(h?.at))
-    add({
-      id: w.sessionId,
-      title: w.title,
-      cwd: w.cwd || null,
-      source: 'climayte',
-      instance: workerAccountLabel(w),
-      status: hookStatus(h, last, now) ?? (running ? 'working' : 'idle'),
-      activity:
-        hookActivity(h) ??
-        (w.status === 'queued' ? 'Queued' : w.status === 'waiting' ? 'Waiting for an account' : w.status === 'checking' ? 'Running its check' : w.lastActivity),
-      lastActivityAt: last,
-      model: w.reportedModel ?? w.model ?? null,
-      accountId: w.accountId,
-      canResume: false,
-      fromPc: null, // a worker runs on this PC's CLI accounts
-      ...UNMARKED,
-    })
-  }
-
-  const fromIndex = (
-    id: string,
-    source: ExternalSession['source'],
-    base: { title?: string | null; cwd?: string | null; instance?: string | null; last?: number | null; root?: string | null; unread?: boolean; parentId?: string; codexAccountId?: string },
-  ) => {
-    const row = index.get(id)
-    const h = hooks.get(id)
-    const last = maxOf(base.last, row?.last_activity_at, iso(h?.at))
-    const status = hookStatus(h, last, now) ?? recencyStatus(last, now)
-    const accountId = resume({
-      source,
-      instance: base.instance ?? row?.instance ?? null,
-      instanceNum: row?.instance_num ?? null,
-      configRoot: base.root ?? null,
-    })
-    add({
-      id,
-      // The id only when nothing ever titled it: a chat whose record is untitled for a moment (a move to another
-      // account) or missing from one read showed its id in place of the title it had (owner, 2026-10-09).
-      title: base.title || row?.title || inp.knownTitle?.(id) || id.slice(0, 8),
-      cwd: base.cwd || row?.cwd || h?.cwd || null,
-      source,
-      // A cloud Claude Code session comes through AgentHydra's foreign reader, but the Apps filter counts it as Claude's.
-      ...(row?.source === 'foreign' && row.tool === 'claude-cloud' ? { app: 'claude' } : {}),
-      instance: base.instance ?? row?.instance ?? (row?.instance_num ? `#${row.instance_num}` : null),
-      status,
-      activity: hookActivity(h),
-      lastActivityAt: last,
-      model: null,
-      accountId,
-      ...(base.codexAccountId ? { codexAccountId: base.codexAccountId } : {}),
-      canResume: canResume({ status, source, codexAccountId: base.codexAccountId }),
-      // The chat sync's mark on its index row: the row draws a cloud for another PC's chat, as the cloud list does.
-      fromPc: row?.from_pc || null,
-      ...(base.parentId ? { parentId: base.parentId } : {}),
-      ...limitOf(row),
-      ...UNMARKED,
-      unread: base.unread ?? false,
-    })
-  }
-
-  for (const c of chats.values())
-    fromIndex(c.sessionId, 'desktop', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), unread: c.unread, parentId: parentIdOf(c) })
+  addWorkers(st)
+  addDesktopChats(st, chats)
   for (const c of inp.codexChats ?? [])
-    fromIndex(c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId })
-  // The session each Desktop chat runs as now, by its local id (archived ones too). A live engine with no transcript
-  // whose chat runs as another session is a spare one Claude Desktop left running, nothing to show (owner, 2026-10-10:
-  // "ddc6fc99 ... shows nothing, like cannot load"; a second engine of a listed chat, started with no prompt, was a row
-  // titled with its id that opened onto "no transcript").
-  const runsAs = new Map(inp.chats.filter((c) => c.sessionId).map((c) => [c.chatId, c.sessionId]))
-  for (const l of inp.live) {
-    const chatSession = l.hostSessionId ? runsAs.get(l.hostSessionId) : undefined
-    if (!l.transcriptPath && chatSession && chatSession !== l.sessionId) continue
-    fromIndex(l.sessionId, l.hostSessionId ? 'desktop' : 'cli', { cwd: l.cwd, last: l.startedAt, root: configRootOf(l.transcriptPath) })
-  }
+    fromIndex(st, c.threadId, 'codex', { title: c.title, cwd: c.cwd, instance: c.instance, last: iso(c.lastActivityAt), codexAccountId: c.instanceId })
+  addLiveSessions(st)
   for (const h of hooks.values())
-    if (h.state !== 'done') fromIndex(h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
+    if (h.state !== 'done') fromIndex(st, h.sessionId, sessionSource(index.get(h.sessionId)?.source), { cwd: h.cwd })
   for (const s of inp.sessions)
     if (inp.wanted?.has(s.session_id) || (s.source !== 'zswarm' && now - s.last_activity_at <= LISTED_AFTER_WRITE_MS))
-      fromIndex(s.session_id, sessionSource(s.source), {})
+      fromIndex(st, s.session_id, sessionSource(s.source), {})
 
   return [...out.values()].sort(
     (a, b) => STATUS_ORDER[a.status] - STATUS_ORDER[b.status] || (b.lastActivityAt ?? 0) - (a.lastActivityAt ?? 0),

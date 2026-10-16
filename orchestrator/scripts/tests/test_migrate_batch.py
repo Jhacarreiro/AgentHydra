@@ -1191,7 +1191,7 @@ class NamingPassVerdictTest(_MigrateBatchTest):
         self.patch(name_chats, "name_pass",
                    lambda instance, extra_titles=None, **k: {
                        "named": [], "needsJudgment": [], "flakes": [], "remaining": [], "why": ""})
-        with self.tmp_meta({"title": "Michael todo burndown"}) as path:
+        with self.tmp_meta({"title": "Alex todo burndown"}) as path:
             self.patch(migrate_chat, "landed_meta_path", lambda land: path)
             live = self._live()
             migrate_batch._name_landings(live)

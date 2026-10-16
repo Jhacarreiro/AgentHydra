@@ -1,7 +1,7 @@
 // One chat's Connections workspace as the chip and the Connections pane both use it: the read, the list of workspaces,
 // switching this chat, the default-for-new-chats star, and Sign in. Each caller gets its own state, so the chip and the
 // pane never share a half-finished request.
-import { computed, ref, type Ref } from 'vue'
+import { computed, ref, shallowRef, type Ref } from 'vue'
 import type { ConnectionsCompany, ConnectionsWorkspace } from '@shared/connectors'
 import { readCompanies, readWorkspace, setDefaultWorkspace, startSignin, switchWorkspace } from './connections-api'
 import { chatScopeAllowed, filterCompanies, pageShouldOpen, starState } from './connections-logic'
@@ -12,7 +12,7 @@ const words = (e: unknown): string => (e instanceof Error ? e.message : String(e
 
 export function useConnectionsWorkspace(chat: () => { id: string; sessionId: string | null }) {
   const ws: Ref<ConnectionsWorkspace | null> = ref(null)
-  const companies: Ref<ConnectionsCompany[]> = ref([])
+  const companies = shallowRef<ConnectionsCompany[]>([])
   const query = ref('')
   const note = ref('')
   const busy = ref(false)

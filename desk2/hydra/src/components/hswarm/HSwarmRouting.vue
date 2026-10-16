@@ -3,7 +3,7 @@
 // Below HSwarm's own routing it carries AgentHydra's cost routing between API keys and subscriptions
 // (HSwarmCostRouting.vue), so the tree's one Routing item holds both.
 import { AlertCircle, Route } from '@lucide/vue'
-import { ref, watch } from 'vue'
+import { ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
@@ -36,7 +36,7 @@ const previewProfile = ref('general')
 const previewTools = ref('none')
 const previewLoading = ref(false)
 const previewError = ref<string | null>(null)
-const previewCandidates = ref<any[]>([])
+const previewCandidates = shallowRef<any[]>([])
 const routingAdvancedOpen = ref(false)
 
 const ROLE_INFO: Record<string, string> = {

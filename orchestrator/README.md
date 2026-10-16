@@ -2,10 +2,10 @@
 
 The fleet orchestrator: the part of AgentHydra that decides what *should* happen to a chat.
 
-Owner order, Michael, 2026-08-31: every line of orchestration was cut out of the daemon and
+Owner order, 2026-08-31: every line of orchestration was cut out of the daemon and
 rewritten from scratch as this Python toolbox, on the other side of an HTTP boundary. AgentHydra
 the daemon knows what instances and chats exist and can act on one when asked; this program
-decides what should happen and asks it to. Owner order, Michael, 2026-09-03: it moves back INTO
+decides what should happen and asks it to. Owner order, 2026-09-03: it moves back INTO
 the AgentHydra repository - as this folder, unchanged in shape - so there is one program to
 explain and one MCP surface to use ("so I don't have to explain that you have to use both").
 The boundary survives the move: nothing in here imports the daemon, everything in here talks to
@@ -367,8 +367,8 @@ networks that DNS-block `trycloudflare.com`, and sign-in completes on the daemon
 
 | machine | address | tunnel |
 | --- | --- | --- |
-| Michael | `https://orch-michael.lunarwerx.com` | `orch-michael` |
-| Jacob | `https://orch-jacob.lunarwerx.com` | `orch-jacob` |
+| the other owner | `https://orch-<name>.lunarwerx.com` | `orch-<name>` |
+| the owner | `https://orch-<other>.lunarwerx.com` | `orch-<other>` |
 
 ```sh
 python scripts/remote_tunnel.py --status                          # what this machine is set to
@@ -382,7 +382,7 @@ Cloudflare's configuration - the machine only needs its own connector credential
 git clone https://github.com/LunarWerxs/AgentHydra.git && cd AgentHydra/app
 bun install && bun run --cwd orchestrator remote:build
 cd orchestrator
-python scripts/remote_tunnel.py --install-token --name orch-jacob   # needs CLOUDFLARE_API_TOKEN
+python scripts/remote_tunnel.py --install-token --name orch-<other>   # needs CLOUDFLARE_API_TOKEN
 powershell -File scripts\tray.ps1 -InstallShortcut -Startup         # the icon, and at every login
 ```
 
@@ -395,13 +395,13 @@ Through the Connections MCP it can be leased without anyone seeing it:
 
 ```sh
 connections_execute { local: true, tool_name: "shell", params: {
-  command: "python scripts/remote_tunnel.py --install-token --name orch-jacob",
+  command: "python scripts/remote_tunnel.py --install-token --name orch-<other>",
   secrets: [{ service: "cloudflare", as: "CLOUDFLARE_API_TOKEN" }] } }
 ```
 
-With no Cloudflare access on that machine, run `--export-token <file> --name orch-jacob` here,
+With no Cloudflare access on that machine, run `--export-token <file> --name orch-<other>` here,
 hand the file over out of band, and `--import-token <file>` there - it shreds the file after
-reading it. Then start the icon and sign in at `https://orch-jacob.lunarwerx.com`; the first
+reading it. Then start the icon and sign in at `https://orch-<other>.lunarwerx.com`; the first
 verified sign-in claims that install. Until a connector runs there the hostname answers
 Cloudflare 530, which is the correct "provisioned, nobody home" state and not a fault.
 
@@ -414,7 +414,7 @@ every start (it follows DHCP), so the tunnel goes out the card while everything 
 
 ⛔ **One label only.** `lunarwerx.com` is on Cloudflare's free plan, whose Universal SSL
 certificate covers `lunarwerx.com` and `*.lunarwerx.com` and nothing deeper (verified: those are
-the cert's only SANs). `michael.orch.lunarwerx.com` would resolve and then fail the TLS
+the cert's only SANs). `<name>.orch.lunarwerx.com` would resolve and then fail the TLS
 handshake in every browser, which reads as "the site is broken". `remote_tunnel.py` refuses a
 two-level name rather than shipping one that cannot serve.
 
@@ -711,7 +711,7 @@ program needs:
 | `GET /api/claude-native/settings`, `PUT /api/claude-native/settings` | per-profile port, routing mode and `launchDebugger`; automatic startup applies on the next AgentHydra Open |
 | `POST /api/chats/:id/rename` | rename through the running app's own control |
 | `POST /api/sessions/:id/import-desktop` | land a chat in an instance |
-| `POST /api/sessions/:id/message` | deliver text into a chat: the daemon picks the channel, preferring the native peer pipe and using the composer only for a dormant chat; a `peer_only` caller (Desk's bridge, so the babysitter) goes first through the native send, the app's own peer delivery, which also starts a stopped chat (`route: "native"`). This is `courier.py`'s PRIMARY route; a 404 from an older daemon is what drops it back to driving the actuator itself |
+| `POST /api/sessions/:id/message` | deliver text into a chat: the native send first (the app's own peer delivery, which also starts a stopped chat; `route: "native"`), then the peer pipe of a live engine. Since 2026-10-15 it types into the app's window (the composer) only for a caller that sends `allow_typing: true`, which only AgentHydra's own chat box does; every other caller gets a `never types:` refusal (409) instead. This is `courier.py`'s only route: the courier never types, and a 404 from an older daemon is a failure |
 | `POST /api/instances/:dir/{open,quit}` | start or stop an instance; URL-encode the full profile path. Open honors its automatic-debugger setting |
 
 The legacy archive fallback, rename and message routes use PowerShell helpers under `misc\`;

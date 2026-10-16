@@ -1,7 +1,7 @@
 // Whether the daemon has a newer AgentHydra waiting, learned by Desk itself (the sidebar row must show without the
 // AgentHydra pane ever opened), and the apply Settings → Updates and the row both run.
 
-import { ref } from 'vue'
+import { ref, shallowRef } from 'vue'
 import type { PaneApi } from '@/components/panes/api'
 import type { ReleaseWaiting } from './desk-update-row'
 
@@ -21,7 +21,7 @@ export interface ReleaseApply {
   error: string | null
 }
 
-export const releaseWaiting = ref<ReleaseWaiting | null>(null)
+export const releaseWaiting = shallowRef<ReleaseWaiting | null>(null)
 export const releaseApplying = ref(false)
 export const releaseApplyError = ref<string | null>(null)
 

@@ -60,6 +60,9 @@ export interface SessionMeta {
   /** The effort the app runs this chat at (`effort` in the record), null when it keeps none. A
    *  per-session setting the user can change in the app, so it is the app's own word on the chat. */
   effort: string | null
+  /** Claude Desktop's unread dot (DossierChat.unread): a turn finished after the app last had the
+   *  chat in focus. An archived chat still unread is one nobody read before it was put away. */
+  unread: boolean
 }
 
 /** One retired-id claim: the transcript it rolled onto, and whether the row that said so is a
@@ -153,6 +156,7 @@ function metaOf(c: DossierChat): { entry: SessionMeta; origin: OriginRow | null 
     cliSessionId: id,
     priorCliSessionIds: c.priorCliSessionIds.filter((p) => !!p && p !== id),
     effort: c.effort,
+    unread: c.unread,
   }
   // Back to the record's own epoch ms: chat-store-scan carries it as ISO, which is exact to the ms.
   const createdAt = c.createdAt ? Date.parse(c.createdAt) : Number.NaN
@@ -288,6 +292,7 @@ export function resolveInstanceByOrigin(cwd: string, createdAt: number | null): 
       cliSessionId: null,
       priorCliSessionIds: [],
       effort: row.effort,
+      unread: false,
     }
   }
   return found

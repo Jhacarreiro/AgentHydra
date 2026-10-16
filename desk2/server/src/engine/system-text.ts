@@ -97,6 +97,11 @@ const STATUS: Record<string, TaskItem['status']> = {
 /** Claude Code's notice, on resume, of tasks the previous session left: their own descriptions stay. */
 const ENDED_BEFORE = /didn't finish before the previous session ended/i
 
+/** A Monitor's last event, which no <status> follows (2026-10-14: monitors that had expired hours before still read
+ *  running). The wordings this PC's transcripts hold: "[Monitor expired after 3600s]", "[Monitor timed out ...]",
+ *  "[Monitor stopped ...]". */
+const MONITOR_END = /^\[Monitor (expired|timed out|stopped)\b/i
+
 /**
  * One <task-notification> body: a task notice per task id, or (no task id: a hook's notice) a muted line.
  * Claude Code's resume notice names several tasks in one body (`<task-id>a</task-id><task-id>b</task-id>
@@ -119,9 +124,10 @@ function taskNotice(body: string, summary: string, taskId: string, shared: boole
   const rawStatus = field(body, 'status')
   const quoted = /"([^"]+)"/.exec(summary)?.[1]
   const event = field(body, 'event')
+  const ended = event ? MONITOR_END.exec(event)?.[1]?.toLowerCase() : undefined
   const task: TaskNotice = {
     taskId,
-    status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : null,
+    status: rawStatus ? (STATUS[rawStatus.toLowerCase()] ?? 'completed') : ended ? (ended === 'stopped' ? 'stopped' : 'completed') : null,
     description: shared ? '' : clip(quoted ?? summary, 160),
     summary: clip(event ? `${summary}: ${event}` : summary),
     taskKind: shared ? 'other' : taskKindOf(summary),

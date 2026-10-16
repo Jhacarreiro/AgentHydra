@@ -174,7 +174,7 @@ def write(plan: dict) -> list[dict]:
             target, name = FALLBACK, f"from-archived-chats-{repo.name}.md"
         elif repo is not None:
             # A repo may forbid loose files at its docs/todo/ ROOT (Connections: owner directive,
-            # Michael, 2026-07-30, gated there by `todo-root-loose-file-gate` - every to-do belongs
+            # 2026-07-30, gated there by `todo-root-loose-file-gate` - every to-do belongs
             # to an owner folder or a standing intake folder). Machine-filed intake there lives in
             # `docs/todo/loki/` beside the other harvester-written files, so write into that folder
             # when the repo has one; a repo without it keeps the plain docs/todo/ convention.

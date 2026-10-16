@@ -312,6 +312,21 @@ class BackgroundWorkTest(unittest.TestCase):
         _write_transcript(self.path, [_tool_result(AGENT_DONE.format(id="a0178ab05b4bf4940"), "2026-09-05T01:10:00Z")])
         self.assertEqual(self.bg()["outstanding"], [])
 
+    def test_a_notice_taken_in_mid_turn_is_reported_back(self):
+        # The CLI's shapes for a job that ends while a turn runs: no user message carries the notice.
+        notice = ("<task-notification>\n<task-id>b7kq2m9xd</task-id>\n<status>completed</status>\n"
+                  "</task-notification>")
+        _write_transcript(self.path, [
+            _tool_result(LAUNCH.format(id="b7kq2m9xd"), "2026-09-05T01:10:00Z"),
+            {"type": "queue-operation", "operation": "enqueue", "timestamp": "2026-09-05T01:12:00Z",
+             "content": notice},
+            {"type": "attachment", "timestamp": "2026-09-05T01:12:00Z",
+             "attachment": {"type": "queued_command", "prompt": notice}},
+        ])
+        got = self.bg()
+        self.assertEqual(got["outstanding"], [])
+        self.assertEqual((got["launched"], got["notified"]), (1, 1))
+
     def test_a_job_collected_with_taskoutput_is_reported_back(self):
         """The 2026-09-18 Stackspire refusal: harvested inline, so never notified.
 

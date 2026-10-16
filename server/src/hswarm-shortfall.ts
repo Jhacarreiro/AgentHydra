@@ -167,6 +167,7 @@ export function startShortfallWatch(): void {
   const tick = () =>
     void checkShortfall().catch((err) => console.warn('[hswarm-shortfall] check failed:', err))
   setTimeout(tick, FIRST_CHECK_MS).unref?.()
+  // arkitect-allow: side-effect-teardown - one hourly watch for the daemon's whole life: the start is idempotent and the timer is unref'd, so it never holds the process open
   timer = setInterval(tick, CHECK_MS)
   timer.unref?.()
 }

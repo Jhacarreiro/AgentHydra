@@ -14,6 +14,7 @@
 import { afterAll, beforeEach, mock } from 'bun:test'
 import fs from 'node:fs'
 import fsp from 'node:fs/promises'
+import os from 'node:os'
 import path from 'node:path'
 import { fileURLToPath } from 'node:url'
 
@@ -94,9 +95,66 @@ function putBackGlobals(): string[] {
   return changed
 }
 
-const leakMessage = (file: string, changed: string[]) =>
-  `${path.relative(process.cwd(), file)} left globalThis.${changed.join(', globalThis.')} swapped when it ended (put ` +
-  'back by the preload): restore it in that file, in an afterAll or afterEach, or every later file in the run gets it'
+// The home folders are guarded the same way (2026-10-15): people-setup.test.ts pointed HOME and USERPROFILE at a folder
+// it then removed and never put them back, so every headless Chrome a later file started never opened its debugging
+// port (38 tests in three runs, each file green alone). os.homedir() and every child follow these at runtime. TEMP and
+// TMP are this preload's own, per file (startFileTemp).
+const HOME_VARS = ['HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA'] as const
+const realHome = new Map(HOME_VARS.map((name) => [name, process.env[name]]))
+
+/** Puts back every home variable that differs from the preload's; returns their names. */
+function putBackHome(): string[] {
+  const changed: string[] = []
+  for (const [name, real] of realHome) {
+    if (process.env[name] === real) continue
+    changed.push(name)
+    if (real === undefined) delete process.env[name]
+    else process.env[name] = real
+  }
+  return changed
+}
+
+const leakMessage = (file: string, changed: string[], home: string[] = []) =>
+  [
+    changed.length ? `globalThis.${changed.join(', globalThis.')} swapped` : '',
+    home.length ? `process.env.${home.join(', process.env.')} changed` : '',
+  ]
+    .filter(Boolean)
+    .reduce((m, part, i) => (i ? `${m} and ${part}` : `${path.relative(process.cwd(), file)} left ${part}`), '') +
+  ' when it ended (put back by the preload): restore it in that file, in an afterAll or afterEach, or every later ' +
+  'file in the run gets it'
+
+// Each test file gets its own temp folder under one run folder, removed when the next file starts and again at the
+// run's end. Windows can hold a file a just-stopped child still has open, so each remove retries briefly. Without
+// this, desk-* folders piled up in %TEMP% (2026-10-14: 587, about 200 a day).
+const TEMP_VARS = ['TMPDIR', 'TEMP', 'TMP'] as const
+// arkitect-ignore-next-line scratch-dir-reaped/violation - removed by this preload's afterAll through removeTree, which retries while Windows still holds a just-stopped child's file
+const runTemp = fs.mkdtempSync(path.join(os.tmpdir(), 'desk2-tests-'))
+// Hydra Core mode reads ~/.agenthydra/core unless this is set, and core mode switched on there strips a paragraph from
+// the Desk append, so 7 tests failed on a PC that runs it. A folder that does not exist reads as core mode off.
+process.env.AGENTHYDRA_CORE_DIR = path.join(runTemp, 'core')
+let fileTemp: string | null = null
+let fileTempCount = 0
+
+function removeTree(dir: string): void {
+  for (let attempt = 0; attempt < 20; attempt++) {
+    try {
+      fs.rmSync(dir, { recursive: true, force: true })
+      return
+    } catch {
+      Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, 100)
+    }
+  }
+}
+
+function startFileTemp(): void {
+  if (fileTemp) removeTree(fileTemp)
+  fileTemp = path.join(runTemp, String(++fileTempCount))
+  fs.mkdirSync(fileTemp, { recursive: true })
+  for (const name of TEMP_VARS) process.env[name] = fileTemp
+}
+
+startFileTemp()
 
 let currentFile = ''
 let leak: string | null = null
@@ -105,7 +163,9 @@ Bun.plugin({
   setup(build) {
     build.onResolve({ filter: /\.(test|spec)\.[cm]?[jt]sx?$/ }, (args) => {
       const changed = putBackGlobals()
-      if (changed.length && currentFile) leak = leakMessage(currentFile, changed)
+      const home = putBackHome()
+      if ((changed.length || home.length) && currentFile) leak = leakMessage(currentFile, changed, home)
+      if (args.path !== currentFile) startFileTemp()
       currentFile = args.path
       return undefined
     })
@@ -118,6 +178,9 @@ beforeEach(() => {
   throw new Error(message)
 })
 afterAll(() => {
+  if (fileTemp) removeTree(fileTemp)
+  removeTree(runTemp)
   const changed = putBackGlobals()
-  if (changed.length) throw new Error(leakMessage(currentFile, changed))
+  const home = putBackHome()
+  if (changed.length || home.length) throw new Error(leakMessage(currentFile, changed, home))
 })

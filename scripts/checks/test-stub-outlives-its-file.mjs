@@ -64,6 +64,23 @@ const ORCH_CALL = /(?<![\w$.])(?:runOrchestrator|startOrchestratorOperation)\s*\
 const NEVER_SETTLES = /(?<![\w$.])new\s+Promise\s*(?:<[^>(]*>\s*)?\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/g
 const ORCH_RESET = /(?<![\w$.])resetOrchestratorOperationsForTests\s*\(/g
 
+// RULE E, a home or temp folder redirected for the rest of the run, added 2026-10-15. process.env is as
+// process-wide as globalThis: os.homedir() and os.tmpdir() follow these variables at runtime, and every
+// child a later file spawns inherits them. desk2's people-setup.test.ts pointed HOME and USERPROFILE at a
+// temp folder at module scope, removed that folder in afterAll and never put them back, so every
+// headless Chrome a later file launched (secret, browser_navigate, the page, tab and session tools: 38
+// tests) never opened its debugging port, in three batch runs, while each of those files passed alone.
+// A put-back is an assignment or delete of the same name in an after hook, or one by key
+// (`process.env[k] = saved[k]`, `delete process.env[k]`), Object.assign(process.env, ...) or a whole
+// new process.env there, which can name any of them.
+const HOME_VARS = 'HOME|USERPROFILE|LOCALAPPDATA|APPDATA|TEMP|TMP|TMPDIR'
+const ENV_SET = new RegExp(`(?<![\\w$.])process\\.env\\.(${HOME_VARS})\\s*=(?![=>])`, 'g')
+const ENV_PUT_BACK = new RegExp(
+  `(?<![\\w$.])(?:process\\.env\\.(${HOME_VARS})\\s*=(?![=>])|delete\\s+process\\.env\\.(${HOME_VARS})\\b)`,
+  'g',
+)
+const ENV_PUT_BACK_ANY = /(?<![\w$.])(?:process\.env\s*\[|Object\.assign\s*\(\s*process\.env\b|process\.env\s*=(?![=>]))/g
+
 // RULE D, a request through the shared Hono app, added 2026-10-12 after it held both CI legs red for
 // a day. server/src/http-app.ts exports ONE `app` for the whole process; every routes/*.ts module
 // registers on it when imported, and Hono builds its router on the first request and refuses a new
@@ -254,8 +271,17 @@ export function findViolations(text) {
   const code = blankNonCode(text)
   const before = callSpans(code, BEFORE_HOOK)
   const after = callSpans(code, AFTER_HOOK)
-  const hits = []
+  return [
+    ...globalStubs(code, before, after),
+    ...moduleMocks(text, code, after),
+    ...orchestratorLocks(code, after),
+    ...envLeaks(text, code, before, after),
+    ...sharedAppCalls(text, code),
+  ].sort((a, b) => a.index - b.index)
+}
 
+/** Rule A: a module-scope or before-hook global assignment with no after-hook assignment to the same global. */
+function globalStubs(code, before, after) {
   const restored = new Set()
   const stubs = []
   GLOBAL_STUB.lastIndex = 0
@@ -264,10 +290,13 @@ export function findViolations(text) {
     if (within(after, m.index)) restored.add(name)
     else if (depthAt(code, m.index) === 0 || within(before, m.index)) stubs.push({ index: m.index, name })
   }
-  for (const s of stubs) if (!restored.has(s.name)) hits.push({ index: s.index, kind: 'global', name: s.name })
+  return stubs.filter((s) => !restored.has(s.name)).map((s) => ({ index: s.index, kind: 'global', name: s.name }))
+}
 
-  // A mock whose specifier is not a literal cannot be matched by name; any re-mock in an after hook
-  // is then accepted, which errs towards silence rather than a false red on an exotic shape.
+/** Rule B: a mock.module(SPEC) with no mock.module(SPEC) inside an after hook. A mock whose specifier is not a
+ *  literal cannot be matched by name; any re-mock in an after hook is then accepted, which errs towards silence
+ *  rather than a false red on an exotic shape. */
+function moduleMocks(text, code, after) {
   const remocked = new Set()
   const mocks = []
   MODULE_MOCK.lastIndex = 0
@@ -276,30 +305,56 @@ export function findViolations(text) {
     if (within(after, m.index)) remocked.add(spec)
     else mocks.push({ index: m.index, spec })
   }
-  for (const k of mocks) {
-    if (remocked.has(k.spec) || remocked.has('*')) continue
-    hits.push({ index: k.index, kind: 'module', name: k.spec })
-  }
+  if (remocked.has('*')) return []
+  return mocks.filter((k) => !remocked.has(k.spec)).map((k) => ({ index: k.index, kind: 'module', name: k.spec }))
+}
 
-  // Rule C: a never-settling spawn parked in the orchestrator's route lock, with nothing in an
-  // after hook to hand it back. The reset must be INSIDE the hook: a test that fails or times out
-  // never reaches the rest of its own body, which is the same reason rule A demands a hook.
+/** Rule C: a never-settling spawn parked in the orchestrator's route lock, with nothing in an after hook to hand it
+ *  back. The reset must be INSIDE the hook: a test that fails or times out never reaches the rest of its own body,
+ *  which is the same reason rule A demands a hook. */
+function orchestratorLocks(code, after) {
   ORCH_CALL.lastIndex = 0
   ORCH_RESET.lastIndex = 0
   const callsOrchestrator = [...code.matchAll(ORCH_CALL)].length > 0
-  const releasesInAfterHook = [...code.matchAll(ORCH_RESET)].some((m) => within(after, m.index))
-  if (callsOrchestrator && !releasesInAfterHook) {
-    NEVER_SETTLES.lastIndex = 0
-    for (const m of code.matchAll(NEVER_SETTLES)) hits.push({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' })
-  }
+  if (!callsOrchestrator || [...code.matchAll(ORCH_RESET)].some((m) => within(after, m.index))) return []
+  NEVER_SETTLES.lastIndex = 0
+  return [...code.matchAll(NEVER_SETTLES)].map((m) => ({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' }))
+}
 
-  // Rule D: a request or fetch through the shared app, under whatever local name it was imported as.
+/** Rule E: a home or temp variable set at module scope or in a before hook, never put back. */
+function envLeaks(text, code, before, after) {
+  ENV_PUT_BACK_ANY.lastIndex = 0
+  if ([...code.matchAll(ENV_PUT_BACK_ANY)].some((m) => within(after, m.index))) return []
+  const envPutBack = new Set()
+  ENV_PUT_BACK.lastIndex = 0
+  for (const m of code.matchAll(ENV_PUT_BACK)) if (within(after, m.index)) envPutBack.add(m[1] ?? m[2])
+  const hits = []
+  ENV_SET.lastIndex = 0
+  for (const m of code.matchAll(ENV_SET)) {
+    if (within(after, m.index) || envPutBack.has(m[1]) || keptForTheRun(text, m.index)) continue
+    if (depthAt(code, m.index) === 0 || within(before, m.index))
+      hits.push({ index: m.index, kind: 'env', name: `process.env.${m[1]}` })
+  }
+  return hits
+}
+
+/** Rule D: a request or fetch through the shared app, under whatever local name it was imported as. */
+function sharedAppCalls(text, code) {
+  const hits = []
   for (const name of sharedAppNames(text, code)) {
     const call = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\s*\\.\\s*(?:request|fetch)\\s*\\(`, 'g')
     for (const m of code.matchAll(call)) hits.push({ index: m.index, kind: 'shared-app', name })
   }
+  return hits
+}
 
-  return hits.sort((a, b) => a.index - b.index)
+/** A redirect the file keeps on purpose for every later file says so on one of the three lines above it,
+ *  in the untouched text: `kept for the run: <why>`. desktop-cli-pairing.test.ts keeps APPDATA off the
+ *  developer's real install folder for the files after it, and removes its folder at exit. */
+function keptForTheRun(text, index) {
+  let start = index
+  for (let n = 0; n < 4 && start > 0; n++) start = text.lastIndexOf('\n', start - 1)
+  return /kept for the run:\s*\S/.test(text.slice(Math.max(0, start), index))
 }
 
 /** The local names this file binds http-app's `app` to: `import { app } from '../src/http-app'`,
@@ -322,7 +377,7 @@ function sharedAppNames(text, code) {
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
 const CHEAP_REJECT =
-  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation|\/http-app/
+  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation|\/http-app|process\.env\.(?:HOME|USERPROFILE|LOCALAPPDATA|APPDATA|TEMP|TMP|TMPDIR)\s*=/
 
 /** The four rules' user-facing text, keyed by hit kind, so a new rule cannot be added without
  *  saying what it found, why it matters and what to do - the half a check is actually read for. */
@@ -356,6 +411,20 @@ function explain(hit) {
         '`afterAll(() => { mock.module(SPEC, () => realApi) })`. A copy taken after the fake ' +
         "is a copy of the fake, because mock.module rewrites the namespace's live bindings. " +
         'Better still, inject the dependency and mock nothing (tests/monitor.test.ts).',
+    }
+  if (hit.kind === 'env')
+    return {
+      what: `${hit.name} redirected, never put back`,
+      message:
+        `This file sets ${hit.name} at module scope or in a before* hook and never puts it back in ` +
+        'afterAll/afterEach. bun test runs every file in one process, so os.homedir(), os.tmpdir() ' +
+        'and every child a LATER file spawns use it. desk2 people-setup.test.ts did this to HOME and ' +
+        'USERPROFILE and then removed the folder, on 2026-10-15: every headless Chrome launched after ' +
+        'it (38 tests in five files) never opened its debugging port, and each file passed alone.',
+      fix:
+        'Save the old values first (const saved = { HOME: process.env.HOME, USERPROFILE: ' +
+        'process.env.USERPROFILE }) and put them back in afterAll, deleting a key that was unset ' +
+        '(people-addon-gate.test.ts ships the loop), or set them inside the test with try/finally.',
     }
   if (hit.kind === 'shared-app')
     return {
@@ -392,7 +461,7 @@ function explain(hit) {
 export const audit = {
   id: ID,
   title:
-    'a test file must put back every global it stubs, every module it mocks, and every route lock it parks before it ends, and never freeze the shared app with a request',
+    'a test file must put back every global it stubs, every module it mocks, every home or temp variable it redirects, and every route lock it parks before it ends, and never freeze the shared app with a request',
   category: 'custom',
   domain: 'code',
   requires: {},

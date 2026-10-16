@@ -1,6 +1,6 @@
 """The bench results database: every A/B and benchmark row ever measured, shared by every machine.
 
-Why it exists (owner, Michael, 2026-09-21): "we should probably be maintaining a database of previous
+Why it exists (owner, 2026-09-21): "we should probably be maintaining a database of previous
 swarm A/B testing and benchmarking ... so we don't end up having to do this over and over and over again,
 and waste usage to test." Before it, results lived in two places nobody could query: `bench/out/`
 (gitignored, so only the machine that ran a bench could read it) and the prose tables of
