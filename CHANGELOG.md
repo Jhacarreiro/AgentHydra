@@ -11,6 +11,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 - **Codex chats from your other PCs appear here, and Desk can continue them**
 - **Codex starts on a Mac or Linux PC that runs AgentHydra as a service**
+- **A tray app connects a PC to the Codex hub in one click and keeps it sending**
+- **A PC's Codex pusher and tray app update themselves from the hub**
 
 **Everything in Unreleased**
 
@@ -22,6 +24,13 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
   than your terminal does, so AgentHydra could miss Codex, or find an npm install of it that could not start. It
   now looks where Codex is usually installed and starts it so it finds its own Node.js, and a Codex that fails to
   start says why.
+- **A tray app connects a PC to the Codex hub in one click and keeps it sending.** On Windows, macOS or Linux,
+  open the Codex Hub app once: it installs itself, starts when you log in, and gets the hub's token from a page on
+  the hub after you sign in, so nothing is copied by hand. Its icon shows whether the PC is sending, not connected,
+  or cannot reach the hub.
+- **A PC's Codex pusher and tray app update themselves from the hub.** Put a new build on the hub and each PC
+  fetches the one for its own system, checks it and makes sure it starts before it replaces the old one. A PC can
+  keep the build it has instead.
 - **CliMayte reads less transcript data to find an attempt's first request.** Spend calculation stops once it finds the matching usage record, using the same token parser and time window. Long records decode in chunks without assembling an extra full byte buffer.
 - **Desk's freeze profiler uses less background CPU.** After a freeze starts diagnostics, it samples at the same measured interval as the main daemon. Freeze thresholds and named-function reports remain unchanged.
 - **CliMayte's recent journal reads skip discarded rows.** Small history requests parse only enough matching entries to fill the requested view. Filtering, file freshness, rotation and displayed order stay unchanged.
