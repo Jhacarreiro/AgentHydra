@@ -2290,7 +2290,13 @@ Always name the account when you quote a percentage. A number a person gives you
 
 Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained tasks on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens visible chats on other accounts; fan_out_status reads them and fan_out_send steers them. Delete a probe chat you create afterwards with hydra_run { tool: 'fan_out_delete', args: { group } }. move_chat moves a chat to another account. add_queue_item and launch_terminal_session refuse every call.
 
-Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.`
+Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.${
+  // Seen only as a name among hundreds of deferred tools, price_check read as a shop-price lookup
+  // and pages went out unpriced (2026-10-16). Only when the private price check is installed.
+  PRICECHECK_TOOLS.some((t) => t.name === 'price_check')
+    ? '\n\nBefore and after you build, change or review a page or screen, price it with price_check { mode: "page", page }: what it costs the person looking (words, controls, fields). Cheaper wins; say both prices.'
+    : ''
+}`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {

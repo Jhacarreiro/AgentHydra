@@ -15,7 +15,12 @@
 //   current, so an edited skill needs no re-sync). The account's own entries (its `synced/` folder)
 //   are left alone; a junction whose skill the owner removed is removed. Measured 2026-09-30: Bun's
 //   rmSync(recursive) on an account folder removes a junction, never the owner's files behind it.
-// Hooks and settings.json are NOT carried: desktop-only hooks can block a headless worker.
+// Hooks and settings.json are NOT carried: desktop-only hooks can block a headless worker. The one
+// exception is the owner's after-edit hooks (PostToolUse on Edit, Write or MultiEdit, command hooks):
+// they run after an edit landed and can only tell the model something, and the account's
+// settings.json is where a chat or worker reads its user hooks. Without them the owner's page price
+// tag never reached a Desk chat or worker: measured 2026-10-16, 177 of the 178 sessions that edited a
+// page in a week ran in an account folder, and 12 of them priced a page.
 //
 // THE LEAN WORKER PROFILE (owner, 2026-09-30, after the run-1 audit). When `~/.claude/climayte-worker/`
 // holds a CLAUDE.md, workers get THAT instead of the full one, and when it holds `skills.txt` (one
@@ -48,7 +53,7 @@ import {
   writeFileSync,
 } from 'node:fs'
 import { dirname, join, resolve, sep } from 'node:path'
-import type { Hook } from './climayte-signal'
+import type { Hook, HookGroup } from './climayte-signal'
 import { peopleAddon } from './people-host'
 
 const STAMP = '.agenthydra-owner-sync.json'
@@ -59,6 +64,10 @@ interface Stamp {
   claudeMd: string | null
   /** The owner's CLAUDE.md (size:mtime) that copy was made from, so it is copied again only when it changed. */
   src?: string | null
+  /** The account's settings.json (size:mtime) as this code last left it. */
+  settings?: string | null
+  /** The after-edit hook groups this code put there (JSON), so it replaces only its own. */
+  carried?: string[]
 }
 
 const seen = new Map<string, string>()
@@ -135,15 +144,82 @@ export interface OwnerSyncResult {
   unlinked: string[]
   /** Owner skills not linked because the account has its own folder of that name. */
   shadowed: string[]
+  /** The owner's after-edit hooks in the account's settings.json (ownerEditHooks). */
+  editHooks: 'written' | 'unchanged' | 'unreadable'
 }
 
-/** The sync signature: which CLAUDE.md a worker gets, its stamp, and the skill names the lean
- *  profile allows. */
+/** The sync signature: which CLAUDE.md a worker gets, its stamp, the skill names the lean
+ *  profile allows, and the owner's settings.json stamp (its after-edit hooks). */
 function syncSignature(ownerDir: string): { srcMd: string; skills: string[]; sig: string } {
   const srcMd = workerClaudeMd(ownerDir)
   const allowed = workerSkillList(ownerDir)
   const skills = ownerSkills(ownerDir).filter((name) => !allowed || allowed.has(name))
-  return { srcMd, skills, sig: `${srcMd}|${stampOf(srcMd) ?? '-'}|${skills.join('/')}` }
+  const settings = stampOf(join(ownerDir, 'settings.json')) ?? '-'
+  return { srcMd, skills, sig: `${srcMd}|${stampOf(srcMd) ?? '-'}|${skills.join('/')}|${settings}` }
+}
+
+const EDIT_TOOL = /(^|\|)(Edit|Write|MultiEdit)(\||$)/
+
+/** The owner's after-edit hooks: the PostToolUse groups of `~/.claude/settings.json` whose matcher
+ *  names Edit, Write or MultiEdit, with only their command hooks that do not re-wake the model. */
+export function ownerEditHooks(ownerDir: string): HookGroup[] {
+  let post: unknown
+  try {
+    post = (
+      JSON.parse(readFileSync(join(ownerDir, 'settings.json'), 'utf8')) as {
+        hooks?: { PostToolUse?: unknown }
+      }
+    ).hooks?.PostToolUse
+  } catch {
+    return []
+  }
+  if (!Array.isArray(post)) return []
+  const out: HookGroup[] = []
+  for (const g of post as Array<{ matcher?: unknown; hooks?: unknown }>) {
+    if (typeof g?.matcher !== 'string' || !EDIT_TOOL.test(g.matcher) || !Array.isArray(g.hooks))
+      continue
+    const hooks = (g.hooks as Array<Hook & { asyncRewake?: unknown }>).filter(
+      (h) => h?.type === 'command' && !h.asyncRewake,
+    )
+    if (hooks.length) out.push({ matcher: g.matcher, hooks })
+  }
+  return out
+}
+
+/** Put the owner's after-edit hooks in the account's settings.json in place of the ones this code
+ *  put there before; every other key and hook stays. A file that is not JSON is left alone. */
+function syncEditHooks(
+  ownerDir: string,
+  accountDir: string,
+  stamp: Stamp | null,
+): { status: OwnerSyncResult['editHooks']; carried: string[] } {
+  const file = join(accountDir, 'settings.json')
+  const before = stamp?.carried ?? []
+  const want = ownerEditHooks(ownerDir).map((g) => JSON.stringify(g))
+  let settings: { hooks?: Record<string, unknown> } & Record<string, unknown> = {}
+  if (existsSync(file)) {
+    try {
+      settings = JSON.parse(readFileSync(file, 'utf8'))
+      if (!settings || typeof settings !== 'object' || Array.isArray(settings)) throw new Error()
+    } catch {
+      return { status: 'unreadable', carried: before }
+    }
+  } else if (!want.length) {
+    return { status: 'unchanged', carried: [] }
+  }
+  const hooks = settings.hooks && typeof settings.hooks === 'object' ? settings.hooks : {}
+  const post = Array.isArray(hooks.PostToolUse) ? (hooks.PostToolUse as unknown[]) : []
+  // A copy already there (a stamp an older daemon rewrote without `carried`) is taken as ours, never doubled.
+  const kept = post.filter(
+    (g) => !before.includes(JSON.stringify(g)) && !want.includes(JSON.stringify(g)),
+  )
+  const next = [...kept, ...want.map((g) => JSON.parse(g) as HookGroup)]
+  const carried = want
+  if (JSON.stringify(next) === JSON.stringify(post)) return { status: 'unchanged', carried }
+  const { PostToolUse: _, ...otherHooks } = hooks
+  settings.hooks = next.length ? { ...otherHooks, PostToolUse: next } : otherHooks
+  writeFileSync(file, `${JSON.stringify(settings, null, 2)}\n`)
+  return { status: 'written', carried }
 }
 
 /** CLAUDE.md: copy over our own earlier copy or into an empty place, never over the account's own.
@@ -192,8 +268,8 @@ function unlinkStaleLinks(
   }
 }
 
-/** Make `accountDir`'s CLAUDE.md and skills match `ownerDir` (`~/.claude`). Never throws: a worker
- *  without the owner's rules is worse, but not a reason to refuse the launch. */
+/** Make `accountDir`'s CLAUDE.md, skills and after-edit hooks match `ownerDir` (`~/.claude`). Never
+ *  throws: a worker without the owner's rules is worse, but not a reason to refuse the launch. */
 export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSyncResult {
   const result: OwnerSyncResult = {
     changed: false,
@@ -201,14 +277,21 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
     linked: [],
     unlinked: [],
     shadowed: [],
+    editHooks: 'unchanged',
   }
   try {
     const { srcMd, skills, sig } = syncSignature(ownerDir)
-    if (seen.get(accountDir) === sig) return result
+    const settingsFile = join(accountDir, 'settings.json')
+    const seenKey = `${sig}|${stampOf(settingsFile) ?? '-'}`
+    if (seen.get(accountDir) === seenKey) return result
     const stamp = readStamp(accountDir)
     const dstMd = join(accountDir, 'CLAUDE.md')
-    if (stamp?.sig === sig && stampOf(dstMd) === stamp.claudeMd) {
-      seen.set(accountDir, sig)
+    if (
+      stamp?.sig === sig &&
+      stampOf(dstMd) === stamp.claudeMd &&
+      stampOf(settingsFile) === (stamp.settings ?? null)
+    ) {
+      seen.set(accountDir, seenKey)
       return result
     }
 
@@ -223,13 +306,24 @@ export function syncOwnerClaude(ownerDir: string, accountDir: string): OwnerSync
     for (const name of skills) linkSkill(srcRoot, dstRoot, name, result)
     unlinkStaleLinks(srcRoot, dstRoot, want, result)
 
+    const edit = syncEditHooks(ownerDir, accountDir, stamp)
+    result.editHooks = edit.status
+    const settings = stampOf(settingsFile)
     writeFileSync(
       join(accountDir, STAMP),
-      JSON.stringify({ sig, claudeMd: md.claudeMd, src: md.src } satisfies Stamp),
+      JSON.stringify({
+        sig,
+        claudeMd: md.claudeMd,
+        src: md.src,
+        settings,
+        carried: edit.carried,
+      } satisfies Stamp),
     )
-    seen.set(accountDir, sig)
+    seen.set(accountDir, `${sig}|${settings ?? '-'}`)
     result.changed =
-      result.claudeMd === 'copied' || result.linked.length + result.unlinked.length > 0
+      result.claudeMd === 'copied' ||
+      result.linked.length + result.unlinked.length > 0 ||
+      result.editHooks === 'written'
   } catch (err) {
     console.error(`[climayte] could not give ${accountDir} the owner's CLAUDE.md and skills:`, err)
   }
