@@ -28,6 +28,7 @@ import TaskGroup from './parts/TaskGroup.vue'
 import BrowserCard from './parts/BrowserCard.vue'
 import MessagePeek from './parts/MessagePeek.vue'
 import RunningTasksRow from '@/components/tasks/RunningTasksRow.vue'
+import SeatsRow from '@/components/tasks/SeatsRow.vue'
 import { CHAT_SENT_EVENT, sentHere, type ChatSentDetail } from '@/components/composer/api'
 import './transcript.css'
 
@@ -864,6 +865,7 @@ watch(
         </div>
         <div :style="{ height: `${padBottom}px` }" />
         <WorkingFooter v-if="showWorking && chat" :chat="chat" :items="items" :shimmer="liveRowId === null" class="mt-4" @reveal="revealStep" />
+        <SeatsRow v-if="chat && !readOnly" :chat="chat" />
         <RunningTasksRow v-if="chat && !readOnly" :chat="chat" :items="items" />
         <div ref="slackEl" aria-hidden="true" />
       </div>

@@ -22,6 +22,7 @@ import {
   syncCommandPacks,
 } from './core/command-packs'
 import { writeJsonStoreAtomic } from './core/json-store'
+import { pathKey } from './path-key'
 
 const STORE = join(CONFIG_DIR, 'command-packs.json')
 const CACHE_ROOT = join(DATA_DIR, 'command-packs')
@@ -90,7 +91,7 @@ export function commandPackTargets(): PackTarget[] {
   const out: PackTarget[] = []
   const seen = new Set<string>()
   const add = (kind: PackTarget['kind'], dir: string, label: string) => {
-    const key = resolve(dir).toLowerCase()
+    const key = pathKey(resolve(dir))
     if (seen.has(key) || !isDir(dir)) return
     seen.add(key)
     out.push({ kind, dir, label })

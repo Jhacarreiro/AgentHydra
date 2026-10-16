@@ -122,6 +122,7 @@ import {
   climaytePriority,
   contextTokens,
   DRONE_REFUSAL,
+  isCoreSeat,
   RUNNER_NEVER_STARTED_NOTICE,
   roleOf,
   tooBigOf,
@@ -764,8 +765,9 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
     w.saidAt = Date.now()
   }
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
-  // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.
-  if (!w.chat && !w.eta && r.eta) {
+  // (a move, a handoff) keeps the first. startReport clears it when the next message goes in. A seat
+  // estimates too (SEAT_ETA_INSTRUCTION), for its Prime's view only: no ledger row, no calibration.
+  if ((!w.chat || isCoreSeat(w)) && !w.eta && r.eta) {
     w.eta = {
       minutes: r.eta.minutes,
       at: r.eta.at,
@@ -773,7 +775,7 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
       line: r.eta.line,
       prompt: ETA_PROMPT_VERSION,
     }
-    void appendEtaRow(saidRow(w, w.eta, r.eta.text))
+    if (!w.chat) void appendEtaRow(saidRow(w, w.eta, r.eta.text))
     changed(w)
   }
   // Its answer to why the estimate missed (the Stop hook asked, climayteStopHook): kept on the
@@ -1055,7 +1057,8 @@ function settleEta(w: CliMayteWorker, v: EndRead['v'], asking: boolean, now: num
     return
   w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
   w.eta.doneAt = now
-  void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+  if (!w.chat)
+    void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
 }
 
 /** Where a settled turn goes next. A wave task with no check is judged now, off the main thread, and

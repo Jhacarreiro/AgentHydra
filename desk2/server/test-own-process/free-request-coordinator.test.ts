@@ -1,3 +1,7 @@
+// Runs in a bun test process of its own (`bun run test` names this folder after the main suite): its server and client
+// node:net sockets, both in this one process, make Bun 1.4.3 on Windows free a socket's state while a poll still holds
+// it. In the shared suite process that crashed the run in 3 of 4 full runs (2026-10-16): `panic: Segmentation fault` in
+// us_internal_socket_close_and_notify, or later inside JSC once the freed memory had been reused.
 import { expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { createServer, type Socket } from 'node:net'
@@ -69,7 +73,9 @@ async function broker<T>(
   try {
     return await body({ port: address.port, token: TOKEN, version: 'synthetic-version' })
   } finally {
-    for (const socket of sockets) socket.destroy()
+    // Every client here closes its own end, so the broker waits for each accepted socket to close. Destroying one
+    // that had ended an 8 MB reply crashed this file alone in 5-7 of 8 runs (2026-10-16), the use-after-free above.
+    await Promise.all([...sockets].map((socket) => new Promise<void>((ok) => socket.once('close', () => ok()))))
     await new Promise<void>((ok) => server.close(() => ok()))
   }
 }
@@ -326,7 +332,8 @@ test('a large fragmented coordinator frame scans only incoming chunks and retain
         console.log(JSON.stringify({ scanned, scans, frameBytes, writes, exact: true }))
       } finally {
         String.prototype.indexOf = indexOf
-        for (const socket of sockets) socket.destroy()
+        // Wait for the client's close, never destroy: see broker() in the test file.
+        await Promise.all([...sockets].map(socket => new Promise(resolve => socket.once('close', resolve))))
         await new Promise(resolve => server.close(resolve))
       }
     `,

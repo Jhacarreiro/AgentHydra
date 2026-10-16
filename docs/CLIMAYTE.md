@@ -920,6 +920,12 @@ sub-agents for estimating time until they can actually estimate time properly."
   `ETA: 1h 20m` (80), `ETA: 5-10 min` (7.5, a range is its middle) and a bare number as minutes;
   only the amounts right after `ETA` count; 0 or over a day is no estimate. `etaOfEvent` looks only
   at an assistant event's text blocks, never a tool result or the prompt.
+- **Seats estimate too, for their Prime only.** A Hydra Core seat (`isCoreSeat`: a chat with a catalog
+  persona, climayte.ts `seatTask`) gets `SEAT_ETA_INSTRUCTION` in its prompt and its `ETA:` line is kept on
+  `eta` like a worker's, so its Prime's view can show the time left (owner, 2026-10-16: "Expected timeline,
+  X amount of hours"; desk2 `tasks/seats.ts`). It is never a sample: no ledger row, `etaSamples` leaves
+  chats out, and the Stop hook never asks a chat to review. Any other chat, a manager-pinned one included,
+  is not asked for an estimate.
 - **Recording.** `applyLogEvent` (climayte-core.ts) keeps the first estimate of an attempt's log in
   `LogRead.eta` with its event time; `noteActivity` copies it once per message to
   `worker.eta { minutes, at, attempt }` (chat workers are skipped: they get no `WORKER_BRIEF`). A

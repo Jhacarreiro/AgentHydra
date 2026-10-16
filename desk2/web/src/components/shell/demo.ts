@@ -62,6 +62,9 @@ export function demoChats(): ChatSummary[] {
       turnStartedAt: now - 3 * MIN - 12_000,
       climayteActive: 2
     }),
+    // Two seats it opened: the sidebar nests them under it, and its transcript sums them up (tasks/SeatsRow.vue).
+    chat('pc-ava', 'Ava · Build cache audit', C, 'working', 1, { parentId: 'pc', activity: 'Bash: bun run build', turnStartedAt: now - 26 * MIN }),
+    chat('pc-leo', 'Leo · Test timing report', C, 'idle', 2, { parentId: 'pc' }),
     chat('ccd', 'Desktop client rewrite plan', C, 'idle', 2),
     chat('usb', 'Unified settings and billing consolidation plan', C, 'needs_you', 3, { unread: true, pendingCount: 1 }),
     chat('nvw', 'Native vs web design trade-offs', C, 'idle', 4),
