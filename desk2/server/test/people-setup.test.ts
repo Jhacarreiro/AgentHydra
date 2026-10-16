@@ -6,6 +6,10 @@ import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { presentAddon } from './people-addon-fixture'
 
+// Every key goes back after the file: the folder is removed, and a later file's headless Chrome started under a
+// USERPROFILE that no longer exists never opens its debugging port (38 tests, 2026-10-15).
+const KEYS = ['HOME', 'USERPROFILE', 'AGENTHYDRA_MANAGERS_DIR', 'AGENTHYDRA_CORE_DIR'] as const
+const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
 const home = mkdtempSync(join(tmpdir(), 'people-'))
 process.env.HOME = home
 process.env.USERPROFILE = home
@@ -13,7 +17,12 @@ process.env.AGENTHYDRA_MANAGERS_DIR = join(home, 'legacy-managers')
 process.env.AGENTHYDRA_CORE_DIR = join(home, 'core')
 const addon = presentAddon(home)
 const { peopleState, savePeople } = await import('../src/people/setup')
-afterAll(() => rmSync(home, { recursive: true, force: true }))
+afterAll(() => {
+  for (const k of KEYS)
+    if (saved[k] === undefined) delete process.env[k]
+    else process.env[k] = saved[k]
+  rmSync(home, { recursive: true, force: true })
+})
 
 describe('people setup', () => {
   test('a fresh home is empty and offers five invented starters', () => {

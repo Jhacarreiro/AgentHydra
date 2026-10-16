@@ -55,12 +55,13 @@ test('process.env cannot be replaced by a copy, and its keys still set and delet
   expect(process.env.DESK_PRELOAD_PROBE).toBeUndefined()
 })
 
-test("a file that leaves fetch swapped fails the next file's first test by name, and the rest get the real fetch", () => {
+test("a file that leaves fetch swapped or USERPROFILE moved fails the next file's first test by name, and the rest get the real ones", () => {
   const dir = mkdtempSync(join(ROOT, 'leak-'))
   writeFileSync(join(dir, 'bunfig.toml'), `[test]\npreload = [${JSON.stringify(join(import.meta.dir, 'preload.ts'))}]\n`)
+  // people-setup.test.ts's shape until 2026-10-15: the home moved at module scope and never put back.
   writeFileSync(
     join(dir, 'a-leaks.test.ts'),
-    `import { test } from 'bun:test'\ntest('swaps fetch', () => { globalThis.fetch = (() => 'stub') as never })\n`,
+    `import { test } from 'bun:test'\nprocess.env.USERPROFILE = 'C:/Users/me/gone'\ntest('swaps fetch', () => { globalThis.fetch = (() => 'stub') as never })\n`,
   )
   // The next file's own beforeAll stand-in is its own business: it is neither blamed nor taken away.
   writeFileSync(
@@ -72,6 +73,7 @@ describe('next file', () => {
   test('first', () => {})
   test('second', () => {
     expect(String(globalThis.fetch)).not.toContain('stub')
+    expect(process.env.USERPROFILE).toBe(${JSON.stringify(process.env.USERPROFILE ?? '')} || undefined)
     expect((globalThis as any).document.title).toBe('own')
   })
 })
@@ -79,7 +81,7 @@ describe('next file', () => {
   )
   const run = Bun.spawnSync([process.execPath, 'test'], { cwd: dir, stdout: 'pipe', stderr: 'pipe' })
   const out = run.stdout.toString() + run.stderr.toString()
-  expect(out).toContain('a-leaks.test.ts left globalThis.fetch swapped')
+  expect(out).toContain('a-leaks.test.ts left globalThis.fetch swapped and process.env.USERPROFILE changed')
   expect(out).toContain('(fail) next file > first')
   expect(out).toMatch(/\b2 pass\b/)
   expect(out).toMatch(/\b1 fail\b/)

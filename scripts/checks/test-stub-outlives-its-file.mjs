@@ -64,6 +64,23 @@ const ORCH_CALL = /(?<![\w$.])(?:runOrchestrator|startOrchestratorOperation)\s*\
 const NEVER_SETTLES = /(?<![\w$.])new\s+Promise\s*(?:<[^>(]*>\s*)?\(\s*\(\s*\)\s*=>\s*\{\s*\}\s*\)/g
 const ORCH_RESET = /(?<![\w$.])resetOrchestratorOperationsForTests\s*\(/g
 
+// RULE E, a home or temp folder redirected for the rest of the run, added 2026-10-15. process.env is as
+// process-wide as globalThis: os.homedir() and os.tmpdir() follow these variables at runtime, and every
+// child a later file spawns inherits them. desk2's people-setup.test.ts pointed HOME and USERPROFILE at a
+// temp folder at module scope, removed that folder in afterAll and never put them back, so every
+// headless Chrome a later file launched (secret, browser_navigate, the page, tab and session tools: 38
+// tests) never opened its debugging port, in three batch runs, while each of those files passed alone.
+// A put-back is an assignment or delete of the same name in an after hook, or one by key
+// (`process.env[k] = saved[k]`, `delete process.env[k]`), Object.assign(process.env, ...) or a whole
+// new process.env there, which can name any of them.
+const HOME_VARS = 'HOME|USERPROFILE|LOCALAPPDATA|APPDATA|TEMP|TMP|TMPDIR'
+const ENV_SET = new RegExp(`(?<![\\w$.])process\\.env\\.(${HOME_VARS})\\s*=(?![=>])`, 'g')
+const ENV_PUT_BACK = new RegExp(
+  `(?<![\\w$.])(?:process\\.env\\.(${HOME_VARS})\\s*=(?![=>])|delete\\s+process\\.env\\.(${HOME_VARS})\\b)`,
+  'g',
+)
+const ENV_PUT_BACK_ANY = /(?<![\w$.])(?:process\.env\s*\[|Object\.assign\s*\(\s*process\.env\b|process\.env\s*=(?![=>]))/g
+
 // RULE D, a request through the shared Hono app, added 2026-10-12 after it held both CI legs red for
 // a day. server/src/http-app.ts exports ONE `app` for the whole process; every routes/*.ts module
 // registers on it when imported, and Hono builds its router on the first request and refuses a new
@@ -293,6 +310,20 @@ export function findViolations(text) {
     for (const m of code.matchAll(NEVER_SETTLES)) hits.push({ index: m.index, kind: 'orchestrator-lock', name: 'the route lock' })
   }
 
+  // Rule E: a home or temp variable set at module scope or in a before hook, never put back.
+  ENV_PUT_BACK_ANY.lastIndex = 0
+  const envPutBackAll = [...code.matchAll(ENV_PUT_BACK_ANY)].some((m) => within(after, m.index))
+  const envPutBack = new Set()
+  ENV_PUT_BACK.lastIndex = 0
+  for (const m of code.matchAll(ENV_PUT_BACK)) if (within(after, m.index)) envPutBack.add(m[1] ?? m[2])
+  ENV_SET.lastIndex = 0
+  if (!envPutBackAll)
+    for (const m of code.matchAll(ENV_SET)) {
+      if (within(after, m.index) || envPutBack.has(m[1]) || keptForTheRun(text, m.index)) continue
+      if (depthAt(code, m.index) === 0 || within(before, m.index))
+        hits.push({ index: m.index, kind: 'env', name: `process.env.${m[1]}` })
+    }
+
   // Rule D: a request or fetch through the shared app, under whatever local name it was imported as.
   for (const name of sharedAppNames(text, code)) {
     const call = new RegExp(`(?<![\\w$.])${name.replace(/\$/g, '\\$')}\\s*\\.\\s*(?:request|fetch)\\s*\\(`, 'g')
@@ -300,6 +331,15 @@ export function findViolations(text) {
   }
 
   return hits.sort((a, b) => a.index - b.index)
+}
+
+/** A redirect the file keeps on purpose for every later file says so on one of the three lines above it,
+ *  in the untouched text: `kept for the run: <why>`. desktop-cli-pairing.test.ts keeps APPDATA off the
+ *  developer's real install folder for the files after it, and removes its folder at exit. */
+function keptForTheRun(text, index) {
+  let start = index
+  for (let n = 0; n < 4 && start > 0; n++) start = text.lastIndexOf('\n', start - 1)
+  return /kept for the run:\s*\S/.test(text.slice(Math.max(0, start), index))
 }
 
 /** The local names this file binds http-app's `app` to: `import { app } from '../src/http-app'`,
@@ -322,7 +362,7 @@ function sharedAppNames(text, code) {
 const lineAt = (text, index) => text.slice(0, index).split('\n').length
 
 const CHEAP_REJECT =
-  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation|\/http-app/
+  /mock\.module|(?:globalThis|global|window)\.fetch\s*=|Bun\.spawn(?:Sync)?\s*=|runOrchestrator|startOrchestratorOperation|\/http-app|process\.env\.(?:HOME|USERPROFILE|LOCALAPPDATA|APPDATA|TEMP|TMP|TMPDIR)\s*=/
 
 /** The four rules' user-facing text, keyed by hit kind, so a new rule cannot be added without
  *  saying what it found, why it matters and what to do - the half a check is actually read for. */
@@ -356,6 +396,20 @@ function explain(hit) {
         '`afterAll(() => { mock.module(SPEC, () => realApi) })`. A copy taken after the fake ' +
         "is a copy of the fake, because mock.module rewrites the namespace's live bindings. " +
         'Better still, inject the dependency and mock nothing (tests/monitor.test.ts).',
+    }
+  if (hit.kind === 'env')
+    return {
+      what: `${hit.name} redirected, never put back`,
+      message:
+        `This file sets ${hit.name} at module scope or in a before* hook and never puts it back in ` +
+        'afterAll/afterEach. bun test runs every file in one process, so os.homedir(), os.tmpdir() ' +
+        'and every child a LATER file spawns use it. desk2 people-setup.test.ts did this to HOME and ' +
+        'USERPROFILE and then removed the folder, on 2026-10-15: every headless Chrome launched after ' +
+        'it (38 tests in five files) never opened its debugging port, and each file passed alone.',
+      fix:
+        'Save the old values first (const saved = { HOME: process.env.HOME, USERPROFILE: ' +
+        'process.env.USERPROFILE }) and put them back in afterAll, deleting a key that was unset ' +
+        '(people-addon-gate.test.ts ships the loop), or set them inside the test with try/finally.',
     }
   if (hit.kind === 'shared-app')
     return {
@@ -392,7 +446,7 @@ function explain(hit) {
 export const audit = {
   id: ID,
   title:
-    'a test file must put back every global it stubs, every module it mocks, and every route lock it parks before it ends, and never freeze the shared app with a request',
+    'a test file must put back every global it stubs, every module it mocks, every home or temp variable it redirects, and every route lock it parks before it ends, and never freeze the shared app with a request',
   category: 'custom',
   domain: 'code',
   requires: {},

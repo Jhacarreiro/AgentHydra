@@ -95,9 +95,34 @@ function putBackGlobals(): string[] {
   return changed
 }
 
-const leakMessage = (file: string, changed: string[]) =>
-  `${path.relative(process.cwd(), file)} left globalThis.${changed.join(', globalThis.')} swapped when it ended (put ` +
-  'back by the preload): restore it in that file, in an afterAll or afterEach, or every later file in the run gets it'
+// The home folders are guarded the same way (2026-10-15): people-setup.test.ts pointed HOME and USERPROFILE at a folder
+// it then removed and never put them back, so every headless Chrome a later file started never opened its debugging
+// port (38 tests in three runs, each file green alone). os.homedir() and every child follow these at runtime. TEMP and
+// TMP are this preload's own, per file (startFileTemp).
+const HOME_VARS = ['HOME', 'USERPROFILE', 'LOCALAPPDATA', 'APPDATA'] as const
+const realHome = new Map(HOME_VARS.map((name) => [name, process.env[name]]))
+
+/** Puts back every home variable that differs from the preload's; returns their names. */
+function putBackHome(): string[] {
+  const changed: string[] = []
+  for (const [name, real] of realHome) {
+    if (process.env[name] === real) continue
+    changed.push(name)
+    if (real === undefined) delete process.env[name]
+    else process.env[name] = real
+  }
+  return changed
+}
+
+const leakMessage = (file: string, changed: string[], home: string[] = []) =>
+  [
+    changed.length ? `globalThis.${changed.join(', globalThis.')} swapped` : '',
+    home.length ? `process.env.${home.join(', process.env.')} changed` : '',
+  ]
+    .filter(Boolean)
+    .reduce((m, part, i) => (i ? `${m} and ${part}` : `${path.relative(process.cwd(), file)} left ${part}`), '') +
+  ' when it ended (put back by the preload): restore it in that file, in an afterAll or afterEach, or every later ' +
+  'file in the run gets it'
 
 // Each test file gets its own temp folder under one run folder, removed when the next file starts and again at the
 // run's end. Windows can hold a file a just-stopped child still has open, so each remove retries briefly. Without
@@ -138,7 +163,8 @@ Bun.plugin({
   setup(build) {
     build.onResolve({ filter: /\.(test|spec)\.[cm]?[jt]sx?$/ }, (args) => {
       const changed = putBackGlobals()
-      if (changed.length && currentFile) leak = leakMessage(currentFile, changed)
+      const home = putBackHome()
+      if ((changed.length || home.length) && currentFile) leak = leakMessage(currentFile, changed, home)
       if (args.path !== currentFile) startFileTemp()
       currentFile = args.path
       return undefined
@@ -155,5 +181,6 @@ afterAll(() => {
   if (fileTemp) removeTree(fileTemp)
   removeTree(runTemp)
   const changed = putBackGlobals()
-  if (changed.length) throw new Error(leakMessage(currentFile, changed))
+  const home = putBackHome()
+  if (changed.length || home.length) throw new Error(leakMessage(currentFile, changed, home))
 })
