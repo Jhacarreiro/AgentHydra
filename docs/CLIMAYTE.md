@@ -1592,12 +1592,19 @@ same logins signed in; a refresh on one reaches the other within a pass.
   (`cloudflare_worker_deploy`, value-blind).
 - On a PC: `<CONFIG_DIR>/login-sync.json` holds the address, the DPAPI-sealed token and 32-byte key,
   the on switch, the logins left out, and per login the store version and credential hash this PC
-  last agreed on. Every 30 s (`startLoginSync`) and on Sync now: a login changed here since that
+  last agreed on (for a CLI login also its sign-in, `signIn`, below). Every 30 s (`startLoginSync`) and on Sync now: a login changed here since that
   agreement goes up (even while a session runs: the file is what that CLI last wrote); when the
   store moved on, the copy whose access token expires later wins (a refresh pushes the expiry out);
   a newer copy lands through `landLogin` (the import's guards); a login only the store holds gets an
   instance here with the same id and number. A landed login is recorded by what was landed, so a
   refresh its sign-in check makes still goes up.
+- A logout reaches every PC (owner, 2026-10-02): a login this PC held and shared that is gone here
+  turns its row into a signed-out marker, and each other PC signs out of it once no session runs on
+  it there, unless its copy is a new sign-in made after the logout. A running session's refresh is
+  not one. The CLI rotates the refresh token on every refresh but writes `refreshTokenExpiresAt` again
+  as the same moment (397 ms apart across one refresh measured 2026-10-16), so every agreement records
+  that sign-in (`credentialSignIn`) and a file within 5 minutes of it is the same login, refreshed.
+  Before, a refresh written after the logout read as a new sign-in and signed the other PC back in.
 - Each login is AES-256-GCM encrypted under the key with its instance id as associated data. The
   pairing code (`ahsync1:` + base64url of address, token, key) is the only way the key leaves a PC:
   the dialog's copy button, for the other PC's Join.
@@ -1629,7 +1636,8 @@ same logins signed in; a refresh on one reaches the other within a pass.
   `claude auth status` passed for each; both sides' next passes found all 10 unchanged.
 - The test (`server/tests/cli-login-sync.test.ts`) runs the real Worker on bun:sqlite behind D1's
   API and plays the other PC through the store: a refresh there lands here, one here goes up, one
-  made by the sign-in check goes up, an older copy never wins, a left-out login stays put.
+  made by the sign-in check goes up, an older copy never wins, a left-out login stays put, and a
+  refresh here after a logout on the other PC signs out here while a new sign-in goes up.
 
 ### Two PCs: the shared queue, `server/src/core/climayte-queue-sync.ts` (owner, 2026-10-02)
 
@@ -1740,9 +1748,13 @@ Desktop account signed in on one PC is signed in on the other without the browse
   separate sign-ins of one account each keep their own tokens and both stay signed in, and tying
   them together would let either PC's refresh sign the other out. A PC joins the store's copy only
   where it has none: a signed-out profile of the same folder name, else a new profile with that
-  name (or `<name>-synced`) and number. From then on the later expiry among the grants wins.
+  name (or `<name>-synced`) and number. From then on the copy whose session grant
+  (`user:sessions:claude_code`, the app's own sign-in) expires later wins, else the later expiry
+  among all its grants. The latest expiry alone is the year-long grant where a profile has one, minted
+  at or after a sign-in but not always anew at the next (seen 2026-10-16), so an older copy holding
+  one beat a newer sign-in without it.
 - A grant Anthropic revoked (2026-10-16, `server/src/core/revoked-grants.ts`) never lands and does
-  not count toward the later expiry, and each login carries the account's revoked-grant digests so
+  not count toward either expiry, and each login carries the account's revoked-grant digests so
   the other PC drops them too. The rules, and why a re-login does not replace such a grant, are in
   REFERENCE.md, "A 429 can be a revoked login". Its prune writes config.json only when the file is
   unchanged since it read it, so it never undoes a login a pass landed meanwhile; the
@@ -1770,16 +1782,21 @@ Desktop account signed in on one PC is signed in on the other without the browse
   pinned by the test.
 - A Log out of a desktop instance leaves that account out of sync on that PC, like a CLI one, and
   reaches every PC (2026-10-02): the account's store row turns into a signed-out marker, and each
-  other PC signs its profile out once that profile's app is closed, unless it was signed in after
-  the logout. A Log out only edits files on each PC; it never asks Anthropic to end the login.
+  other PC signs its profile out once that profile's app is closed, unless its claude.ai sign-in was
+  made after the logout: the earliest creation time of its `sessionKey*` cookies, which claude.ai
+  keeps when it sets the same key again and a token refresh never touches. A running app refreshes
+  its grants and rewrites config.json on its own, so neither counts as a sign-in; a real one on a
+  profile left open goes up once it closes. A Log out only edits files on each PC; it never asks
+  Anthropic to end the login.
 - Windows only (elsewhere the profile key is in the Keychain or a keyring).
 - The test (`server/tests/desktop-login-sync.test.ts`, Windows) proves the key round trip, a
   store-only account landing in a new profile under its own key with the cookie in Chromium's
-  format, the later expiry winning both ways, a separate sign-in left alone, and a left-out login
-  staying put. `server/tests/revoked-grants.test.ts` (Windows) proves a usage check taking the
-  revoked grants out of a closed profile while keeping the live one, and a prune leaving alone a
-  login that landed while it waited. Not proven by a test: that Claude Desktop itself accepts a
-  landed profile; that takes opening one, which only the owner does.
+  format, the newer copy winning both ways (the later session grant over a year-long one), a
+  refresh after a logout on the other PC signing out while a sign-in after it goes up, a separate
+  sign-in left alone, and a left-out login staying put. `server/tests/revoked-grants.test.ts`
+  (Windows) proves a usage check taking the revoked grants out of a closed profile while keeping the
+  live one, and a prune leaving alone a login that landed while it waited. Not proven by a test: that
+  Claude Desktop itself accepts a landed profile; that takes opening one, which only the owner does.
 
 ### One sign-in for desktop and CLI: `server/src/core/desktop-cli-feed.ts` (owner, 2026-10-01)
 
