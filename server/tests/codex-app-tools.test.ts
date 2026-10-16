@@ -3,10 +3,14 @@ import { randomUUID } from 'node:crypto'
 import { createServer, type Socket } from 'node:net'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { callCodexAppPipe } from '../src/core/codex-app-tools'
+import { callCodexAppPipe, codexAppPipesForPid } from '../src/core/codex-app-tools'
 
-async function withPipe(handler: (socket: Socket) => void, run: (pipe: string) => Promise<void>) {
-  const name = `hydra-app-tools-test-${randomUUID()}`
+async function withPipe(
+  handler: (socket: Socket) => void,
+  run: (pipe: string) => Promise<void>,
+  prefix = 'hydra-app-tools-test-',
+) {
+  const name = `${prefix}${randomUUID()}`
   const pipe = process.platform === 'win32' ? `\\\\.\\pipe\\${name}` : join(tmpdir(), name)
   const sockets = new Set<Socket>()
   const server = createServer((socket) => {
@@ -54,6 +58,21 @@ test('reads fragmented native app frames and ignores unrelated responses', async
     },
   )
 })
+
+// Codex 26.1013 serves its app tools on codex-app-tools-* pipes; discovery that looked only at codex-browser-use-*
+// found nothing, and restoring an Unassigned chat failed with "app-tools connection could not be found" (2026-10-16).
+test.skipIf(process.platform !== 'win32')(
+  'finds the app-tools pipe a Codex app serves by its own pid',
+  async () => {
+    await withPipe(
+      () => {},
+      async (pipe) => {
+        expect(await codexAppPipesForPid(process.pid)).toContain(pipe)
+      },
+      'codex-app-tools-',
+    )
+  },
+)
 
 test('native refusals are surfaced without a second dispatch', async () => {
   let dispatches = 0

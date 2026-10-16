@@ -82,7 +82,11 @@ export function callCodexAppPipe<T>(
   })
 }
 
-/** Select pipes by their OS-reported server PID. An inherited pipe is only a discovery hint. */
+/**
+ * Select pipes by their OS-reported server PID. An inherited pipe is only a discovery hint. Codex serves its app tools on
+ * a `codex-app-tools-*` pipe; builds before 26.1013 served them on one of its `codex-browser-use-*` pipes, which now
+ * answer tools/list with "No handler registered" (measured 2026-10-16), so app-tools pipes are listed first.
+ */
 export async function codexAppPipesForPid(pid: number): Promise<string[]> {
   if (process.platform !== 'win32' || !Number.isSafeInteger(pid) || pid <= 0) {
     throw new Error('Talking to an open Codex app needs a supported Windows desktop.')
@@ -102,7 +106,7 @@ public class HydraCodexPipe {
 '@
 $hydraPipeMatches = @()
 $knownPipe = $env:CODEX_APP_TOOLS_PIPE_PATH
-if ($knownPipe -and $knownPipe.StartsWith('\\\\.\\pipe\\codex-browser-use-')) {
+if ($knownPipe -and ($knownPipe.StartsWith('\\\\.\\pipe\\codex-app-tools-') -or $knownPipe.StartsWith('\\\\.\\pipe\\codex-browser-use-'))) {
   $handle = [HydraCodexPipe]::CreateFile($knownPipe,0,3,[IntPtr]::Zero,3,0,[IntPtr]::Zero)
   if ($handle -ne [IntPtr](-1)) {
     try {
@@ -114,8 +118,9 @@ if ($knownPipe -and $knownPipe.StartsWith('\\\\.\\pipe\\codex-browser-use-')) {
     } finally { [void][HydraCodexPipe]::CloseHandle($handle) }
   }
 }
-Get-ChildItem '\\\\.\\pipe\\' | Where-Object Name -Like 'codex-browser-use-*' | ForEach-Object {
-  $pipePath = '\\\\.\\pipe\\' + $_.Name
+$hydraPipes = @(Get-ChildItem '\\\\.\\pipe\\' | Select-Object -ExpandProperty Name)
+@($hydraPipes -like 'codex-app-tools-*') + @($hydraPipes -like 'codex-browser-use-*') | ForEach-Object {
+  $pipePath = '\\\\.\\pipe\\' + $_
   $handle = [HydraCodexPipe]::CreateFile($pipePath,0,3,[IntPtr]::Zero,3,0,[IntPtr]::Zero)
   if ($handle -ne [IntPtr](-1)) {
     try {
@@ -159,17 +164,19 @@ export interface CodexAppTools {
   call<T>(tool: string, args: Record<string, unknown>): Promise<T>
 }
 
-/** The tools a migration calls; a pipe whose catalog lacks one is not the app-tools server. */
-const MIGRATION_TOOLS = [
+/** The tools showing a migrated chat calls. Not every account's app serves the sidebar ones (measured 2026-10-16: one
+ *  app listed 58 tools, another 44 without create_sidebar_section), so a caller names only the tools it calls. */
+export const MIGRATION_TOOLS = [
   'list_threads',
   'navigate_to_codex_page',
   'create_sidebar_section',
   'move_thread_to_sidebar_section',
 ]
 
-/** The first of `pid`'s pipes that serves every migration tool, with each tool's namespace. */
+/** The first of `pid`'s pipes that serves every tool in `needs`, with each tool's namespace. */
 async function findAppToolsPipe(
   pid: number,
+  needs: readonly string[],
 ): Promise<{ pipe: string; tools: Map<string, string> } | null> {
   for (const pipe of await codexAppPipesForPid(pid)) {
     let catalog: { tools: { name: string; namespace: string }[] }
@@ -179,7 +186,7 @@ async function findAppToolsPipe(
       continue // Read-only discovery; no mutation has been dispatched.
     }
     const tools = new Map(catalog.tools.map((tool) => [tool.name, tool.namespace]))
-    if (MIGRATION_TOOLS.every((name) => tools.has(name))) return { pipe, tools }
+    if (needs.every((name) => tools.has(name))) return { pipe, tools }
   }
   return null
 }
@@ -229,6 +236,7 @@ function appToolsClient(
 export async function connectCodexAppTools(
   target: CodexDesktopTarget,
   callerThreadId: string,
+  needs: readonly string[],
 ): Promise<CodexAppTools> {
   const state = await codexDesktopRunState(target)
   if (state.state !== 'running') throw new Error("That account's Codex desktop is not open.")
@@ -236,11 +244,13 @@ export async function connectCodexAppTools(
   // A process appears before its app-tools server finishes startup. Only discovery is retried.
   const deadline = Date.now() + 15_000
   do {
-    const found = await findAppToolsPipe(pid)
+    const found = await findAppToolsPipe(pid, needs)
     if (found) return appToolsClient(target, pid, found.pipe, found.tools, callerThreadId)
     verifiedPipes.delete(pid)
     if (Date.now() >= deadline) break
     await Bun.sleep(500)
   } while (Date.now() < deadline)
-  throw new Error('The Codex app-tools connection could not be found.')
+  throw new Error(
+    `The open Codex app does not serve ${needs.join(', ')} on any of its app-tools connections.`,
+  )
 }
