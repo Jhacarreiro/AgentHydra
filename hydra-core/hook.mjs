@@ -223,13 +223,98 @@ function craniumOn(dir) {
 
 const CORE_VIA = '(Connections MCP; when it is not in your tool list, connections_execute { tool_name: "connections_core", params })';
 
+// The Connections MCP writes each folder's quick exits to a head file: the flowchart's first questions, which the chat
+// answers itself. The owner's design is three quick questions on every message, which cut most of what a message costs;
+// only what they do not settle needs the core. An entry older than a day is not trusted: the flowchart may have changed.
+const HEAD_TTL_MS = 24 * 60 * 60 * 1000;
+
+export function folderKey(p) {
+  const key = String(p).replace(/\\/g, "/").replace(/\/+$/, "");
+  return /^[a-z]:\//i.test(key) ? key.toLowerCase() : key;
+}
+
+function headEntry(input, env) {
+  let head;
+  try {
+    head = JSON.parse(
+      readFileSync(env.AGENTHYDRA_CRANIUM_HEAD_FILE || path.join(os.homedir(), ".connections", "cranium", "core-head.json"), "utf8"),
+    );
+  } catch {
+    return null;
+  }
+  const entry = head?.folders?.[folderKey(cwdOf(input))];
+  const at = Date.parse(entry?.readAt);
+  return Number.isFinite(at) && Date.now() - at < HEAD_TTL_MS ? entry : null;
+}
+
+// Null when the entry holds no usable quick exit (no ask, no exit, or a shape this does not read): the walk line stands.
+function fastPath(entry, at) {
+  if (!entry.asks?.length || !entry.exits?.length) return null;
+  try {
+    const asks = entry.asks.map((ask) => `- ${ask.id}: ${ask.text} (${ask.answers.join(" | ")})`);
+    const exits = entry.exits.map((exit) => {
+      const when = Object.entries(exit.answers).map(([id, answer]) => `${id} ${answer}`).join(", ");
+      return `If your answers are ${when}: ${exit.outcome}.${exit.say ? ` ${exit.say}` : ""}`;
+    });
+    return [
+      `Hydra Core (flowchart v${entry.version}): answer these yourself before you act; they need no tool call.`,
+      ...asks,
+      ...exits,
+      `Any other answers: walk it, connections_core { action: "run", ${at}, answers: { <your answers to the questions above> }, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with that answer added. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+    ].join("\n");
+  } catch {
+    return null;
+  }
+}
+
 function craniumPrompt(input, env) {
   if (!ownerPrompt(input)) return null;
   const at = `chat: ${JSON.stringify(chatKey(input, env))}, folderPath: ${JSON.stringify(cwdOf(input))}`;
+  const entry = headEntry(input, env);
+  if (entry?.status === "none") return null;
+  const fast = entry?.status === "ok" ? fastPath(entry, at) : null;
   return output(
     "UserPromptSubmit",
-    `Hydra Core: before you act on this message, walk the workspace flowchart: connections_core { action: "run", ${at}, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with answers: { <ask.id>: <one of ask.answers> } added to the answers so far. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
+    fast ??
+      `Hydra Core: before you act on this message, walk the workspace flowchart: connections_core { action: "run", ${at}, facts: { message: <this message> } } ${CORE_VIA}. While its status is "ask", answer ask.text yourself and call again with answers: { <ask.id>: <one of ask.answers> } added to the answers so far. At "done" follow what it returns, its brief first; at "none", "stuck" or an error, go ahead.`,
   );
+}
+
+// One outbox line per turn: whether the chat walked the core and whether it handed work to a delegate. Only a delegate
+// needs the core (the quick questions are answered in the chat), so these two counts show which turns still pay for a
+// core call. Never blocks the Stop and never throws.
+const DELEGATES = /^(Agent|Task|Workflow)$|(hswarm_run|climayte_run|fan_out)$/;
+
+function craniumLedger(input, env) {
+  try {
+    if (input.stop_hook_active === true) return;
+    const { tools } = lastTurn(input);
+    const called = tools.some((tool) => {
+      const name = String(tool.name ?? "");
+      if (name.endsWith("connections_core")) return true;
+      return (
+        name.endsWith("connections_execute") &&
+        tool.input?.tool_name === "connections_core" &&
+        (tool.input?.params?.action ?? "run") === "run"
+      );
+    });
+    const delegated = tools.some((tool) => DELEGATES.test(String(tool.name ?? "")));
+    const chat = chatKey(input, env);
+    const line = {
+      uid: `turn:${chat.slice(0, 50)}:${Date.now()}`.replace(/[^A-Za-z0-9._:-]/g, "_"),
+      at: new Date().toISOString(),
+      chat,
+      folder: folderKey(cwdOf(input)),
+      called,
+      delegated,
+      version: headEntry(input, env)?.version ?? null,
+      pc: os.hostname(),
+    };
+    const outbox =
+      env.AGENTHYDRA_CRANIUM_OUTBOX_FILE || path.join(os.homedir(), ".connections", "cranium", "core-outbox.jsonl");
+    mkdirSync(path.dirname(outbox), { recursive: true });
+    appendFileSync(outbox, `${JSON.stringify(line)}\n`);
+  } catch {}
 }
 
 function craniumSession(input, env) {
@@ -477,6 +562,7 @@ export async function run(input, env = process.env) {
   }
   if (craniumOn(dir)) {
     if (event === "UserPromptSubmit") return craniumPrompt(input, env);
+    if (event === "Stop") craniumLedger(input, env);
     return event === "SessionStart" ? craniumSession(input, env) : null;
   }
   if (event === "Stop") {

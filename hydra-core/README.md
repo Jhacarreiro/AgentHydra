@@ -28,6 +28,7 @@ A `<core dir>/CRANIUM` file (empty is fine) moves the core off this PC. The flow
 
 - Each owner message gets one line: walk the flowchart with `connections_core { action: "run", chat, folderPath, facts: { message } }`, answer each `ask` and call again with the answers so far, then follow what `done` returns.
 - After a compact the chat gets one line naming `connections_core { action: "brief", chat, folderPath }`, which gives back the last brief the flowchart handed on.
+- Fast path: the flowchart's quick exits are kept per folder in `~/.connections/cranium/core-head.json` (`AGENTHYDRA_CRANIUM_HEAD_FILE` overrides it), written by the Connections MCP and used for a day. When a folder has them, the message lists its questions and exits, and the chat answers those itself with no tool call; only answers they do not settle call `connections_core`. A folder marked `none` gets no line. Each turn's Stop appends one line to `~/.connections/cranium/core-outbox.jsonl` (`AGENTHYDRA_CRANIUM_OUTBOX_FILE`): whether the chat walked the core and whether it handed work to a delegate, so the core calls that remain can be counted.
 - Nothing is written under the core folder, and the placement, pack and president rule below are off.
 - Seats, drones and worker shells still get nothing, and their skips are not logged. Without the file the hook runs the local tree as before, so each PC switches when its owner writes the file.
 
