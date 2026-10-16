@@ -305,6 +305,76 @@ describe('login sync between two PCs', () => {
     }
   }, 20_000)
 
+  // Found 2026-10-16 (efficiency audit sweep): a session running here keeps refreshing the login it is on, so after a
+  // logout on the other PC the file here had changed and was written after the logout. That read as a new sign-in,
+  // went back up and signed the other PC in again. The CLI writes which sign-in a file is (refreshTokenExpiresAt)
+  // and a refresh keeps it; a new sign-in does not.
+  test('a refresh here of a login logged out on the other PC signs out here, and a new sign-in goes up', async () => {
+    const made = createCliInstance('out@example.com (Pro)')
+    const id = (made.data as { id: string }).id
+    const dir = getCliInstance(id)!.configDir
+    const cred = join(dir, '.credentials.json')
+    const signedIn = (expiresAt: number, signIn: number) =>
+      JSON.stringify({
+        claudeAiOauth: {
+          accessToken: `at-${expiresAt}`,
+          refreshToken: `rt-${expiresAt}`,
+          expiresAt,
+          refreshTokenExpiresAt: signIn,
+        },
+      })
+    try {
+      // Sign-ins are days apart; a refresh writes its sign-in again within a second (397 ms, measured).
+      const first = Date.now() + 30 * 86_400_000
+      writeFileSync(cred, signedIn(1000, first))
+      writeFileSync(
+        join(dir, '.claude.json'),
+        JSON.stringify({ oauthAccount: { emailAddress: 'out@example.com' } }),
+      )
+      expect((await configureLoginSync({ url: base, token })).ok).toBe(true)
+      await runLoginSync()
+      const key = Buffer.from(
+        JSON.parse(
+          Buffer.from(loginSyncPairingCode()!.slice('ahsync1:'.length), 'base64url').toString(),
+        ).k,
+        'base64',
+      )
+      const row = async () => (await store('GET', `/v1/logins/${id}`)).json
+      const logOutOnOtherPc = async () => {
+        const kept = await row()
+        const r = await store('PUT', `/v1/logins/${id}`, {
+          version: kept.version,
+          blob: sealLogin(key, { id }),
+          meta: { ...kept.meta, signedOut: true, expiresAt: 0, at: Date.now() },
+        })
+        expect(r.status).toBe(200)
+        await Bun.sleep(20)
+      }
+      await logOutOnOtherPc()
+      // A session here refreshed the login after the logout: new tokens, the same sign-in.
+      writeFileSync(cred, signedIn(2000, first + 397))
+      await runLoginSync()
+      expect(existsSync(cred)).toBe(false)
+      expect((await row()).meta.signedOut).toBe(true)
+      // Signed in again here: it goes up. Logged out on the other PC again, and before this PC takes it, a new
+      // sign-in here: that one is the newer word and goes up in its place.
+      writeFileSync(cred, signedIn(3000, first + 2 * 86_400_000))
+      await runLoginSync()
+      expect((await row()).meta.signedOut).not.toBe(true)
+      await logOutOnOtherPc()
+      writeFileSync(cred, signedIn(4000, first + 3 * 86_400_000))
+      await runLoginSync()
+      const back = await row()
+      expect(back.meta.signedOut).not.toBe(true)
+      expect(openLogin(key, id, back.blob)!.credentials).toBe(
+        signedIn(4000, first + 3 * 86_400_000),
+      )
+    } finally {
+      disconnectLoginSync()
+      deleteCliInstance(id, getCliInstance(id)?.name)
+    }
+  }, 20_000)
+
   // Measured live, 2026-10-04: a PC with two instances on one account re-created one row every 30 s
   // and the other PC (one instance, landed from that row) deleted it again, about 110 inserts and 110
   // deletes an hour. Both PCs are real here: each one's registry, sync config and instance dirs are

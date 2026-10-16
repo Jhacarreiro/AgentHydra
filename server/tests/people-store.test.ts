@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   statSync,
+  utimesSync,
   writeFileSync,
 } from 'node:fs'
 import { tmpdir } from 'node:os'
@@ -127,6 +128,33 @@ test('sync conflict: newer wins and the losing copy is kept in the backup folder
   expect((await remote.get('manager/ada'))?.brief).toBe('newest pc brief')
   const all = readdirSync(backupDir(home)).flatMap((d) => readdirSync(join(backupDir(home), d)))
   expect(all).toContain('crainium--manager--ada.json')
+})
+
+// Found 2026-10-16 (efficiency audit sweep): a person's time here is its files' newest mtime, so a checkout or restore
+// that rewrote the files unchanged made the stale copy here beat a later CrAInium edit, which it then replaced.
+test('a copy here unchanged since the last sync never outranks a later CrAInium edit, whatever its files say', async () => {
+  const pc = createThisPcHome({ home })
+  const remote = remoteHome()
+  const opts = {
+    local: pc,
+    remote,
+    backupDir: backupDir(home),
+    baseFile: join(home, 'synced.json'),
+  }
+  await pc.put(person('ada', '2020-01-01T00:00:00.000Z', { brief: 'first brief' }))
+  expect(await syncPeople(opts)).toMatchObject({ pushed: 1, error: null })
+  // Another PC edits the person in CrAInium; then a checkout here rewrites the files as they were, a day later.
+  await remote.put(person('ada', '2020-02-01T00:00:00.000Z', { brief: 'later edit elsewhere' }))
+  const dir = join(home, '.agenthydra', 'people', 'manager', 'ada')
+  const touched = new Date('2020-03-01T00:00:00.000Z')
+  for (const f of ['persona.json', 'brief.md']) utimesSync(join(dir, f), touched, touched)
+  expect(await syncPeople(opts)).toMatchObject({ pulled: 1, pushed: 0, error: null })
+  expect((await remote.get('manager/ada'))?.brief).toBe('later edit elsewhere')
+  expect((await pc.get('manager/ada'))?.brief).toBe('later edit elsewhere')
+  // An edit here still goes up.
+  await pc.put(person('ada', '2020-04-01T00:00:00.000Z', { brief: 'edited here' }))
+  expect(await syncPeople(opts)).toMatchObject({ pushed: 1, pulled: 0 })
+  expect((await remote.get('manager/ada'))?.brief).toBe('edited here')
 })
 
 test('playbook and avatar files round-trip byte-exact through the door and This PC', async () => {

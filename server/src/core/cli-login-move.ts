@@ -171,6 +171,20 @@ export function credentialExpiry(text: string | null): number {
   }
 }
 
+/** Which sign-in a credential file holds: its refresh token's own expiry (ms), or 0 when it does not
+ *  say. It ends the sign-in, not the token: a refresh rotates the refresh token and writes this again
+ *  as the same moment, give or take its clock and the request (a refresh measured 2026-10-16 moved it
+ *  397 ms), while a new sign-in starts it over (sameSignIn). */
+export function credentialSignIn(text: string | null): number {
+  try {
+    const at = (JSON.parse(text ?? '') as { claudeAiOauth?: { refreshTokenExpiresAt?: unknown } })
+      .claudeAiOauth?.refreshTokenExpiresAt
+    return typeof at === 'number' && Number.isFinite(at) ? at : 0
+  } catch {
+    return 0
+  }
+}
+
 function seal(
   plain: string,
   passphrase: string,

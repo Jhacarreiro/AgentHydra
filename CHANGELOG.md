@@ -7,6 +7,8 @@ is based on [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and this p
 
 ## [Unreleased]
 
+- **Logging out on one PC is no longer undone by another.** A Claude session or Desktop app still running on the other PC refreshes its login, and login sync took that refresh for a new sign-in and signed the account back in everywhere; now only a real sign-in after the logout does. A Desktop copy is also judged newer by its own sign-in grant, not by a year-long one beside it.
+- **People sync keeps a newer CrAInium edit over an unchanged copy here.** A checkout, copy or restore that rewrote a person's files without changing them made that old copy look newer and replace the edit; now a copy unchanged since the last sync never wins.
 - **A chat with a background task still running no longer looks idle in the sidebar.** A Claude Desktop or CLI chat whose reply has finished while its background command, watcher or workflow still runs now shows the orange running dot at full brightness, as AgentHydra's own chats do, instead of the dim idle ring.
 - **Guarded web-pool imports prefer Go over idle Free accounts.** Completed browser logins are verified before pool replacement; Free and Go share a configured active-account limit. Replaced accounts retain their credentials and history without logging out devices, while pending and retired logins stay out of routing and background sync. Existing live renewals keep their slot.
 - **Connectors is a compact table.** Settings → Connectors lists each connector on one line with its type, status, action and switch; details open under it. A connector that is not installed can no longer be switched on.
