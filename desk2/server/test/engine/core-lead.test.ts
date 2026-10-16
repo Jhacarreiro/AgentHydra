@@ -2,7 +2,7 @@
 // lead its placement.json keeps) or, for a seat, the persona its Prime's seats.json opened it for; with the persona's
 // photo wherever it lives (a manager's folder, a portraits folder beside the persona files), else none. A pinned
 // manager still wins, and a chat with no lead has no face.
-import { afterEach, expect, test } from 'bun:test'
+import { afterEach, beforeEach, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -14,6 +14,7 @@ import { forgetManager } from '../../src/engine/managers'
 import { DEFAULT_SETTINGS } from '../../src/settings'
 import avatars from '../../src/plugins/37-manager-avatars'
 import { type CoreFixture, coreFixture, PNG, writeChatFile } from '../fixtures/hydra-core'
+import { usePeopleDoor } from '../people-addon-fixture'
 import { fakeBridge, fakeQueries } from './manager/fakes'
 
 const PRIME = '7f0c1d2e-0000-4000-8000-00000000000a'
@@ -23,8 +24,15 @@ const savedManagers = process.env.AGENTHYDRA_MANAGERS_DIR
 const savedPeople = process.env.AGENTHYDRA_PEOPLE_DIR
 let core: CoreFixture | null = null
 let managers: string | null = null
+let dropDoor: (() => void) | null = null
+
+beforeEach(async () => {
+  dropDoor = await usePeopleDoor()
+})
 
 afterEach(() => {
+  dropDoor?.()
+  dropDoor = null
   core?.done()
   core = null
   if (managers) rmSync(managers, { recursive: true, force: true })
