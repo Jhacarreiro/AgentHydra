@@ -12,23 +12,17 @@
  *
  * The list belongs to the person, not the app: `<CONFIG_DIR>/helpers.json`, so a PC without one runs
  * nothing from here. A helper keeps running across a daemon restart and the next daemon adopts it,
- * so a chat's MCP server is not dropped each time the daemon updates.
+ * so a chat's MCP server is not dropped each time the daemon updates. That needs each helper started
+ * outside the daemon's tree (core/outside-start.ts): until 2026-10-16 they were the daemon's own
+ * children, in Bun's kill-on-close job, and every self-update relaunch ended them.
  */
 
-import {
-  closeSync,
-  existsSync,
-  mkdirSync,
-  openSync,
-  readFileSync,
-  renameSync,
-  statSync,
-  writeFileSync,
-} from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, renameSync, statSync, writeFileSync } from 'node:fs'
 import { homedir } from 'node:os'
-import { join } from 'node:path'
+import { dirname, join } from 'node:path'
 import { APP_ROOT, CONFIG_DIR, DATA_DIR } from './config'
-import { killProcessTree, startProcess } from './core/process'
+import { startOutsideDaemon } from './core/outside-start'
+import { killProcessTree } from './core/process'
 import {
   INFO_WORKING_SET,
   nativeCommandLines,
@@ -66,8 +60,11 @@ export interface HelperDeps {
   findByPort(port: number): Lookup
   findByCommand(exe: string, match: string): Lookup
   memoryMB(pid: number): number | null
+  /** Its command line, or null when it could not be read. */
+  commandLine(pid: number): string | null
   alive(pid: number): boolean
-  /** Starts it hidden with stdout and stderr in `logFile`; resolves its pid. */
+  /** Starts it hidden, outliving this daemon, with stdout and stderr appended to `logFile`; resolves
+   *  the pid it started, which may be the helper's parent rather than the helper. */
   spawn(
     cmd: string[],
     opts: { cwd?: string; env: Record<string, string | undefined>; logFile: string },
@@ -230,6 +227,22 @@ export function createHelpers(deps: HelperDeps) {
     return deps.findByCommand(spec.exe as string, spec.match as string)
   }
 
+  /** Why the program holding the helper's port is not the helper, or null when it is (or its command
+   *  line cannot be read: the port is then its identity, as it always was). Every argument of the
+   *  helper's command must be in it, slashes and case aside; the program name is not compared, since
+   *  another starter (a chat's connect helper) may name the same interpreter differently. */
+  function stranger(spec: HelperSpec, pid: number): string | null {
+    if (!spec.port) return null
+    const line = deps.commandLine(pid)
+    if (line === null) return null
+    const plain = (s: string) => s.replaceAll('\\', '/').toLowerCase()
+    const have = plain(line)
+    const missing = spec.command.slice(1).find((arg) => !have.includes(plain(arg)))
+    return missing === undefined
+      ? null
+      : `port ${spec.port} is held by pid ${pid}, which is not this helper (its command line has no ${missing}); left alone`
+  }
+
   function gone(slot: Slot, why: string): void {
     const now = deps.now()
     const ranFor = slot.since === null ? 0 : now - slot.since
@@ -270,9 +283,24 @@ export function createHelpers(deps: HelperDeps) {
       return
     }
     const now = deps.now()
+    const notIt = typeof found === 'number' ? stranger(slot.spec, found) : null
+    if (notIt) {
+      // Never adopted, so never ended by a cap or a restart; and nothing is started onto its port.
+      Object.assign(slot, {
+        state: 'waiting',
+        pid: null,
+        since: null,
+        adopted: false,
+        memoryMB: null,
+        lastError: notIt,
+      })
+      return
+    }
     if (typeof found === 'number') {
       if (slot.pid !== found) {
-        slot.adopted = found !== slot.startedPid
+        // Found while this daemon was starting it: its own, though the pid it started may be the
+        // helper's parent (core/outside-start.ts runs it under cmd.exe).
+        slot.adopted = slot.startedPid === null
         slot.since = now
       }
       slot.pid = found
@@ -388,13 +416,14 @@ export function createHelpers(deps: HelperDeps) {
   }
 }
 
-function openLog(file: string): number {
+/** Keeps one older log beside it once it outgrows LOG_MAX_BYTES. A log a running copy still has open
+ *  stays as it is. */
+function rotateLog(file: string): void {
   try {
     if (statSync(file).size > LOG_MAX_BYTES) renameSync(file, `${file}.1`)
   } catch {
-    // no log yet
+    // no log yet, or still open
   }
-  return openSync(file, 'a')
 }
 
 function listenerPid(port: number): Lookup {
@@ -415,7 +444,7 @@ function commandPid(exe: string, match: string): Lookup {
   return 'none'
 }
 
-function realDeps(): HelperDeps {
+export function realDeps(): HelperDeps {
   const logDir = join(DATA_DIR, 'logs', 'helpers')
   return {
     configPath: join(CONFIG_DIR, 'helpers.json'),
@@ -428,26 +457,19 @@ function realDeps(): HelperDeps {
       const ws = nativeProcessInfo(pid, INFO_WORKING_SET)?.workingSetSize
       return typeof ws === 'number' ? ws / (1024 * 1024) : null
     },
+    commandLine: (pid) => nativeCommandLines([pid])?.get(pid) ?? null,
     alive: (pid) => nativeProcessTable({ fresh: true })?.some((p) => p.pid === pid) ?? true,
     spawn: async (cmd, { cwd, env, logFile }) => {
       const exe = Bun.which(cmd[0] as string)
       if (!exe) throw new Error(`${cmd[0]} is not on PATH`)
-      mkdirSync(logDir, { recursive: true })
-      const fd = openLog(logFile)
-      try {
-        const child = await startProcess([exe, ...cmd.slice(1)], {
-          lane: 'helpers',
-          cwd,
-          env,
-          stdout: fd,
-          stderr: fd,
-        })
-        void child.exited.finally(() => closeSync(fd))
-        return child.pid ?? null
-      } catch (e) {
-        closeSync(fd)
-        throw e
-      }
+      mkdirSync(dirname(logFile), { recursive: true })
+      rotateLog(logFile)
+      return startOutsideDaemon([exe, ...cmd.slice(1)], {
+        cwd: cwd ?? process.cwd(),
+        env,
+        logFile,
+        lane: 'helpers',
+      })
     },
     kill: killProcessTree,
     now: () => Date.now(),
