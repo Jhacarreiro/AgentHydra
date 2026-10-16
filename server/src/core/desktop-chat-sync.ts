@@ -35,6 +35,14 @@
 // matches a fresh stream. The Worker refuses chunks past its room for chats (400 MB by default, under
 // D1's 500 MB free-plan database the logins share), which the dialog reports as such.
 //
+// A STREAM IS ONE SESSION'S. A record can move to another session (a Hydra Desk chat or a desktop record
+// whose session changed): the agreed position belongs to the old session's stream, so the chat starts
+// over in the store and the new session goes up from byte 0, archived or not. Builds before 2026-10-16
+// carried the old position on, leaving records that count chunks their session never got (measured that
+// day: 6 of 114 rows). A PC that finds a record's chunks missing writes nothing past them, marks the row
+// (meta.rs, which the PC the chat started on reads as written elsewhere and answers by starting over),
+// and waits without downloading it again until that PC has.
+//
 // The state file keeps, per chat, what the last pass agreed with the store, so the next pass can tell
 // who changed what. Failures are the chat sync's own: the caller keeps them apart from the logins'.
 
@@ -112,6 +120,12 @@ interface ChatState {
   stoppedAt?: number
   /** Left the store (archived three days): never sent again, not listed. */
   gone?: boolean
+  /** This PC's chat whose shared stream broke and started over: it goes up again in full even archived
+   *  or held back, since the other PCs had it before. */
+  again?: boolean
+  /** Another PC's chat whose chunks the store lacks: this PC asked the PC it started on to send it again
+   *  (askAgain) and takes nothing from the row while it still carries the ask. */
+  asked?: boolean
 }
 
 interface StateFile {
@@ -122,8 +136,9 @@ interface StateFile {
 interface StoreRow {
   id: string
   version: number
-  /** Plain: kind, session id, the PC it started on, stream bytes, archived. */
-  meta: { k?: string; s?: string; pc?: string; b?: number; a?: number } | null
+  /** Plain: kind, session id, the PC it started on, stream bytes, archived, and `rs` when a reading PC
+   *  found chunks missing and asked for the chat again. */
+  meta: { k?: string; s?: string; pc?: string; b?: number; a?: number; rs?: number } | null
   updatedAt?: number
 }
 
@@ -392,7 +407,11 @@ async function takeAll(
     const st = state.chats[row.id]
     // This PC's own chat: only this PC writes it, so nothing in the store is taken back.
     if ((st?.origin.pc ?? row.meta?.pc) === io.pc) continue
-    if (st && st.version === row.version && !st.retry) continue
+    // In step, unless the row moved to another session: a chat that started over can come back at the
+    // version this PC last took.
+    const sameSession = row.meta?.s === undefined || st?.sessionId === row.meta.s
+    if (st && st.version === row.version && sameSession && !st.retry) continue
+    if (st?.asked && row.meta?.rs !== undefined) continue
     try {
       await takeChat(io, state, row, opened.get(row.id), now)
     } catch (err) {
@@ -522,9 +541,17 @@ function sendableState(
     if (st.state === 'diverged' || st.state === 'waiting') return null
     return st
   }
-  if (c.archived || c.holdBack || !c.project) return null
+  if (((c.archived || c.holdBack) && !st?.again) || !c.project) return null
   if (st && st.version > 0) return null
   return st ?? newState(io, c)
+}
+
+/** Whether the store's stream of a chat this PC shared can no longer be read whole: the chat moved to
+ *  another session (the agreed position is the old session's), or a PC reading it found chunks missing
+ *  (meta.rs). A chat the two-way sync left diverged stays as it is. */
+function streamBroken(st: ChatState | undefined, row: StoreRow, c: LocalChat): boolean {
+  if (!st || st.state === 'diverged') return false
+  return st.sessionId !== c.sessionId || row.meta?.rs !== undefined
 }
 
 /** A shared chat that grew since the last pass and went up less than CHAT_PUSH_EVERY_MS ago is
@@ -636,7 +663,7 @@ async function putRecord(
     up: null,
     title: titleOf(c.record),
     sent: hash,
-    state: c.size > at.bytes && !c.archived && budget <= 0 ? 'sending' : 'synced',
+    state: c.size > at.bytes && (!c.archived || st.again) && budget <= 0 ? 'sending' : 'synced',
     note: null,
     retry: false,
     at: now,
@@ -659,16 +686,22 @@ async function sendChat(
   now: number,
 ): Promise<number> {
   let row = rows.get(c.id)
-  if (row && !c.archived && c.project && writtenElsewhere(state.chats[c.id], row)) {
+  const prior = state.chats[c.id]
+  const broken = row !== undefined && streamBroken(prior, row, c)
+  if (row && c.project && (broken || (!c.archived && writtenElsewhere(prior, row)))) {
     if (!(await startOver(io, state, rows, c))) return budget
+    if (broken) (state.chats[c.id] as ChatState).again = true
     row = undefined
+  } else if (!row && prior?.version === 0 && prior.sessionId !== c.sessionId) {
+    // A first share left unfinished under the old session resumes nowhere in the new one.
+    state.chats[c.id] = newState(io, c)
   }
   const st = dueState(io, state, row, c, now)
   if (!st) return budget
   const start = st.up ?? { bytes: st.bytes, chunks: st.chunks }
   let at = start
   let out: SendOutcome = 'done'
-  if (!c.archived && c.project && c.size > start.bytes) {
+  if ((!c.archived || st.again) && c.project && c.size > start.bytes) {
     const up = await uploadBytes(io, c, c.project, start.bytes, start.chunks, budget)
     budget = up.budget
     out = up.out
@@ -749,6 +782,8 @@ async function takeChat(
   // Still in ~/.claude (retireLanded did not get it out yet): the viewer waits for it.
   if (!st.viewer) return
   st.retry = false
+  // The viewer's copy is the record's session's (a chat that moved to another session starts over there).
+  st.sessionId = rec.sessionId
 
   // Only the sync writes the viewer's copy, so one that is not the agreed length (removed, or a store
   // stream shorter than what this PC took) starts over from the first chunk.
@@ -756,7 +791,7 @@ async function takeChat(
     Object.assign(st, { bytes: 0, chunks: 0 })
   if (rec.stream.bytes > st.bytes) {
     st.state = 'receiving'
-    await receive(io, st, rec)
+    if (!(await receive(io, st, rec))) return await askAgain(io, row, st)
   }
   if (st.bytes !== rec.stream.bytes) return
 
@@ -765,21 +800,53 @@ async function takeChat(
     version: row.version,
     state: 'synced',
     note: null,
+    asked: undefined,
   })
 }
 
-/** Download the chunks from the agreed position up to the record's stream, in order, into the viewer. */
-async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<void> {
-  let from = st.chunks
-  while (st.bytes < rec.stream.bytes && from < rec.stream.chunks) {
-    const r = await io.call('GET', `/v1/chats/${rec.sessionId}/chunks?from=${from}`)
+/** The store lacks chunks another PC's record counts. They were written before the record, so no later
+ *  pass brings them: the PC the chat started on is asked to send it again (the row marked `rs`, which
+ *  that PC reads as written elsewhere and answers by starting over), and the chat waits, taking nothing
+ *  from the row while it still carries the ask. The viewer keeps what it has until the fresh stream is
+ *  written over it from byte 0. */
+async function askAgain(io: ChatIo, row: StoreRow, st: ChatState): Promise<void> {
+  Object.assign(st, {
+    bytes: 0,
+    chunks: 0,
+    state: 'waiting',
+    note: `The store is missing part of this chat’s transcript; ${st.origin.name} is asked to send it again.`,
+    retry: true,
+  })
+  if (row.meta?.rs !== undefined) {
+    st.asked = true
+    return
+  }
+  const r = await getRecord(io, row.id)
+  if (r.status !== 200 || typeof r.json?.blob !== 'string') return // asked on the next pass
+  const meta = { ...row.meta, rs: 1 }
+  const put = await io.call('PUT', `/v1/chats/${row.id}`, {
+    version: row.version,
+    blob: r.json.blob,
+    meta,
+  })
+  if (put.status !== 200 || !Number.isInteger(put.json?.version)) return
+  st.asked = true
+  Object.assign(row, { version: put.json.version, meta })
+}
+
+/** Download the chunks from the agreed position up to the record's stream, in order, into the viewer.
+ *  False when the store does not hold them all (a gap, or the chunks end before the record's count);
+ *  nothing past the gap is written, so the viewer never holds one. */
+async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<boolean> {
+  while (st.bytes < rec.stream.bytes && st.chunks < rec.stream.chunks) {
+    const r = await io.call('GET', `/v1/chats/${rec.sessionId}/chunks?from=${st.chunks}`)
     if (r.status !== 200 || !Array.isArray(r.json?.chunks))
       throw chatFailure('Downloading a chat’s transcript', r)
-    for (const ch of r.json.chunks as Array<{ seq: number; blob: string }>) {
-      if (ch.seq !== st.chunks || ch.seq >= rec.stream.chunks) {
-        if (ch.seq >= rec.stream.chunks) return
-        throw new Error('A chat’s transcript chunks are out of order; skipped.')
-      }
+    const page = r.json.chunks as Array<{ seq: number; blob: string }>
+    for (const ch of page) {
+      // Chunks past the record are a send whose record is not written yet.
+      if (st.chunks >= rec.stream.chunks) break
+      if (ch.seq !== st.chunks) return false
       const bytes = openChunk(io.key, rec.sessionId, ch.seq, ch.blob)
       if (!bytes) throw new Error('A chat’s transcript chunk does not open with this PC’s key.')
       if (!io.local.viewWrite(rec.project, rec.sessionId, st.bytes, bytes))
@@ -788,8 +855,8 @@ async function receive(io: ChatIo, st: ChatState, rec: Sealed): Promise<void> {
         )
       st.bytes += bytes.length
       st.chunks = ch.seq + 1
-      from = st.chunks
     }
-    if (!r.json.more) break
+    if (!r.json.more || page.length === 0) break
   }
+  return st.bytes === rec.stream.bytes && st.chunks === rec.stream.chunks
 }

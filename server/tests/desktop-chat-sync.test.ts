@@ -5,8 +5,10 @@
 // byte and its origin, and never its chat list; later turns travel as new chunks only; a chat archived
 // before it was ever shared is never uploaded, and archiving a shared one reaches the other PC; a copy
 // of another PC's chat never goes up, however it grows; a chat another PC wrote into goes up again from
-// the transcript of the PC it started on; a chat an earlier version took into ~/.claude is taken back
-// out once; an unfinished last line waits for its newline; a PC with another key writes
+// the transcript of the PC it started on; a chat whose record moves to another session goes up again
+// from that session's first byte; a record counting chunks the store lacks waits, without downloading
+// again, until the PC it started on sends it again; a chat an earlier version took into ~/.claude is
+// taken back out once; an unfinished last line waits for its newline; a PC with another key writes
 // nothing. The store is the real Worker on bun:sqlite (login-sync-store.ts); each PC is a fake
 // ChatLocal over a temp folder with its own state file.
 
@@ -23,6 +25,7 @@ import {
 } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { sealRecord } from '../src/core/chat-sync-codec'
 import {
   ARCHIVED_KEEP_MS,
   CHAT_MIN_GAP_MS,
@@ -305,6 +308,84 @@ test('A’s chat another PC wrote into under the two-way sync goes up again from
     expect((await rowFor(c.id)).meta.b).toBe(16)
     expect(chatSyncRows(a.io.statePath).find((r) => r.id === c.id)?.state).toBe('synced')
   }
+})
+
+test('a chat whose record moves to another session reaches B whole, from the new session', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const chat = a.add({}, '{"n":1}\n')
+  await syncChats(a.io)
+  await syncChats(b.io)
+
+  // The record now names another session (a Hydra Desk chat or desktop record whose session changed),
+  // longer than what the old one sent: it goes up from its own first byte, not the old one's position.
+  chat.sessionId = randomUUID()
+  a.extend(chat, '{"m":1}\n{"m":2}\n')
+  await syncChats(a.io, pastHold())
+  await syncChats(b.io)
+
+  expect(b.view(chat)).toBe('{"m":1}\n{"m":2}\n')
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)).toMatchObject({
+    sessionId: chat.sessionId,
+    state: 'synced',
+    bytes: 16,
+  })
+  expect(chatsFromElsewhere(b.io.statePath).get(chat.sessionId)?.pc).toBe('PC-A')
+})
+
+test('a record counting chunks the store lacks waits without downloading again, asks A, and comes whole once A starts it over, archived', async () => {
+  const a = pc('PC-A')
+  const b = pc('PC-B')
+  const chat = a.add({}, '{"n":1}\n')
+  await syncChats(a.io)
+  await syncChats(b.io)
+
+  // A build before 2026-10-16 archived it with a record counting three chunks of which the store holds
+  // one (it carried a stream position over from another session), and its state agrees with what it wrote.
+  chat.archived = true
+  a.extend(chat, '{"n":2}\n{"n":3}\n')
+  const row = (await store('GET', `/v1/chats/${chat.id}`)).json
+  const sealed = {
+    record: { title: 'A chat', isArchived: true },
+    sessionId: chat.sessionId,
+    project: chat.project,
+    account: chat.account,
+    org: chat.org,
+    archived: true,
+    origin: { pc: a.io.pc, name: 'PC-A' },
+    stream: { bytes: 24, chunks: 3 },
+  }
+  const put = await store('PUT', `/v1/chats/${chat.id}`, {
+    version: row.version,
+    blob: sealRecord(key, chat.id, sealed),
+    meta: { ...row.meta, b: 24, a: 1 },
+  })
+  const s = JSON.parse(readFileSync(a.io.statePath, 'utf8'))
+  Object.assign(s.chats[chat.id], { version: put.json.version, bytes: 24, chunks: 3, stored: 24 })
+  writeFileSync(a.io.statePath, JSON.stringify(s))
+
+  const fetched: string[] = []
+  b.io.call = (method, path, body) => {
+    if (path.includes('/chunks')) fetched.push(path)
+    return store(method, path, body)
+  }
+  await syncChats(b.io)
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)).toMatchObject({
+    state: 'waiting',
+    note: expect.stringContaining('PC-A'),
+  })
+  const asked = fetched.length
+  await syncChats(b.io)
+  expect(fetched).toHaveLength(asked)
+
+  await syncChats(a.io)
+  await syncChats(b.io)
+  expect(b.view(chat)).toBe('{"n":1}\n{"n":2}\n{"n":3}\n')
+  expect(chatSyncRows(b.io.statePath).find((r) => r.id === chat.id)).toMatchObject({
+    state: 'synced',
+    bytes: 24,
+  })
+  expect(chatsFromElsewhere(b.io.statePath).get(chat.sessionId)?.archived).toBe(true)
 })
 
 test('chats an earlier version took into B’s ~/.claude are taken out once, and the viewer holds them', async () => {
