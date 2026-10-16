@@ -6,7 +6,9 @@ import { test } from "node:test";
 import { run } from "../hook.mjs";
 
 // `<core>/DOORBELL` holding `crainium`: the flowchart lives in the CrAInium, so the hook only tells the chat to walk it
-// through connections_core, and keeps nothing on this PC. A PC without the file keeps the local tree (hook.test.mjs).
+// through connections_core, and keeps nothing on this PC. It needs no `<core>/ON`: ON also turns on the daemon's local
+// core mode (core chat prompt, CLAUDE.md excludes, manager tools refused), which a doorbell PC must not get. A PC
+// without the file keeps the local tree (hook.test.mjs).
 
 const CLEARED = ["HYDRA_DESK_CHAT_ID", "AGENTHYDRA_CLIMAYTE_WORKER", "AGENTHYDRA_CLIMAYTE_CHAT", "AGENTHYDRA_ROLE"];
 const FOLDER = "C:\\Users\\me\\project";
@@ -14,7 +16,6 @@ const FOLDER = "C:\\Users\\me\\project";
 async function withDoorbell(fn) {
   const dir = mkdtempSync(path.join(os.tmpdir(), "hydra-core-doorbell-"));
   try {
-    writeFileSync(path.join(dir, "ON"), "");
     writeFileSync(path.join(dir, "DOORBELL"), "crainium\n");
     return await fn(dir);
   } finally {

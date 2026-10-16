@@ -469,7 +469,8 @@ export async function run(input, env = process.env) {
   const event = input.hook_event_name;
   if (!EVENTS.has(event)) throw new Error(`unexpected hook_event_name "${event}"`);
   const dir = coreDir(env);
-  if (!existsSync(path.join(dir, "ON"))) return null;
+  // DOORBELL needs no ON: ON also turns on the daemon's local core mode, which a doorbell PC must not get.
+  if (!existsSync(path.join(dir, "ON")) && !doorbellOf(dir)) return null;
   const skip = skipOf(env, dir);
   if (skip) {
     if (event !== "Stop" && !doorbellOf(dir)) logSkip(input, env, dir, skip);
