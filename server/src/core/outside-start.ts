@@ -1,6 +1,7 @@
 /**
  * Start a long-lived program OUTSIDE this daemon's process tree and every job it is in (Windows), so
- * it keeps running when the daemon exits: the always-on helpers (helpers.ts).
+ * it keeps running when the daemon exits: the always-on helpers (helpers.ts) and HSwarm's shared
+ * server (hswarm.ts).
  *
  * ⛔ WHY. Every child Bun.spawn starts on Windows goes into Bun's own job object (libuv's, made with
  * JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, its only handle held by this process), so the child ends the

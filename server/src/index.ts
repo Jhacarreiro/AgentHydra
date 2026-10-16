@@ -1403,7 +1403,7 @@ for (const sig of ['SIGINT', 'SIGTERM'] as const)
     // away, and a tick landing after clearInstanceInfo() would write the pointer back.
     clearInterval(pointerReassertTimer)
     stopBackgroundTimers()
-    await stopHSwarm()
+    await stopHSwarm({ leaveRunning: true }) // every chat's hswarm calls go on; the next daemon adopts it
     await flushBeforeExit()
     clearInstanceInfo()
     stopAutoUpdate()
@@ -1462,7 +1462,7 @@ function relaunchDaemon(): Promise<boolean> {
         // The successor is up and waiting for our port. The short delay only lets a
         // /api/daemon/restart response flush before the socket carrying it closes.
         setTimeout(async () => {
-          await stopHSwarm()
+          await stopHSwarm({ leaveRunning: true }) // the successor adopts it, calls in flight and all
           await flushBeforeExit()
           clearInstanceInfo()
           stopAutoUpdate()

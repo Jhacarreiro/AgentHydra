@@ -4,12 +4,19 @@
  * Starts, restarts with backoff, and stops the hswarm Python sidecar that the daemon exposes
  * through a proxy at /api/hswarm/*. Driven by a daemon setting and integrated into the boot
  * and shutdown sequence.
+ *
+ * The server outlives the daemon: every chat's hswarm MCP talks to it, so a self-update relaunch must
+ * not end it and every call in flight on it. On Windows a child Bun.spawn starts sits in Bun's own
+ * kill-on-close job and ends with the daemon (measured 2026-10-12: a new server pid after one
+ * relaunch), so there it starts outside the daemon's tree (core/outside-start.ts), as the helpers do;
+ * the daemon's exit leaves it running, and the next daemon adopts it as its own.
  */
 
 import { closeSync, existsSync, mkdirSync, openSync, renameSync, statSync } from 'node:fs'
 import { homedir } from 'node:os'
 import { join, resolve } from 'node:path'
 import { APP_ROOT, appEnv, DATA_DIR } from './config'
+import { startOutsideDaemon } from './core/outside-start'
 import { killProcessTree, spawnCaptured, startProcess } from './core/process'
 import type { StartedChild } from './core/spawn-worker'
 import { IS_PRIMARY_INSTALL } from './instance'
@@ -34,16 +41,21 @@ export function hswarmHome(env: NodeJS.ProcessEnv = process.env): string {
   return env.HSWARM_HOME?.trim() || join(homedir(), '.hswarm')
 }
 
-/** Open `<logDir>/hswarm.log` for append, rotating one generation past 5 MiB first. */
-export function openHSwarmLog(logDir: string, maxBytes = LOG_MAX_BYTES): number {
+/** `<logDir>/hswarm.log`, rotated one generation past 5 MiB first. */
+function hswarmLogFile(logDir: string, maxBytes = LOG_MAX_BYTES): string {
   mkdirSync(logDir, { recursive: true })
   const file = join(logDir, 'hswarm.log')
   try {
     if (statSync(file).size > maxBytes) renameSync(file, `${file}.1`)
   } catch {
-    // no log yet
+    // no log yet, or a running server still has it open
   }
-  return openSync(file, 'a')
+  return file
+}
+
+/** Open `<logDir>/hswarm.log` for append, rotating one generation past 5 MiB first. */
+export function openHSwarmLog(logDir: string, maxBytes = LOG_MAX_BYTES): number {
+  return openSync(hswarmLogFile(logDir, maxBytes), 'a')
 }
 
 /** The port hswarm should listen on. `HSWARM_PORT` env var or default. */
@@ -102,6 +114,8 @@ interface HSwarmDeps {
   probe?: (port: number, timeoutMs?: number) => Promise<Record<string, unknown> | null>
   /** Ends a foreign server, or our own child gone silent, by pid (tests pass a fake). */
   kill?: (pid: number) => void
+  /** Whether a pid still runs (tests pass a fake): how the exit of a server we hold no handle on is seen. */
+  alive?: (pid: number) => boolean
   watchEveryMs?: number
   /** How long our own child may answer no /health before it is ended and started again. */
   silentLimitMs?: number
@@ -128,7 +142,10 @@ let state: HSwarmState = {
   lastError: null,
 }
 
+/** The server this daemon owns: its own start, or the one the daemon before a relaunch started. */
 let proc: StartedChild | null = null
+/** What the last start was handed; a stop ends the server with its `kill`. */
+let startDeps: HSwarmDeps = {}
 let stopRequested = false
 /** A start awaiting its worker (spawnServer): a second start meanwhile would run a second server. */
 let starting = false
@@ -154,6 +171,50 @@ let adoptTimer: ReturnType<typeof setTimeout> | null = null
 function clearAdoptTimer(): void {
   if (adoptTimer) clearTimeout(adoptTimer)
   adoptTimer = null
+}
+
+/** How often the pid of a server we hold no handle on is looked at: its exit is seen within this. */
+const PID_POLL_MS = 1_000
+let pidPoll: ReturnType<typeof setInterval> | null = null
+function stopPidPoll(): void {
+  if (pidPoll) clearInterval(pidPoll)
+  pidPoll = null
+}
+
+/** Whether `pid` still runs. Signal 0 only asks: ESRCH is gone (on Windows an exited process whose
+ *  handle someone still holds as well), EPERM a live process this one may not signal. */
+function pidAlive(pid: number): boolean {
+  try {
+    process.kill(pid, 0)
+    return true
+  } catch (e) {
+    return (e as NodeJS.ErrnoException).code !== 'ESRCH'
+  }
+}
+
+/** A server we hold no handle on (started outside the daemon's tree on Windows, or adopted from the
+ *  daemon before a relaunch) as a child: `exited` settles once its pid is gone, `kill` ends its tree. */
+function watchedPid(deps: HSwarmDeps, pid: number): StartedChild {
+  stopPidPoll()
+  const alive = deps.alive ?? pidAlive
+  const exited = new Promise<number | null>((resolve) => {
+    const poll = setInterval(
+      () => {
+        try {
+          if (alive(pid)) return
+          clearInterval(poll)
+          if (pidPoll === poll) pidPoll = null
+          resolve(null)
+        } catch (e) {
+          console.error('[hswarm] pid check failed:', e instanceof Error ? e.message : String(e))
+        }
+      },
+      Math.min(deps.watchEveryMs ?? PID_POLL_MS, PID_POLL_MS),
+    )
+    ;(poll as { unref?(): void }).unref?.()
+    pidPoll = poll
+  })
+  return { pid, exited, kill: () => (deps.kill ?? killProcessTree)(pid) }
 }
 
 /** A folder path in a form two spellings of the same folder share. */
@@ -198,26 +259,18 @@ async function replaceForeign(
 const REPLACE_WAIT_MS = 5_000
 const REPLACE_POLL_MS = 100
 
-/** An adopted server is not our child, so nothing tells us it died: look at /health on an interval and, when
- *  it stops answering (or a server of another folder took the port), clear the state and start again (which
- *  spawns our own supervised child). */
-function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
+/** A side-run daemon's adopted server is somebody else's, read-only: look at /health on an interval and,
+ *  when it stops answering, clear the state and start again (which spawns our own supervised child). */
+function watchAdopted(deps: HSwarmDeps, port: number): void {
   clearAdoptTimer()
   adoptTimer = setTimeout(async () => {
     adoptTimer = null
     if (stopRequested || !state.running || proc) return
     const live = await (deps.probe ?? probeHSwarm)(port)
     if (stopRequested || !state.running || proc) return
-    if (live?.hswarm === true && (isSideRun(deps) || runsFrom(live, dir))) {
-      state.answering = true
-      watchAdopted(deps, port, dir)
-      return
-    }
     if (live?.hswarm === true) {
-      state.running = false
-      state.pid = null
-      state.lastError = 'adopted server runs from another folder'
-      void startHSwarm(deps) // sees the foreign server and replaces it
+      state.answering = true
+      watchAdopted(deps, port)
       return
     }
     console.log(`[hswarm] adopted server on port ${port} stopped answering; starting our own`)
@@ -234,6 +287,7 @@ function watchAdopted(deps: HSwarmDeps, port: number, dir: string): void {
  */
 export async function startHSwarm(deps: HSwarmDeps = {}): Promise<void> {
   if (stopRequested) return
+  startDeps = deps
 
   const dir = enabledDir(deps)
   if (!dir) return
@@ -316,17 +370,46 @@ async function settleLive(deps: HSwarmDeps, plan: StartPlan): Promise<boolean> {
   console.log(`[hswarm] adopting existing server on port ${port} with pid ${liveHSwarm.pid}`)
   // The old sidecar usually survives a daemon restart; the hourly import must not stop with it.
   startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
-  watchAdopted(deps, port, dir)
+  // The primary takes it as its own, as it is after a relaunch (the server the daemon before this one
+  // started): ended by a stop, or once it answers nothing for SILENT_LIMIT_MS. A side-run only watches.
+  if (sideRun) watchAdopted(deps, port)
+  else supervise(deps, watchedPid(deps, liveHSwarm.pid as number), port, { adopted: true })
   return true
 }
 
-function restartOnExit(deps: HSwarmDeps): void {
+/** Watches a server this daemon owns, as `proc`, and starts the next once it exits: at once after an
+ *  adopted one, which had been serving; after the backoff for our own start, which may die as it starts.
+ *  `gone` runs when it has exited. */
+function supervise(
+  deps: HSwarmDeps,
+  child: StartedChild,
+  port: number,
+  o: { adopted: boolean; gone?: () => void },
+): void {
+  proc = child
+  watchChild(deps, child, port)
+  child.exited
+    .finally(o.gone)
+    .then(() => {
+      if (proc !== child) return // stopped, or left running for the next daemon
+      proc = null
+      restartOnExit(deps, o.adopted)
+    })
+    .catch((e) => {
+      // A failure in the restart path would otherwise leave hswarm down with no reason shown.
+      state.lastError = `restart failed: ${e instanceof Error ? e.message : String(e)}`
+      console.error('[hswarm]', state.lastError)
+    })
+}
+
+function restartOnExit(deps: HSwarmDeps, adopted: boolean): void {
   if (!stopRequested && state.running) {
     state.running = false
     state.answering = null
     state.pid = null
     state.lastError ??= 'process exited'
-    scheduleRestart(deps)
+    if (adopted) void startHSwarm(deps)
+    else scheduleRestart(deps)
   }
 }
 
@@ -355,6 +438,9 @@ function watchChild(deps: HSwarmDeps, child: StartedChild, port: number): void {
     if (!live()) return
     state.answering = answer?.hswarm === true
     if (state.answering) heardAt = Date.now()
+    // The server's own pid, the one a daemon adopting it sees: the pid our start has may be its parent
+    // (cmd.exe under an outside start, or hswarm's launcher of a committed copy).
+    if (state.answering && typeof answer?.pid === 'number') state.pid = answer.pid
     const silentMs = Date.now() - heardAt
     if (silentMs >= (deps.silentLimitMs ?? SILENT_LIMIT_MS) && child.pid) {
       state.lastError = `answered nothing for ${Math.round(silentMs / 1000)} s; ended and started again`
@@ -378,17 +464,21 @@ async function spawnServer(deps: HSwarmDeps, plan: StartPlan): Promise<void> {
   if (starting) return
   starting = true
   const { port, dir, python, env } = plan
+  const logDir = deps.logDir ?? join(DATA_DIR, 'logs')
+  // On Windows it starts outside the daemon's tree and its jobs, to outlive the daemon's relaunch;
+  // cmd.exe appends its output to the log there, so no handle on the log is held here.
+  const outside = !deps.spawn && process.platform === 'win32'
   let fd = -1
   try {
-    fd = openHSwarmLog(deps.logDir ?? join(DATA_DIR, 'logs'))
+    if (!outside) fd = openHSwarmLog(logDir)
 
     // The shared server itself, in the foreground: `hswarm ui` only starts it detached and exits,
     // which read as a crash here and restarted it forever.
     const command = [python, '-m', 'hswarm', 'mcp', '--http', '--port', String(port)]
 
-    // Started on a spawn-worker thread of its own, which watches it for its exit: CreateProcess of
-    // python held the daemon's thread for seconds on a loaded box (STALL lines on this call,
-    // 2026-10-11), and that thread serves every route.
+    // Elsewhere, started on a spawn-worker thread of its own, which watches it for its exit:
+    // CreateProcess of python held the daemon's thread for seconds on a loaded box (STALL lines on
+    // this call, 2026-10-11), and that thread serves every route.
     const child: StartedChild = deps.spawn
       ? deps.spawn(command, {
           cwd: dir,
@@ -398,7 +488,9 @@ async function spawnServer(deps: HSwarmDeps, plan: StartPlan): Promise<void> {
           windowsHide: true,
           env,
         })
-      : await startProcess(command, { cwd: dir, stdout: fd, stderr: fd, env, lane: 'hswarm' })
+      : outside
+        ? watchedPid(deps, await startOutside(command, dir, env, hswarmLogFile(logDir)))
+        : await startProcess(command, { cwd: dir, stdout: fd, stderr: fd, env, lane: 'hswarm' })
     if (stopRequested) {
       // stopHSwarm ran while it started and found no child to end.
       const logFd = fd
@@ -407,26 +499,15 @@ async function spawnServer(deps: HSwarmDeps, plan: StartPlan): Promise<void> {
       else child.kill()
       return
     }
-    proc = child
 
     state.running = true
     state.answering = null
-    state.pid = proc.pid ?? null
+    state.pid = child.pid ?? null
     state.port = port
     state.lastError = null
     backoffMs = MIN_BACKOFF_MS
     startZswarmImport({ python, dir, env, spawn: deps.importSpawn, firstMs: deps.importFirstMs })
-    watchChild(deps, proc, port)
-
-    // Watch for crash and restart with backoff
-    proc.exited
-      .finally(() => closeLog(fd))
-      .then(() => restartOnExit(deps))
-      .catch((e) => {
-        // A failure in the restart path would otherwise leave hswarm down with no reason shown.
-        state.lastError = `restart failed: ${e instanceof Error ? e.message : String(e)}`
-        console.error('[hswarm]', state.lastError)
-      })
+    supervise(deps, child, port, { adopted: false, gone: () => closeLog(fd) })
   } catch (e) {
     closeLog(fd)
     state.running = false
@@ -436,6 +517,19 @@ async function spawnServer(deps: HSwarmDeps, plan: StartPlan): Promise<void> {
   } finally {
     starting = false
   }
+}
+
+/** Starts the server outside this daemon (core/outside-start.ts); resolves the pid of the cmd.exe it
+ *  runs under. */
+async function startOutside(
+  command: string[],
+  cwd: string,
+  env: NodeJS.ProcessEnv,
+  logFile: string,
+): Promise<number> {
+  const exe = Bun.which(command[0] as string)
+  if (!exe) throw new Error(`${command[0]} is not on PATH`)
+  return startOutsideDaemon([exe, ...command.slice(1)], { cwd, env, logFile, lane: 'hswarm' })
 }
 
 function scheduleRestart(deps: HSwarmDeps): void {
@@ -541,41 +635,50 @@ export function startZswarmImport(deps: {
   importTimer.unref?.()
 }
 
-/** Stop hswarm. Returns a promise that settles once the process is gone. */
-export async function stopHSwarm(): Promise<void> {
+/** A stop waits this long for a server we hold no handle on to go, then forgets it. */
+const STOP_WAIT_MS = 10_000
+
+function forgetServer(): void {
+  stopPidPoll()
+  proc = null
+  state.running = false
+  state.answering = null
+  state.pid = null
+}
+
+/** Stop hswarm. Returns a promise that settles once the server is gone. `leaveRunning` is the daemon's
+ *  own exit, a relaunch's included: it stops looking after the server and leaves it serving every chat,
+ *  for the next daemon to adopt. */
+export async function stopHSwarm(o: { leaveRunning?: boolean } = {}): Promise<void> {
   stopRequested = true
   if (importTimer) clearTimeout(importTimer)
   importTimer = null
   clearAdoptTimer()
-  if (!proc) {
-    // An adopted server is somebody else's process (a chat's keeper started it): forget it, never kill it.
-    state.running = false
-    state.answering = null
-    state.pid = null
+  const child = proc
+  // A side-run's adopted server is somebody else's process: forget it, never kill it.
+  if (!child || o.leaveRunning) {
+    forgetServer()
     return
   }
   if (!state.running) return
 
   try {
-    if (proc.pid) {
-      killProcessTree(proc.pid)
-    } else {
-      proc.kill()
-    }
+    if (child.pid) (startDeps.kill ?? killProcessTree)(child.pid)
+    else child.kill()
   } catch {
     // already gone
   }
 
-  try {
-    await proc.exited // its exit handler closes its log
-  } catch {
-    // ignore
-  }
-
-  state.running = false
-  state.answering = null
-  state.pid = null
-  proc = null
+  // Its exit handler closes its log. A pid we hold no handle on may refuse to end: not waited on for good.
+  let cap: ReturnType<typeof setTimeout> | undefined
+  await Promise.race([
+    child.exited.catch(() => null),
+    new Promise((done) => {
+      cap = setTimeout(done, STOP_WAIT_MS)
+    }),
+  ])
+  clearTimeout(cap)
+  forgetServer()
 }
 
 /** Get the current hswarm status. */
@@ -598,8 +701,10 @@ export function setHSwarmEnabled(enabled: boolean): void {
 export function resetHSwarmStateForTests(): void {
   stopRequested = false
   clearAdoptTimer()
+  stopPidPoll()
   state = { running: false, answering: null, port: null, pid: null, lastError: null }
   proc = null
+  startDeps = {}
   starting = false
   backoffMs = MIN_BACKOFF_MS
 }
