@@ -21,6 +21,7 @@ from ..errors import ClaudeError
 from .. import signin
 from ..registry import chat_lock
 from .http import BASE, ChatGPTHttp, visible_messages
+from .quiet_window import ARGS as OFF_SCREEN, FocusReturn
 
 
 def markers_missing(cookies, now=None):
@@ -300,11 +301,12 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
     dispatch = {'network_id': None, 'status': None, 'sent': False}
     identity_verified = False
     server_id = None
+    returning = asyncio.create_task(FocusReturn().watch())
     # The session lock held by ChatGPTClient protects both cookies and this profile.
     with tempfile.TemporaryDirectory(prefix='request-', dir=directory) as profile:
         try:
             browser = await zd.start(user_data_dir=profile, headless=False,
-                browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check'])
+                browser_args=['--window-size=650,850','--no-first-run','--no-default-browser-check', *OFF_SCREEN])
             await signin.load_cookies(browser, http.saved_state()['cookies'])
             path = '/c/' + existing['conversation_id'] if existing else '/'
             tab = await browser.get(BASE + path)
@@ -325,5 +327,6 @@ async def _prepare(http, prompt, existing, *, directory, model, temporary, on_id
                     'browser_closed_before_send': False, 'browser_completed_send': True,
                     'renewed_browser_markers': missing_before}}
         finally:
+            returning.cancel()
             if browser:
                 await _close_browser(http, browser, identity_verified)
