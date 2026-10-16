@@ -38,7 +38,9 @@ export interface CommandPacksView {
 }
 
 let last: CommandPackRun | null = null
-let busy = false
+/** Runs asked for and not yet finished. Counted when asked, not when started: a save's answer is built before the
+ *  queued run starts, and must already say busy, or Settings waits its slow poll to see the result. */
+let pending = 0
 let chain: Promise<unknown> = Promise.resolve()
 
 /** The saved list. A missing or unreadable file is no packs. */
@@ -111,8 +113,8 @@ export function commandPackTargets(): PackTarget[] {
 /** Pull every pack and copy it into every account, one run at a time: a run asked for while one is going
  *  starts when it ends, with the list as it is then. */
 export function runCommandPacks(): Promise<CommandPackRun> {
+  pending++
   const next = chain.then(async () => {
-    busy = true
     try {
       const packs = readCommandPacks()
       const run = await syncCommandPacks({
@@ -131,7 +133,7 @@ export function runCommandPacks(): Promise<CommandPackRun> {
       for (const p of run.packs) if (p.error) console.warn(`[command-packs] ${p.url}: ${p.error}`)
       return run
     } finally {
-      busy = false
+      pending--
     }
   })
   chain = next.catch(() => {})
@@ -142,7 +144,7 @@ export function commandPacksView(): CommandPacksView {
   return {
     packs: readCommandPacks(),
     run: last,
-    busy,
+    busy: pending > 0,
     everyMin: COMMAND_PACKS_EVERY_MS / 60_000,
   }
 }
