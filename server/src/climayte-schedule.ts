@@ -117,6 +117,7 @@ export function tickState(
   accounts: CliMayteAccount[],
   now: number,
   install: InstallState | null = null,
+  growthMaxAgeMs = 0,
 ): TickState {
   const allowFull = overageAllowed()
   const active = new Map<string, number>()
@@ -133,9 +134,10 @@ export function tickState(
   for (const [id, n] of remoteActiveCounts(now)) active.set(id, (active.get(id) ?? 0) + n)
   const { costOf, running, finishedSince } = placementState()
   const memory = memoryReader?.() ?? null
-  // Process trees are read only when the gate is on.
+  // Process trees are read only when the gate is on, and anew only when the caller may start a
+  // worker on them (growthMaxAgeMs 0); otherwise a reading of the same runners under that age stands.
   const growing: Growth = memory
-    ? growthOf(live, now)
+    ? growthOf(live, now, undefined, growthMaxAgeMs)
     : { expectedBytes: DEFAULT_GROWN_BYTES, sets: [] }
   // Sampled every tick, so the window fills whether or not a start is waiting (climayte-cpu.ts).
   const cpu = recordCpu(now, cpuReader?.() ?? null)

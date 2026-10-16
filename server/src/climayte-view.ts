@@ -44,7 +44,7 @@ import {
   toReport,
   toView,
 } from './climayte-lib'
-import { memoryShort } from './climayte-memory'
+import { GROWTH_REUSE_MS, memoryShort } from './climayte-memory'
 import type { OriginLookup } from './climayte-origin'
 import { roomNow, tickState } from './climayte-schedule'
 import {
@@ -100,7 +100,7 @@ export async function climayteCapacity(now = Date.now()): Promise<{
     running++
     if (w.accountId) busy.add(w.accountId)
   }
-  const state = tickState(accounts, now)
+  const state = tickState(accounts, now, null, GROWTH_REUSE_MS)
   const idle = roomNow(state).filter((a) => !busy.has(a.id)).length
   return {
     idle,

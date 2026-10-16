@@ -121,6 +121,7 @@ import {
   tooBigOf,
 } from './climayte-lib'
 import { archiveLogsWhenDue } from './climayte-log-archive'
+import { GROWTH_REUSE_MS } from './climayte-memory'
 import {
   type CliMayteOrigin,
   type CliMaytePing,
@@ -679,7 +680,9 @@ async function tick(): Promise<void> {
         break
       }
     const install = anyDue ? await installForTick() : null
-    const state = tickState(accounts, now, install)
+    // A tick that may start a worker reads the ramping trees anew; one with nothing due reuses a
+    // reading under GROWTH_REUSE_MS old.
+    const state = tickState(accounts, now, install, anyDue ? 0 : GROWTH_REUSE_MS)
     const due: CliMayteWorker[] = []
     for (const w of workers.values()) if (isDue(w)) due.push(w)
     scheduleDue(state, due)
