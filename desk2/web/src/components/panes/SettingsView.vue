@@ -1,24 +1,29 @@
 <script setup lang="ts">
 import { computed, nextTick, onBeforeUnmount, onMounted, ref, shallowRef, watch } from 'vue'
 import { Check, Hourglass, ListChecks } from '@lucide/vue'
-import { routineCountLine } from './routine-view'
+import { routineCountLine, storeLine } from './routine-view'
 import type { DeskSettings, Effort, ModelChoice, PermissionMode } from '@shared/protocol'
 import type { BabysitterStatus } from '@shared/babysitter'
+import type { InstanceManagerStatus } from '@shared/instance-manager'
 import type { RoutinesStatus } from '@shared/routines'
 import { isOrchestratorModel, ORCHESTRATOR_MODEL_ALIASES, type OrchestratorModelStatus } from '@shared/orchestrator'
 import { useShellSource } from '@/components/shell/source'
 import PaneSwitch from './PaneSwitch.vue'
 import RoutineCard from './RoutineCard.vue'
+import RoutineDetails from './RoutineDetails.vue'
 import RoutineProposalCard from './RoutineProposalCard.vue'
 import DiagnosticsView from '@/components/diagnostics/DiagnosticsView.vue'
 import ConnectorsSettings from '@/components/connectors/ConnectorsSettings.vue'
+import PeopleSetup from '@/components/people/PeopleSetup.vue'
+import PeopleWhere from '@/components/people/PeopleWhere.vue'
+import { loadStatus as loadPeopleStore } from '@/components/people/where-api'
 import { EFFORTS, PERMISSION_MODES } from '@/components/composer/logic'
 import { COLLAPSE_MODES, COLLAPSE_MODE_LABELS } from '@/components/sidebar/collapse'
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select'
 import { settingsIcons } from '@/lib/icons'
 import { canCollapse, inHost } from '@/lib/host-window'
 import { usePaneApi } from './api'
-import { BUTTON, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
+import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS, SELECT_CONTENT as CONTENT, SELECT_ITEM, SELECT_TRIGGER as TRIGGER } from './settings-styles'
 import { SETTINGS_SECTIONS, sectionFor, settingsGroups, stepSection, switchPatch, type SettingsCondition, type SettingsSection } from './settings'
 import { requestedSection } from './settings-request'
 import { rememberScreen } from '@/lib/view-memory'
@@ -58,18 +63,18 @@ const needsSettings = computed(() => groups.value.some((g) => g.rows.some((r) =>
 // reka-ui's Select cannot hold null or '', so "no override" is this sentinel in the menus.
 const NONE = '__default'
 
-const SEGMENTS = 'flex h-7 shrink-0 items-center gap-px rounded-[var(--radius-7)] bg-fill-5 p-px'
-const SEGMENT =
-  'flex h-[26px] cursor-default items-center rounded-[var(--radius-5)] px-2.5 text-ui leading-[19px] text-text-2 transition-colors duration-[60ms] hover:text-text focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none aria-checked:bg-[var(--fill-secondary)] aria-checked:text-text'
-
 const local = ref<DeskSettings | null>(null)
-const models = ref<ModelChoice[]>([])
+const models = shallowRef<ModelChoice[]>([])
 const version = ref<string | null>(null)
 const home = ref<string | null>(null)
-const bridge = ref<{ up: boolean; url: string } | null>(null)
+const bridge = shallowRef<{ up: boolean; url: string } | null>(null)
 const babysitter = shallowRef<BabysitterStatus | null>(null)
+const instanceManager = shallowRef<InstanceManagerStatus | null>(null)
 const routines = shallowRef<RoutinesStatus | null>(null)
+/** The routine whose details replace the list (its Details button), or null. */
+const detailsOf = ref<string | null>(null)
 const routineCount = computed(() => routineCountLine(routines.value?.routines ?? []))
+const routineStore = computed(() => storeLine(routines.value?.store, Date.now()))
 const orchestratorModel = shallowRef<OrchestratorModelStatus | null>(null)
 /** The custom model id being typed (the Custom choice of the orchestrator model's select). */
 const customModelOpen = ref(false)
@@ -181,6 +186,14 @@ async function loadBabysitter() {
   }
 }
 
+async function loadInstanceManager() {
+  try {
+    instanceManager.value = await api.instanceManager()
+  } catch {
+    instanceManager.value = null
+  }
+}
+
 async function loadRoutines() {
   try {
     routines.value = await api.routines()
@@ -245,26 +258,31 @@ const babysitterNote = computed(() => {
   return [stopped, last ? `Last continued ${last.title} at ${clock(last.at)}.` : null, s.error].filter(Boolean).join(' ')
 })
 
+/** Under the Instance manager row: how many apps it watches, and the last one that went down and what came of it. */
+const instanceManagerNote = computed(() => {
+  const s = instanceManager.value
+  if (!s) return null
+  const up = s.instances.filter((i) => i.running && i.signedIn).length
+  const r = s.recoveries[0]
+  const last = r ? `Last: #${r.from.num} ${r.from.name} went down at ${clock(r.at)}; ${r.detail}.` : 'No app has gone down with chats in it.'
+  return [`Watching ${s.instances.length} apps, ${up} up.`, last, s.error].filter(Boolean).join(' ')
+})
+
+// Each tick asks again; the status is written only when it changed, so an unchanged answer redraws nothing.
+function setBridge(next: { up: boolean; url: string }) {
+  if (bridge.value?.up !== next.up || bridge.value?.url !== next.url) bridge.value = next
+}
 async function loadBridge() {
   try {
-    bridge.value = await api.bridgeStatus()
+    setBridge(await api.bridgeStatus())
   } catch {
-    bridge.value = { up: false, url: bridge.value?.url ?? '' }
+    setBridge({ up: false, url: bridge.value?.url ?? '' })
   }
 }
 
 // Segmented control: arrows move the choice, as in a radio group.
 function onCollapseKey(e: KeyboardEvent) {
   onSegmentKey(e, COLLAPSE_MODES.indexOf(local.value?.collapseMode ?? 'off'), COLLAPSE_MODES.length, (i) => save({ collapseMode: COLLAPSE_MODES[i]! }))
-}
-function onSegmentKey(e: KeyboardEvent, current: number, count: number, pick: (i: number) => void) {
-  const step = e.key === 'ArrowRight' || e.key === 'ArrowDown' ? 1 : e.key === 'ArrowLeft' || e.key === 'ArrowUp' ? -1 : 0
-  if (!step) return
-  e.preventDefault()
-  const next = (current + step + count) % count
-  pick(next)
-  const group = (e.currentTarget as HTMLElement).querySelectorAll<HTMLElement>('[role="radio"]')
-  group[next]?.focus()
 }
 const effortIndex = computed(() => Math.max(0, efforts.findIndex((x) => x.value === (local.value?.defaultEffort ?? null))))
 
@@ -334,6 +352,16 @@ function onBabysitterVisibility() {
   if (showsBabysitter.value && !document.hidden) void loadBabysitter()
 }
 
+// The instance manager's the same way.
+const showsInstanceManager = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'instanceManager')))
+watch(showsInstanceManager, (on) => {
+  if (on) void loadInstanceManager()
+}, { immediate: true })
+document.addEventListener('visibilitychange', onInstanceManagerVisibility)
+function onInstanceManagerVisibility() {
+  if (showsInstanceManager.value && !document.hidden) void loadInstanceManager()
+}
+
 // The standing agents' status is read the same way, when its row comes on screen and when the window is shown again.
 const showsRoutines = computed(() => groups.value.some((g) => g.rows.some((r) => r.id === 'routines')))
 watch(showsRoutines, (on) => {
@@ -391,6 +419,11 @@ function onFocus() {
   if (!ah.sync.value?.connected) void ah.loadSync()
 }
 window.addEventListener('focus', onFocus)
+// The People add-on is absent on most PCs; its section stays hidden until the store says it is here.
+const peopleOn = ref(false)
+void loadPeopleStore().then((st) => (peopleOn.value = st.available)).catch(() => {})
+const navSections = computed(() => SETTINGS_SECTIONS.filter((s) => s.id !== 'people' || peopleOn.value))
+
 onMounted(async () => {
   syncBridgePoll()
   void ah.load()
@@ -423,6 +456,7 @@ onMounted(async () => {
 onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
   document.removeEventListener('visibilitychange', onBabysitterVisibility)
+  document.removeEventListener('visibilitychange', onInstanceManagerVisibility)
   document.removeEventListener('visibilitychange', onRoutinesVisibility)
   window.removeEventListener('focus', onFocus)
   stopBridgePoll()
@@ -452,9 +486,9 @@ onBeforeUnmount(() => {
       </label>
 
       <div ref="navEl" class="flex gap-1 overflow-x-auto sm:flex-col sm:gap-px sm:overflow-visible" @keydown="onNavKey">
-        <template v-for="(s, i) in SETTINGS_SECTIONS" :key="s.id">
+        <template v-for="(s, i) in navSections" :key="s.id">
           <div
-            v-if="s.caption !== SETTINGS_SECTIONS[i - 1]?.caption"
+            v-if="s.caption !== navSections[i - 1]?.caption"
             class="hidden px-2 pb-1.5 text-ui-sm leading-4 text-text-muted sm:block"
             :class="i ? 'pt-4' : 'pt-2'"
           >
@@ -494,6 +528,8 @@ onBeforeUnmount(() => {
 
       <ConnectorsSettings v-else-if="section === 'connectors' && !searching" />
 
+      <PeopleSetup v-else-if="section === 'people' && !searching && peopleOn" />
+
       <template v-else>
         <div v-for="(g, gi) in groups" :key="g.heading" role="group" :aria-label="g.heading" :class="gi ? 'mt-8' : ''">
           <h3 class="text-ui font-semibold leading-5 text-text">{{ g.heading }}</h3>
@@ -506,6 +542,7 @@ onBeforeUnmount(() => {
                 </div>
                 <div v-if="r.id === 'bridge'" class="truncate font-mono text-ui-sm leading-4.75 text-text-muted">{{ bridge?.url || 'No address yet' }}</div>
                 <div v-if="r.id === 'babysitter' && babysitterNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ babysitterNote }}</div>
+                <div v-if="r.id === 'instanceManager' && instanceManagerNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ instanceManagerNote }}</div>
                 <div v-if="r.id === 'orchestratorModel' && orchestratorModelNote" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ orchestratorModelNote }}</div>
                 <div v-for="n in ah.rowNotes(r.id)" :key="n" class="mt-0.5 break-all text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
                 <div v-for="n in inst.rowNotes(r.id)" :key="n" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">{{ n }}</div>
@@ -577,7 +614,7 @@ onBeforeUnmount(() => {
                       {{ COLLAPSE_MODE_LABELS[m].label }}
                     </button>
                   </div>
-                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-right text-ui-sm leading-4.5 text-text-muted">
+                  <p v-if="inHost() && !canCollapse()" class="max-w-80 text-end text-ui-sm leading-4.5 text-text-muted">
                     Close and reopen the AgentHydra window to use this: the window open now is older than collapse mode.
                   </p>
                 </div>
@@ -635,6 +672,13 @@ onBeforeUnmount(() => {
                 />
 
                 <PaneSwitch
+                  v-else-if="r.id === 'instanceManager'"
+                  label="Instance manager"
+                  :model-value="local.instanceManager"
+                  @update:model-value="(v: boolean) => save({ instanceManager: v })"
+                />
+
+                <PaneSwitch
                   v-else-if="r.id === 'orchestrator'"
                   label="Orchestrator"
                   :model-value="local.orchestrator"
@@ -687,6 +731,16 @@ onBeforeUnmount(() => {
                 <div v-if="!routines.routines.length && !routines.proposals.length" class="wrap-break-word text-ui-sm leading-4.5 text-text-muted">
                   No routines yet: a routine is a file in routines in AgentHydra's folder, written for something you asked for.
                 </div>
+                <div v-if="routineStore" class="wrap-break-word text-ui-sm leading-4.5" :class="routines.store?.error ? 'text-danger-text' : 'text-text-muted'">
+                  {{ routineStore }}
+                </div>
+                <RoutineDetails
+                  v-if="detailsOf && routines.routines.some((x) => x.id === detailsOf)"
+                  :id="detailsOf"
+                  :name="routines.routines.find((x) => x.id === detailsOf)!.name"
+                  @back="detailsOf = null"
+                />
+                <template v-else>
                 <template v-if="routines.proposals.length">
                   <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0"><Hourglass class="size-3.5 text-warning" aria-hidden="true" />Awaiting approval ({{ routines.proposals.length }})</h4>
                   <RoutineProposalCard v-for="p in routines.proposals" :key="p.id" :proposal="p" @changed="loadRoutines" />
@@ -695,13 +749,16 @@ onBeforeUnmount(() => {
                   <h4 class="mt-3 flex items-center gap-1.5 text-ui-sm leading-4.5 text-text-2 first:mt-0">
                     <ListChecks class="size-3.5 text-text-muted" aria-hidden="true" />{{ routineCount }}
                   </h4>
-                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" />
+                  <RoutineCard v-for="x in routines.routines" :key="x.id" :routine="x" :enabled="routines.enabled" @changed="loadRoutines" @details="detailsOf = x.id" />
+                </template>
                 </template>
               </div>
             </div>
           </div>
         </div>
       </template>
+
+      <PeopleWhere v-if="section === 'people' && !searching && peopleOn" />
     </section>
   </div>
 </template>

@@ -37,7 +37,58 @@ async function until(check: () => boolean): Promise<void> {
   }
 }
 
+/** The retained input, checked without adding a production diagnostics API. */
+const retained = (writer: AsyncFile): string | null =>
+  (writer as unknown as { want: string | null }).want
+
 describe('AsyncFile', () => {
+  test('an idle writer releases its landed payload and accepts the next write', async () => {
+    const file = scratchFile()
+    const writer = new AsyncFile(file)
+    const text = JSON.stringify({ rows: 'x'.repeat(8 * 1024 * 1024) })
+    expect(await writer.write(text)).toBe(true)
+    await writer.settled()
+    expect(retained(writer)).toBeNull()
+    expect(readFileSync(file, 'utf8')).toBe(text)
+    writer.flushSync()
+    expect(retained(writer)).toBeNull()
+    expect(await writer.write('newer')).toBe(true)
+    await writer.settled()
+    expect(retained(writer)).toBeNull()
+    expect(readFileSync(file, 'utf8')).toBe('newer')
+  })
+
+  test('a failed pending write keeps its payload until a synchronous flush lands it', async () => {
+    const file = scratchFile()
+    const log = spyOn(console, 'error').mockImplementation(() => {})
+    const writer = new AsyncFile(file, {
+      retryMs: 60_000,
+      rename: async () => {
+        throw new Error('locked')
+      },
+    })
+    try {
+      expect(await writer.write('retry me')).toBe(false)
+      await writer.quiet()
+      expect(retained(writer)).toBe('retry me')
+      writer.flushSync()
+      expect(retained(writer)).toBeNull()
+      expect(writer.ok).toBe(true)
+      expect(readFileSync(file, 'utf8')).toBe('retry me')
+    } finally {
+      log.mockRestore()
+    }
+  })
+
+  test('a write chained from an earlier receipt is preserved', async () => {
+    const file = scratchFile()
+    const writer = new AsyncFile(file)
+    expect(await writer.write('one').then(() => writer.write('two'))).toBe(true)
+    await writer.settled()
+    expect(retained(writer)).toBeNull()
+    expect(readFileSync(file, 'utf8')).toBe('two')
+  })
+
   test('the newest content lands last when a write comes while an earlier rename is held', async () => {
     const file = scratchFile()
     const hold = holdingRename(1)
@@ -92,9 +143,12 @@ describe('AsyncFile', () => {
     writer.write('two')
     writer.flushSync()
     expect(readFileSync(file, 'utf8')).toBe('two')
+    // The held old rename can still overwrite the sync flush: its repair needs this text.
+    expect(retained(writer)).toBe('two')
     hold.release()
     await writer.settled()
     expect(readFileSync(file, 'utf8')).toBe('two')
+    expect(retained(writer)).toBeNull()
   })
 
   test('a write resolves true once its content or a newer one is on disk', async () => {
@@ -124,6 +178,7 @@ describe('AsyncFile', () => {
     expect(await writer.write('kept')).toBe(false)
     await writer.settled()
     expect(readFileSync(file, 'utf8')).toBe('kept')
+    expect(retained(writer)).toBeNull()
     log.mockRestore()
   })
 })

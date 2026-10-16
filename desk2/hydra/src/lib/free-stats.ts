@@ -6,8 +6,8 @@
 import type { FreeInstance, FreeProvider, FreeStatRow, FreeTokens } from '@desk/shared/free-instances'
 import type { TokenWindow } from '@/lib/token-window'
 
-/** Messages sent and failed; `tokens` as the row says where it came from. */
-export interface FreeTally { sent: number; failed: number; tokens: number }
+/** Messages sent and failed, the failures by their error code (`why`); `tokens` as the row says where it came from. */
+export interface FreeTally { sent: number; failed: number; tokens: number; why: Record<string, number> }
 export interface FreeModelTally extends FreeTally { model: string; provider: FreeProvider }
 export interface FreeSummary {
   /** Tokens in the table's window; messages over the record's days. */
@@ -27,7 +27,8 @@ const windowTokens = (t: FreeTokens | undefined, w: TokenWindow) => (!t ? 0 : (w
 const byMessages = (a: FreeModelTally, b: FreeModelTally) => b.sent - a.sent || b.tokens - a.tokens || a.model.localeCompare(b.model)
 
 export function summarizeFree(rows: readonly FreeStatRow[], instances: readonly FreeInstance[], tokens: Record<string, FreeTokens>, window: TokenWindow, days: number, now: number): FreeSummary {
-  const blank = (): FreeTally => ({ sent: 0, failed: 0, tokens: 0 })
+  const blank = (): FreeTally => ({ sent: 0, failed: 0, tokens: 0, why: {} })
+  const addWhy = (t: FreeTally, why: Record<string, number> | undefined) => { for (const [code, n] of Object.entries(why ?? {})) t.why[code] = (t.why[code] ?? 0) + n }
   const totals = { all: blank(), claude: blank(), chatgpt: blank() }
   const byId = new Map(instances.map(i => [i.id, i]))
   const models = new Map<string, FreeModelTally>()
@@ -42,13 +43,14 @@ export function summarizeFree(rows: readonly FreeStatRow[], instances: readonly 
     if (!instance) continue
     const day = perDay.get(r.day)
     if (day) day[instance.provider] += r.input + r.output
-    for (const t of [totals.all, totals[instance.provider]]) { t.sent += r.sent; t.failed += r.failed }
+    for (const t of [totals.all, totals[instance.provider]]) { t.sent += r.sent; t.failed += r.failed; addWhy(t, r.why) }
     // No model (stats.ts UNRECORDED_MODEL) counts by day and in the totals only. Days recorded before 2026-10-11 hold
     // the same sends, ones that failed before a model was picked, as 'unknown'.
     if (!r.model || r.model === 'unknown') continue
     const key = `${instance.provider}/${r.model}`
     const m = models.get(key) ?? { model: r.model, provider: instance.provider, ...blank() }
     m.sent += r.sent; m.failed += r.failed; m.tokens += r.input + r.output
+    addWhy(m, r.why)
     models.set(key, m)
   }
   return {

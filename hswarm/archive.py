@@ -5,7 +5,7 @@ filesystem slack because most of those files are smaller than a 4 KiB cluster. E
 and compresses hard (job.json to 6%, transcripts to 15%, blobs to 28% under LZMA), so a finished job is
 worth about a fifth of its size and a single file instead of seventy.
 
-The split is by age, not by importance (owner ask, Michael, 2026-09-16: "have the compression auto-apply
+The split is by age, not by importance (owner ask, 2026-09-16: "have the compression auto-apply
 after 24 hours or 6 hours"). A job younger than the window stays a plain folder: it is cheap to write, easy
 to look at, and may still be read while the work is fresh. Past the window a job never changes again, so it
 is packed into `<job-id>.zip` and the folder is removed. Every reader here checks the folder first and the

@@ -14,12 +14,16 @@ import { open, readdir, stat } from 'node:fs/promises'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { TranscriptItem } from '@shared/protocol'
-import { historyBuilder, historyToItems, parseJsonl } from '../engine/normalize'
+import { historyBuilder, historyToItems, parseJsonl, type HistoryOptions } from '../engine/normalize'
+import { mediaCache } from '../media/cache'
+import { readTail, TAIL_BYTES } from './session-tail'
 
-/** How much of a transcript's end is read: enough for a long session's recent turns. What is before it the window asks
- *  for on its own (sessionJsonlOlder): a 56 MB session showed only its last 8 MiB, none of the owner's messages
- *  (owner, 2026-10-11: "it won't let me scroll up to ... the top. It just stops"). */
-export const TAIL_BYTES = 8 * 1024 * 1024
+/** How a session file's records become items: with the media cache, so a Read of a picture, a screenshot and the
+ *  person's own pictures show (2026-10-14: without it every outside session's pictures were dropped). Measured on a
+ *  session holding 15 in its tail: 57 ms the first time they are cached, then 7 ms against 5 to 9 without them. */
+const history = (cwd?: string | null): HistoryOptions => ({ cwd: cwd ?? null, media: mediaCache() })
+
+export { readTail, TAIL_BYTES }
 
 /** A session id that can only name a file in a projects folder: no dots, no separators. */
 const SESSION_ID = /^[A-Za-z0-9_-]{6,80}$/
@@ -100,22 +104,14 @@ export async function findSessionJsonlAsync(sessionId: string, roots: string[], 
   return hits.reduce((a, b) => (b.mtime > a.mtime ? b : a)).path
 }
 
-/** The last `max` bytes of a file as text (the first line may be cut; parseJsonl skips it). */
-export function readTail(path: string, max = TAIL_BYTES): string {
-  const size = statSync(path).size
-  const start = Math.max(0, size - max)
-  const buf = Buffer.alloc(size - start)
-  const fd = openSync(path, 'r')
+/** The `cwd` a transcript line carries, or null: a blank line, a line still being written, or one cut at its start. */
+function lineCwd(line: string): string | null {
+  if (!line) return null
   try {
-    let read = 0
-    while (read < buf.length) {
-      const n = readSync(fd, buf, read, buf.length - read, start + read)
-      if (n <= 0) break
-      read += n
-    }
-    return buf.subarray(0, read).toString('utf8')
-  } finally {
-    closeSync(fd)
+    const rec = JSON.parse(line) as { cwd?: unknown }
+    return typeof rec.cwd === 'string' && rec.cwd ? rec.cwd : null
+  } catch {
+    return null
   }
 }
 
@@ -129,11 +125,34 @@ export function lastCwd(path: string): string | null {
   for (const max of [64 * 1024, TAIL_BYTES]) {
     const lines = readTail(path, max).split('\n')
     for (let i = lines.length - 1; i >= 0; i--) {
-      const line = lines[i]!.trim()
-      if (!line) continue
+      const cwd = lineCwd(lines[i]!.trim())
+      if (cwd) return cwd
+    }
+    if (size <= max) break
+  }
+  return null
+}
+
+/**
+ * The tokens in context after the session's last reply: that call's prompt (input, cache read, cache write) and its
+ * answer, from the newest main-thread assistant line with usage (a subagent's and a synthetic one are not the
+ * session's). Claude Code's file never names the model's window, so there is no share of it. Null when none is in the
+ * file's end.
+ */
+export function lastContextTokens(path: string): number | null {
+  const size = statSync(path).size
+  const n = (v: unknown) => (typeof v === 'number' && Number.isFinite(v) ? v : 0)
+  for (const max of [256 * 1024, TAIL_BYTES]) {
+    const lines = readTail(path, max).split('\n')
+    for (let i = lines.length - 1; i >= 0; i--) {
+      const line = lines[i]!
+      if (!line.includes('"usage"')) continue
       try {
-        const rec = JSON.parse(line) as { cwd?: unknown }
-        if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd
+        const rec = JSON.parse(line) as { type?: unknown; isSidechain?: unknown; message?: { model?: unknown; usage?: Record<string, unknown> } }
+        const u = rec.message?.usage
+        if (rec.type !== 'assistant' || rec.isSidechain === true || rec.message?.model === '<synthetic>' || !u) continue
+        const tokens = n(u.input_tokens) + n(u.cache_read_input_tokens) + n(u.cache_creation_input_tokens) + n(u.output_tokens)
+        if (tokens > 0) return tokens
       } catch {
         // the tail's first line may be cut
       }
@@ -164,14 +183,8 @@ export function firstCwdFrom(path: string, offset: number): string | null {
     closeSync(fd)
   }
   for (const raw of buf.subarray(0, read).toString('utf8').split('\n')) {
-    const line = raw.trim()
-    if (!line) continue
-    try {
-      const rec = JSON.parse(line) as { cwd?: unknown }
-      if (typeof rec.cwd === 'string' && rec.cwd) return rec.cwd
-    } catch {
-      // a line still being written, or the offset fell mid-line
-    }
+    const cwd = lineCwd(raw.trim())
+    if (cwd) return cwd
   }
   return null
 }
@@ -362,10 +375,20 @@ const LINES_PER_SLICE = 100
 function openingItems(head: Buffer, before: number, cwd?: string | null): TranscriptItem[] {
   for (let s = 0, nl = head.indexOf(10); nl >= 0 && nl < before; s = nl + 1, nl = head.indexOf(10, s)) {
     const rec = parseJsonl(head.subarray(s, nl).toString('utf8'))[0] as { type?: unknown } | undefined
-    if (rec?.type === 'user') return historyToItems([rec], { cwd: cwd ?? null })
+    if (rec?.type === 'user') return historyToItems([rec], history(cwd))
   }
   return []
 }
+
+/** The bytes one read takes from a file: after the memo it extends (base), or from the file's tail with its head when asked. */
+type ReadSpan = { base: Memo | undefined; from: number; buf: Buffer; head: Buffer | null }
+
+/** The items of a read: its opening prompt, then the records it holds, the last of them possibly still being written. */
+function itemsOf(fresh: Memo, unfinished: unknown[], opening: TranscriptItem[], cwd?: string | null): TranscriptItem[] {
+  return [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], history(cwd))]
+}
+
+const rewritten = (m: Pick<Memo, 'ino' | 'size' | 'mtimeMs'>, st: Stats): boolean => st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs
 
 export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
   const memo = new Map<string, Memo>()
@@ -423,42 +446,43 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     return start
   }
 
-  function* step(path: string, cwd?: string | null): Generator<Io | undefined, TranscriptItem[], Stats | Buffer | undefined> {
-    const st = (yield { op: 'stat', path }) as Stats
-    let m = memo.get(path)
+  /** The answer the memo or the settled set holds for a file that has not changed since, else null. */
+  function answerFromCache(path: string, m: Memo | undefined, st: Stats): TranscriptItem[] | null {
     if (m && unchanged(m, st)) return m.items
     const kept = settled.get(path)
-    if (kept && unchanged(kept, st)) {
-      settled.delete(path)
-      settled.set(path, kept)
-      return kept.items
-    }
-    const counted = m?.bytes ?? 0
-    if (m && (st.size < m.size || st.ino !== m.ino || st.mtimeMs < m.mtimeMs)) m = undefined
-    let from = 0
-    let buf: Buffer | null = null
-    if (m) {
-      buf = yield* readContinuation(path, m, st)
-      if (buf) from = m.offset
-      else m = undefined
-    }
+    if (!kept || !unchanged(kept, st)) return null
+    settled.delete(path)
+    settled.set(path, kept)
+    return kept.items
+  }
+
+  /** The bytes after what the memo has read, when they still follow it; else the file's tail, and its head when it is asked for. */
+  function* readSpan(path: string, m: Memo | undefined, st: Stats): Generator<Io | undefined, ReadSpan, Stats | Buffer | undefined> {
+    let continued: Buffer | null = null
+    if (m) continued = yield* readContinuation(path, m, st)
+    if (m && continued) return { base: m, from: m.offset, buf: continued, head: null }
+    const from = Math.max(0, st.size - o.tailBytes)
+    const buf = (yield { op: 'read', path, from, to: st.size }) as Buffer
     let head: Buffer | null = null
-    if (!buf) {
-      from = Math.max(0, st.size - o.tailBytes)
-      buf = (yield { op: 'read', path, from, to: st.size }) as Buffer
-      if (o.headBytes && from > 0) head = (yield { op: 'read', path, from: 0, to: Math.min(o.headBytes, st.size) }) as Buffer
-    }
-    const prevTail = m?.tail ?? Buffer.alloc(0)
+    if (o.headBytes && from > 0) head = (yield { op: 'read', path, from: 0, to: Math.min(o.headBytes, st.size) }) as Buffer
+    return { base: undefined, from, buf, head }
+  }
+
+  /** Parses a read's bytes into the memo they extend, or a new memo, and brings its size, tail and kept records up to date. */
+  function* parseSpan(span: ReadSpan, st: Stats): Generator<Io | undefined, { fresh: Memo; from: number; unfinished: unknown[] }, Stats | Buffer | undefined> {
+    const { base, buf } = span
+    let { from } = span
+    const prevTail = base?.tail ?? Buffer.alloc(0)
     let start = 0
-    if (!m && from > 0) {
+    if (!base && from > 0) {
       // The read starts mid-file: its first line may be cut, so it is left out.
       const nl = buf.indexOf(10)
       start = nl < 0 ? buf.length : nl + 1
       from += start
     }
-    const fresh: Memo = m ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, start: from, recs: [], bytes: 0, items: [], tail: prevTail }
+    const fresh: Memo = base ?? { ino: st.ino, size: 0, mtimeMs: 0, offset: from, start: from, recs: [], bytes: 0, items: [], tail: prevTail }
     start = yield* appendLines(fresh, buf, start)
-    if (!windowed && !m && from > 0) {
+    if (!windowed && !base && from > 0) {
       // A first read from inside the file begins at a clean cut, so what is before it reads the same on its own.
       const i = cleanCut(fresh.recs, fresh.bytes, Infinity)
       if (i > 0) dropBefore(fresh, i)
@@ -469,21 +493,37 @@ export function createJsonlReader(o: JsonlReaderOptions): JsonlReader {
     fresh.size = st.size
     fresh.mtimeMs = st.mtimeMs
     fresh.ino = st.ino
-    // A session that goes on growing keeps its start until it holds twice the tail, so the window's older part (asked for
-    // once per start) stays good; then it moves on to a clean cut. Only with none in the newest tail is it cut anywhere.
-    if (!windowed && fresh.bytes > 2 * o.tailBytes) {
-      const i = cleanCut(fresh.recs, fresh.bytes, o.tailBytes)
-      if (i > 0) dropBefore(fresh, i)
-      else while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) dropBefore(fresh, 1)
-    }
+    trimGrown(fresh)
+    return { fresh, from, unfinished }
+  }
+
+  /**
+   * A session that goes on growing keeps its start until it holds twice the tail, so the window's older part (asked for
+   * once per start) stays good; then it moves on to a clean cut. Only with none in the newest tail is it cut anywhere.
+   */
+  function trimGrown(fresh: Memo): void {
+    if (windowed || fresh.bytes <= 2 * o.tailBytes) return
+    const i = cleanCut(fresh.recs, fresh.bytes, o.tailBytes)
+    if (i > 0) dropBefore(fresh, i)
+    else while (fresh.bytes > o.tailBytes && fresh.recs.length > 1) dropBefore(fresh, 1)
+  }
+
+  function* step(path: string, cwd?: string | null): Generator<Io | undefined, TranscriptItem[], Stats | Buffer | undefined> {
+    const st = (yield { op: 'stat', path }) as Stats
+    const m = memo.get(path)
+    const cached = answerFromCache(path, m, st)
+    if (cached) return cached
+    const counted = m?.bytes ?? 0
+    const span = yield* readSpan(path, m && !rewritten(m, st) ? m : undefined, st)
+    const { fresh, from, unfinished } = yield* parseSpan(span, st)
     yield
-    const opening = head ? openingItems(head, from, cwd) : []
-    const answer = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
+    const opening = span.head ? openingItems(span.head, from, cwd) : []
+    const answer = itemsOf(fresh, unfinished, opening, cwd)
     fresh.items = answer
     if (windowed) {
       const dropped = trimWindow(fresh, answer, o.keepBytes, pinCap)
       // A first read dropped most of the tail: what is kept answers for the window alone, not the whole tail again.
-      if (dropped > o.keepBytes) fresh.items = [...opening, ...historyToItems([...fresh.recs.map((r) => r.rec), ...unfinished], { cwd: cwd ?? null })]
+      if (dropped > o.keepBytes) fresh.items = itemsOf(fresh, unfinished, opening, cwd)
     }
     memo.delete(path)
     memo.set(path, fresh)
@@ -577,8 +617,8 @@ export async function sessionJsonlOlder(path: string, before: number, cwd?: stri
   if (running) return running
   const read = (async () => {
     const buf = (await runAsync({ op: 'read', path, from: 0, to: st.size })) as Buffer
-    const all = historyBuilder({ cwd: cwd ?? null })
-    const after = historyBuilder({ cwd: cwd ?? null })
+    const all = historyBuilder(history(cwd))
+    const after = historyBuilder(history(cwd))
     let lines = 0
     let bytes = 0
     for (let start = 0; start < buf.length; ) {

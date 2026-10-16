@@ -13,7 +13,7 @@
  *     rule was always announce-then-do, never announce-instead-of-do.
  *
  *  2. A release tag (refs/tags/v*) is refused while the repository's own work queue has an open
- *     section. Owner directive (Michael, 2026-09-11): "We always do everything now... If something
+ *     section. Owner directive (2026-09-11): "We always do everything now... If something
  *     is pending a to-do, it should be to-done before we do the upcoming release." The queue is
  *     docs/todo/TODO.md, gitignored and local, so this gate can only fire on a machine that holds
  *     it; a clone without the file has nothing to gate on and passes. There is deliberately NO

@@ -10,7 +10,8 @@ import { afterAll, describe, expect, test } from 'bun:test'
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
-import { refreshAnalytics, scanSessionAnalytics, sinkReport } from '../src/analytics'
+import { refreshAnalytics, scanSessionAnalytics } from '../src/analytics'
+import { sinkReport } from '../src/analytics-sink-report'
 import { DEEP_CONTEXT_TOKENS } from '../src/analytics-sinks'
 
 const dir = mkdtempSync(join(tmpdir(), 'ah-sinks-'))

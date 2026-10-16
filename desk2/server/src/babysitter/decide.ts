@@ -83,8 +83,7 @@ export function continueText(): string {
 const time = (ms: number): string => new Date(ms).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' })
 
 /** A Desk chat's account's reset: the later of its windows that are full, or null when none is. */
-function accountReset(accounts: readonly AccountInfo[] | null, id: string): number | null {
-  const a = accounts?.find((x) => x.id === id)
+function accountReset(a: AccountInfo | undefined): number | null {
   if (!a) return null
   const full = [
     (a.fiveHourPct ?? 0) >= 100 ? a.fiveHourResetsAt : null,
@@ -109,6 +108,10 @@ interface Stop {
 /** This look's stops. */
 function stopsOf(look: Look, memory: Memory): Stop[] {
   const stops: Stop[] = []
+  // The look's accounts are the same for every chat: index them and check for room once, not once per chat.
+  const accountById = new Map<string, AccountInfo>()
+  for (const a of look.accounts ?? []) if (!accountById.has(a.id)) accountById.set(a.id, a)
+  const roomAnywhere = someRoom(look.accounts)
   for (const c of look.own ?? []) {
     if (c.archived || c.status !== 'limited') continue
     // A Desk chat records no moment for its stop: the first look that saw it limited keeps the one it saw, unless the
@@ -126,10 +129,10 @@ function stopsOf(look: Look, memory: Memory): Stop[] {
         account: c.account.label,
         session: c.sessionId,
         notice: c.lastError,
-        resetsAt: c.limitResetsAt ?? accountReset(look.accounts, c.account.id),
+        resetsAt: c.limitResetsAt ?? accountReset(accountById.get(c.account.id)),
       },
       stoppedAt: known ?? c.updatedAt,
-      roomNow: c.accountAuto && someRoom(look.accounts),
+      roomNow: c.accountAuto && roomAnywhere,
     })
   }
   for (const s of look.outside ?? []) {

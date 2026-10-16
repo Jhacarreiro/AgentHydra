@@ -1,8 +1,9 @@
 import { existsSync, readFileSync } from 'node:fs'
-import { basename, join } from 'node:path'
+import { basename } from 'node:path'
+import { managerFile } from '../manager-folders'
 import { findTranscript } from '../transcript'
 import { type MergedTurn, mergeTurns } from './collect'
-import { appendJsonl, managersDir, ROUTES_FILE, readJsonl, readState, TURNS_FILE } from './store'
+import { appendJsonl, ROUTES_FILE, readJsonl, readState, TURNS_FILE } from './store'
 import {
   type JudgeRecord,
   type LineRef,
@@ -116,12 +117,11 @@ export function facetNamesOf(persona: unknown): string[] {
 }
 
 function readManagerFiles(slug: string): { rubric: string; facets: string[] } | null {
-  const dir = join(managersDir(), slug)
-  const briefPath = join(dir, 'brief.md')
-  if (!existsSync(briefPath)) return null
-  const personaPath = join(dir, 'persona.json')
+  const briefPath = managerFile(slug, 'brief.md')
+  if (!briefPath) return null
+  const personaPath = managerFile(slug, 'persona.json')
   let facets: string[] = []
-  if (existsSync(personaPath)) {
+  if (personaPath) {
     try {
       facets = facetNamesOf(JSON.parse(readFileSync(personaPath, 'utf8')))
     } catch {
@@ -309,6 +309,54 @@ export interface JudgePassResult {
   failed: Array<{ manager: string; error: string }>
 }
 
+type ReadyTurn = { excerpt: Excerpt; turn: MergedTurn }
+
+async function readyExcerpts(
+  turns: MergedTurn[],
+  paths: Map<string, string>,
+  linesOf: (path: string) => Promise<LineRef[]>,
+): Promise<ReadyTurn[]> {
+  const ready: ReadyTurn[] = []
+  for (const turn of turns) {
+    const sep = turn.id.indexOf(':')
+    const promptUuid = turn.id.slice(sep + 1)
+    const path = resolvePath(turn.session, paths)
+    if (!path) continue
+    const excerpt = excerptOf(await linesOf(path), promptUuid)
+    if (excerpt) ready.push({ excerpt, turn })
+  }
+  return ready
+}
+
+/** One batch's judge rows; a reply with no usable row throws, so the caller records the batch as failed. */
+async function judgeChunk(
+  manager: string,
+  files: { rubric: string; facets: string[] },
+  chunk: Array<ReadyTurn & { n: number }>,
+  now: number,
+  ask: AskFree,
+): Promise<JudgeRecord[]> {
+  const answer = await ask(buildPrompt(manager, files.rubric, files.facets, chunk))
+  const parsed = parseJudgeReply(answer.text, chunk.length, files.facets)
+  if (parsed.length === 0) throw new Error('no judge rows in the reply')
+  const model = `${answer.model} free`
+  return parsed.map(
+    (p): JudgeRecord => ({
+      v: 1,
+      type: 'judge',
+      turn: chunk[p.n - 1].turn.id,
+      score: CRITERIA.reduce((sum, k) => sum + p.criteria[k], 0),
+      criteria: p.criteria,
+      facet: p.facet,
+      ...(p.facetDropped ? { facetDropped: p.facetDropped } : {}),
+      why: p.why,
+      model,
+      costUsd: 0,
+      at: now,
+    }),
+  )
+}
+
 export async function runJudgePass(opts: JudgePassOptions = {}): Promise<JudgePassResult> {
   const now = opts.now ?? Date.now()
   const ask = opts.ask ?? askFree
@@ -341,40 +389,12 @@ export async function runJudgePass(opts: JudgePassOptions = {}): Promise<JudgePa
       result.failed.push({ manager, error: 'no brief.md' })
       continue
     }
-    const ready: Array<{ excerpt: Excerpt; turn: MergedTurn }> = []
-    for (const turn of turns) {
-      const sep = turn.id.indexOf(':')
-      const promptUuid = turn.id.slice(sep + 1)
-      const path = resolvePath(turn.session, paths)
-      if (!path) continue
-      const excerpt = excerptOf(await linesOf(path), promptUuid)
-      if (excerpt) ready.push({ excerpt, turn })
-    }
+    const ready = await readyExcerpts(turns, paths, linesOf)
     for (let at = 0; at < ready.length; at += BATCH_SIZE) {
       const chunk = ready.slice(at, at + BATCH_SIZE).map((x, i) => ({ ...x, n: i + 1 }))
       result.batches++
       try {
-        const answer = await ask(buildPrompt(manager, files.rubric, files.facets, chunk))
-        const parsed = parseJudgeReply(answer.text, chunk.length, files.facets)
-        if (parsed.length === 0) throw new Error('no judge rows in the reply')
-        const model = `${answer.model} free`
-        for (const p of parsed) {
-          const turn = chunk[p.n - 1].turn
-          const score = CRITERIA.reduce((sum, k) => sum + p.criteria[k], 0)
-          result.written.push({
-            v: 1,
-            type: 'judge',
-            turn: turn.id,
-            score,
-            criteria: p.criteria,
-            facet: p.facet,
-            ...(p.facetDropped ? { facetDropped: p.facetDropped } : {}),
-            why: p.why,
-            model,
-            costUsd: 0,
-            at: now,
-          })
-        }
+        result.written.push(...(await judgeChunk(manager, files, chunk, now, ask)))
       } catch (e) {
         const error = (e as Error).message
         console.error(`[manager-judge] ${manager} batch failed: ${error}`)
@@ -388,6 +408,9 @@ export async function runJudgePass(opts: JudgePassOptions = {}): Promise<JudgePa
 }
 
 let judging = false
+// Kept so a second start replaces the timers instead of stacking a second interval beside the first.
+let firstJudge: ReturnType<typeof setTimeout> | undefined
+let judgeInterval: ReturnType<typeof setInterval> | undefined
 
 /** Daemon timer: first pass 5 min after boot, then every 10 min; a pass still running is not overlapped. */
 export function startManagerJudge(): void {
@@ -402,8 +425,10 @@ export function startManagerJudge(): void {
       judging = false
     }
   }
-  setTimeout(() => {
+  clearTimeout(firstJudge)
+  clearInterval(judgeInterval)
+  firstJudge = setTimeout(() => {
     tick()
-    setInterval(tick, JUDGE_EVERY_MS)
+    judgeInterval = setInterval(tick, JUDGE_EVERY_MS)
   }, FIRST_JUDGE_MS)
 }

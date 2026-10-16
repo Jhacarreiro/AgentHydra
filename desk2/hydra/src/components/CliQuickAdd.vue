@@ -13,7 +13,7 @@
 // browser keeps its card, its code box and its Cancel when the row is closed, so closing never
 // orphans a pending login.
 import { AppWindow, Copy, LoaderCircle, LogIn, Plus, X } from '@lucide/vue'
-import { computed, nextTick, onMounted, onUnmounted, ref, watch } from 'vue'
+import { computed, nextTick, onMounted, onUnmounted, ref, shallowRef, watch } from 'vue'
 import { useI18n } from 'vue-i18n'
 import { toast } from 'vue-sonner'
 import { Button } from '@/components/ui/button'
@@ -64,7 +64,7 @@ watch(target, (next) => {
 })
 const qaInput = ref<InstanceType<typeof Input> | null>(null)
 const qaStarting = ref(false)
-const qaFlows = ref<QuickAddFlow[]>([])
+const qaFlows = shallowRef<QuickAddFlow[]>([])
 /** Flows started from this window; the rest of the server's last-20 list is only shown while waiting.
  *  A ref, so Dismiss (which drops an id) re-renders the list. */
 const qaMine = ref(new Set<string>())
@@ -199,10 +199,11 @@ const AUTO_DISMISS_MS: Record<Exclude<QuickAddFlow['state'], 'waiting'>, number>
   failed: 12_000,
 }
 const dismissTimers = new Map<string, number>()
+// Keyed by each visible flow's id and state, so a poll that changes nothing does not run the scheduling.
 watch(
-  qaVisible,
-  (flows) => {
-    for (const f of flows) {
+  () => qaVisible.value.map((f) => `${f.id}:${f.state}`).join('|'),
+  () => {
+    for (const f of qaVisible.value) {
       if (f.state === 'waiting' || dismissTimers.has(f.id)) continue
       dismissTimers.set(
         f.id,

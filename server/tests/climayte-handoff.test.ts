@@ -1,5 +1,5 @@
 // When CliMayte asks a session to hand off for its conversation's size (climayte-lib.ts).
-import { afterEach, describe, expect, test } from 'bun:test'
+import { afterAll, afterEach, describe, expect, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
@@ -41,6 +41,8 @@ describe('continuationPrompt', () => {
   })
 })
 
+const SCRATCH = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
+afterAll(() => rmSync(SCRATCH, { recursive: true, force: true }))
 const now = Date.now()
 const reading = (sessionPct: number) => ({
   sessionPct,
@@ -154,7 +156,7 @@ describe('a chat worker winds down silently', () => {
   })
 
   test('a chat whose handoff was written ends done, not handoff', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'climayte-handoff-'))
+    const dir = mkdtempSync(join(SCRATCH, 'handoff-'))
     const path = join(dir, 'h.md')
     const at = Date.now()
     writeFileSync(path, 'handoff')
@@ -214,7 +216,7 @@ describe('a handoff the daemon writes from the transcript', () => {
 
 describe('the w-984f4bed sequence (invented text)', () => {
   test('a chat turn that hit the size line, wrote its handoff silently, and ends done', () => {
-    const dir = mkdtempSync(join(tmpdir(), 'climayte-chat-'))
+    const dir = mkdtempSync(join(SCRATCH, 'chat-'))
     const path = join(dir, 'w-984f4bed-4-wind.md')
     const at = Date.now()
     // The session was asked to wind down during a short turn and wrote the handoff in that turn.
@@ -233,7 +235,7 @@ describe('a launch that threw after its runner started', () => {
   // 2026-10-02: the launch wrote its 'moved' event and then threw before the worker was
   // marked running. Its runner was live, but the worker stayed queued on the account it left, so the
   // next tick launched the same handoff again: two runners, and two 'moved' events from one account.
-  const root = mkdtempSync(join(tmpdir(), 'ah-climayte-handoff-retry-'))
+  const root = mkdtempSync(join(SCRATCH, 'retry-'))
   const configDir = (name: string): string => {
     const dir = join(root, name)
     mkdirSync(dir, { recursive: true })

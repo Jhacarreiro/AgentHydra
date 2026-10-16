@@ -3,6 +3,8 @@ import { afterEach, beforeEach, describe, expect, it } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { replyWhenDone } from '../src/desk-client'
+import { managerRoots } from '../src/manager-folders'
 import { MANAGER_TOOLS, managerName } from '../src/mcp-managers'
 
 const tool = (name: string) => {
@@ -14,25 +16,32 @@ const tool = (name: string) => {
 
 let dir = ''
 const oldDir = process.env.AGENTHYDRA_MANAGERS_DIR
+const oldPeople = process.env.AGENTHYDRA_PEOPLE_DIR
 const oldChat = process.env.HYDRA_DESK_CHAT_ID
 
 beforeEach(() => {
   dir = mkdtempSync(join(tmpdir(), 'mcp-managers-'))
-  process.env.AGENTHYDRA_MANAGERS_DIR = dir
+  process.env.AGENTHYDRA_MANAGERS_DIR = join(dir, 'managers')
+  process.env.AGENTHYDRA_PEOPLE_DIR = join(dir, 'people')
   delete process.env.HYDRA_DESK_CHAT_ID
-  mkdirSync(join(dir, 'example-manager'))
+  mkdirSync(join(dir, 'managers', 'example-manager'), { recursive: true })
   writeFileSync(
-    join(dir, 'example-manager', 'persona.json'),
+    join(dir, 'managers', 'example-manager', 'persona.json'),
     JSON.stringify({ slug: 'example-manager', name: 'Example Manager' }),
   )
-  mkdirSync(join(dir, 'nameless'))
-  writeFileSync(join(dir, 'nameless', 'persona.json'), JSON.stringify({ slug: 'nameless' }))
+  mkdirSync(join(dir, 'managers', 'nameless'), { recursive: true })
+  writeFileSync(
+    join(dir, 'managers', 'nameless', 'persona.json'),
+    JSON.stringify({ slug: 'nameless' }),
+  )
 })
 
 afterEach(() => {
   if (dir) rmSync(dir, { recursive: true, force: true })
   if (oldDir === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
   else process.env.AGENTHYDRA_MANAGERS_DIR = oldDir
+  if (oldPeople === undefined) delete process.env.AGENTHYDRA_PEOPLE_DIR
+  else process.env.AGENTHYDRA_PEOPLE_DIR = oldPeople
   if (oldChat === undefined) delete process.env.HYDRA_DESK_CHAT_ID
   else process.env.HYDRA_DESK_CHAT_ID = oldChat
 })
@@ -74,6 +83,28 @@ describe('manager_ask and manager_read refuse', () => {
 })
 
 describe('the persona name', () => {
+  it('reads the people folder first and the legacy folder when the people one has no persona', () => {
+    mkdirSync(join(dir, 'people', 'manager', 'both'), { recursive: true })
+    writeFileSync(
+      join(dir, 'people', 'manager', 'both', 'persona.json'),
+      JSON.stringify({ slug: 'both', name: 'People Copy' }),
+    )
+    mkdirSync(join(dir, 'managers', 'both'), { recursive: true })
+    writeFileSync(
+      join(dir, 'managers', 'both', 'persona.json'),
+      JSON.stringify({ slug: 'both', name: 'Legacy Copy' }),
+    )
+    mkdirSync(join(dir, 'managers', 'legacy-only'), { recursive: true })
+    writeFileSync(
+      join(dir, 'managers', 'legacy-only', 'persona.json'),
+      JSON.stringify({ slug: 'legacy-only', name: 'Legacy Only' }),
+    )
+    expect(managerName('both')).toBe('People Copy')
+    expect(managerName('legacy-only')).toBe('Legacy Only')
+  })
+  it('lists the two homes people first', () => {
+    expect(managerRoots()).toEqual([join(dir, 'people', 'manager'), join(dir, 'managers')])
+  })
   it('is read from the managers folder', () => {
     expect(managerName('example-manager')).toBe('Example Manager')
   })
@@ -107,5 +138,64 @@ describe('a Desk chat pinned to a manager', () => {
     expect(deskProblem({ ...desk, chatId: 7 }, true)).toContain(
       'desk.chatId must be a Desk chat id',
     )
+  })
+})
+
+describe('replyWhenDone after a sent message', () => {
+  const realFetch = globalThis.fetch
+  afterEach(() => {
+    globalThis.fetch = realFetch
+  })
+
+  function desk(polls: { status: string; items: { kind: string; text?: string }[] }[]) {
+    let n = 0
+    globalThis.fetch = (async (url: string | URL | Request) => {
+      const p = polls[Math.min(n, polls.length - 1)]
+      const body = String(url).endsWith('/transcript') ? p.items : [{ id: 'c1', status: p.status }]
+      if (String(url).endsWith('/transcript')) n++
+      return new Response(JSON.stringify(body), { status: 200 })
+    }) as unknown as typeof fetch
+  }
+
+  it('waits through an idle first poll that has only the prompt, then answers the reply', async () => {
+    desk([
+      { status: 'idle', items: [{ kind: 'user', text: 'q' }] },
+      {
+        status: 'idle',
+        items: [
+          { kind: 'user', text: 'q' },
+          { kind: 'assistant_text', text: 'the answer' },
+        ],
+      },
+    ])
+    const r = await replyWhenDone({ id: 'c1', title: 'Seat' }, 0, 10)
+    expect(r.status).toBe('done')
+    expect(r.reply).toBe('the answer')
+  })
+
+  it('answers working, not an empty done, when no reply ever arrives', async () => {
+    desk([{ status: 'idle', items: [{ kind: 'user', text: 'q' }] }])
+    const r = await replyWhenDone({ id: 'c1', title: 'Seat' }, 0, 1)
+    expect(r.status).toBe('working')
+  })
+
+  it('a resend to an idle seat ignores the earlier reply until a new one lands', async () => {
+    const old = [
+      { kind: 'user', text: 'old q' },
+      { kind: 'assistant_text', text: 'old answer' },
+    ]
+    desk([
+      { status: 'idle', items: [...old, { kind: 'user', text: 'new q' }] },
+      {
+        status: 'idle',
+        items: [
+          ...old,
+          { kind: 'user', text: 'new q' },
+          { kind: 'assistant_text', text: 'new answer' },
+        ],
+      },
+    ])
+    const r = await replyWhenDone({ id: 'c1' }, 2, 10)
+    expect(r.reply).toBe('new answer')
   })
 })

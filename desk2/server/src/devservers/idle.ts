@@ -42,6 +42,9 @@ export function countClients(netstatText: string, servers: IdleServer[]): Map<st
     if (Number.isInteger(pid) && Number.isInteger(local.port)) rows.push({ local: f[1]!, localPort: local.port, remote: f[2]!, remoteHost: remote.host, pid })
   }
   if (!rows.length) return null
+  // The first row per local address, built once: the peer lookup below would otherwise scan every row for each row.
+  const byLocal = new Map<string, Row>()
+  for (const p of rows) if (!byLocal.has(p.local)) byLocal.set(p.local, p)
   const out = new Map<string, number>()
   for (const s of servers) {
     let n = 0
@@ -49,7 +52,7 @@ export function countClients(netstatText: string, servers: IdleServer[]): Map<st
       if (!s.ports.includes(r.localPort) || !s.treePids.has(r.pid)) continue
       // A loopback peer that is one of the server's own processes is the server talking to its child: not a client.
       if (loopback(r.remoteHost)) {
-        const peer = rows.find((p) => p.local === r.remote)
+        const peer = byLocal.get(r.remote)
         if (peer && s.treePids.has(peer.pid)) continue
       }
       n++

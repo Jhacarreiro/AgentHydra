@@ -1,5 +1,5 @@
 // Scroll-follow end to end (bun run e2e:scroll; Windows, Edge): the transcript follows a streaming reply only while
-// Jacob is at the bottom. Drives web `#/stream-bench` (the transcript alone, one assistant reply growing a chunk at a time) in
+// the owner is at the bottom. Drives web `#/stream-bench` (the transcript alone, one assistant reply growing a chunk at a time) in
 // headless Edge through CDP, and checks: a reply growing under someone reading higher up never moves them (touchpad-sized wheel
 // steps, a scrollbar drag, a keyboard Page Up, each WHILE it streams); the down arrow at the top right takes them back down; a
 // send (the composer's chat-sent event) takes them down; at the bottom it follows; the up arrow steps back through the messages
@@ -270,7 +270,7 @@ try {
 
   // 13. The peek under the arrows (owner, 2026-10-10: "show me what the previous message was in ... a slide-down tray"):
   // it shows the message the up arrow would go to and the view stays put; it stays while the pointer is on it, goes about
-  // a second after the pointer leaves, and on its own after two seconds; Go to it lands that message on the line.
+  // a second after the pointer leaves, and on its own after two seconds; its arrow lands that message on the line.
   const boxOf = (sel: string): Promise<Box | null> => ev(`(() => { const b = document.querySelector(${JSON.stringify(sel)})?.getBoundingClientRect();
     return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
   const PEEK_BTN = '[data-testid="peek-step"]'
@@ -304,13 +304,117 @@ try {
   const third = await boxOf(PEEK_BTN)
   if (third) await click(third)
   await sleep(400)
-  const go = await ev(`(() => { const b = [...document.querySelectorAll('${TRAY} button')].find((e) => e.textContent.trim() === 'Go to it')?.getBoundingClientRect();
+  const go = await ev(`(() => { const b = document.querySelector('${TRAY} button[aria-label="Go to this message"]')?.getBoundingClientRect();
     return b && b.width ? { left: b.left, right: b.right, top: b.top, bottom: b.bottom } : null })()`)
   if (go) await click(go)
   await sleep(900)
   const landed = await onLine()
   check(!!go && landed.n === here.n - 1 && Math.abs(landed.off) <= 2 && (await peekText()) === null,
-    `Go to it lands the peeked message on the line and closes the peek (${said([landed])})`)
+    `The peek's arrow lands the peeked message on the line and closes the peek (${said([landed])})`)
+
+  // 13. Lazy loading: a 1,000-item chat starts with its newest 200; at the top the pages above land (a spinner while one
+  // loads) and the row that was on screen stays where it was.
+  await ev('window.__previous = 1')
+  await send('Page.navigate', { url: `${BASE}/?load=${Date.now()}#/parity/lazy` })
+  let lazyUp = false
+  for (let t = 0; t < 100 && !(lazyUp = await ev(`!window.__previous && !!${SC} && !!document.querySelector('[data-id^="lazy-"]')`)); t++) await sleep(100)
+  if (!lazyUp) throw new Error('the lazy parity scene did not load')
+  await sleep(500)
+  const lazyRow = `(() => { const sc = ${SC}, v = sc.getBoundingClientRect();
+    const r = [...sc.querySelectorAll('[data-id]')].find((x) => x.getBoundingClientRect().bottom > v.top + 1);
+    return r ? { id: r.dataset.id, y: r.getBoundingClientRect().top - v.top } : null })()`
+  await ev(`(() => { ${SC}.scrollTop = 0 })()`)
+  await frame()
+  // Up through the blank that stands for the rows not loaded yet, to where the first loaded row is at the top of the view.
+  await ev(`(() => { const sc = ${SC}; sc.scrollTop += ${lazyRow}.y })()`)
+  await frame()
+  const lazyBefore = await ev(lazyRow)
+  const spun = await ev(`!!document.querySelector('[data-testid="older-spinner"]')`)
+  await sleep(1800)
+  const lazyAfter = await ev(lazyRow)
+  const lazyIds = await ev(`[...${SC}.querySelectorAll('[data-id]')].map((x) => Number(x.dataset.id.slice(5)))`)
+  const lowest = Math.min(...lazyIds)
+  const high = await ev(`${SC}.scrollHeight`)
+  check(!!lazyBefore && !!lazyAfter && lazyBefore.id === lazyAfter.id && Math.abs(lazyBefore.y - lazyAfter.y) < 2,
+    `the page above lands without moving the row on screen (${lazyBefore?.id} at ${Math.round(lazyBefore?.y ?? 0)} -> ${lazyAfter?.id} at ${Math.round(lazyAfter?.y ?? 0)}; spinner ${spun}; scroll height ${Math.round(high)})`)
+  check(lowest < 800, `rows older than the first 200 were loaded (lowest rendered lazy-${lowest})`)
+
+  // 14. A long chat switched to, its history arriving after it mounted, or its history loaded again under it (the window's
+  // socket reconnecting empties the cache and fetches it whole): it is at its bottom within 500 ms of its items being
+  // there, no frame shows the history above the last screen, and it stays at the bottom (owner, 2026-10-13: the chat
+  // "keeps spending 30 seconds scrolling all the way down ... like they were behind"). Measured in the page: every
+  // painted frame's distance from the bottom once the items are in, and the scrollTop writes the transcript makes.
+  type Open = { landMs: number; far: number; first: number; end: number; writes: number; frames: number }
+  async function openLong(how: 'switch' | 'arrive' | 'reload', listExpr: string): Promise<Open> {
+    await ev('window.__previous = 1')
+    await send('Page.navigate', { url: `${BASE}/?load=${Date.now()}#/stream-bench` })
+    for (let t = 0; t < 100 && !(await ev(`!window.__previous && !!window.__streamBench?.ready && !!${SC}`)); t++) await sleep(100)
+    if (how === 'reload') {
+      // Opened as the Desk opens a chat: empty, then its history; the rows at its bottom are measured, the top's never are.
+      await ev(`window.__streamBench.mount('long', [], true); window.__list = ${listExpr}; setTimeout(() => window.__streamBench.arrive(window.__list), 50)`)
+      await sleep(800)
+    }
+    return ev(`new Promise((done) => {
+      const SC = '[data-transcript-scroller]';
+      const bench = window.__streamBench;
+      const list = window.__list ?? ${listExpr};
+      const d = Object.getOwnPropertyDescriptor(Element.prototype, 'scrollTop');
+      const rec = { writes: 0, frames: [], t0: Infinity };
+      Object.defineProperty(Element.prototype, 'scrollTop', { configurable: true, get: d.get, set(v) { if (this.matches?.(SC)) rec.writes++; d.set.call(this, v) } });
+      const finish = () => {
+        cancelAnimationFrame(raf);
+        Object.defineProperty(Element.prototype, 'scrollTop', d);
+        // Landed: the first frame from which every later one is at the bottom.
+        const off = rec.frames.findLastIndex((f) => f.distance > 2);
+        const landed = rec.frames[off + 1];
+        done({ landMs: landed ? landed.t : 1e9, far: rec.frames.filter((f) => f.distance > f.client).length, first: rec.frames[0]?.distance ?? -1,
+          end: rec.frames[rec.frames.length - 1]?.distance ?? -1, writes: rec.writes, frames: rec.frames.length });
+      };
+      const sampleFrame = () => {
+        const el = document.querySelector(SC);
+        const t = performance.now() - rec.t0;
+        if (el && t >= 0 && el.scrollHeight > 2 * el.clientHeight) rec.frames.push({ t, distance: el.scrollHeight - el.scrollTop - el.clientHeight, client: el.clientHeight });
+        if (t < 2000) raf = requestAnimationFrame(sampleFrame); else finish();
+      };
+      let raf = requestAnimationFrame(sampleFrame);
+      const land = () => { rec.t0 = performance.now(); bench.arrive(list) };
+      if ('${how}' === 'switch') { rec.t0 = performance.now(); bench.mount('long', list, false) }
+      else if ('${how}' === 'arrive') { bench.mount('long', [], true); setTimeout(land, 0) }
+      else { bench.arrive([]); setTimeout(land, 120) }
+    })`)
+  }
+  // A long chat in the shape of the owner's longest (2026-10-14: 6,600 to 16,500 items, three in four of them tool runs,
+  // then replies, thinking, tasks, notes and system lines; text 150 to 7,000 characters), opening on a long one-paragraph
+  // question and replies that render shorter than their estimates. Invented text throughout.
+  const REAL = (n: number) => `((n) => {
+    const words = 'the build reads its config then checks each module and writes a short report of what it found '.split(' ');
+    const say = (i, len) => { let t = ''; for (let k = 0; t.length < len; k++) t += words[(i + k * 7) % words.length] + (k % 13 === 12 ? '.\\n\\n' : ' '); return t };
+    const one = (t) => t.replace(/\\n+/g, ' ');
+    const size = (i) => [120, 180, 240, 400, 900, 1800, 3000, 4600][(i * 2654435761 >>> 0) % 8];
+    const out = []; let ts = 0;
+    for (let i = 0; out.length < n; i++) {
+      const id = 'r' + i + '-', at = () => ts++;
+      out.push({ id: id + 'u', ts: at(), kind: 'user', text: i === 0 ? one(say(0, 1800)) : i % 8 ? say(i, size(i) / 3) : [say(i, 200), say(i + 1, 120), say(i + 2, 90), say(i + 3, 60)].join('\\n') });
+      if (i % 4 === 0) out.push({ id: id + 'th', ts: at(), kind: 'thinking', text: say(i + 1, size(i + 1)) });
+      for (let k = 0; k < 12; k++) {
+        const t = at(), name = ['Bash', 'Read', 'Edit', 'Grep'][k % 4];
+        out.push({ id: id + 't' + k, ts: t, kind: 'tool_use', name, input: name === 'Bash' ? { command: 'npm test -- run ' + k } : { file_path: 'C:/Users/me/work/src/mod' + k + '.ts' }, status: 'done', startedAt: t, endedAt: t + 1 });
+        if (k % 4 === 3) out.push({ id: id + 'a' + k, ts: at(), kind: 'assistant_text', text: i === 0 ? one(say(k, 900)) : say(i + k, size(i + k)) });
+      }
+      if (i % 6 === 0) out.push({ id: id + 'task', ts: at(), kind: 'task', taskId: String(i), description: 'Check the module ' + i, status: 'completed', taskKind: 'agent' });
+      if (i % 5 === 0) out.push({ id: id + 'n', ts: at(), kind: 'note', from: 'lead', text: say(i + 2, 300) });
+      if (i % 7 === 0) out.push({ id: id + 's', ts: at(), kind: 'system', level: 'info', text: 'Compacted the context.' });
+      out.push({ id: id + 'res', ts: at(), kind: 'result', ok: true, durationMs: 4000, costUsd: 0.1, turns: 12 });
+    }
+    return out;
+  })(${n})`
+  // A desktop-sized window: the rows at the bottom of a taller view are all measured before the reload.
+  await send('Emulation.setDeviceMetricsOverride', { width: 1400, height: 900, deviceScaleFactor: 1, mobile: false })
+  for (const how of ['switch', 'arrive', 'reload'] as const) {
+    const r = await openLong(how, REAL(12000))
+    check(r.landMs <= 500 && r.far === 0 && Math.abs(r.end) <= 2,
+      `a 12,000-item chat ${how === 'switch' ? 'switched to' : how === 'arrive' ? 'whose history arrives after it opened' : 'whose history loads again under it'} opens at its bottom: at the bottom after ${Math.round(r.landMs)} ms, ${r.far} of ${r.frames} frames above the last screen, first frame ${Math.round(r.first)}px and last ${Math.round(r.end)}px from the bottom, ${r.writes} scrollTop writes`)
+  }
 } finally {
   // The Edge launched here may hand its window to another process: close the browser over CDP, then the launcher.
   try {

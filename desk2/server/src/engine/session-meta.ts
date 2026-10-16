@@ -3,7 +3,7 @@
 // atomically (temp file + rename). They live here because the sessions' own files belong to Claude Desktop or the
 // CLI and are never written. The bridge applies them to every external list it answers.
 
-import { readFileSync } from 'node:fs'
+import { readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { ExternalSession, SessionMeta, SessionMetaPatch } from '@shared/protocol'
 import { AsyncFile } from '../async-file'
@@ -26,6 +26,9 @@ export class SessionMetaStore {
   private readonly byId: Map<string, SessionMeta>
   /** When each Unassigned mark was set (UNASSIGN_GRACE_MS); kept in the file beside the marks as `unassignedAt`. */
   private readonly unassignedAt = new Map<string, number>()
+  /** When each chat was archived here; kept in the file as `archivedAt`. A mark from before it was kept dates from the
+   *  file's last write, the latest it can have been set. */
+  private readonly archivedAt = new Map<string, number>()
   private readonly tombs: Set<string>
   private readonly marksWriter: AsyncFile
   private readonly tombWriter: AsyncFile
@@ -76,6 +79,8 @@ export class SessionMetaStore {
     for (const k of Object.keys(UNMARKED) as (keyof SessionMeta)[]) if (p[k] !== undefined) Object.assign(next, { [k]: p[k] })
     if (next.unassigned && !prev?.unassigned) this.unassignedAt.set(sessionId, this.now())
     if (!next.unassigned) this.unassignedAt.delete(sessionId)
+    if (next.archived && !prev?.archived) this.archivedAt.set(sessionId, this.now())
+    if (!next.archived) this.archivedAt.delete(sessionId)
     if (isUnmarked(next)) this.byId.delete(sessionId)
     else this.byId.set(sessionId, next)
     this.save()
@@ -85,7 +90,9 @@ export class SessionMetaStore {
   /**
    * The list with each session's marks on it (its title replaced when renamed here). `onAccount`: the sessions an
    * account's app lists now (unarchived). Such a session is not Unassigned whatever its mark says, and a mark older
-   * than UNASSIGN_GRACE_MS on one is dropped.
+   * than UNASSIGN_GRACE_MS on one is dropped. A chat archived here and used since, in its own app or by anyone, is
+   * shown again and its mark dropped, as a mail app brings back an archived thread with a new reply (owner, 2026-10-14:
+   * a Codex chat its app showed and used was missing from the sidebar under a mark set here hours before).
    */
   apply(list: ExternalSession[], onAccount: ReadonlySet<string> = new Set()): ExternalSession[] {
     return list.map((s) => {
@@ -96,7 +103,12 @@ export class SessionMetaStore {
         unassigned = false
         if (this.now() - (this.unassignedAt.get(s.id) ?? 0) > UNASSIGN_GRACE_MS) this.patch(s.id, { unassigned: false })
       }
-      return { ...s, title: m.title ?? s.title, pinned: m.pinned, archived: m.archived, unread: m.unread, group: m.group, note: m.note, unassigned }
+      let archived = m.archived
+      if (archived && (s.lastActivityAt ?? 0) > (this.archivedAt.get(s.id) ?? Number.POSITIVE_INFINITY)) {
+        archived = false
+        this.patch(s.id, { archived: false })
+      }
+      return { ...s, title: m.title ?? s.title, pinned: m.pinned, archived, unread: m.unread, group: m.group, note: m.note, unassigned }
     })
   }
 
@@ -109,10 +121,11 @@ export class SessionMetaStore {
       return {}
     }
     if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return {}
+    const written = statSync(this.file).mtimeMs
     const out: Record<string, SessionMeta> = {}
     for (const [id, v] of Object.entries(raw as Record<string, unknown>)) {
       if (!v || typeof v !== 'object') continue
-      const m = v as Partial<SessionMeta> & { unassignedAt?: unknown }
+      const m = v as Partial<SessionMeta> & { unassignedAt?: unknown; archivedAt?: unknown }
       out[id] = {
         title: typeof m.title === 'string' ? m.title : null,
         pinned: m.pinned === true,
@@ -123,6 +136,7 @@ export class SessionMetaStore {
         unassigned: m.unassigned === true,
       }
       if (m.unassigned === true) this.unassignedAt.set(id, typeof m.unassignedAt === 'number' ? m.unassignedAt : 0)
+      if (m.archived === true) this.archivedAt.set(id, typeof m.archivedAt === 'number' ? m.archivedAt : written)
     }
     return out
   }
@@ -139,7 +153,8 @@ export class SessionMetaStore {
   private save(): void {
     const rows = [...this.byId].map(([id, m]) => {
       const at = this.unassignedAt.get(id)
-      return [id, at === undefined ? m : { ...m, unassignedAt: at }] as const
+      const archivedAt = this.archivedAt.get(id)
+      return [id, { ...m, ...(at === undefined ? {} : { unassignedAt: at }), ...(archivedAt === undefined ? {} : { archivedAt }) }] as const
     })
     this.marksWriter.write(JSON.stringify(Object.fromEntries(rows), null, 2))
   }

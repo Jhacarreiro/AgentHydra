@@ -1,6 +1,6 @@
 # misc/Ensure-Daemon.ps1 - make sure this app's daemon is UP, and start it if it is not.
 #
-# WHY THIS EXISTS (owner directive, Michael, 2026-08-28): automations talk to AgentHydra over
+# WHY THIS EXISTS (owner directive, 2026-08-28): automations talk to AgentHydra over
 # HTTP every wake. On 2026-08-28 the daemon and its tray host were gone (no tray icon, port 7787
 # refusing), and the caller simply failed its curl and reported the outage instead of fixing
 # it. "Anything that might need AgentHydra should make sure AgentHydra is running first" -

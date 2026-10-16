@@ -23,9 +23,9 @@ afterEach(() => {
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
 })
 
-const DONE = '20261012-205500-a1b2'
-const RUNNING = '20261012-205600-c3d4'
-const FINISHED = '2026-10-12T21:00:00+00:00'
+const DONE = '20191021-205500-a1b2'
+const RUNNING = '20191021-205600-c3d4'
+const FINISHED = '2019-10-21T21:00:00+00:00'
 
 /** An HSwarm job folder: finished with counts, or still running. */
 function jobs(): string {
@@ -35,7 +35,7 @@ function jobs(): string {
     mkdirSync(join(home, 'jobs', id), { recursive: true })
     writeFileSync(join(home, 'jobs', id, 'job.json'), JSON.stringify(job))
   }
-  write(DONE, { state: 'done', finished: FINISHED, summary: { created: '2026-10-12T20:55:00+00:00', finished: FINISHED, counts: { ok: 14, error: 2 } } })
+  write(DONE, { state: 'done', finished: FINISHED, summary: { created: '2019-10-21T20:55:00+00:00', finished: FINISHED, counts: { ok: 14, error: 2 } } })
   write(RUNNING, { state: 'running', finished: '', summary: { created: new Date(NOW - 30 * MIN).toISOString(), finished: '', counts: { running: 3 } } })
   return home
 }

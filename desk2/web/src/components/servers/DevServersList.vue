@@ -80,8 +80,8 @@ const companies = computed(() => companyGroups(groups.value))
 
 type ProjectLine =
   | { kind: 'company'; key: string; company: DevWebCompany; up: number; total: number }
-  | { kind: 'project'; key: string; g: Group; depth: 0 | 1 }
-  | { kind: 'server'; key: string; project: DevWebProject; p: DevWebProcess; depth: 0 | 1 }
+  | { kind: 'project'; key: string; g: Group; depth: 0 | 1; acts: { start: boolean; stop: boolean }; up: number }
+  | { kind: 'server'; key: string; project: DevWebProject; p: DevWebProcess; depth: 0 | 1; tip: string; actions: ServerAction[]; block: string | null }
   | { kind: 'none'; key: string; depth: 0 | 1 }
 
 const projectLines = computed<ProjectLine[]>(() => {
@@ -97,13 +97,13 @@ const projectLines = computed<ProjectLine[]>(() => {
       // A closed company still shows the projects with a server up (closed, so only those servers), as a project does,
       // and the one selected.
       if (several && !isOpen(ck) && !peek.length && g.project.id !== selectedProject.value) continue
-      out.push({ kind: 'project', key: pk, g, depth })
+      out.push({ kind: 'project', key: pk, g, depth, acts: groupActions(g.project.processes), up: upCount(g) })
       const open = isOpen(pk) && (!several || isOpen(ck))
       if (!g.total) {
         if (open) out.push({ kind: 'none', key: `${pk}:none`, depth })
         continue
       }
-      for (const p of open ? g.servers : peek) out.push({ kind: 'server', key: p.id, project: g.project, p, depth })
+      for (const p of open ? g.servers : peek) out.push({ kind: 'server', key: p.id, project: g.project, p, depth, tip: tip(g.project, p), actions: serverActions(p.status), block: startBlock(p) })
     }
   }
   return out
@@ -328,20 +328,22 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
   <div class="flex flex-col" role="region" aria-label="Dev servers">
     <div v-if="view.kind === 'list' || view.kind === 'empty'" class="flex items-center gap-1 px-1 pb-1 pt-1.5">
       <input v-model="filter" type="search" :class="INPUT" placeholder="Filter servers" aria-label="Filter servers" />
-      <DropdownMenu>
-        <Tip label="Scan this PC for projects">
-          <DropdownMenuTrigger as-child>
-            <button type="button" :class="HEADER_BTN" aria-label="Scan this PC for projects">
-              <Loader2 v-if="scanning" class="size-3.5 animate-spin" />
-              <ScanSearch v-else class="size-3.5" />
-            </button>
-          </DropdownMenuTrigger>
-        </Tip>
-        <DropdownMenuContent align="start">
-          <DropdownMenuItem :disabled="scanning" @select="scan('quick')">Quick scan</DropdownMenuItem>
-          <DropdownMenuItem :disabled="scanning" @select="scan('deep')">Deep scan</DropdownMenuItem>
-        </DropdownMenuContent>
-      </DropdownMenu>
+      <Tip label="Scan this PC for projects">
+        <span class="inline-flex">
+          <DropdownMenu>
+            <DropdownMenuTrigger as-child>
+              <button type="button" :class="HEADER_BTN" aria-label="Scan this PC for projects">
+                <Loader2 v-if="scanning" class="size-3.5 animate-spin" />
+                <ScanSearch v-else class="size-3.5" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start">
+              <DropdownMenuItem :disabled="scanning" @select="scan('quick')">Quick scan</DropdownMenuItem>
+              <DropdownMenuItem :disabled="scanning" @select="scan('deep')">Deep scan</DropdownMenuItem>
+            </DropdownMenuContent>
+          </DropdownMenu>
+        </span>
+      </Tip>
       <Tip label="Add a project">
         <button type="button" :class="HEADER_BTN" aria-label="Add a project" @click="pick({ kind: 'add' })"><Plus class="size-3.5" /></button>
       </Tip>
@@ -400,23 +402,23 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
               </button>
             </Tip>
             <span class="flex-1" />
-            <template v-if="groupActions(l.g.project.processes).start">
+            <template v-if="l.acts.start">
               <Tip label="Start all">
                 <button type="button" :class="HEADER_BTN" :disabled="servers.busy.value.has(allKey(l.g.project))" :aria-label="`Start all in ${l.g.project.name}`" @click="servers.actAll(l.g.project, 'start')"><Play class="size-3.5" /></button>
               </Tip>
             </template>
-            <template v-if="groupActions(l.g.project.processes).stop">
+            <template v-if="l.acts.stop">
               <Tip label="Stop all">
                 <button type="button" :class="HEADER_BTN" :disabled="servers.busy.value.has(allKey(l.g.project))" :aria-label="`Stop all in ${l.g.project.name}`" @click="servers.actAll(l.g.project, 'stop')"><Square class="size-3.5" /></button>
               </Tip>
             </template>
-            <Tip :label="`${upCount(l.g)} of ${l.g.total} running`"><span class="tnum">{{ upCount(l.g) }}/{{ l.g.total }}</span></Tip>
+            <Tip :label="`${l.up} of ${l.g.total} running`"><span class="tnum">{{ l.up }}/{{ l.g.total }}</span></Tip>
           </header>
 
           <p v-else-if="l.kind === 'none'" class="pb-1 text-ui-sm leading-4 text-text-muted" :class="HEAD_INDENT[l.depth]">No servers in this project.</p>
 
           <div v-else :class="ROW_INDENT[l.depth]">
-            <Tip :label="tip(l.project, l.p)" side="right" align="start">
+            <Tip :label="l.tip" side="right" align="start">
               <div
                 role="button"
                 tabindex="0"
@@ -447,7 +449,7 @@ const anyUp = computed(() => (servers.projects.value ?? []).some((p) => p.proces
                   <Tip v-if="processAddress(l.p)" label="Open in browser">
                     <button type="button" :class="ROW_BTN" :aria-label="`Open ${l.p.name} in browser`" @click="openBrowser(l.project, l.p)"><ExternalLink class="size-3.5" /></button>
                   </Tip>
-                  <Tip v-for="a in serverActions(l.p.status)" :key="a" :label="a !== 'stop' && startBlock(l.p) ? startBlock(l.p)! : ACTION[a].label">
+                  <Tip v-for="a in l.actions" :key="a" :label="a !== 'stop' && l.block ? l.block : ACTION[a].label">
                     <button type="button" :class="ROW_BTN" :disabled="actionDisabled(l.p, a, servers.busy.value.has(l.p.id))" :aria-label="`${ACTION[a].label} ${l.p.name}`" @click="act(l.p, a)">
                       <component :is="ACTION[a].icon" class="size-3.5" />
                     </button>

@@ -1,18 +1,21 @@
 <script setup lang="ts">
-// One routine on the Routines list: a collapsed row (icon, name, status chip, last run, next run, what the last run did when
-// it is described, and its own on/off switch) that opens into its schedule in words, its Describe runs switch, its history
-// with each run's description, and its actions: Run now, Open chat for a prompt run's chat, and Edit (its Edit form).
+// One routine on the Routines list: a collapsed row (icon, name, status chip, last run (a central routine's newest run,
+// wherever it ran), next run, its mode, what the last run did when it is described, and its own on/off switch) that opens
+// into its schedule in words (a central routine's in its own time zone), its Mode row (a routine with modes), its Describe
+// runs switch, its history on this computer with each run's description, and its actions: Run now, Open chat for a prompt
+// run's chat, and Edit (its Edit form).
 import { computed, ref } from 'vue'
-import { CalendarClock, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
+import { CalendarClock, ChartColumn, ChevronRight, CircleAlert, CircleCheck, CircleMinus, Clock, Gauge, History, LoaderCircle, MessageSquare, Pencil, Repeat, Sparkles } from '@lucide/vue'
 import type { Routine } from '@shared/routines'
 import { useShellSource } from '@/components/shell/source'
 import { useClock } from '@/lib/clock'
 import { usePaneApi } from './api'
-import { BUTTON } from './settings-styles'
+import { BUTTON, onSegmentKey, SEGMENT, SEGMENTS } from './settings-styles'
 import PaneSwitch from './PaneSwitch.vue'
 import RoutineEditForm from './RoutineEditForm.vue'
 import RoutineStatusChip from './RoutineStatusChip.vue'
-import { lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
+import { counterLabel } from './routine-details'
+import { centralRunText, lastRunText, localZone, nextRunText, outcomeKind, plainReason, routineStatus, scheduleSentence, spanOf } from './routine-view'
 
 const props = defineProps<{
   /** The routine as the last look saw it (GET /api/routines). */
@@ -21,7 +24,7 @@ const props = defineProps<{
   enabled: boolean
 }>()
 /** A request was answered (run, paused, resumed, or refused): the parent re-reads the status. */
-const emit = defineEmits<{ changed: [] }>()
+const emit = defineEmits<{ changed: []; details: [] }>()
 
 const api = usePaneApi()
 const src = useShellSource()
@@ -33,24 +36,35 @@ const openRuns = ref<Set<number>>(new Set())
 
 const canRun = computed(() => props.enabled && !busy.value && ['idle', 'due'].includes(props.routine.state) && props.routine.kind !== null)
 const last = computed(() => props.routine.runs[0])
+/** A central routine's newest run, wherever it ran (the run log every computer reads). */
+const latest = computed(() => props.routine.latestRun ?? null)
 const status = computed(() => routineStatus(props.routine))
 const now = useClock(30_000)
-const lastShort = computed(() => lastRunText(props.routine, now.value))
+const lastShort = computed(() => centralRunText(latest.value, now.value) ?? lastRunText(props.routine, now.value))
+const lastAt = computed(() => (latest.value ? (latest.value.endedAt ?? latest.value.startedAt) : (last.value?.endedAt ?? null)))
 const nextShort = computed(() => nextRunText(props.routine, now.value))
-const lastOutcome = computed(() => (last.value ? outcomeKind(last.value.outcome) : null))
+const lastOutcome = computed(() => {
+  const outcome = latest.value ? latest.value.outcome : last.value?.outcome
+  return outcome ? outcomeKind(outcome) : null
+})
 const KindIcon = computed(() => (props.routine.what === 'prompt' ? MessageSquare : props.routine.kind === 'windowsTask' ? CalendarClock : Repeat))
+/** The zone its schedule keeps: a central routine's own, else this computer's. */
+const zone = computed(() => props.routine.timeZone ?? localZone())
 const scheduleText = computed(() => {
   const r = props.routine
-  if (r.schedule !== null) return scheduleSentence(r.schedule, localZone())
+  if (r.schedule !== null) return scheduleSentence(r.schedule, zone.value)
   if (r.windowsTask !== null) return `Windows: ${r.windowsTask.replace(/^\\/, '')}`
   return 'its own pace'
 })
-const totalsText = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => `${k} ${n}`).join(' · '))
+const reasonText = computed(() => props.routine.headline ?? plainReason(props.routine.reason, zone.value))
+const totalRows = computed(() => Object.entries(props.routine.totals ?? {}).map(([k, n]) => ({ label: counterLabel(k), value: n.toLocaleString(undefined) })))
+const runsTotal = computed(() => Math.max(props.routine.runsTotal ?? 0, props.routine.runs.length))
 const settingRows = computed(() => Object.entries(props.routine.settings ?? {}))
 /** The session of a prompt run's chat: the one running now, else the last run's. */
 const chatSession = computed(() => props.routine.running?.sessionId ?? last.value?.sessionId ?? null)
-/** What the last run did, as its description says (owner, 2026-10-13: "an AI description of what they did"). */
-const lastDescription = computed(() => (last.value?.description?.state === 'done' ? last.value.description.text : null))
+/** What the last run did, as its description says (owner, 2026-10-13: "an AI description of what they did"); a central
+ *  routine's newest run's, wherever it ran. */
+const lastDescription = computed(() => (latest.value ? latest.value.description : last.value?.description?.state === 'done' ? last.value.description.text : null))
 /** Windows runs a windowsTask routine, so its output never reaches the manager to describe; a broken one has nothing to run. */
 const describable = computed(() => props.routine.kind === 'schedule' || props.routine.kind === 'status')
 
@@ -84,6 +98,26 @@ async function act(body: Parameters<typeof api.routinesAct>[0]): Promise<boolean
   }
 }
 
+/** A mode option as the card shows it: "aggressive" is Aggressive, "low-power" is Low power. */
+const modeLabel = (option: string) => option.charAt(0).toUpperCase() + option.slice(1).replace(/-/g, ' ')
+/** The mode its status says is in force, and the one being set now (its radio spins until the status says it). */
+const modeIndex = computed(() => props.routine.modes?.indexOf(props.routine.mode ?? '') ?? -1)
+const pendingMode = ref<string | null>(null)
+
+/** The owner's pick on the Mode row (owner, 2026-10-15: "Maybe the Archangel should have three toggles"): the routine's own
+ *  command takes it, and the card shows the mode its status then says. */
+async function pickMode(value: string) {
+  if (busy.value || value === props.routine.mode) return
+  pendingMode.value = value
+  await act({ mode: { id: props.routine.id, value } })
+  pendingMode.value = null
+}
+
+function onModeKey(e: KeyboardEvent) {
+  const modes = props.routine.modes ?? []
+  if (modes.length) onSegmentKey(e, Math.max(0, modeIndex.value), modes.length, (i) => void pickMode(modes[i]!))
+}
+
 /** Saves the Edit form's changes; it closes once the server has them. */
 async function saveEdit(set: Record<string, unknown>) {
   if (await act({ edit: { id: props.routine.id, set } })) editing.value = false
@@ -96,11 +130,11 @@ function toggleEdit() {
 </script>
 
 <template>
-  <div class="mt-2 rounded-[var(--radius-6)] bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
+  <div class="mt-2 rounded-(--radius-6) bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
     <div class="flex items-center gap-1 pe-3">
       <button
         type="button"
-        class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-6)] p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
+        class="flex min-w-0 flex-1 flex-wrap items-center gap-x-3 gap-y-1 rounded-(--radius-6) p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
         :aria-expanded="open"
         @click="open = !open"
       >
@@ -109,7 +143,7 @@ function toggleEdit() {
         <span class="min-w-0 flex-1 truncate text-ui leading-5 text-text">{{ routine.name }}</span>
         <RoutineStatusChip :status="status" />
         <span class="flex basis-full flex-wrap items-center gap-x-4 gap-y-0.5 ps-12 text-ui-sm leading-4.5 text-text-muted">
-          <span class="inline-flex items-center gap-1" :title="last ? stamp(last.endedAt) : 'never run'">
+          <span class="inline-flex items-center gap-1" :title="lastAt !== null ? stamp(lastAt) : 'never run'">
             <CircleCheck v-if="lastOutcome === 'ok'" class="size-3.5 text-success" aria-hidden="true" />
             <CircleAlert v-else-if="lastOutcome === 'failed'" class="size-3.5 text-danger-text" aria-hidden="true" />
             <CircleMinus v-else-if="lastOutcome === 'busy'" class="size-3.5" aria-hidden="true" />
@@ -120,6 +154,10 @@ function toggleEdit() {
             <Clock class="size-3.5" aria-hidden="true" />
             Next {{ nextShort }}
           </span>
+          <span v-if="routine.mode" class="inline-flex items-center gap-1" title="Mode">
+            <Gauge class="size-3.5" aria-hidden="true" />
+            {{ modeLabel(routine.mode) }}
+          </span>
         </span>
         <span v-if="routine.describe && lastDescription" class="line-clamp-2 basis-full ps-12 text-ui-sm leading-4.5 text-text-2" :title="lastDescription">{{ lastDescription }}</span>
       </button>
@@ -128,18 +166,26 @@ function toggleEdit() {
       <PaneSwitch
         :model-value="!routine.paused"
         :label="`Run ${routine.name} on its schedule`"
-        :disabled="busy || routine.kind === null"
+        :disabled="busy || routine.kind === null || routine.state === 'elsewhere'"
         @update:model-value="(on: boolean) => act(on ? { resume: routine.id } : { pause: routine.id })"
       />
     </div>
-    <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
+    <div v-if="open" class="border-t border-(--border) p-3 pt-2">
       <div class="flex items-start gap-1.5 text-ui-sm leading-4.5 text-text-2">
         <CalendarClock class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
         <span class="wrap-break-word">{{ scheduleText }}<template v-if="routine.until"> · until {{ routine.until }}</template></span>
       </div>
-      <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ routine.headline ?? plainReason(routine.reason, localZone()) }}</div>
+      <div class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">{{ reasonText }}</div>
       <div v-if="routine.askedBy" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">Asked for by {{ routine.askedBy }}</div>
-      <div v-if="totalsText" class="mt-0.5 tnum ps-5 text-ui-sm leading-4.5 text-text-muted">{{ totalsText }}</div>
+      <div v-if="routine.source === 'central'" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">
+        From the central store; runs on {{ routine.runsOn?.join(', ') }}<template v-if="latest?.lastLine"> · its newest run, on {{ latest.runner }}: {{ latest.lastLine }}</template>
+      </div>
+      <dl v-if="totalRows.length" class="mt-2 flex flex-wrap gap-1.5 ps-5">
+        <div v-for="t in totalRows" :key="t.label" class="rounded-(--radius-6) bg-fill-5 px-2 py-1 shadow-[inset_0_0_0_1px_var(--border)]">
+          <dt class="text-ui-sm leading-4 text-text-muted">{{ t.label }}</dt>
+          <dd class="tnum text-ui leading-5 text-text">{{ t.value }}</dd>
+        </div>
+      </dl>
       <div v-if="routine.what === 'prompt' && routine.cwd" class="mt-0.5 wrap-break-word ps-5 text-ui-sm leading-4.5 text-text-muted">An AI prompt in {{ routine.cwd }}</div>
       <dl v-if="settingRows.length" class="mt-2 grid gap-1">
         <div v-for="[k, v] in settingRows" :key="k" class="flex items-baseline justify-between gap-4 text-ui-sm leading-4.5">
@@ -147,6 +193,27 @@ function toggleEdit() {
           <dd class="tnum truncate text-text-2">{{ String(v) }}</dd>
         </div>
       </dl>
+      <!-- Its file's `modes`: how hard it works, the one in force as its status says it. -->
+      <div v-if="routine.modes" class="mt-2 flex items-center gap-2 text-ui-sm leading-4.5">
+        <Gauge class="size-3.5 shrink-0 text-text-2" aria-hidden="true" />
+        <span class="min-w-0 flex-1 text-text-2">Mode</span>
+        <div role="radiogroup" :aria-label="`How hard ${routine.name} works`" :class="SEGMENTS" @keydown="onModeKey">
+          <button
+            v-for="(option, i) in routine.modes"
+            :key="option"
+            type="button"
+            role="radio"
+            :aria-checked="option === routine.mode"
+            :tabindex="(modeIndex < 0 ? i === 0 : i === modeIndex) ? 0 : -1"
+            :class="[SEGMENT, 'gap-1.5 disabled:opacity-50']"
+            :disabled="busy"
+            @click="pickMode(option)"
+          >
+            <LoaderCircle v-if="pendingMode === option" class="size-3.5 animate-spin" aria-label="Setting the mode" />
+            {{ modeLabel(option) }}
+          </button>
+        </div>
+      </div>
       <!-- Its file's `describe` (owner, 2026-10-13: "have a toggle that says... run description"): on, an AI writes what each
            run did once it ends. -->
       <div v-if="describable" class="mt-2 flex items-center gap-2 text-ui-sm leading-4.5">
@@ -160,13 +227,18 @@ function toggleEdit() {
           @update:model-value="(on: boolean) => act({ edit: { id: routine.id, set: { describe: on } } })"
         />
       </div>
-      <div class="mt-3 text-ui-sm leading-4.5 text-text-2">Recent runs</div>
+      <div class="mt-3 flex items-center gap-2 text-ui-sm leading-4.5 text-text-2">
+        <span class="tnum">{{ runsTotal > 8 ? `Latest 8 of ${runsTotal} runs` : runsTotal === 1 ? '1 run' : `${runsTotal} runs` }}</span>
+        <button v-if="runsTotal" type="button" :class="[BUTTON, 'ms-auto gap-1.5']" @click="emit('details')">
+          <ChartColumn class="size-3.5" aria-hidden="true" />All runs &amp; stats
+        </button>
+      </div>
       <div v-if="!routine.runs.length" class="text-ui-sm leading-4.5 text-text-muted">No runs yet.</div>
       <ul v-else class="mt-1 grid gap-0.5">
         <li v-for="r in routine.runs.slice(0, 8)" :key="r.startedAt">
           <button
             type="button"
-            class="flex w-full items-center gap-2 rounded-[var(--radius-6)] px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
+            class="flex w-full items-center gap-2 rounded-(--radius-6) px-1.5 py-1 text-start text-ui-sm leading-4.5 hover:bg-fill-5 disabled:hover:bg-transparent"
             :aria-expanded="openRuns.has(r.startedAt)"
             :disabled="!r.lastLine && r.description?.state !== 'failed'"
             @click="toggleRun(r.startedAt)"

@@ -50,10 +50,10 @@ async function act(body: { approve: string } | { discard: string }) {
 </script>
 
 <template>
-  <div class="mt-2 rounded-[var(--radius-6)] bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
+  <div class="mt-2 rounded-(--radius-6) bg-fill-5 shadow-[inset_0_0_0_1px_var(--border)]">
     <button
       type="button"
-      class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-[var(--radius-6)] p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
+      class="flex w-full flex-wrap items-center gap-x-3 gap-y-1 rounded-(--radius-6) p-3 text-start hover:bg-fill-5 focus-visible:outline-2 focus-visible:outline-accent"
       :aria-expanded="open"
       @click="open = !open"
     >
@@ -63,7 +63,7 @@ async function act(body: { approve: string } | { discard: string }) {
       <RoutineStatusChip status="waiting" />
       <span class="basis-full truncate ps-12 text-ui-sm leading-4.5 text-text-muted">{{ when }}</span>
     </button>
-    <div v-if="open" class="border-t border-[var(--border)] p-3 pt-2">
+    <div v-if="open" class="border-t border-(--border) p-3 pt-2">
       <div class="wrap-break-word text-ui-sm leading-4.5 text-text-2">Why: {{ proposal.why }}</div>
       <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">When: {{ when }}<template v-if="proposal.until"> · until {{ proposal.until }}</template></div>
       <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">What: {{ what }}</div>
@@ -77,6 +77,9 @@ async function act(body: { approve: string } | { discard: string }) {
         </button>
       </template>
       <div class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">Asked for by {{ proposal.askedBy }}</div>
+      <div v-if="proposal.source === 'central'" class="mt-0.5 wrap-break-word text-ui-sm leading-4.5 text-text-muted">
+        In the central store; runs on {{ proposal.runsOn?.join(', ') }}. Approve signs it with this computer's key.
+      </div>
       <div class="mt-3 flex flex-wrap gap-2">
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ discard: proposal.id })">Discard</button>
         <button type="button" :class="BUTTON" :disabled="busy" @click="act({ approve: proposal.id })">Approve</button>

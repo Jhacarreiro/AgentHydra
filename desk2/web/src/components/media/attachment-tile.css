@@ -1,0 +1,69 @@
+.attachment-tile {
+  position: relative;
+  display: block;
+  flex-shrink: 0;
+  width: 120px;
+  height: 120px;
+  overflow: hidden;
+  border-radius: 8px;
+  border: 1px solid var(--border-attachment);
+  background: var(--bg-attachment);
+  box-shadow: var(--shadow-attachment);
+  text-align: start;
+}
+.attachment-tile > .attachment-caption {
+  position: absolute;
+  inset: auto 0 0 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  min-width: 0;
+  padding: 36px 10px 10px;
+  background: var(--bg-attachment-caption);
+  transition: background 0.25s;
+  pointer-events: none;
+}
+.attachment-tile:hover > .attachment-caption {
+  background: var(--bg-attachment-caption-hover);
+}
+.attachment-tile > .attachment-caption > .attachment-name {
+  display: block;
+  width: 100%;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--on-accent);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.2;
+  white-space: nowrap;
+  text-overflow: ellipsis;
+  text-shadow: var(--text-shadow-attachment-name);
+}
+.attachment-tile > .attachment-caption > .attachment-size {
+  display: block;
+  color: var(--text-attachment-size);
+  font-size: 10px;
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+  text-shadow: var(--text-shadow-attachment-size);
+}
+.attachment-tile > .attachment-type {
+  position: absolute;
+  top: 6px;
+  left: 6px;
+  padding: 3px 6px;
+  border-radius: 5px;
+  border: 0.5px solid var(--border-strong);
+  background: var(--bg-attachment-type);
+  -webkit-backdrop-filter: blur(12px);
+  backdrop-filter: blur(12px);
+  box-shadow: var(--shadow-attachment-type);
+  color: var(--on-accent);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+  line-height: 1;
+  white-space: nowrap;
+  pointer-events: none;
+}

@@ -1,9 +1,11 @@
+import { tryNativeNew } from '../claude-native-new'
 import { resolveAccount } from '../core/accounts'
 import { noteLoggedOutHere, setLoginSyncExcluded } from '../core/cli-login-sync'
 import { detectDesktopInstall } from '../core/desktop-install'
 import {
   createDshInstance,
   deleteDshInstance,
+  freeDshName,
   launchDshInstance,
   listDshInstances,
   quitDshInstance,
@@ -27,7 +29,7 @@ import {
   readLoginUuid,
   revealInstanceFolder,
 } from '../core/instances'
-import { createInstance, removeInstance } from '../core/lifecycle'
+import { createInstance, freeInstanceName, removeInstance } from '../core/lifecycle'
 import { readLoginHistory } from '../core/login-history'
 import { INSTANCE_COLOR_KEYS, INSTANCE_ICON_KEYS } from '../core/shared'
 import { createInstanceShortcut } from '../core/shortcut'
@@ -146,6 +148,21 @@ app.post('/api/instances/:dir/open', async (c) => {
     )
   return c.json(result)
 })
+// Start a new chat inside the RUNNING app with its own start call (claude-native-new.ts): no window,
+// no deeplink, the model and effort pinned. Body: {cwd, prompt, model, effort, bypass?}.
+app.post('/api/instances/:dir/native-new', async (c) => {
+  const dir = await instanceDirParam(c)
+  if (dir instanceof Response) return dir
+  const body = await jsonBody(c)
+  const result = await tryNativeNew(dir, {
+    cwd: String(body.cwd ?? ''),
+    prompt: String(body.prompt ?? ''),
+    model: String(body.model ?? ''),
+    effort: String(body.effort ?? ''),
+    ...(body.bypass !== undefined ? { bypass: body.bypass === true } : {}),
+  })
+  return c.json(result)
+})
 app.post('/api/instances/:dir/quit', async (c) => {
   const dir = await instanceDirParam(c)
   if (dir instanceof Response) return dir
@@ -166,7 +183,7 @@ app.post('/api/instances/:dir/logout', async (c) => {
   const account = readLoginUuid(dir)
   const result = await logoutInstance(dir)
   if (result.ok && account) noteLoggedOutHere(account)
-  // OWNER RULE (Michael, 2026-09-07): signing out clears the usage numbers - session, weekly,
+  // OWNER RULE (2026-09-07): signing out clears the usage numbers - session, weekly,
   // five-hour. logoutInstance already drops our cached IDENTITY for the dir; the cached USAGE
   // outlived it, and since the usage routes serve the cache before checking anything, the row
   // went on showing the signed-out account's percentages. Dropped here so it clears the moment
@@ -300,12 +317,12 @@ app.post('/api/instances/:dir/meta', async (c) => {
   const meta = setInstanceMeta(dir, patch)
   return c.json({ ok: true, action: 'meta', dir, message: 'updated', data: meta })
 })
+// No name in the body: one is made up (core/shared.ts firstFreeName). A blank one is still refused.
 app.post('/api/instances', async (c) => {
-  const body = await c.req.json().catch(() => null)
-  if (!body || typeof body.name !== 'string' || !body.name.trim()) {
-    return c.json({ error: 'name is required' }, 400)
-  }
-  return c.json(await createInstance(body.name))
+  const body = await c.req.json().catch(() => ({}))
+  const name = body?.name === undefined ? freeInstanceName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(await createInstance(name))
 })
 
 // --- DeepSeek Harness instances (a home per account; see core/dsh-instances.ts) ------------------
@@ -317,9 +334,9 @@ app.post('/api/instances', async (c) => {
 app.get('/api/dsh-instances', async (c) => c.json(await listDshInstances()))
 app.post('/api/dsh-instances', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string' || !body.name.trim())
-    return c.json({ error: 'name is required' }, 400)
-  return c.json(createDshInstance(body.name))
+  const name = body.name === undefined ? freeDshName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(createDshInstance(name))
 })
 app.post('/api/dsh-instances/:id/launch', async (c) =>
   c.json(await launchDshInstance(c.req.param('id'))),

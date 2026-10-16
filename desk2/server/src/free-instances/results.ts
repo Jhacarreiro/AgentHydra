@@ -30,37 +30,57 @@ function message(value: unknown): FreeMessage {
   }
 }
 
-/** Only the public fields needed by Desk cross this boundary; raw auth/network data never do. */
-export function parseResult(command: FreeCommand, output: RunOutput): FreeResult {
-  let r: Record<string, unknown>
-  try { r = object(JSON.parse(output.stdout)) }
-  catch { return failure('harness_failed', 'The harness did not return a result. Check the saved login and read the chat before sending again.') }
-  if (r.ok !== true || output.code !== 0) {
-    const e = object(r.error)
-    return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined, str(e.model, 100) || undefined)
+function failedRun(r: Record<string, unknown>): FreeResult {
+  const e = object(r.error)
+  return failure(str(e.code, 100) || 'harness_failed', str(e.message, 2000) || 'The operation failed. Read the chat before sending again.', str(e.chat_id, 100) || undefined, str(e.model, 100) || undefined)
+}
+
+function parseAuth(r: Record<string, unknown>): FreeResult {
+  return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null, account_email: address(r.account_email) }
+}
+
+function chatEntry(item: unknown) {
+  const c = object(item)
+  return { chat_id: str(c.chat_id, 100), name: str(c.name, 200) || null, is_temporary: c.is_temporary === true ? true : c.is_temporary === false ? false : null,
+    status: str(c.status, 100), created_at: str(c.created_at, 100), updated_at: str(c.updated_at, 100), server_conversation_id: str(c.server_conversation_id, 100) || undefined }
+}
+
+function parseChats(r: Record<string, unknown>): FreeResult {
+  return { ok: true, chats: list(r.chats).map(chatEntry).filter(c => c.is_temporary !== false) }
+}
+
+function usageWindow(item: unknown): NonNullable<FreeUsage['windows']>[number] {
+  const w = object(item)
+  return { id: str(w.id, 100), used_percent: percent(w.used_percent), remaining_percent: percent(w.remaining_percent), resets_at: str(w.resets_at, 100) || null, reset_passed: w.reset_passed === true }
+}
+
+function usageModel(item: unknown): NonNullable<FreeUsage['models']>[number] {
+  const m = object(item)
+  return { slug: str(m.slug, 100), title: str(m.title, 100) || undefined, reasoning: str(m.reasoning, 40) || undefined }
+}
+
+function usageRoles(value: unknown): Record<string, string> {
+  const roles: Record<string, string> = {}
+  for (const [k, v] of Object.entries(object(value)).slice(0, 8)) {
+    if (k.length <= 100 && typeof v === 'string' && v.length <= 100 && /^gpt-[a-z0-9][a-z0-9.-]{0,38}$/.test(v)) roles[k] = v
   }
-  if (command === 'auth' || command === 'login') return { ok: true, authenticated: r.authenticated === true, account_label: str(r.account_label, 100).trim() || null, account_email: address(r.account_email) }
-  if (command === 'nudge') return { ok: true }
-  if (command === 'chats') return { ok: true, chats: list(r.chats).map(item => {
-    const c = object(item)
-    return { chat_id: str(c.chat_id, 100), name: str(c.name, 200) || null, is_temporary: c.is_temporary === true ? true : c.is_temporary === false ? false : null,
-      status: str(c.status, 100), created_at: str(c.created_at, 100), updated_at: str(c.updated_at, 100), server_conversation_id: str(c.server_conversation_id, 100) || undefined }
-  }).filter(c => c.is_temporary !== false) }
-  if (command === 'usage') {
-    const usage: FreeUsage = { available: r.available === true, unlimited_text: r.available === true && r.unlimited_text === true,
-      text_model: str(r.text_model, 100) || undefined, plan: str(r.plan, 20).trim() || null, is_snapshot: r.is_snapshot === true,
-      observed_at: str(r.observed_at, 100) || null, note: str(r.note, 2000),
-      windows: list(r.windows).map(item => { const w = object(item); return { id: str(w.id, 100), used_percent: percent(w.used_percent), remaining_percent: percent(w.remaining_percent), resets_at: str(w.resets_at, 100) || null, reset_passed: w.reset_passed === true } }) }
-    const models = list(r.models).map(item => { const m = object(item); return { slug: str(m.slug, 100), title: str(m.title, 100) || undefined, reasoning: str(m.reasoning, 40) || undefined } }).filter(m => m.slug).slice(0, 40)
-    if (models.length) usage.models = models
-    const roles: Record<string, string> = {}
-    for (const [k, v] of Object.entries(object(r.roles)).slice(0, 8)) {
-      if (k.length <= 100 && typeof v === 'string' && v.length <= 100 && /^gpt-[a-z0-9][a-z0-9.-]{0,38}$/.test(v)) roles[k] = v
-    }
-    if (Object.keys(roles).length) usage.roles = roles
-    if (r.default_moved === true) usage.default_moved = true
-    return { ok: true, usage }
-  }
+  return roles
+}
+
+function parseUsage(r: Record<string, unknown>): FreeResult {
+  const usage: FreeUsage = { available: r.available === true, unlimited_text: r.available === true && r.unlimited_text === true,
+    text_model: str(r.text_model, 100) || undefined, plan: str(r.plan, 20).trim() || null, is_snapshot: r.is_snapshot === true,
+    observed_at: str(r.observed_at, 100) || null, note: str(r.note, 2000),
+    windows: list(r.windows).map(usageWindow) }
+  const models = list(r.models).map(usageModel).filter(m => m.slug).slice(0, 40)
+  if (models.length) usage.models = models
+  const roles = usageRoles(r.roles)
+  if (Object.keys(roles).length) usage.roles = roles
+  if (r.default_moved === true) usage.default_moved = true
+  return { ok: true, usage }
+}
+
+function parseChat(r: Record<string, unknown>): FreeResult {
   const chatId = str(r.chat_id, 100)
   if (r.is_temporary !== true) return failure('privacy_mismatch', 'This chat is not confirmed as private. Free instances only use Incognito or Temporary Chats.', chatId)
   const messages = Array.isArray(r.messages) ? r.messages.map(message) : undefined
@@ -72,4 +92,17 @@ export function parseResult(command: FreeCommand, output: RunOutput): FreeResult
     incomplete: r.incomplete === true || r.truncated === true,
     warnings: list(r.warnings).map(w => str(typeof w === 'string' ? w : object(w).message, 2000)).filter(Boolean),
   }
+}
+
+/** Only the public fields needed by Desk cross this boundary; raw auth/network data never do. */
+export function parseResult(command: FreeCommand, output: RunOutput): FreeResult {
+  let r: Record<string, unknown>
+  try { r = object(JSON.parse(output.stdout)) }
+  catch { return failure('harness_failed', 'The harness did not return a result. Check the saved login and read the chat before sending again.') }
+  if (r.ok !== true || output.code !== 0) return failedRun(r)
+  if (command === 'auth' || command === 'login') return parseAuth(r)
+  if (command === 'nudge') return { ok: true }
+  if (command === 'chats') return parseChats(r)
+  if (command === 'usage') return parseUsage(r)
+  return parseChat(r)
 }

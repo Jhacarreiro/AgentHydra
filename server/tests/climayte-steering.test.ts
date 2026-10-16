@@ -454,6 +454,7 @@ describe('integration: a task with a check is judged by it', () => {
     4 * ATTEMPT_MS + 10_000,
   )
 
+  // arkitect-allow: subprocess-test-declares-budget - budgeted by its trailing 2 * ATTEMPT_MS + 10_000; the rule reads only a numeric literal there
   test(
     "a passing check with the worker's files uncommitted sends it back; a task told not to commit, or dispatched with commit: false, passes",
     async () => {

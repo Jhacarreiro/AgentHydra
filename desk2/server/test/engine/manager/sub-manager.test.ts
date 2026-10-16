@@ -1,15 +1,17 @@
 // A chat opened under another Desk chat keeps its parent and its manager, names the manager on its row, and its
 // Claude process runs with the manager pinned (AGENTHYDRA_MANAGER); a chat with no manager runs without the pin.
 
-import { afterEach, expect, setSystemTime, test } from 'bun:test'
+import { afterEach, beforeEach, expect, setSystemTime, test } from 'bun:test'
 import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import type { ServerEvent } from '../../../../shared/protocol'
-import { ChatManager, parseCreate } from '../../../src/engine/chat-manager'
+import { ChatManager } from '../../../src/engine/chat-manager'
+import { parseCreate } from '../../../src/engine/chat-requests'
 import { forgetManagerStats } from '../../../src/engine/manager-stats'
 import { currentManager } from '../../../src/engine/managers'
 import { DEFAULT_SETTINGS } from '../../../src/settings'
+import { usePeopleDoor } from '../../people-addon-fixture'
 import { fakeBridge, fakeQueries } from './fakes'
 
 const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00, 0x00, 0x00, 0x0d])
@@ -17,7 +19,13 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00
 const temps: string[] = []
 const managers: ChatManager[] = []
 const oldManagersDir = process.env.AGENTHYDRA_MANAGERS_DIR
+let dropDoor: (() => void) | null = null
+beforeEach(async () => {
+  dropDoor = await usePeopleDoor()
+})
 afterEach(async () => {
+  dropDoor?.()
+  dropDoor = null
   for (const m of managers.splice(0)) await m.closeAll()
   for (const d of temps.splice(0)) rmSync(d, { recursive: true, force: true })
   if (oldManagersDir === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
@@ -69,6 +77,19 @@ test('a chat opened under a Desk chat keeps its parent and manager, and runs wit
   })
   await waitFor(() => q.all.length === 1)
   expect(q.last().options.env).toMatchObject({ AGENTHYDRA_MANAGER: 'example-manager' })
+})
+
+test('archiving a chat archives its sub-chats and theirs, and unarchiving brings them back; other chats stay', async () => {
+  const { home, m } = setup()
+  const parent = await m.create({ cwd: home, delegateToCliMayte: false })
+  const child = await m.create({ cwd: home, parentId: parent.id, delegateToCliMayte: false })
+  const grandchild = await m.create({ cwd: home, parentId: child.id, delegateToCliMayte: false })
+  const other = await m.create({ cwd: home, delegateToCliMayte: false })
+  const archived = () => [parent, child, grandchild, other].map((c) => m.get(c.id).archived)
+  await m.patch(parent.id, { archived: true })
+  expect(archived()).toEqual([true, true, true, false])
+  await m.patch(parent.id, { archived: false })
+  expect(archived()).toEqual([false, false, false, false])
 })
 
 test('a chat with no manager runs without the pin', async () => {

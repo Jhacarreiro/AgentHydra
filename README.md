@@ -9,7 +9,7 @@
 [![Website](https://img.shields.io/badge/website-agenthydra.lunarwerx.com-c15f3c?style=flat-square)](https://agenthydra.lunarwerx.com)
 [![CI](https://img.shields.io/github/actions/workflow/status/LunarWerxs/AgentHydra/ci.yml?branch=main&style=flat-square&label=CI)](https://github.com/LunarWerxs/AgentHydra/actions/workflows/ci.yml)
 [![Release](https://img.shields.io/github/v/release/LunarWerxs/AgentHydra?style=flat-square&color=c15f3c)](https://github.com/LunarWerxs/AgentHydra/releases)
-[![License: MIT](https://img.shields.io/badge/license-MIT-c15f3c?style=flat-square)](LICENSE)
+[![License: PolyForm Noncommercial](https://img.shields.io/badge/license-PolyForm%20Noncommercial-c15f3c?style=flat-square)](LICENSE)
 [![Discord](https://img.shields.io/badge/Discord-join_the_community-5865F2?style=flat-square&logo=discord&logoColor=white)](https://discord.gg/PsWpeNUzhk)
 
 </div>
@@ -128,6 +128,42 @@ you already have.
 
 </details>
 
+## Your people
+
+**TL;DR**
+
+- **First run:** with no managers and no highest authority yet, AgentHydra opens a short "Your people" page. Skip it and it stays out of the way; it is always in Settings → Your people.
+- **It asks three things:** (1) the highest authority, the person whose rulings win (a name, a few lines on how they decide, optional rulings); (2) which managers you want, from five invented starters or your own; (3) Save.
+- **Where it writes:** `~/.agenthydra/people/` (the format in [docs/PEOPLE.md](docs/PEOPLE.md)), then it rebuilds the Hydra Core catalog so your chats see them at once.
+
+<details>
+<summary>Details</summary>
+
+- The authority goes to `people/creator/<name>/`, each manager to `people/manager/<name>/`, each as a `persona.json` plus a `brief.md` you can edit by hand.
+- The starters are a project coordinator, a floor manager, a backend engineer, a UI designer and an advertising lead, with invented names and generic text. Rename or rewrite them freely; saving never overwrites a folder you did not pick.
+- Managers already in `~/.agenthydra/managers/` count as set up, so the page does not show for them.
+
+</details>
+
+## Where your people live
+
+**TL;DR**
+
+- **This PC (the default):** your people are folders under `~/.agenthydra/people/`, the format in [docs/PEOPLE.md](docs/PEOPLE.md).
+- **CrAInium (owners only):** in Settings → Your people, pick CrAInium. Your people are kept in the owners' private persona store on their own server, reached over SSH, and follow you to your other PCs. The choice only shows on a PC that has the private add-on and SSH access to that server.
+- **Safe sync:** the newer copy of a person wins, the older one is kept in `~/.agenthydra/people-backup/`, and a failed sync never deletes a file.
+
+<details>
+<summary>How it works</summary>
+
+- This PC always keeps the working copy, because Hydra Core's catalog reads those folders. CrAInium is a second copy that is kept in step with it.
+- AgentHydra reaches CrAInium through a command, the people door (`store/people-door.mjs` in the private sue-dredd checkout, or the `crainium.command` set in `~/.agenthydra/people-store.json`). No persona text is in this repo.
+- Sync runs when AgentHydra starts, a few seconds after you change a person, and on Sync now. After a pull it rebuilds the Hydra Core catalog, so new people show at once.
+- Without the door (anyone without the add-on), only This PC shows and everything keeps working.
+- The choice is saved in `~/.agenthydra/people-store.json`. Deleting a person on this PC does not delete it from CrAInium, which keeps every row.
+
+</details>
+
 ## Install
 
 **Windows, one line** (no Administrator; the download's SHA-256 is checked before anything unpacks):
@@ -175,7 +211,8 @@ bun run build && bun run start
 <details>
 <summary><b>Is it free?</b></summary>
 
-Yes, MIT-licensed, with no account or subscription. You bring your own Claude Code, Codex or
+Yes, for noncommercial use (PolyForm Noncommercial 1.0.0), with no account or subscription.
+Commercial use needs a separate license. You bring your own Claude Code, Codex or
 OpenCode.
 
 </details>
@@ -211,7 +248,7 @@ Made by [LunarWerx Studios](https://lunarwerx.com). Also see [RepoYeti](https://
 
 ## License
 
-[MIT](LICENSE).
+[PolyForm Noncommercial 1.0.0](LICENSE). Versions released before it stay under the MIT License.
 
 ## Star history
 

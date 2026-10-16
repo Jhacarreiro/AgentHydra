@@ -24,6 +24,13 @@ export function accountRefOf(a: AccountInfo): AccountRef {
   return { id: a.id, label: a.label, configDir: a.configDir, ...(a.number !== undefined ? { number: a.number } : {}) }
 }
 
+/** The account a chat at work in Claude Desktop is on: the login signed in there, else the app itself, never the default
+ *  login (owner, 2026-10-15: "shouldn't that just say ... desktop instance instead of default login?"). */
+export function desktopAccountRef(s: Pick<ExternalSession, 'desktopAccountId'>, accounts: AccountInfo[]): AccountRef & { name?: string } {
+  const a = s.desktopAccountId ? accounts.find((x) => x.id === s.desktopAccountId) : undefined
+  return a ? accountRefOf(a) : { id: 'desktop', label: '', configDir: null, name: 'Claude Desktop' }
+}
+
 /** The CLI instance that holds the session, when it can resume it in place: a signed-out login cannot. */
 export function holderOf(s: Pick<ExternalSession, 'accountId'>, accounts: AccountInfo[]): AccountInfo | undefined {
   const owner = s.accountId ? accounts.find((x) => x.id === s.accountId) : undefined

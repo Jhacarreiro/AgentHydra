@@ -4,6 +4,7 @@ import { Ban, Check, Clock, ExternalLink, Plug } from '@lucide/vue'
 import type { ElicitationAnswer, TranscriptItem } from '@shared/protocol'
 import { Tip } from '@/components/ui/tooltip'
 import { useDesk } from '@/stores/desk'
+import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { useTranscript } from '../context'
 import { formAnswer, initialForm, limitHint, linkOf, LONG_CHOICE, togglePick } from '../lib/elicitation'
 
@@ -12,6 +13,7 @@ import { formAnswer, initialForm, limitHint, linkOf, LONG_CHOICE, togglePick } f
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'elicitation' }>; docked?: boolean }>()
 
 const ctx = useTranscript()
+const lockedTitle = computed(() => (ctx.readOnly.value ? LOCKED_TITLE : undefined))
 const desk = useDesk()
 const busy = ref(false)
 const err = ref<string | null>(null)
@@ -190,14 +192,13 @@ const answered = computed(() => {
       The link it sent was refused: only http and https links open here.
     </p>
 
-    <div v-if="!ctx.readOnly.value" class="flex flex-wrap items-center gap-2 px-3 py-2.5 ps-9">
-      <button v-if="item.mode === 'form' || link" type="button" class="tx-btn tx-btn-primary" :disabled="busy || !ready" @click="respond(true)">
+    <div class="flex flex-wrap items-center gap-2 px-3 py-2.5 ps-9">
+      <button v-if="item.mode === 'form' || link" type="button" class="tx-btn tx-btn-primary" :disabled="busy || !ready || ctx.readOnly.value" :title="lockedTitle" @click="respond(true)">
         {{ item.mode === 'url' ? 'I have finished' : 'Submit' }}
       </button>
-      <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="respond(false)">Cancel</button>
+      <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="respond(false)">Cancel</button>
       <span v-if="answer.invalid.length" class="text-ui-sm text-danger-text">{{ answer.invalid.join('; ') }}</span>
       <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
-    <div v-else class="px-3 py-2 text-ui-sm text-text-muted">Waiting for an answer</div>
   </div>
 </template>

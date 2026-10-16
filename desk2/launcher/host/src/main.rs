@@ -11,6 +11,12 @@ use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
 use std::time::{Duration, Instant};
 
+mod commands;
+mod page_policy;
+
+use commands::{parse_browser_cmd, parse_window_cmd, BrowserCmd, Edge, WindowCmd};
+use page_policy::{desk_page_allowed, is_local_page, local_key, origin_of, page_url_allowed};
+
 // AgentHydra 2.0, once called Hydra Desk 2 (owner, 2026-10-06). The tray's hidden window has this title
 // too (the tray host names it after the app), so single_instance looks for a visible one.
 const TITLE: &str = "AgentHydra";
@@ -858,170 +864,8 @@ mod win {
     compile_error!("HydraDesk2 host is Windows only");
 }
 
-fn origin_of(url: &str) -> String {
-    let rest = url.split("://").nth(1).unwrap_or(url);
-    let host = rest.split(['/', '?', '#']).next().unwrap_or("");
-    format!("{}://{}", url.split("://").next().unwrap_or("http"), host)
-}
-
-// ---- the browser pane's page tabs: desk2/web/src/components/servers/native-browser.ts is the other end ----
-// An iframe cannot show a site that sends X-Frame-Options or CSP frame-ancestors (most sites with a sign-in), so a
-// page tab asks this window for a browser view of its own, placed over the tab. The window's page says where (client
-// pixels) and what to show through window.ipc; each view reports its address and title back as an
-// `agenthydra:browser` window event.
-
 /// The most page views at once; an Open past it is refused (the page tab keeps its own placeholder).
 const MAX_PAGES: usize = 24;
-
-/// What the window's page asks of a page tab's browser view (HostBrowserIn in native-browser.ts).
-#[derive(Debug, PartialEq, Deserialize)]
-#[serde(tag = "op", rename_all = "lowercase")]
-enum BrowserCmd {
-    /// Show `url` in view `id`, made on first use; no `rect` keeps it hidden.
-    Open {
-        id: String,
-        url: String,
-        rect: Option<Rect>,
-    },
-    /// Move view `id` to `rect`, or hide it.
-    Place {
-        id: String,
-        rect: Option<Rect>,
-    },
-    Back {
-        id: String,
-    },
-    Forward {
-        id: String,
-    },
-    Reload {
-        id: String,
-    },
-    Close {
-        id: String,
-    },
-    /// Mute or unmute view `id` (ICoreWebView2_8::put_IsMuted).
-    Mute {
-        id: String,
-        muted: bool,
-    },
-}
-
-impl BrowserCmd {
-    fn id(&self) -> &str {
-        match self {
-            BrowserCmd::Open { id, .. }
-            | BrowserCmd::Place { id, .. }
-            | BrowserCmd::Back { id }
-            | BrowserCmd::Forward { id }
-            | BrowserCmd::Reload { id }
-            | BrowserCmd::Close { id }
-            | BrowserCmd::Mute { id, .. } => id,
-        }
-    }
-}
-
-/// A browser message from the window's page, or None for anything else. A rect with no area means hidden.
-fn parse_browser_cmd(text: &str) -> Option<BrowserCmd> {
-    #[derive(Deserialize)]
-    struct Kind {
-        kind: String,
-    }
-    if serde_json::from_str::<Kind>(text).ok()?.kind != "browser" {
-        return None;
-    }
-    let mut cmd: BrowserCmd = serde_json::from_str(text).ok()?;
-    if cmd.id().is_empty() || cmd.id().len() > 64 {
-        return None;
-    }
-    if let BrowserCmd::Open { rect, .. } | BrowserCmd::Place { rect, .. } = &mut cmd {
-        *rect = rect.filter(|r| r.w() > 0 && r.h() > 0 && r.w() <= 32_000 && r.h() <= 32_000);
-    }
-    Some(cmd)
-}
-
-// ---- the window's own frame: the page's host bridge is the other end ----
-// The page draws its top row as the title bar: `ready` turns Windows' caption off (once), the page's own buttons ask for
-// minimize, maximize, close or a resize drag, and the window answers with an `agenthydra:window` event.
-
-/// What the window's page asks of the window (`{"op":"window","action":...}`).
-#[derive(Debug, PartialEq)]
-enum WindowCmd {
-    /// The page has loaded: turn the caption off (once) and say what the window is now.
-    Ready,
-    Minimize,
-    /// Maximize, or restore when maximized.
-    Maximize,
-    /// What the caption's X does: the placement is saved and the window closes.
-    Close,
-    /// Start a native resize drag from this edge.
-    Resize(Edge),
-    /// Start the window's move, as a press on the caption does (a title bar the page's drag regions cannot cover).
-    Drag,
-    /// Where the page's three window buttons are, in client pixels, or None while it shows none: the caption sink
-    /// goes over them (win::caption_sink).
-    Buttons(Option<Rect>),
-    /// Shrink to a strip of `width` pixels on the right edge of the work area, topmost (clamped to 160..=1200).
-    Collapse { width: i32 },
-    /// Back to the placement remembered when the window collapsed.
-    Expand,
-}
-
-/// The edges the page starts a resize drag from (the top ones: the page draws those).
-#[derive(Debug, PartialEq)]
-enum Edge {
-    North,
-    NorthEast,
-    NorthWest,
-}
-
-/// A window message from the window's page, or None for anything else; an unknown action is ignored.
-fn parse_window_cmd(text: &str) -> Option<WindowCmd> {
-    #[derive(Deserialize)]
-    struct Msg {
-        op: String,
-        action: String,
-        edge: Option<String>,
-        /// left, top, width, height
-        rect: Option<[i32; 4]>,
-        width: Option<i64>,
-    }
-    let m: Msg = serde_json::from_str(text).ok()?;
-    if m.op != "window" {
-        return None;
-    }
-    Some(match m.action.as_str() {
-        "ready" => WindowCmd::Ready,
-        "minimize" => WindowCmd::Minimize,
-        "maximize" => WindowCmd::Maximize,
-        "close" => WindowCmd::Close,
-        "drag" => WindowCmd::Drag,
-        "collapse" => WindowCmd::Collapse {
-            width: m.width?.clamp(160, 1200) as i32,
-        },
-        "expand" => WindowCmd::Expand,
-        // Three buttons are a few hundred pixels at most; anything else is not the page's buttons.
-        "buttons" => WindowCmd::Buttons(match m.rect {
-            None => None,
-            Some([left, top, w, h]) if (1..=2000).contains(&w) && (1..=400).contains(&h) => {
-                Some(Rect {
-                    left,
-                    top,
-                    right: left + w,
-                    bottom: top + h,
-                })
-            }
-            Some(_) => return None,
-        }),
-        "resize" => WindowCmd::Resize(match m.edge.as_deref()? {
-            "n" => Edge::North,
-            "ne" => Edge::NorthEast,
-            "nw" => Edge::NorthWest,
-            _ => return None,
-        }),
-        _ => return None,
-    })
-}
 
 /// The script that tells the window's page its frame (the caption is gone), whether it is maximized and whether it is collapsed.
 fn window_event_script(frame: bool, maximized: bool, collapsed: bool) -> String {
@@ -1035,7 +879,13 @@ fn focus_event_script(focused: bool) -> String {
 
 /// Whether AgentHydra is the app in front: its main window, any window of this process, or a window the main window
 /// owns (a file dialog a page opened, which runs in WebView2's process). None while no window is in front.
-fn app_active(fg: isize, fg_pid: u32, fg_root_owner: isize, main: isize, our_pid: u32) -> Option<bool> {
+fn app_active(
+    fg: isize,
+    fg_pid: u32,
+    fg_root_owner: isize,
+    main: isize,
+    our_pid: u32,
+) -> Option<bool> {
     if fg == 0 {
         return None;
     }
@@ -1104,50 +954,6 @@ fn caption_event_script(
         name(hover),
         name(pressed)
     )
-}
-
-/// Where a page tab's view may go: http and https except AgentHydra's own window, and about: and blob: pages.
-fn page_url_allowed(url: &str, desk_origin: &str) -> bool {
-    let u = url.to_ascii_lowercase();
-    if u.starts_with("about:") || u.starts_with("blob:") {
-        return true;
-    }
-    (u.starts_with("http://") || u.starts_with("https://"))
-        && origin_of(&u) != desk_origin.to_ascii_lowercase()
-}
-
-/// A local page on this PC (file:///C:/...). Only the Desk opens one; a web page reaches one only as a link from a local page.
-fn is_local_page(url: &str) -> bool {
-    url.to_ascii_lowercase().starts_with("file:///")
-}
-
-/// Where a local page is remembered: lower case, with %XX escapes undone (WebView2 may escape a space in a path).
-fn local_key(url: &str) -> String {
-    let b = url.as_bytes();
-    let mut out = Vec::with_capacity(b.len());
-    let mut i = 0;
-    while i < b.len() {
-        let hex = b
-            .get(i + 1..i + 3)
-            .and_then(|h| std::str::from_utf8(h).ok())
-            .and_then(|h| u8::from_str_radix(h, 16).ok());
-        match (b[i], hex) {
-            (b'%', Some(v)) => {
-                out.push(v);
-                i += 3;
-            }
-            (c, _) => {
-                out.push(c);
-                i += 1;
-            }
-        }
-    }
-    String::from_utf8_lossy(&out).to_ascii_lowercase()
-}
-
-/// The address the Desk may open in a page view: a local page, or what page_url_allowed allows.
-fn desk_page_allowed(url: &str, desk_origin: &str) -> bool {
-    is_local_page(url) || page_url_allowed(url, desk_origin)
 }
 
 /// What a page view has shown. A web page may reach a local page only when this view already showed it (its own
@@ -1873,13 +1679,11 @@ impl Host {
     }
 
     fn send_window_state(&self) {
-        let _ = self
-            .webview
-            .evaluate_script(&window_event_script(
-                self.caption_gone,
-                self.maximized,
-                self.collapsed.is_some(),
-            ));
+        let _ = self.webview.evaluate_script(&window_event_script(
+            self.caption_gone,
+            self.maximized,
+            self.collapsed.is_some(),
+        ));
     }
 
     /// Shrinks the window to a strip on the right of its work area, remembering the placement it had (once: a
@@ -1901,7 +1705,8 @@ impl Host {
                 maximized,
             });
         }
-        let (Some(work), Some((outer, visible))) = (win::work_area(self.hwnd), win::frame_rects(self.hwnd))
+        let (Some(work), Some((outer, visible))) =
+            (win::work_area(self.hwnd), win::frame_rects(self.hwnd))
         else {
             return;
         };

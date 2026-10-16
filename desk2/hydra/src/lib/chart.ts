@@ -87,24 +87,6 @@ export function seriesColor(name: string, order: readonly string[]): string {
 }
 
 /**
- * Keep the biggest `keep` entries and sum the rest into one "Other" row.
- *
- * The alternative to this is a chart with fourteen colours in it, which is not a chart anyone reads.
- */
-export function topNWithOther<T extends { key: string }>(
-  rows: T[],
-  keep: number,
-  value: (row: T) => number,
-  makeOther: (total: number, count: number) => T,
-): T[] {
-  if (rows.length <= keep) return rows
-  const head = rows.slice(0, keep)
-  const tail = rows.slice(keep)
-  const total = tail.reduce((n, r) => n + value(r), 0)
-  return [...head, makeOther(total, tail.length)]
-}
-
-/**
  * Who actually makes a model, from its id.
  *
  * Two different naming conventions arrive here. OpenCode qualifies a model with the provider it

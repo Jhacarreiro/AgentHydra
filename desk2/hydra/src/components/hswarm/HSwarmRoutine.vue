@@ -95,8 +95,8 @@ async function runNow() {
           <Table v-if="settings.length">
             <TableBody>
               <TableRow v-for="[k, v] in settings" :key="k">
-                <TableCell class="text-xs text-muted-foreground">{{ k }}</TableCell>
-                <TableCell class="break-all text-xs">{{ String(v) }}</TableCell>
+                <TableCell size="xs" muted>{{ k }}</TableCell>
+                <TableCell size="xs" class="break-all">{{ String(v) }}</TableCell>
               </TableRow>
             </TableBody>
           </Table>

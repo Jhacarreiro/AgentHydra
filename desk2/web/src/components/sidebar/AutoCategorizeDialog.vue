@@ -2,12 +2,12 @@
 // Auto-categorize for a scratch group: shows each chat's project from its transcript, and moves them only when the owner
 // confirms. A moved chat can go back (its group null: its folder's again). Mounted once by the sidebar; the menu opens it
 // by setting `categorizing` to the folder.
-import { computed, ref, watch } from 'vue'
+import { computed, ref, shallowRef, watch } from 'vue'
 import type { PlacementMove, PlacementProposal } from '@shared/protocol'
 import { Dialog, DialogContent, DialogDescription, DialogTitle } from '@/components/ui/dialog'
 import { applyPlacements, categorizing, proposeCategorize, stayReason } from './projectStats'
 
-const items = ref<PlacementProposal[] | null>(null)
+const items = shallowRef<PlacementProposal[] | null>(null)
 const error = ref<string | null>(null)
 const busy = ref(false)
 /** The chats this dialog moved (by id), and the ones it put back. */

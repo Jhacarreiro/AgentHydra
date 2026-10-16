@@ -67,7 +67,7 @@ const cut = (s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)
             :width="slot * 0.6"
             :height="Math.max(0.5, PAD.top + plotH - y(p.value))"
             rx="2"
-            :style="{ fill: 'var(--viz-seq)' }"
+            class="fill-(--viz-seq)"
             :opacity="hovered === null || hovered === i ? 1 : 0.45"
           />
           <text
@@ -98,8 +98,8 @@ const cut = (s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)
       </svg>
       <div
         v-if="hovered !== null && points[hovered]"
-        class="pointer-events-none absolute top-0 z-10 w-max max-w-56 -translate-x-1/2 rounded-md bg-popover px-2 py-1 text-2xs text-popover-foreground shadow-md ring-1 ring-foreground/10"
-        :style="{ left: `${(x(hovered) / W) * 100}%` }"
+        class="pointer-events-none absolute top-0 left-(--tip-x) z-10 w-max max-w-56 -translate-x-1/2 rounded-md bg-popover px-2 py-1 text-2xs text-popover-foreground shadow-md ring-1 ring-foreground/10"
+        :style="{ '--tip-x': `${(x(hovered) / W) * 100}%` }"
       >
         <div class="font-medium break-all">{{ points[hovered].label }}</div>
         <div class="tabular-nums">{{ yTitle }}: {{ format(points[hovered].value) }}</div>
@@ -108,7 +108,7 @@ const cut = (s: string) => (s.length > 14 ? `${s.slice(0, 13)}…` : s)
       </div>
     </div>
     <div class="flex flex-wrap items-center gap-x-3 gap-y-0.5 text-2xs text-muted-foreground">
-      <span class="flex items-center gap-1"><span class="size-2 rounded-sm" :style="{ background: 'var(--viz-seq)' }"></span>{{ barLabel }}</span>
+      <span class="flex items-center gap-1"><span class="size-2 rounded-sm bg-(--viz-seq)"></span>{{ barLabel }}</span>
       <span class="flex items-center gap-1"><span class="h-0.5 w-3 bg-foreground"></span>{{ lineLabel }}</span>
       <span>{{ xTitle }}</span>
     </div>

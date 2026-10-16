@@ -396,6 +396,6 @@ def nudge_text(items: list[tuple[dict, dict]]) -> str:
         + "\n\nIs it stuck? If so, stop it with TaskStop <id>"
         + (" (for a workflow, TaskStop it and relaunch with resumeFromRunId: finished agents "
            "come back from cache and only the stuck one reruns)" if has_wf else "")
-        + ". If it is genuinely still working, say so in one line. Then tell Jacob plainly "
+        + ". If it is genuinely still working, say so in one line. Then tell the owner plainly "
         "whether the job is finished."
     )

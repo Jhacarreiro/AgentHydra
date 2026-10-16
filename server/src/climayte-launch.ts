@@ -47,6 +47,7 @@ import {
   CONTEXT_HANDOFF_TOKENS,
   continuationPrompt,
   copySessionTranscript,
+  DRONE_BRIEF,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
   keepReport,
@@ -54,6 +55,7 @@ import {
   NO_COMMIT_BRIEF,
   newestTranscript,
   PAUSED_PROMPT,
+  roleOf,
   scrubbedEnv,
   TRANSIENT_PROMPT,
   transcriptHandoff,
@@ -67,7 +69,16 @@ import { reaskWindDown } from './climayte-stops'
 import { readWave, waveStateText } from './climayte-wave'
 import { APP_ROOT, PORT } from './config'
 import { OLD_HAIKU } from './core/haiku-pin'
-import { coreChatExcludes, coreModeOn } from './hydra-core-mode'
+import { type LeadPick, modelOn } from './hydra-core/lead'
+import { chatKeyOk, coreDir } from './hydra-core/paths'
+import {
+  APPEND_MAX,
+  pickForPlace,
+  placeChat,
+  placementOf,
+  placeNeedsPick,
+} from './hydra-core/placement'
+import { coreChatExcludes, coreModeOn, craniumOn } from './hydra-core-mode'
 import { DESK_CHAT_HEADER } from './mcp-find'
 import {
   deskBrowserMcpUrl,
@@ -587,18 +598,25 @@ export function writeWorkerSettings(w: CliMayteWorker, acct: CliMayteAccount): s
         signalFile: slashed(signalPath(w.id)),
         claims: claims && existsSync(claims) ? slashed(claims) : null,
         guards,
-        // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode: Hydra Core's hook).
+        agentGuard: true,
+        // A chat is the owner's own: Manager Hydra's router picks its manager every message (core mode or the
+        // CrAInium flowchart: Hydra Core's hook).
         promptHooks:
           w.chat && ownerClaudeDir && !w.sealed
-            ? coreModeOn()
+            ? coreModeOn() || craniumOn()
               ? coreHookGroups()
               : ownerRouterHooks(ownerClaudeDir)
             : [],
         sessionStartHooks:
-          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
-        // Its president rule: a chat about to ask the owner something asks the owner tier first.
+          w.chat && ownerClaudeDir && !w.sealed && (coreModeOn() || craniumOn())
+            ? coreHookGroups()
+            : undefined,
+        // At Stop core mode runs its president rule (a chat about to ask the owner something asks the owner tier
+        // first), and the CrAInium flowchart keeps the turn's ledger line.
         stopHooks:
-          w.chat && ownerClaudeDir && !w.sealed && coreModeOn() ? coreHookGroups() : undefined,
+          w.chat && ownerClaudeDir && !w.sealed && (coreModeOn() || craniumOn())
+            ? coreHookGroups()
+            : undefined,
         // The daemon answers it: it asks why a missed estimate missed (climayte-eta.ts).
         stopUrl:
           w.chat || w.sealed
@@ -655,7 +673,7 @@ function chatSettings(acct: CliMayteAccount): { claudeMdExcludes: string[] } {
   return { claudeMdExcludes: [slashed(join(acct.configDir, 'CLAUDE.md')), ...coreChatExcludes()] }
 }
 
-/** Core mode's chat hook: Hydra Core's hook.mjs, given for the prompt, the session start and the stop, in place of the router. */
+/** Hydra Core's chat hook, hook.mjs, in place of the router: for the prompt, the session start and (core mode) the stop. */
 export function coreHookGroups(): Array<{ hooks: Array<{ type: 'command'; command: string }> }> {
   return [
     {
@@ -677,10 +695,10 @@ const CHAT_MEDIA =
 const CHAT_NOTE_BASE =
   "You are the manager the owner talks to in this Desk chat: he reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Orchestrate: send the work to your CliMayte workers and HSwarm, your employees, or to sub-agents, check what they report, and report to him; when you run out of context or account you hand off to your successor manager, who continues as this chat's manager." +
   " Manager Hydra names which manager you are on each message (a deep persona such as the Head of Advertising or the Structural Backend Engineer). Act as that manager. When a question crosses into another manager's field, open them as a sub-manager chat below yours with the agenthydra MCP's hydra_run { tool: 'manager_open' } and ask with hydra_run { tool: 'manager_ask' }; your workers are your employees." +
-  ' Your process ends when your turn ends, and every background command with it; nothing wakes this chat when one finishes, so never end a turn saying a poll or job will wake you: wait inside the turn with a time-limited loop on its output.'
+  ' Your process can end any time after your reply (when its last background command ends, or when the next owner message stops it), and everything it started in the background ends with it. Background sub-agents are refused: run sub-agents in the foreground (several Agent calls in one message run in parallel), and give work that must outlive the reply to climayte_run, which messages this chat when it finishes.'
 export const CHAT_NOTE = `${CHAT_NOTE_BASE} ${CHAT_MEDIA}`
 const CORE_CHAT_NOTE =
-  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered, and your process ends when your turn ends.'
+  'The owner reads every reply you write. No terminal is attached, so nothing that waits for an interactive prompt or a permission dialog can be answered. Your process can end any time after your reply (when its last background command ends, or when the next owner message stops it), and everything it started in the background ends with it. Background sub-agents are refused: run sub-agents in the foreground (several Agent calls in one message run in parallel), and give work that must outlive the reply to climayte_run, which messages this chat when it finishes.'
 
 /** Whether the CLI's own CLAUDE.md walk, which reads `.claude/CLAUDE.md` in every folder above the
  *  working folder, already reaches the owner's (`~/.claude/CLAUDE.md`) from `cwd`. */
@@ -690,11 +708,75 @@ function walkReachesOwnerMd(cwd: string, ownerDir: string): boolean {
   return !rel.startsWith('..') && !isAbsolute(rel)
 }
 
+/** Where a Prime chat's pack is placed under core mode's slot or file placement; null when it gets none. */
+function packPlacement(w: CliMayteWorker): 'slot' | 'file' | null {
+  if (!coreModeOn() || roleOf(w) !== 'prime') return null
+  const placement = placementOf(coreDir())
+  return placement === 'slot' || placement === 'file' ? placement : null
+}
+
+/** Lead picks for Prime chats' launches, by worker: made off the launch path, taken by corePromptText. */
+const leadPicks = new Map<string, { prompt: string; pending: boolean; pick?: LeadPick }>()
+
+/**
+ * Whether a Prime chat's launch waits for its lead pick. The scheduler holds the launch (due again next tick) while
+ * the model answers, up to LAUNCH_BUDGET_MS, so launch() stays synchronous and the daemon never waits on the network.
+ * Asked only for a Desk chat whose lead is not kept yet, or a non-Desk chat's first launch (its key is the session
+ * the launch picks), and only while a model can be asked: without one the launch's own word ranker picks, unheld.
+ */
+export function leadPickPending(w: CliMayteWorker): boolean {
+  if (!modelOn()) return false
+  const placement = packPlacement(w)
+  if (!placement) return false
+  const have = leadPicks.get(w.id)
+  if (have && have.prompt === w.prompt) return have.pending
+  const chat = w.desk?.chatId
+  const req = { chat: chat ?? w.id, cwd: w.cwd, prompt: w.prompt, placement }
+  if (chat ? !chatKeyOk(chat) || !placeNeedsPick(coreDir(), req) : w.attempts.length > 0)
+    return false
+  const entry: { prompt: string; pending: boolean; pick?: LeadPick } = {
+    prompt: w.prompt,
+    pending: true,
+  }
+  leadPicks.set(w.id, entry)
+  void pickForPlace(coreDir(), req)
+    .then((pick) => {
+      entry.pick = pick
+    })
+    .catch((err) => console.error(`[climayte] lead pick for ${w.id} failed:`, err))
+    .finally(() => {
+      entry.pending = false
+    })
+  return true
+}
+
+/** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
+function corePromptText(w: CliMayteWorker, cli: CliSession): string {
+  const head = [CORE_CHAT_NOTE, w.desk?.append]
+  // Keyed as the hook keys it: the Desk chat, else the session being launched (a handoff's new one, not w.sessionId).
+  const chat = w.desk?.chatId ?? cli.id
+  const placement = packPlacement(w)
+  if (!placement || !chat || !chatKeyOk(chat)) return head.filter(Boolean).join('\n\n')
+  const ready = leadPicks.get(w.id)
+  leadPicks.delete(w.id)
+  const placed = placeChat(coreDir(), {
+    chat,
+    session: cli.id,
+    fresh: !cli.resume,
+    cwd: w.cwd,
+    prompt: w.prompt,
+    placement,
+    room: APPEND_MAX - (head.filter(Boolean).join('\n\n').length + 2),
+    pick: ready?.prompt === w.prompt ? ready.pick : undefined,
+  })
+  return [...head, placed.text].filter(Boolean).join('\n\n')
+}
+
 /** A chat's appended prompt: CHAT_NOTE, then the Desk's append when the task carried one (it has
  *  the media sentence, so CHAT_NOTE's own is left out), then the owner's global CLAUDE.md unless
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
-export function chatPromptText(w: CliMayteWorker): string {
-  if (coreModeOn()) return w.desk ? `${CORE_CHAT_NOTE}\n\n${w.desk.append}` : CORE_CHAT_NOTE
+export function chatPromptText(w: CliMayteWorker, cli: CliSession): string {
+  if (coreModeOn()) return corePromptText(w, cli)
   const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
@@ -711,10 +793,10 @@ export function chatPromptText(w: CliMayteWorker): string {
 
 /** Write a chat's appended prompt (`--append-system-prompt-file`): a file, so the owner's CLAUDE.md
  *  never meets the Windows command line's length limit. */
-function writeChatPrompt(w: CliMayteWorker): string {
+function writeChatPrompt(w: CliMayteWorker, cli: CliSession): string {
   const file = workerFiles(w.id)[2]
   mkdirSync(HOOKS, { recursive: true })
-  writeFileSync(file, chatPromptText(w))
+  writeFileSync(file, chatPromptText(w, cli))
   return file
 }
 
@@ -730,7 +812,7 @@ function ownerHome(): string | null {
  *  owner's skills, or a sealed worker's own system prompt in place of the CLI's, with no settings
  *  source (no CLAUDE.md, hook or user setting; `--settings` is still read), no built-in tool, and
  *  no MCP server but its config's (docs/CLIMAYTE.md, "Sealed tasks"). */
-function briefArgs(w: CliMayteWorker): string[] {
+function briefArgs(w: CliMayteWorker, cli: CliSession): string[] {
   if (w.sealed)
     return [
       '--strict-mcp-config',
@@ -755,6 +837,7 @@ function briefArgs(w: CliMayteWorker): string[] {
     )
     const brief = [
       WORKER_BRIEF,
+      roleOf(w) === 'drone' ? DRONE_BRIEF : '',
       w.commit === false ? NO_COMMIT_BRIEF : '',
       w.light ? LIGHT_BRIEF : '',
       note,
@@ -769,7 +852,17 @@ function briefArgs(w: CliMayteWorker): string[] {
   }
   const home = ownerHome()
   // --add-dir is variadic: the option after it ends its list.
-  return [...(home ? ['--add-dir', home] : []), '--append-system-prompt-file', writeChatPrompt(w)]
+  return [
+    ...(home ? ['--add-dir', home] : []),
+    '--append-system-prompt-file',
+    writeChatPrompt(w, cli),
+  ]
+}
+
+/** The CLI session a launch runs. A resume keeps the system prompt the session started with; only a fresh start reads the new one. */
+export interface CliSession {
+  id: string
+  resume: boolean
 }
 
 export function cliArgv(
@@ -794,12 +887,33 @@ export function cliArgv(
     ...(mcpFile ? ['--mcp-config', mcpFile] : []),
     '--settings',
     hookFile,
-    ...briefArgs(w),
+    ...briefArgs(w, { id: sessionId, resume }),
   ]
 }
 
 /** The prompt cache an attempt runs with: 1 hour for a manager and a chat, else 5 minutes. */
 const cacheTtl = (w: CliMayteWorker): '1h' | '5m' => (w.kind === 'manage' || w.chat ? '1h' : '5m')
+
+/** The environment an attempt's CLI runs with. AGENTHYDRA_ROLE tells the Hydra Core hook (hydra-core/hook.mjs)
+ *  which role it is: only a Prime gets the per-message pack and lead changes (ROLES.md). */
+export function workerEnv(w: CliMayteWorker, configDir: string): Record<string, string> {
+  return {
+    ...scrubbedEnv(configDir, w.id),
+    // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
+    // A sub-manager chat runs pinned to its manager.
+    ...(w.chat
+      ? {
+          AGENTHYDRA_CLIMAYTE_CHAT: '1',
+          ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
+          ...(w.desk?.chatId ? { HYDRA_DESK_CHAT_ID: w.desk.chatId } : {}),
+        }
+      : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
+    AGENTHYDRA_ROLE: roleOf(w),
+    CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
+    CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
+    TERM: 'dumb',
+  }
+}
 
 /** Start the CLI under a runner (climayte-runner.ts), launched outside the daemon: a daemon restart
  *  leaves the CLI running and the next daemon reads it on from its files (owner, 2026-09-30).
@@ -847,21 +961,7 @@ function startRunner(
         // A chat keeps the claude.ai connectors (his own `claude` has them: a chat asked to answer
         // a company sends the mail) and the 1-hour cache, since a person's next message is often
         // more than 5 minutes away.
-        env: {
-          ...scrubbedEnv(acct.configDir, w.id),
-          // A chat is the owner's own, so Manager Hydra's router (managers/router.mjs) routes it; a worker it skips.
-          // A sub-manager chat runs pinned to its manager.
-          ...(w.chat
-            ? {
-                AGENTHYDRA_CLIMAYTE_CHAT: '1',
-                ...(w.desk?.manager ? { AGENTHYDRA_MANAGER: w.desk.manager } : {}),
-                ...(w.desk?.chatId ? { HYDRA_DESK_CHAT_ID: w.desk.chatId } : {}),
-              }
-            : { ENABLE_CLAUDEAI_MCP_SERVERS: 'false' }),
-          CLAUDE_CODE_PROMPT_CACHE_TTL: cacheTtl(w),
-          CLAUDE_CODE_DISABLE_AUTO_MEMORY: '1',
-          TERM: 'dumb',
-        },
+        env: workerEnv(w, acct.configDir),
         stdin: promptFile,
         stdout: log,
         stderr: errLog,
@@ -906,6 +1006,7 @@ function journalLaunch(
     active: activeOnAccount,
     model: w.model,
     effort: w.effort,
+    role: roleOf(w),
   })
 }
 

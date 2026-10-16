@@ -1,7 +1,7 @@
 // What the usage tables show for a CLI account CliMayte is using (server/src/usage-live.ts).
 import { describe, expect, test } from 'bun:test'
 import type { UsageSnapshot } from '../src/types'
-import { withLimitWall, withLiveReading } from '../src/usage-live'
+import { withLimitWall, withLinkedReading, withLiveReading } from '../src/usage-live'
 
 // One fixed scenario, clock included, parked 104 weeks before the field-note incident so no
 // calendar drift can tip its future dates into the past: same weekday, same UTC time of day, every
@@ -50,5 +50,33 @@ describe('withLiveReading', () => {
     const shown = withLiveReading(snapshot(), live, 'a', now)
     expect(shown?.session?.pct).toBe(43)
     expect(shown?.weekAll?.pct).toBe(20)
+  })
+})
+
+describe('withLinkedReading', () => {
+  // A desktop profile and the CLI login linked to it are one account; the window reads the desktop row's key.
+  const desktop = (): UsageSnapshot => ({
+    ...snapshot(),
+    account: 'Example Owner (desktop)',
+    capturedAt: '2024-10-03T00:14:33Z',
+  })
+  const cli = (capturedAt: string): UsageSnapshot => ({
+    ...snapshot(),
+    account: 'Example Owner (CLI)',
+    session: { pct: 61, resets: '11:29pm', resetsAt: '2024-10-03T04:29:59Z', severity: 'warning' },
+    capturedAt,
+  })
+
+  test("the login's newer reading is the desktop row's, under the desktop row's own account line", () => {
+    const shown = withLinkedReading(desktop(), cli('2024-10-03T00:52:00Z'))
+    expect(shown?.session?.pct).toBe(61)
+    expect(shown?.capturedAt).toBe('2024-10-03T00:52:00Z')
+    expect(shown?.account).toBe('Example Owner (desktop)')
+  })
+
+  test("an older login reading leaves the desktop row's own; a row with none takes the login's", () => {
+    expect(withLinkedReading(desktop(), cli('2024-10-03T00:10:00Z'))).toEqual(desktop())
+    expect(withLinkedReading(null, cli('2024-10-03T00:10:00Z'))?.session?.pct).toBe(61)
+    expect(withLinkedReading(desktop(), null)).toEqual(desktop())
   })
 })

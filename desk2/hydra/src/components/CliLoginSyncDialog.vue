@@ -67,11 +67,16 @@ async function load() {
 
 // Fresh while it is open: a pass runs every 30 s on the server.
 let stopPoll: (() => void) | null = null
+// The "ago" labels move while it is open; the poll only moves them when the status changes.
+const clock = ref(Date.now())
+let stopTick: (() => void) | null = null
 watch(
   open,
   (isOpen) => {
     stopPoll?.()
     stopPoll = null
+    stopTick?.()
+    stopTick = null
     if (!isOpen) return
     choosing.value = false
     code.value = ''
@@ -79,12 +84,15 @@ watch(
     token.value = ''
     void load()
     stopPoll = visibleInterval(() => void load(), 15_000)
+    stopTick = visibleInterval(() => (clock.value = Date.now()), 5_000)
   },
   { immediate: true },
 )
 onUnmounted(() => {
   stopPoll?.()
   stopPoll = null
+  stopTick?.()
+  stopTick = null
 })
 
 async function act(fn: () => Promise<{ ok: boolean; message: string }>) {
@@ -265,6 +273,7 @@ const statusLine = computed(() => {
   const s = status.value
   if (!s) return ''
   if (!s.enabled) return t('cliInstances.syncPaused')
+  void clock.value
   const count =
     syncing.value && syncCount.value.arriving > 0
       ? t('cliInstances.syncCountArriving', syncCount.value)

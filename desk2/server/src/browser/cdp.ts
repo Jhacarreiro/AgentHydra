@@ -101,6 +101,15 @@ export function findChrome(): string | null {
 
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms))
 
+/** Resolves once the socket opens; rejects when it fails or does not open within `limitMs`. `what` names the target in the error. */
+function openSocket(ws: WebSocket, what: string, limitMs = 4000): Promise<void> {
+  return new Promise<void>((res, rej) => {
+    ws.onopen = () => res()
+    ws.onerror = () => rej(new Error(`the ${what} did not accept a connection`))
+    setTimeout(() => rej(new Error(`the ${what} did not answer in time`)), limitMs)
+  })
+}
+
 const starting = new Map<string, Promise<number | null>>()
 
 export class LaunchError extends Error {}
@@ -155,11 +164,7 @@ export async function closeBrowser(dir: string): Promise<boolean> {
   if (!live || !file?.wsPath) return false
   const ws = new WebSocket(`ws://${HOST}:${live.port}${file.wsPath}`)
   try {
-    await new Promise<void>((res, rej) => {
-      ws.onopen = () => res()
-      ws.onerror = () => rej(new Error('the browser did not accept a connection'))
-      setTimeout(() => rej(new Error('the browser did not answer in time')), 4000)
-    })
+    await openSocket(ws, 'browser')
     ws.send(JSON.stringify({ id: 1, method: 'Browser.close' }))
     // Chrome answers, then exits; wait until its port stops answering (at most 5 s).
     for (let i = 0; i < 25; i++) {
@@ -198,11 +203,7 @@ export async function capturePreview(port: number, tabId: string, width = 640): 
     }
   }
   try {
-    await new Promise<void>((res, rej) => {
-      ws.onopen = () => res()
-      ws.onerror = () => rej(new Error('the page did not accept a connection'))
-      setTimeout(() => rej(new Error('the page did not answer in time')), 4000)
-    })
+    await openSocket(ws, 'page')
     let next = 1
     const pending = new Map<number, (m: { result?: Record<string, unknown>; error?: { message?: string } }) => void>()
     ws.onmessage = (ev) => {
@@ -419,11 +420,7 @@ export class LiveSession {
     this.tab = tab
     // The URL is built here from the id: a target's own webSocketDebuggerUrl is never followed.
     const ws = new WebSocket(`ws://${HOST}:${this.port}/devtools/page/${encodeURIComponent(tab.id)}`)
-    await new Promise<void>((res, rej) => {
-      ws.onopen = () => res()
-      ws.onerror = () => rej(new Error('the page did not accept a connection'))
-      setTimeout(() => rej(new Error('the page did not answer in time')), 8000)
-    })
+    await openSocket(ws, 'page', 8000)
     this.cdp = ws
     ws.onmessage = (ev) => {
       if (epoch === this.epoch) this.onCdp(String(ev.data), epoch)

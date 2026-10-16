@@ -21,6 +21,7 @@ import { join } from 'node:path'
 import { DATA_DIR } from './config'
 import { db, getSetting, setSetting } from './db'
 import type { FleetUsagePoint, UsageForecast, UsageSample, UsageSnapshot } from './types'
+import { usageReader } from './usage-reader'
 
 /** The legacy store. Read once for the import below and never written again; left in place. */
 const LEGACY_PATH = join(DATA_DIR, 'usage-history.json')
@@ -57,10 +58,10 @@ type Row = {
 }
 
 const insertRow = db.query(
-  'insert or ignore into usage_samples (key, at, at_ms, session_pct, week_pct, week_resets_at, session_resets_at) values (?, ?, ?, ?, ?, ?, ?)',
+  'insert or ignore into usage_samples (key, at, at_ms, session_pct, week_pct, week_resets_at, session_resets_at, reader) values (?, ?, ?, ?, ?, ?, ?, ?)',
 )
 
-function insertSample(key: string, s: UsageSample): boolean {
+function insertSample(key: string, s: UsageSample, reader: string | null = null): boolean {
   const ms = Date.parse(s.at)
   if (!Number.isFinite(ms) || typeof s.weekAllPct !== 'number') return false
   const r = insertRow.run(
@@ -71,6 +72,7 @@ function insertSample(key: string, s: UsageSample): boolean {
     s.weekAllPct,
     s.weekResetsAt ?? null,
     s.sessionResetsAt ?? null,
+    reader,
   )
   return Number(r.changes ?? 0) > 0
 }
@@ -117,14 +119,18 @@ export function recordUsageSample(key: string, snap: UsageSnapshot): void {
   if (!snap.weekAll) return // nothing to trend
   try {
     // A replayed snapshot (same `at`) hits the primary key and is ignored.
-    insertSample(key, {
-      at: snap.capturedAt,
-      sessionPct: snap.session?.pct ?? null,
-      weekAllPct: snap.weekAll.pct,
-      weekResetsAt: snap.weekAll.resetsAt ?? null,
-      // Keys the 5-hour windows for the dollar calibration (quota-calibration.ts).
-      sessionResetsAt: snap.session?.resetsAt ?? null,
-    })
+    insertSample(
+      key,
+      {
+        at: snap.capturedAt,
+        sessionPct: snap.session?.pct ?? null,
+        weekAllPct: snap.weekAll.pct,
+        weekResetsAt: snap.weekAll.resetsAt ?? null,
+        // Keys the 5-hour windows for the dollar calibration (quota-calibration.ts).
+        sessionResetsAt: snap.session?.resetsAt ?? null,
+      },
+      usageReader() ?? 'unlabelled',
+    )
     if (Date.now() - lastPrune > 3600_000) {
       lastPrune = Date.now()
       pruneUsageSamples()
@@ -138,6 +144,25 @@ export function recordUsageSample(key: string, snap: UsageSnapshot): void {
  *  can ever ask for that key again. */
 export function dropUsageHistory(key: string): void {
   db.query('delete from usage_samples where key = ?').run(key)
+}
+
+export type UsageReaderCount = {
+  reader: string | null
+  kind: string
+  readings: number
+  keys: number
+}
+
+/** Readings taken since `sinceMs`, counted by reader (usage-reader.ts) and key kind (cli, desktop,
+ *  codex), most first. A reader of null is a row from before readers were kept. */
+export function usageReaderCounts(sinceMs: number): UsageReaderCount[] {
+  return db
+    .query<UsageReaderCount, [number]>(
+      `select reader, substr(key, 1, instr(key, ':') - 1) as kind, count(*) as readings,
+              count(distinct key) as keys
+         from usage_samples where at_ms >= ? group by reader, kind order by readings desc`,
+    )
+    .all(sinceMs)
 }
 
 /** Every key with a stored series. */

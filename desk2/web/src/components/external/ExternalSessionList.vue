@@ -1,6 +1,7 @@
 <script setup lang="ts">
 import { computed, ref } from 'vue'
 import { icons } from '@/lib/icons'
+import { useClock } from '@/lib/clock'
 
 const Search = icons.search
 import type { ExternalSession } from '@shared/protocol'
@@ -8,6 +9,7 @@ import { useDesk } from '@/stores/desk'
 
 const desk = useDesk()
 const searchQuery = ref('')
+const clock = useClock(30_000)
 
 const sortedSessions = computed(() => {
   const sessions = desk.external.value
@@ -20,8 +22,9 @@ const sortedSessions = computed(() => {
     const bTime = b.lastActivityAt ?? 0
     return bTime - aTime
   })
-  // Each row's relative time is worked out here, once per update of the list, not once per render.
-  return sorted.map((session) => ({ session, time: session.lastActivityAt ? formatTime(session.lastActivityAt) : '' }))
+  // Each row's relative time is worked out here, once per update of the list or tick of the clock, not once per render.
+  const now = clock.value
+  return sorted.map((session) => ({ session, time: session.lastActivityAt ? formatTime(session.lastActivityAt, now) : '' }))
 })
 
 const filteredSessions = computed(() => {
@@ -67,9 +70,9 @@ const statusColor = (status: string): string => {
   }
 }
 
-const formatTime = (time: number | null): string => {
+const formatTime = (time: number | null, now: number): string => {
   if (!time) return 'Never'
-  const elapsed = Date.now() - time
+  const elapsed = now - time
   const minutes = Math.floor(elapsed / 60000)
   const hours = Math.floor(elapsed / 3600000)
   const days = Math.floor(elapsed / 86400000)

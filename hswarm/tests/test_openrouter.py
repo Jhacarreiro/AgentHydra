@@ -1,6 +1,6 @@
 """Offline: OpenRouter as a provider, and the DISABLED SLOT a key goes to when it runs out.
 
-Both shipped together on 2026-09-17 (owner ask, Michael: wire OpenRouter in, and "when any key runs out of
+Both shipped together on 2026-09-17 (owner ask, the other owner: wire OpenRouter in, and "when any key runs out of
 DeepSeek or OpenRouter, have it go to, like, a disabled slot so it's not constantly retried").
 
 The shapes asserted here were MEASURED against the live endpoints that day, not guessed:

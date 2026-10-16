@@ -37,7 +37,8 @@ export const SHAPE_VALUES: readonly SessionShape[] = [
 const NONE_TOKEN = 'none'
 
 export function isAllSelected(selected: readonly string[], universe: readonly string[]): boolean {
-  return universe.every((v) => selected.includes(v))
+  const picked = new Set(selected)
+  return universe.every((v) => picked.has(v))
 }
 
 /** Tick or untick one value. Always returns the universe's order, so equal sets are equal arrays. */
@@ -58,8 +59,10 @@ export function parseStoredSelection<T extends string>(
   universe: readonly T[],
 ): T[] | undefined {
   if (!Array.isArray(raw)) return undefined
-  if (!raw.every((v) => typeof v === 'string' && universe.includes(v as T))) return undefined
-  return universe.filter((v) => raw.includes(v))
+  const known = new Set<unknown>(universe)
+  if (!raw.every((v) => typeof v === 'string' && known.has(v))) return undefined
+  const picked = new Set<unknown>(raw)
+  return universe.filter((v) => picked.has(v))
 }
 
 /** The query value for one scope: undefined when everything is ticked (no narrowing, so rows from
@@ -148,7 +151,8 @@ export function summarizeSelection<T extends string>(
   },
 ): string {
   if (isAllSelected(selected, universe)) return text.all
-  const names = universe.filter((v) => selected.includes(v)).map(text.label)
+  const picked = new Set(selected)
+  const names = universe.filter((v) => picked.has(v)).map(text.label)
   if (names.length === 0) return text.none
   const [first = ''] = names
   return names.length === 1 ? first : text.more(first, names.length - 1)

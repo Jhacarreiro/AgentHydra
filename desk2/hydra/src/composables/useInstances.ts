@@ -322,10 +322,9 @@ async function createShortcut(dir: string): Promise<api.CMActionResult | undefin
   }
 }
 
-/** Create a new isolated instance. Returns the action result (or null on hard failure)
- *  so the caller can surface `needsBrowserDance`. */
-async function create(name: string): Promise<api.CMActionResult | undefined> {
-  const result = await guard(api.createInstance(name))
+/** Create a new isolated instance, named by the daemon. Returns the action result (or undefined on hard failure). */
+async function create(): Promise<api.CMActionResult | undefined> {
+  const result = await guard(api.createInstance())
   if (result?.ok) await refreshInstances()
   return result
 }

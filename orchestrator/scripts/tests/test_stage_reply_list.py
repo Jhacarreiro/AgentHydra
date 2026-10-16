@@ -256,11 +256,11 @@ class ParseArgvTest(unittest.TestCase):
 
     def test_a_well_formed_command_line_still_parses_exactly_as_before(self):
         got = stage_reply._parse_argv(
-            ["A waiting chat", "--text", "Yes, go ahead.", "--by", "michael", "--json"])
+            ["A waiting chat", "--text", "Yes, go ahead.", "--by", "alex", "--json"])
         self.assertIsNone(got.usage_error)
         self.assertEqual(got.positional, ["A waiting chat"])
         self.assertEqual(got.text, "Yes, go ahead.")
-        self.assertEqual(got.by, "michael")
+        self.assertEqual(got.by, "alex")
         self.assertTrue(got.as_json)
 
     def test_a_well_formed_list_command_line_still_parses(self):

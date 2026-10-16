@@ -325,15 +325,3 @@ export function hydrateSharedPrefs(): Promise<void> {
   })()
   return hydrating
 }
-
-/** Test seam: forget every registration and the hydrate latch. */
-export function resetSharedPrefsForTest(): void {
-  registry.length = 0
-  hydrated = false
-  hydrating = null
-  sharedPrefsSettled.value = false
-  sharedPrefsRequested.value = false
-  stored = null
-  synced.clear()
-  pending.clear()
-}

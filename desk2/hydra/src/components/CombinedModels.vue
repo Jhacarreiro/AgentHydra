@@ -42,7 +42,7 @@ const hidden = computed(() => Math.max(0, rows.value.length - TOP))
         <li v-for="m in shown" :key="m.model" class="flex items-center gap-3 px-2.5 py-1.5">
           <span class="min-w-0 flex-1 truncate">{{ m.model }}</span>
           <span class="flex shrink-0 gap-1">
-            <Badge v-for="p in m.parts" :key="p.source" variant="outline" class="text-muted-foreground tabular-nums">
+            <Badge v-for="p in m.parts" :key="p.source" variant="outline" tone="muted" tabular>
               {{ $t(SOURCE_LABEL[p.source]) }}<span v-if="m.parts.length > 1" class="ms-1 text-foreground">{{ formatTokens(p.tokens) }}</span>
             </Badge>
           </span>

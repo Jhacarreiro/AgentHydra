@@ -26,8 +26,8 @@ import { instancesRoot } from '../src/core/paths'
 import { setSetting } from '../src/db'
 import './no-chats'
 
-// The default install's folder must not be the developer's real one. APPDATA keeps naming it for the
-// test files that run after this one in the same process, so it goes when the process exits.
+// kept for the run: the default install's folder must not be the developer's real one. APPDATA keeps
+// naming it for the test files that run after this one in the same process, so it goes when the process exits.
 const appData = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
 process.env.APPDATA = appData
 process.on('exit', () => {

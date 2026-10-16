@@ -115,6 +115,7 @@ from __future__ import annotations
 
 import json
 import os
+import subprocess
 import sys
 import threading
 import time
@@ -147,7 +148,7 @@ _DEFAULT_RESUME_TEXT = (
 #: The law this batch enforces, quoted at the caller in every refusal so the reason arrives
 #: WITH the refusal rather than in a doc nobody opens at that moment.
 _ARCHIVE_LAW = (
-    "owner directive (Michael, 2026-09-05, restated ANGRILY 2026-09-13): only move UNARCHIVED "
+    "owner directive (2026-09-05, restated ANGRILY 2026-09-13): only move UNARCHIVED "
     "chats. An archived chat moves ONLY when the human explicitly asked for that chat - never "
     "because an agent set a flag for itself while sweeping an account."
 )
@@ -548,7 +549,7 @@ def _terminate_for(query: str) -> dict:
     return stopped
 
 
-# Owner's standing order (Michael, 2026-09-20): "if the account you're pulling it from is at
+# Owner's standing order (2026-09-20): "if the account you're pulling it from is at
 # 100% usage... always kill. That should be a standing order. Honestly, if it's 98% or above,
 # always kill." A chat left running on a walled account burns the last of its quota and then
 # dies at the wall anyway, so the owner's word is already given for these - no flag needed.
@@ -1633,6 +1634,48 @@ def _recheck_provisional_settles(items: list) -> dict | None:
     }
 
 
+#: How long the sweep waits for the source store to stop calling a killed engine live.
+_SOURCE_KILL_CONFIRM_SECS = 15
+
+
+def _kill_source_engine(sid: str, src: str, row: dict) -> dict:
+    """Kill the engine the SOURCE app is running for a landed chat, and confirm on the source.
+
+    ⛔ WHY (owner, 2026-10-15: "you seemed to have missed one ... still there and still
+    running"). The #187 -> #215 drain killed 'Dealflow app Google Look styling' on
+    --terminate-live and the move landed, but #187's app was still open and started a NEW
+    engine for the chat at once (engineReleased: "the app kept the engine: work is in flight").
+    The app then refused every settle with NATIVE_REFUSAL (isRunning), the final sweep re-settled
+    into the same refusal, and the chat sat unarchived AND working on the account being shut
+    down, beside its landed copy: two writers on one transcript.
+
+    Scoped to the source on purpose: a moved chat keeps its session id, so enginelib's
+    cross-account liveness read would see the landed copy's engine and call this kill
+    unconfirmed. The pid comes from the source account's own row, read just now."""
+    pid = row.get("livePid")
+    if not pid:
+        return {"stopped": False, "pid": None, "why": "the source row is live but names no pid"}
+    try:
+        clilib.run_text(["taskkill", "/PID", str(int(pid)), "/T", "/F"], timeout=30)
+    except (OSError, ValueError, subprocess.TimeoutExpired) as err:
+        return {"stopped": False, "pid": pid, "why": f"taskkill failed: {err}"}
+    t0 = time.time()
+    while time.time() - t0 < _SOURCE_KILL_CONFIRM_SECS:
+        try:
+            again = [r for r in hydralib.chats(instance=src, archived="hide")
+                     if str(r.get("sessionId") or "") == sid]
+        except hydralib.DaemonError:
+            again = None  # a flaky read confirms nothing either way - keep polling
+        if again is not None and not any(r.get("live") for r in again):
+            ledgerlib.note("terminate", sid, note=(
+                f"final sweep: pid {pid} on {src} restarted after the move - killed again"))
+            return {"stopped": True, "pid": pid, "why": f"killed the source app's restarted "
+                    f"engine (pid {pid}) on {src}", "confirmedSecs": round(time.time() - t0, 1)}
+        time.sleep(1)
+    return {"stopped": False, "pid": pid, "why": f"taskkill was issued for pid {pid} but {src} "
+            f"still lists the chat live after {_SOURCE_KILL_CONFIRM_SECS}s"}
+
+
 def _sweep_repair(item, sid: str, src: str, fleet: dict) -> bool:
     """Re-drive the settle for one landed chat the sweep still saw on its source. True when the
     source no longer shows it afterwards."""
@@ -1643,6 +1686,64 @@ def _sweep_repair(item, sid: str, src: str, fleet: dict) -> bool:
                            f"{str(err)[:150]}")
         return False
     return not migrate_chat.source_still_visible(sid, src, fleet)
+
+
+def _sweep_sources(items: list, parsed) -> set[str]:
+    """Every account the batch may have moved a chat off: the --from account and the source of
+    each landed chat."""
+    sources: set[str] = set(getattr(parsed, "source_labels", None) or set())
+    for item in items:
+        land = item.landing
+        if land is not None and item.payload.get("landed"):
+            src = str(getattr(land, "src_instance", None)
+                      or (getattr(land, "match", None) or {}).get("instance") or "")
+            if src:
+                sources.add(src)
+    return sources
+
+
+def _reread_source_rows(parsed, sources: set[str]) -> list[dict]:
+    # One read, like _movable_chats: scoped only when --from named the one account.
+    scope = next(iter(sources)) if parsed.source and len(sources) == 1 else None
+    wanted = {label.lower() for label in sources}
+    return [r for r in hydralib.chats(instance=scope)
+            if str(r.get("instance") or "").lower() in wanted]
+
+
+def _sweep_landed(landed_by_sid: dict[str, _Item], shown: dict, parsed) -> tuple[list, list]:
+    """Re-settle or name each landed chat the sweep still sees on its source. Returns the
+    `leftBehind` rows and the session ids the sweep repaired."""
+    left_behind, repaired = [], []
+    fleet = None
+    for sid, item in landed_by_sid.items():
+        if sid not in shown:
+            continue
+        src = str(shown[sid].get("instance") or "")
+        # A kill this batch was already allowed for this chat (--terminate-live, or the
+        # full-source standing order) covers the engine the source app restarted after it.
+        if shown[sid].get("live") and (parsed.terminate_live or item.terminated is not None):
+            item.payload["sourceRestartKilled"] = _kill_source_engine(sid, src, shown[sid])
+        if fleet is None and item.landing is not None:
+            try:
+                fleet = hydralib.fleet()
+            except hydralib.DaemonError:
+                fleet = {}
+        if item.landing is not None and fleet and _sweep_repair(item, sid, src, fleet):
+            repaired.append(sid)
+            item.payload["sourceSweep"] = {"stillShown": False, "repaired": True}
+            continue
+        left_behind.append({"sessionId": sid, "title": shown[sid].get("title"), "source": src})
+        item.payload["ok"] = False
+        item.payload["sourceSweep"] = {
+            "stillShown": True, "repaired": False,
+            "fix": f"migrate_reconcile, then migrate_reconcile --finish <id> for '{shown[sid].get('title')}'"}
+    return left_behind, repaired
+
+
+def _not_taken_rows(shown: dict, named: set[str]) -> list[dict]:
+    return [{"sessionId": sid, "title": r.get("title"), "source": r.get("instance"),
+             "lastActivityAt": r.get("lastActivityAt")}
+            for sid, r in shown.items() if sid not in named]
 
 
 def _final_source_sweep(items: list, parsed) -> dict | None:
@@ -1661,22 +1762,11 @@ def _final_source_sweep(items: list, parsed) -> dict | None:
         enumeration missed, is still on the owner's screen either way. Refused chats are not
         counted again - they are already in `refused` with their reason.
     """
-    sources: set[str] = set(getattr(parsed, "source_labels", None) or set())
-    for item in items:
-        land = item.landing
-        if land is not None and item.payload.get("landed"):
-            src = str(getattr(land, "src_instance", None)
-                      or (getattr(land, "match", None) or {}).get("instance") or "")
-            if src:
-                sources.add(src)
+    sources = _sweep_sources(items, parsed)
     if not sources:
         return None
     try:
-        # One read, like _movable_chats: scoped only when --from named the one account.
-        scope = next(iter(sources)) if parsed.source and len(sources) == 1 else None
-        wanted = {label.lower() for label in sources}
-        rows = [r for r in hydralib.chats(instance=scope)
-                if str(r.get("instance") or "").lower() in wanted]
+        rows = _reread_source_rows(parsed, sources)
     except hydralib.DaemonError as err:
         return {"checked": False, "why": f"the source accounts could not be re-read "
                                          f"({str(err)[:120]}) - run list_chats on them before "
@@ -1685,30 +1775,9 @@ def _final_source_sweep(items: list, parsed) -> dict | None:
              if not r.get("isArchived", r.get("archived")) and r.get("sessionId")}
     landed_by_sid = {str(i.payload.get("sessionId") or ""): i for i in items
                      if i.payload.get("landed") and i.payload.get("sessionId")}
-    left_behind, repaired = [], []
-    fleet = None
-    for sid, item in landed_by_sid.items():
-        if sid not in shown:
-            continue
-        src = str(shown[sid].get("instance") or "")
-        if fleet is None and item.landing is not None:
-            try:
-                fleet = hydralib.fleet()
-            except hydralib.DaemonError:
-                fleet = {}
-        if item.landing is not None and fleet and _sweep_repair(item, sid, src, fleet):
-            repaired.append(sid)
-            item.payload["sourceSweep"] = {"stillShown": False, "repaired": True}
-            continue
-        left_behind.append({"sessionId": sid, "title": shown[sid].get("title"), "source": src})
-        item.payload["ok"] = False
-        item.payload["sourceSweep"] = {
-            "stillShown": True, "repaired": False,
-            "fix": f"migrate_reconcile, then migrate_reconcile --finish <id> for '{shown[sid].get('title')}'"}
+    left_behind, repaired = _sweep_landed(landed_by_sid, shown, parsed)
     named = _batch_ids(items) | set(landed_by_sid)
-    not_taken = [{"sessionId": sid, "title": r.get("title"), "source": r.get("instance"),
-                  "lastActivityAt": r.get("lastActivityAt")}
-                 for sid, r in shown.items() if sid not in named]
+    not_taken = _not_taken_rows(shown, named)
     return {"checked": True, "sources": sorted(sources), "stillUnarchived": len(shown),
             "repaired": repaired, "leftBehind": left_behind, "notTaken": not_taken,
             "notTakenCounts": bool(parsed.all_unarchived and not parsed.limit)}

@@ -42,6 +42,7 @@ import {
   deleteCodexInstance,
   findCodexInstance,
   focusCodexDesktopInstance,
+  freeCodexName,
   launchCodexInstance,
   listCodexInstances,
   openCodexDesktopInstance,
@@ -60,6 +61,7 @@ import {
   launchOptionError,
 } from '../core/launch-options'
 import { readLoginUuid } from '../core/login-state'
+import { normalizeInstancePath } from '../core/paths'
 import { db, getSetting, setSetting } from '../db'
 import { turnOffExtraUsage } from '../extra-usage'
 import { deepseekBalance } from '../hswarm-cost'
@@ -96,9 +98,10 @@ import {
   fleetUsageSeries,
   lastSampleSnapshot,
   usageHistoryKeys,
+  usageReaderCounts,
 } from '../usage-history'
-import { withLimitWall, withLiveReading } from '../usage-live'
-import { lastAutoRefreshAt, sweepUsage } from '../usage-refresh'
+import { withLimitWall, withLinkedReading, withLiveReading } from '../usage-live'
+import { lastAutoRefreshAt, markUsageSeen, sweepUsage } from '../usage-refresh'
 import {
   checkUsageForAccount,
   checkUsageForCliInstance,
@@ -250,6 +253,19 @@ app.get('/api/usage/cache', (c) => {
     const walled = withLimitWall(cache[cliKey(id)] ?? null, wall)
     if (walled) cache[cliKey(id)] = walled
   }
+  // A desktop row and its linked CLI login are one account: the newer reading of the two is the desktop row's
+  // (usage-live.ts withLinkedReading), so long as the login is still signed in to that desktop's account.
+  // Both must be known: a signed-out login (or an unreadable profile) has no uuid, and its cached reading
+  // may be of the account it held before.
+  for (const cli of listCliInstances()) {
+    if (!cli.associatedDesktopDir) continue
+    const own = readLoginUuid(cli.associatedDesktopDir)
+    const theirs = cliAccountUuid(cli.configDir, cli.loggedIn)
+    if (!own || !theirs || own !== theirs) continue
+    const key = desktopKey(cli.associatedDesktopDir)
+    const linked = withLinkedReading(cache[key] ?? null, cache[cliKey(cli.id)] ?? null)
+    if (linked) cache[key] = linked
+  }
   // A row whose usage was cleared shows only what was read after (the tables; nothing is deleted).
   const cleared = usageClearedAt()
   return c.json({
@@ -341,6 +357,16 @@ app.get('/api/usage/history', (c) => {
 
 // Force one background sweep now (the same pass the auto-refresh timer runs).
 app.post('/api/usage/refresh', async (c) => c.json({ ok: true, checked: await sweepUsage() }))
+// Someone is looking at AgentHydra (its page on screen, or Desk's account menu open): the background
+// sweep keeps its set interval, and slows down an hour after the last look (usage-refresh.ts).
+app.post('/api/usage/seen', (c) => c.json({ ok: true, ...markUsageSeen() }))
+// Who has been reading usage: the readings of the last `hours` (default 24) counted by the request or
+// timer that took them (usage-reader.ts), most first.
+app.get('/api/usage/readers', (c) => {
+  const hours = Math.min(Math.max(Number(c.req.query('hours')) || 24, 0.1), 24 * 90)
+  const since = Date.now() - hours * 3600_000
+  return c.json({ since: new Date(since).toISOString(), readers: usageReaderCounts(since) })
+})
 
 // MUTATES THE ACCOUNT: switch claude.ai paid extra usage off for one instance's account, so it stops
 // at its limits instead of billing. `instance_ref` is 'desktop:<dir>' or 'cli:<id>'. A person's
@@ -576,9 +602,17 @@ app.get('/api/cli-instances', async (c) => {
   )
   // Someone else is on the account now (CliMayte's accountInUse): CliMayte leaves it out for new work.
   const busy = cliInstancesInUse(rows.map((r) => r.i))
+  // A link names its desktop in the desktop row's own spelling, so the windows' lookups by dir find it (a link
+  // stored as `c:\users\me\...` against a row listed as `C:\Users\me\...` drew no terminal badge, 2026-10-14).
+  const desktopDirs = new Map(
+    (await listInstances()).map((d) => [normalizeInstancePath(d.dir), d.dir]),
+  )
   return c.json(
     rows.map(({ i, uuid, lastUsageCheck }, k) => ({
       ...i,
+      associatedDesktopDir: i.associatedDesktopDir
+        ? (desktopDirs.get(normalizeInstancePath(i.associatedDesktopDir)) ?? i.associatedDesktopDir)
+        : null,
       inUse: busy.has(i.id),
       lastNudge: nudges[i.id] ?? null,
       liveSessions: liveSessions[k],
@@ -931,11 +965,12 @@ app.get('/api/codex-instances/:id/usage', async (c) => {
   if (!inst) return c.json({ error: 'Codex instance not found' }, 404)
   return c.json(await checkUsageForCodex(inst.codexHome, id, wantsRefresh(c)))
 })
+// No name in the body: one is made up (core/shared.ts firstFreeName). A blank one is still refused.
 app.post('/api/codex-instances', async (c) => {
   const body = await jsonBody(c)
-  if (typeof body.name !== 'string' || !body.name.trim())
-    return c.json({ error: 'name is required' }, 400)
-  return c.json(createCodexInstance(body.name))
+  const name = body.name === undefined ? freeCodexName() : body.name
+  if (typeof name !== 'string' || !name.trim()) return c.json({ error: 'name is required' }, 400)
+  return c.json(createCodexInstance(name))
 })
 app.post('/api/codex-instances/:id/launch', async (c) => {
   const body = await jsonBody(c)

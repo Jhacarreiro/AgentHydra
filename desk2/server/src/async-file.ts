@@ -48,6 +48,7 @@ export class AsyncFile {
   /** Writes anything pending now, on the thread (server shutdown). A failed write throws and the content stays pending. */
   flushSync(): void {
     if (this.wanted !== this.landed) this.writeSync()
+    this.releaseLanded()
   }
 
   /** Resolves once no write is in flight; a failed one counts as done, its retry is not waited for (tests). */
@@ -98,7 +99,14 @@ export class AsyncFile {
       }
     } finally {
       this.draining = false
+      this.releaseLanded()
     }
+  }
+
+  /** Once idle, the landed string is on disk and no longer needed. Keep it during a rename:
+   *  flushSync may land newer content which that older rename then has to restore. */
+  private releaseLanded(): void {
+    if (!this.draining && this.wanted === this.landed) this.want = null
   }
 
   private failed(err: unknown): void {

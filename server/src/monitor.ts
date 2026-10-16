@@ -42,6 +42,7 @@ import type {
   UsageSnapshot,
 } from './types'
 import { parseResetTime } from './usage'
+import { asReader } from './usage-reader'
 import { checkUsageForAccount, checkUsageForInstanceRef } from './usage-service'
 
 /**
@@ -74,9 +75,11 @@ const defaultDeps: MonitorDeps = {
   // readable (see checkUsageAmbient). Reading the ambient login for a pinned chat timed its resume
   // off ANOTHER account's reset and let another account's weekly % decide whether it waited.
   readUsage: (stop) =>
-    stop.account_id
-      ? checkUsageForAccount(stop.account_id)
-      : checkUsageForInstanceRef(stop.instance_ref),
+    asReader('monitor', () =>
+      stop.account_id
+        ? checkUsageForAccount(stop.account_id)
+        : checkUsageForInstanceRef(stop.instance_ref),
+    ),
   discoverStops: (keep) =>
     discoverPendingStops({
       isBusy: (sessionId) => isSessionActive(sessionId),

@@ -174,7 +174,7 @@ function onContextMenu(e: MouseEvent): void {
 
       <!-- Which kind this row is, on the All tab's one ranking (the Type column). -->
       <TableCell v-else-if="col.key === 'kind'">
-        <Badge v-if="row.kind" variant="outline" class="text-muted-foreground">{{
+        <Badge v-if="row.kind" variant="outline" tone="muted">{{
           $t(KIND_LABEL[row.kind])
         }}</Badge>
       </TableCell>

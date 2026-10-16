@@ -1,7 +1,32 @@
 import { describe, expect, test } from 'bun:test'
 import type { CliMayteWorker } from '@shared/protocol'
-import { firstLine, reuseWorkers, workersOfChat } from '../../src/bridge/climayte'
+import { firstLine, keptWorkerIds, reuseWorkers, workersOfChat } from '../../src/bridge/climayte'
 import { worker } from '../engine/manager/fakes'
+
+describe('another Desk chat\'s worker', () => {
+  const workers = [
+    worker({ id: 'mine', sessionId: 's1' }),
+    worker({ id: 'mine-sub', originWorkerId: 'mine', originSessionId: 's1' }),
+    worker({ id: 'other-chat', chat: true, originWorkerId: 'mine', originSessionId: 's1' }),
+    worker({ id: 'other-sub', originWorkerId: 'other-chat', originSessionId: 'other-session' }),
+    worker({ id: 'other-wave', originWorkerId: 'other-sub' }),
+  ]
+  const chat = { sessionId: 's1', workerId: 'mine' }
+
+  test('is not matched to the chat that stamped it as its origin, nor its dispatches', () => {
+    expect(workersOfChat(workers, chat).map((w) => w.id).sort()).toEqual(['mine-sub'])
+  })
+
+  test('a stored id of another chat\'s worker, or of its dispatches, is pruned; the chat\'s own are kept', () => {
+    const stored = { ...chat, workerIds: ['mine-sub', 'other-chat', 'other-wave', 'gone'] }
+    expect(keptWorkerIds(workers, stored, new Set())).toEqual(['mine-sub', 'gone'])
+  })
+
+  test('a stored id that is another chat\'s worker is pruned even when the list no longer holds it', () => {
+    const stored = { ...chat, workerIds: ['other-chat', 'gone'] }
+    expect(keptWorkerIds([worker({ id: 'mine-sub', originWorkerId: 'mine' })], stored, new Set(['other-chat']))).toEqual(['gone'])
+  })
+})
 
 describe('workersOfChat', () => {
   test('a sub-worker dispatched under the chat worker\'s old session still counts after a handoff', () => {

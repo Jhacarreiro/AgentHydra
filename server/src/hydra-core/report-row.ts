@@ -22,7 +22,11 @@ function runOf(dir: string, chat: string): number | null {
   }
 }
 
+export const OUTCOMES = ['done', 'partial', 'failed'] as const
+
 export function reportRun(dir: string, args: ReportArgs, now = new Date()) {
+  if (!(OUTCOMES as readonly string[]).includes(args.outcome))
+    throw new Error(`outcome is one of ${OUTCOMES.join(', ')}`)
   if (
     args.score !== undefined &&
     (!Number.isInteger(args.score) || args.score < 1 || args.score > 5)
@@ -44,5 +48,7 @@ export function reportRun(dir: string, args: ReportArgs, now = new Date()) {
     },
     now,
   )
-  return { ok: true, run }
+  return run === null
+    ? { ok: true, run, warning: 'no run is open for this chat: the report is stored without a run' }
+    : { ok: true, run }
 }

@@ -10,7 +10,7 @@
 // the active button's offsetLeft/offsetWidth) rather than a per-button background swap,
 // so switching tabs animates instead of jump-cutting. Re-measures on tabs/model change and
 // window resize (ResizeObserver would be overkill for a handful of flex-basis buttons).
-import { nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
+import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch, type ComponentPublicInstance } from 'vue';
 
 const props = defineProps<{ tabs: readonly { id: T; label: string }[] }>();
 
@@ -37,7 +37,11 @@ function measure() {
   const listRect = tablistEl.value.getBoundingClientRect();
   const rect = active.getBoundingClientRect();
   const left = rect.left - listRect.left - tablistEl.value.clientLeft;
-  indicator.value = { left, width: rect.width };
+  // A resize event fires on every frame of a drag: skip the write when the geometry did not move,
+  // so the template does not re-render for nothing.
+  if (indicator.value.left !== left || indicator.value.width !== rect.width) {
+    indicator.value = { left, width: rect.width };
+  }
   indicatorReady.value = true;
 }
 
@@ -45,8 +49,13 @@ function onResize() {
   measure();
 }
 
+// A joined key, not the array the getter used to return: a fresh array is never equal to the last
+// one, so the callback ran on every change to anything the getter read. The labels are in the key
+// too, since a label change resizes its button and the indicator has to follow it.
+const tabsKey = computed(() => props.tabs.map((tb) => `${tb.id}:${tb.label}`).join('|'));
+
 watch(
-  () => [model.value, props.tabs.map((tb) => tb.id).join('|')],
+  [() => model.value, tabsKey],
   () => void nextTick(measure),
   { immediate: true },
 );

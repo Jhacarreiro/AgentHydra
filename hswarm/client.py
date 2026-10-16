@@ -6,11 +6,11 @@ exponential backoff. Every call returns a ChatResult (usage.py) with the usage s
 reports and the USD cost at the live rate - or, where the provider reports what it actually charged
 (OpenRouter does, per call), that number instead of ours.
 
-Keys are a POOL (owner ask, Michael, 2026-09-15): every request takes the next key in turn, and a key
+Keys are a POOL (owner ask, 2026-09-15): every request takes the next key in turn, and a key
 that answers 429 is rested for the Retry-After (or 20 s) while the next one carries on at once.
 
 A key that RUNS OUT goes to a DISABLED SLOT and is never handed to a worker again (owner ask,
-Michael, 2026-09-17: "when any key runs out of DeepSeek or OpenRouter, have it go to, like, a
+2026-09-17: "when any key runs out of DeepSeek or OpenRouter, have it go to, like, a
 disabled slot so it's not constantly retried"). Disabling is STICKY - no timer, no ladder, no
 periodic re-try with a real request - and it happens on:
   * a 402 from the chat endpoint (out of credit), whatever the provider; and
@@ -944,7 +944,7 @@ class KeyPool:
         job probe again, each waiting out the connect timeout per key while holding its slot.
 
         A key in the disabled slot gets the longer window. The owner does not expect to top the spent keys up
-        (Michael, 2026-09-17: "I'll likely never top up any of the keys... You can occasionally check... assume
+        (the other owner, 2026-09-17: "I'll likely never top up any of the keys... You can occasionally check... assume
         no"), so re-reading thirteen dead keys every half hour only delayed jobs. A top-up is still found, just
         within hours instead of minutes; `hswarm keys probe` checks every key at once on demand.
 

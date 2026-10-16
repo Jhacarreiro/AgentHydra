@@ -3,13 +3,13 @@ import { homedir } from 'node:os'
 import { join } from 'node:path'
 import type { CliMayteVerdict } from '../climayte-scorecard'
 import { CONFIG_DIR } from '../config'
+import { managerRoots, managersDir } from '../manager-folders'
 import { findTranscriptAsync } from '../transcript'
 import type { SignalLabel } from './signal'
 import { buildStats } from './stats'
 import {
   appendJsonl,
   type CollectState,
-  managersDir,
   type OpenTurn,
   ROUTES_FILE,
   readJsonl,
@@ -273,6 +273,62 @@ function pickerFor(
   }
 }
 
+/** The transcript file a session reads from: a routed or session-file path, else the kept one, else a (rate-limited) search. */
+async function resolveTranscriptPath(
+  session: string,
+  entries: RouteEntry[],
+  sf: SessionFile | undefined,
+  kept: { path: string; pathLookedAt?: number } | undefined,
+  now: number,
+): Promise<{ path: string | null; pathLookedAt: number | undefined }> {
+  let pathLookedAt = kept?.pathLookedAt
+  let path: string | null =
+    [...entries].reverse().find((e) => e.transcriptPath)?.transcriptPath ??
+    sf?.transcriptPath ??
+    null
+  if (!path || !existsSync(path)) {
+    path = kept?.path && existsSync(kept.path) ? kept.path : null
+    const quiet = path ? now - statSync(path).mtimeMs >= PATH_RELOOK_MS : true
+    if (quiet && now - (pathLookedAt ?? 0) >= PATH_RELOOK_MS) {
+      pathLookedAt = now
+      path = (await findTranscriptAsync(session))?.path ?? findInDeskInstances(session) ?? path
+    }
+  }
+  return { path, pathLookedAt }
+}
+
+/** Worker verdicts not yet recorded on any turn; each is also pushed onto its turn. */
+function collectVerdicts(
+  turnsAll: Map<string, MergedTurn>,
+  verdictsOf: NonNullable<PassOptions['verdictsOf']>,
+): VerdictRecord[] {
+  const out: VerdictRecord[] = []
+  const seen = new Set<string>()
+  for (const t of turnsAll.values()) {
+    for (const v of t.verdicts) seen.add(`${t.id}|${v.worker}|${v.at}`)
+  }
+  for (const t of turnsAll.values()) {
+    for (const worker of t.workers) {
+      for (const v of verdictsOf(worker) ?? []) {
+        const key = `${t.id}|${worker}|${v.at}`
+        if (seen.has(key)) continue
+        seen.add(key)
+        const rec: VerdictRecord = {
+          v: 1,
+          type: 'verdict',
+          turn: t.id,
+          worker,
+          verdict: v.verdict,
+          at: v.at,
+        }
+        out.push(rec)
+        t.verdicts.push(rec)
+      }
+    }
+  }
+  return out
+}
+
 export async function collectPass(opts: PassOptions = {}): Promise<PassResult> {
   const now = opts.now ?? Date.now()
   const state = readState()
@@ -303,19 +359,7 @@ export async function collectPass(opts: PassOptions = {}): Promise<PassResult> {
     const sf = sessionFiles.get(session)
     const entries = byRoute.get(session) ?? []
     const kept = state.transcripts[session]
-    let pathLookedAt = kept?.pathLookedAt
-    let path: string | null =
-      [...entries].reverse().find((e) => e.transcriptPath)?.transcriptPath ??
-      sf?.transcriptPath ??
-      null
-    if (!path || !existsSync(path)) {
-      path = kept?.path && existsSync(kept.path) ? kept.path : null
-      const quiet = path ? now - statSync(path).mtimeMs >= PATH_RELOOK_MS : true
-      if (quiet && now - (pathLookedAt ?? 0) >= PATH_RELOOK_MS) {
-        pathLookedAt = now
-        path = (await findTranscriptAsync(session))?.path ?? findInDeskInstances(session) ?? path
-      }
-    }
+    const { path, pathLookedAt } = await resolveTranscriptPath(session, entries, sf, kept, now)
     if (!path || !existsSync(path)) continue
     const cur = kept ?? { path, cursor: 0, prevTurn: null }
     if (cur.path !== path) {
@@ -334,7 +378,7 @@ export async function collectPass(opts: PassOptions = {}): Promise<PassResult> {
       endOffset,
       {
         session,
-        managersDir: managersDir(),
+        managerRoots: managerRoots(),
         deskChat: row?.id ?? null,
         parentChat: row?.parentId ?? null,
         pick: pickerFor(entries, sf, row),
@@ -371,32 +415,7 @@ export async function collectPass(opts: PassOptions = {}): Promise<PassResult> {
   for (const t of newTurns) turnsAll.set(t.id, { ...t, signals: [], verdicts: [], judge: null })
   for (const s of newSignals) turnsAll.get(s.turn)?.signals.push(s)
 
-  const newVerdicts: VerdictRecord[] = []
-  if (opts.verdictsOf) {
-    const seen = new Set<string>()
-    for (const t of turnsAll.values()) {
-      for (const v of t.verdicts) seen.add(`${t.id}|${v.worker}|${v.at}`)
-    }
-    for (const t of turnsAll.values()) {
-      for (const worker of t.workers) {
-        for (const v of opts.verdictsOf(worker) ?? []) {
-          const key = `${t.id}|${worker}|${v.at}`
-          if (seen.has(key)) continue
-          seen.add(key)
-          const rec: VerdictRecord = {
-            v: 1,
-            type: 'verdict',
-            turn: t.id,
-            worker,
-            verdict: v.verdict,
-            at: v.at,
-          }
-          newVerdicts.push(rec)
-          t.verdicts.push(rec)
-        }
-      }
-    }
-  }
+  const newVerdicts = opts.verdictsOf ? collectVerdicts(turnsAll, opts.verdictsOf) : []
 
   return {
     turns: newTurns,
@@ -437,7 +456,7 @@ const PASS_EVERY_MS = 60_000
 const FIRST_PASS_MS = 30_000
 
 /** Daemon timer: first pass 30 s after boot, then every 60 s; a pass that is still running is not overlapped. */
-export function startManagerAnalytics(verdictsOf: PassOptions['verdictsOf']): void {
+export function startManagerAnalytics(verdictsOf: PassOptions['verdictsOf']): () => void {
   let running = false
   const tick = async () => {
     if (running) return
@@ -450,8 +469,14 @@ export function startManagerAnalytics(verdictsOf: PassOptions['verdictsOf']): vo
       running = false
     }
   }
-  setTimeout(() => {
+  let interval: ReturnType<typeof setInterval> | null = null
+  const first = setTimeout(() => {
     tick()
-    setInterval(tick, PASS_EVERY_MS)
+    interval = setInterval(tick, PASS_EVERY_MS)
   }, FIRST_PASS_MS)
+  return () => {
+    clearTimeout(first)
+    if (interval) clearInterval(interval)
+    interval = null
+  }
 }

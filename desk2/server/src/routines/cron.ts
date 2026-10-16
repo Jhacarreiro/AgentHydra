@@ -1,5 +1,7 @@
-// A routine's `schedule`: a 5-field cron expression in LOCAL time (shared/routines.ts says which forms are taken). Pure:
-// it parses, and finds the next slot after a time and the newest slot at or before one. Nothing here reads a clock.
+// A routine's `schedule`: a 5-field cron expression in one time zone's wall-clock time (shared/routines.ts says which forms
+// are taken). A local routine keeps this computer's zone; a central one names its IANA `timeZone`, so a runner anywhere runs
+// it at the same moments. Pure: it parses, and finds the next slot after a time and the newest slot at or before one, in a
+// zone (Intl reads the zone's rules). Nothing here reads a clock.
 
 export interface Cron {
   minutes: number[]
@@ -21,6 +23,9 @@ const FIELDS = [
 
 /** How many days the search walks before it gives up: about 8 years covers every real expression (Feb 29 included). */
 const MAX_DAYS = 366 * 8
+const DAY = 86_400_000
+/** The most a zone's clocks move at once (a summer time change): a wall time this far before the search's start is never a slot after it. */
+const SHIFT_MAX = 3 * 3_600_000
 
 /** One field's values, from `*`, `n`, `a-b`, `*\/n`, `a-b/n` and their comma lists. Throws with the reason. */
 function parseField(text: string, name: string, min: number, max: number): Set<number> {
@@ -61,48 +66,100 @@ export function parseCron(expr: string): Cron {
   }
 }
 
-/** Whether the local calendar day of `date` is one the expression runs on. */
-function dayMatches(c: Cron, date: Date): boolean {
-  if (!c.months.has(date.getMonth() + 1)) return false
-  const byDom = c.daysOfMonth.has(date.getDate())
-  const byDow = c.weekdays.has(date.getDay())
+/** This computer's time zone: a local routine's schedule keeps it. */
+export const systemZone = (): string => Intl.DateTimeFormat().resolvedOptions().timeZone
+
+const formats = new Map<string, Intl.DateTimeFormat>()
+
+/** One formatter per zone, made on first use: a look asks for the same zones again and again. */
+function formatOf(zone: string): Intl.DateTimeFormat {
+  let f = formats.get(zone)
+  if (!f) {
+    f = new Intl.DateTimeFormat('en-US', { timeZone: zone, hourCycle: 'h23', year: 'numeric', month: 'numeric', day: 'numeric', hour: 'numeric', minute: 'numeric', second: 'numeric' })
+    formats.set(zone, f)
+  }
+  return f
+}
+
+/** The wall-clock time a moment shows in a zone, written as the UTC ms of those fields (its milliseconds dropped). */
+function wallOf(zone: string, t: number): number {
+  const n: Record<string, number> = {}
+  for (const p of formatOf(zone).formatToParts(t)) if (p.type !== 'literal') n[p.type] = Number(p.value)
+  return Date.UTC(n.year, n.month - 1, n.day, n.hour % 24, n.minute, n.second)
+}
+
+/** How far a zone's wall clock is ahead of UTC at a moment, ms. */
+const offsetAt = (zone: string, t: number): number => wallOf(zone, t) - Math.floor(t / 1000) * 1000
+
+/** The moments one civil day's wall-clock times name in a zone, the day and the wall times written as UTC fields. A day with
+ *  no change of offset near it maps each wall time by one offset. On a day the clocks move, a wall time the zone skips (moved
+ *  forward) is the moment after the gap and one it shows twice (moved back) the first of them, as Date does in local time. */
+function dayClock(zone: string, day: number): (wall: number) => number {
+  const before = offsetAt(zone, day - DAY)
+  const after = offsetAt(zone, day + 2 * DAY)
+  if (before === after) return (wall) => wall - before
+  return (wall) => {
+    const shown = [wall - before, wall - after].filter((t) => wallOf(zone, t) === wall)
+    return shown.length ? Math.min(...shown) : wall - before
+  }
+}
+
+/** The moment a wall-clock time (its fields written as UTC ms) names in a zone. */
+export function momentOf(zone: string, wall: number): number {
+  return dayClock(zone, wall - (((wall % DAY) + DAY) % DAY))(wall)
+}
+
+/** The civil day (as UTC midnight ms) a moment falls on in a zone. */
+function dayOf(zone: string, t: number): number {
+  const w = wallOf(zone, t)
+  return w - (((w % DAY) + DAY) % DAY)
+}
+
+/** Whether the expression runs on a civil day (UTC midnight ms). */
+function dayMatches(c: Cron, day: number): boolean {
+  const d = new Date(day)
+  if (!c.months.has(d.getUTCMonth() + 1)) return false
+  const byDom = c.daysOfMonth.has(d.getUTCDate())
+  const byDow = c.weekdays.has(d.getUTCDay())
   return c.eitherDay ? byDom || byDow : byDom && byDow
 }
 
-/** The first slot strictly after `after` (ms), or null when none falls within the search. */
-export function nextSlot(c: Cron, after: number): number | null {
+/** The first slot strictly after `after` (ms) in `zone`, or null when none falls within the search. */
+export function nextSlot(c: Cron, after: number, zone: string = systemZone()): number | null {
   const start = Math.floor(after / 60_000) * 60_000 + 60_000
-  let day = new Date(start)
-  day.setHours(0, 0, 0, 0)
-  for (let i = 0; i < MAX_DAYS; i++) {
-    if (dayMatches(c, day)) {
-      for (const h of c.hours) {
-        for (const m of c.minutes) {
-          const at = new Date(day.getFullYear(), day.getMonth(), day.getDate(), h, m).getTime()
-          if (at >= start) return at
-        }
+  const startWall = wallOf(zone, start)
+  let day = dayOf(zone, start)
+  for (let i = 0; i < MAX_DAYS; i++, day += DAY) {
+    if (!dayMatches(c, day)) continue
+    const at = dayClock(zone, day)
+    for (const h of c.hours) {
+      for (const m of c.minutes) {
+        const wall = day + h * 3_600_000 + m * 60_000
+        if (wall < startWall - SHIFT_MAX) continue
+        const t = at(wall)
+        if (t >= start) return t
       }
     }
-    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() + 1)
   }
   return null
 }
 
-/** The newest slot at or before `at` (ms), or null when none falls within the search. */
-export function previousSlot(c: Cron, at: number): number | null {
+/** The newest slot at or before `at` (ms) in `zone`, or null when none falls within the search. */
+export function previousSlot(c: Cron, at: number, zone: string = systemZone()): number | null {
   const end = Math.floor(at / 60_000) * 60_000
-  let day = new Date(end)
-  day.setHours(0, 0, 0, 0)
-  for (let i = 0; i < MAX_DAYS; i++) {
-    if (dayMatches(c, day)) {
-      for (let h = c.hours.length - 1; h >= 0; h--) {
-        for (let m = c.minutes.length - 1; m >= 0; m--) {
-          const slot = new Date(day.getFullYear(), day.getMonth(), day.getDate(), c.hours[h], c.minutes[m]).getTime()
-          if (slot <= end) return slot
-        }
+  const endWall = wallOf(zone, end)
+  let day = dayOf(zone, end)
+  for (let i = 0; i < MAX_DAYS; i++, day -= DAY) {
+    if (!dayMatches(c, day)) continue
+    const clock = dayClock(zone, day)
+    for (let h = c.hours.length - 1; h >= 0; h--) {
+      for (let m = c.minutes.length - 1; m >= 0; m--) {
+        const wall = day + c.hours[h] * 3_600_000 + c.minutes[m] * 60_000
+        if (wall > endWall + SHIFT_MAX) continue
+        const slot = clock(wall)
+        if (slot <= end) return slot
       }
     }
-    day = new Date(day.getFullYear(), day.getMonth(), day.getDate() - 1)
   }
   return null
 }

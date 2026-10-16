@@ -212,6 +212,24 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
       const { app: shared } = await import('../src/http-app')
       test('x', async () => { expect((await shared.request('/api/queue')).status).toBe(200) })
       `,
+      // Rule E, desk2 people-setup.test.ts until 2026-10-15: home redirected at module scope, the folder
+      // removed in afterAll and the variables never put back, so every later headless Chrome failed.
+      `
+      import { afterAll, expect, test } from 'bun:test'
+      const home = mkdtempSync(join(tmpdir(), 'people-'))
+      process.env.HOME = home
+      process.env.USERPROFILE = home
+      afterAll(() => rmSync(home, { recursive: true, force: true }))
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      // Rule E in a before hook, with only one of the two variables put back.
+      `
+      import { afterAll, beforeAll, expect, test } from 'bun:test'
+      const savedHome = process.env.HOME
+      beforeAll(() => { process.env.HOME = '/tmp/x'; process.env.USERPROFILE = '/tmp/x' })
+      afterAll(() => { process.env.HOME = savedHome })
+      test('x', () => { expect(1).toBe(1) })
+      `,
     ],
     fixed: [
       // Rule D's fixed shape (queue-patch-guard.test.ts): requests go through a copy with its own router.
@@ -291,6 +309,40 @@ const FIXTURES_BY_FILE: Record<string, { broken: string[]; fixed: string[] }> = 
         release()
         expect(1).toBe(1)
       })
+      `,
+      // Rule E's fixed shapes: people-addon-gate.test.ts's put-back by key, a named put-back and delete,
+      // and a redirect inside the test body with try/finally, which is that test's own business.
+      `
+      import { afterAll, beforeAll, expect, test } from 'bun:test'
+      const KEYS = ['HOME', 'USERPROFILE'] as const
+      const saved = Object.fromEntries(KEYS.map((k) => [k, process.env[k]]))
+      beforeAll(() => { process.env.HOME = '/tmp/x'; process.env.USERPROFILE = '/tmp/x' })
+      afterAll(() => { for (const k of KEYS) if (saved[k] === undefined) delete process.env[k]; else process.env[k] = saved[k] })
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      `
+      import { afterAll, expect, test } from 'bun:test'
+      const savedHome = process.env.HOME
+      process.env.HOME = '/tmp/x'
+      process.env.TEMP = '/tmp/t'
+      afterAll(() => { process.env.HOME = savedHome; delete process.env.TEMP })
+      test('x', () => { expect(1).toBe(1) })
+      `,
+      `
+      import { expect, test } from 'bun:test'
+      test('x', () => {
+        const saved = process.env.USERPROFILE
+        process.env.USERPROFILE = '/tmp/x'
+        try { expect(1).toBe(1) } finally { process.env.USERPROFILE = saved }
+      })
+      `,
+      // A redirect kept on purpose says so (desktop-cli-pairing.test.ts keeps APPDATA off the real folder).
+      `
+      import { expect, test } from 'bun:test'
+      const appData = mkdtempSync(join(tmpdir(), 'pairing-appdata-'))
+      // kept for the run: the files after this one must not reach the real install folder.
+      process.env.APPDATA = appData
+      test('x', () => { expect(1).toBe(1) })
       `,
       // A never-settling promise with no orchestrator run behind it parks no lock at all.
       `

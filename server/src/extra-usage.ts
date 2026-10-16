@@ -36,6 +36,7 @@ import { getProviderSettings } from './provider-settings'
 import type { ExtraUsageOffResult, UsageLimit, UsageSnapshot } from './types'
 import { getCachedUsage } from './usage'
 import { claudeUserAgent } from './usage-api'
+import { asReader } from './usage-reader'
 import { checkUsageForCliInstance, checkUsageForDesktop, cliKey, desktopKey } from './usage-service'
 
 const TICK_MS = 30_000
@@ -142,10 +143,9 @@ async function sessionsOn(store: Store, skip: Set<number>): Promise<number[] | n
 }
 
 async function reread(store: Store): Promise<UsageSnapshot | null> {
-  const result =
-    store.kind === 'desktop'
-      ? await checkUsageForDesktop(store.id)
-      : await checkUsageForCliInstance(store.id)
+  const result = await asReader('extra usage', () =>
+    store.kind === 'desktop' ? checkUsageForDesktop(store.id) : checkUsageForCliInstance(store.id),
+  )
   return result?.reason === 'ok' ? result.snapshot : null
 }
 

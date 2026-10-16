@@ -29,9 +29,9 @@ const until = ref(r.until ?? '')
 
 const LABEL = 'grid min-w-0 gap-1 text-ui-sm leading-4.5 text-text-2'
 const AREA =
-  'w-full resize-y rounded-[var(--radius-6)] bg-fill-5 px-2 py-1.5 text-ui text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-[var(--focus-ring)]'
+  'w-full resize-y rounded-(--radius-6) bg-fill-5 px-2 py-1.5 text-ui text-text shadow-[inset_0_0_0_1px_var(--border)] outline-none focus:shadow-[var(--focus-ring)]'
 const SAVE =
-  'flex h-7 shrink-0 cursor-default items-center rounded-[var(--radius-6)] bg-accent px-2.5 text-ui font-medium text-white transition-colors duration-[60ms] hover:bg-accent-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:opacity-50'
+  'flex h-7 shrink-0 cursor-default items-center rounded-(--radius-6) bg-accent px-2.5 text-ui font-medium text-white transition-colors duration-[60ms] hover:bg-accent-hover focus-visible:shadow-[var(--focus-ring)] focus-visible:outline-none disabled:opacity-50'
 
 /** A command as the form writes it: one argument per line. */
 const argsOf = (text: string): string[] => text.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)
@@ -58,7 +58,7 @@ const changed = computed(() => Object.keys(changes.value).length > 0)
 </script>
 
 <template>
-  <form class="mt-3 grid gap-2 border-t border-[var(--border)] pt-3" @submit.prevent="emit('save', changes)">
+  <form class="mt-3 grid gap-2 border-t border-(--border) pt-3" @submit.prevent="emit('save', changes)">
     <label :class="LABEL">
       Name
       <input v-model="name" :class="[FIELD, 'w-full']" required />

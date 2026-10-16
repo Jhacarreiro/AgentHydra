@@ -53,8 +53,6 @@ import {
   Zap
 } from '@lucide/vue'
 
-export const ICON_SIZE = { chrome: 16, row: 16, menu: 16, chevron: 12, toolbar: 20 } as const
-
 /** Stroke width Hydra Desk draws every lucide icon with (set globally in style.css). */
 export const ICON_STROKE = 1.5
 
@@ -129,8 +127,6 @@ export const icons = {
   pullRequest: GitPullRequest
 } as const
 
-export type IconName = keyof typeof icons
-
 // Shell (sidebar, chrome, title bar)
 import { Archive, Bot, CircleDot, EllipsisVertical, MonitorSmartphone, Pencil, Pin, Settings, Terminal, Trash2 } from '@lucide/vue'
 
@@ -194,10 +190,10 @@ export const sidebarIcons = {
     ['path', { d: 'M16 18v3' }],
     ['circle', { cx: 16, cy: 15, r: 3 }]
   ]),
-  footer: Settings // the real settings gear (Jacob, 2026-10-04): eight teeth, a circle inside
+  footer: Settings // the real settings gear (the owner, 2026-10-04): eight teeth, a circle inside
 } as const
 
-// The chrome bar's AgentHydra button, in place of the colour logo (Michael, 2026-10-04: "a fun, like,
+// The chrome bar's AgentHydra button, in place of the colour logo (the other owner, 2026-10-04: "a fun, like,
 // outline-y version like the other ones"): the logo's big head with its open jaw and eye, and a smaller
 // head facing back off its neck, on the grid and stroke of the Cloud and Bot beside it.
 export const agentHydraIcon = glyph([
@@ -210,11 +206,12 @@ export const agentHydraIcon = glyph([
 ])
 
 // Settings dialog nav, as the real Settings nav draws them: 16px outline glyphs.
-import { Activity, BellRing, CloudDownload, Info, Monitor, Server } from '@lucide/vue'
+import { Activity, BellRing, CloudDownload, Info, Monitor, Server, Users } from '@lucide/vue'
 
 export const settingsIcons = {
   general: Settings,
   managers: Eye,
+  people: Users,
   alerts: BellRing,
   hswarm: Bot,
   connections: Plug,

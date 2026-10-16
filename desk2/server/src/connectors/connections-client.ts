@@ -1,5 +1,6 @@
 // A small MCP stdio client for the Connections server the person already has in their main Claude config
-// (`~/.claude.json` → mcpServers.connections, a node loader). The Connections chip (plugins/56-connections.ts) asks
+// (`~/.claude.json` → the mcpServers entry that launches a Connections loader, whatever its key: `connections`,
+// `connections-local` or another). The Connections chip (plugins/56-connections.ts) asks
 // it who a chat acts as and moves that. The server is started the way Claude Code starts it for a chat: with
 // CLAUDECODE=1, CLAUDE_PROJECT_DIR=<the chat's folder> and, when the chat has one, CLAUDE_CODE_SESSION_ID, which is
 // what Connections keys a chat's own workspace pin on. One child per folder+session is kept for 60 s after its last
@@ -44,42 +45,68 @@ function readConfig(file: string): unknown {
   return json
 }
 
-/** The `connections` stdio server of a main Claude config, or null when it has none (or the file is unreadable). */
-export function connectionsServer(file: string = defaultConfigFile()): ConnectionsServer | null {
-  let json: unknown
-  try {
-    json = readConfig(file)
-  } catch {
-    return null
+/** The port of the shared Connections server: CONNECTIONS_HTTP_PORT, else 7791 (Connections' loader.mjs --http). */
+const sharedPort = (): number => Number(process.env.CONNECTIONS_HTTP_PORT) || 7791
+
+/** A path that IS a Connections loader, where the repo or the npm package keeps one; never a wrapper (npx, cmd /c). */
+const isLoader = (p: string): boolean => /(^|\/)(local-mcp|connections-mcp)\/loader\.mjs$/i.test(p.replace(/\\/g, '/'))
+
+/**
+ * Whether a config entry starts or reaches a Connections MCP, judged by what it launches and never by its key, as
+ * Connections' own launchesConnectionsMcp does: stdio, a Connections loader or the connections-mcp package; http, a
+ * headersHelper that runs a Connections loader's --connect, or the shared server's loopback /mcp.
+ */
+function launchesConnections(e: Record<string, unknown>): boolean {
+  if (e.type === 'http') {
+    const helper = typeof e.headersHelper === 'string' ? e.headersHelper : ''
+    const parts = (helper.match(/"[^"]*"|\S+/g) ?? []).map((a) => a.replace(/^"|"$/g, ''))
+    if (parts.includes('--connect') && parts.some(isLoader)) return true
+    try {
+      const u = new URL(String(e.url ?? ''))
+      return /^(127\.0\.0\.1|localhost)$/i.test(u.hostname) && Number(u.port) === sharedPort() && u.pathname.replace(/\/+$/, '') === '/mcp'
+    } catch {
+      return false
+    }
   }
-  const servers = (json as { mcpServers?: Record<string, unknown> } | null)?.mcpServers
-  const s = servers && typeof servers === 'object' ? (servers.connections as Record<string, unknown> | undefined) : undefined
-  if (!s || typeof s.command !== 'string' || (s.type !== undefined && s.type !== 'stdio')) return null
+  if (e.type !== undefined && e.type !== 'stdio') return false
+  const parts = [e.command, ...(Array.isArray(e.args) ? e.args : [])].filter((a): a is string => typeof a === 'string').map((a) => a.replace(/\\/g, '/'))
+  return parts.some((p) => isLoader(p) || /^connections-mcp(@[^\s/]+)?$/i.test(p) || /(^|\/)connections-mcp(\.cmd|\.exe)?$/i.test(p))
+}
+
+/** The Connections entry of a main Claude config, stdio or http. */
+export type ConnectionsEntry = ({ kind: 'stdio' } & ConnectionsServer) | ({ kind: 'http' } & HttpServerConfig)
+
+function toEntry(name: string, s: Record<string, unknown>): ConnectionsEntry | null {
+  if (s.type === 'http') {
+    const h = httpConfig(s, name)
+    return h ? { kind: 'http', ...h } : null
+  }
+  if (typeof s.command !== 'string') return null
   const args = Array.isArray(s.args) ? s.args.filter((a): a is string => typeof a === 'string') : []
   const env: Record<string, string> = {}
   if (s.env && typeof s.env === 'object') for (const [k, v] of Object.entries(s.env)) if (typeof v === 'string') env[k] = v
-  return { command: s.command, args, env }
+  return { kind: 'stdio', command: s.command, args, env }
 }
 
-/** The `connections` entry of a main Claude config, stdio or http; null when it has none (or the file is unreadable). */
-export type ConnectionsEntry = ({ kind: 'stdio' } & ConnectionsServer) | ({ kind: 'http' } & HttpServerConfig)
-
+/**
+ * The entry of a main Claude config that launches a Connections MCP, under whatever key the installer gave it; null
+ * when none does (or the file is unreadable). Any Connections MCP answers a chat the same, so when several do, the
+ * http one wins: one shared server rather than a node child per chat.
+ */
 export function connectionsEntry(file: string = defaultConfigFile()): ConnectionsEntry | null {
-  const http = rawEntry(file)
-  const h = http ? httpConfig(http) : null
-  if (h) return { kind: 'http', ...h }
-  const s = connectionsServer(file)
-  return s ? { kind: 'stdio', ...s } : null
-}
-
-function rawEntry(file: string): Record<string, unknown> | null {
+  let servers: unknown
   try {
-    const servers = (readConfig(file) as { mcpServers?: Record<string, unknown> } | null)?.mcpServers
-    const s = servers && typeof servers === 'object' ? servers.connections : undefined
-    return s && typeof s === 'object' ? (s as Record<string, unknown>) : null
+    servers = (readConfig(file) as { mcpServers?: unknown } | null)?.mcpServers
   } catch {
     return null
   }
+  if (!servers || typeof servers !== 'object' || Array.isArray(servers)) return null
+  const found: ConnectionsEntry[] = []
+  for (const [name, s] of Object.entries(servers)) {
+    const e = s && typeof s === 'object' && launchesConnections(s as Record<string, unknown>) ? toEntry(name, s as Record<string, unknown>) : null
+    if (e) found.push(e)
+  }
+  return found.find((e) => e.kind === 'http') ?? found[0] ?? null
 }
 
 /** True when the server's loader file (its first path argument) exists on this machine. */

@@ -177,7 +177,7 @@ async function readRange(path: string, start: number, end: number): Promise<Buff
 async function firstRowOf(path: string): Promise<{ payload?: Record<string, unknown> } | null> {
   for (let size = 64 * 1024; ; size *= 4) {
     const bytes = await readRange(path, 0, size)
-    if (bytes.indexOf(10) >= 0 || bytes.length < size) return firstRow(bytes, path)
+    if (bytes.includes(10) || bytes.length < size) return firstRow(bytes, path)
   }
 }
 

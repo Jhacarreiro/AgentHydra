@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from 'node:crypto'
 import { join } from 'node:path'
-import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, isPaidPlan, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
+import { FREE_CLAUDE_MODELS, FREE_COMMANDS, FREE_PROVIDERS, FREE_SETTINGS_DEFAULTS, isFreeChatgptModel, promotionFor, type FreeHealth, type FreeInstance, type FreeJob, type FreeRequest, type FreeResult, type FreeSettings, type FreeStatRow, type FreeStatus, type FreeThread, type FreeTokens } from '@shared/free-instances'
 import { addOutcome, healthOf, type SendOutcome } from './health'
 import { NUDGE_EVERY_MS, nudgeDue } from './keepalive'
 import { nextRead, REFRESH_TICK_MS, USAGE_EVERY_MS } from './refresh'
@@ -82,6 +82,12 @@ export class FreeInstances {
   private runs = new Map<string, Promise<void>>()
   /** Each account's messages in the last hour and how they ended (health.ts). Kept in memory: an hour is gone soon. */
   private outcomes = new Map<string, SendOutcome[]>()
+  /** Thread counts change only on insertion, removal or a status transition, not on every poll. */
+  private threadRevision = 0
+  private threadSummary?: { threads: FreeThread[]; length: number; revision: number; running: number; counts: Record<string, number> }
+  /** A restart must not validate a browser's history from the previous process. No account data is in this tag. */
+  private historyEpoch = randomUUID()
+  private historyRevision = 0
   /** A sign-in or a log out here (the Free login sync listens, so the other PCs hear soon). */
   onLoginChange?: () => void
   /** An account moved between free and paid (notePlan); the plugin tells the window. */
@@ -167,8 +173,11 @@ export class FreeInstances {
         await this.runner(this.runtime.config(id), { requestId: randomUUID(), instanceId: id, provider: instance.provider, command: 'forget' }, AbortSignal.timeout(240_000))
       } catch { /* deleted regardless */ }
       for (const [jobId, job] of this.jobs) if (job.instanceId === id) { this.jobs.delete(jobId); this.fingerprints.delete(jobId) }
+      this.historyRevision++
       this.store.remove(id, opts.tombstone ?? true)
+      this.threadSummary = undefined
       this.refreshed.delete(id)
+      this.outcomes.delete(id)
     } finally { this.forgetting.delete(id) }
     this.onLoginChange?.()
     return { ok: true }
@@ -239,6 +248,26 @@ export class FreeInstances {
     }
   }
   threads(): FreeThread[] { return this.store.data.threads }
+  /** Opt-in bounded history for callers that would otherwise download every row then slice it. */
+  recentThreads(limit: number, account?: number): { total: number; threads: FreeThread[] } {
+    const byId = new Map(this.store.data.instances.map(instance => [instance.id, instance]))
+    const mine = this.store.data.threads.filter(thread => account === undefined || byId.get(thread.instanceId)?.num === account)
+    const count = Math.max(1, Math.min(Number(limit) || 30, 500))
+    return { total: mine.length, threads: mine.sort((a, b) => b.updatedAt - a.updatedAt).slice(0, count) }
+  }
+  /** The first stored match wins, just as a full history's find(chatId) did, even for a removed account. */
+  lookupThreads(chatIds: readonly string[]): FreeThread[] {
+    if (chatIds.length > 32) throw new FreeError('Look up at most 32 chat identifiers.')
+    const wanted = new Set(chatIds)
+    const found: FreeThread[] = []
+    for (const thread of this.store.data.threads) {
+      if (wanted.delete(thread.chatId)) found.push(thread)
+      if (!wanted.size) break
+    }
+    return found
+  }
+  /** Full history validators are cheap; only actual thread writes invalidate them. */
+  threadsETag(): string { return `"free-threads-${this.historyEpoch}-${this.historyRevision}"` }
   /** Removes one thread from Desk's list (a private chat: it is not in the site's history either). Its tokens stay in the
    *  account's ledger, so the totals do not drop. Refused while its message is still running. Its id is remembered: the
    *  harness still lists the private chats it made, and the next read of them (refresh.ts, hourly) would add it back. */
@@ -247,6 +276,8 @@ export class FreeInstances {
     if (!thread) throw new FreeError('Thread not found.', 404)
     if (thread.status === 'running') throw new FreeError('This chat has a message running. Wait for it to finish or cancel it first.', 409)
     this.store.data.threads = this.store.data.threads.filter(t => t !== thread)
+    this.historyRevision++
+    this.threadSummary = undefined
     this.store.data.forgotten = [...(this.store.data.forgotten ?? []).filter(f => f !== id), id].slice(-5000)
     this.store.save()
     return { ok: true }
@@ -266,13 +297,17 @@ export class FreeInstances {
       const hour = healthOf(this.outcomes.get(i.id), now)
       if (hour) health[i.id] = hour
     }
-    let running = 0
-    const threadCounts: Record<string, number> = {}
-    for (const t of this.store.data.threads) {
-      if (t.status === 'running') running++
-      threadCounts[t.instanceId] = (threadCounts[t.instanceId] ?? 0) + 1
+    const threads = this.store.data.threads
+    let summary = this.threadSummary
+    if (!summary || summary.threads !== threads || summary.length !== threads.length || summary.revision !== this.threadRevision) {
+      summary = { threads, length: threads.length, revision: this.threadRevision, running: 0, counts: {} }
+      for (const t of threads) {
+        if (t.status === 'running') summary.running++
+        summary.counts[t.instanceId] = (summary.counts[t.instanceId] ?? 0) + 1
+      }
+      this.threadSummary = summary
     }
-    return { ready: this.runtime.ready(), tokens, health, running, threadCounts, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
+    return { ready: this.runtime.ready(), tokens, health, running: summary.running, threadCounts: { ...summary.counts }, instances: this.store.data.instances, jobs: [...this.jobs.values()].map(({ result, ...job }) => ({ ...job, chatId: result?.chat_id ?? result?.error?.chat_id ?? job.chatId })) }
   }
   /** The last `days` days' messages by account and model (stats.ts). */
   stats(days: number): FreeStatRow[] { return statRows(this.store.data.stats ?? {}, days, Date.now()) }
@@ -281,6 +316,13 @@ export class FreeInstances {
     const job = this.jobs.get(id)
     if (!job) throw new FreeError('Operation not found or expired. Refresh the chat list and read the chat before sending again.', 404)
     return job
+  }
+  /** One bounded read/prune for a batch; an expired ID must not hide its siblings. */
+  getMany(ids: unknown): Record<string, FreeJob | null> {
+    if (!Array.isArray(ids) || !ids.length || ids.length > 32 || ids.some(id => !isUuid(id)))
+      throw new FreeError('Read between 1 and 32 operation UUIDs.')
+    this.prune()
+    return Object.fromEntries([...new Set(ids as string[])].map(id => [id, this.jobs.get(id) ?? null]))
   }
   cancel(id: string): void { this.get(id); this.controllers.get(id)?.abort() }
   /** True while start() would refuse an operation a person or a chat asks for on the account: one of theirs runs
@@ -349,7 +391,10 @@ export class FreeInstances {
       thread = { id, instanceId: r.instanceId, provider: r.provider, chatId, title: title || r.name || `${r.provider === 'claude' ? 'Claude' : 'ChatGPT'} · ${chatId.slice(0, 8)}`, status, createdAt: created, updatedAt: used ? Date.now() : created, error }
       this.store.data.threads.push(thread)
       known?.set(id, thread)
+      this.threadRevision++
     }
+    else if (thread.status !== status) this.threadRevision++
+    this.historyRevision++
     Object.assign(thread, { status, error }, used ? { updatedAt: Date.now() } : {}, serverId ? { serverId } : {}, title ? { title } : {})
     return true
   }
@@ -368,17 +413,20 @@ export class FreeInstances {
       const instance = this.instance(r.instanceId)
       if (r.command === 'auth' || r.command === 'login') await this.afterAuth(r, job.result, instance, config, controller.signal)
       if (r.command === 'nudge') await this.afterNudge(r, job.result, instance, config, controller.signal)
-      spent = this.apply(r, job.result)
+      // finally saves the result together with its stats. Serializing here too
+      // copied the entire history twice with no asynchronous work in between.
+      spent = this.apply(r, job.result, false)
     } catch {
       job.result = failure('operation_interrupted', 'The operation was interrupted. Refresh the chat list and read the chat before sending again.', r.chatId)
-      this.markThread(r, 'failed', r.chatId, job.result.error!.message)
+      // finally persists this recovery state together with the completed job's accounting.
+      this.noteThread(r, 'failed', r.chatId, job.result.error!.message)
     } finally {
       job.state = 'done'; job.finishedAt = Date.now(); this.controllers.delete(job.id)
       // A cancel is the asker's doing, not the account's.
       if ((r.command === 'chat' || r.command === 'resume') && !controller.signal.aborted) {
         this.outcomes.set(r.instanceId, addOutcome(this.outcomes.get(r.instanceId), { at: job.finishedAt, error: job.result?.ok ? null : (job.result?.error?.message ?? 'No result') }, job.finishedAt))
         const ok = job.result?.ok === true
-        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, input: spent?.input ?? 0, output: spent?.output ?? 0 })
+        addStat((this.store.data.stats ??= {}), { at: job.finishedAt, instanceId: r.instanceId, model: ok ? job.result?.model : job.result?.error?.model, ok, code: job.result?.error?.code, input: spent?.input ?? 0, output: spent?.output ?? 0 })
       }
       this.store.save()
     }
@@ -398,21 +446,24 @@ export class FreeInstances {
     this.onLoginChange?.()
     // Read-only followups bring imported chats and available quota into the shared view.
     for (const command of ['chats', 'usage'] as const) {
-      try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, signal))) } catch { /* auth still succeeded; refresh can retry a read */ }
+      // Keep the chat checkpoint before the next provider read. The last usage
+      // result has no further provider wait: execute's finally saves it once.
+      try { this.apply({ ...r, command }, parseResult(command, await this.runner(config, { ...r, command }, signal)), command !== 'usage') } catch { /* auth still succeeded; refresh can retry a read */ }
     }
   }
   private async afterNudge(r: FreeRequest, result: FreeResult, instance: FreeInstance, config: ReturnType<FreeRuntime['config']>, signal: AbortSignal): Promise<void> {
     instance.nudge = { at: Date.now(), ok: result.ok }
     // Read the quota again so the window the nudge started shows.
-    if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal))) } catch { /* the nudge worked; the next refresh reads it */ }
+    if (result.ok) try { this.apply({ ...r, command: 'usage' }, parseResult('usage', await this.runner(config, { ...r, command: 'usage' }, signal)), false) } catch { /* the nudge worked; the next refresh reads it */ }
   }
-  /** Keep the plan a reading reports; a move between free and paid (a first reading that is already paid included) is
-   *  kept on the row and told to onPlanChange. A reading with no plan changes nothing. */
+  /** Keep the plan a reading reports; a move that changes what the account can be promoted to (promotionFor: Free to
+   *  Go does not, Go to Plus does, and so does a first reading already on Plus) is kept on the row and told to
+   *  onPlanChange. A reading with no plan changes nothing. */
   private notePlan(instance: FreeInstance, plan: string | null): void {
     if (!plan || plan === instance.plan) return
     const before = instance.plan ?? null
     instance.plan = plan
-    if (isPaidPlan(plan) === isPaidPlan(before)) return
+    if (promotionFor(instance.provider, plan) === promotionFor(instance.provider, before)) return
     instance.planChange = { from: before, to: plan, at: Date.now() }
     this.onPlanChange?.(instance)
   }
@@ -424,41 +475,47 @@ export class FreeInstances {
     return instance
   }
   /** Returns the message's token estimate, or null for anything that was not an answered message. */
-  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>): TokenEntry | null {
+  private apply(r: FreeRequest, result: NonNullable<FreeJob['result']>, persist = true): TokenEntry | null {
     const instance = this.instance(r.instanceId)
-    if (result.usage) {
-      // A row read before plans were kept (2026-10-09) has its plan only in its last reading. Start from that, or
-      // every account already on Go or Pro would be told as newly paid on its first reading after the update.
-      if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
-      instance.usage = result.usage
-      this.notePlan(instance, result.usage.plan ?? null)
-      try { this.onUsage?.(instance) } catch { /* a watcher's failure never fails a reading */ }
-    }
+    if (result.usage) this.applyUsage(instance, result.usage)
     if (r.command === 'usage') instance.usageReadAt = Date.now()
     if (result.ok && (r.command === 'chat' || r.command === 'resume')) instance.lastActiveAt = Date.now()
-    if (result.chats) {
-      // Looked up by id, not searched per chat: an account's list of ~1,500 chats against ~22,000 threads held the
-      // server 2 to 6 s a list, every list read (2026-10-10, loop-stalls.jsonl: 220 s in a day).
-      const known = new Map(this.store.data.threads.map(t => [t.id, t]))
-      const forgotten = new Set(this.store.data.forgotten)
-      for (const chat of result.chats) {
-        const id = `${r.instanceId}/${chat.chat_id}`
-        if (chat.is_temporary === true && !forgotten.has(id)) {
-          const existing = known.get(id)
-          this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false, known)
-        }
+    if (result.chats) this.applyChats(r, result.chats)
+    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) this.applyChatThread(r, instance, result)
+    const spent = result.ok ? this.countTokens(r, result) : null
+    if (persist) this.store.save()
+    return spent
+  }
+  /** Takes a reading's usage as the row's, and tells the watchers, after noting any plan change. */
+  private applyUsage(instance: FreeInstance, usage: NonNullable<FreeResult['usage']>): void {
+    // A row read before plans were kept (2026-10-09) has its plan only in its last reading. Start from that, or
+    // every account already on Go or Pro would be told as newly paid on its first reading after the update.
+    if (instance.plan === undefined) instance.plan = instance.usage?.plan ?? null
+    instance.usage = usage
+    this.notePlan(instance, usage.plan ?? null)
+    try { this.onUsage?.(instance) } catch { /* a watcher's failure never fails a reading */ }
+  }
+  /** Keeps each temporary chat of a listing as a thread, unless it was forgotten. */
+  private applyChats(r: FreeRequest, chats: NonNullable<FreeResult['chats']>): void {
+    // Looked up by id, not searched per chat: an account's list of ~1,500 chats against ~22,000 threads held the
+    // server 2 to 6 s a list, every list read (2026-10-10, loop-stalls.jsonl: 220 s in a day).
+    const known = new Map(this.store.data.threads.map(t => [t.id, t]))
+    const forgotten = new Set(this.store.data.forgotten)
+    for (const chat of chats) {
+      const id = `${r.instanceId}/${chat.chat_id}`
+      if (chat.is_temporary === true && !forgotten.has(id)) {
+        const existing = known.get(id)
+        this.noteThread(r, existing?.status ?? 'done', chat.chat_id, existing?.error ?? null, chat.server_conversation_id, existing?.title || chat.name || undefined, Date.parse(chat.created_at ?? '') || undefined, false, known)
       }
     }
-    if (!['auth', 'login', 'usage', 'chats', 'nudge'].includes(r.command)) {
-      if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
-      const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
-      const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
-      if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
-      this.noteThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
-    }
-    const spent = result.ok ? this.countTokens(r, result) : null
-    this.store.save()
-    return spent
+  }
+  /** Records a chat-type command's outcome on its thread, and marks the account signed in when the chat is private. */
+  private applyChatThread(r: FreeRequest, instance: FreeInstance, result: FreeResult): void {
+    if (result.ok && result.is_temporary) { instance.loggedIn = true; instance.checkedAt = instance.lastSignedInAt = Date.now() }
+    const chatId = result.chat_id ?? result.error?.chat_id ?? r.chatId
+    const existing = this.store.data.threads.find(t => t.instanceId === r.instanceId && t.chatId === chatId)
+    if (result.ok) result.chat_name = r.name || existing?.title || result.chat_name
+    this.noteThread(r, result.ok ? 'done' : 'failed', chatId, result.error?.message ?? null, result.server_conversation_id, r.name || existing?.title || result.chat_name || undefined)
   }
   /** A message adds to the account's token estimate (tokens.ts): what it sent, the thread it continues included, and
    *  the reply. A chat that was read gives its thread's length, so a later continuation counts what it holds. */

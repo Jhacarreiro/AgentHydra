@@ -12,7 +12,7 @@ import type {
   SDKMessage,
   SDKUserMessage,
 } from '@anthropic-ai/claude-agent-sdk'
-import type { ChatSummary, DeskSettings, ServerEvent, TranscriptItem } from '@shared/protocol'
+import { DEFAULT_EFFORT, DEFAULT_MODEL, type ChatSummary, type DeskSettings, type ServerEvent, type TranscriptItem } from '@shared/protocol'
 import { ChatRuntime, INTERRUPT_GRACE_MS, type QueryImpl } from '../../../src/engine/chat-runtime'
 import { isUsageLimitText } from '../../../src/engine/usage-limit'
 import { DESK_APPEND, DESK_APPEND_NO_DELEGATE } from '../../../src/engine/desk-prompt'
@@ -36,7 +36,7 @@ const SETTINGS: DeskSettings = {
   projectRoots: [],
   hiddenProjects: [],
   pinnedProjects: [],
-  babysitter: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false,
+  babysitter: true, instanceManager: true, orchestrator: false, orchestratorModel: 'opus', routines: true, collapseMode: 'off', coreEngine: false,
 }
 
 /** A Query whose messages the test pushes; records every control call and every prompt it reads. */
@@ -359,8 +359,9 @@ describe('ChatRuntime: start options', () => {
     expect(o.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: DESK_APPEND })
     expect(o.disallowedTools).toEqual(['Agent', 'Task'])
     expect(o.resume).toBeUndefined()
-    expect(o.model).toBeUndefined()
-    expect(o.effort).toBeUndefined()
+    // A chat that names no model runs Opus 5.5 at Extra (owner, 2026-10-15: "it should default to Opus 5.5").
+    expect(o.model).toBe(DEFAULT_MODEL)
+    expect(o.effort).toBe(DEFAULT_EFFORT)
     expect(typeof o.canUseTool).toBe('function')
     expect(typeof o.stderr).toBe('function')
     expect(o.mcpServers).toBeUndefined()
@@ -405,7 +406,7 @@ describe('ChatRuntime: start options', () => {
     expect(opts!.allowDangerouslySkipPermissions).toBeUndefined()
     expect(opts!.disallowedTools).toBeUndefined()
     expect(opts!.systemPrompt).toEqual({ type: 'preset', preset: 'claude_code', append: DESK_APPEND_NO_DELEGATE })
-    expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, Jacob's own desktop for Claude Code. You have a real browser")).toBe(true)
+    expect(DESK_APPEND_NO_DELEGATE.startsWith("You are running inside Hydra Desk, the owner's own desktop for Claude Code. You have a real browser")).toBe(true)
     expect(DESK_APPEND_NO_DELEGATE).not.toContain('Sub-agents here are CliMayte workers')
     expect(DESK_APPEND).toContain('Sub-agents here are CliMayte workers')
     // the agenthydra server carries this chat's Desk id, so its desk_chat acts on this chat
@@ -1149,7 +1150,7 @@ describe('ChatRuntime: MCP elicitation', () => {
     expect(() => t.rt.answerElicitation(item.id, { action: 'decline' })).toThrow('no pending elicitation request')
   })
 
-  test('a link: accepted once Jacob says he is done; a link that is not http(s) is not kept', async () => {
+  test('a link: accepted once the owner says he is done; a link that is not http(s) is not kept', async () => {
     const t = await workingChat()
     const { promise } = elicit(t.fake(), { serverName: 'connections', message: 'Sign in', mode: 'url', url: 'https://auth.example.test/start' })
     const item = lastItem(t.items(), 'elicitation')

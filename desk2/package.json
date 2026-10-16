@@ -1,6 +1,6 @@
 {
   "name": "hydra-desk",
-  "//": "Hydra Desk 2: Michael's copy of ../desk (2026-10-04), plus hydra/, its own copy of AgentHydra's window (served at /ah/).",
+  "//": "Hydra Desk 2: the other owner's copy of ../desk (2026-10-04), plus hydra/, its own copy of AgentHydra's window (served at /ah/).",
   "private": true,
   "version": "2.0.4",
   "workspaces": ["server", "web", "hydra"],
@@ -18,10 +18,14 @@
     "e2e:hosts": "bun e2e/hosts.e2e.ts",
     "e2e:gestures": "bun e2e/gestures.e2e.ts",
     "e2e:scroll": "bun e2e/scroll-follow.e2e.ts",
+    "e2e:rail": "bun e2e/rail.e2e.ts",
+    "e2e:outside": "bun e2e/outside-composer.e2e.ts",
+    "e2e:frame-click": "bun e2e/frame-click.e2e.ts",
     "e2e:clipboard": "bun e2e/browser-clipboard.e2e.ts",
     "e2e:browser-speed": "bun e2e/browser-speed.e2e.ts",
     "e2e:host-audio": "bun e2e/host-audio.e2e.ts",
-    "e2e:manager-avatar": "bun e2e/manager-avatar.e2e.ts"
+    "e2e:manager-avatar": "bun e2e/manager-avatar.e2e.ts",
+    "e2e:multi-select": "bun e2e/multi-select.e2e.ts"
   },
   "devDependencies": {
     "puppeteer": "^25.12.0"

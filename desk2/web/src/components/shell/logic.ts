@@ -287,15 +287,31 @@ export const splitChat = (want: number, stage: number): number => Math.round(Mat
 /** splitChat as the stage's grid columns, so the split is right before anything is measured and as the window resizes. */
 export const splitColumns = (want: number): string => `max(${CHAT_MIN}px, min(${Math.round(want)}px, calc(100% - ${SIDE_MIN}px))) minmax(0, 1fr)`
 
-// The Background tasks panel docked beside the chat opens narrower than its first 440px and its left edge drags it (owner, 2026-10-08: "should be resizeable, and
-// probably open narrower, it is currently VERY wide"). The chat keeps CHAT_MIN however wide it is dragged.
-export const TASKS_MIN = 300
-export const TASKS_MAX = 720
-export const TASKS_DEFAULT = 360
+// The session rail on the chat's right (owner, 2026-10-14, after Claude Desktop's: "it'll reserve space on the right, but if I make
+// it wider, the text does stay centered"): its left edge drags it, and the chat keeps CHAT_MIN however wide it is dragged. It takes
+// from the chat only the room the centred text column needs: on a wide stage it lies over the empty margin and the column stays
+// centred on the whole stage; as the stage narrows it pushes the column over, up to its whole width.
+export const RAIL_MIN = 260
+export const RAIL_MAX = 640
+export const RAIL_DEFAULT = 320
+/** The rail's gap to the stage's right edge, and the least gap it keeps to the text column: the transcript's step arrows'
+ *  lane (12px off the rail, 24 wide, 12 clear of the text). At 16 the arrows sat over the column's last 28px, on a right-hand
+ *  user message's picture (owner, 2026-10-14: "issue with the ... gap around the peek/previous chat thingy"). */
+export const RAIL_INSET = 8
+export const RAIL_GAP = 48
+/** The transcript's and the composer's text column. */
+export const TEXT_COLUMN = 768
 
-/** The panel's width in a stage `stage` px wide (0 before it is measured), for `want`. */
-export const tasksPanelWidth = (want: number, stage: number): number =>
-  Math.round(Math.max(TASKS_MIN, Math.min(want, TASKS_MAX, stage > 0 ? stage - CHAT_MIN : TASKS_MAX)))
+/** The rail's width in a stage `stage` px wide (0 before it is measured), for `want`. */
+export const railWidthIn = (want: number, stage: number): number =>
+  Math.round(Math.max(RAIL_MIN, Math.min(want, RAIL_MAX, stage > 0 ? stage - CHAT_MIN - RAIL_INSET : RAIL_MAX)))
+
+/** The room the rail takes from the chat: none while the column, centred on the whole stage, clears it; all of it once the stage is
+ *  too narrow for both side by side; in between, enough that the column, centred on what is left, ends RAIL_GAP short of it. */
+export function railReserve(width: number, stage: number): number {
+  const rail = width + RAIL_INSET + RAIL_GAP
+  return stage > 0 ? Math.round(Math.max(0, Math.min(rail, 2 * rail + TEXT_COLUMN - stage))) : rail
+}
 
 // ---- the archived notice at the bottom of the chat on screen ----
 export type ArchivedNotice = { kind: 'chat' | 'external'; id: string; patch: { archived: false } }

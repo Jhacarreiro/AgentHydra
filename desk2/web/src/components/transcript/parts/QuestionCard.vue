@@ -4,12 +4,14 @@ import { Check, Clock, MessageCircleQuestion, SkipForward, X } from '@lucide/vue
 import type { ImageRef, TranscriptItem } from '@shared/protocol'
 import { dataUrlToBase64, validateImage } from '@/components/composer/logic'
 import { useDesk } from '@/stores/desk'
+import { LOCKED_TITLE } from '@/components/shell/readonly-child'
 import { useTranscript } from '../context'
 
 // Pending, the card lives in the composer dock (docked); the transcript keeps a quiet row.
 const props = defineProps<{ item: Extract<TranscriptItem, { kind: 'question' }>; docked?: boolean }>()
 
 const ctx = useTranscript()
+const lockedTitle = computed(() => (ctx.readOnly.value ? LOCKED_TITLE : undefined))
 const desk = useDesk()
 const busy = ref(false)
 const err = ref<string | null>(null)
@@ -171,59 +173,59 @@ const summary = computed(() => {
               : 'border-border text-text-muted hover:bg-fill-hover hover:text-text'
           "
           :disabled="ctx.readOnly.value || busy"
+          :title="lockedTitle"
           @click="toggle(q.question, o.label, q.multiSelect)"
         >
           <span class="shrink-0 font-medium">{{ o.label }}</span>
           <span v-if="o.description" class="min-w-0 truncate text-ui-sm text-text-muted">{{ o.description }}</span>
         </button>
-        <template v-if="!ctx.readOnly.value">
-          <button
-            type="button"
-            class="rounded-md border px-2.5 py-1.5 text-start text-ui"
-            :class="otherOn[q.question] ? 'border-brand/60 bg-brand/10 text-text' : 'border-border text-text-muted hover:bg-fill-hover'"
-            :disabled="busy"
-            @click="toggleOther(q.question, q.multiSelect)"
-          >
-            Other…
-          </button>
-          <div
-            v-if="otherOn[q.question]"
-            class="grid gap-1.5"
-            :class="dragOver ? 'rounded-md ring-1 ring-brand/60' : ''"
-            @dragover.prevent="dragOver = true"
-            @dragleave="dragOver = false"
-            @drop.prevent="onDrop($event, q.question)"
-          >
-            <input
-              v-model="other[q.question]"
-              class="tx-input"
-              placeholder="Your answer (paste or drop a picture)"
-              @keydown.enter.prevent="next()"
-              @paste="onPaste($event, q.question)"
-            />
-            <div v-if="pictures[q.question]?.length" class="flex flex-wrap gap-1.5">
-              <span v-for="im in pictures[q.question]" :key="im.id" class="group relative size-12 overflow-hidden rounded-md bg-(--bg-picture) shadow-(--shadow-picture-light)">
-                <img :src="im.url" :alt="im.name" class="size-full object-cover" />
-                <button
-                  type="button"
-                  class="absolute right-0 top-0 flex size-4 items-center justify-center rounded-es bg-black/70 text-white"
-                  :aria-label="`Remove ${im.name}`"
-                  @click="removePicture(q.question, im.id)"
-                >
-                  <X class="size-3" />
-                </button>
-              </span>
-            </div>
-            <span v-if="pictureErr" class="text-ui-sm text-danger-text">{{ pictureErr }}</span>
+        <button
+          type="button"
+          class="rounded-md border px-2.5 py-1.5 text-start text-ui"
+          :class="otherOn[q.question] ? 'border-brand/60 bg-brand/10 text-text' : 'border-border text-text-muted hover:bg-fill-hover'"
+          :disabled="busy || ctx.readOnly.value"
+          :title="lockedTitle"
+          @click="toggleOther(q.question, q.multiSelect)"
+        >
+          Other…
+        </button>
+        <div
+          v-if="otherOn[q.question]"
+          class="grid gap-1.5"
+          :class="dragOver ? 'rounded-md ring-1 ring-brand/60' : ''"
+          @dragover.prevent="dragOver = true"
+          @dragleave="dragOver = false"
+          @drop.prevent="onDrop($event, q.question)"
+        >
+          <input
+            v-model="other[q.question]"
+            class="tx-input"
+            placeholder="Your answer (paste or drop a picture)"
+            @keydown.enter.prevent="next()"
+            @paste="onPaste($event, q.question)"
+          />
+          <div v-if="pictures[q.question]?.length" class="flex flex-wrap gap-1.5">
+            <span v-for="im in pictures[q.question]" :key="im.id" class="group relative size-12 overflow-hidden rounded-md bg-(--bg-picture) shadow-(--shadow-picture-light)">
+              <img :src="im.url" :alt="im.name" class="size-full object-cover" />
+              <button
+                type="button"
+                class="absolute right-0 top-0 flex size-4 items-center justify-center rounded-es bg-black/70 text-white"
+                :aria-label="`Remove ${im.name}`"
+                @click="removePicture(q.question, im.id)"
+              >
+                <X class="size-3" />
+              </button>
+            </span>
           </div>
-        </template>
+          <span v-if="pictureErr" class="text-ui-sm text-danger-text">{{ pictureErr }}</span>
+        </div>
       </div>
     </div>
-    <div v-if="!ctx.readOnly.value" class="mt-2.5 flex items-center gap-2 ps-6">
-      <button v-if="step > 0" type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="step--">Back</button>
-      <button v-if="!last" type="button" class="tx-btn tx-btn-primary" :disabled="busy || !stepDone" @click="next()">Next</button>
-      <button v-else type="button" class="tx-btn tx-btn-primary" :disabled="busy || !complete" @click="submit()">Answer</button>
-      <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy" @click="submit(true)">Skip</button>
+    <div class="mt-2.5 flex items-center gap-2 ps-6">
+      <button v-if="step > 0" type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="step--">Back</button>
+      <button v-if="!last" type="button" class="tx-btn tx-btn-primary" :disabled="busy || ctx.readOnly.value || !stepDone" :title="lockedTitle" @click="next()">Next</button>
+      <button v-else type="button" class="tx-btn tx-btn-primary" :disabled="busy || ctx.readOnly.value || !complete" :title="lockedTitle" @click="submit()">Answer</button>
+      <button type="button" class="tx-btn tx-btn-ghost" :disabled="busy || ctx.readOnly.value" :title="lockedTitle" @click="submit(true)">Skip</button>
       <span v-if="err" class="text-ui-sm text-danger-text">{{ err }}</span>
     </div>
   </div>

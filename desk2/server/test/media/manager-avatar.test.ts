@@ -1,5 +1,5 @@
 import { afterEach, expect, test } from 'bun:test'
-import { mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readdirSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { Hono } from 'hono'
@@ -11,6 +11,7 @@ const PNG = new Uint8Array([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 0x00
 const JPG = new Uint8Array([0xff, 0xd8, 0xff, 0xe0, 0x00, 0x10, 0x4a, 0x46])
 
 const oldManagersDir = process.env.AGENTHYDRA_MANAGERS_DIR
+const oldPeopleDir = process.env.AGENTHYDRA_PEOPLE_DIR
 let personas: string | null = null
 let changed: string[] = []
 
@@ -19,6 +20,8 @@ afterEach(() => {
   personas = null
   if (oldManagersDir === undefined) delete process.env.AGENTHYDRA_MANAGERS_DIR
   else process.env.AGENTHYDRA_MANAGERS_DIR = oldManagersDir
+  if (oldPeopleDir === undefined) delete process.env.AGENTHYDRA_PEOPLE_DIR
+  else process.env.AGENTHYDRA_PEOPLE_DIR = oldPeopleDir
 })
 
 function setup(): Hono {
@@ -114,6 +117,20 @@ test('a PNG is saved, served with its headers, and reaches the manager label', a
     photo,
     statsLine: null,
   })
+})
+
+test('a photo for a manager with a people copy is saved in the people folder', async () => {
+  const hono = setup()
+  process.env.AGENTHYDRA_PEOPLE_DIR = join(personas!, 'people')
+  mkdirSync(join(personas!, 'people', 'manager', 'example-manager'), { recursive: true })
+  writeFileSync(
+    join(personas!, 'people', 'manager', 'example-manager', 'persona.json'),
+    JSON.stringify({ name: 'Example Manager', title: 'Invented title' }),
+  )
+  const saved = await put(hono, 'example-manager', PNG, 'image/png')
+  expect(saved.status).toBe(200)
+  expect(existsSync(join(personas!, 'people', 'manager', 'example-manager', 'avatar.png'))).toBe(true)
+  expect(existsSync(join(personas!, 'example-manager', 'avatar.png'))).toBe(false)
 })
 
 test('a new photo replaces the old one and leaves no temporary file', async () => {

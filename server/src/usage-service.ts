@@ -61,7 +61,7 @@ export function accountAuth(accountId: string): { auth: UsageAuth; label: string
 }
 
 /** Desktop instances authenticate via safeStorage (not the dispatch `accounts` table); match on the
- *  resolved email appearing in a dispatch account's free-text label (e.g. "Michael <x@y.com>"). */
+ *  resolved email appearing in a dispatch account's free-text label (e.g. "Alex <x@y.com>"). */
 export function findDispatchAccountByEmail(email: string): { id: string; label: string } | null {
   const needle = email.toLowerCase()
   const rows = db.query<{ id: string; label: string }, []>('select id, label from accounts').all()
@@ -333,7 +333,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
           : isRunning
             ? 'check_failed'
             : 'stale_token_app_closed'
-  // ⛔ OWNER RULE (Michael, 2026-09-07): *"when the account is not logged in, it should reset and
+  // ⛔ OWNER RULE (2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
   // before they check anything, so a signed-out row went on showing the old percentages

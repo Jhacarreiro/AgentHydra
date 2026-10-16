@@ -1,4 +1,5 @@
 <script setup lang="ts">
+import { computed } from 'vue'
 import { Bot, Network } from '@lucide/vue'
 import { Tip } from '@/components/ui/tooltip'
 import { runPulse } from './logic'
@@ -16,8 +17,10 @@ import { badgeTip, SUB_KIND_LABELS, toggleExpanded, type SubBadge } from './subi
 // bit ... to show that it's been toggled on"): HSwarm's tinted in the accent, as the Filter button is while it narrows
 // the list (SidebarTools.vue); CliMayte's, which may not be blue, lit and outlined in the strong border instead. A
 // running icon keeps its pulse in the badge's colour.
-defineProps<{ rowKey: string; badges: SubBadge[] }>()
+const props = defineProps<{ rowKey: string; badges: SubBadge[] }>()
 const label = (b: SubBadge) => `${SUB_KIND_LABELS[b.kind]}: ${b.running} running of ${b.total}${b.accounts.length ? `, on ${b.accounts.map((a) => a.label).join(', ')}` : ''}`
+// Each badge's label and tooltip, worked out once per change of the badges rather than on every render of the row.
+const tips = computed(() => props.badges.map((b) => ({ b, aria: label(b), tip: badgeTip(b) })))
 const tone = (b: SubBadge) => (!b.running ? 'text-text-muted' : b.kind === 'jobs' ? 'text-accent-text' : 'text-text-2')
 const look = (b: SubBadge) =>
   !b.open
@@ -30,10 +33,10 @@ const pulse = (b: SubBadge) => (!b.running ? '' : b.open ? 'run-pulse' : runPuls
 
 <template>
   <span v-if="badges.length" class="flex shrink-0 items-center gap-1">
-    <Tip v-for="b in badges" :key="b.kind" :label="badgeTip(b)">
+    <Tip v-for="{ b, aria, tip } in tips" :key="b.kind" :label="tip">
       <button
         type="button"
-        :aria-label="label(b)"
+        :aria-label="aria"
         :aria-expanded="b.open"
         class="flex h-4 min-w-4 cursor-default items-center justify-center gap-0.5 rounded-sm px-1 text-2xs leading-4 tnum transition-colors duration-(--dur-fast)"
         :class="look(b)"

@@ -43,12 +43,25 @@ const gitUpdater = createUpdater({
   },
 })
 
+// The spawn lane serializes individual commands, not an entire fetch/check or pull/build.
+// Concurrent source operations can otherwise replace FETCH_HEAD while a pull is using it.
+let sourceTail: Promise<void> = Promise.resolve()
+function sourceOperation<T>(run: () => Promise<T>): Promise<T> {
+  const result = sourceTail.then(run)
+  // Recover only the queue's tail; this caller still receives its own rejection.
+  sourceTail = result.then(
+    () => undefined,
+    () => undefined,
+  )
+  return result
+}
+
 /** `fresh` bypasses the compiled path's 5-minute result cache, for a check a PERSON asked for.
  *  It is only meaningful there: the source path shells out to git on every call and holds no
  *  cache, so it is already as fresh as it can be and the flag is silently irrelevant rather than
  *  ignored. The shared kit engine's signature is untouched either way. */
 export function checkForUpdate(opts: { fresh?: boolean } = {}): Promise<UpdateStatus> {
-  return IS_RELEASE ? ghCheckForUpdate(opts) : gitUpdater.checkForUpdate()
+  return IS_RELEASE ? ghCheckForUpdate(opts) : sourceOperation(() => gitUpdater.checkForUpdate())
 }
 
 export async function applyUpdate(): Promise<UpdateApplyResult> {
@@ -59,17 +72,19 @@ export async function applyUpdate(): Promise<UpdateApplyResult> {
   // engine, which is synced and not ours to instrument. So report the phase honestly and say why it
   // is slow, rather than leaving a mute spinner over several minutes of real work — that silence is
   // the whole complaint. Coarse and true beats precise and invented.
-  beginUpdateProgress('Starting the update…')
-  setUpdatePhase(
-    'building',
-    'Pulling, reinstalling dependencies and rebuilding the web app. This runs three commands back to back and usually takes a few minutes.',
-  )
-  try {
-    const result = await gitUpdater.applyUpdate()
-    finishUpdateProgress(result.ok, result.message ?? (result.ok ? 'Updated.' : 'Update failed.'))
-    return result
-  } catch (e) {
-    finishUpdateProgress(false, e instanceof Error ? e.message : String(e))
-    throw e
-  }
+  return sourceOperation(async () => {
+    beginUpdateProgress('Starting the update…')
+    setUpdatePhase(
+      'building',
+      'Pulling, reinstalling dependencies and rebuilding the web app. This runs three commands back to back and usually takes a few minutes.',
+    )
+    try {
+      const result = await gitUpdater.applyUpdate()
+      finishUpdateProgress(result.ok, result.message ?? (result.ok ? 'Updated.' : 'Update failed.'))
+      return result
+    } catch (e) {
+      finishUpdateProgress(false, e instanceof Error ? e.message : String(e))
+      throw e
+    }
+  })
 }

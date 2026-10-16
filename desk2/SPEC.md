@@ -1,11 +1,11 @@
-# Hydra Desk: Jacob's own Claude Code desktop
+# Hydra Desk: the owner's own Claude Code desktop
 
-Jacob's replacement for the Claude Code desktop app (the Code tab of Claude Desktop). It runs Claude
+The owner's replacement for the Claude Code desktop app (the Code tab of Claude Desktop). It runs Claude
 Code chats itself through the Claude Agent SDK, shows at a glance which chats are working, waiting on
-him, finished or stopped, lets him stop any of them, and plugs into AgentHydra (the daemon on
+the owner, finished or stopped, lets them stop any chat, and plugs into AgentHydra (the daemon on
 `http://127.0.0.1:7787`) for accounts, CliMayte workers and the chats running elsewhere.
 
-Owner: Jacob. His words (2026-10-03): "my own desktop that plugs into Agent Hydra with the goal of
+The owner's words (2026-10-03): "my own desktop that plugs into Agent Hydra with the goal of
 removing Claude Code desktop. My own chat manager, my own everything ... everything is told to hand to
 CliMayte. I can see all the active CliMaytes ... make it look and function exactly like Claude Code
 Desktop ... I'm tired of not being able to see if a chat's working, stopping or anything."
@@ -16,7 +16,7 @@ Desktop ... I'm tired of not being able to see if a chat's working, stopping or 
   `docs/reference/claude-desktop-composer.png`, `docs/reference/claude-desktop-toast.png`. Where Claude
   Desktop hides state (it shows no "working" signal in its sidebar), Hydra Desk shows it. That is the one
   place we deliberately differ.
-- **Status must never lie.** A chat that is working shows working; one waiting on Jacob shows that, on
+- **Status must never lie.** A chat that is working shows working; one waiting on the owner shows that, on
   every surface (sidebar row, header, window title, notification). The engine's state comes from the SDK
   (`system/session_state_changed`: idle, running, requires_action) plus local facts (interrupt, error,
   usage limit, closed).
@@ -52,7 +52,7 @@ desk/
 ```
 
 Default settings: `defaultModel null` (account default), `defaultEffort null`, `defaultPermissionMode
-'bypassPermissions'` (what Jacob runs today), `defaultAccountId 'auto'`, `delegateToCliMayte true`,
+'bypassPermissions'` (what the owner runs today), `defaultAccountId 'auto'`, `delegateToCliMayte true`,
 `idleCloseMinutes 30`, `notifications true`.
 
 ## The engine (server/src/engine)
@@ -68,17 +68,17 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   - `settingSources: ['user', 'project', 'local']` so CLAUDE.md files, hooks and MCP servers load as in
     Claude Code.
   - `systemPrompt: { type: 'preset', preset: 'claude_code', append: DESK_APPEND }` (below).
-  - `mcpServers`: what plain `claude` gets in the chat's folder under Jacob's MAIN `~/.claude.json` (never logged: CLAUDE.md), whatever
+  - `mcpServers`: what plain `claude` gets in the chat's folder under the owner's MAIN `~/.claude.json` (never logged: CLAUDE.md), whatever
     account the chat runs on: its user-level `mcpServers` (agenthydra, connections, any other) plus the
     folder's local-scope servers (`projects[<folder>].mcpServers`; the folder matches case-insensitively and
     with / or \ , a parent folder's entry is not applied, as in Claude Code), passed VERBATIM (never log a
     url, header or env). The folder's `.mcp.json` still loads through the SDK, and a user-level name it also
     defines is left to it (project beats user). A name the account's own config also defines: the main
-    config's wins (it is what Jacob's own `claude` runs). A missing or corrupt file is skipped with one log
+    config's wins (it is what the owner's own `claude` runs). A missing or corrupt file is skipped with one log
     line naming the file. `server/src/engine/mcp-servers.ts` computes it for both the chat and the MCP list.
     CliMayte worker chats run in AgentHydra, not here: their MCP parity is AgentHydra's job.
   - When the account's CLAUDE.md is AgentHydra's worker-rules copy ('Rules for a CliMayte worker'), Desk sets
-    flag setting `claudeMdExcludes` for it and appends Jacob's real
+    flag setting `claudeMdExcludes` for it and appends the owner's real
     `~/.claude/CLAUDE.md` (the default config dir, ../docs/CLAUDE-CONFIG-LAYOUT.md) to the system prompt.
   - `disallowedTools: ['Agent', 'Task']` when `delegateToCliMayte` is on.
   - `resume: sessionId` when the chat already has a session (restart, idle-close, import).
@@ -134,7 +134,9 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   Unknown message types are ignored, never thrown on.
 - **Store** (`store.ts`): `~/.hydra-desk-2/chats.json` (ChatSummary[] without volatile fields) and
   `~/.hydra-desk-2/chats/<chatId>.jsonl` (one TranscriptItem per line, append-only; loading keeps the last
-  line per id). Streaming deltas are not written per delta: the finished item is written once.
+  line per id). Streaming deltas are not written per delta: the finished item is written once. A chat's
+  `lastActionAt` is its newest item's time (the manager stamps it from every item it sends out); a chat saved
+  before that field existed takes its `.jsonl` file's last write when loaded.
   `~/.hydra-desk-2/queue.json` holds the Send queue (below), written immediately and atomically on every change.
 - **Session meta** (`session-meta.ts`): `~/.hydra-desk-2/session-meta.json`, Hydra Desk's own marks on
   outside sessions keyed by session id (`SessionMeta`: pinned, archived, unread, title, group), written
@@ -155,13 +157,13 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   choice", "Limit failover"); it stays `limited` only when no other account has room.
 - **After each turn:** `getContextUsage()` -> `contextPct`; `result.total_cost_usd` added to `costUsd`;
   `unread = true`; a `notify` event (finished / needs_you / error / limited).
-- **Titles:** the first line of the first prompt, at most 60 chars, until Jacob renames it. Then, for every new chat (CliMayte, SDK, queued), a generated title replaces it shortly after the first message is sent: 3-6 words, sentence case, no quotes or trailing period. `server/src/engine/chat-title.ts` makes it with one Haiku 5.5 query (`claude-haiku-5-5` by id, never Haiku 4.5) on the chat's own account, low effort, no tools, maxTurns 1, from the first ~2000 chars of the message, 20 s limit; run off the send, so the send never waits. It is applied once, pushed as a `chat.upsert`, and never over a title Jacob set (a rename before it returns wins). Any failure or timeout keeps the first words, silently. Always on (no setting). HydraSwarm was not used: this needs no extra service and rides the login the chat has.
+- **Titles:** the first line of the first prompt, at most 60 chars, until the owner renames it. Then, for every new chat (CliMayte, SDK, queued), a generated title replaces it shortly after the first message is sent: 3-6 words, sentence case, no quotes or trailing period. `server/src/engine/chat-title.ts` makes it with one Haiku 5.5 query (`claude-haiku-5-5` by id, never Haiku 4.5) on the chat's own account, low effort, no tools, maxTurns 1, from the first ~2000 chars of the message, 20 s limit; run off the send, so the send never waits. It is applied once, pushed as a `chat.upsert`, and never over a title the owner set (a rename before it returns wins). Any failure or timeout keeps the first words, silently. Always on (no setting). HydraSwarm was not used: this needs no extra service and rides the login the chat has.
 - **Accounts:** `accountId 'auto'` asks the bridge `placeAccount(liveChatsByAccount())` (see "Account
   choice"); an explicit id is used as given and never re-placed.
 
 DESK_APPEND (the orchestrator default every chat gets):
 
-> You are running inside Hydra Desk, Jacob's own desktop for Claude Code. Sub-agents here are CliMayte
+> You are running inside Hydra Desk, the owner's own desktop for Claude Code. Sub-agents here are CliMayte
 > workers, not the Agent tool: when you would start a sub-agent or hand off a piece of work, send it
 > through the agenthydra MCP with `climayte_run { tasks: [{ prompt, cwd, kind, check }] }` (or
 > `climayte_manage` for five or more tasks in rounds). Each task must stand alone: its folder, its
@@ -171,7 +173,7 @@ DESK_APPEND (the orchestrator default every chat gets):
 
 When `delegateToCliMayte` is off, DESK_APPEND is only its first sentence.
 
-### A chat moves folders (engine/cwd-move.ts, chat-manager noteCwd)
+### A chat moves folders (engine/cwd-move.ts, chat-manager-moves noteCwd)
 
 Like Claude Code's own app: tell a chat "make folder X and move yourself there" and its sidebar group
 becomes X, and later turns run in X with X's instructions and MCP servers.
@@ -218,7 +220,7 @@ becomes X, and later turns run in X with X's instructions and MCP servers.
 
 ### Chat hosts (server/src/host)
 
-Jacob, 2026-10-04: an update to Hydra Desk must not kill the chats. A chat this server runs itself (an
+The owner, 2026-10-04: an update to Hydra Desk must not kill the chats. A chat this server runs itself (an
 import, a fork, a chat stored before CliMayte workers; worker chats run in AgentHydra and need none of
 this) runs its Agent SDK query in a **chat host**: a small bun process (`host/chat-host.ts`) born outside
 the server's process tree (Windows: WMI `Win32_Process.Create`, as AgentHydra's `detached-spawn.mjs` does;
@@ -246,7 +248,7 @@ only the server's own children); when both refuse, the start fails at once with 
 - **Restart.** After the plugins load and before the server answers, `ChatManager.attachHosts()`
   connects to every live host (hello, journal, then live traffic) and the runtime replays the journal
   through the live path from the status the chat had at the last ack (`ChatRuntime.adopt`). Only items
-  that differ from the stored transcript are written; what the last server already told Jacob is not told
+  that differ from the stored transcript are written; what the last server already told the owner is not told
   again, what happened while no server was there is (a finished turn, a request), and a usage limit hit
   then is carried now. Requests the host still waits on open again under the same ids. A host whose chat
   is gone is ended. A stopping server says what it saw (`detach { seen, shown }`) and the host closes the
@@ -367,6 +369,7 @@ chat is created at once, ignoring `maxNewChats` and the wait for room (Auto may 
 | `POST /api/folders/reveal` (`{ path }`) | `{ path }` (opens an existing absolute folder in Explorer, `explorer.exe <path>`, no shell; else 400) |
 | `GET /api/chats/:id/commands` | `SlashCommandInfo[]` |
 | `GET /api/models` | `ModelChoice[]` |
+| `GET /api/pushback` | `{ service, model, effort, turns, pushback, refusals, pushbackRate }[]` (every setting with any turns, on any service, lowest `pushbackRate` first; see "Sus meter"; `model` is the resolved model id, `effort` is `default` when none was set) |
 | `GET /api/folders/recent` | `string[]` (the folder menu's Recent: the chats' folders and the folders opened or chosen in the menu, latest first, at most 20; a folder taken off stays off until it is used again; folders gone from disk left out; `<home>/folders.json`) |
 | `POST /api/folders/recent` (`{ path }`) | `string[]` (the folder was chosen: it tops Recent, back on it if it was taken off; 400 unless an existing absolute folder on this machine) |
 | `DELETE /api/folders/recent?path=` | `string[]` (takes the folder off Recent until it is opened, chosen or gets a new chat) |
@@ -412,6 +415,51 @@ window is connected the bridge polls AgentHydra every 3 s and broadcasts `extern
 a stalled read is not down, and a list read that fails is answered with its last answer for two minutes
 (`KEEP_LAST_MS`), so the sidebar never empties and refills over a blip (owner, 2026-10-09).
 
+## Sus meter (server/src/engine/pushback.ts)
+
+Some settings kick back on routine work on the owner's own projects (refusing, "are you sure", warnings about his own
+keys or production, lecturing, doing less than asked). Desk measures that per setting and lets each chat choose a level
+instead of a model. Server half; the composer draws the three levels.
+
+- **Counting.** When any assistant turn ends, on Claude, Codex or ChatGPT, `classifyTurn(stopReason, finalText)` gives
+  `refusal` (the result's `stop_reason` is `refusal`), `pushback` (the closing text matches an entry of
+  `PUSHBACK_PHRASES`, one exported list of `{ label, re }`, case-insensitive: a refusal, permission or "are you sure" asked
+  for routine work, a warning about the owner's own keys, production or accounts, a safety lecture, or less done than
+  asked with the reason; a plain technical caveat such as "this will need a restart" matches nothing) or `clean`. Every
+  answered turn is counted, clean ones too, so a setting that never pushes back shows its zero. A turn that failed
+  without a refusal answered nothing and counts nowhere. The count is keyed `{ service, model, effort }`: the model id the
+  assistant message named (Codex and ChatGPT: the chat's model, `default` when none), the effort (`default` when none).
+  Counts live in `<home>/pushback.json` (temp file + rename) with the ids of the chats the backfill has counted and an
+  audit list: each turn that was not clean, with its time, chat, setting, class and the matched phrase label (newest 2000).
+- **Backfill.** `ChatManager.backfillPushback()` / `bun server/scripts/pushback-backfill.ts <data folder>` seeds the counts
+  once from the transcripts of the Claude chats the Desk knows, under each chat's own model and effort (a transcript has no
+  stop reasons, so only pushbacks are found). A chat counted is recorded, so a second run adds nothing.
+- **CliMayte worker chats.** A worker's turn is counted when the chat goes from at work to idle, under `service: 'claude'`,
+  the model the worker's last attempt reported (`reportedModel`, else its `model`, else `default`) and its `effort`
+  (`default` when none), with its final reply's text and no stop reason (none reaches the Desk). It is keyed by its
+  closing reply's id (`counted` in `pushback.json`, newest 5000), so a second read, a restart or the backfill never counts
+  it again. The backfill reads a worker chat's transcript as turns that end at the next message, the last one only once
+  the chat is not at work. `sus` on a worker chat sends each message (and the worker's start) with the pick as CliMayte's
+  `model` (`opus`, `sonnet`, `haiku`, by the family the id names) and `effort` (`low` to `max`); a pick it cannot name,
+  no pick yet, and `fine` send none. CliMayte keeps a sent setting from that launch on, so the first override records the
+  worker's own `{ model, effort }` (from its worker record; `null`s for a worker started on the pick) as
+  `ChatSummary.susRestore`, saved with the chat. Once `sus` stops applying (the chat left it for `fine` or `bad`, or no
+  setting qualifies any more) the next message to the worker carries that setting once and the field goes; a part
+  CliMayte cannot name, or none, goes back as its nearest, Opus and xhigh (how CliMayte launches a Desk chat). `bad` pins a
+  worker chat to Codex as any other: nothing reaches the worker meanwhile, so the restore rides its first message after.
+- **Levels.** `ChatSummary.sus` is `fine | sus | bad` (absent = `fine`); set on `PATCH /api/chats/:id` (`{ sus }`) and on
+  `POST /api/chats` (`{ sus }`).
+  - `fine`: the chat's own model and effort, exactly as before.
+  - `sus`: the next Claude turn runs on the Claude setting with the lowest `pushbackRate` among those with at least
+    `SUS_MIN_TURNS` (20) classified turns, else on the chat's own. Nothing is added to the prompt; only the model and effort
+    of that turn change, and the chat's own fields stay. `ChatSummary.susPick` (`{ model, effort, pushbackRate, turns }`,
+    null when no setting qualifies yet, absent off `sus`, never saved) says what `sus` resolves to.
+  - `bad`: the chat is pinned to Codex (`service: 'codex'`, the Pin service path: the next turn first reads what was said).
+    Leaving `bad` pins back to Claude. Without Codex set up the patch is the 409 `Codex is not set up in this Desk.`
+- **Never re-sent.** A turn that ended in `refusal` is counted and reported, nothing more: it is not sent again on another
+  setting or service, and refusals do not enter the `sus` ranking (only `pushbackRate`). The level changes where the next
+  message goes only because the owner chose it.
+
 ## The bridge (server/src/bridge)
 
 A typed client for the AgentHydra daemon (`HYDRA_URL`, default `http://127.0.0.1:7787`). Read
@@ -441,7 +489,7 @@ shows the HSwarm and CliMayte items the session called). The sidebar keeps the w
 
 ### Chats are CliMayte workers
 
-Hydra Desk is a viewer (Jacob, 2026-10-04): it keeps no account policy, no failover and no limit or
+Hydra Desk is a viewer (the owner, 2026-10-04): it keeps no account policy, no failover and no limit or
 login handling. A new chat (create, or a queued new chat) is a CliMayte worker: its first message calls
 `POST /api/corch/workers` (`tasks: [{ prompt, cwd, title, chat: true }]`, group `hydra-desk`). `chat: true`
 is AgentHydra's chat mode: the worker launches like the owner's own `claude` (no worker brief, the owner's
@@ -476,7 +524,7 @@ picks the account and moves the worker when that account hits its limit or its l
 - **No SDK chat ends on an account failure (in-runtime failover, not CliMayte):** AgentHydra's
   `POST /api/corch/workers` takes only a prompt and cwd (no resume or seed option), so an imported session
   cannot start as a worker. Instead, when a turn fails on its account (expired/revoked login, 401/403 auth,
-  org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `ChatManager.carryToAnotherAccount`
+  org mismatch: `isSignInFailureText`; or a usage limit: `isUsageLimitText`), `carryToAnotherAccount` (`engine/chat-manager-moves.ts`)
   asks `listAccounts()` (AgentHydra's word: `signedIn`, usage percentages, never a token) for the least used
   signed-in account not yet tried whose 5-hour and weekly readings are both under the fleet's 85% line, or under
   the owner's lower cap for the account, the owner's higher priority first (`AccountInfo.priority`, `maxFiveHourPct`,
@@ -582,12 +630,15 @@ Details in `docs/fidelity/shell.md` "Status dots".
 
 Hover tooltip: status in words, activity, elapsed, account. A chat with active CliMayte workers shows a
 small count chip. Row menu (right-click, the row's "...", and the title bar's chat menu: one list, the
-real app's): Open in > (File Explorer, Copy resume command, Copy session ID), Stop (only while working),
+real app's), under a line naming the row (its id and account) and a Last action line (how long ago it last
+did something, README "Which chat, on which account"): Open in > (File Explorer, Copy resume command, Copy session ID), Stop (only while working),
 Pin P / Unpin, Mark as unread U / Mark as read, Rename R, Fork F, Move to group > (every folder and moved-to
 group, a check on the current one, New group…, Remove from group), Archive A / Unarchive, Delete D (red,
 confirmed in a dialog). The letter runs its item while the menu is open. A chat moved to a group is listed
 under it instead of its folder (a group named like a folder joins that folder's group). Outside sessions
-get the same menu without Delete; their marks are Hydra Desk's session meta. The Filter menu shows Active (default, not archived), Archived (only archived chats) or All
+get the same menu without Delete; their marks are Hydra Desk's session meta. Ctrl or Shift and a click picks
+several rows; two or more picked share one menu, under "N selected", of the items that fit many (README "Several
+rows at once"). The Filter menu shows Active (default, not archived), Archived (only archived chats) or All
 (an "Archived" group at the bottom). Collapsed, the sidebar slides in over the content while the pointer
 is on the show-sidebar toggle or the window's left edge. Footer: "Auto account" or the
 pinned account, with the accounts popover (each account's 5-hour and weekly bars) and a gear (Settings).
@@ -605,7 +656,7 @@ unread/needs attention = solid `#2a78d6` (Hydra Desk: orange, see the table abov
 
 **Transcript** (`components/transcript/TranscriptView.vue`, props `{ chatId: string, items:
 TranscriptItem[], readOnly?: boolean }`): centered column, max width 780px, auto-scroll that stops when
-Jacob scrolls up (a "Jump to latest" button appears; Desk 2 replaced it with the arrows at the top right, see
+the owner scrolls up (a "Jump to latest" button appears; Desk 2 replaced it with the arrows at the top right, see
 README "Arrows through the messages you sent"). User messages in a rounded `--bg-elev` box;
 assistant text as markdown (markdown-it + shiki, dark theme, copy button on code blocks); thinking as a
 collapsed "Thinking" row (expands to the text); tool calls as compact rows like Claude Code: icon, tool
@@ -812,7 +863,7 @@ bold group headings over rows of label, muted description and control, split by 
 model, effort, permission mode, notifications (with Test), idle-close minutes, the default account
 (`AccountsList embedded`), delegate to CliMayte, workers running, bridge status, version, data folder.
 
-**Notifications:** browser `Notification` when a chat finishes, needs Jacob, errors or hits a limit
+**Notifications:** browser `Notification` when a chat finishes, needs the owner, errors or hits a limit
 while the window is not focused or the chat is not the one on screen; clicking it focuses that chat.
 
 **Store** (`web/src/stores/desk.ts`, `useDesk()`): reactive `chats`, `itemsByChat` (Map chatId ->

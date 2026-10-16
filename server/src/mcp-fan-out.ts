@@ -5,6 +5,8 @@ import { randomUUID } from 'node:crypto'
 import { unlinkSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
+import { DRONE_REFUSAL } from './climayte-lib'
+import { refuse, traceCaller, untracedRefusal } from './hydra-core/caller'
 import {
   AUTO_DETACH_MS,
   api,
@@ -19,12 +21,15 @@ import {
   str,
 } from './mcp-client'
 import { instanceLabel, selfIdentity } from './mcp-self'
-import type { McpEngineTool } from './mcp-stdio.mjs'
 
 /** The orchestrator's arg limit is 4000 characters; a seven-task spec with real prompts can pass
  *  it. Under the limit the spec travels inline (visible in the returned `command`); over it, it is
  *  written to a temp file the script reads (fan_out.py accepts either). */
 const SPEC_INLINE_MAX = 3800
+/** The effort levels a spawned chat can run at, and the model-id shape fan_out.py checks too
+ *  (spawn_chat.py: DEFAULT_MODEL claude-opus-5-5, DEFAULT_EFFORT xhigh). Never Fable unless named. */
+const FANOUT_EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'] as const
+const FANOUT_MODEL_RE = /^claude-[a-z0-9.-]{3,60}$/
 /** How long `fan_out` waits, after its last spawn, for every chat to echo its task receipt before
  *  re-delivering once to a chat that never started. Spawns are sequential, so the earlier chats
  *  have had minutes already; this is the last chat's window. */
@@ -216,7 +221,7 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
     name: 'fan_out',
     listed: true,
     description:
-      "MUTATES: starts one visible Claude Desktop chat per task, each on another account, and tracks them as a group. Use it for work that needs real Claude Desktop chats running in parallel. Mechanical batch work belongs on hswarm_run instead, and so does any batch when every Claude account is at 90% weekly or more (check list_usage). Each task is {cwd, prompt, title?}. Accounts are ranked by real room, open apps first, one task per account by default; the calling chat's own account is left out unless exclude_self is false. Spawns run one at a time, about 30-90 s each, so the call answers at once with the group id and an operationId; poll fan_out_status {group}. Each prompt carries a receipt the chat must echo, so delivery is checked, not assumed. The chats are never headless. A task no account can take is reported UNASSIGNED, never dropped. A spawn tree holds at most max_nodes (12) chats. A probe or drill fan-out must be deleted afterwards: fan_out_delete {group}.",
+      "MUTATES: starts one visible Claude Desktop chat per task, each on another account, and tracks them as a group. Use it for work that needs real Claude Desktop chats running in parallel. Mechanical batch work belongs on hswarm_run instead, and so does any batch when every Claude account is at 90% weekly or more (check list_usage). Each task is {cwd, prompt, title?, model?, effort?}; a chat is pinned to claude-opus-5-5 at xhigh unless a task or the call names another model or effort (never Fable unless named). Accounts are ranked by real room, open apps first, one task per account by default; the calling chat's own account is left out unless exclude_self is false. Spawns run one at a time, about 30-90 s each, so the call answers at once with the group id and an operationId; poll fan_out_status {group}. Each prompt carries a receipt the chat must echo, so delivery is checked, not assumed. The chats are never headless. A task no account can take is reported UNASSIGNED, never dropped. A spawn tree holds at most max_nodes (12) chats. A probe or drill fan-out must be deleted afterwards: fan_out_delete {group}.",
     inputSchema: S(
       {
         tasks: {
@@ -236,6 +241,17 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
                 description:
                   "What the chat should produce, named in its task receipt (optional; default 'a final report in this chat').",
               },
+              model: {
+                type: 'string',
+                description:
+                  "The model id this chat is pinned to, e.g. claude-opus-5-5 (optional; overrides the group's model). Default claude-opus-5-5. Never Fable unless named here.",
+              },
+              effort: {
+                type: 'string',
+                enum: [...FANOUT_EFFORTS],
+                description:
+                  "The effort this chat runs at (optional; overrides the group's effort). Default xhigh.",
+              },
             },
             required: ['cwd', 'prompt'],
             additionalProperties: false,
@@ -245,6 +261,16 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
         group: {
           type: 'string',
           description: 'A name for the group (optional; the id is generated).',
+        },
+        model: {
+          type: 'string',
+          description:
+            'The model id for every task that names none, e.g. claude-opus-5-5 (optional). Default claude-opus-5-5; never Fable unless named.',
+        },
+        effort: {
+          type: 'string',
+          enum: [...FANOUT_EFFORTS],
+          description: 'The effort for every task that names none (optional). Default xhigh.',
         },
         per_account: {
           type: 'number',
@@ -323,15 +349,38 @@ export const FAN_OUT_TOOLS: HydraTool[] = [
         if (!prompt) throw new Error(`task ${i} has no prompt`)
         const title = str(task.title).trim()
         const artifact = str(task.artifact).trim()
+        const model = str(task.model).trim()
+        const effort = str(task.effort).trim()
+        if (model && !FANOUT_MODEL_RE.test(model))
+          throw new Error(`task ${i}: model ${model} is not a claude-... model id`)
+        if (effort && !(FANOUT_EFFORTS as readonly string[]).includes(effort))
+          throw new Error(`task ${i}: effort ${effort} is not one of ${FANOUT_EFFORTS.join(', ')}`)
         return {
           ...(title ? { title } : {}),
           folder: cwd,
           prompt,
           ...(artifact ? { artifact } : {}),
+          ...(model ? { model } : {}),
+          ...(effort ? { effort } : {}),
         }
       })
+      // After the argument checks: the role is read from the daemon, and a bad call is refused before any request.
+      const caller = await traceCaller(a)
+      if (caller.role === 'drone') refuse(caller, DRONE_REFUSAL)
+      if (!caller.role) refuse(caller, untracedRefusal('start a fan-out', caller.why))
       const groupName = str(a.group).trim()
-      const spec = JSON.stringify({ ...(groupName ? { group: groupName } : {}), tasks })
+      const groupModel = str(a.model).trim()
+      const groupEffort = str(a.effort).trim()
+      if (groupModel && !FANOUT_MODEL_RE.test(groupModel))
+        throw new Error(`model ${groupModel} is not a claude-... model id`)
+      if (groupEffort && !(FANOUT_EFFORTS as readonly string[]).includes(groupEffort))
+        throw new Error(`effort ${groupEffort} is not one of ${FANOUT_EFFORTS.join(', ')}`)
+      const spec = JSON.stringify({
+        ...(groupName ? { group: groupName } : {}),
+        ...(groupModel ? { model: groupModel } : {}),
+        ...(groupEffort ? { effort: groupEffort } : {}),
+        tasks,
+      })
       // ⛔ GENERATED HERE, NOT BY fan_out.py, SO IT CAN BE RETURNED BEFORE SPAWNING FINISHES
       // (found live 2026-09-15, operation 2411fce7: the MCP call blocked on the WHOLE spawn -
       // 30-90s per chat, sequential - and the client gave up long before the last chat landed,

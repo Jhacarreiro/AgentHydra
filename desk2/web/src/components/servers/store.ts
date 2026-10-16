@@ -67,7 +67,8 @@ function createDevServers() {
   const on = ref(storage?.getItem(ON_KEY) === '1')
   // A snapshot from the last day paints at once and is marked as refreshing until the live answer arrives.
   const shot = readSnapshot()
-  const status = ref<DevWebStatus | null>(shot?.status ?? null)
+  // Replaced whole by each answer, never edited in place.
+  const status = shallowRef<DevWebStatus | null>(shot?.status ?? null)
   const statusMissing = ref(false)
   const refreshing = ref(!!shot)
   // Replaced whole by each answer, never edited in place.

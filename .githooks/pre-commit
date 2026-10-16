@@ -35,6 +35,11 @@ if command -v node >/dev/null 2>&1; then
   node .githooks/check-kit-sync-staged.mjs orchestrator || exit 1
 fi
 
+if command -v node >/dev/null 2>&1; then
+  echo "› people guard (staged files only)…"
+  node .githooks/check-people.mjs || exit 1
+fi
+
 # Biome ships as a devDependency, so this runs the local copy and does not reach the network.
 # Skipped silently when it is absent (a fresh clone before `bun install`), because a hook that
 # blocks the first commit on a machine that has not installed yet is a hook people turn off.

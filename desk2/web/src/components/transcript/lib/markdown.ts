@@ -14,7 +14,6 @@ export const CODE_CAP_LINES = 24
 
 /** Pictures, videos and html pages the server serves from its cache (a page's url carries its serving's ?v=); the only
  *  image targets the window loads. */
-export const MEDIA_PREFIX = '/api/media/'
 const MEDIA_ID = /^\/api\/media\/[0-9a-f]{64}\.(png|jpg|gif|webp|mp4|webm|html)(?:\?v=\d+)?$/
 
 // lucide Copy, Check and File (stroke 1.5), inline because markdown-it emits a string, not components.

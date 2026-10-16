@@ -4,7 +4,7 @@
 // version landed there. Never opens or launches a desktop app, and never touches a chat through the
 // UI or a menu: the archive goes through the production entry point the routes use.
 //
-// Hydra Desk's chats (Jacob's Desk and AgentHydra 2.0's window, each listing its chats in
+// Hydra Desk's chats (the owner's Desk and AgentHydra 2.0's window, each listing its chats in
 // `<home>/chats.json`) are listed beside the desktop records: their transcripts are in the projects
 // folder of the account each chat runs on (`account.configDir`, else ~/.claude). Only the real homes
 // are read: a throwaway Desk's chats are never shared.
@@ -85,7 +85,13 @@ async function defaultArchive(
   profile: string,
   sessionId: string,
 ): Promise<{ ok: boolean; reason?: string }> {
-  if (await defaultIsRunning(profile)) {
+  // A record under a previous login is one the running app never loaded: native cannot find it and
+  // the app cannot save over the flag, so it takes the closed-app route.
+  const { findChatMetaPath, findVisibleChatMetaPath } = await import('../session-launch')
+  const staleLogin =
+    findVisibleChatMetaPath(profile, sessionId) === null &&
+    findChatMetaPath(profile, sessionId) !== null
+  if (!staleLogin && (await defaultIsRunning(profile))) {
     const { tryNativeArchiveChat } = await import('../claude-native-archive')
     const r = await tryNativeArchiveChat(profile, sessionId)
     if (r.kind === 'unavailable') return { ok: false, reason: r.reason }

@@ -1,5 +1,5 @@
 """Which Claude ACCOUNT did a piece of work, and what that account's plan costs per day - with no
-name and no email anywhere (owner ask, Michael, 2026-09-17: "maybe each account should have a unique
+name and no email anywhere (owner ask, 2026-09-17: "maybe each account should have a unique
 identifier somehow, like a hash number ... I reuse the numbers, like 17 and 13, and sometimes they
 get cycled out").
 

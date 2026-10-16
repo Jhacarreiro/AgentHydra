@@ -127,7 +127,11 @@ describe('an outside session the list does not carry', () => {
     // Its history is fetched before the send, so the chat opens on the whole conversation, not the new lines alone.
     expect(calls).toEqual(['POST /api/chats/import', 'GET /api/chats/imported-1/items', 'POST /api/chats/imported-1/messages'])
     expect(desk.selected.value).toEqual({ kind: 'chat', id: 'imported-1' })
-    expect(desk.itemsByChat.value.get('imported-1')?.map((i) => i.id)).toEqual(['u-earlier'])
+    // the message's bubble stays until the server's copy of it lands in the chat
+    const shown = desk.itemsByChat.value.get('imported-1') ?? []
+    expect(shown.map((i) => i.id)[0]).toBe('u-earlier')
+    expect(shown).toHaveLength(2)
+    expect(shown[1]).toMatchObject({ kind: 'user', text: 'carry on' })
   })
 })
 

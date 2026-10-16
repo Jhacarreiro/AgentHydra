@@ -21,7 +21,7 @@ import {
   type ToolResult,
   type TranscriptItem,
 } from '@shared/protocol'
-import { cut, describeToolActivity } from './describe'
+import { cut, describeToolActivity, str } from './describe'
 import { resetsAtMs, type NotifyReason } from './status'
 import { classifyUserText, noteOf, taskItemFrom, taskKindOf, userTurns, type TaskNotice } from './system-text'
 import { MEDIA_ROUTE, mediaCache, RENDERABLE, type MediaCache } from '../media/cache'
@@ -82,10 +82,6 @@ export const LIMIT_LABEL: Record<string, string> = {
   seven_day_sonnet: 'weekly Sonnet',
   seven_day_overage_included: 'weekly',
   overage: 'extra usage',
-}
-
-function str(v: unknown): string {
-  return typeof v === 'string' ? v : ''
 }
 
 function firstLine(text: string): string {
@@ -308,6 +304,11 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
       if (blockCount.size <= MAX_KEPT_MESSAGES) break
       blockCount.delete(id)
     }
+    // A denial is only read for a tool still held here, so one whose tool was pruned is dead.
+    for (const id of denied) {
+      if (denied.size <= MAX_KEPT_TOOLS) break
+      if (!tools.has(id)) denied.delete(id)
+    }
   }
 
   function withParent<T extends TranscriptItem>(item: T, parent: string | null | undefined): T {
@@ -416,8 +417,13 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
   function onToolUseBlock(out: Emission[], block: Block, parent: string | null) {
     const id = str(block.id)
     if (!id) return
-    const input = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
-    const name = str(block.name) || block.type
+    const given = (block.input && typeof block.input === 'object' ? block.input : {}) as Loose
+    const called = str(block.name) || block.type
+    // Claude Desktop's update_plan (its ccd_turn MCP, 2026-10: the checklist the app draws under a running turn) is
+    // TodoWrite by another name, its `items` the same { content, status }: read as TodoWrite, it is the chat's To-dos.
+    const plan = /(^|__)update_plan$/.test(called) && Array.isArray(given.items)
+    const name = plan ? 'TodoWrite' : called
+    const input: Loose = plan ? { todos: given.items } : given
     for (const p of inputPaths(name, input)) named.add(pathKey(p))
     const prev = tools.get(id)
     const item: ToolItem = withParent(
@@ -519,6 +525,14 @@ export function createNormalizer(opts: NormalizerOptions = {}): Normalizer {
       if (refs.length) result.images = [...(result.images ?? []), ...refs]
     }
     finishTool(out, id, result)
+    // A TaskStop that worked ends its task, and Claude Code files no notice for a task stopped this way (2026-10-14:
+    // four tasks stopped so stayed running in the rail for half a day).
+    const stopped = tool.name === 'TaskStop' && !result.isError ? tasks.get(str(tool.input.task_id)) : undefined
+    if (stopped?.status === 'running') {
+      const next: TaskItem = { ...stopped, status: 'stopped', durationMs: Math.max(0, now() - stopped.ts) }
+      tasks.set(next.taskId, next)
+      out.push({ type: 'upsert', item: next })
+    }
     const background = BACKGROUND_TASK.exec(result.text)
     if (background && !result.isError && !tasks.has(background[1]!)) {
       const task = backgroundTaskItem(tool, background[1]!, now())
@@ -804,6 +818,18 @@ function queuedNotification(rec: Loose): string {
   return prompt.trimStart().startsWith('<task-notification>') ? prompt : ''
 }
 
+/**
+ * What the person sent while a turn ran: Claude Code files it as a queued_command attachment only, never a user record,
+ * its prompt a string or the message's blocks (text and pictures). 2026-10-14: every one was dropped, 2,771 in this PC's
+ * transcripts, 17 of them in one session, 11 with pictures. Its content, or null.
+ */
+function queuedPrompt(rec: Loose): string | Block[] | null {
+  const a = (rec.attachment ?? {}) as Loose
+  if (a.type !== 'queued_command' || a.commandMode !== 'prompt' || (a.origin as Loose | undefined)?.kind !== 'human') return null
+  if (typeof a.prompt === 'string') return a.prompt.trim() ? a.prompt : null
+  return Array.isArray(a.prompt) && a.prompt.length ? (a.prompt as Block[]) : null
+}
+
 /** A background task the file shows launched but never settled, this long ago, is taken as gone. */
 const STALE_TASK_MS = 24 * 3_600_000
 
@@ -849,6 +875,8 @@ export function historyBuilder(o: HistoryOptions = {}): { add(record: unknown): 
 function recordMessage(rec: Loose): Loose | null {
   if (rec.type === 'user' || rec.type === 'assistant') return rec
   if (rec.type === 'attachment') {
+    const said = queuedPrompt(rec)
+    if (said) return { type: 'user', uuid: rec.uuid, message: { role: 'user', content: said } }
     const prompt = queuedNotification(rec)
     return prompt ? { type: 'user', uuid: rec.uuid, message: { role: 'user', content: prompt } } : null
   }

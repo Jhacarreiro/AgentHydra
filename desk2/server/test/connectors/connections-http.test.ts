@@ -4,7 +4,7 @@
 // from them (the folder and session of the chat).
 
 import { afterEach, expect, test } from 'bun:test'
-import { existsSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { pathToFileURL } from 'node:url'
@@ -56,7 +56,9 @@ interface Fake {
 function fakeServer(): Fake {
   const dir = temp('desk-cxh-')
   const counter = join(dir, 'helper-runs.txt')
-  const helper = join(dir, 'helper.mjs')
+  // a Connections loader's --connect, where an install keeps it, so the entry is known by what it launches
+  mkdirSync(join(dir, 'local-mcp'))
+  const helper = join(dir, 'local-mcp', 'loader.mjs')
   // What Claude Code gives the helper: the env. It prints headers; the token is a made-up value.
   writeFileSync(
     helper,
@@ -126,7 +128,7 @@ process.stdout.write(JSON.stringify(h))
     rejectNext: () => (reject = true),
     folders,
     config: (extra = {}) => {
-      writeFileSync(cfgFile, JSON.stringify({ mcpServers: { connections: { type: 'http', url, headersHelper: `"${process.execPath}" "${helper}"`, ...extra } } }))
+      writeFileSync(cfgFile, JSON.stringify({ mcpServers: { connections: { type: 'http', url, headersHelper: `"${process.execPath}" "${helper}" --connect`, ...extra } } }))
       return cfgFile
     },
     stop: () => void server.stop(true)
@@ -184,8 +186,11 @@ test('a 401 re-runs the helper once and the call goes through', async () => {
 test('a helper that fails, or a server that is down, is a readable error naming no header', async () => {
   const f = fakeServer()
   const bad = JSON.parse(readFileSync(f.config(), 'utf8'))
-  bad.mcpServers.connections.headersHelper = `"${process.execPath}" -e "process.exit(3)"`
-  const file = join(temp('desk-cxh-bad-'), 'claude.json')
+  const badDir = temp('desk-cxh-bad-')
+  mkdirSync(join(badDir, 'local-mcp'))
+  writeFileSync(join(badDir, 'local-mcp', 'loader.mjs'), 'process.exit(3)\n')
+  bad.mcpServers.connections.headersHelper = `"${process.execPath}" "${join(badDir, 'local-mcp', 'loader.mjs')}" --connect`
+  const file = join(badDir, 'claude.json')
   writeFileSync(file, JSON.stringify(bad))
   const client = new ConnectionsClient(file)
   await expect(client.call({ cwd: temp('desk-cxh-proj-'), sessionId: null }, 'connections_whoami')).rejects.toThrow(/headers helper failed/)
