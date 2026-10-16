@@ -83,6 +83,11 @@ export interface CliMayteAttempt {
   started?: boolean // true once the CLI logged system/init: its message reached the session
   daemonPid?: number // the daemon that launched it; its handle dies with that daemon
   overage?: { resetsAt: number | null; notice?: string } // stopped to spare paid extra usage
+  /** Native runner only: the loopback port file and the delivered log of messages written into the
+   *  live CLI's stdin mid-turn (climayteSend). `deliveries` lists them in order; `accepted` is set once
+   *  the runner answered 200. Whether the CLI read one is told by its echo on the stdout log. */
+  deliver?: { token: string; portFile: string; delivered: string }
+  deliveries?: { requestId: string; text: string; accepted: boolean }[]
   /** Stopped at CEILING_PCT of that window (`week`), the account walled until it resets. Its outcome
    *  is 'quota' or 'handoff' for what follows; it is not a limit hit. `onArrival`: its first reading
    *  was already past the ceiling (pastOnArrival), so it was placed on a stale or missing reading
@@ -1069,9 +1074,10 @@ export function transcriptHandoff(jsonl: string, cap = 4_000): string {
       continue
     }
     if (ev?.parent_tool_use_id) continue
-    if (ev?.type === 'user' && typeof ev.message?.content === 'string') {
+    const owner = ev?.type === 'user' ? plainUserText(ev.message?.content) : null
+    if (owner !== null) {
       flush()
-      turns.push(`Owner: ${ev.message.content.slice(0, 1_500)}`)
+      turns.push(`Owner: ${owner.slice(0, 1_500)}`)
     } else if (ev?.type === 'assistant') {
       const text = (ev.message?.content ?? [])
         .filter((b: any) => b?.type === 'text' && typeof b.text === 'string')
@@ -1252,8 +1258,23 @@ function noteTurnText(scan: AttemptScan, ev: any): void {
       }
   } else if (ev?.type === 'user') {
     if (scan.said.length && isStopHookFeedback(ev)) scan.turnTexts.push(scan.said.join('\n\n'))
+    else if (isMessageEcho(ev)) return
     scan.said = []
   }
+}
+
+/** The text of a user line that is a message (a string, or text blocks only); a tool's result is a
+ *  tool_result block, so it is null. */
+export function plainUserText(content: unknown): string | null {
+  if (typeof content === 'string') return content
+  if (!Array.isArray(content) || content.length === 0) return null
+  if (!content.every((b: any) => b?.type === 'text' && typeof b.text === 'string')) return null
+  return content.map((b: any) => b.text).join('\n')
+}
+
+/** A message the CLI read from its stdin mid-turn, echoed back by --replay-user-messages. */
+function isMessageEcho(ev: any): boolean {
+  return plainUserText(ev.message?.content) !== null
 }
 
 /** The wall a rejected `rate_limit_event` names: when it ends and which window it is. */

@@ -23,6 +23,7 @@ export type CliMayteJournalEvent =
   | 'handoff-written' // it wrote the handoff; the task goes on in a fresh session
   | 'handoff-resumed' // the fresh session started from the handoff
   | 'follow-up-queued' // climayte_send queued a message
+  | 'message-delivered' // climayte_send put a message into the running CLI's stdin mid-turn
   | 'cwd-changed' // climayte_send asked for another folder (`cwd`, `from`; `pending`), or the launch moved there (`copied`)
   | 'follow-up-delivered' // an attempt started with that message
   | 'follow-up-cancelled' // the human took back a held message before it was delivered (`pending`: messages still held)
@@ -333,6 +334,8 @@ const DESCRIBE: Partial<Record<CliMayteJournalEvent, Describe>> = {
   'handoff-resumed': (_e, p) => `resumed from its handoff${p.on} ${p.pick}${p.runs}`,
   'follow-up-queued': (e, p) => describeFollowUpQueuedLine(e, p.runs),
   'follow-up-delivered': (_e, p) => `follow-up delivered${p.on} ${p.pick}${p.runs}`,
+  'message-delivered': (_e, p) =>
+    `message delivered into the running turn${p.on} ${p.pick}${p.runs}`,
   'follow-up-cancelled': (e, p) =>
     `held message taken back, not sent${p.on}${e.pending ? `; ${e.pending} still held` : ''}`,
   asked: (e, p) => `asked${p.on}${e.said ? `: ${e.said}` : ''}`,

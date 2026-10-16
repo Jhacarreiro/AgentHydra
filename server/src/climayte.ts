@@ -29,6 +29,7 @@
 // transcript is an ordinary session in that account's folder. headless-policy.ts names this as the
 // one exemption. Nothing here starts on its own: with no worker queued each tick is a no-op.
 
+import { randomUUID } from 'node:crypto'
 import {
   closeSync,
   cpSync,
@@ -36,6 +37,7 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
 } from 'node:fs'
@@ -109,6 +111,7 @@ import { firstLine } from './climayte-journal'
 import { removeWorkerFiles, workerFileIds } from './climayte-launch'
 import {
   type CliMayteAccount,
+  type CliMayteAttempt,
   type CliMayteSealed,
   type CliMayteWave,
   type CliMayteWorker,
@@ -116,6 +119,7 @@ import {
   climaytePriority,
   contextTokens,
   DRONE_REFUSAL,
+  plainUserText,
   RUNNER_NEVER_STARTED_NOTICE,
   roleOf,
   tooBigOf,
@@ -988,6 +992,7 @@ function recordAttemptEnd(
   at.notice = v.notice
   at.endedAt = now
   at.context = contextTokens(events)
+  requeueUnread(w, at, events)
   // A chat's handoff, written in a turn that ended on its own, is the note its next message starts
   // from (a fresh session answering that message, not an immediate continuation).
   if (w.chat === true && v.outcome === 'done' && at.windDown && handoffWritten(at.windDown))
@@ -1394,6 +1399,96 @@ const TAKEN_ALREADY = 'Already taken: this message arrived before, so it was not
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
  *  follow it, in order. Without it, a running worker gets the message when its task ends. */
+const DELIVER_TIMEOUT_MS = 3_000
+const DELIVERED_MESSAGE =
+  "Delivered into the worker's running turn: it reads the message at its next step."
+
+/** Hands a message to a running worker's live CLI through its native runner (/deliver). The message
+ *  is recorded on the attempt before the POST and kept only once the runner answers 200; a refused or
+ *  failed POST puts it back among the held messages. False when the attempt has no live input yet
+ *  (no port file), so the caller holds the message as before. */
+function deliverInTurn(
+  w: CliMayteWorker,
+  text: string,
+  setting: SendSetting,
+  requestId: string | undefined,
+): boolean {
+  const at = w.attempts[w.attempts.length - 1]
+  if (!at?.deliver || at.endedAt !== null) return false
+  let port = NaN
+  try {
+    port = Number(readFileSync(at.deliver.portFile, 'utf8'))
+  } catch {
+    return false
+  }
+  if (!Number.isInteger(port) || port <= 0) return false
+  const entry = { requestId: requestId ?? randomUUID(), text, accepted: false }
+  at.deliveries = [...(at.deliveries ?? []), entry]
+  void postDelivery(port, at.deliver.token, entry).then((ok) => {
+    if (ok) {
+      entry.accepted = true
+      journal(w, 'message-delivered', { pending: w.pending.length })
+      changed(w)
+      return
+    }
+    at.deliveries = (at.deliveries ?? []).filter((d) => d !== entry)
+    queueFollowUp(w, text, setting)
+    if (!isActive(w)) {
+      w.status = 'queued'
+      w.retries = 0
+      w.error = null
+      w.revived = true
+      schedule(0)
+    }
+    changed(w)
+  })
+  return true
+}
+
+async function postDelivery(
+  port: number,
+  token: string,
+  entry: { requestId: string; text: string },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/deliver`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-climayte-deliver-token': token },
+      body: JSON.stringify({ requestId: entry.requestId, text: entry.text }),
+      signal: AbortSignal.timeout(DELIVER_TIMEOUT_MS),
+    })
+    await res.text()
+    return res.status === 200
+  } catch {
+    return false
+  }
+}
+
+/** A message accepted into the CLI's stdin that the CLI never echoed back went unread (its turn ended
+ *  first): it goes back among the held messages. The CLI echoes each user line it reads in order, and
+ *  its first echo is the prompt itself, so the accepted messages it read are the echoed prefix. */
+export function requeueUnread(w: CliMayteWorker, at: CliMayteAttempt, events: unknown[]): void {
+  const accepted = (at.deliveries ?? []).filter((d) => d.accepted)
+  at.deliveries = []
+  if (accepted.length === 0) return
+  const echoed: string[] = []
+  let first = true
+  for (const e of events) {
+    const line = e as { type?: unknown; message?: { content?: unknown } } | null
+    if (line?.type !== 'user') continue
+    if (first) {
+      first = false
+      continue
+    }
+    const said = plainUserText(line.message?.content)
+    if (said !== null) echoed.push(said)
+  }
+  let read = 0
+  while (read < accepted.length && echoed[read] === accepted[read].text) read++
+  for (const d of accepted.slice(read)) w.pending.push(d.text)
+  if (read < accepted.length) changed(w)
+}
+
 export function climayteSend(
   id: string,
   text: string,
@@ -1412,6 +1507,7 @@ export function climayteSend(
   ok: boolean
   message: string
   urgent?: boolean
+  delivered?: 'in-turn'
   model?: string | null
   effort?: string | null
 } {
@@ -1450,6 +1546,19 @@ export function climayteSend(
     const sent = sendUrgent(w, text, setting)
     if (sent) return sent
     // It finished on its own a moment ago: the message leads its next turn like any other.
+  } else if (
+    w.status === 'running' &&
+    !opts.ping &&
+    deliverInTurn(w, text, setting, opts.requestId)
+  ) {
+    changed(w)
+    return {
+      ok: true,
+      message: DELIVERED_MESSAGE,
+      delivered: 'in-turn',
+      model: w.model,
+      effort: w.effort,
+    }
   } else {
     queueFollowUp(w, text, setting)
   }

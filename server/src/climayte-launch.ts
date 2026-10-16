@@ -3,6 +3,7 @@
 // it is up. Split out of climayte.ts so each file can be read whole; the state it works on
 // (workers, journal) is climayte-core.ts's.
 
+import { randomBytes } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -62,7 +63,7 @@ import {
   WORKER_BRIEF,
 } from './climayte-lib'
 import { ownerMcpServers, ownerRouterHooks, syncOwnerClaude, urlPath } from './climayte-owner-sync'
-import { launchRunner } from './climayte-runner'
+import { launchRunner, type RunnerSpec } from './climayte-runner'
 import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
 import { reaskWindDown } from './climayte-stops'
@@ -865,18 +866,29 @@ export interface CliSession {
   resume: boolean
 }
 
+type DeliverFiles = NonNullable<RunnerSpec['deliver']>
+
+/** The stream-json user line the native runner writes to the CLI's stdin for the prompt. */
+function userLine(text: string) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }
+}
+
 export function cliArgv(
   w: CliMayteWorker,
   sessionId: string,
   resume: boolean,
   hookFile: string,
   mcpFile: string | null,
+  liveInput = false,
 ): string[] {
   return [
     ...claudeCommand(),
     '-p',
     '--output-format',
     'stream-json',
+    // The native runner's stdin carries the prompt and later messages as stream-json user lines;
+    // --replay-user-messages echoes each one the CLI reads, which is how a delivery is confirmed.
+    ...(liveInput ? ['--input-format', 'stream-json', '--replay-user-messages'] : []),
     '--verbose',
     // A sealed worker is allowed its named tools and no other (briefArgs).
     ...(w.sealed ? ['--permission-mode', 'default'] : ['--dangerously-skip-permissions']),
@@ -923,9 +935,9 @@ function startRunner(
   w: CliMayteWorker,
   acct: CliMayteAccount,
   argv: string[],
-  files: { promptFile: string; log: string; errLog: string },
+  files: { promptFile: string; log: string; errLog: string; deliver?: DeliverFiles },
 ): NonNullable<CliMayteWorker['attempts'][number]['runner']> | null {
-  const { promptFile, log, errLog } = files
+  const { promptFile, log, errLog, deliver } = files
   closeSync(openSync(log, 'a'))
   closeSync(openSync(errLog, 'a'))
   const runner = {
@@ -969,6 +981,7 @@ function startRunner(
         exitFile: runner.exitFile,
         // The wind-down hook is answered by this runner over http, not by a `cat` per tool call.
         signal: { file: signalPath(w.id), settings: workerFiles(w.id)[0] },
+        ...(deliver ? { deliver } : {}),
         maxProcesses: WORKER_MAX_PROCESSES,
       },
       runnerSpecPath(log),
@@ -1101,20 +1114,30 @@ export function launch(
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })
+  const live = process.platform === 'win32'
   const promptFile = join(PROMPTS, `${w.id}-${n}.txt`)
-  writeFileSync(promptFile, text)
+  writeFileSync(promptFile, live ? `${JSON.stringify(userLine(text))}\n` : text)
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
   const hookFile = writeWorkerSettings(w, acct)
   forgetOwnNeedsAuth(acct.configDir)
-  const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w))
-  const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
+  const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w), live)
+  const deliver: DeliverFiles | undefined = live
+    ? {
+        token: randomBytes(16).toString('hex'),
+        portFile: `${log}.deliver.port`,
+        delivered: `${log}.delivered.jsonl`,
+      }
+    : undefined
+  if (deliver) rmSync(deliver.portFile, { force: true })
+  const runner = startRunner(w, acct, argv, { promptFile, log, errLog, deliver })
   if (!runner) return
   w.attempts.push({
     account: { id: acct.id, num: acct.num, name: acct.name, configDir: acct.configDir },
     pid: null,
     log,
     errLog,
+    ...(deliver ? { deliver, deliveries: [] } : {}),
     startedAt: Date.now(),
     endedAt: null,
     outcome: 'running',
