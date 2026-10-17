@@ -111,6 +111,14 @@ describe.skipIf(!win)('tray launcher', () => {
     expect(existsSync(join(APP, 'misc', script))).toBe(true)
     // ...and a bundle without desk2/ keeps Open on the URL only if `requires` guards that same script
     expect(cfg.openCommand.requires).toBe(script)
+    // Quit takes the window with it (owner, 2026-10-15): the tray runs Desk 2's stop.ps1 -Window, and a
+    // moved stop.ps1 would leave the window and Desk's server running after every Quit, again with no error.
+    expect(cfg.quitCommand.exe).toEndWith('\\System32\\WindowsPowerShell\\v1.0\\powershell.exe')
+    const stop = cfg.quitCommand.args.at(-2)
+    expect(cfg.quitCommand.args.at(-1)).toBe('-Window')
+    expect(join(APP, 'misc', stop)).toBe(join(APP, 'desk2', 'launcher', 'stop.ps1'))
+    expect(existsSync(join(APP, 'misc', stop))).toBe(true)
+    expect(cfg.quitCommand.requires).toBe(stop)
   })
 
   test('the .ico has a tray-sized (<=48px) frame (a 256-only icon renders blank)', () => {

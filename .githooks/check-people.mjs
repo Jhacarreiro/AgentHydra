@@ -17,7 +17,7 @@ import { basename, join } from 'node:path'
 
 export const FIXTURES_DIR = 'server/tests/fixtures/people-examples/'
 /** Older invented-example folders (manager loader tests: alpha-ui, beta-backend ...). */
-const ALLOWED = [FIXTURES_DIR, 'managers/test/fixtures/']
+const ALLOWED = [FIXTURES_DIR]
 /** Already-committed owner traces, left in place and listed in the report for the owner to decide on. */
 const KNOWN_EXISTING = new Set(['.gitignore'])
 export const LOCAL_FILE = join(homedir(), '.agenthydra', 'people-guard.local.json')

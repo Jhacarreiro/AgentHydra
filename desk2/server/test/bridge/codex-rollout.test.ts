@@ -40,9 +40,9 @@ describe('a Codex chat rollout', () => {
   test("its context is the last turn's tokens and the model's window; an event with no info is skipped", () => {
     const f = join(temp(), 'rollout.jsonl')
     writeFileSync(f, [count(null), count({ last_token_usage: usage(30_000), total_token_usage: usage(30_000), model_context_window: 258_400 }), count({ last_token_usage: usage(51_018), total_token_usage: usage(81_018), model_context_window: 258_400 }), count(null)].join('\n'))
-    expect(lastCodexContext(f)).toEqual({ tokens: 51_018, window: 258_400 })
+    expect(lastCodexContext(f)).toEqual({ tokens: 51_018, window: 258_400, total: 81_018 })
     writeFileSync(f, count({ last_token_usage: usage(9_000), total_token_usage: usage(9_000) }))
-    expect(lastCodexContext(f)).toEqual({ tokens: 9_000, window: null })
+    expect(lastCodexContext(f)).toEqual({ tokens: 9_000, window: null, total: 9_000 })
     writeFileSync(f, count(null))
     expect(lastCodexContext(f)).toBeNull()
   })

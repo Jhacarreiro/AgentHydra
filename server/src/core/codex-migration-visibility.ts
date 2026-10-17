@@ -1,4 +1,4 @@
-import { type CodexAppTools, connectCodexAppTools } from './codex-app-tools'
+import { type CodexAppTools, connectCodexAppTools, MIGRATION_TOOLS } from './codex-app-tools'
 import { type CodexDesktopTarget, openCodexDesktop } from './codex-desktop'
 
 interface Sidebar {
@@ -7,7 +7,11 @@ interface Sidebar {
 
 interface VisibilityDependencies {
   open: typeof openCodexDesktop
-  connect: (target: CodexDesktopTarget, threadId: string) => Promise<CodexAppTools>
+  connect: (
+    target: CodexDesktopTarget,
+    threadId: string,
+    needs: readonly string[],
+  ) => Promise<CodexAppTools>
 }
 
 /** Complete the user-visible half of the move through the destination's own native app tools. */
@@ -19,7 +23,7 @@ export async function showMigratedCodexChat(
   const deps = { open: openCodexDesktop, connect: connectCodexAppTools, ...overrides }
   const opened = await deps.open(target)
   if (!opened.ok) throw new Error(opened.message ?? 'Codex did not open the destination desktop.')
-  const app = await deps.connect(target, threadId)
+  const app = await deps.connect(target, threadId, MIGRATION_TOOLS)
   const navigation = await app.call<{ navigated: boolean }>('navigate_to_codex_page', { threadId })
   if (navigation.navigated !== true) throw new Error('Codex did not open the imported chat.')
   const sidebar = await app.call<Sidebar>('list_threads', { limit: 20 })

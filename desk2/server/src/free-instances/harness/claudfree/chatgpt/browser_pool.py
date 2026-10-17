@@ -22,12 +22,29 @@ from ..registry import chat_lock
 from .http import ChatGPTHttp
 
 MAX_FRAME = 4 * 1024 * 1024
+# How long an idle exit lets open connections finish (a ping reply) after it stops listening.
+CLOSE_GRACE_SECONDS = 2
+
+
+async def close_server(server, grace=CLOSE_GRACE_SECONDS):
+    """Stop listening, then wait a bounded time for open connections.
+
+    Never `async with server`: its exit awaits wait_closed() without a bound. On Windows,
+    CPython's proactor transport skips Server._detach when its socket's shutdown() raises
+    after the peer is gone, so wait_closed() never returned. The idle broker then kept its
+    owner lock and a dead endpoint.json, and every ChatGPT send failed after Desk's 25 s
+    startup wait until the process was killed (2026-10-17: two brokers stuck that way)."""
+    server.close()
+    try:
+        await asyncio.wait_for(server.wait_closed(), grace)
+    except TimeoutError:
+        pass
 
 
 class ContextBrowser:
     """The cookie/browser interface used by signin, scoped to exactly one context."""
 
-    def __init__(self, browser, tab, cdp, on_disposal_error=None):
+    def __init__(self, browser, tab, cdp, on_disposal_error=None, on_disposed=None):
         self.browser, self.tab, self.cdp = browser, tab, cdp
         self.context_id = tab.target.browser_context_id
         if not self.context_id:
@@ -35,6 +52,7 @@ class ContextBrowser:
         self.cookies = self
         self.closed = False
         self.on_disposal_error = on_disposal_error
+        self.on_disposed = on_disposed
 
     async def get_all(self):
         return await self.browser.connection.send(self.cdp.storage.get_cookies(browser_context_id=self.context_id))
@@ -51,6 +69,8 @@ class ContextBrowser:
             try:
                 await self.browser.connection.send(self.cdp.target.dispose_browser_context(self.context_id))
                 self.closed = True
+                if self.on_disposed:
+                    self.on_disposed()
             except Exception:
                 if self.on_disposal_error:
                     self.on_disposal_error()
@@ -82,6 +102,8 @@ class Pool:
     async def handle(self, reader, writer):
         task = disconnected = None
         claimed = False
+        caller_cancelled = False
+        request = None
         try:
             raw = await asyncio.wait_for(reader.readline(), 5)
             if len(raw) > MAX_FRAME:
@@ -91,7 +113,7 @@ class Pool:
                 raise ValueError('Invalid request')
             token = request.get('token', '')
             if not isinstance(token, str) or not hmac.compare_digest(token, self.token):
-                await self.write(writer, {'ok': False, 'error': {'code': 'unauthorized'}})
+                await self.write(writer, {'ok': False, 'cleanup_verified': True, 'error': {'code': 'unauthorized'}})
                 return
             if getattr(self.browser, 'stopped', False):
                 self.drain()
@@ -108,30 +130,33 @@ class Pool:
             if request.get('op') != 'send':
                 raise ValueError('Invalid operation')
             if self.draining:
-                await self.write(writer, {'ok': False, 'error': {'code': 'browser_pool_unavailable', 'message': 'The browser is draining after a cleanup failure. No message was sent.'}})
+                await self.write(writer, {'ok': False, 'cleanup_verified': True, 'error': {'code': 'browser_pool_unavailable', 'message': 'The browser is draining after a cleanup failure. No message was sent.'}})
                 return
             identity = str(UUID(request['request_id']))
             if identity in self.seen:
-                await self.write(writer, {'ok': False, 'error': {'code': 'request_already_claimed', 'message': 'This request was already claimed. Read its chat before sending again.'}})
+                await self.write(writer, {'ok': False, 'cleanup_verified': True, 'error': {'code': 'request_already_claimed', 'message': 'This request was already claimed. Read its chat before sending again.'}})
                 return
             if self.active >= 3:
-                await self.write(writer, {'ok': False, 'error': {'code': 'browser_busy', 'message': 'The browser queue is busy. No message was sent.', 'retryable': True}})
+                await self.write(writer, {'ok': False, 'cleanup_verified': True, 'error': {'code': 'browser_busy', 'message': 'The browser queue is busy. No message was sent.', 'retryable': True}})
                 return
             self.seen.add(identity)
             self.active += 1
             self.requests += 1
             claimed = True
+            request['_cleanup_verified'] = True
             task = asyncio.create_task(self.send(request, writer))
             disconnected = asyncio.create_task(reader.read(1))
             done, _ = await asyncio.wait([task, disconnected], return_when=asyncio.FIRST_COMPLETED)
             if task in done:
                 await task
             else:
+                caller_cancelled = True
                 task.cancel()
                 await asyncio.gather(task, return_exceptions=True)
         except (ValueError, KeyError, TypeError, asyncio.TimeoutError, asyncio.LimitOverrunError):
             try:
-                await self.write(writer, {'ok': False, 'error': {'code': 'invalid_request', 'message': 'The browser request was refused before dispatch.'}})
+                await self.write(writer, {'ok': False, 'cleanup_verified': not claimed or request.get('_cleanup_verified') is True,
+                    'error': {'code': 'invalid_request', 'message': 'The browser request was refused before dispatch.'}})
             except (ConnectionError, OSError):
                 pass
         except (ConnectionError, OSError):
@@ -141,6 +166,11 @@ class Pool:
                 if pending and not pending.done():
                     pending.cancel()
                     await asyncio.gather(pending, return_exceptions=True)
+            if caller_cancelled and isinstance(request, dict):
+                try:
+                    await self.write(writer, {'cleanup_verified': request.get('_cleanup_verified') is True})
+                except (ConnectionError, OSError):
+                    pass
             if claimed:
                 self.active -= 1
                 self.last_used = time.monotonic()
@@ -169,16 +199,26 @@ class Pool:
         async def context():
             # Own the ID before creating a tab, so partial tab creation failures
             # cannot leave an account context behind in the shared process.
-            context_id = await self.browser.connection.send(self.cdp.target.create_browser_context(dispose_on_detach=True))
+            context_id = None
+            request['_cleanup_verified'] = False
+            def disposed():
+                request['_cleanup_verified'] = True
+            def disposal_failed():
+                request['_cleanup_verified'] = False
+                self.drain()
             try:
+                context_id = await self.browser.connection.send(self.cdp.target.create_browser_context(dispose_on_detach=True))
                 target_id = await self.browser.connection.send(self.cdp.target.create_target('about:blank', browser_context_id=context_id, new_window=True))
                 tab = await self.browser._get_tab(target_id)
-                return ContextBrowser(self.browser, tab, self.cdp, on_disposal_error=self.drain)
+                return ContextBrowser(self.browser, tab, self.cdp, on_disposal_error=disposal_failed, on_disposed=disposed)
             except BaseException:
                 try:
+                    if context_id is None:
+                        raise RuntimeError('Context creation was not confirmed')
                     await self.browser.connection.send(self.cdp.target.dispose_browser_context(context_id))
+                    disposed()
                 except Exception:
-                    self.drain()
+                    disposal_failed()
                 raise
 
         try:
@@ -193,7 +233,7 @@ class Pool:
         finally:
             cookies = http.saved_state()['cookies']
             http.close()
-        result.update(cookies=cookies, server_id=server_id)
+        result.update(cookies=cookies, server_id=server_id, cleanup_verified=request.get('_cleanup_verified') is True)
         await self.write(writer, result)
 
     def drain(self):
@@ -269,11 +309,15 @@ async def serve(directory, version, *, idle_seconds=60):
             temporary.write_text(json.dumps({'port': port, 'token': token, 'pid': os.getpid(), 'version': version}), encoding='utf-8')
             temporary.chmod(0o600)
             temporary.replace(endpoint)
-            async with server:
+            try:
                 while pool.active or (not pool.draining and time.monotonic() - pool.last_used < idle_seconds):
                     await asyncio.sleep(1)
                     if browser.stopped:
                         pool.drain()
+            finally:
+                # No caller may find this port once it stops listening.
+                endpoint.unlink(missing_ok=True)
+                await close_server(server)
         finally:
             try:
                 await browser.stop()

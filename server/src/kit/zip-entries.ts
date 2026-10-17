@@ -5,7 +5,7 @@
 // entries are read; zip64 sizes and offsets are honoured. Any other method, and a damaged archive, reads as
 // nothing rather than throwing into the sweep.
 import { closeSync, createReadStream, fstatSync, openSync, readSync } from 'node:fs'
-import { createInflateRaw } from 'node:zlib'
+import { createInflateRaw, inflateRawSync, constants as zlibConstants } from 'node:zlib'
 
 export interface ZipEntry {
   name: string
@@ -135,6 +135,28 @@ function dataStart(path: string, e: ZipEntry): number | null {
     return e.headerOffset + 30 + h.readUInt16LE(26) + h.readUInt16LE(28)
   } finally {
     closeSync(fd)
+  }
+}
+
+/** At most the first `compressedBytes` of the entry, inflated as far as they go: a rollout's first line
+ *  without streaming the rest of it. Empty for a method this reader does not know or a damaged entry. */
+export function zipEntryHead(path: string, e: ZipEntry, compressedBytes: number): Buffer {
+  if (e.method !== 0 && e.method !== 8) return Buffer.alloc(0)
+  try {
+    const start = dataStart(path, e)
+    if (start === null) return Buffer.alloc(0)
+    const fd = openSync(path, 'r')
+    let raw: Buffer
+    try {
+      raw = readAt(fd, start, Math.min(compressedBytes, e.compressedSize))
+    } finally {
+      closeSync(fd)
+    }
+    if (e.method === 0) return raw
+    // A cut deflate stream: SYNC_FLUSH hands back what the bytes so far decode to instead of throwing.
+    return inflateRawSync(raw, { finishFlush: zlibConstants.Z_SYNC_FLUSH })
+  } catch {
+    return Buffer.alloc(0)
   }
 }
 

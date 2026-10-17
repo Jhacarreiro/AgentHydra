@@ -121,7 +121,7 @@ function questionsOf(input: Record<string, unknown>): Asked[] {
  *  AskUserQuestion call still running. */
 function waitingQuestion(items: readonly TranscriptItem[]): { question: string; options: string[] } | null {
   const card = items.find((i) => i.kind === 'question' && i.state === 'pending')
-  const call = card ? undefined : [...items].reverse().find((i) => i.kind === 'tool_use' && i.name === 'AskUserQuestion' && i.status === 'running')
+  const call = card ? undefined : items.findLast((i) => i.kind === 'tool_use' && i.name === 'AskUserQuestion' && i.status === 'running')
   const asks: Asked[] = card?.kind === 'question' ? card.questions : call?.kind === 'tool_use' ? questionsOf(call.input) : []
   if (!asks.length) return null
   const first = Array.isArray(asks[0].options) ? (asks[0].options as unknown[]) : []

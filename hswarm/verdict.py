@@ -53,8 +53,11 @@ def compute() -> dict:
 
 def write(v: dict | None = None) -> dict:
     """Compute (unless given) and write atomically. Never raises: a verdict that cannot be written is simply absent,
-    and the hook treats absent as "no news", never as dead."""
-    v = v or compute()
+    and the hook treats absent as "no news", never as dead. Safe on any thread: the registry is held still while it
+    is read (config.RELOAD_LOCK), so a reload cannot make it write a false "unusable"."""
+    if v is None:
+        with config.RELOAD_LOCK:
+            v = compute()
     try:
         p = path()
         p.parent.mkdir(parents=True, exist_ok=True)

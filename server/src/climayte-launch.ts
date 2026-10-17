@@ -3,6 +3,7 @@
 // it is up. Split out of climayte.ts so each file can be read whole; the state it works on
 // (workers, journal) is climayte-core.ts's.
 
+import { randomBytes } from 'node:crypto'
 import {
   closeSync,
   existsSync,
@@ -38,7 +39,13 @@ import {
   workers,
 } from './climayte-core'
 import { copySessionToCwd } from './climayte-cwd'
-import { etaBandCalibrations, etaCalibration, etaNote, MAX_PAST_ETAS } from './climayte-eta'
+import {
+  etaBandCalibrations,
+  etaCalibration,
+  etaNote,
+  MAX_PAST_ETAS,
+  SEAT_ETA_INSTRUCTION,
+} from './climayte-eta'
 import { allEtaSamples } from './climayte-eta-ledger'
 import { firstLine } from './climayte-journal'
 import {
@@ -50,6 +57,7 @@ import {
   DRONE_BRIEF,
   HANDOFF_PROMPT,
   INTERRUPTED_PROMPT,
+  isCoreSeat,
   keepReport,
   LIGHT_BRIEF,
   NO_COMMIT_BRIEF,
@@ -62,7 +70,7 @@ import {
   WORKER_BRIEF,
 } from './climayte-lib'
 import { ownerMcpServers, ownerRouterHooks, syncOwnerClaude, urlPath } from './climayte-owner-sync'
-import { launchRunner } from './climayte-runner'
+import { launchRunner, type RunnerSpec } from './climayte-runner'
 import { HAIKU } from './climayte-scorecard'
 import { workerHooks } from './climayte-signal'
 import { reaskWindDown } from './climayte-stops'
@@ -750,9 +758,12 @@ export function leadPickPending(w: CliMayteWorker): boolean {
   return true
 }
 
+/** A seat's estimating sentences (SEAT_ETA_INSTRUCTION), which its Prime shows as the time left; empty for any other chat. */
+const seatEtaNote = (w: CliMayteWorker): string => (isCoreSeat(w) ? SEAT_ETA_INSTRUCTION : '')
+
 /** Core mode's appended prompt. A Prime chat under a slot or file placement also gets its pack (or the line that names it). */
 function corePromptText(w: CliMayteWorker, cli: CliSession): string {
-  const head = [CORE_CHAT_NOTE, w.desk?.append]
+  const head = [CORE_CHAT_NOTE, seatEtaNote(w), w.desk?.append]
   // Keyed as the hook keys it: the Desk chat, else the session being launched (a handoff's new one, not w.sessionId).
   const chat = w.desk?.chatId ?? cli.id
   const placement = packPlacement(w)
@@ -777,7 +788,9 @@ function corePromptText(w: CliMayteWorker, cli: CliSession): string {
  *  the CLI's own walk reads it already from the chat's folder (so it is never in a request twice). */
 export function chatPromptText(w: CliMayteWorker, cli: CliSession): string {
   if (coreModeOn()) return corePromptText(w, cli)
-  const note = w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE
+  const note = [w.desk ? `${CHAT_NOTE_BASE}\n\n${w.desk.append}` : CHAT_NOTE, seatEtaNote(w)]
+    .filter(Boolean)
+    .join('\n\n')
   if (!ownerClaudeDir || walkReachesOwnerMd(w.cwd, ownerClaudeDir)) return note
   const md = join(ownerClaudeDir, 'CLAUDE.md')
   let owner = ''
@@ -865,18 +878,29 @@ export interface CliSession {
   resume: boolean
 }
 
+type DeliverFiles = NonNullable<RunnerSpec['deliver']>
+
+/** The stream-json user line the native runner writes to the CLI's stdin for the prompt. */
+function userLine(text: string) {
+  return { type: 'user', message: { role: 'user', content: [{ type: 'text', text }] } }
+}
+
 export function cliArgv(
   w: CliMayteWorker,
   sessionId: string,
   resume: boolean,
   hookFile: string,
   mcpFile: string | null,
+  liveInput = false,
 ): string[] {
   return [
     ...claudeCommand(),
     '-p',
     '--output-format',
     'stream-json',
+    // The native runner's stdin carries the prompt and later messages as stream-json user lines;
+    // --replay-user-messages echoes each one the CLI reads, which is how a delivery is confirmed.
+    ...(liveInput ? ['--input-format', 'stream-json', '--replay-user-messages'] : []),
     '--verbose',
     // A sealed worker is allowed its named tools and no other (briefArgs).
     ...(w.sealed ? ['--permission-mode', 'default'] : ['--dangerously-skip-permissions']),
@@ -923,9 +947,9 @@ function startRunner(
   w: CliMayteWorker,
   acct: CliMayteAccount,
   argv: string[],
-  files: { promptFile: string; log: string; errLog: string },
+  files: { promptFile: string; log: string; errLog: string; deliver?: DeliverFiles },
 ): NonNullable<CliMayteWorker['attempts'][number]['runner']> | null {
-  const { promptFile, log, errLog } = files
+  const { promptFile, log, errLog, deliver } = files
   closeSync(openSync(log, 'a'))
   closeSync(openSync(errLog, 'a'))
   const runner = {
@@ -969,6 +993,7 @@ function startRunner(
         exitFile: runner.exitFile,
         // The wind-down hook is answered by this runner over http, not by a `cat` per tool call.
         signal: { file: signalPath(w.id), settings: workerFiles(w.id)[0] },
+        ...(deliver ? { deliver } : {}),
         maxProcesses: WORKER_MAX_PROCESSES,
       },
       runnerSpecPath(log),
@@ -991,7 +1016,7 @@ function journalLaunch(
   activeOnAccount: number,
 ): void {
   if (p.fromId) {
-    const left = [...w.attempts].reverse().find((a) => a.account.id === p.fromId)?.account
+    const left = w.attempts.findLast((a) => a.account.id === p.fromId)?.account
     journal(w, 'moved', {
       from: left ? acctLabel(left) : p.fromId,
       account: acctLabel(acct),
@@ -1050,6 +1075,8 @@ function noteLaunch(
   delete w.revived
   w.accountId = acct.id
   w.status = 'running'
+  // The last attempt's line ('finished (N turns; ...)') is not this one's: Desk shows it under a working chat.
+  w.lastActivity = null
   w.error = null
   w.notBefore = null
   delete w.heldForResetSince
@@ -1101,20 +1128,30 @@ export function launch(
 
   mkdirSync(LOGS, { recursive: true })
   mkdirSync(PROMPTS, { recursive: true })
+  const live = process.platform === 'win32'
   const promptFile = join(PROMPTS, `${w.id}-${n}.txt`)
-  writeFileSync(promptFile, text)
+  writeFileSync(promptFile, live ? `${JSON.stringify(userLine(text))}\n` : text)
   const log = join(LOGS, `${w.id}-${n}.jsonl`)
   const errLog = join(LOGS, `${w.id}-${n}.err.log`)
   const hookFile = writeWorkerSettings(w, acct)
   forgetOwnNeedsAuth(acct.configDir)
-  const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w))
-  const runner = startRunner(w, acct, argv, { promptFile, log, errLog })
+  const argv = cliArgv(w, sessionId, resume, hookFile, writeWorkerMcp(w), live)
+  const deliver: DeliverFiles | undefined = live
+    ? {
+        token: randomBytes(16).toString('hex'),
+        portFile: `${log}.deliver.port`,
+        delivered: `${log}.delivered.jsonl`,
+      }
+    : undefined
+  if (deliver) rmSync(deliver.portFile, { force: true })
+  const runner = startRunner(w, acct, argv, { promptFile, log, errLog, deliver })
   if (!runner) return
   w.attempts.push({
     account: { id: acct.id, num: acct.num, name: acct.name, configDir: acct.configDir },
     pid: null,
     log,
     errLog,
+    ...(deliver ? { deliver, deliveries: [] } : {}),
     startedAt: Date.now(),
     endedAt: null,
     outcome: 'running',

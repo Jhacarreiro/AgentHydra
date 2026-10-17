@@ -70,10 +70,11 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
     missing: [],
   })
   // Most tokens first; a source the card does not know keeps its key.
+  // Each names its first recorded local day, from the kit's oldest call for it; one with no record says null.
   expect(body.sources).toEqual([
-    { key: 'desktop', label: 'Claude desktop', sessions: 20, messages: 500, tokens: 30_000_000, costUsd: 800 },
-    { key: 'climayte', label: 'CliMayte', sessions: 30, messages: 300, tokens: 10_000_000, costUsd: 400 },
-    { key: 'newtool', label: 'newtool', sessions: 10, messages: 100, tokens: 3_500_000, costUsd: null },
+    { key: 'desktop', label: 'Claude desktop', sessions: 20, messages: 500, tokens: 30_000_000, costUsd: 800, since: '2026-06-30' },
+    { key: 'climayte', label: 'CliMayte', sessions: 30, messages: 300, tokens: 10_000_000, costUsd: 400, since: '2026-09-30' },
+    { key: 'newtool', label: 'newtool', sessions: 10, messages: 100, tokens: 3_500_000, costUsd: null, since: null },
   ])
   // A `rank:` row is a dispatch rank, not a model, however many sessions it carries.
   expect(body.models).toEqual([
@@ -81,11 +82,11 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
     { key: 'claude-sonnet-5-5', sessions: 15 },
     { key: 'gpt-6-astra', sessions: 5 },
   ])
-  // 27 weeks ending today, against the busiest day: today's 500 turns are 4, two days ago's 200 are 2,
-  // and the day 250 days back has no cell.
+  // 27 weeks ending today, ranked among the active days: today's 500 turns are the busiest (4), two days
+  // ago's 200 the quietest (1), and the day 250 days back has no cell.
   expect(body.heat).toHaveLength(189)
   expect(body.heat.at(-1).level).toBe(4)
-  expect(body.heat.at(-3).level).toBe(2)
+  expect(body.heat.at(-3).level).toBe(1)
   expect(body.heat.filter((cell: { level: number }) => cell.level > 0)).toHaveLength(2)
   // Each cell names its local day and its number, for the square's hover.
   expect(body.heat.at(-1)).toMatchObject({ day: localDay(0), count: 500 })
@@ -101,6 +102,24 @@ test('GET /api/stats/home consolidates every source AgentHydra counts, and reuse
   const all = await call(desk, '/api/stats/home?range=all')
   expect(f.gets).toContain('/api/hswarm/api/stats?days=90')
   expect(all.body.hswarm).toEqual({ tasks: 500, savedUsd: 400 })
+})
+
+test('one outlier day does not wash out the activity grid: every shade is used', async () => {
+  // 40 ordinary days of 10 to 400 turns and one of 100,000 (2026-07-29 had 733,633: a Codex run of 443
+  // sub-agents). Against the busiest day every ordinary day was 1, the palest shade.
+  const f = await startFakeHydra()
+  fakes.push(f)
+  const ordinary = Array.from({ length: 40 }, (_, i) => ({ key: localDay(i + 1), weighted: 0, costUsd: 0, sessions: 0, turns: (i + 1) * 10 }))
+  f.state.stats.spend.byDay = [...ordinary, { key: localDay(60), weighted: 0, costUsd: 0, sessions: 0, turns: 100_000 }]
+  const desk = await boot(f.url)
+
+  const { body } = await call(desk, '/api/stats/home?range=all')
+  const level = (daysAgo: number) => body.heat.find((c: { day: string }) => c.day === localDay(daysAgo)).level
+  expect(level(60)).toBe(4)
+  expect(level(1)).toBe(1) // 10 turns, the quietest
+  expect(level(40)).toBe(4) // 400 turns, the busiest ordinary day
+  const shades = new Set(ordinary.map((_, i) => level(i + 1)))
+  expect([...shades].sort()).toEqual([1, 2, 3, 4])
 })
 
 test('a source that fails is missing, not 0; a failed spend report or AgentHydra down is an error', async () => {

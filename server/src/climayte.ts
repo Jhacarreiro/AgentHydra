@@ -29,6 +29,7 @@
 // transcript is an ordinary session in that account's folder. headless-policy.ts names this as the
 // one exemption. Nothing here starts on its own: with no worker queued each tick is a no-op.
 
+import { randomUUID } from 'node:crypto'
 import {
   closeSync,
   cpSync,
@@ -36,8 +37,10 @@ import {
   mkdirSync,
   openSync,
   readdirSync,
+  readFileSync,
   renameSync,
   rmSync,
+  statSync,
 } from 'node:fs'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
@@ -85,6 +88,7 @@ import {
   walls,
   workers,
 } from './climayte-core'
+import { beginDeliveryPost, endDeliveryPost, hasDeliveryPosts } from './climayte-delivery-echo'
 import {
   assertKnownAccounts,
   deskProblem,
@@ -109,13 +113,16 @@ import { firstLine } from './climayte-journal'
 import { removeWorkerFiles, workerFileIds } from './climayte-launch'
 import {
   type CliMayteAccount,
+  type CliMayteAttempt,
   type CliMayteSealed,
+  type CliMayteSendId,
   type CliMayteWave,
   type CliMayteWorker,
   classifyAttempt,
   climaytePriority,
   contextTokens,
   DRONE_REFUSAL,
+  isCoreSeat,
   RUNNER_NEVER_STARTED_NOTICE,
   roleOf,
   tooBigOf,
@@ -172,6 +179,7 @@ import {
   killAttempts,
   killLateStarts,
   killsLanded,
+  lastRead,
   noteReading,
   readLog,
   recheckCredentialWall,
@@ -207,11 +215,13 @@ import {
   releaseStuckManager,
   settledWaves,
   settleKeyOfWorker,
+  unwrittenWaves,
   WAVE_MIN_TASKS,
   waveDirs,
 } from './climayte-wave-ops'
+import { type CliAuthCheckResult, createCliAuthChecker } from './core/cli-auth-check'
 import { getCliInstance, setCliLoginVeto } from './core/cli-instances'
-import { cliAuthStatus } from './core/cli-quick-add'
+import { setDesktopCliAuthChecker } from './core/desktop-cli-feed'
 import { spawnCaptured } from './core/process'
 import { desk2Url } from './desk2'
 import { loadCatalog } from './hydra-core/catalog'
@@ -219,6 +229,7 @@ import { coreDir } from './hydra-core/paths'
 import { seatChatOf } from './hydra-core/seat-chats'
 import { POINTER_DIR } from './instance'
 import { type SwarmJobPing, seenByChat, startSwarmJobPing } from './swarm-job-ping'
+import { clearVerifiedUsageAuthFailure } from './usage'
 
 export {
   setCliMayteAccountsProvider,
@@ -291,13 +302,42 @@ let timer: ReturnType<typeof setTimeout> | null = null
 
 let ticking = false
 
-/** Ask the CLI whether `a`'s login works again; a yes lifts its wall. Any answer saves the wall
- *  (its new `until`, or its removal) and schedules the next tick at once. */
+const verifyCliAuth = createCliAuthChecker({
+  instance: getCliInstance,
+  wall: (id) => walls[id],
+  clearWall: (id) => {
+    delete walls[id]
+  },
+  verified: (instance, token) => {
+    if (instance.name) clearVerifiedUsageAuthFailure(instance.name, token)
+  },
+  rejected: (instance) => {
+    walls[instance.id] = {
+      reason: 'signed out',
+      until: Date.now(),
+      cred: credStamp(instance.configDir),
+    }
+  },
+})
+
+/** Authenticate the current grant without sending a message or refreshing it. Only a verified,
+ *  unchanged grant may lift the same signed-out wall; other account and quota walls stay intact. */
+export async function climayteCheckCliAuth(
+  id: string,
+  expectedEmail?: string,
+): Promise<CliAuthCheckResult> {
+  load()
+  const result = await verifyCliAuth(id, expectedEmail)
+  if (result.wallCleared || result.wallSet) {
+    trySaveWalls()
+    schedule(0)
+  }
+  return result
+}
+
+/** A changed login is rechecked against the server once, with no message or token refresh. */
 function checkAuth(a: CliMayteAccount): void {
-  void cliAuthStatus(a.configDir)
-    .then((s) => {
-      if (s.loggedIn) delete walls[a.id]
-    })
+  void climayteCheckCliAuth(a.id)
     .catch(() => {})
     .finally(() => {
       authChecks.delete(a.id)
@@ -307,7 +347,7 @@ function checkAuth(a: CliMayteAccount): void {
 }
 
 /** A signed-out wall is lifted only by a new sign-in: when the account's credential file changes,
- *  the CLI's own `auth status` decides (about a quarter of a second, no quota). The clock never asks
+ *  the OAuth profile endpoint verifies that exact grant (no message or quota). The clock never asks
  *  again, so a dead login costs no other worker a failed attempt (it was rechecked every 30 minutes,
  *  and each lift sent waiting work at it). */
 function recheckSignedOut(accounts: CliMayteAccount[]): void {
@@ -329,6 +369,7 @@ function recheckSignedOut(accounts: CliMayteAccount[]): void {
 }
 
 setCliLoginVeto(climayteSignedOutReason)
+setDesktopCliAuthChecker(climayteCheckCliAuth)
 
 function startCheck(w: CliMayteWorker, relaunches = 0): void {
   if (!w.check) return
@@ -401,6 +442,7 @@ function pollChecks(): void {
     // One worker's bad record (a hand edit, a half-written store) is that worker's problem: a throw
     // here ended the whole tick, so no task anywhere moved on (found by a test, 2026-10-02).
     try {
+      if (w.status !== 'checking' && !w.checkRunner && !w.staleChecks?.length) continue
       stopStaleChecks(w)
       pollCheck(w)
     } catch (err) {
@@ -596,13 +638,23 @@ ${code === null ? '' : output.trim()}${sev.others ? "\nThe failing files are not
 /** When the tick last looked for attempts whose spend the kit had not caught up with (every 5 s). */
 let lastSettle = 0
 
+/** The next tick's wait: 1 s while a worker runs, 3 s while one is queued or waiting, else 15 s. One
+ *  pass over the store and no copy of it: this runs after every tick, and the store keeps every
+ *  finished worker. */
+function idleDelay(): number {
+  let active = false
+  for (const w of workers.values()) {
+    if (w.status === 'running') return 1_000
+    if (!active && isActive(w)) active = true
+  }
+  return active ? 3_000 : 15_000
+}
+
 function schedule(delay?: number): void {
   if (timer) clearTimeout(timer)
   // poll() runs every tick, so the overage stop is only as fast as the tick, and each second of
   // overage bills the owner: 1 s while a worker runs, 3 s while one is queued or waiting.
-  const all = [...workers.values()]
-  const next =
-    delay ?? (all.some((w) => w.status === 'running') ? 1_000 : all.some(isActive) ? 3_000 : 15_000)
+  const next = delay ?? idleDelay()
   timer = setTimeout(
     () => void tick().catch((err) => console.error('[climayte] tick failed:', err)),
     next,
@@ -661,7 +713,7 @@ async function tick(): Promise<void> {
       lastSettle = now
       settleSpends(now)
     }
-    killLateStarts()
+    killLateStarts(settleStoppedDeliveries)
     saveLive()
     pollChecks()
     recheckSignedOut(accounts)
@@ -722,8 +774,9 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
     w.saidAt = Date.now()
   }
   // Its `ETA:` line for this message (climayte-eta.ts), once: a later attempt of the same message
-  // (a move, a handoff) keeps the first. startReport clears it when the next message goes in.
-  if (!w.chat && !w.eta && r.eta) {
+  // (a move, a handoff) keeps the first. startReport clears it when the next message goes in. A seat
+  // estimates too (SEAT_ETA_INSTRUCTION), for its Prime's view only: no ledger row, no calibration.
+  if ((!w.chat || isCoreSeat(w)) && !w.eta && r.eta) {
     w.eta = {
       minutes: r.eta.minutes,
       at: r.eta.at,
@@ -731,7 +784,7 @@ function noteActivity(w: CliMayteWorker, r: LogRead, exited: boolean): void {
       line: r.eta.line,
       prompt: ETA_PROMPT_VERSION,
     }
-    void appendEtaRow(saidRow(w, w.eta, r.eta.text))
+    if (!w.chat) void appendEtaRow(saidRow(w, w.eta, r.eta.text))
     changed(w)
   }
   // Its answer to why the estimate missed (the Stop hook asked, climayteStopHook): kept on the
@@ -982,12 +1035,14 @@ function recordAttemptEnd(
   v: EndRead['v'],
   events: unknown[],
   now: number,
+  deliveryLogComplete: boolean,
 ): number {
   if (v.outcome === 'auth' || v.outcome === 'quota') keepHome(w, at)
   at.outcome = v.outcome
   at.notice = v.notice
   at.endedAt = now
   at.context = contextTokens(events)
+  if (deliveryLogComplete) requeueUnread(w, at)
   // A chat's handoff, written in a turn that ended on its own, is the note its next message starts
   // from (a fresh session answering that message, not an immediate continuation).
   if (w.chat === true && v.outcome === 'done' && at.windDown && handoffWritten(at.windDown))
@@ -1011,7 +1066,8 @@ function settleEta(w: CliMayteWorker, v: EndRead['v'], asking: boolean, now: num
     return
   w.eta.tookS = etaTookSeconds(w.eta, w.attempts, now)
   w.eta.doneAt = now
-  void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
+  if (!w.chat)
+    void appendEtaRow(settledRow(w, w.eta as typeof w.eta & { tookS: number; doneAt: number }))
 }
 
 /** Where a settled turn goes next. A wave task with no check is judged now, off the main thread, and
@@ -1041,9 +1097,10 @@ function finish(w: CliMayteWorker, events: unknown[]): void {
       : end.v
   rmSync(signalPath(w.id), { force: true })
   removeWorkerFiles(w.id)
+  const deliveryLogComplete = !at.deliveries?.length || !lastRead(at).partial.trim()
   forgetRead(at.log)
   const now = Date.now()
-  const spent = recordAttemptEnd(w, at, v, events, now)
+  const spent = recordAttemptEnd(w, at, v, events, now, deliveryLogComplete)
   if (w.status === 'cancelled') {
     changed(w)
     return
@@ -1079,6 +1136,9 @@ export function journalTooBig(w: CliMayteWorker): void {
 /** Piece 3: The daemon's batch wake. Process all waves that have held task changes and decide
  * whether to wake their managers with a batch report. Clear the modified waves map at the end. */
 function processBatchWakes(now: number): void {
+  // Waves an earlier tick could not write, unchanged since: written now, their wake already decided.
+  for (const [id, { wave, configDir }] of unwrittenWaves)
+    if (!modifiedWaves.has(id)) saveWave(wave, configDir)
   for (const [, { wave, configDir }] of modifiedWaves) {
     const manager = workers.get(wave.managerId)
     // A wave no longer running (reported, decided) wakes no manager: there is nothing left to manage.
@@ -1089,11 +1149,7 @@ function processBatchWakes(now: number): void {
       wave.status !== 'running'
     ) {
       // No manager to wake; keep what changed in the wave.
-      try {
-        writeWave(configDir, wave)
-      } catch {
-        // The next change writes it again.
-      }
+      saveWave(wave, configDir)
       continue
     }
 
@@ -1124,14 +1180,22 @@ function processBatchWakes(now: number): void {
     }
 
     // Write the updated wave back to disk.
-    try {
-      writeWave(configDir, wave)
-    } catch {
-      // If write fails, the batch will be picked up on the next tick.
-    }
+    saveWave(wave, configDir)
   }
 
   modifiedWaves.clear()
+}
+
+/** Write a wave the tick changed; one that cannot be written is kept (unwrittenWaves) and written
+ *  again next tick, never dropped. */
+function saveWave(wave: CliMayteWave, configDir: string): void {
+  try {
+    writeWave(configDir, wave)
+    unwrittenWaves.delete(wave.id)
+  } catch (err) {
+    unwrittenWaves.set(wave.id, { wave, configDir })
+    console.error(`[climayte] wave ${wave.id} could not be written; trying again next tick:`, err)
+  }
 }
 
 /** Store a dispatch's new workers, journal each and start them (climayteRun): a wave's carry the
@@ -1385,15 +1449,187 @@ function sendUrgent(
   return null
 }
 
-/** How many message request ids a worker keeps (CliMayteWorker.sendIds): a caller retries a message
- *  within seconds, so the newest few are enough. */
-const SEND_IDS_KEPT = 50
+/** How long a worker keeps a message request id (CliMayteWorker.sendIds). By age, not by count: a
+ *  caller retries a message it got no answer for within seconds or a few minutes, and a busy worker can
+ *  take any number of other messages in that time (kept by count, the 50 newest, a slow retry after 50
+ *  more was delivered twice). Ten minutes outlasts any retry while the caller still waits. */
+const SEND_ID_WINDOW_MS = 10 * 60_000
+/** The most ids a worker keeps, a bound on memory only: 100 messages a minute for ten minutes, far
+ *  beyond what any worker is sent. */
+const SEND_IDS_MAX = 1000
 /** What a message sent again (the same requestId) is answered: it was taken the first time. */
 const TAKEN_ALREADY = 'Already taken: this message arrived before, so it was not queued again.'
+
+/** The message request ids `w` still keeps at `now`, oldest first. An id saved before they carried
+ *  their time (a bare string) counts from the worker's last change, which is no earlier than it. */
+function keptSendIds(w: CliMayteWorker, now: number): CliMayteSendId[] {
+  return (w.sendIds ?? [])
+    .map((s) => (typeof s === 'string' ? { id: s, at: w.updatedAt } : s))
+    .filter((s) => now - s.at < SEND_ID_WINDOW_MS)
+}
 
 /** `urgent`: a running worker is stopped cleanly (its attempt recorded with its cost, the transcript
  *  kept) and the same session continues at once with this message first; messages already queued
  *  follow it, in order. Without it, a running worker gets the message when its task ends. */
+const DELIVER_TIMEOUT_MS = 3_000
+const DELIVERED_MESSAGE =
+  "Delivered into the worker's running turn: it reads the message at its next step."
+
+/** Hands a message to a running worker's live CLI through its native runner (/deliver). Every
+ *  receipt stays until the turn ends and its POSTs settle: even a failed response can be followed
+ *  by a CLI echo. False with no live input yet, so the caller holds the message as before. */
+function deliverInTurn(w: CliMayteWorker, text: string, requestId: string | undefined): boolean {
+  const at = w.attempts[w.attempts.length - 1]
+  if (!at?.deliver || at.endedAt !== null) return false
+  let port = NaN
+  try {
+    port = Number(readFileSync(at.deliver.portFile, 'utf8'))
+  } catch {
+    return false
+  }
+  if (!Number.isInteger(port) || port <= 0) return false
+  const entry: NonNullable<CliMayteAttempt['deliveries']>[number] = {
+    requestId: requestId ?? randomUUID(),
+    text,
+    accepted: false,
+  }
+  at.deliveries = [...(at.deliveries ?? []), entry]
+  beginDeliveryPost(entry)
+  void postDelivery(port, at.deliver.token, entry)
+    .then(async (ok) => {
+      endDeliveryPost(entry)
+      if (workers.get(w.id) !== w) return
+      entry.accepted = ok
+      // Keep refusals and unknown HTTP outcomes too: the CLI can echo a message after a
+      // failed response. Replaying before the turn ends would risk sending it twice.
+      if (ok || entry.read) journal(w, 'message-delivered', { pending: w.pending.length })
+      if (at.endedAt !== null) {
+        if (at.outcome === 'cancelled') {
+          // A stop stamps endedAt before its asynchronous kill lands. Its final echo can
+          // still arrive meanwhile; an unconfirmed/still-starting runner stays unresolved.
+          await killsLanded()
+          if (workers.get(w.id) !== w) return
+          settleStoppedDeliveries(w, at)
+        } else if (!hasDeliveryPosts(at)) {
+          try {
+            if (readDeliveryLog(at) && reviveAfterDelivery(w, at, requeueUnread(w, at))) schedule(0)
+          } finally {
+            forgetRead(at.log)
+          }
+        }
+      }
+      changed(w)
+    })
+    .catch((err) =>
+      console.error(`[climayte] ${w.id}: delivery receipt could not be settled:`, err),
+    )
+  return true
+}
+
+async function postDelivery(
+  port: number,
+  token: string,
+  entry: { requestId: string; text: string },
+): Promise<boolean> {
+  try {
+    const res = await fetch(`http://127.0.0.1:${port}/deliver`, {
+      method: 'POST',
+      headers: { 'content-type': 'application/json', 'x-climayte-deliver-token': token },
+      body: JSON.stringify({ requestId: entry.requestId, text: entry.text }),
+      signal: AbortSignal.timeout(DELIVER_TIMEOUT_MS),
+    })
+    await res.text()
+    return res.status === 200
+  } catch {
+    return false
+  }
+}
+
+/** The complete log stream marks read receipts before its tail evicts their echoes. Once the
+ *  attempt ends and every live POST settles, unread text/count goes back among held messages once. */
+export function requeueUnread(w: CliMayteWorker, at: CliMayteAttempt): number {
+  if (at.endedAt === null || hasDeliveryPosts(at)) return 0
+  const deliveries = at.deliveries ?? []
+  // All receipts stay until this point. For identical texts it does not matter which
+  // request's echo was attributed to which receipt: the unread text/count is exact.
+  const unread = deliveries.filter((d) => !d.read)
+  at.deliveries = []
+  for (const d of unread) w.pending.push(d.text)
+  return unread.length
+}
+
+function readDeliveryLog(at: CliMayteAttempt): boolean {
+  const r = readLog(at)
+  if (r.partial.trim()) return false
+  if (r.offset > 0) return true
+  try {
+    const st = statSync(at.log)
+    return st.isFile() && st.size === 0
+  } catch {
+    return false
+  }
+}
+
+/** Called after a stop's kill has landed, including when every POST already settled before
+ *  the stop. Never dispatches: unread messages remain held on a cancelled/failed worker. */
+export function settleStoppedDeliveries(w: CliMayteWorker, at: CliMayteAttempt): number {
+  if (
+    workers.get(w.id) !== w ||
+    at.endedAt === null ||
+    !at.deliveries?.length ||
+    hasDeliveryPosts(at) ||
+    !attemptExited(w, at)
+  )
+    return 0
+  try {
+    if (!readDeliveryLog(at)) return 0
+    const count = requeueUnread(w, at)
+    changed(w)
+    return count
+  } catch (err) {
+    // One unreadable log must not interrupt another worker's stop cleanup.
+    console.error(`[climayte] ${w.id}: stopped delivery receipts could not be recovered:`, err)
+    return 0
+  } finally {
+    forgetRead(at.log)
+  }
+}
+
+function reviveAfterDelivery(w: CliMayteWorker, at: CliMayteAttempt, queued: number): boolean {
+  if (!queued || at.outcome === 'cancelled' || w.status !== 'done' || w.attempts.at(-1) !== at)
+    return false
+  w.status = 'queued'
+  w.retries = 0
+  w.error = null
+  w.revived = true
+  return true
+}
+
+/** A prior daemon can end a turn before its delivery POST callbacks settle. Recover just those
+ *  receipts from the full log, once at boot, before dispatch. A missing/unreadable log leaves the
+ *  receipt for review instead of guessing that the message was unread and replaying it. */
+export function recoverDeliveryReceipts(): number {
+  let queued = 0
+  for (const w of workers.values())
+    for (const at of w.attempts) {
+      if (at.endedAt === null || !at.deliver || !at.deliveries?.length || hasDeliveryPosts(at))
+        continue
+      try {
+        if (at.outcome === 'cancelled' && !attemptExited(w, at)) continue
+        if (!readDeliveryLog(at)) continue
+        const count = requeueUnread(w, at)
+        queued += count
+        reviveAfterDelivery(w, at, count)
+        changed(w)
+      } catch (err) {
+        console.error(`[climayte] ${w.id}: delivery receipts could not be recovered:`, err)
+      } finally {
+        forgetRead(at.log)
+      }
+    }
+  return queued
+}
+
 export function climayteSend(
   id: string,
   text: string,
@@ -1412,6 +1648,7 @@ export function climayteSend(
   ok: boolean
   message: string
   urgent?: boolean
+  delivered?: 'in-turn'
   model?: string | null
   effort?: string | null
 } {
@@ -1421,7 +1658,9 @@ export function climayteSend(
   if (!text.trim()) return { ok: false, message: 'The message is empty.' }
   const badId = requestIdProblem(opts.requestId)
   if (badId) return { ok: false, message: badId }
-  if (opts.requestId && w.sendIds?.includes(opts.requestId))
+  const now = Date.now()
+  const kept = keptSendIds(w, now)
+  if (opts.requestId && kept.some((s) => s.id === opts.requestId))
     return { ok: true, message: TAKEN_ALREADY, model: w.model, effort: w.effort }
   const setting = sendSetting(w, opts)
   if (typeof setting === 'string') return { ok: false, message: setting }
@@ -1432,8 +1671,11 @@ export function climayteSend(
     w.desk = opts.desk as CliMayteWorker['desk']
   }
   applySendSetting(w, setting)
-  // Every path from here takes the message, so its id is kept now; each path saves it with the worker.
-  if (opts.requestId) w.sendIds = [...(w.sendIds ?? []), opts.requestId].slice(-SEND_IDS_KEPT)
+  // Every path from here takes the message, so its id is kept now and the expired ones go; each path
+  // saves them with the worker.
+  if (opts.requestId) kept.push({ id: opts.requestId, at: now })
+  if (kept.length) w.sendIds = kept.slice(-SEND_IDS_MAX)
+  else delete w.sendIds
   delete w.question // a message is the answer to what the worker asked (climayteAsk)
   // A stopped worker stays stopped for a ping: its text waits with the owner's next message.
   if (opts.ping && w.status === 'cancelled') {
@@ -1450,6 +1692,15 @@ export function climayteSend(
     const sent = sendUrgent(w, text, setting)
     if (sent) return sent
     // It finished on its own a moment ago: the message leads its next turn like any other.
+  } else if (w.status === 'running' && !opts.ping && deliverInTurn(w, text, opts.requestId)) {
+    changed(w)
+    return {
+      ok: true,
+      message: DELIVERED_MESSAGE,
+      delivered: 'in-turn',
+      model: w.model,
+      effort: w.effort,
+    }
   } else {
     queueFollowUp(w, text, setting)
   }
@@ -1910,8 +2161,11 @@ function recordStop(w: CliMayteWorker, at: Attempt, notice: string | null): void
   at.outcome = 'cancelled'
   at.notice = notice
   at.endedAt = Date.now()
-  charge(w, at)
-  forgetRead(at.log)
+  try {
+    charge(w, at)
+  } finally {
+    forgetRead(at.log)
+  }
 }
 
 /** A stopped worker's signal and settings files, removed once its CLI's tree is gone. */
@@ -1931,7 +2185,10 @@ function stopRunning(w: CliMayteWorker, notice: string | null): boolean {
   if (!pollBeforeStop(w)) return false
   const at = runningAttempt(w)
   if (at) {
-    killAttempts([at], () => removeStopFiles(w))
+    killAttempts([at], () => {
+      removeStopFiles(w)
+      settleStoppedDeliveries(w, at)
+    })
     recordStop(w, at, notice)
   }
   return true
@@ -1959,7 +2216,10 @@ export function climayteCancel(filter: { id?: string; group?: string }): {
   killAttempts(
     killing.map((s) => s.at as Attempt),
     () => {
-      for (const { w } of killing) removeStopFiles(w)
+      for (const { w, at } of killing) {
+        removeStopFiles(w)
+        if (at) settleStoppedDeliveries(w, at)
+      }
     },
   )
   for (const { w, at: running } of stopping) {
@@ -2095,6 +2355,7 @@ export function startCliMayte(): void {
     .catch((err) => console.error('[climayte] preloading finished workers failed:', err))
     .then(() => {
       load()
+      recoverDeliveryReceipts()
       sweepWorkerFiles()
       startPing()
       schedule(0)
@@ -2184,15 +2445,18 @@ const desk: NonNullable<CliMaytePingDeps['desk']> = {
         signal: AbortSignal.timeout(5_000),
       })
       if (res.status === 404) return { ok: false, reason: 'not a Desk 2 chat', notDesk: true }
-      return { ok: res.ok, reason: res.ok ? 'sent' : `desk ${res.status}` }
+      // A 5xx can come after the route sent the message; a 4xx is a refusal before it.
+      return {
+        ok: res.ok,
+        reason: res.ok ? 'sent' : `desk ${res.status}`,
+        uncertain: res.status >= 500,
+      }
     } catch (err) {
       const why = err instanceof Error ? err.message : String(err)
       const code = (err as { code?: string }).code ?? ''
-      return {
-        ok: false,
-        reason: why,
-        notDesk: /ECONNREFUSED|Unable to connect/i.test(`${why} ${code}`),
-      }
+      // Refused: nothing reached Desk 2. Any other failure (the 5 s timeout above all) may have.
+      const refused = /ECONNREFUSED|Unable to connect/i.test(`${why} ${code}`)
+      return { ok: false, reason: why, notDesk: refused, uncertain: !refused }
     }
   },
 }
@@ -2207,6 +2471,8 @@ function startPing(): void {
   ping = startCliMaytePing({
     dir: PING_DIR,
     workers: () => [...workers.values()],
+    // A test that stands in its own workers() is read through it, not the store.
+    workerById: pingOverrides?.workers ? undefined : (id) => workers.get(id),
     subscribe: onCliMayteChange,
     climayteSend: (id, text, opts) => climayteSend(id, text, opts),
     composer,
@@ -2280,6 +2546,8 @@ export function climayteAdopt(
   for (const w of workers.values()) {
     if (w.group !== group || !isActive(w)) continue
     live++
+    // Never the caller itself, nor an owner's chat: neither is news to anyone (climayte-ping.ts reportsTo).
+    if (w.chat === true || (o.kind === 'worker' && o.workerId === w.id)) continue
     if (w.origin) {
       owned++
       continue
@@ -2301,9 +2569,13 @@ export function climayteSeen(
 ): { seen: number } {
   load()
   let seen = 0
-  for (const w of workers.values()) {
-    const inScope =
-      (scope.ids?.includes(w.id) ?? false) || (!!scope.group && w.group === scope.group)
+  // A list of ids reads just those workers; a group still walks the store, testing ids by Set.
+  const ids = scope.ids?.length ? new Set(scope.ids) : null
+  const pool = scope.group
+    ? workers.values()
+    : [...(ids ?? [])].flatMap((id) => workers.get(id) ?? [])
+  for (const w of pool) {
+    const inScope = (ids?.has(w.id) ?? false) || (!!scope.group && w.group === scope.group)
     if (!inScope || w.origin?.kind !== 'chat' || w.origin.sessionId !== sessionId) continue
     if ((w.seenAt ?? 0) >= at) continue
     w.seenAt = at

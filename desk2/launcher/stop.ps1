@@ -11,8 +11,12 @@
 #   -Chats   end the chats too: the server closes them first; one it cannot reach is ended by the pid in
 #            its host file (~/.hydra-desk-2/hosts/<chat>.json), only while that pid is still a bun process
 #            started no later than the host says it started
+#   -Window  close the window first (HydraDesk2.exe run from this folder, never another copy): asked to close,
+#            so it saves where it was, and ended after 5 s if it has not. AgentHydra's tray Quit runs this
+#            (quitCommand in ..\..\misc\AgentHydra-Tray.json): quitting AgentHydra takes its window and server
+#            with it, while closing the window leaves AgentHydra running.
 #   -DryRun  print what it would stop and exit 0
-param([switch]$Chats, [switch]$DryRun)
+param([switch]$Chats, [switch]$Window, [switch]$DryRun)
 
 $ErrorActionPreference = 'Stop'
 $DeskHome = if ($env:HYDRA_DESK_HOME) { $env:HYDRA_DESK_HOME } else { Join-Path $HOME '.hydra-desk-2' }
@@ -60,6 +64,20 @@ function Get-ChatHosts {
   return $out
 }
 
+$HostExe = Join-Path $PSScriptRoot 'HydraDesk2.exe'
+function Get-Windows {
+  @(Get-Process -Name 'HydraDesk2' -ErrorAction SilentlyContinue | Where-Object { $_.Path -and $_.Path -eq $HostExe })
+}
+
+function Close-Windows {
+  foreach ($p in Get-Windows) {
+    [void]$p.CloseMainWindow()
+    if ($p.WaitForExit(5000)) { Write-Output "closed the window (pid $($p.Id))"; continue }
+    Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue
+    Write-Output "the window (pid $($p.Id)) did not close within 5 s: ended it"
+  }
+}
+
 function Ask-Shutdown {
   try {
     $body = if ($Chats) { '{"chats":true}' } else { '{}' }
@@ -69,6 +87,7 @@ function Ask-Shutdown {
 }
 
 if ($DryRun) {
+  if ($Window) { foreach ($p in Get-Windows) { Write-Output "[dry-run] would close the window (pid $($p.Id))" } }
   Write-Output "[dry-run] would ask http://127.0.0.1:$Port/api/server/shutdown to stop$(if ($Chats) { ', ending the chats' } else { ', the chats running on' })"
   foreach ($p in $targets) { Write-Output "[dry-run] then, if still running after $GraceSec s, would stop $($p.ProcessName) pid $($p.Id) and its children" }
   $hosts = @(Get-ChatHosts)
@@ -77,6 +96,8 @@ if ($DryRun) {
   if (-not $targets -and $info) { Write-Output "[dry-run] would remove the stale pid file $PidFile" }
   exit 0
 }
+
+if ($Window) { Close-Windows }
 
 if (Ask-Shutdown) {
   Write-Output "asked the server on port $Port to stop$(if ($Chats) { ' and end the chats' })"

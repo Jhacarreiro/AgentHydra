@@ -6,6 +6,8 @@
 // endpoint have always returned. A session the kit has not swept yet (brand new, before the next
 // ingest pass) has no rows and answers a real zero, the same as an empty transcript always did.
 
+import type { CliMayteWorker } from './climayte-lib'
+import { dispatchedFrom } from './climayte-view'
 import { type UsageQueryOpts, usageQuery } from './kit/query'
 import { pricesAsOf } from './pricing'
 import type { TranscriptFile } from './transcript'
@@ -59,13 +61,90 @@ function spend(
   }
 }
 
+/** Adds dollar figures, null only when every one is null. */
+const addUsd = (...xs: (number | null | undefined)[]): number | null =>
+  xs.reduce<number | null>((sum, x) => (x == null ? sum : (sum ?? 0) + x), null)
+
+/** HSwarm's ledger names its caller by the session id's first 8 characters (the key HSwarm's MCP server
+ *  is given; ledger.jsonl's `caller_session`, the kit's `session` for its rows), a newer line by the whole
+ *  id: both are asked for. Two sessions whose ids share the first 8 characters would share these rows. */
+const hswarmCallers = (ids: Iterable<string>): string[] => [
+  ...new Set([...ids].flatMap((id) => [id, id.slice(0, 8)])),
+]
+
+export interface SessionUsageOpts extends UsageQueryOpts {
+  /** Every CliMayte worker on record (climayte-view climayteWorkers); the ones this session started are
+   *  found in it. Without it, no CliMayte work is counted. */
+  workers?: Iterable<CliMayteWorker>
+}
+
 /**
- * Tokens and cost for one session, subagents included.
+ * What a session's handed-off work spent (SessionUsage.delegated), from the analytics kit:
+ *
+ *  * CliMayte: every worker the session started, by its ping origin or, with none, its trace (a
+ *    CliMayte-routed HSwarm task's worker names the calling chat only there), and every worker those
+ *    started in turn (dispatchedFrom with `trace`). Each worker's sessions, earlier ones included, are
+ *    Claude calls in the kit like the session's own, so they are counted the same way.
+ *  * HSwarm: the ledger's rows for the session and for those workers' sessions (a worker's own HSwarm
+ *    calls), except the ones HSwarm routed to CliMayte: that work is a worker's session, counted above,
+ *    and HSwarm's line for it records part of it or nothing.
+ */
+export function delegatedUsage(
+  sessionId: string,
+  opts: SessionUsageOpts = {},
+): SessionUsage['delegated'] {
+  const { workers, ...kit } = opts
+  const list = workers ? [...workers] : []
+  const mine = dispatchedFrom(list, [sessionId], { trace: true })
+  const sessions = new Set<string>()
+  for (const w of list) {
+    if (!mine.has(w.id)) continue
+    for (const s of [w.sessionId, ...(w.sessions ?? [])]) if (s && s !== sessionId) sessions.add(s)
+  }
+  let climayte = { tokens: 0, costUsd: null as number | null }
+  if (sessions.size) {
+    const res = usageQuery(
+      {
+        window: { last: 'all' },
+        filter: { session: [...sessions], source: CLAUDE_SOURCES },
+        measures: ['tokens', 'list_usd'],
+      },
+      { ...kit, coverage: false },
+    )
+    climayte = { tokens: num(res.totals.tokens), costUsd: res.totals.list_usd ?? null }
+  }
+  const hswarm = { tokens: 0, costUsd: null as number | null, calls: 0 }
+  const res = usageQuery(
+    {
+      window: { last: 'all' },
+      filter: { session: hswarmCallers([sessionId, ...sessions]), source: 'hswarm' },
+      groupBy: ['provider'],
+      measures: ['tokens', 'list_usd', 'calls'],
+    },
+    { ...kit, coverage: false },
+  )
+  for (const r of res.rows) {
+    if (r.provider === 'climayte') continue
+    hswarm.tokens += num(r.tokens)
+    hswarm.calls += num(r.calls)
+    hswarm.costUsd = addUsd(hswarm.costUsd, typeof r.list_usd === 'number' ? r.list_usd : null)
+  }
+  return { hswarm, climayte: { ...climayte, workers: mine.size } }
+}
+
+const NO_DELEGATION: SessionUsage['delegated'] = {
+  hswarm: { tokens: 0, costUsd: null, calls: 0 },
+  climayte: { tokens: 0, costUsd: null, workers: 0 },
+}
+
+/**
+ * Tokens and cost for one session, subagents included, and what the HSwarm and CliMayte work it handed
+ * off spent (delegatedUsage), with the grand total of the three.
  *
  * Claude only: a Codex rollout and an OpenCode row answer `source-unsupported` so the UI can say
  * why rather than showing a silent zero.
  */
-export function sessionUsage(tf: TranscriptFile, opts: UsageQueryOpts = {}): SessionUsage {
+export function sessionUsage(tf: TranscriptFile, opts: SessionUsageOpts = {}): SessionUsage {
   const base = {
     session_id: tf.session_id,
     source: tf.source,
@@ -79,9 +158,13 @@ export function sessionUsage(tf: TranscriptFile, opts: UsageQueryOpts = {}): Ses
       costUsd: null,
       pricedModels: [],
       unpricedModels: [],
+      delegated: NO_DELEGATION,
+      grand: { tokens: 0, costUsd: null },
     }
   }
-  const s = spend(tf.session_id, { last: 'all' }, opts)
+  const { workers: _workers, ...kit } = opts
+  const s = spend(tf.session_id, { last: 'all' }, kit)
+  const d = delegatedUsage(tf.session_id, opts)
   return {
     ...base,
     status: 'ok',
@@ -89,6 +172,11 @@ export function sessionUsage(tf: TranscriptFile, opts: UsageQueryOpts = {}): Ses
     costUsd: s.costUsd,
     pricedModels: s.priced,
     unpricedModels: s.unpriced,
+    delegated: d,
+    grand: {
+      tokens: s.tokens.total + d.hswarm.tokens + d.climayte.tokens,
+      costUsd: addUsd(s.costUsd, d.hswarm.costUsd, d.climayte.costUsd),
+    },
   }
 }
 

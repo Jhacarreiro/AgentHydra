@@ -8,7 +8,9 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { CORE_TOOLS } from '../src/mcp-core'
 import { FAN_OUT_TOOLS } from '../src/mcp-fan-out'
 import { callerOrigin, callerRole, setCallerTranscriptResolver } from '../src/mcp-self'
+import type { UseModeAsk } from '../src/people-host'
 import { scratch } from './hydra-core-fixture'
+import { installUseAddon, removeUseAddon } from './people-fake-addon'
 
 const PRIME = 'chat-prime'
 const FOLDER = 'D:/example/folder'
@@ -139,8 +141,16 @@ function untraced(): void {
   })
 }
 
-beforeEach(() => {
+let asked: UseModeAsk[] = []
+
+beforeEach(async () => {
   dir = scratch()
+  await installUseAddon()
+  asked = []
+  globalThis.__useModeMock = (ask) => {
+    asked.push(ask)
+    return { answered: ask.mode }
+  }
   savedWorker = process.env.AGENTHYDRA_CLIMAYTE_WORKER
   delete process.env.AGENTHYDRA_CLIMAYTE_WORKER
   savedFetch = globalThis.fetch
@@ -163,6 +173,7 @@ beforeEach(() => {
 })
 
 afterEach(() => {
+  removeUseAddon()
   globalThis.fetch = savedFetch
   setCallerTranscriptResolver(null)
   if (savedWorker === undefined) delete process.env.AGENTHYDRA_CLIMAYTE_WORKER
@@ -184,7 +195,7 @@ test('a drone is found by an earlier session of its worker: role drone', async (
   expect(await callerRole({})).toBe('drone')
 })
 
-test('a session no worker owns that names a Desk chat gets a seat there, never a fresh worker', async () => {
+test('a session no worker owns that names a Desk chat is asked for under that chat, never a fresh worker', async () => {
   callerIs('sess-nobody')
   expect(await callerRole({})).toBeUndefined()
   const r = await coreUse.run({
@@ -194,40 +205,27 @@ test('a session no worker owns that names a Desk chat gets a seat there, never a
     question: 'Is the grid right?',
     cwd: FOLDER,
   })
-  expect(r).toMatchObject({ status: 'done', seat: { chat: 'chat-seat-1' } })
+  expect(r).toEqual({ answered: 'consult' })
+  expect(asked[0]?.chat).toMatchObject({ key: PRIME, desk: { id: PRIME } })
   expect(posts.some((p) => p.path === '/api/corch/workers')).toBe(false)
 })
 
-test('a traced session that is no worker and has no Desk chat is a Prime: its consult opens one seat, a worker of the persona, resumed after', async () => {
+test('a traced session that is no worker and has no Desk chat is a Prime with no Desk row: the add-on is asked with no chat', async () => {
   callerIs('sess-nobody')
   mkdirSync(chatPaths(dir, 'chat-nodesk').root, { recursive: true })
-  writeFileSync(chatPaths(dir, 'chat-nodesk').cwd, FOLDER)
-  const ask = (question?: string) =>
-    coreUse.run({ chat: 'chat-nodesk', id: 'person:iris-ui', mode: 'consult', question })
-  expect(await ask('Is the grid right?')).toMatchObject({ job: 'w-new', status: 'done' })
-  const opened = posts.filter((p) => p.path === '/api/corch/workers')
-  expect(opened).toHaveLength(1)
-  expect((opened[0].body.tasks as Record<string, unknown>[])[0]).toMatchObject({
-    role: 'seat',
-    persona: 'person:iris-ui',
-    cwd: FOLDER,
+  const r = await coreUse.run({
+    chat: 'chat-nodesk',
+    id: 'person:iris-ui',
+    mode: 'consult',
+    question: 'Hi?',
   })
-  expect(await ask('And the spacing?')).toMatchObject({ job: 'w-new', status: 'done' })
-  expect(posts.filter((p) => p.path === '/api/corch/workers')).toHaveLength(1)
-  expect(posts.filter((p) => p.path === '/api/corch/workers/w-new/send')).toEqual([
-    { path: '/api/corch/workers/w-new/send', body: { text: 'And the spacing?' } },
-  ])
-  expect(await ask()).toMatchObject({ job: 'w-new', status: 'done' })
-  expect(posts.filter((p) => p.path.startsWith('/api/corch/workers'))).toHaveLength(2)
-  expect(posts.some((p) => p.path === '/api/chats')).toBe(false)
-  const log = readFileSync(join(dir, 'log.jsonl'), 'utf8')
-  expect(log).toContain(
-    '"event":"seat-opened","mode":"consult","id":"person:iris-ui","seat":"w-new"',
-  )
-  expect(log).toContain(
-    '"event":"seat-resumed","mode":"consult","id":"person:iris-ui","seat":"w-new"',
-  )
-  expect(log).not.toContain('"event":"seatless"')
+  expect(r).toEqual({ answered: 'consult' })
+  expect(asked[0]).toMatchObject({
+    mode: 'consult',
+    chat: { key: 'chat-nodesk', desk: null },
+    args: { caller: 'prime' },
+  })
+  expect(posts).toEqual([])
 })
 
 test('a caller that cannot be traced is refused a consult or a hire, told how to be traced, and starts nothing', async () => {
@@ -272,13 +270,14 @@ test('a failed trace never tells the caller to pass a session id, which the trac
   expect(r.why).not.toContain('session_id')
 })
 
-test("the owner's own chat (a Desk chat whose session no worker owns) is a Prime and gets a seat", async () => {
+test("the owner's own chat (a Desk chat whose session no worker owns) is a Prime, asked for under that chat", async () => {
   callerIs('sess-owner')
   const r = await coreUse.run({ id: 'person:iris-ui', mode: 'consult', question: 'Hi?' })
-  expect(r).toMatchObject({
-    seat: { chat: 'chat-seat-1', title: 'Iris Example · Owner desktop chat' },
+  expect(r).toEqual({ answered: 'consult' })
+  expect(asked[0]?.chat).toMatchObject({
+    key: OWNER,
+    desk: { id: OWNER, title: 'Owner desktop chat' },
   })
-  expect(posts.find((p) => p.path === '/api/chats')?.body.parentId).toBe(OWNER)
 })
 
 test('a Prime opens seats only for its own chat: another Desk chat named as chat is refused', async () => {
@@ -290,7 +289,7 @@ test('a Prime opens seats only for its own chat: another Desk chat named as chat
   expect(existsSync(chatPaths(dir, OTHER).seats)).toBe(false)
 })
 
-test('a Prime that names its chat by title, or names none, files the seat under its Desk chat id', async () => {
+test('a Prime that names its chat by title, or names none, is asked for under its Desk chat id', async () => {
   callerIs('sess-prime')
   await coreUse.run({
     chat: 'Example prime',
@@ -299,29 +298,23 @@ test('a Prime that names its chat by title, or names none, files the seat under 
     question: 'A?',
   })
   await coreUse.run({ id: 'person:iris-ui', mode: 'consult', question: 'B?' })
-  expect(posts.filter((p) => p.path === '/api/chats')).toHaveLength(1)
-  expect(JSON.parse(readFileSync(chatPaths(dir, PRIME).seats, 'utf8'))).toMatchObject({
-    'person:iris-ui': { chat: 'chat-seat-1' },
-  })
+  expect(asked.map((a) => a.chat?.key)).toEqual([PRIME, PRIME])
+  expect(asked[0]?.chat?.desk?.id).toBe(PRIME)
 })
 
-test('core_use from a Prime chat opens a seat under it, with no env var set', async () => {
+test('core_use from a Prime chat hands the add-on the chat it resolved, with no env var set', async () => {
   callerIs('sess-prime')
   const r = await coreUse.run({
     chat: PRIME,
     id: 'person:iris-ui',
     mode: 'consult',
-    question: 'Layout for the login page?',
+    question: 'Layout?',
   })
-  expect(r).toMatchObject({
-    status: 'done',
-    reply: 'Fake reply',
-    seat: { chat: 'chat-seat-1', title: 'Iris Example · Example prime' },
-  })
-  expect(posts.find((p) => p.path === '/api/chats')?.body).toMatchObject({
-    parentId: PRIME,
-    title: 'Iris Example · Example prime',
-    cwd: FOLDER,
+  expect(r).toEqual({ answered: 'consult' })
+  expect(asked[0]).toMatchObject({
+    mode: 'consult',
+    entry: { id: 'person:iris-ui' },
+    chat: { key: PRIME, desk: { id: PRIME, title: 'Example prime', cwd: FOLDER } },
   })
   expect(posts.some((p) => p.path === '/api/corch/workers')).toBe(false)
 })

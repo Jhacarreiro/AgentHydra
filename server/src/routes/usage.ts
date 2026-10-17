@@ -1,7 +1,7 @@
 import { statSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Context } from 'hono'
-import { climayteLimitWalls, climayteLiveReadings } from '../climayte'
+import { climayteCheckCliAuth, climayteLimitWalls, climayteLiveReadings } from '../climayte'
 import { cliInstancesInUse } from '../climayte-core'
 import { remoteActiveCounts } from '../climayte-remote'
 import { cliAccountUuid } from '../core/account-holders'
@@ -22,12 +22,14 @@ import {
 import { runCliLimitReset } from '../core/cli-limit-reset'
 import { exportCliLogins, importCliLogins } from '../core/cli-login-move'
 import {
+  cliSyncRowOf,
   configureLoginSync,
   disconnectLoginSync,
   joinLoginSync,
   loginSyncPairingCode,
   loginSyncStatus,
   noteLoggedOutHere,
+  removeLoginEverywhere,
   runLoginSync,
   setChatSharing,
   setLoginSyncEnabled,
@@ -52,6 +54,7 @@ import {
 import { logoutCodexInstance } from '../core/codex-logout'
 import { feedCliFromDesktop } from '../core/desktop-cli-feed'
 import { type PairingResult, pairingPlan, runPairing } from '../core/desktop-cli-pairing'
+import { renewalOutcomes } from '../core/desktop-cli-renew'
 import { allInstanceNumbers, parseInstanceRef } from '../core/instance-numbers'
 import { resolveInstance, resolveInstanceError } from '../core/instance-ref'
 import { listInstances } from '../core/instances'
@@ -596,9 +599,7 @@ app.get('/api/cli-instances', async (c) => {
     rows.map((r) => ({ uuid: r.uuid, snapshot: r.lastUsageCheck })),
   )
   const liveSessions = await Promise.all(
-    rows.map(
-      async ({ i }) => (await readLiveRegistryAsync(i.configDir, { transcripts: false })).length,
-    ),
+    rows.map(async ({ i }) => await readLiveRegistryAsync(i.configDir, { transcripts: false })),
   )
   // Someone else is on the account now (CliMayte's accountInUse): CliMayte leaves it out for new work.
   const busy = cliInstancesInUse(rows.map((r) => r.i))
@@ -615,7 +616,9 @@ app.get('/api/cli-instances', async (c) => {
         : null,
       inUse: busy.has(i.id),
       lastNudge: nudges[i.id] ?? null,
-      liveSessions: liveSessions[k],
+      liveSessions: liveSessions[k].length,
+      // Their pids, for the Instances tab's exit watch (GET /api/instances/alive): a closed session leaves "Now" in seconds.
+      livePids: liveSessions[k].map((s) => s.pid),
       // The last prompt typed on this login (the CLI appends to history.jsonl) or the last
       // keepalive nudge, whichever is newer: one stat, no transcript walk.
       lastActiveAt: Math.max(historyMtimeMs(i.configDir), nudges[i.id]?.at ?? 0) || null,
@@ -665,6 +668,18 @@ app.post('/api/cli-instances/:id/launch', async (c) => {
 app.post('/api/cli-instances/:id/login', (c) =>
   c.json(launchCliInstance(c.req.param('id'), { login: true })),
 )
+// Reconcile a freshly imported login through a real, read-only server authentication check.
+// No clear-wall flag: a stale or refused grant keeps its signed-out block.
+app.post('/api/cli-instances/:id/auth-check', async (c) => {
+  const body = await jsonBody(c)
+  if (body.expectedEmail !== undefined && typeof body.expectedEmail !== 'string')
+    return c.json({ error: 'expectedEmail must be a string' }, 400)
+  const result = await climayteCheckCliAuth(
+    c.req.param('id'),
+    body.expectedEmail as string | undefined,
+  )
+  return c.json(result, result.reason === 'not_found' ? 404 : 200)
+})
 // Sign a CLI instance out (removes .credentials.json) - see core/cli-logout.ts for why it refuses
 // while a session runs on it. On success the cached quota is dropped: it belongs to the old login.
 app.post('/api/cli-instances/:id/logout', (c) => {
@@ -707,6 +722,9 @@ app.post('/api/cli-instances/move-out', async (c) => {
 // Answers carry statuses only; the pairing route is the one that returns a secret, for the Login
 // sync dialog's copy button. No MCP tool on purpose, as for the move.
 app.get('/api/cli-instances/sync', async (c) => c.json(await loginSyncStatus()))
+// Each linked desktop profile's last Claude Code renewal: renewed, refused, or why it waits (another PC
+// renewing it, its app open there). States and reasons only, never a token.
+app.get('/api/cli-instances/renewals', (c) => c.json({ renewals: renewalOutcomes() }))
 app.post('/api/cli-instances/sync/setup', async (c) => {
   const body = await jsonBody(c)
   return c.json(
@@ -800,8 +818,20 @@ app.post('/api/cli-instances/:id/associate', async (c) => {
 })
 app.delete('/api/cli-instances/:id', async (c) => {
   const body = await jsonBody(c)
-  const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  return c.json(deleteCliInstance(c.req.param('id'), confirmName))
+  const note = typeof body.note === 'string' ? body.note : undefined
+  const id = c.req.param('id')
+  // A synced login is deleted on the other PCs too, and they show this note (core/cli-login-sync.ts).
+  const row = cliSyncRowOf(id)
+  const inst = getCliInstance(id)
+  const result = deleteCliInstance(id, note)
+  if (result.ok && row && note)
+    removeLoginEverywhere(row, {
+      kind: 'cli',
+      num: inst?.num ?? null,
+      name: inst?.name ?? null,
+      note,
+    })
+  return c.json(result)
 })
 // Link this CLI instance to a DESKTOP instance (or clear it with desktopDir: null). Same account,
 // two logins — the link is what lets the UI group them and lets each back the other up for usage.
@@ -1028,6 +1058,6 @@ app.post('/api/codex-instances/:id/rename', async (c) => {
 })
 app.delete('/api/codex-instances/:id', async (c) => {
   const body = await jsonBody(c)
-  const confirmName = typeof body.confirmName === 'string' ? body.confirmName : undefined
-  return c.json(await deleteCodexInstance(c.req.param('id'), confirmName))
+  const note = typeof body.note === 'string' ? body.note : undefined
+  return c.json(await deleteCodexInstance(c.req.param('id'), note))
 })

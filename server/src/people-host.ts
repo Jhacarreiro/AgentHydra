@@ -7,14 +7,32 @@ import { join } from 'node:path'
 import type { Hono } from 'hono'
 import { loadAddon } from './addon-loader'
 import type { Hook } from './climayte-signal'
-import { APP_ROOT } from './config'
+import { APP_ROOT, CONFIG_DIR } from './config'
 import { type DeskChat, deskChats, deskPost, replyWhenDone, transcriptItems } from './desk-client'
-import type { CatalogEntry } from './hydra-core/catalog'
-import { coreDir } from './hydra-core-mode'
-import type { HydraTool } from './mcp-client'
+import type { ChatOfCaller } from './hydra-core/caller'
+import { type CatalogEntry, loadCatalog, loadRef, loadText } from './hydra-core/catalog'
+import {
+  addPick,
+  emptyDoc,
+  leadLine,
+  leadName,
+  parseHydra,
+  renderHydra,
+} from './hydra-core/hydra-md'
+import { appendLog } from './hydra-core/log'
+import { chatPaths } from './hydra-core/paths'
+import { addSeatChat } from './hydra-core/seat-chats'
+import type { Daemon, UseArgs } from './hydra-core/use'
+import { coreDir, coreModeOn } from './hydra-core-mode'
+import { completionsApi, type HydraTool } from './mcp-client'
+import { pickDeskChat } from './mcp-find'
 import { type AddonOpts, peopleAddonPresent } from './people-addon'
+import type { PeopleStatus } from './people-store/service'
 import { agentHydraDir } from './people-store/this-pc'
+import { priceTokens } from './pricing'
 import { findSueDredd } from './sue-dredd-home'
+import { findTranscript, findTranscriptAsync, isCommandWrapperText } from './transcript'
+import { readTurnUsage } from './usage-tokens'
 
 export const PEOPLE_ENTRY = join('people', 'agenthydra.mjs')
 const PEOPLE_EXPORT = 'peopleAddon'
@@ -22,17 +40,60 @@ export const PEOPLE_CATALOG_FILE = 'generated-people.json'
 
 export type PeopleOpts = AddonOpts & { coreDir?: string }
 
+export interface PlacementInput {
+  session: string
+  deskChat: string | null
+  lead?: string | null
+  prev?: string | null
+  source: string
+  message: number
+  cwd: string
+  promptChars: number
+}
+
 export interface PeopleHost {
   agentHydraDir: string
   coreDir: string
+  configDir: string
   desk: {
     chats: () => Promise<DeskChat[]>
     post: (path: string, body: unknown) => Promise<Record<string, unknown>>
     transcript: (chatId: string) => Promise<{ kind?: string; text?: string }[]>
     replyWhenDone: typeof replyWhenDone
+    pick: (chats: DeskChat[], ref: string) => DeskChat
   }
+  transcripts: {
+    find: typeof findTranscript
+    findAsync: typeof findTranscriptAsync
+    isCommandWrapper: typeof isCommandWrapperText
+  }
+  pricing: { priceTokens: typeof priceTokens }
+  usage: { readTurnUsage: typeof readTurnUsage }
+  coreModeOn: typeof coreModeOn
+  completions: typeof completionsApi
+  onPlacement: (listener: (input: PlacementInput, now: Date) => void) => void
   verdicts: (worker: string) => unknown
   log: (line: string) => void
+  currentCoreDir: () => string
+  catalogBuilder: string
+  catalog: { load: typeof loadCatalog }
+  hydraMd: { parse: typeof parseHydra; leadName: typeof leadName }
+  /** The core's chat files, log, seat-chat map and catalog text, for the add-on's persona modes. */
+  core: {
+    chatPaths: typeof chatPaths
+    appendLog: typeof appendLog
+    addSeatChat: typeof addSeatChat
+    loadText: typeof loadText
+    loadRef: typeof loadRef
+    hydraMd: {
+      render: typeof renderHydra
+      empty: typeof emptyDoc
+      addPick: typeof addPick
+      leadLine: typeof leadLine
+    }
+  }
+  peopleStore: () => Promise<PeopleStoreHandle>
+  deskServices: () => DeskServices
 }
 
 export interface LeadAsk {
@@ -54,8 +115,46 @@ export interface PersonaFace {
   name: string
   title?: string | null
   oneLiner?: string | null
+  photo?: number | null
   photoUrl?: string | null
+  statsLine?: string | null
   role?: 'lead' | 'seat'
+  persona?: true
+}
+
+/** The Desk services the add-on's routes call; Desk registers them (registerDeskServices) before the add-on loads. */
+export interface DeskServices {
+  notOwnPage: (headers: Headers, what: string) => string | null
+  writeFlushed: (path: string, data: string | Uint8Array) => void
+  renameOver: (from: string, to: string) => void
+  sniff: (bytes: Uint8Array) => string | null
+  managerChanged: (slug: string) => void
+}
+
+export interface PeopleStoreHandle {
+  syncOnStart: () => Promise<void>
+  status: () => Promise<PeopleStatus>
+  setHome: (home: 'pc' | 'crainium') => Promise<unknown>
+  syncNow: () => Promise<unknown>
+}
+
+/** One persona-mode call core_use hands the add-on (the caller gates and the chat are already resolved). */
+export interface UseModeAsk {
+  dir: string
+  mode: 'become' | 'consult' | 'hire'
+  entry: CatalogEntry
+  args: UseArgs
+  /** The chat a seat opens under; null for become, and for a consult or hire from a non-Prime or untraced caller. */
+  chat: ChatOfCaller | null
+  daemon: Daemon
+  now: Date
+}
+
+export interface SeatsAsk {
+  dir: string
+  chat: string
+  entries: CatalogEntry[]
+  files: { root: string; hydraMd: string }
 }
 
 export interface PeopleAddon {
@@ -68,6 +167,14 @@ export interface PeopleAddon {
   catalogEntries?: () => CatalogEntry[]
   routerHooks?: (ownerDir: string) => Array<{ hooks: Hook[] }>
   chatNote?: () => string | null
+  /** The manager's display name for a slug, or null when the slug is no manager. */
+  managerName?: (slug: string) => string | null
+  /** The answer to a persona mode (become, consult, hire), or null when the add-on does not answer it. */
+  useMode?: (ask: UseModeAsk) => Promise<unknown | null>
+  /** The handoff pack's lines about the chat's seats and consults, or null for none. */
+  seatsLine?: (ask: SeatsAsk) => string | null
+  /** Ends what start began (the daemon is going away). */
+  stop?: () => void
 }
 
 let loaded: { opts: PeopleOpts; addon: PeopleAddon | null } | null = null
@@ -101,30 +208,78 @@ export function forgetPeopleAddon(): void {
   memo = undefined
 }
 
+let placementListeners: Array<(input: PlacementInput, now: Date) => void> = []
+
+/** Tells the add-on's placement listeners about one routed message (the seam that places a chat calls this). */
+export function reportPlacement(input: PlacementInput, now: Date): void {
+  for (const listener of placementListeners) listener(input, now)
+}
+
 function hostFor(opts: PeopleOpts): PeopleHost {
   return {
     agentHydraDir: agentHydraDir(opts.home),
     coreDir: opts.coreDir ?? coreDir(),
+    configDir: CONFIG_DIR,
     desk: {
       chats: deskChats,
       post: deskPost,
       transcript: transcriptItems,
       replyWhenDone,
+      pick: pickDeskChat,
+    },
+    transcripts: {
+      find: findTranscript,
+      findAsync: findTranscriptAsync,
+      isCommandWrapper: isCommandWrapperText,
+    },
+    pricing: { priceTokens },
+    usage: { readTurnUsage },
+    coreModeOn,
+    completions: completionsApi,
+    onPlacement: (listener) => {
+      placementListeners.push(listener)
     },
     verdicts: (worker) => verdictsOf?.(worker),
     log: (line) => console.error(`[people] ${line}`),
+    currentCoreDir: () => opts.coreDir ?? coreDir(),
+    catalogBuilder: join(APP_ROOT, 'hydra-core', 'catalog', 'build.mjs'),
+    catalog: { load: loadCatalog },
+    hydraMd: { parse: parseHydra, leadName },
+    core: {
+      chatPaths,
+      appendLog,
+      addSeatChat,
+      loadText,
+      loadRef,
+      hydraMd: { render: renderHydra, empty: emptyDoc, addPick, leadLine },
+    },
+    peopleStore: async () => (await import('./people-store/service')).peopleService(),
+    deskServices: requireDeskServices,
   }
+}
+
+let deskServices: DeskServices | undefined
+
+/** Desk registers the services its people routes call, before the add-on loads (Desk's plugin that loads the add-on). */
+export function registerDeskServices(services: DeskServices): void {
+  deskServices = services
+}
+
+function requireDeskServices(): DeskServices {
+  if (!deskServices) throw new Error('the Desk services were not registered')
+  return deskServices
 }
 
 function writeCatalog(dir: string, entries: CatalogEntry[]): void {
   mkdirSync(join(dir, 'catalog'), { recursive: true })
-  writeFileSync(join(dir, 'catalog', PEOPLE_CATALOG_FILE), JSON.stringify(entries, null, 2) + '\n')
+  writeFileSync(join(dir, 'catalog', PEOPLE_CATALOG_FILE), `${JSON.stringify(entries, null, 2)}\n`)
 }
 
 /** Loads the add-on for `opts` (uncached) and makes it the one the seams see. Its catalog entries are written to
  *  <core>/catalog/generated-people.json, and that file is removed when the module is absent. */
 export async function loadPeopleAddon(opts: PeopleOpts = {}): Promise<PeopleAddon | null> {
   const host = hostFor(opts)
+  placementListeners = []
   const addon = peopleModulePresent(opts)
     ? await loadAddon<PeopleAddon>(PEOPLE_ENTRY, PEOPLE_EXPORT, host, opts)
     : null
@@ -137,6 +292,7 @@ export async function loadPeopleAddon(opts: PeopleOpts = {}): Promise<PeopleAddo
 
 /** The add-on for this PC, loaded once. */
 export function getPeopleAddon(): Promise<PeopleAddon | null> {
+  if (loaded) return Promise.resolve(loaded.addon)
   memo ??= loadPeopleAddon()
   return memo
 }

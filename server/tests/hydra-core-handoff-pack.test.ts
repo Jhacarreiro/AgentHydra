@@ -31,46 +31,25 @@ const slotReq = (chat: string, session: string) => ({
   placement: 'slot' as const,
 })
 
-describe("a new session hears about the chat's seats and consults (C3 finding 3)", () => {
-  test('consults.json and the Under you list reach a handoff slot, one line per persona', () => {
+describe("a new session's pack carries no seat or consult lines without the people add-on", () => {
+  test('files left in the chat folder are not read into the pack', () => {
     const files = chatPaths(dir, 'consulting')
     mkdirSync(files.root, { recursive: true })
     writeFileSync(
       join(files.root, 'consults.json'),
-      JSON.stringify({ 'person:pricing-expert': 'w-0a1b2c3d' }),
-    )
-    writeFileSync(
-      files.hydraMd,
-      '# hydra.md\n## Under you\n- consult person:ops-lead - Ops Lead\n## Scope log\n',
+      JSON.stringify({ 'person:example-one': 'w-0a1b2c3d' }),
     )
     writeFileSync(
       files.seats,
-      JSON.stringify({ 'person:design-lead': { chat: 'desk-9', title: 'Design' } }),
+      JSON.stringify({ 'person:example-two': { chat: 'desk-9', title: 'Seat' } }),
     )
-
     const text = placeChat(dir, slotReq('consulting', 'new-session'), T).text
-    const lines = text.split('\n')
-    const pricing = lines.filter((l) => l.includes('person:pricing-expert'))
-    const ops = lines.filter((l) => l.includes('person:ops-lead'))
-    const design = lines.filter((l) => l.includes('person:design-lead'))
-    expect(pricing).toHaveLength(1)
-    expect(pricing[0]).toContain('w-0a1b2c3d')
-    expect(ops).toHaveLength(1)
-    expect(design).toHaveLength(1)
-    expect(design[0]).toContain('desk-9')
-    expect(text).toContain('core_use { chat: "consulting"')
-  })
-
-  test("a chat's first message pack carries the consults too, a later message does not repeat them", () => {
-    const files = chatPaths(dir, 'consulting')
-    mkdirSync(files.root, { recursive: true })
-    writeFileSync(
-      join(files.root, 'consults.json'),
-      JSON.stringify({ 'person:pricing-expert': 'w-0a1b2c3d' }),
-    )
-    const req = { chat: 'consulting', session: 's2', cwd: CWD, prompt: 'where are we?' }
-    expect(packFor(dir, req, T).text).toContain('w-0a1b2c3d')
-    expect(packFor(dir, req, T).text).not.toContain('w-0a1b2c3d')
+    expect(text).not.toContain('w-0a1b2c3d')
+    expect(text).not.toContain('desk-9')
+    expect(
+      packFor(dir, { chat: 'consulting', session: 's2', cwd: CWD, prompt: 'where are we?' }, T)
+        .text,
+    ).not.toContain('core_use { chat: "consulting"')
   })
 
   test('a chat with no seats and no consults gets no consult lines', () => {

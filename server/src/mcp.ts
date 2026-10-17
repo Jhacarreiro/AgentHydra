@@ -71,7 +71,6 @@ import { FAMILY_TOOLS } from './mcp-family-tools'
 import { FAN_OUT_TOOLS } from './mcp-fan-out'
 import { findTools } from './mcp-find'
 import { FREE_TOOLS } from './mcp-free'
-import { managerTools } from './mcp-managers'
 import { withOutputShaping } from './mcp-output'
 import { PRICECHECK_TOOLS } from './mcp-pricecheck'
 import { ROUTINES_TOOLS } from './mcp-routines'
@@ -1815,7 +1814,6 @@ export const TOOLS: HydraTool[] = [
   ...PRICECHECK_TOOLS,
   ...SUE_DREDD_TOOLS,
   ...PEOPLE_ADDON_TOOLS,
-  ...managerTools(),
   ...CORE_TOOLS,
   {
     name: 'archive_desktop_chat',
@@ -2000,7 +1998,7 @@ export const TOOLS: HydraTool[] = [
     name: 'orchestrator_operation',
     listed: true,
     description:
-      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
+      "Reads an orchestrator run by its operationId: status (running, done or failed), stdout, exit code and verdict. Use it when a call timed out: the daemon keeps a finished run's result for an hour, so do not re-run the act. Omit id to list recent operations, which is how you find an id you never saw. A chat move (migrate_batch, migrate_chat) keeps running and keeps its record through a daemon restart. A reason of daemon-restarted means the record was lost in a restart: do not re-fire the act; check its effect instead (migrate_reconcile lists chats left half-moved). orchestrator_cancel stops a run that is still going. Read-only.",
     inputSchema: S({
       id: {
         type: 'string',
@@ -2292,7 +2290,13 @@ Always name the account when you quote a percentage. A number a person gives you
 
 Give Claude-quality work to climayte_run {tasks:[{prompt, cwd}]}: self-contained tasks on idle CLI accounts. fan_out {tasks:[{cwd, prompt}]} opens visible chats on other accounts; fan_out_status reads them and fan_out_send steers them. Delete a probe chat you create afterwards with hydra_run { tool: 'fan_out_delete', args: { group } }. move_chat moves a chat to another account. add_queue_item and launch_terminal_session refuse every call.
 
-Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.`
+Change a Hydra Desk chat's folder or title with desk_chat {cwd, title}. Start a dev server with dev_servers {action:"start", cwd}, which reuses the copy already running, rather than from the shell.${
+  // Seen only as a name among hundreds of deferred tools, price_check read as a shop-price lookup
+  // and pages went out unpriced (2026-10-16); it is price_tag since. Only when the private price check is installed.
+  PRICECHECK_TOOLS.some((t) => t.name === 'price_tag')
+    ? '\n\nBefore and after you build, change or review a page or screen, price it with price_tag { mode: "page", page }: what it costs the person looking (words, controls, fields). Cheaper wins; say both prices.'
+    : ''
+}`
 
 /** The stdio loop, callable from main.ts's `--mcp` subcommand (the compiled exe's MCP mode). */
 export function runMcp(): Promise<void> {
@@ -2315,13 +2319,18 @@ export function runMcp(): Promise<void> {
 /** Old tool names still answered (never listed): a chat keeps the tool list it got at its start,
  *  but its MCP process restarts onto new code with the daemon, so after a rename every call by the
  *  old name failed with "Unknown tool" mid-run (2026-10-01, Corch -> CliMayte: the orchestrator of
- *  a live run lost every corch_* tool and carried on through the HTTP routes). */
-export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries(
-  TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
+ *  a live run lost every corch_* tool and carried on through the HTTP routes). price_check* became
+ *  price_tag* on 2026-10-16 (the owner: a name that says what it is for). */
+export const RENAMED_TOOLS: Readonly<Record<string, string>> = Object.fromEntries([
+  ...TOOLS.filter((t) => t.name.startsWith('climayte_')).map((t) => [
     t.name.replace(/^climayte_/, 'corch_'),
     t.name,
   ]),
-)
+  ...PRICECHECK_TOOLS.filter((t) => t.name.startsWith('price_tag')).map((t) => [
+    t.name.replace(/^price_tag/, 'price_check'),
+    t.name,
+  ]),
+])
 
 /** `tools` with old names answered: the stdio engine (shared server-lib mcp-stdio.mjs, synced from
  *  the kit, so not edited here) lists `tools` with `map` and looks a call up with `find(predicate)`;

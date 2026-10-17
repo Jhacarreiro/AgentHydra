@@ -12,7 +12,8 @@ import { buildHandoff, CONTINUE_TEXT, GROWN } from './handoff'
 import type { ChatStore } from './store'
 import type { FailureInput, FailureLedger } from './failures'
 import { MAX_MOVES, type Entry, type ManagerBridge, SIGN_IN_HOLD_MS } from './chat-manager-types'
-import { accountName, accountRef, pickHealthy } from './chat-manager-helpers'
+import { pickHealthy } from '../bridge/accounts'
+import { accountName, accountRef } from './chat-manager-helpers'
 
 /** What the moves read and call on ChatManager: its fields, and the members of the manager a move applies to. */
 export interface MovesHost {
@@ -121,7 +122,7 @@ export class ChatMoves {
     const tried = e.moved ?? []
     const from = chat.account
     const accounts = await this.host.bridge.listAccounts().catch(() => [])
-    const next = pickHealthy(this.host.placeable(accounts), tried)
+    const next = pickHealthy(this.host.placeable(accounts), new Set(tried))
     if (!next) {
       this.moveFailed(e, rt, `${accountName(from)} ${signIn ? 'is signed out' : 'hit its limit'} and no other signed-in account has room (tried ${tried.map((id) => accountName(accounts.find((a) => a.id === id) ?? from)).join(', ')}).`)
       return

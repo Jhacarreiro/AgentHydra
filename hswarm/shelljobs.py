@@ -62,10 +62,15 @@ class Sanitizer:
     def __init__(self) -> None:
         self._decoder = codecs.getincrementaldecoder("utf-8")("replace")
         self._held = ""  # an escape sequence or a CR whose meaning depends on the next chunk
-        self.partial = ""  # the current unfinished line (a later CR may still redraw it)
+        # The current unfinished line (a later CR may still redraw it), kept as what _last_frame needs of it: the frame
+        # being drawn, in pieces, and the last non-empty frame a CR ended. A newline-free line once cost each 4 KB chunk
+        # a copy and a split of the whole line so far: 16 MB took 17.5 s, now 0.11 s (2026-10-16), each chunk its own length.
+        self._frame: list[str] = []
+        self._shown = ""
+        self._open = False  # the line holds a character yet (a lone CR counts)
 
     def feed(self, data: bytes, final: bool = False) -> str:
-        """The complete lines this chunk finished, cleaned. The unfinished line waits in `partial`."""
+        """The complete lines this chunk finished, cleaned. The unfinished line waits for pending()."""
         text = self._held + self._decoder.decode(data, final)
         self._held = ""
         if not final:
@@ -76,15 +81,42 @@ class Sanitizer:
             if text.endswith("\r"):
                 text, self._held = text[:-1], "\r" + self._held
         text = _CONTROL_RE.sub("", _ESCAPE_RE.sub("", text)).replace("\r\n", "\n")
-        lines = (self.partial + text).split("\n")
-        self.partial = "" if final else lines.pop()
-        if final and lines and lines[-1] == "":
-            lines.pop()
-        return "".join(_last_frame(line) + "\n" for line in lines)
+        pieces = text.split("\n")
+        self._draw(pieces[0])
+        out = []
+        if len(pieces) > 1:
+            out.append(self._end_line() + "\n")
+            out.extend(_last_frame(line) + "\n" for line in pieces[1:-1])  # lines that began and ended in this chunk
+            self._draw(pieces[-1])
+        if final and self._open:
+            out.append(self._end_line() + "\n")
+        return "".join(out)
+
+    def _draw(self, piece: str) -> None:
+        """Add text with no newline to the unfinished line: each CR in it ends the frame being drawn."""
+        if not piece:
+            return
+        self._open = True
+        first, *redraws = piece.split("\r")
+        if first:
+            self._frame.append(first)
+        for frame in redraws:
+            drawn = "".join(self._frame)
+            if drawn:
+                self._shown = drawn
+            self._frame = [frame] if frame else []
+
+    def _end_line(self) -> str:
+        """_last_frame of the line just ended, and a fresh line."""
+        line = "".join(self._frame) or self._shown
+        self._frame, self._shown, self._open = [], "", False
+        return line
 
     def pending(self) -> str:
         """The unfinished line as a terminal would show it now: a progress bar's latest frame."""
-        return _last_frame(self.partial)
+        if len(self._frame) > 1:
+            self._frame = ["".join(self._frame)]
+        return (self._frame[0] if self._frame else "") or self._shown
 
 
 def _last_frame(line: str) -> str:

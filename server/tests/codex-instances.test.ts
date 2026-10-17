@@ -131,17 +131,21 @@ test('Codex instance lifecycle uses isolated CLI/desktop homes and guarded delet
   expect(runningInstance?.ownName).toBe(true)
   expect(runningInstance?.isDesktopRunning).toBe(true)
   expect(runningInstance?.desktopPid).toBe(1234)
-  // Named after its account again: the mark goes, the name stays (delete still confirms it).
+  // Named after its account again: the mark goes, the name stays.
   expect(renameCodexInstance(id, null).ok).toBe(true)
   const named = getCodexInstance(id)
   expect(named?.name).toBe(renamed)
   expect(named?.ownName).toBeUndefined()
 
-  expect((await deleteCodexInstance(id, name)).ok).toBe(false)
+  // A delete needs a note saying why, and never runs under a running desktop.
+  const note = 'No longer used'
+  expect((await deleteCodexInstance(id, 'ok', { listDesktopProcesses: async () => [] })).ok).toBe(
+    false,
+  )
   expect(getCodexInstance(id)).not.toBeNull()
   expect(
     (
-      await deleteCodexInstance(id, renamed, {
+      await deleteCodexInstance(id, note, {
         listDesktopProcesses: async () => [{ desktopUserDataDir, pid: 1234 }],
       })
     ).ok,
@@ -149,7 +153,7 @@ test('Codex instance lifecycle uses isolated CLI/desktop homes and guarded delet
   expect(getCodexInstance(id)).not.toBeNull()
   expect(
     (
-      await deleteCodexInstance(id, renamed, {
+      await deleteCodexInstance(id, note, {
         listDesktopProcesses: async () => [],
       })
     ).ok,

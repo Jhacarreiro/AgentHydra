@@ -448,6 +448,77 @@ describe('check-kit-sync-pushed.mjs: only drift the push carries refuses it', ()
   )
 })
 
+describe('check-kit-sync-pushed.mjs: an uncommitted kit refuses only a push that carries its copy', () => {
+  let repo: string
+  const refFor = (branch: string) => {
+    const head = git(repo, {}, 'rev-parse', branch).trim()
+    return `refs/heads/${branch} ${head} refs/heads/${branch} 0000000000000000000000000000000000000000\n`
+  }
+  const run = (branch: string) =>
+    spawnSync('node', [REAL_KIT_SYNC, 'origin', 'agenthydra'], {
+      cwd: repo,
+      input: refFor(branch),
+      encoding: 'utf8',
+      timeout: HOOK_TEST_TIMEOUT,
+      env: envFor({}),
+    })
+
+  beforeAll(() => {
+    const base = prepushRoot('kitdirty')
+    repo = join(base, 'ah', 'repo')
+    const kit = join(base, 'lunarwerx-ui')
+    const origin = join(base, 'origin')
+    // A kit checkout whose check finds no drift, with one synced file mid-edit (another session's).
+    mkdirSync(join(kit, 'src', 'lib'), { recursive: true })
+    writeFileSync(join(kit, 'sync.mjs'), 'process.exit(0)\n')
+    writeFileSync(join(kit, 'src', 'lib', 'shared.ts'), 'one\n')
+    git(kit, {}, 'init', '-q', '-b', 'main')
+    git(kit, {}, 'add', '-A')
+    git(kit, {}, 'commit', '-q', '-m', 'kit')
+    writeFileSync(join(kit, 'src', 'lib', 'shared.ts'), 'unfinished\n')
+
+    mkdirSync(join(repo, 'server', 'lib'), { recursive: true })
+    git(base, {}, 'init', '-q', '--bare', origin)
+    git(repo, {}, 'init', '-q', '-b', 'main')
+    git(repo, {}, 'remote', 'add', 'origin', origin)
+    writeFileSync(join(repo, 'server', 'lib', 'shared.ts'), 'one\n')
+    writeFileSync(join(repo, 'server', 'other.ts'), 'one\n')
+    git(repo, {}, 'add', '-A')
+    git(repo, {}, 'commit', '-q', '-m', 'on the remote')
+    git(repo, {}, 'push', '-q', 'origin', 'main')
+    // A push that touches nothing synced, and one carrying the kit's unfinished text (CRLF, as a sync
+    // on Windows may write it).
+    git(repo, {}, 'checkout', '-q', '-b', 'unrelated')
+    writeFileSync(join(repo, 'server', 'other.ts'), 'two\n')
+    git(repo, {}, 'commit', '-q', '-am', 'unrelated')
+    git(repo, {}, 'checkout', '-q', '-b', 'carries', 'main')
+    writeFileSync(join(repo, 'server', 'lib', 'shared.ts'), 'unfinished\r\n')
+    git(repo, {}, 'commit', '-q', '-am', 'synced from the dirty kit')
+  }, HOOK_TEST_TIMEOUT)
+
+  test(
+    'a push that carries no copy of the dirty file goes, naming it',
+    () => {
+      const r = run('unrelated')
+      expect(r.status).toBe(0)
+      expect(r.stderr).toContain('left alone')
+      expect(r.stderr).toContain('src/lib/shared.ts')
+    },
+    HOOK_TEST_TIMEOUT,
+  )
+
+  test(
+    'a push carrying an app copy of the uncommitted kit text is refused',
+    () => {
+      const r = run('carries')
+      expect(r.status).toBe(1)
+      expect(r.stderr).toContain('not committed in the kit')
+      expect(r.stderr).toContain("server/lib/shared.ts  (the kit's src/lib/shared.ts)")
+    },
+    HOOK_TEST_TIMEOUT,
+  )
+})
+
 describe('check-public-push.mjs: the parsers', () => {
   test('parseGithubSlug accepts every URL shape git uses for GitHub, with or without .git', () => {
     for (const url of [

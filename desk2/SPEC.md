@@ -136,7 +136,9 @@ One `ChatRuntime` per live chat, owned by `ChatManager`.
   `~/.hydra-desk-2/chats/<chatId>.jsonl` (one TranscriptItem per line, append-only; loading keeps the last
   line per id). Streaming deltas are not written per delta: the finished item is written once. A chat's
   `lastActionAt` is its newest item's time (the manager stamps it from every item it sends out); a chat saved
-  before that field existed takes its `.jsonl` file's last write when loaded.
+  before that field existed takes its `.jsonl` file's last write when loaded. Lines are appended off the server's
+  thread; at server shutdown (`ChatStore.close`) the writes under way land before the last flush, and the hosts folder
+  goes to the next server only after that, so no line of the old server lands after the new server's newer ones.
   `~/.hydra-desk-2/queue.json` holds the Send queue (below), written immediately and atomically on every change.
 - **Session meta** (`session-meta.ts`): `~/.hydra-desk-2/session-meta.json`, Hydra Desk's own marks on
   outside sessions keyed by session id (`SessionMeta`: pinned, archived, unread, title, group), written

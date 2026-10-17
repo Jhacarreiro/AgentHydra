@@ -3,8 +3,8 @@ import { computed, nextTick, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import type { ComponentPublicInstance } from 'vue'
 import { EyeOff, Folder, FolderPlus, ListFilter, MessagesSquare, Pin } from '@lucide/vue'
 import { DashboardGlyph } from '@/components/dashboard/glyph'
-import { openDashboard, dashboardList, refreshDashboards } from '@/components/dashboard/store'
-import { hasSite } from '@/components/dashboard/logic'
+import { openDashboard, dashboardList, refreshDashboards, templateList } from '@/components/dashboard/store'
+import { hasDashboard as anyDashboard } from '@/components/dashboard/logic'
 import type { ChatSummary, ProjectChoices, ProjectEntry, ProjectsResponse } from '@shared/protocol'
 import { ContextMenu, ContextMenuContent, ContextMenuItem, ContextMenuTrigger } from '@/components/ui/context-menu'
 import { useFirstInterestSet } from '@/lib/first-interest'
@@ -70,7 +70,7 @@ function load(): void {
 onMounted(load)
 onMounted(refreshDashboards)
 watch(showHiddenProjects, load)
-const hasDashboard = (path: string) => hasSite(dashboardList.value, path)
+const hasDashboard = (path: string) => anyDashboard(dashboardList.value, templateList.value, path)
 
 // The composer's folder pill comes here when Project Hydra lists the projects (FolderPicker.vue).
 const filterBox = ref<HTMLInputElement | null>(null)

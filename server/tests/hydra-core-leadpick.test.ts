@@ -1,7 +1,8 @@
 // server/tests/hydra-core-leadpick.test.ts - who a chat is told to be (one model call, the word ranker behind it),
 // the lead following the work, the per-message additions' bar, the tree's become log and the seats line.
 import { afterEach, beforeEach, describe, expect, test } from 'bun:test'
-import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
+import { tmpdir } from 'node:os'
 import { join } from 'node:path'
 import { workers } from '../src/climayte-core'
 import { chatPromptText, leadPickPending } from '../src/climayte-launch'
@@ -10,15 +11,12 @@ import { LAUNCH_BURST, setLaunchPacing } from '../src/climayte-pacing'
 import { scheduleDue, setLauncher, tickState } from '../src/climayte-schedule'
 import { loadCatalog } from '../src/hydra-core/catalog'
 import {
-  type Decider,
-  hswarmDecide,
+  forgetLeadPicks,
   LATE_BUDGET_MS,
   LAUNCH_BUDGET_MS,
-  type LeadQuestion,
   latePicks,
   MESSAGE_BUDGET_MS,
   pickLead,
-  setDecider,
 } from '../src/hydra-core/lead'
 import {
   matchFor,
@@ -33,7 +31,8 @@ import { chatPaths } from '../src/hydra-core/paths'
 import { pickForPlace, placeChat, placeNeedsPick } from '../src/hydra-core/placement'
 import { answer, scope } from '../src/hydra-core/tree'
 import { contentWords } from '../src/mcp-find'
-import { scratch, startChat, usePeopleDoor } from './hydra-core-fixture'
+import { forgetPeopleAddon, type LeadAsk, loadPeopleAddon, type SeatsAsk } from '../src/people-host'
+import { scratch, startChat } from './hydra-core-fixture'
 
 const T = Date.now()
 
@@ -46,18 +45,47 @@ const placed = async (d: string, req: Parameters<typeof placeChat>[1], now = new
   placeChat(d, { ...req, pick: await pickForPlace(d, req, now) }, now)
 const CWD = 'C:/Users/me/app'
 let dir = ''
-let asked: { q: LeadQuestion; ms: number }[] = []
-let dropDoor: (() => void) | null = null
+let asked: { ask: LeadAsk; ms: number }[] = []
+
+// The people add-on is a fake module in a temp checkout whose `lead` calls the mock a test sets; the real add-on's
+// question and decide door are tested in the add-on (sue-dredd people/core/test).
+const FAKE_ADDON = `
+export function peopleAddon() {
+  return {
+    lead: (ask) => globalThis.__leadMock ? globalThis.__leadMock(ask) : Promise.reject(new Error('no model call under test')),
+    seatsLine: (ask) => globalThis.__seatsMock ? globalThis.__seatsMock(ask) : null,
+  }
+}
+`
+declare global {
+  var __leadMock: ((ask: LeadAsk) => Promise<{ slug: string } | null>) | undefined
+  var __seatsMock: ((ask: SeatsAsk) => string | null) | undefined
+}
+let root = ''
+
+async function fakeAddon(): Promise<void> {
+  const checkout = join(root, 'checkout')
+  mkdirSync(join(checkout, 'store'), { recursive: true })
+  writeFileSync(join(checkout, 'store', 'people-door.mjs'), '')
+  mkdirSync(join(checkout, 'people'), { recursive: true })
+  writeFileSync(join(checkout, 'people', 'agenthydra.mjs'), FAKE_ADDON)
+  await loadPeopleAddon({
+    home: join(root, 'home'),
+    env: { SUE_DREDD_HOME: checkout },
+    appRoot: join(root, 'AgentHydra'),
+    coreDir: join(root, 'core'),
+  })
+}
 
 /** A mock model: answers from `pick(message)` after `delayMs`, or fails when it returns null. */
 function mockModel(pick: (message: string) => string | null, delayMs = 0): void {
-  const d: Decider = async (q, ms) => {
-    asked.push({ q, ms })
+  globalThis.__leadMock = async (ask) => {
+    asked.push({ ask, ms: ask.budgetMs })
     if (delayMs) await Bun.sleep(delayMs)
-    const a = pick(q.message)
-    return a === null ? { answer: null, error: 'mock: no answer' } : { answer: a }
+    const a = pick(ask.message)
+    if (a === null) throw new Error('mock: no answer')
+    return a === 'none' ? null : { slug: a }
   }
-  setDecider(d)
 }
 
 const brief = (dir: string, slug: string, text: string) => {
@@ -149,7 +177,8 @@ function fiveManagers(dir: string): void {
 }
 
 beforeEach(async () => {
-  dropDoor = await usePeopleDoor()
+  root = mkdtempSync(join(tmpdir(), 'leadpick-'))
+  await fakeAddon()
   dir = scratch()
   fiveManagers(dir)
   // These tests cover ASK off (no core_scope line, a model lead pick and lead shift); a chat asks by default.
@@ -157,11 +186,11 @@ beforeEach(async () => {
   asked = []
 })
 afterEach(() => {
-  dropDoor?.()
-  dropDoor = null
-  setDecider(null)
-  delete process.env.AGENTHYDRA_DECIDE_URL
-  delete process.env.AGENTHYDRA_HSWARM_TOKEN_FILE
+  forgetPeopleAddon()
+  forgetLeadPicks()
+  globalThis.__leadMock = undefined
+  globalThis.__seatsMock = undefined
+  rmSync(root, { recursive: true, force: true })
   rmSync(dir, { recursive: true, force: true })
 })
 
@@ -176,27 +205,25 @@ const logOf = (d: string) =>
 const entriesOf = (d: string) => [...loadCatalog(d).entries.values()]
 
 describe('lead choice (A2-F1)', () => {
-  test("the model picks among the managers' one-liners, none and the coordinator rule", async () => {
+  test('the add-on picks among the catalog entries and its slug becomes the lead', async () => {
     mockModel(() => 'sam-backend')
     const pick = await pickLead(entriesOf(dir), 'add a last_seen column to the users table', 5000, {
       cache: false,
     })
     expect(pick).toMatchObject({ id: 'person:sam-backend', path: 'model' })
-    const { q } = asked[0] as { q: LeadQuestion }
-    expect(Object.keys(q.options)).toEqual(
-      expect.arrayContaining([
-        'gil-floor',
-        'ivy-ui',
-        'jay-ads',
-        'none',
-        'pia-project',
-        'sam-backend',
-      ]),
-    )
-    expect(Object.keys(q.options)).not.toContain('retention-expert')
-    expect(q.options['ivy-ui']).toContain('Owns how every screen, layout and flow looks and works')
-    expect(q.options.none).toMatch(/No manager needed/)
-    expect(q.question).toContain("A message spanning several fields is Pia's.")
+    const { ask } = asked[0] as (typeof asked)[number]
+    expect(ask.message).toBe('add a last_seen column to the users table')
+    expect(ask.current).toBeNull()
+    expect(ask.entries.map((e) => e.id)).toContain('person:sam-backend')
+  })
+
+  test('a slug that is no manager falls back to the word ranker', async () => {
+    mockModel(() => 'nobody-here')
+    expect(
+      await pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
+        cache: false,
+      }),
+    ).toMatchObject({ id: 'person:sam-backend', path: 'words' })
   })
 
   test('an answer of none gives no lead; a message with no content word is never asked', async () => {
@@ -263,37 +290,15 @@ describe('lead choice (A2-F1)', () => {
     })
   })
 
-  test('the real call is awaited: a timer fires on time while the door is silent, and it gives up at its budget', async () => {
-    const tok = join(dir, 'token')
-    writeFileSync(tok, 'invented-token')
-    process.env.AGENTHYDRA_HSWARM_TOKEN_FILE = tok
-    const server = Bun.serve({ port: 0, fetch: () => new Promise<Response>(() => {}) })
-    process.env.AGENTHYDRA_DECIDE_URL = `http://127.0.0.1:${server.port}/api/decide`
-    const started = performance.now()
-    const tick = new Promise<number>((r) => setTimeout(() => r(performance.now() - started), 50))
-    const [got, tickMs] = await Promise.all([
-      hswarmDecide({ message: 'm', question: 'q', options: { a: 'a', b: 'b' } }, 600),
-      tick,
-    ])
-    const ms = performance.now() - started
-    server.stop(true)
-    expect(got.answer).toBeNull()
-    expect(tickMs).toBeLessThan(250)
-    expect(ms).toBeGreaterThanOrEqual(450)
-    expect(ms).toBeLessThan(1100)
-  })
-
-  test('clearing a mock under test puts back no model call, so later test files never reach the network', async () => {
-    mockModel(() => 'person:sam-backend')
-    setDecider(null)
-    await pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
-      cache: false,
-      log: { dir, chat: 'lp-net' },
-    })
-    expect(logOf(dir).find((e) => e.event === 'lead-pick')).toMatchObject({
-      path: 'words',
-      error: 'no model call under test',
-    })
+  test('with no add-on the word ranker picks and nothing is asked', async () => {
+    mockModel(() => 'sam-backend')
+    forgetPeopleAddon()
+    expect(
+      await pickLead(entriesOf(dir), 'write the migration for the backend schema', 5000, {
+        cache: false,
+      }),
+    ).toMatchObject({ id: 'person:sam-backend', path: 'words', ms: 0 })
+    expect(asked).toHaveLength(0)
   })
 })
 
@@ -419,12 +424,12 @@ describe('a lead pick that misses the hook budget (C2 NEW-1, C3 N1, C2 NEW-2, C3
       new Date(T + at),
     )
   const slow = (pick: (m: string) => string) => {
-    const d: Decider = async (q, ms) => {
-      asked.push({ q, ms })
+    globalThis.__leadMock = async (ask) => {
+      asked.push({ ask, ms: ask.budgetMs })
       await Bun.sleep(MESSAGE_BUDGET_MS + 300)
-      return { answer: pick(q.message) }
+      const slug = pick(ask.message)
+      return slug === 'none' ? null : { slug }
     }
-    setDecider(d)
   }
 
   test('the hook answers in its budget, the late pick moves the lead in hydra.md, and the next message gets the note once', async () => {
@@ -495,10 +500,7 @@ describe('a lead pick that misses the hook budget (C2 NEW-1, C3 N1, C2 NEW-2, C3
     mockModel(() => 'ivy-ui')
     await msg('meta', 'test the consult tool: call core_use three times and paste each raw reply')
     expect(asked).toHaveLength(1)
-    const q = asked[0]?.q.question ?? ''
-    expect(q).toContain('Ivy leads this chat now')
-    expect(q).toContain('answer ivy-ui')
-    expect(asked[0]?.q.options['ivy-ui']).toBeDefined()
+    expect(asked[0]?.ask.current).toBe('person:ivy-ui')
   })
 })
 
@@ -623,23 +625,31 @@ test('a lead picked through the question tree logs a become as core_use does (A2
   ])
 })
 
-test("the slot lists the chat's seats so a handoff knows whom it consulted", async () => {
+test("the slot carries the add-on's line about the chat's seats, once, and nothing without one", async () => {
   mockModel(() => 'none')
-  const files = chatPaths(dir, 'seated')
-  mkdirSync(files.root, { recursive: true })
-  writeFileSync(
-    files.seats,
-    JSON.stringify({ 'person:ivy-ui': { chat: 'desk-chat-1', title: 'Ivy seat' } }),
-  )
-  const slot = await placed(
+  const asks: SeatsAsk[] = []
+  globalThis.__seatsMock = (ask) => {
+    asks.push(ask)
+    return 'Seats line from the add-on.'
+  }
+  const req = {
+    chat: 'seated',
+    session: 's1',
+    fresh: true,
+    cwd: CWD,
+    prompt: 'hello',
+    placement: 'slot' as const,
+  }
+  const slot = await placed(dir, req, new Date(T))
+  expect(slot.text).toContain('Seats line from the add-on.')
+  expect(asks[0]).toMatchObject({
     dir,
-    { chat: 'seated', session: 's1', fresh: true, cwd: CWD, prompt: 'hello', placement: 'slot' },
-    new Date(T),
-  )
-  expect(slot.text).toContain(
-    'Seats and consults in this chat; resume one with core_use { chat: "seated", id: "<person id>", mode: "consult" }',
-  )
-  expect(slot.text).toContain('- Ivy (person:ivy-ui): seat chat desk-chat-1')
+    chat: 'seated',
+    files: { root: chatPaths(dir, 'seated').root },
+  })
+  globalThis.__seatsMock = undefined
+  const quiet = await placed(dir, { ...req, chat: 'quiet' }, new Date(T))
+  expect(quiet.text).not.toContain('Seats line from the add-on.')
 })
 
 describe('the model call never blocks an event loop (B2 review 1)', () => {
@@ -700,7 +710,7 @@ describe('the model call never blocks an event loop (B2 review 1)', () => {
   test('with no model to ask, a Prime launch is not held and logs no pick', () => {
     writeFileSync(join(dir, 'ON'), '')
     writeFileSync(join(dir, 'PLACEMENT'), 'slot\n')
-    setDecider(null)
+    forgetPeopleAddon()
     const w = {
       id: 'w-nomodel',
       cwd: CWD,
@@ -786,14 +796,6 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
       { cache: false },
     )
     expect(small).toMatchObject({ id: null, path: 'model' })
-    const { q } = asked[0] as { q: LeadQuestion }
-    expect(q.question).toContain(
-      'Judge its size first. A small task a chat finishes alone in a few minutes (a fact, a status, a rename, a typo, a git or npm command, a fix of a few lines, a quick question) needs no manager: answer none, not Gil, even when it sits in a field a manager owns.',
-    )
-    expect(q.question).toContain('calls itself quick, small or a two-second fix is small')
-    expect(q.question).not.toContain("is Gil's")
-    expect(q.question).not.toContain('Answer none only when the message holds no work')
-    expect(q.options.none).toContain('a fix of a few lines')
     const big = await pickLead(
       entriesOf(dir),
       'move the billing tables into their own plane',
@@ -817,10 +819,6 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
       cache: false,
     })
     expect(col).toMatchObject({ id: 'person:sam-backend', path: 'model' })
-    const { q } = asked[0] as { q: LeadQuestion }
-    expect(q.question).toContain(
-      "Only a small change that spends money or changes a database schema, a migration or customers' data stays its field's manager's: an ad spend or audience change is the advertising manager's, a schema column or a migration the backend manager's.",
-    )
   })
 
   test("a continuation that names its work is asked and gets that work's lead; a bare one is never asked", async () => {
@@ -837,10 +835,7 @@ describe('quick asks and named continuations (B2 review 2 and 3)', () => {
       new Date(T),
     )
     expect(named.lead).toBe('person:jay-ads')
-    expect(asked[0]?.q.question).toContain(
-      `A continuation that names its work ("keep going on <the work>, still need <X>") is that work's field's manager's.`,
-    )
-    expect(asked[0]?.q.question).toContain('the lead is the field where the fix lives')
+    expect(asked[0]?.ask.message).toContain('keep going on the spring ad campaign')
     asked = []
     const bare = await packed(
       dir,

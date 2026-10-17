@@ -2,29 +2,37 @@
 import { computed, onBeforeUnmount, ref, shallowRef, watch } from 'vue'
 import { AppWindow, ArrowLeft, Copy, ExternalLink, RotateCw } from '@lucide/vue'
 import type { Dashboard } from '@shared/dashboards'
+import type { ProjectDashboard } from '@shared/project-dashboard'
 import type { ProjectEntry } from '@shared/protocol'
 import { useShellSource } from '@/components/shell/source'
 import { Tip } from '@/components/ui/tooltip'
-import { getDashboard } from './api'
+import { getDashboard, getTemplate, NoTemplate, refreshTemplate } from './api'
 import { DashboardGlyph } from './glyph'
 import { EXAMPLE_PROMPT, timeAgo, workspaceKey } from './logic'
 import { closeDashboard, openDashboardTab, refreshDashboards } from './store'
+import DashboardTemplate from './template/DashboardTemplate.vue'
 
-// The project dashboard, a page in the sliding track (DeskFrame). Its site is framed on the daemon's own origin, and the
-// frame is re-keyed when the newest file changes, so a chat's write shows by itself. One read loop, every 3 seconds,
-// only while the page is on screen.
+// The project dashboard, a page in the sliding track (DeskFrame). A project with a spec (.agenthydra/dashboard.json) shows
+// AgentHydra's template, filled by Desk 2's server from the spec's sources; one without shows the static site its chats
+// wrote, framed on the daemon's own origin and re-keyed when the newest file changes, so a chat's write shows by itself.
+// One read loop, every 3 seconds, only while the page is on screen; the template's reads are answered from the server's
+// cache, which asks the sources only as often as the spec says.
 const props = defineProps<{ cwd: string | null; active: boolean; padLeft: number }>()
 const src = useShellSource()
 const POLL_MS = 3000
 
 const dash = shallowRef<Dashboard | null>(null)
+const tpl = shallowRef<ProjectDashboard | null>(null)
+/** unknown until the first answer says whether the project has a spec. */
+const mode = ref<'unknown' | 'template' | 'site'>('unknown')
+const reloading = ref(false)
 const project = shallowRef<ProjectEntry | null>(null)
 const problem = ref<string | null>(null)
 const loaded = ref(false)
 const now = ref(Date.now())
 const reloads = ref(0)
 const folderName = computed(() => (props.cwd ?? '').replace(/\\/g, '/').split('/').filter(Boolean).pop() ?? '')
-const title = computed(() => dash.value?.name || project.value?.name || folderName.value)
+const title = computed(() => tpl.value?.title || dash.value?.name || project.value?.name || folderName.value)
 const hasSite = computed(() => (dash.value?.files ?? 0) > 0)
 const frameKey = computed(() => `${dash.value?.updatedAt ?? ''}#${reloads.value}`)
 const updated = computed(() => {
@@ -37,11 +45,30 @@ const updated = computed(() => {
 let timer: ReturnType<typeof setInterval> | undefined
 let seq = 0
 
+async function loadTemplate(cwd: string, mine: number): Promise<boolean> {
+  try {
+    const t = await getTemplate(cwd, mode.value === 'unknown' ? 8000 : 0)
+    if (mine !== seq) return true
+    if (t.version !== tpl.value?.version) tpl.value = t
+    mode.value = 'template'
+    problem.value = null
+    return true
+  } catch (err) {
+    if (mine !== seq) return true
+    if (!(err instanceof NoTemplate)) throw err
+    tpl.value = null
+    mode.value = 'site'
+    return false
+  }
+}
+
 async function load(): Promise<void> {
   const cwd = props.cwd
   if (!cwd) return
   const mine = ++seq
   try {
+    if (mode.value !== 'site' && (await loadTemplate(cwd, mine))) return
+    if (mine !== seq) return
     const d = await getDashboard(cwd)
     if (mine !== seq) return
     // An unchanged answer (most polls) must not swap the dashboard in: everything that reads it would re-run.
@@ -89,6 +116,8 @@ watch(
   ([active, cwd], prev) => {
     if (cwd !== prev?.[1]) {
       dash.value = null
+      tpl.value = null
+      mode.value = 'unknown'
       loaded.value = false
       problem.value = null
       project.value = null
@@ -105,7 +134,21 @@ onBeforeUnmount(() => {
   document.removeEventListener('visibilitychange', onVisibility)
 })
 
-function reload(): void {
+async function reload(): Promise<void> {
+  if (mode.value === 'template' && props.cwd) {
+    reloading.value = true
+    try {
+      tpl.value = await refreshTemplate(props.cwd)
+      problem.value = null
+    } catch (err) {
+      problem.value = err instanceof Error ? err.message : String(err)
+    } finally {
+      reloading.value = false
+    }
+    return
+  }
+  // A project that has just been given a spec shows the template at the next read.
+  mode.value = 'unknown'
   reloads.value++
   void load()
 }
@@ -121,7 +164,7 @@ function copyText(text: string): void {
     setTimeout(() => (copied.value = false), 1400)
   })
 }
-const copyFolder = () => copyText(dash.value?.folder || props.cwd || '')
+const copyFolder = () => copyText(tpl.value?.workspace || dash.value?.folder || props.cwd || '')
 const copyPrompt = () => copyText(EXAMPLE_PROMPT)
 </script>
 
@@ -142,9 +185,9 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
         <h2 class="truncate text-[15px] leading-5 font-semibold text-text">{{ title }}</h2>
         <span v-if="updated" class="min-w-0 truncate text-2xs leading-4 text-text-muted">{{ updated }}</span>
       </div>
-      <Tip label="Reload">
-        <button type="button" aria-label="Reload dashboard" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" @click="reload">
-          <RotateCw class="size-3.5" aria-hidden="true" />
+      <Tip :label="mode === 'template' ? 'Read the sources again' : 'Reload'">
+        <button type="button" aria-label="Reload dashboard" class="flex size-7 shrink-0 items-center justify-center rounded-(--radius-8) text-text-2 hover:bg-fill-hover hover:text-text" :disabled="reloading" @click="reload">
+          <RotateCw class="size-3.5" :class="reloading && 'animate-spin'" aria-hidden="true" />
         </button>
       </Tip>
       <template v-if="hasSite">
@@ -170,8 +213,12 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
       Could not reach AgentHydra: <span class="text-danger">{{ problem }}</span>
     </p>
 
+    <div v-if="tpl" class="min-h-0 flex-1 overflow-y-auto">
+      <DashboardTemplate :dashboard="tpl" :now="now" />
+    </div>
+
     <iframe
-      v-if="dash && hasSite"
+      v-else-if="dash && hasSite"
       :key="frameKey"
       :src="dash.url"
       sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-popups-to-escape-sandbox allow-downloads allow-modals"
@@ -182,7 +229,7 @@ const copyPrompt = () => copyText(EXAMPLE_PROMPT)
     <div v-else-if="loaded && !problem" class="flex min-h-0 flex-1 flex-col items-center justify-center gap-3 px-6 text-center">
       <h3 class="text-[15px] leading-5 font-semibold text-text">No dashboard yet</h3>
       <p class="max-w-md text-ui leading-5 text-text-muted">
-        This project has no dashboard yet. A chat in it builds one: a page of any HTML, CSS, JavaScript or data, with whatever it wants on it. It writes the page with dashboard_write on the agenthydra MCP.
+        AgentHydra's dashboard template fills from an MCP tool or an HTTP endpoint named in .agenthydra/dashboard.json. A chat in this project can set it up.
       </p>
       <div class="flex items-center gap-2 rounded-(--radius-8) bg-fill-5 py-1.5 ps-3 pe-1.5">
         <code class="text-ui-sm leading-4 text-text-2">{{ EXAMPLE_PROMPT }}</code>

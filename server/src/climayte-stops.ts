@@ -34,6 +34,7 @@ import {
   walls,
   workers,
 } from './climayte-core'
+import { createDeliveryEchoObserver } from './climayte-delivery-echo'
 import { firstLine } from './climayte-journal'
 import {
   aboutToBill,
@@ -293,18 +294,19 @@ export function checkRunners(): void {
   if (Date.now() - runnerCheckAt < RUNNER_RECHECK_MS) return
   const runners: { pid: number; log: string }[] = []
   for (const w of workers.values()) {
-    const at = w.attempts[w.attempts.length - 1]
+    const at = w.status === 'running' ? w.attempts[w.attempts.length - 1] : undefined
     const pid = at?.runner?.pid
     if (w.status === 'running' && at && pid && runnerIdentity(pid) === 'unknown')
       runners.push({ pid, log: at.log })
     // And every runner a stop is still waiting to kill, on any attempt of any worker: a cancelled
     // worker's or an urgent message's earlier attempt is neither 'running' nor the last (re-review).
-    for (const a of w.attempts) {
-      const late = a.runner?.killOnStart ? a.runner.pid : null
-      const asked = a === at && w.status === 'running' // the line above has it already
-      if (late && !asked && runnerIdentity(late) === 'unknown')
-        runners.push({ pid: late, log: a.log })
-    }
+    if (lateStartsMaybe)
+      for (const a of w.attempts) {
+        const late = a.runner?.killOnStart ? a.runner.pid : null
+        const asked = a === at && w.status === 'running' // the line above has it already
+        if (late && !asked && runnerIdentity(late) === 'unknown')
+          runners.push({ pid: late, log: a.log })
+      }
     // A check's runner after a restart: its spec path names the check's log the same way.
     const check = w.checkRunner
     // Any worker's: a cancelled one's check waits on this answer to be stopped (stopCheck).
@@ -432,7 +434,7 @@ export function killAttempts(ats: Attempt[], after?: () => void): void {
  *  (killAttempts marks them killOnStart). Every attempt of every worker, whatever its status: after a
  *  cancel the worker is no longer 'running', so pollRunning never visits it, and after an urgent
  *  message a new attempt is already the worker's last. */
-export function killLateStarts(): void {
+export function killLateStarts(onSettled?: (w: CliMayteWorker, at: Attempt) => void): void {
   if (!lateStartsMaybe) return
   for (const w of workers.values())
     for (const at of w.attempts) {
@@ -442,6 +444,8 @@ export function killLateStarts(): void {
       // A runner that already wrote its exit file has ended: its pid may be a stranger's by now.
       // Killed, ended on its own, or a runner that claimed its spec and died before writing a pid.
       const settle = () => {
+        // The exit receipt can prove EOF while the runner itself is still exiting.
+        onSettled?.(w, at)
         cleanUpRunner(w, at)
         delete runner.killOnStart
         changed(w)
@@ -516,7 +520,7 @@ const BOOTED_AT = Date.now()
 function readOf(at: CliMayteWorker['attempts'][number]): { r: LogRead; replay: boolean } {
   let r = reads.get(at.log)
   if (!r) {
-    r = freshRead()
+    r = freshRead(at.deliver ? createDeliveryEchoObserver(at) : undefined)
     reads.set(at.log, r)
   }
   return { r, replay: r.offset === 0 && at.startedAt < BOOTED_AT }

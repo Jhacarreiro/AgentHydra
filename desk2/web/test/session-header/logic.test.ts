@@ -5,6 +5,7 @@ import {
   displayItems,
   findHits,
   instanceFor,
+  usageDetail,
   usageSummary,
   wrapIndex,
   type AhInstance,
@@ -64,6 +65,20 @@ test('a cost with a model that has no published price is marked as a floor', () 
   expect(usageSummary({ ...u, unpricedModels: ['some-model'] })).toBe('1.3M tokens · $3.40+')
   expect(usageSummary({ ...u, costUsd: null })).toBe('1.3M tokens')
   expect(usageSummary({ ...u, tokens: { ...u.tokens, turns: 0 } })).toBeNull()
+})
+
+test('the tokens row is the total total: the chat and the HSwarm and CliMayte work it handed off', () => {
+  const u: AhUsage = {
+    status: 'ok',
+    tokens: { input: 1000, output: 200_000, cacheRead: 1_000_000, cacheCreation: 50_000, total: 1_251_000, turns: 12 },
+    costUsd: 3.4,
+    unpricedModels: [],
+    pricesAsOf: '2026-10-01',
+    delegated: { hswarm: { tokens: 500_000, costUsd: 0.1, calls: 40 }, climayte: { tokens: 2_000_000, costUsd: 1.5, workers: 6 } },
+    grand: { tokens: 3_751_000, costUsd: 5 }
+  }
+  expect(usageSummary(u)).toBe('3.8M tokens · $5.00')
+  expect(usageDetail(u)).toStartWith('This chat 1.3M · HSwarm 500K over 40 calls · CliMayte 2M in 6 workers:')
 })
 
 test("the account is the one instance the session's label names, or none when two could be it", () => {

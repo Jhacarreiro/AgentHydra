@@ -3,7 +3,9 @@ import type { Dot } from './logic'
 
 export const DOT: Record<Dot, string> = {
   run: 'bg-[var(--success)]',
-  wait: 'bg-[var(--warning)] animate-pulse',
+  // Starting, waiting for its port or stopping: the gray pulse of work under way; yellow is only what waits on the
+  // owner (owner, 2026-10-17).
+  wait: 'bg-[var(--text-muted)] animate-pulse',
   bad: 'bg-[var(--danger)]',
   off: 'bg-[var(--text-muted)] opacity-50'
 }

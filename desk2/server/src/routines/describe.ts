@@ -8,8 +8,7 @@
 import type { Options, SDKMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { AccountInfo } from '@shared/protocol'
 import type { RoutineOutcome } from '@shared/routines'
-import { DEFAULT_ACCOUNT } from '../bridge/accounts'
-import { pickHealthy } from '../engine/chat-manager'
+import { pickHealthy } from '../bridge/accounts'
 import { pinHaikuModel } from '../engine/haiku-pin'
 import { sdkQuery } from '../host/sdk'
 
@@ -105,25 +104,24 @@ async function askOnce(prompt: string, cwd: string, configDir: string | null, bi
 
 /**
  * The real describer: an account nobody is using first, the least used first, then a busy one, and the next when a login is
- * refused; the default login last (its token expires). With accounts listed and none with room, no description is asked.
+ * refused. With no account that has room, no description is asked.
  */
 export function sdkDescriber(cwd: string, accounts: () => Promise<AccountInfo[]>, binary: () => string | null = () => null): Describer {
   return async (req) => {
     const prompt = describePrompt(req)
     const listed = await accounts().catch(() => [] as AccountInfo[])
-    const managed = listed.filter((a) => a.id !== DEFAULT_ACCOUNT.id)
-    const idle = managed.filter((a) => !a.inUse)
-    const tried: string[] = []
+    const idle = listed.filter((a) => !a.inUse)
+    const tried = new Set<string>()
     let last = 'no account was tried'
     for (let n = 0; n < ACCOUNT_TRIES; n++) {
       const account = pickHealthy(idle, tried) ?? pickHealthy(listed, tried)
-      if (!account && managed.length) throw new Error(tried.length ? last : 'no account has room to describe it')
-      if (account) tried.push(account.id)
+      if (!account) throw new Error(tried.size ? last : 'no account has room to describe it')
+      tried.add(account.id)
       try {
-        return await askOnce(prompt, cwd, account?.configDir ?? null, binary())
+        return await askOnce(prompt, cwd, account.configDir, binary())
       } catch (err) {
         last = err instanceof Error ? err.message : String(err)
-        if (!account || !LOGIN_REFUSED.test(last)) throw new Error(last)
+        if (!LOGIN_REFUSED.test(last)) throw new Error(last)
       }
     }
     throw new Error(last)

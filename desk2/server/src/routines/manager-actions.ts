@@ -4,22 +4,23 @@ import type { Context } from 'hono'
 import type { RoutineProposal, RoutineProposalRequest, RoutinesRequest } from '@shared/routines'
 import { callerKind } from '../caller'
 import { judge } from './decide'
-import { checkDefinition, checkProposal, parseProposalText, ROUTINE_ID } from './manifest'
+import { applyMeta, checkDefinition, checkMeta, checkProposal, type MetaValues, parseProposalText, ROUTINE_ID } from './manifest'
 import { lastLineOf, message, runArgv } from './proc'
 import { enabled, memOf, readStatus, save, type Manager } from './manager'
 import { contractOf, writeWhole } from './manager-files'
 import { look, runsHere } from './manager-look'
 import { startRun } from './manager-runs'
 import { status } from './manager-view'
-import { approveCentral, discardCentral, editCentral, proposeCentral, type Refusal } from './manager-central'
+import { approveCentral, discardCentral, editCentral, metaCentral, proposeCentral, type Refusal } from './manager-central'
+import { approveMoving, discardMoving, movingIds, moveRoutine } from './manager-move'
 
 /** The actions a caller may ask for, one per call; and those only the window may ask for. */
-const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode'] as const
+const ACTIONS = ['run', 'pause', 'resume', 'approve', 'discard', 'propose', 'edit', 'mode', 'move', 'meta'] as const
 type ActionName = (typeof ACTIONS)[number]
-const OWNER_ACTIONS: readonly string[] = ['resume', 'approve', 'discard', 'edit', 'mode']
-const OWNER_ONLY = { error: 'only the owner can do that, in Settings > Managers > Routines' }
+const OWNER_ACTIONS: readonly string[] = ['resume', 'discard', 'edit', 'mode']
+const OWNER_ONLY = { error: "only the owner can do that, in AgentHydra's Tools tab" }
 const SHAPE =
-  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
+  'the body must be JSON: { "enabled"?: true | false, "run"?: "<id>", "pause"?: "<id>", "resume"?: "<id>", "approve"?: "<id>", "discard"?: "<id>", "move"?: "<id>" (to the central store), "meta"?: { "id": "<id>", "group"?: "<1 to 40 characters>" | null, "campaigns"?: ["<campaign id>", ...] | null }, "propose"?: { "id", "why", ...the contract, and for the central store "store": "central" with "runsOn", "timeZone" and "workdir" }, "edit"?: { "id": "<id>", "set": { ...contract keys, null removes one } }, "mode"?: { "id": "<id>", "value": "<one of its modes>" } }, one action per call besides "enabled"'
 /** How long a routine's `modes.set` command may take. */
 const MODE_MS = 60_000
 
@@ -33,7 +34,7 @@ export async function postRoutine(m: Manager, c: Context) {
   const [action] = actions
   if (body.enabled !== undefined && !owner) return c.json(OWNER_ONLY, 403)
   if (action !== undefined && OWNER_ACTIONS.includes(action) && !owner) return c.json(OWNER_ONLY, 403)
-  const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : action === 'mode' ? body.mode!.id : (body[action as 'run'] ?? '')
+  const id = action === 'propose' ? '' : action === 'edit' ? body.edit!.id : action === 'mode' ? body.mode!.id : action === 'meta' ? body.meta!.id : (body[action as 'run'] ?? '')
   if (action !== undefined && action !== 'propose' && !ROUTINE_ID.test(id)) return c.json({ error: `"${id}" is not a routine id` }, 400)
 
   if (body.enabled !== undefined && body.enabled !== m.ctx.settings().routines) m.ctx.updateSettings({ routines: body.enabled })
@@ -53,6 +54,10 @@ export async function postRoutine(m: Manager, c: Context) {
       return setMode(m, c, body.mode!)
     case 'propose':
       return proposeRoutine(m, c, body)
+    case 'move':
+      return centrally(m, c, moveRoutine(m, id))
+    case 'meta':
+      return metaRoutine(m, c, body.meta!)
     default:
       return decideProposal(m, c, action, id)
   }
@@ -63,6 +68,7 @@ function typedAction(body: RoutinesRequest, k: ActionName): boolean {
   if (k === 'propose') return typeof body.propose === 'object' && body.propose !== null
   if (k === 'edit') return typeof body.edit?.id === 'string' && typeof body.edit.set === 'object' && body.edit.set !== null && !Array.isArray(body.edit.set)
   if (k === 'mode') return typeof body.mode?.id === 'string' && typeof body.mode.value === 'string'
+  if (k === 'meta') return typeof body.meta?.id === 'string' && typeof body.meta === 'object' && !Array.isArray(body.meta)
   return typeof body[k] === 'string'
 }
 
@@ -149,6 +155,7 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
   const id = edit.id
   const routineFile = join(m.routinesDir, `${id}.json`)
   if (isCentral(m, id, routineFile)) return centrally(m, c, editCentral(m.central!, id, edit.set, m.clock()))
+  if (movingIds(m).has(id)) return c.json({ error: `"${id}" is moving to the central store as its file was: approve or discard the move first` }, 409)
   let raw: Record<string, unknown>
   try {
     raw = JSON.parse(readFileSync(routineFile, 'utf8')) as Record<string, unknown>
@@ -166,6 +173,42 @@ async function editRoutine(m: Manager, c: Context, edit: NonNullable<RoutinesReq
     return c.json({ error: `"${id}" was not saved: ${message(err)}` }, 409)
   }
   writeWhole(routineFile, next)
+  await look(m)
+  return c.json(status(m))
+}
+
+/** `meta`: any caller's group and campaigns for a routine or a proposal (the Tools tab's Routines folder, the campaigns it works for):
+ *  a key it names is set, null removes it, an absent one is kept. A central document keeps its approval (both keys are unsigned);
+ *  a local file keeps every other key. A value that does not check out is a 400, a missing routine a 404. */
+async function metaRoutine(m: Manager, c: Context, meta: NonNullable<RoutinesRequest['meta']>) {
+  const id = meta.id
+  let values: MetaValues
+  try {
+    values = checkMeta(meta as unknown as Record<string, unknown>)
+  } catch (err) {
+    return c.json({ error: `"${id}" was not saved: ${message(err)}` }, 400)
+  }
+  const file = join(m.routinesDir, `${id}.json`)
+  const proposal = join(m.proposedDir, `${id}.json`)
+  if (isCentral(m, id, file) || isCentral(m, id, proposal)) return centrally(m, c, metaCentral(m.central!, id, values))
+  if (movingIds(m).has(id)) return c.json({ error: `"${id}" is moving to the central store as its file was: approve or discard the move first` }, 409)
+  const path = existsSync(file) ? file : existsSync(proposal) ? proposal : null
+  if (path === null) return c.json({ error: `no routine "${id}" is registered: routines/${id}.json is missing` }, 404)
+  let raw: Record<string, unknown>
+  try {
+    raw = JSON.parse(readFileSync(path, 'utf8')) as Record<string, unknown>
+  } catch {
+    return c.json({ error: `no routine "${id}" is registered: ${path} is not JSON` }, 404)
+  }
+  const next: Record<string, unknown> = { ...raw }
+  applyMeta(next, values)
+  try {
+    if (path === file) checkDefinition(id, next)
+    else checkProposal(id, next)
+  } catch (err) {
+    return c.json({ error: `"${id}" was not saved: ${message(err)}` }, 409)
+  }
+  writeWhole(path, next)
   await look(m)
   return c.json(status(m))
 }
@@ -215,8 +258,10 @@ async function proposeRoutine(m: Manager, c: Context, body: RoutinesRequest) {
   return c.json(status(m))
 }
 
-/** approve and discard: the window only (checked in postRoutine). Each acts on the proposal file of that id. */
+/** approve (any caller: the owner, 2026-10-16, has agents approve the routines he asks for) and discard (the window only,
+ *  checked in postRoutine). Each acts on the move of that id, the central proposal, or the proposal file. */
 async function decideProposal(m: Manager, c: Context, action: 'approve' | 'discard', id: string) {
+  if (movingIds(m).has(id)) return centrally(m, c, action === 'approve' ? approveMoving(m, id) : discardMoving(m, id))
   const proposal = join(m.proposedDir, `${id}.json`)
   if (isCentral(m, id, proposal))
     return centrally(m, c, action === 'approve' ? approveCentral(m.central!, id, localIds(m), m.clock()) : discardCentral(m.central!, id, m.clock()))

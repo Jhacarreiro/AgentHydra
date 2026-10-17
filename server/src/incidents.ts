@@ -127,7 +127,7 @@ async function sha256Hex(input: string): Promise<string> {
 /** Dedup key: stable for the same (scope, key) + the same normalized-and-placeholdered error prefix. */
 async function errorSignature(scope: string, key: string, error: string): Promise<string> {
   const normalized = signatureText(error).slice(0, MAX_SIGNATURE_ERROR_CHARS)
-  const hex = await sha256Hex(`${scope}${key}${normalized}`)
+  const hex = await sha256Hex(`${scope}\x01${key}\x01${normalized}`)
   return hex.slice(0, 12)
 }
 

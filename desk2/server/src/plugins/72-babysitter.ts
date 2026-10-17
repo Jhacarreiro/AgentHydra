@@ -11,7 +11,7 @@
 import { readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import type { Hono } from 'hono'
-import type { AccountInfo, ChatSummary, ExternalSession, QueueState } from '@shared/protocol'
+import type { AccountInfo, ChatSummary, DesktopMessageRequest, DesktopMessageResult, ExternalSession, QueueState } from '@shared/protocol'
 import {
   BABYSITTER_EVERY_MS,
   type BabysitterAccount,
@@ -21,7 +21,7 @@ import {
   type BabysitterStatus,
 } from '@shared/babysitter'
 import type { ServerContext } from '../context'
-import { carried, decide, type Act, type Memory, shown, type Tracked } from '../babysitter/decide'
+import { carried, decide, HOLD_MS, type Act, type Memory, type Outcome, shown, type Tracked } from '../babysitter/decide'
 import { AsyncFile } from '../async-file'
 
 /** Acts kept for the page. */
@@ -74,11 +74,27 @@ function missingNote(ownRead: ChatSummary[] | null, outside: ExternalSession[] |
   return missing.length ? `${missing.join(' and ')} did not load; the chats they hold were left as they were` : null
 }
 
-/** How a continue went. An outside chat AgentHydra cannot reach (no live engine, its app closed, not a Desktop chat,
- *  AgentHydra itself not answering) is no try: it is continued once something runs it again. */
-function outcomeOf(t: Tracked, r: { status: number; error: string | null }): 'ok' | 'no-engine' | 'failed' {
-  if (r.error === null) return 'ok'
+/** A route's answer: its status, why it refused (null when it did not), and its body. */
+interface Answer {
+  status: number
+  error: string | null
+  body: Partial<DesktopMessageResult> | null
+}
+
+/** How a continue went. A Desktop chat's answer says whether the app started a turn on it or AgentHydra holds it; a
+ *  Desk chat's send queue takes it with no such word. An outside chat AgentHydra cannot reach (no live engine, its app
+ *  closed, not a Desktop chat, AgentHydra itself not answering) is no try: it is continued once something runs it. */
+function outcomeOf(t: Tracked, r: Answer): Outcome {
+  if (r.error === null) return r.body?.held === true ? 'held' : r.body?.started === true ? 'started' : 'sent'
   return t.source !== 'desk' && [404, 409, 503].includes(r.status) ? 'no-engine' : 'failed'
+}
+
+/** What a continue's act says happened. */
+function actDetail(t: Tracked, outcome: Outcome, r: Answer): string {
+  if (r.error !== null) return r.error
+  if (t.source === 'desk') return 'queued in its send queue'
+  if (outcome === 'held') return "held: its app shows work still running in the chat; AgentHydra sends it once the chat is idle"
+  return outcome === 'started' ? 'delivered into the chat; it started a turn' : 'delivered into the chat; no turn start seen yet'
 }
 
 export default function plugin(app: Hono, ctx: ServerContext): void {
@@ -103,15 +119,15 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
     }
   }
 
-  /** The route's status and, when it refused, why. */
-  async function post(path: string, body: unknown): Promise<{ status: number; error: string | null }> {
+  /** The route's status, its body and, when it refused, why. */
+  async function post(path: string, body: unknown): Promise<Answer> {
     try {
       const res = await app.request(path, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) })
-      if (res.ok) return { status: res.status, error: null }
-      const answer = (await res.json().catch(() => null)) as { error?: unknown } | null
-      return { status: res.status, error: typeof answer?.error === 'string' ? answer.error : `${path} answered ${res.status}` }
+      const answer = (await res.json().catch(() => null)) as (Partial<DesktopMessageResult> & { error?: unknown }) | null
+      if (res.ok) return { status: res.status, error: null, body: answer }
+      return { status: res.status, error: typeof answer?.error === 'string' ? answer.error : `${path} answered ${res.status}`, body: answer }
     } catch (err) {
-      return { status: 0, error: err instanceof Error ? err.message : String(err) }
+      return { status: 0, error: err instanceof Error ? err.message : String(err), body: null }
     }
   }
 
@@ -151,15 +167,19 @@ export default function plugin(app: Hono, ctx: ServerContext): void {
       act(t, a.id, 'gave-up', t.reason)
       return
     }
+    // A held continue is given the babysitter's own window: one the chat's app never frees in time is dropped, not
+    // sent late beside the next.
     const r =
       t.source === 'desk'
         ? await post('/api/queue', { kind: 'message', chatId: a.id, text: a.text })
-        : await post(`/api/external/sessions/${encodeURIComponent(a.id)}/message`, { text: a.text })
+        : await post(`/api/external/sessions/${encodeURIComponent(a.id)}/message`, { text: a.text, holdSecs: HOLD_MS / 1000 } satisfies DesktopMessageRequest)
     const outcome = outcomeOf(t, r)
     saved.memory[a.id] = carried(t, outcome, r.error ?? '', Date.now())
     // A chat still unreachable is noted once, not on every look.
     if (outcome === 'no-engine' && before[a.id]?.state === 'no-engine') return
-    act(t, a.id, outcome === 'ok' ? 'resumed' : outcome, r.error ?? (t.source === 'desk' ? 'queued in its send queue' : 'delivered into the chat'))
+    const did = outcome === 'started' || outcome === 'sent' ? 'resumed' : outcome
+    const detail = actDetail(t, outcome, r)
+    act(t, a.id, did, a.recheck ? `${a.recheck}; sent again: ${detail}` : detail)
   }
 
   /** One look; never two at once. While off it only reads and judges, so the page still shows what waits. */

@@ -206,9 +206,6 @@ export function madeFor(requestId: string | undefined): CliMayteWorker | null {
   return null
 }
 
-/** A Manager Hydra manager's slug, the folder its persona lives in (managers/router.mjs). */
-const MANAGER_SLUG = /^[a-z0-9][a-z0-9-]{0,63}$/
-
 /** The longest `desk.append` a chat may carry; a longer one is refused, never cut. */
 const DESK_APPEND_MAX = 20_000
 
@@ -224,11 +221,6 @@ export function deskProblem(d: unknown, chat: boolean): string | null {
     return `desk.append must be a string of at most ${DESK_APPEND_MAX} characters`
   if (!desk.mcpServers || typeof desk.mcpServers !== 'object' || Array.isArray(desk.mcpServers))
     return 'desk.mcpServers must be an object of server configs'
-  if (
-    desk.manager !== undefined &&
-    !(typeof desk.manager === 'string' && MANAGER_SLUG.test(desk.manager))
-  )
-    return 'desk.manager must be a manager slug (lowercase letters, digits and dashes)'
   if (
     desk.chatId !== undefined &&
     !(typeof desk.chatId === 'string' && DESK_CHAT_ID.test(desk.chatId))

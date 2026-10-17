@@ -23,13 +23,19 @@ export interface AhSessionRow {
   effort?: string | null
 }
 
-/** AgentHydra's SessionUsage (GET /api/sessions/:id/usage). */
+/** AgentHydra's SessionUsage (GET /api/sessions/:id/usage). `delegated` and `grand` come from a daemon that counts the
+ *  HSwarm and CliMayte work a session handed off (server/src/session-usage.ts); an older one sends neither. */
 export interface AhUsage {
   status: string
   tokens: { input: number; output: number; cacheRead: number; cacheCreation: number; total: number; turns: number }
   costUsd: number | null
   unpricedModels: string[]
   pricesAsOf: string
+  delegated?: {
+    hswarm: { tokens: number; costUsd: number | null; calls: number }
+    climayte: { tokens: number; costUsd: number | null; workers: number }
+  }
+  grand?: { tokens: number; costUsd: number | null }
 }
 
 /** AgentHydra's SessionSecretScan: redacted always; the daemon has no way to reveal one. */
@@ -114,23 +120,41 @@ export function formatUsd(n: number): string {
   return usd.format(n)
 }
 
-/** "1.2M tokens · $3.40", a "+" when a model has no published price (the total is then a floor). Null with nothing counted. */
+/** "1.2M tokens · $3.40": the session's total total, its own work and the HSwarm and CliMayte work it handed off (owner,
+ *  2026-10-16: "I just want the total total"), a "+" when a model has no published price (the total is then a floor). Null
+ *  with nothing counted. */
 export function usageSummary(u: AhUsage | null): string | null {
-  if (!u || u.status !== 'ok' || u.tokens.turns <= 0) return null
-  const tokens = `${formatCompact(u.tokens.total)} tokens`
-  if (u.costUsd === null) return tokens
-  return `${tokens} · ${formatUsd(u.costUsd)}${u.unpricedModels.length ? '+' : ''}`
+  if (!u || u.status !== 'ok' || (u.tokens.turns <= 0 && !u.grand?.tokens)) return null
+  const tokens = `${formatCompact(u.grand?.tokens ?? u.tokens.total)} tokens`
+  const cost = u.grand ? u.grand.costUsd : u.costUsd
+  if (cost === null) return tokens
+  return `${tokens} · ${formatUsd(cost)}${u.unpricedModels.length ? '+' : ''}`
+}
+
+/** "HSwarm 1.2M over 40 calls", "CliMayte 3.4M in 6 workers": each delegated part with tokens, for the tooltip. */
+function delegatedParts(u: AhUsage): string[] {
+  const d = u.delegated
+  if (!d) return []
+  const count = (n: number, one: string, many: string) => `${n.toLocaleString()} ${n === 1 ? one : many}`
+  const parts: string[] = []
+  if (d.hswarm.tokens > 0) parts.push(`HSwarm ${formatCompact(d.hswarm.tokens)} over ${count(d.hswarm.calls, 'call', 'calls')}`)
+  if (d.climayte.tokens > 0) parts.push(`CliMayte ${formatCompact(d.climayte.tokens)} in ${count(d.climayte.workers, 'worker', 'workers')}`)
+  return parts
 }
 
 export function usageDetail(u: AhUsage | null): string {
   if (!u || u.status !== 'ok') return ''
   const t = u.tokens
-  const parts = [
-    `In ${formatCompact(t.input)} · out ${formatCompact(t.output)} · cache read ${formatCompact(t.cacheRead)} · cache write ${formatCompact(t.cacheCreation)}, over ${t.turns} replies.`
-  ]
+  const handed = delegatedParts(u)
+  const parts = handed.length
+    ? [`This chat ${formatCompact(t.total)} · ${handed.join(' · ')}: the work it handed off counts too, the workers those started included.`]
+    : []
+  parts.push(
+    `${handed.length ? "This chat's own: in" : 'In'} ${formatCompact(t.input)} · out ${formatCompact(t.output)} · cache read ${formatCompact(t.cacheRead)} · cache write ${formatCompact(t.cacheCreation)}, over ${t.turns} replies.`
+  )
   if (u.unpricedModels.length) {
     const models = u.unpricedModels.join(', ')
-    parts.push(u.costUsd === null ? `No published price for ${models}, so no cost is shown.` : `No published price for ${models}, so the real total is higher.`)
+    parts.push((u.grand ? u.grand.costUsd : u.costUsd) === null ? `No published price for ${models}, so no cost is shown.` : `No published price for ${models}, so the real total is higher.`)
   }
   parts.push(`Priced at published list rates as of ${u.pricesAsOf}. A subscription plan is not billed per token.`)
   return parts.join(' ')

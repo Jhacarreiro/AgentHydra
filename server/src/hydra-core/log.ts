@@ -137,7 +137,7 @@ function tallyEvent(t: Tally, e: Record<string, unknown>): void {
   const chat = typeof e.chat === 'string' ? e.chat : ''
   if (e.event === 'miss' && typeof e.id === 'string') tallyMiss(t, e.id, e.why)
   if (e.event === 'find') tallyFind(t, e)
-  if (e.event === 'president-block') bump(t.pushback, chat)
+  if (e.pushback === true) bump(t.pushback, chat)
   if (e.step === 'start') t.runs.add(`${chat}#${e.run}`)
   else if (typeof e.step === 'string' && e.step !== 'end' && 'answer' in e)
     tallyQuestion(t, e.step, e.defaulted === true)

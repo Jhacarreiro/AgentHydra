@@ -52,7 +52,7 @@ async function desktopMessage(c: Context, b: Bridge): Promise<Response> {
     const id = c.req.param('id') ?? ''
     const r = await b.client.sendToDesktopChat(id, text.trim(), holdSecs)
     if (!r.ok || !r.delivered) return c.json({ error: r.detail || `AgentHydra did not deliver the message to ${id}` }, 422)
-    return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
+    return c.json({ ok: true, route: r.route ?? 'peer', delivered: true, started: r.confirmed === true, held: r.held === true, detail: r.detail ?? '' } satisfies DesktopMessageResult)
   } catch (err) {
     return fail(c, b, err)
   }

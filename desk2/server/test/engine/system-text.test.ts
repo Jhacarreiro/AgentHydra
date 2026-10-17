@@ -256,6 +256,20 @@ describe('every path uses the classifier', () => {
     expect(items.filter((i) => i.kind === 'task')).toHaveLength(1)
   })
 
+  test("history: a CliMayte worker's queued message has no origin and is still the person's, at its own time", () => {
+    // The shape a worker (entrypoint sdk-cli) writes; dropped, the chat's stand-in sat "Queued" after it was answered.
+    const worker = {
+      type: 'attachment',
+      uuid: 'qw1',
+      timestamp: '2020-10-03T10:00:05.000Z',
+      entrypoint: 'sdk-cli',
+      attachment: { type: 'queued_command', prompt: [{ type: 'text', text: 'also buy the domains' }], source_uuid: 's1', delivery_id: 'd1', commandMode: 'prompt', timestamp: '2020-10-03T10:00:05.000Z' },
+      renderedRole: 'system',
+    }
+    const items = historyToItems([rec('user', 'start the send'), worker, rec('assistant', 'On it.')])
+    expect(items.find((i) => i.kind === 'user' && i.text === 'also buy the domains')).toMatchObject({ ts: Date.parse('2020-10-03T10:00:05.000Z') })
+  })
+
   test("AgentHydra's tail: the flattened notification is a task, the same id merges", () => {
     const flat = (s: string) => s.replace(/\s*\n\s*/g, ' ')
     const items = tailToItems({

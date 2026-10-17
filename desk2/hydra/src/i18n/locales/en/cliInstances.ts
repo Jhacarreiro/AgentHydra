@@ -92,10 +92,8 @@ export default {
   deleteDialogTitle: 'Delete CLI instance',
   deleteDialogDescription:
     'This permanently removes the CLI instance and its local config directory. This cannot be undone.',
-  deleteDialogPlaceholder: 'Instance name',
   deleteDialogSubmit: 'Delete instance',
   deleteDialogDeleting: 'Deleting…',
-  deleteDialogMismatch: "Name doesn't match.",
   associateDialogTitle: 'Associate account',
   associateDialogDescription:
     'Pick the dispatch account this CLI instance checks usage against (and, later, auto-resumes under).',
@@ -206,7 +204,7 @@ export default {
   // One line each (owner, 2026-10-01: the dialog was "verbose as FUCK"); the long version is
   // cloud/login-sync-worker/README.md.
   syncIntro:
-    'Sign in or log out on one PC and the other follows within a minute; an account signed in on both is one login. The store only holds encrypted copies.',
+    'Sign in, log out or delete on one PC and the other follows within a minute; an account signed in on both is one login. The store only holds encrypted copies.',
   // Says what goes wrong otherwise: "keep it open on one PC at a time" alone was read twice and
   // still left "what happens if I do not?" (SUE round, 2026-10-01).
   syncDesktopNote:
@@ -228,7 +226,7 @@ export default {
   // The one switch (owner, 2026-10-01): on means every login syncs and the list stays away.
   syncAll: 'Sync all',
   syncAllHint:
-    'Every login on this PC and in the store is kept the same on both PCs. Turn this off to choose which logins sync here.',
+    'Every login on this PC and in the store is kept the same on both PCs. Turn this off to choose which CLI logins sync here; desktop logins always sync.',
   syncQueue: 'Share the CliMayte queue with my other PCs',
   syncQueueHint:
     "Each PC shows the other's CliMayte tasks, and work placed on one PC counts on the other, so they do not crowd the same account.",
@@ -292,6 +290,7 @@ export default {
   syncEventCreated: 'added here',
   syncEventSkipped: 'skipped',
   syncEventSignedOut: 'signed out',
+  syncEventRemoved: 'deleted',
   syncEventMerged: 'merged',
   syncEventError: 'error',
 }

@@ -537,6 +537,175 @@ def test_the_servers_sync_tick_does_nothing_without_a_vault(fleet, monkeypatch, 
     assert capsys.readouterr().err == ""
 
 
+# The autosync's change gate: a tick runs a full round (download, decrypt, merge) only when the vault file's hash or a
+# stat here moved since the last round that ended in step, or FULL_SYNC_EVERY_S after it.
+
+class Machines:
+    """Machines on one fleet, each with its own _last_round (one process is one machine), counting full rounds by their
+    decrypts. age() gives each write since its last call its own mtime a day back, as a file written long ago has, so a
+    test can reach the skip path that the racy-write guard (RACY_S) keeps a just-written file out of."""
+
+    def __init__(self, fleet, monkeypatch):
+        self.fleet, self.rounds, self.current, self.seen = fleet, {}, None, {}
+        self.mtime = time.time_ns() - 86_400 * 10**9
+        self.unseals, self.real_unseal = 0, vault.unseal
+
+        def counting(key, blob):
+            self.unseals += 1
+            return self.real_unseal(key, blob)
+
+        monkeypatch.setattr(vault, "unseal", counting)
+        monkeypatch.setattr(vault, "_last_round", None)
+
+    def on(self, name: str) -> None:
+        if self.current is not None:
+            self.rounds[self.current] = vault._last_round
+        vault._last_round, self.current = self.rounds.get(name), name
+        self.fleet.on(name)
+
+    def age(self) -> None:
+        for p in [*config.SECRETS_DIR.iterdir(), vault.config_file(), vault.key_file()]:
+            st = p.stat()
+            if self.seen.get(p) == (st.st_size, st.st_mtime_ns, st.st_ino):
+                continue
+            self.mtime += 10**9
+            os.utime(p, ns=(self.mtime, self.mtime))
+            st = p.stat()
+            self.seen[p] = (st.st_size, st.st_mtime_ns, st.st_ino)
+
+    def in_step(self) -> bool:
+        """This machine's lists hold exactly the vault's live keys."""
+        state = self.real_unseal(vault._load_key(), (_server(self.fleet) / "vault.bin").read_bytes())
+        remote = {n: {kid for kid, e in entries.items() if e["k"] is not None} for n, entries in state["lists"].items()}
+        local = {n: {vault.key_id(k) for k in keys} for n, keys in vault.scan().items()}
+        return {n: s for n, s in remote.items() if s} == {n: s for n, s in local.items() if s}
+
+
+def _paired(fleet, monkeypatch, *keys: str) -> Machines:
+    m = Machines(fleet, monkeypatch)
+    m.on("alpha")
+    fleet.write("groq_api_keys", *keys)
+    vault.init(fleet.url)
+    code = vault.pair_code()
+    m.on("beta")
+    vault.join(code)
+    m.on("alpha")
+    m.age()
+    m.unseals = 0
+    return m
+
+
+def test_idle_autosync_ticks_decrypt_nothing_and_every_change_still_lands(fleet, monkeypatch):
+    m = _paired(fleet, monkeypatch, "gsk-test-0001", "gsk-test-0002")
+    assert vault.autosync_tick() is None and m.unseals == 1  # the setup writes were just made: this round runs in full
+    for _ in range(5):
+        assert vault.autosync_tick() is None
+    assert m.unseals == 1  # five idle ticks, no download, decrypt or merge (one each before the gate)
+
+    m.on("beta")
+    fleet.tick()
+    vault.add_keys("groq", ["gsk-test-0003"])  # another machine changes the vault between two ticks
+    m.on("alpha")
+    seen = m.unseals
+    vault.autosync_tick()
+    assert m.unseals == seen + 1 and "gsk-test-0003" in keys_of("groq_api_keys") and m.in_step()
+    m.age()
+    vault.autosync_tick()  # the round that wrote this machine's file is not trusted; the next full one is
+    seen = m.unseals
+    vault.autosync_tick()
+    assert m.unseals == seen
+
+    fleet.tick()
+    fleet.write("groq_api_keys", "gsk-test-0001", "gsk-test-0002", "gsk-test-0003", "gsk-test-0004")  # an edit by hand here
+    m.age()
+    vault.autosync_tick()
+    assert m.unseals == seen + 1 and m.in_step()
+    m.on("beta")
+    vault.sync()
+    assert "gsk-test-0004" in keys_of("groq_api_keys")
+
+
+def test_a_full_round_still_runs_every_thirty_minutes_and_after_a_failure(fleet, monkeypatch):
+    m = _paired(fleet, monkeypatch, "gsk-test-0001")
+    vault.autosync_tick()
+    vault.autosync_tick()
+    seen = m.unseals
+    vault._last_round["at"] -= vault.FULL_SYNC_EVERY_S  # the gate is trusted this long at most
+    vault.autosync_tick()
+    assert m.unseals == seen + 1
+    assert vault.FULL_SYNC_EVERY_S + vault.SYNC_EVERY_S <= 30 * 60
+
+    vault.autosync_tick()
+    seen = m.unseals
+    (_server(fleet) / "vault.bin").write_bytes(b"not a vault")  # a damaged file: a new hash, a failing round, no trust
+    assert "not a ZSwarm/HSwarm vault" in vault.autosync_tick()
+    assert vault._last_round is None and m.unseals == seen + 1
+
+
+def test_a_same_size_rewrite_on_a_coarse_clock_is_never_skipped(fleet, monkeypatch):
+    """A round that starts right after a write is not trusted (RACY_S): a second same-size, in-place write within the
+    same clock tick leaves every stat as it was, and only the next full round can see it."""
+    m = _paired(fleet, monkeypatch, "gsk-test-0001", "gsk-test-0002")
+    vault.autosync_tick()
+    vault.autosync_tick()
+    path = config.SECRETS_DIR / "groq_api_keys"
+    fleet.tick()
+    fleet.write("groq_api_keys", "gsk-test-0001", "gsk-test-0003")  # same size, same file, written just now
+    stamp = path.stat()
+    vault.autosync_tick()
+    assert vault._last_round is None  # pushed, but not trusted: the file was written within RACY_S of the round
+    fleet.tick()
+    fleet.write("groq_api_keys", "gsk-test-0001", "gsk-test-0004")
+    os.utime(path, ns=(stamp.st_atime_ns, stamp.st_mtime_ns))  # the coarse clock: the second write's stat is the first's
+    assert path.stat().st_size == stamp.st_size and path.stat().st_mtime_ns == stamp.st_mtime_ns
+    vault.autosync_tick()
+    assert m.in_step()
+    m.on("beta")
+    vault.sync()
+    assert set(keys_of("groq_api_keys")) == {"gsk-test-0001", "gsk-test-0004"}
+
+
+def test_the_autosync_gate_never_misses_a_change_over_random_interleavings(fleet, monkeypatch):
+    import random
+
+    rng = random.Random(20261016)
+    m = _paired(fleet, monkeypatch, *(f"gsk-test-{i:04d}" for i in range(8)))
+    fresh = iter(range(100, 10_000))
+    ticks = 0
+    for _ in range(120):
+        fleet.tick()
+        op = rng.choice(["remote", "local", "tick", "tick", "tick"])
+        if op == "remote":
+            m.on("beta")
+            have = keys_of("groq_api_keys")
+            if rng.random() < 0.6 or len(have) < 4:
+                vault.add_keys("groq", [f"gsk-test-{next(fresh):04d}"])
+            else:
+                vault.remove_key("groq", config.fingerprint(rng.choice(have)))
+            if rng.random() < 0.5:
+                m.age()
+            m.on("alpha")
+        elif op == "local":
+            have = keys_of("groq_api_keys")
+            kind = rng.choice(["add", "remove", "replace"]) if len(have) >= 4 else "add"
+            if kind == "add":
+                have.append(f"gsk-test-{next(fresh):04d}")
+            elif kind == "remove":
+                have.remove(rng.choice(have))
+            else:
+                have[rng.randrange(len(have))] = f"gsk-test-{next(fresh):04d}"  # same size, in place
+            fleet.write("groq_api_keys", *have)
+            if rng.random() < 0.5:
+                m.age()
+        else:
+            assert vault.autosync_tick() is None
+            ticks += 1
+            assert m.in_step(), "a tick left this machine out of step with the vault"
+            if rng.random() < 0.7:
+                m.age()
+    assert 0 < m.unseals < ticks  # the gate skipped some rounds and ran others
+
+
 # Sealed pairing (wire format v1, shared with ZSwarm): request on the new machine, grant on a vault machine, accept.
 
 def _server(fleet) -> Path:

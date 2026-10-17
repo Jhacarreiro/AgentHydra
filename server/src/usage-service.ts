@@ -33,6 +33,7 @@ import { listAllInstances } from './core/instance-ref'
 import { listInstances } from './core/instances'
 import { normalizeInstancePath } from './core/paths'
 import { listClaudeProcesses } from './core/process'
+import { noteRevokedGrant, pruneRevokedGrants } from './core/revoked-grants'
 import { db } from './db'
 import { noteUsageSnapshot } from './reset-watch'
 import type { AuthType, UsageCheckResult, UsageReason, UsageSnapshot } from './types'
@@ -130,10 +131,32 @@ export async function checkUsageWithGrants(
     })
     if (!isNoData(snap)) return { snapshot: snap, failure: null }
     const attempt = lastUsageApiFailure(label)
+    // Remembered, so the dead grant leaves its profile once the app is closed (core/revoked-grants.ts).
+    if (apiFailureReason(attempt) === 'token_revoked') noteRevokedGrant(grant.token)
     if (i === 0) failure = attempt
     if (!attempt || !CREDENTIAL_SPECIFIC_STATUSES.has(attempt.status)) break
   }
   return { snapshot: null, failure }
+}
+
+/** What a usage-API failure says about the account, for desktop and CLI rows alike: a rate limit,
+ *  a login Anthropic revoked (a usage 429 the profile endpoint answered 401, usage-api
+ *  revokedLoginError), or null when it names neither and the caller's own reason applies. */
+function apiFailureReason(
+  fail: ReturnType<typeof lastUsageApiFailure>,
+): 'rate_limited' | 'token_revoked' | null {
+  if (fail?.status === 429) return 'rate_limited'
+  if (fail?.status === 401 && /revoked/i.test(fail.error)) return 'token_revoked'
+  return null
+}
+
+/** The server's own words, plus the retry window when a 429 gave one: the text says WHAT limit was
+ *  hit, the window says when it lifts (see UsageCheckResult.detail). */
+function apiFailureDetail(fail: ReturnType<typeof lastUsageApiFailure>): string | undefined {
+  if (!fail) return undefined
+  return fail.status === 429 && fail.retryAfterSec
+    ? `${fail.error} (retry in ${Math.max(1, Math.round(fail.retryAfterSec / 60))} min)`
+    : fail.error
 }
 
 /**
@@ -328,11 +351,10 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
       ? 'logged_out'
       : !hadGrant
         ? 'no_token'
-        : apiFail?.status === 429
-          ? 'rate_limited'
-          : isRunning
-            ? 'check_failed'
-            : 'stale_token_app_closed'
+        : (apiFailureReason(apiFail) ?? (isRunning ? 'check_failed' : 'stale_token_app_closed'))
+  // The app goes on using a revoked grant until its own expiry date, re-login or not, so the dead
+  // ones leave the profile while it is closed and the app makes new ones (core/revoked-grants.ts).
+  if (reason === 'token_revoked') await pruneRevokedGrants(dir, { prove: true })
   // ⛔ OWNER RULE (2026-09-07): *"when the account is not logged in, it should reset and
   // clear the usage data, session, weekly, five-hour."* Not caching the no-data result is not
   // enough on its own - the PREVIOUS reading is still in the cache, and the routes serve the cache
@@ -378,11 +400,7 @@ export async function checkUsageForDesktop(dir: string): Promise<UsageCheckResul
   // look, before writing the explanation into the product.
   const detail = !hadGrant
     ? 'no usable login found for this instance - nothing was asked of Anthropic'
-    : apiFail
-      ? apiFail.status === 429 && apiFail.retryAfterSec
-        ? `${apiFail.error} (retry in ${Math.max(1, Math.round(apiFail.retryAfterSec / 60))} min)`
-        : apiFail.error
-      : undefined
+    : apiFailureDetail(apiFail)
   return { snapshot, cached: false, key, reason, detail, advice: usageAdvice(snapshot) }
 }
 
@@ -434,15 +452,22 @@ export async function checkUsageForCliInstance(id: string): Promise<UsageCheckRe
 
   const hasAnyCredential =
     inst.loggedIn || !!inst.associatedAccountId || !!inst.associatedDesktopDir
-  // Same owner rule as the desktop path above: signed out clears the numbers, a failed check does
-  // not. `hasAnyCredential` false IS the signed-out case for a CLI instance.
-  if (!hasAnyCredential) dropCachedUsage(key, { keepLastKnown: true })
+  // Why the usage API said no, as the desktop path reports it, when this check asked it under the
+  // instance's name (its own login or the linked desktop's grants). Without it every failure read
+  // "check failed": the CLI logins linked to instances #72 and #8 carry the same revoked tokens and
+  // said nothing more (2026-10-16).
+  const apiFail = inst.loggedIn || inst.associatedDesktopDir ? lastUsageApiFailure(inst.name) : null
+  // Same owner rule as the desktop path above: signed out, or a definitive 401, clears the numbers;
+  // a failed check does not. `hasAnyCredential` false IS the signed-out case for a CLI instance.
+  if (!hasAnyCredential || apiFail?.status === 401) dropCachedUsage(key, { keepLastKnown: true })
   const snapshot = parseUsageOutput('', inst.name)
+  const detail = hasAnyCredential ? apiFailureDetail(apiFail) : undefined
   return {
     snapshot,
     cached: false,
     key,
-    reason: hasAnyCredential ? 'check_failed' : 'not_logged_in',
+    reason: hasAnyCredential ? (apiFailureReason(apiFail) ?? 'check_failed') : 'not_logged_in',
+    ...(detail === undefined ? {} : { detail }),
     advice: usageAdvice(snapshot),
   }
 }

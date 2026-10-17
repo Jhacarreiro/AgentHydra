@@ -999,8 +999,14 @@ async def cmd_service(a) -> int:
     return await call_service(a)
 
 
+async def cmd_image(a) -> int:
+    from .image import cmd_image as run_image
+
+    return await run_image(a)
+
+
 COMMANDS = {
-    "service": cmd_service,
+    "service": cmd_service, "image": cmd_image,
     "doctor": cmd_doctor, "web": cmd_web, "ask": cmd_ask, "panel": cmd_panel, "run": cmd_run, "status": cmd_status, "cancel": cmd_cancel, "results": cmd_results,
     "jobs": cmd_jobs, "cost": cmd_cost, "savings": cmd_savings, "usage": cmd_usage, "bench": cmd_bench, "sync": cmd_sync,
     "maintain": cmd_maintain, "history": cmd_history, "keys": cmd_keys, "vault": cmd_vault, "import-keys": cmd_import_keys, "import-zswarm": cmd_import_zswarm, "models": cmd_models, "index": cmd_index, "survival": cmd_survival, "backfill-free-misses": cmd_backfill_free_misses, "prefix": cmd_prefix, "egress": cmd_egress,

@@ -9,6 +9,7 @@ import {
   liveLineage,
   profileRoots,
 } from '../chat-dossier'
+import { climayteWorkers } from '../climayte-view'
 import { CLIPBOARD_DIR } from '../config'
 import { collectChatsAsync } from '../core/chat-store-scan'
 import { listCodexChats } from '../core/codex-chat-list'
@@ -780,8 +781,8 @@ function tailResponse(c: Context, result: TailResult) {
   return c.body(body, 200, { ...headers, 'content-type': 'application/json; charset=utf-8' })
 }
 // What this one session spent: token totals and a dollar cost at published list prices, computed
-// from the analytics kit (subagent calls included; see server/src/session-usage.ts).
-// Answers 200 with a `status` rather than an error for a source that records no per-turn usage, so
+// from the analytics kit (subagent calls included; see server/src/session-usage.ts), with what the
+// HSwarm and CliMayte work it handed off spent and the grand total of all three. Answers 200 with a `status` rather than an error for a source that records no per-turn usage, so
 // the UI can explain the gap instead of showing a zero it cannot justify.
 app.get('/api/sessions/:id/usage', async (c) => {
   const rawSource = c.req.query('source')
@@ -789,7 +790,7 @@ app.get('/api/sessions/:id/usage', async (c) => {
   const locator = c.req.query('locator') || undefined
   const tf = await findTranscriptAsync(c.req.param('id'), source, locator)
   if (!tf) return c.json({ error: 'session not found' }, 404)
-  return c.json(sessionUsage(tf))
+  return c.json(sessionUsage(tf, { workers: climayteWorkers() }))
 })
 // The conversation index behind the fast search path. It holds no text of its own and rebuilds
 // itself from the transcripts, so deleting it costs nothing but the time to build it again — which

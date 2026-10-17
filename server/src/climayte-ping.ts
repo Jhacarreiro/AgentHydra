@@ -114,6 +114,9 @@ export interface PingWorker {
   verdicts?: Array<{ verdict: 'pass' | 'fail'; by?: string; at?: number }>
   error: string | null
   origin?: CliMayteOrigin
+  /** One of the owner's own chats (climayte_run chat: true): the owner reads it in the window, so no
+   *  chat is pinged about it. */
+  chat?: boolean
   /** The wave it belongs to and its kind: a wave task has no origin, its question goes to its manager's. */
   wave?: string | null
   kind?: string | null
@@ -568,6 +571,8 @@ export interface CliMaytePingDeps {
   dir: string
   /** Every worker now. */
   workers(): PingWorker[]
+  /** One worker by id, without copying the store (workers() copies every worker the daemon ever ran). */
+  workerById?(id: string): PingWorker | undefined
   /** Calls `cb` on every worker change (onCliMayteChange); returns the unsubscribe. */
   subscribe(cb: (w: PingWorker) => void): () => void
   /** A non-urgent message to a manager worker (climayteSend). */
@@ -597,7 +602,7 @@ export interface CliMaytePingDeps {
     send(
       sessionId: string,
       text: string,
-    ): Promise<{ ok: boolean; reason: string; notDesk?: boolean }>
+    ): Promise<{ ok: boolean; reason: string; notDesk?: boolean; uncertain?: boolean }>
   }
   /** The app's native send (tryNativeSend), tried for a chat Desk 2 does not run, before the peer pipe.
    *  `unavailable`: nothing reached the app, so the pipe may go; false: the app was sent it and refused or
@@ -636,6 +641,16 @@ const originKey = (o: CliMayteOrigin): string =>
 
 const sameOrigin = (a: CliMayteOrigin | undefined, b: CliMayteOrigin): boolean =>
   !!a && originKey(a) === originKey(b)
+
+/** Whether `w`'s news goes to origin `o`. Never a worker's own (a chat that adopted its own group heard of
+ *  its own every turn end), and never an owner's chat's: the owner reads that in the window. Both woke the
+ *  Desk chat that had adopted group hydra-desk each time any Desk chat ended a turn, itself included: 2,485
+ *  turns of "the same automatic ping, nothing to judge" (2026-10-16). */
+export const reportsTo = (
+  w: Pick<PingWorker, 'id' | 'origin' | 'chat'>,
+  o: CliMayteOrigin,
+): boolean =>
+  sameOrigin(w.origin, o) && w.chat !== true && !(o.kind === 'worker' && o.workerId === w.id)
 
 const seqRange = (batch: QueuedPing[]): string => {
   const s = batch.map((e) => e.seq)
@@ -704,7 +719,7 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
   const workersOf = (o: CliMayteOrigin, latest?: PingWorker): PingWorker[] => {
     const all = deps.workers().map((x) => (latest && x.id === latest.id ? latest : x))
     if (latest && !all.some((x) => x.id === latest.id)) all.push(latest)
-    return all.filter((x) => sameOrigin(x.origin, o))
+    return all.filter((x) => reportsTo(x, o))
   }
 
   const boxFor = (o: CliMayteOrigin): OriginBox => {
@@ -751,7 +766,15 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
       (w.wave && w.kind !== 'manage' && events.some((e) => e.kind === 'asking')
         ? deps.workers().find((m) => m.kind === 'manage' && m.wave === w.wave)?.origin
         : undefined)
-    if (!origin || !events.length || pingOff()) return
+    // Worker text may be packed behind enumerable getters. Ownership needs only these
+    // three fields; spreading a history worker unpacks its reports on every heartbeat.
+    if (
+      !origin ||
+      !events.length ||
+      !reportsTo({ id: w.id, chat: w.chat, origin }, origin) ||
+      pingOff()
+    )
+      return
     const box = boxFor(origin)
     if (TERMINAL.has(w.status)) {
       const group = workersOf(origin, w).filter((x) => x.group === w.group)
@@ -793,9 +816,13 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
    *  delivers a line without checking it again (2026-10-13), so each waits for the turn's end. */
   const sendable = (box: OriginBox): QueuedPing[] => {
     const o = box.origin
-    const busy =
-      o.kind === 'worker' &&
-      deps.workers().some((x) => x.id === o.workerId && x.status === 'running')
+    const w =
+      o.kind === 'worker'
+        ? deps.workerById
+          ? deps.workerById(o.workerId)
+          : deps.workers().find((x) => x.id === o.workerId)
+        : undefined
+    const busy = w?.status === 'running'
     return busy ? [] : box.pending
   }
 
@@ -869,9 +896,13 @@ export function startCliMaytePing(deps: CliMaytePingDeps): CliMaytePing {
     if (deps.desk) {
       const d = await deps.desk
         .send(o.sessionId, text)
-        .catch((err) => ({ ok: false, reason: String(err), notDesk: false }))
+        .catch((err) => ({ ok: false, reason: String(err), notDesk: false, uncertain: false }))
       if (d.ok) return settle(box, batch)
       if (!d.notDesk) fail(box, batch, 'desk', d.reason)
+      // Desk 2 may have started the turn before its answer was lost (a resume outlasts the 5 s wait, or a
+      // 5xx after the send): never sent again another way, as for the native send below (2026-10-16).
+      if (d.uncertain)
+        return giveUp(box, batch, text, "did not confirm Desk 2's send, which is never repeated")
     }
     // Any other chat: the app's native send starts its turn. Only a refusal before dispatch goes on to
     // the pipe; a send the app took is never sent again another way (the runbook's rule).
